@@ -12,6 +12,8 @@ from aiopslab.paths import TARGET_MICROSERVICES
 from aiopslab.service.apps.socialnet import SocialNetwork
 from aiopslab.service.kubectl import KubeCtl
 
+from .helpers import get_frontend_url
+
 
 class K8STargetPortMisconfig(Problem):
     def __init__(self, faulty_service="user-service"):
@@ -28,7 +30,7 @@ class K8STargetPortMisconfig(Problem):
             problem=self, expected=[faulty_service]
         )
 
-        self.mitigation_oracle = MitigationOracle(problem=self, expected_port=9090)
+        self.mitigation_oracle = MitigationOracle(problem=self)
 
         # === Workload setup ===
         self.payload_script = (
@@ -53,8 +55,11 @@ class K8STargetPortMisconfig(Problem):
         print(f"[FAULT RECOVERED] {self.faulty_service}")
 
     def start_workload(self):
+        print("== Start Workload ==")
+        frontend_url = get_frontend_url(self.app)
+
         wrk = Wrk(rate=10, dist="exp", connections=2, duration=10, threads=2)
         wrk.start_workload(
             payload_script=self.payload_script,
-            url=f"http://{self.app.get_frontend_host()}/wrk2-api/post/compose",
+            url=f"{frontend_url}/wrk2-api/post/compose",
         )
