@@ -8,9 +8,9 @@ from aiopslab.orchestrator.oracles.base import Oracle
 
 
 class LocalizationOracle(Oracle):
-    def __init__(self, problem, expected_fault="user-service"):
+    def __init__(self, problem, expected="user-service"):
         super().__init__(problem)
-        self.expected_fault = expected_fault
+        self.expected = expected
 
     def evaluate(self, solution, trace, duration) -> dict:
         print("== Localization Evaluation ==")
@@ -22,8 +22,8 @@ class LocalizationOracle(Oracle):
             self.problem.results["is_subset"] = False
             return self.problem.eval(solution, trace, duration)
 
-        is_exact = is_exact_match(solution, self.expected_fault)
-        is_sub = is_subset([self.expected_fault], solution)
+        is_exact = is_exact_match(solution, self.expected)
+        is_sub = is_subset([self.expected], solution)
 
         if is_exact:
             acc = 100.0
