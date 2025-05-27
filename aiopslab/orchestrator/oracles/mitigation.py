@@ -18,7 +18,7 @@ class MitigationOracle(Oracle):
                 all_normal = False
                 break
 
-            for container_status in pod.status.container_statuses or []:
+            for container_status in pod.status.container_statuses:
                 if (
                     container_status.state.waiting
                     and container_status.state.waiting.reason
