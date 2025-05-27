@@ -2,7 +2,6 @@
 # Licensed under the MIT License.
 
 from .auth_miss_mongodb import (
-    MongoDBAuthMissingAnalysis,
     MongoDBAuthMissingDetection,
     MongoDBAuthMissingLocalization,
     MongoDBAuthMissingMitigation,
