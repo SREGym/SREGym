@@ -82,8 +82,6 @@ class MCPClient:
                     },
                 }
             )
-        print(f"available tools: {available_tools}")
-        # print(available_tools[0].type)
 
         llm = get_llm_backend_for_tools()
         finish_reason, response_message = llm.inference(
@@ -92,7 +90,6 @@ class MCPClient:
             tools=available_tools,
         )
 
-        print(f"finish_reason: {finish_reason}, response_message: {response_message}")
         # Process response and handle tool calls
         tool_results = []
         final_text = []
@@ -103,8 +100,6 @@ class MCPClient:
         else:
             tool_name = None
             tool_args = None
-        # final_text.append(response_message.content)
-        # print(f"llm response: {response_message.content}")
 
         print(f"tool {tool_name}, args {tool_args}")
         # Execute tool call
