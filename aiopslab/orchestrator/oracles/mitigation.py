@@ -13,13 +13,18 @@ class MitigationOracle(Oracle):
         all_normal = True
 
         for pod in pod_list.items:
+            if pod.status.phase != "Running":
+                print(f"❌ Pod {pod.metadata.name} is in phase: {pod.status.phase}")
+                all_normal = False
+                break
+
             for container_status in pod.status.container_statuses or []:
                 if (
                     container_status.state.waiting
-                    and container_status.state.waiting.reason == "CrashLoopBackOff"
+                    and container_status.state.waiting.reason
                 ):
                     print(
-                        f"❌ Container {container_status.name} is in CrashLoopBackOff"
+                        f"❌ Container {container_status.name} is waiting: {container_status.state.waiting.reason}"
                     )
                     all_normal = False
                 elif (
@@ -27,7 +32,7 @@ class MitigationOracle(Oracle):
                     and container_status.state.terminated.reason != "Completed"
                 ):
                     print(
-                        f"❌ Container {container_status.name} terminated with reason: {container_status.state.terminated.reason}"
+                        f"❌ Container {container_status.name} terminated: {container_status.state.terminated.reason}"
                     )
                     all_normal = False
                 elif not container_status.ready:
