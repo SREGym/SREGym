@@ -30,24 +30,6 @@ When prompted for a password, enter your CloudLab account password (the same one
 This will create a new file `cloudlab_decrypted.pem` containing your decrypted private key.
 The SSL certificate remains in the original `cloudlab.pem` file.
 
-# Fixing the geni-lib library
-
-The `geni-lib` is outdated and some parts of the code are not compatible with python 3.12.
-Before proceeding, ensure you have:
-1. Created and activated a Python virtual environment
-2. Run `uv sync` to install dependencies
-3. Installed `lib2to3` using the following command if not already installed:
-
-```bash
-sudo apt-get install python3-lib2to3
-```
-
-Then run the fix script:
-```bash
-cd scripts/geni-lib
-./fix_geni_lib.sh
-```
-
 # Building a context definition for CloudLab
 
 To build a context definition, you'll need:
@@ -102,7 +84,7 @@ The `genictl.py` script provides an interactive CLI to manage both slices and sl
 To enter interactive mode:
 ```bash
 cd scripts/geni-lib
-python genictl.py
+python3 genictl.py -i
 ```
 
 ### Available Commands
