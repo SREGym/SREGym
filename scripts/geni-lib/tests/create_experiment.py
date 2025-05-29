@@ -1,4 +1,4 @@
-# Create a 3-node cloudlab experiment with 3 c220g5 nodes
+# Create a 3-node cloudlab experiment with 3 c220g5 nodes for 1 hour
 
 import datetime
 import geni.util
@@ -60,7 +60,10 @@ geni.util.printlogininfo(manifest=igm)
 login_info = geni.util._corelogininfo(igm)
 if isinstance(login_info, list):
     login_info = "\n".join(map(str, login_info))
-with open(f"{SLICE_NAME}.login.info.txt", "w") as f:
+with open(f"{SLICE_NAME}.login.info.txt", "a") as f:
+    f.write(f"Slice name: {SLICE_NAME}\n")
+    f.write(f"Cluster name: {aggregate.name}\n")
+    f.write(f"Duration: {DURATION} hours\n")
     f.write(login_info)
 print(f"\nSSH info saved to {SLICE_NAME}.login.info.txt\n")
 

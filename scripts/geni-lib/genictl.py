@@ -1,8 +1,11 @@
 import argparse
+from calendar import prcal
 import datetime
 import json
+import geni.portal as portal
 
 # suppress warnings
+import random
 import warnings
 
 import geni.util
@@ -156,6 +159,98 @@ def get_hardware_info(context=None, args=None):
     else:
         print("No hardware information available")
 
+def quick_experiment_creation(context, args):
+    try:
+
+        hardware_type = args.hardware_type
+        duration = args.duration
+
+        print(f"Creating a quick 3 node cluster of hardware type: {hardware_type}")
+
+        hardware_info_list = collect_hardware_info_from_html()
+        slice_name = "test-"+str(random.randint(100000, 999999))
+        cluster_name = None
+
+        for item in hardware_info_list:
+            # print(f"Checking {item['hardware_name']} at {item['cluster_name']}")
+            if item["hardware_name"].strip() == hardware_type.strip():
+                if item["total"] >= 3 and item["free"] >= 3:
+                    print(f"Creating a 3 node cluster of {hardware_type} at {item['cluster_name']}")
+                    cluster_name = item["cluster_name"]
+                    break
+                else:
+                    print(f"Not enough {hardware_type} nodes available at {item['cluster_name']}")
+
+        if cluster_name is None:
+            print(f"No {hardware_type} nodes available")
+            return
+
+        print(f"{hardware_type} is available at {cluster_name}\n")
+        aggregate_name = cluster_name.replace("Cloudlab ", "").lower()
+        aggregate = get_aggregate(aggregate_name)
+
+        # Create a 3 node cluster of the desired hardware type
+        request = portal.context.makeRequestRSpec()
+
+        node1 = request.RawPC("control")
+        node2 = request.RawPC("compute1")
+        node3 = request.RawPC("compute2")
+
+        node1.hardware_type = hardware_type
+        node2.hardware_type = hardware_type
+        node3.hardware_type = hardware_type
+
+        node1.disk_image = "urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD"
+        node2.disk_image = "urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD"
+        node3.disk_image = "urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD"
+
+        link1 = request.Link(members=[node1, node2, node3])
+
+        ### Create the slice
+        try:
+            print(f"Creating slice: {slice_name}")
+            expiration = datetime.datetime.now() + datetime.timedelta(hours=duration)
+            ret = context.cf.createSlice(context, slice_name, exp=expiration)
+            print(f"Slice created: {slice_name} for {duration} hours\n")
+            print(f"Slice Info: {json.dumps(ret, indent=2)}\n")
+        except Exception as e:
+            print(f"Error creating slice: {e}")
+            exit(1)
+
+        ### Create the sliver (actual experiment)
+        print(f"Creating sliver in slice: {slice_name}")
+        try:
+            igm = aggregate.createsliver(context, slice_name, request)
+            print(f"Sliver created\n")
+        except Exception as e:
+            print(f"Error creating sliver: {e}")
+            exit(1)
+
+        geni.util.printlogininfo(manifest=igm)
+
+        print("Your ssh info:")
+        geni.util.printlogininfo(manifest=igm)
+
+        ### Save the login info to a file
+        login_info = geni.util._corelogininfo(igm)
+        if isinstance(login_info, list):
+            login_info = "\n".join(map(str, login_info))
+        with open(f"{slice_name}.login.info.txt", "a") as f:
+            f.write(f"Slice name: {slice_name}\n")
+            f.write(f"Cluster name: {cluster_name}\n")
+            f.write(f"Duration: {duration} hours\n")
+            f.write(login_info)
+            f.write("\n")
+            f.write("To delete the experiment, run the following command:\n")
+            f.write(f"python3 genictl.py delete-sliver {slice_name} --site {aggregate_name}\n")
+        print(f"\nSSH info saved to {slice_name}.login.info.txt\n")
+
+        print(
+            f"Your experiment under slice: {slice_name} is successfully created for {duration} hours at {aggregate_name}\n"
+        )
+
+    except Exception as e:
+        print(f"Error: {e}")
 
 def main():
     commands = [
@@ -168,6 +263,7 @@ def main():
         "sliver-spec",
         "delete-sliver",
         "get-hardware-info",
+        "quick-experiment",
     ]
     sites = ["utah", "clemson", "wisconsin"]
 
@@ -255,6 +351,18 @@ def main():
         "get-hardware-info", help="Get available hardware information from CloudLab"
     )
 
+    # Add quick-experiment command
+    quick_exp_parser = subparsers.add_parser(
+        "quick-experiment", help="Create a quick 3-node experiment with specified hardware type"
+    )
+    quick_exp_parser.add_argument(
+        "--hardware-type", required=True, help="Hardware type for the nodes"
+    )
+
+    quick_exp_parser.add_argument(
+        "--duration", type=validate_hours, default=1, help="Duration in hours"
+    )
+
     # Add interactive mode flag
     parser.add_argument(
         "--interactive", "-i", action="store_true", help="Run in interactive mode"
@@ -280,6 +388,7 @@ def main():
             "sliver-spec": list_sliver_spec,
             "delete-sliver": delete_sliver,
             "get-hardware-info": get_hardware_info,
+            "quick-experiment": quick_experiment_creation,
         }
         commands_map[args.command](context, args)
 
@@ -330,7 +439,7 @@ def run_interactive_mode(parser, commands, sites):
                 "sliver-status",
                 "renew-sliver",
                 "sliver-spec",
-                "delete-sliver",
+                "delete-sliver"
             ]:
                 while True:
                     site = site_session.prompt(
@@ -391,6 +500,17 @@ def run_interactive_mode(parser, commands, sites):
                 )
                 args_list.extend(["--description", description])
 
+            if input_parts[0] == "quick-experiment":
+                while True:
+                    hardware_type = input("Enter hardware type: ").strip()
+                    if hardware_type:
+                        break
+                    print("Error: Hardware type cannot be empty")
+                args_list.extend(["--hardware-type", hardware_type])
+                
+                duration = input("Enter duration in hours (default 1): ").strip() or "1"
+                args_list.extend(["--duration", duration])
+
             args = parser.parse_args(args_list)
             if not args.command:
                 parser.print_help()
@@ -407,6 +527,7 @@ def run_interactive_mode(parser, commands, sites):
                 "sliver-spec": list_sliver_spec,
                 "delete-sliver": delete_sliver,
                 "get-hardware-info": get_hardware_info,
+                "quick-experiment": quick_experiment_creation,
             }
             commands_map[args.command](context, args)
 

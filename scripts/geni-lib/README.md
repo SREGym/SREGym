@@ -170,6 +170,14 @@ python3 genictl.py -i
    > get-hardware-info
    ```
 
+10. **quick-experiment**
+   - Creates a quick 3 node experiment with the desired hardware type. The aggregate will be chosen based on where the hardware type is available.
+   ```bash
+   > quick-experiment
+   Enter hardware type: c220g5
+   Enter duration in hours (default 1): 1
+   ```
+
 ## Quick Test
 
 Under the `scripts/geni-lib/tests` directory, there is a script called `create_experiment.py` that can be used to create a quick experiment.

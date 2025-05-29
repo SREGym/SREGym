@@ -146,19 +146,3 @@ def collect_hardware_info_from_html():
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
         return None
-
-
-# if __name__ == "__main__":
-#     hardware_info_list = get_hardware_info()
-
-#     if hardware_info_list:
-#         print(f"\n{'Hardware Name':<20} | {'Cluster Name':<30} | {'Total':<7} | {'Free':<7}")
-#         print("-" * 120)
-
-#         count = 0
-#         for item in hardware_info_list:
-#             if item['total'] > 0 or item['free'] > 0:
-#                 print(f"{item['hardware_name']:<20} | {item['cluster_name']:<30} | {item['total']:<7} | {item['free']:<7}")
-#                 count += 1
-#     else:
-#         print("No hardware information available")
