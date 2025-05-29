@@ -130,7 +130,8 @@ async def main():
     agent.display_welcome_message()
     await agent.set_problem()
 
-    await orchestrator.start_problem()
+    results = await orchestrator.start_problem()
+    print(results)
 
 
 if __name__ == "__main__":
