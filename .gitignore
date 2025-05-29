@@ -365,4 +365,4 @@ scripts/ansible/inventory.yml
 *.pem
 
 # Ignore geni-lib login info
-scripts/geni-lib/*.login.info.txt
+*.login.info.txt

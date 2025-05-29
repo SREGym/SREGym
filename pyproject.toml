@@ -27,6 +27,7 @@ dependencies = [
     "bcrypt==4.3.0",
     "black==24.10.0",
     "blake3==1.0.5",
+    "bs4>=0.0.2",
     "cachetools==5.5.2",
     "certifi==2025.4.26",
     "cffi==1.17.1",

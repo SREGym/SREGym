@@ -30,6 +30,12 @@ When prompted for a password, enter your CloudLab account password (the same one
 This will create a new file `cloudlab_decrypted.pem` containing your decrypted private key.
 The SSL certificate remains in the original `cloudlab.pem` file.
 
+# About `geni-lib` library
+
+The `geni-lib` library is a Python library for interacting with the GENI (Global Environment for Network Innovations) API. It provides a Python interface to manage slices and slivers on GENI-enabled resources. The original library can be found [here](https://gitlab.flux.utah.edu/emulab/geni-lib). For this project, we have made some modifications to the original library to make it python3 compatible as the original library has some python3 context that causes issues when using it in python3.
+
+The modified library can be found in the `scripts/geni-lib/mod/geni-lib-xlab` directory. It will be automatically installed when you run `uv sync` to install the dependencies.
+
 # Building a context definition for CloudLab
 
 To build a context definition, you'll need:
@@ -156,4 +162,10 @@ python3 genictl.py -i
    > delete-sliver
    Enter site (utah, clemson, wisconsin): utah
    Enter slice name: test-slice
+   ```
+
+9. **get-hardware-info**
+   - Gets the hardware information from CloudLab. This is useful to get the hardware information of the nodes available in the different sites.
+   ```bash
+   > get-hardware-info
    ```
