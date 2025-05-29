@@ -78,6 +78,7 @@ dependencies = [
     { name = "aiosignal" },
     { name = "airportsdata" },
     { name = "annotated-types" },
+    { name = "anthropic" },
     { name = "anyio" },
     { name = "asgiref" },
     { name = "astor" },
@@ -152,12 +153,14 @@ dependencies = [
     { name = "kiwisolver" },
     { name = "kubernetes" },
     { name = "lark" },
+    { name = "litellm" },
     { name = "llvmlite" },
     { name = "lm-format-enforcer" },
     { name = "markdown-it-py" },
     { name = "markupsafe" },
     { name = "marshmallow" },
     { name = "matplotlib" },
+    { name = "mcp", extra = ["cli"] },
     { name = "mdurl" },
     { name = "mistral-common" },
     { name = "mpmath" },
@@ -174,7 +177,6 @@ dependencies = [
     { name = "numba" },
     { name = "numpy" },
     { name = "oauthlib" },
-    { name = "openai" },
     { name = "opencv-python-headless" },
     { name = "opentelemetry-api" },
     { name = "opentelemetry-instrumentation" },
@@ -282,6 +284,7 @@ requires-dist = [
     { name = "aiosignal", specifier = "==1.3.2" },
     { name = "airportsdata", specifier = "==20250523" },
     { name = "annotated-types", specifier = "==0.7.0" },
+    { name = "anthropic", specifier = ">=0.52.0" },
     { name = "anyio", specifier = "==4.9.0" },
     { name = "asgiref", specifier = "==3.8.1" },
     { name = "astor", specifier = "==0.8.1" },
@@ -356,12 +359,14 @@ requires-dist = [
     { name = "kiwisolver", specifier = "==1.4.8" },
     { name = "kubernetes", specifier = "==30.1.0" },
     { name = "lark", specifier = "==1.2.2" },
+    { name = "litellm", specifier = ">=1.71.1" },
     { name = "llvmlite", specifier = "==0.43.0" },
     { name = "lm-format-enforcer", specifier = "==0.10.11" },
     { name = "markdown-it-py", specifier = "==3.0.0" },
     { name = "markupsafe", specifier = "==3.0.2" },
     { name = "marshmallow", specifier = "==3.26.1" },
     { name = "matplotlib", specifier = "==3.10.3" },
+    { name = "mcp", extras = ["cli"], specifier = ">=1.9.1" },
     { name = "mdurl", specifier = "==0.1.2" },
     { name = "mistral-common", specifier = "==1.5.6" },
     { name = "mpmath", specifier = "==1.3.0" },
@@ -378,7 +383,6 @@ requires-dist = [
     { name = "numba", specifier = "==0.60.0" },
     { name = "numpy", specifier = "==1.26.4" },
     { name = "oauthlib", specifier = "==3.2.2" },
-    { name = "openai", specifier = "==1.82.0" },
     { name = "opencv-python-headless", specifier = "==4.11.0.86" },
     { name = "opentelemetry-api", specifier = "==1.31.1" },
     { name = "opentelemetry-instrumentation", specifier = "==0.52b1" },
@@ -507,6 +511,24 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/ee/67/531ea369ba64dcff5ec9c3402f9f51bf748cec26dde048a2f973a4eea7f5/annotated_types-0.7.0.tar.gz", hash = "sha256:aff07c09a53a08bc8cfccb9c85b05f1aa9a2a6f23728d790723543408344ce89", size = 16081, upload-time = "2024-05-20T21:33:25.928Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/78/b6/6307fbef88d9b5ee7421e68d78a9f162e0da4900bc5f5793f6d3d0e34fb8/annotated_types-0.7.0-py3-none-any.whl", hash = "sha256:1f02e8b43a8fbbc3f3e0d4f0f4bfc8131bcb4eebe8849b8e5c773f3a1c582a53", size = 13643, upload-time = "2024-05-20T21:33:24.1Z" },
+]
+
+[[package]]
+name = "anthropic"
+version = "0.52.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/57/fd/8a9332f5baf352c272494a9d359863a53385a208954c1a7251a524071930/anthropic-0.52.0.tar.gz", hash = "sha256:f06bc924d7eb85f8a43fe587b875ff58b410d60251b7dc5f1387b322a35bd67b", size = 229372, upload-time = "2025-05-22T16:42:22.044Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/43/172c0031654908bbac2a87d356fff4de1b4947a9b14b9658540b69416417/anthropic-0.52.0-py3-none-any.whl", hash = "sha256:c026daa164f0e3bde36ce9cbdd27f5f1419fff03306be1e138726f42e6a7810f", size = 286076, upload-time = "2025-05-22T16:42:20Z" },
 ]
 
 [[package]]
@@ -1594,6 +1616,28 @@ wheels = [
 ]
 
 [[package]]
+name = "httpx-aiohttp"
+version = "0.1.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/83/34/07ee45949f76701c4327d95bbaf31c6d62d72c74677ba6a2087b13df7743/httpx_aiohttp-0.1.4.tar.gz", hash = "sha256:61030eed28deeac26286d2e872b7c167f5450b7b0eec5a617ae7d3f7da9c8684", size = 8375, upload-time = "2025-05-23T20:33:20.09Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ec/77/04b416a0b6e351edf4a0a7a5ff18e9b0ab5dd59d3614cf41030fb86ccaaf/httpx_aiohttp-0.1.4-py3-none-any.whl", hash = "sha256:740a8725af7b7a03d12f21ccd48a83457baa037304646589b87595746c05c87e", size = 4977, upload-time = "2025-05-23T20:33:19.306Z" },
+]
+
+[[package]]
+name = "httpx-sse"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/4c/60/8f4281fa9bbf3c8034fd54c0e7412e66edbab6bc74c4996bd616f8d0406e/httpx-sse-0.4.0.tar.gz", hash = "sha256:1e81a3a3070ce322add1d3529ed42eb5f70817f45ed6ec915ab753f961139721", size = 12624, upload-time = "2023-12-22T08:01:21.083Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/9b/a181f281f65d776426002f330c31849b86b31fc9d848db62e16f03ff739f/httpx_sse-0.4.0-py3-none-any.whl", hash = "sha256:f329af6eae57eaa2bdfd962b42524764af68075ea87370a2de920af5341e318f", size = 7819, upload-time = "2023-12-22T08:01:19.89Z" },
+]
+
+[[package]]
 name = "huggingface-hub"
 version = "0.32.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1844,6 +1888,29 @@ wheels = [
 ]
 
 [[package]]
+name = "litellm"
+version = "1.71.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "aiohttp" },
+    { name = "click" },
+    { name = "httpx" },
+    { name = "httpx-aiohttp" },
+    { name = "importlib-metadata" },
+    { name = "jinja2" },
+    { name = "jsonschema" },
+    { name = "openai" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "tiktoken" },
+    { name = "tokenizers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8d/f7/1d51b81e608543c6a79b275a4e2b43f6b4b7f32588566b303102014b725d/litellm-1.71.1.tar.gz", hash = "sha256:c20e5917fdbe771ba4b6d1862b3d38d6e89cfba53e85bb337013f848256566eb", size = 7935681, upload-time = "2025-05-25T14:24:10.744Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/34/0e/328e077a66726dc1d4cfee37c67548b151a33a6d196a32737c85a034712b/litellm-1.71.1-py3-none-any.whl", hash = "sha256:9b94e250c58fba3c87c6ebb77e33c1cc8aa9110cee99dfdc37b368a11cec57c7", size = 7921387, upload-time = "2025-05-25T14:24:08.205Z" },
+]
+
+[[package]]
 name = "llvmlite"
 version = "0.43.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1968,6 +2035,32 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/c7/473bc559beec08ebee9f86ca77a844b65747e1a6c2691e8c92e40b9f42a8/matplotlib-3.10.3-cp313-cp313t-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:f6929fc618cb6db9cb75086f73b3219bbb25920cb24cee2ea7a12b04971a4158", size = 8618082, upload-time = "2025-05-08T19:10:39.892Z" },
     { url = "https://files.pythonhosted.org/packages/d8/e9/6ce8edd264c8819e37bbed8172e0ccdc7107fe86999b76ab5752276357a4/matplotlib-3.10.3-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:6c7818292a5cc372a2dc4c795e5c356942eb8350b98ef913f7fda51fe175ac5d", size = 9413699, upload-time = "2025-05-08T19:10:42.376Z" },
     { url = "https://files.pythonhosted.org/packages/1b/92/9a45c91089c3cf690b5badd4be81e392ff086ccca8a1d4e3a08463d8a966/matplotlib-3.10.3-cp313-cp313t-win_amd64.whl", hash = "sha256:4f23ffe95c5667ef8a2b56eea9b53db7f43910fa4a2d5472ae0f72b64deab4d5", size = 8139044, upload-time = "2025-05-08T19:10:44.551Z" },
+]
+
+[[package]]
+name = "mcp"
+version = "1.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx" },
+    { name = "httpx-sse" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "python-multipart" },
+    { name = "sse-starlette" },
+    { name = "starlette" },
+    { name = "uvicorn", marker = "sys_platform != 'emscripten'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e7/bc/54aec2c334698cc575ca3b3481eed627125fb66544152fa1af927b1a495c/mcp-1.9.1.tar.gz", hash = "sha256:19879cd6dde3d763297617242888c2f695a95dfa854386a6a68676a646ce75e4", size = 316247, upload-time = "2025-05-22T15:52:21.26Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a6/c0/4ac795585a22a0a2d09cd2b1187b0252d2afcdebd01e10a68bbac4d34890/mcp-1.9.1-py3-none-any.whl", hash = "sha256:2900ded8ffafc3c8a7bfcfe8bc5204037e988e753ec398f371663e6a06ecd9a9", size = 130261, upload-time = "2025-05-22T15:52:19.702Z" },
+]
+
+[package.optional-dependencies]
+cli = [
+    { name = "python-dotenv" },
+    { name = "typer" },
 ]
 
 [[package]]
@@ -3069,6 +3162,20 @@ wheels = [
 ]
 
 [[package]]
+name = "pydantic-settings"
+version = "2.9.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/67/1d/42628a2c33e93f8e9acbde0d5d735fa0850f3e6a2f8cb1eb6c40b9a732ac/pydantic_settings-2.9.1.tar.gz", hash = "sha256:c509bf79d27563add44e8446233359004ed85066cd096d8b510f715e6ef5d268", size = 163234, upload-time = "2025-04-18T16:44:48.265Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/5f/d6d641b490fd3ec2c4c13b4244d68deea3a1b970a97be64f34fb5504ff72/pydantic_settings-2.9.1-py3-none-any.whl", hash = "sha256:59b4f431b1defb26fe620c71a7d3968a710d719f5f4cdbbdb7926edeb770f6ef", size = 44356, upload-time = "2025-04-18T16:44:46.617Z" },
+]
+
+[[package]]
 name = "pydash"
 version = "8.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -3614,6 +3721,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+]
+
+[[package]]
+name = "sse-starlette"
+version = "2.3.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "starlette" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/10/5f/28f45b1ff14bee871bacafd0a97213f7ec70e389939a80c60c0fb72a9fc9/sse_starlette-2.3.5.tar.gz", hash = "sha256:228357b6e42dcc73a427990e2b4a03c023e2495ecee82e14f07ba15077e334b2", size = 17511, upload-time = "2025-05-12T18:23:52.601Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c8/48/3e49cf0f64961656402c0023edbc51844fe17afe53ab50e958a6dbbbd499/sse_starlette-2.3.5-py3-none-any.whl", hash = "sha256:251708539a335570f10eaaa21d1848a10c42ee6dc3a9cf37ef42266cdb1c52a8", size = 10233, upload-time = "2025-05-12T18:23:50.722Z" },
 ]
 
 [[package]]
