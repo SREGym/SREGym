@@ -77,6 +77,7 @@ class Orchestrator:
         return await self.agent.get_action(input)
 
     async def ask_env(self, input: str):
+        # Parse input and ensure it's a submit(...) call
         try:
             parsed = self.parser.parse(input)
         except Exception as e:
@@ -87,8 +88,14 @@ class Orchestrator:
 
         solution = parsed["args"][0] if parsed["args"] else None
 
-        # === Evaluate based on current stage ===
+        # === Evaluate based on available oracles ===
         if self.submission_stage == "detection":
+            if (
+                not hasattr(self.problem, "detection_oracle")
+                or self.problem.detection_oracle is None
+            ):
+                return "[⚠️] This problem does not support detection evaluation."
+
             results = self.problem.detection_oracle.evaluate(solution)
             self.results["Detection"] = results
 
@@ -101,12 +108,33 @@ class Orchestrator:
                 self.submission_stage = "done"
                 return "[❌] Incorrect detection. Ending evaluation."
 
-            self.submission_stage = "localization"
+            # Advance to next available stage
+            if (
+                hasattr(self.problem, "localization_oracle")
+                and self.problem.localization_oracle is not None
+            ):
+                self.submission_stage = "localization"
+            elif (
+                hasattr(self.problem, "mitigation_oracle")
+                and self.problem.mitigation_oracle is not None
+            ):
+                self.submission_stage = "mitigation"
+            else:
+                self.submission_stage = "done"
+                return "[✅] Detection successful. No further stages to evaluate."
+
             return SubmissionStatus.VALID_SUBMISSION
 
         elif self.submission_stage == "localization":
+            if (
+                not hasattr(self.problem, "localization_oracle")
+                or self.problem.localization_oracle is None
+            ):
+                return "[⚠️] This problem does not support localization evaluation."
+
             results = self.problem.localization_oracle.evaluate(solution)
             self.results["Localization"] = results
+
             if (
                 "Localization Accuracy" not in results
                 or results.get("Localization Accuracy") == 0.0
@@ -120,10 +148,25 @@ class Orchestrator:
                     return "[⚠️] Invalid localization list contents. Please try again."
 
             self.results["TTL"] = time.time() - self.execution_start_time
-            self.submission_stage = "mitigation"
+
+            if (
+                hasattr(self.problem, "mitigation_oracle")
+                and self.problem.mitigation_oracle is not None
+            ):
+                self.submission_stage = "mitigation"
+            else:
+                self.submission_stage = "done"
+                return "[✅] Localization complete. No mitigation required."
+
             return SubmissionStatus.VALID_SUBMISSION
 
         elif self.submission_stage == "mitigation":
+            if (
+                not hasattr(self.problem, "mitigation_oracle")
+                or self.problem.mitigation_oracle is None
+            ):
+                return "[⚠️] This problem does not support mitigation evaluation."
+
             results = self.problem.mitigation_oracle.evaluate()
             self.results["Mitigation"] = results
             self.results["TTM"] = time.time() - self.execution_start_time
