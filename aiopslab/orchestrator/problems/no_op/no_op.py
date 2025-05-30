@@ -38,6 +38,7 @@ class NoOp(Problem):
 
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
+        self.faulty_service = None
         self.injector = NoopFaultInjector(namespace=self.namespace)
         # === Attach evaluation oracles ===
         self.detection_oracle = DetectionOracle(problem=self, expected="No")
