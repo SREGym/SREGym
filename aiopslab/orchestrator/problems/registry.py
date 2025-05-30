@@ -6,7 +6,6 @@ from aiopslab.orchestrator.problems.auth_miss_mongodb import MongoDBAuthMissing
 from aiopslab.orchestrator.problems.cart_service_failure import CartServiceFailure
 from aiopslab.orchestrator.problems.container_kill import ChaosMeshContainerKill
 from aiopslab.orchestrator.problems.image_slow_load import ImageSlowLoad
-from aiopslab.orchestrator.problems.k8s_target_port_misconfig import K8STargetPortMisconfig
 from aiopslab.orchestrator.problems.kafka_queue_problems import KafkaQueueProblems
 from aiopslab.orchestrator.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
 from aiopslab.orchestrator.problems.misconfig_app import MisconfigAppHotelRes
@@ -23,6 +22,7 @@ from aiopslab.orchestrator.problems.redeploy_without_pv import RedeployWithoutPV
 from aiopslab.orchestrator.problems.revoke_auth import MongoDBRevokeAuth
 from aiopslab.orchestrator.problems.scale_pod import ScalePodSocialNet
 from aiopslab.orchestrator.problems.storage_user_unregistered import MongoDBUserUnregistered
+from aiopslab.orchestrator.problems.target_port import K8STargetPortMisconfig
 from aiopslab.orchestrator.problems.wrong_bin_usage import WrongBinUsage
 
 

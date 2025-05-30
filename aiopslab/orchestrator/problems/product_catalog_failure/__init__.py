@@ -1,1 +1,0 @@
-from .product_catalog_failure import ProductCatalogServiceFailure

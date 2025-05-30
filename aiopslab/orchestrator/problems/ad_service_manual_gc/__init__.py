@@ -1,1 +1,0 @@
-from .ad_service_manual_gc import AdServiceManualGc

@@ -1,1 +1,0 @@
-from .misconfig_app_hotel_res import MisconfigAppHotelRes
