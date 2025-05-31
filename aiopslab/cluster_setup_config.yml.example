@@ -1,15 +1,15 @@
 # set cloulab or kind as the default mode
-mode: kind
+mode: cloudlab
 
 cloudlab:
-  ssh_user: ubuntu
-  ssh_key: ~/.ssh/id_rsa
+  ssh_user: <user>
+  ssh_key:  /Users/<your-user>/ssh
 
   # dummy ip nodes
   nodes:
-    - 10.10.1.101
-    - 10.10.1.102
-    - 10.10.1.103
+    - 128.110.217.150   
+    - 128.110.217.139 
+    - 128.110.217.130   
 
 # fallback to kind if cloublab is not avilable 
 kind:
