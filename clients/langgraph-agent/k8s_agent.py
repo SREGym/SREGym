@@ -6,6 +6,7 @@ from typing import Annotated
 from azure.mgmt.core.exceptions import TypedErrorInfo
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import END
 from langgraph.graph import START, StateGraph
 from langgraph.graph.message import add_messages
@@ -112,12 +113,19 @@ graph_builder.add_conditional_edges(
     {"observability_tool_node": "observability_tool_node", END: END},
 )
 graph_builder.add_edge("observability_tool_node", "agent")
-graph = graph_builder.compile()
+memory = MemorySaver()
+graph = graph_builder.compile(checkpointer=memory)
+config = {"configurable": {"thread_id": "1"}}
 
 
 def stream_graph_updates(user_input: str):
-    for event in graph.stream({"messages": [{"role": "user", "content": user_input}]}):
+    for event in graph.stream(
+        {"messages": [{"role": "user", "content": user_input}]},
+        config=config,
+        stream_mode="values",
+    ):
         logger.info(event)
+        event["messages"][-1].pretty_print()
         for value in event.values():
             try:
                 logger.info("Assistant: %s", value["messages"][-1].content)
