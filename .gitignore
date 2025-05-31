@@ -360,3 +360,9 @@ srearena/observer/prometheus/prometheus/Chart.lock
 # Ignore customized config files
 srearena/config.yml
 scripts/ansible/inventory.yml
+
+# Ignore cloudlab credentials
+*.pem
+
+# Ignore geni-lib login info
+*.login.info.txt
