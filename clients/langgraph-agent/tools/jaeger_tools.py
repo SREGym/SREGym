@@ -11,9 +11,7 @@ from langchain_core.tools.base import ArgsSchema, BaseTool
 from mcp import ClientSession, StdioServerParameters, stdio_client
 from pydantic import BaseModel, Field
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -25,9 +23,7 @@ class GetTracesInput(BaseModel):
 
 class GetTraces(BaseTool):
     name: str = "get_traces"
-    description: str = (
-        "get traces of last n minutes from jaeger by service and operation"
-    )
+    description: str = "get traces of last n minutes from jaeger by service and operation"
     args_schema: Optional[ArgsSchema] = GetTracesInput
 
     def _run(
@@ -60,19 +56,11 @@ class GetTraces(BaseTool):
         if not (is_python or is_js):
             raise ValueError("Server script must be a .py or .js file")
 
-        command = (
-            sys.executable  # Uses the current Python interpreter from the activated venv
-            if is_python
-            else "node"
-        )
-        server_params = StdioServerParameters(
-            command=command, args=[server_path], env=None
-        )
+        command = sys.executable if is_python else "node"  # Uses the current Python interpreter from the activated venv
+        server_params = StdioServerParameters(command=command, args=[server_path], env=None)
 
         logging.info(f"Starting server: {server_name} with params: {server_params}")
-        stdio_transport = await exit_stack.enter_async_context(
-            stdio_client(server_params)
-        )
+        stdio_transport = await exit_stack.enter_async_context(stdio_client(server_params))
 
         stdio, write = stdio_transport
         session = await exit_stack.enter_async_context(ClientSession(stdio, write))
@@ -120,19 +108,11 @@ class GetServices(BaseTool):
         if not (is_python or is_js):
             raise ValueError("Server script must be a .py or .js file")
 
-        command = (
-            sys.executable  # Uses the current Python interpreter from the activated venv
-            if is_python
-            else "node"
-        )
-        server_params = StdioServerParameters(
-            command=command, args=[server_path], env=None
-        )
+        command = sys.executable if is_python else "node"  # Uses the current Python interpreter from the activated venv
+        server_params = StdioServerParameters(command=command, args=[server_path], env=None)
 
         logging.info(f"Starting server: {server_name} with params: {server_params}")
-        stdio_transport = await exit_stack.enter_async_context(
-            stdio_client(server_params)
-        )
+        stdio_transport = await exit_stack.enter_async_context(stdio_client(server_params))
 
         stdio, write = stdio_transport
         session = await exit_stack.enter_async_context(ClientSession(stdio, write))
@@ -158,9 +138,7 @@ class GetOperations(BaseTool):
     description: str = "get operations from jaeger by service"
     args_schema: Optional[ArgsSchema] = GetOperationsInput
 
-    def _run(
-        self, service: str, run_manager: Optional[CallbackManagerForToolRun] = None
-    ) -> str:
+    def _run(self, service: str, run_manager: Optional[CallbackManagerForToolRun] = None) -> str:
         logger.error("no sync version of tools, exiting.")
         sys.exit(1)
 
@@ -169,10 +147,8 @@ class GetOperations(BaseTool):
         service: str,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
-        logger.info(
-            f"calling mcp get_operations from langchain get_operations with service {service}"
-        )
-        server_path = "../../mcp_server/observability_server.py"
+        logger.info(f"calling mcp get_operations from langchain get_operations with service {service}")
+        server_path = "mcp_server/observability_server.py"
         server_name = "observability"
         exit_stack = AsyncExitStack()
         server_path = Path(server_path).resolve().as_posix()
@@ -182,19 +158,11 @@ class GetOperations(BaseTool):
         if not (is_python or is_js):
             raise ValueError("Server script must be a .py or .js file")
 
-        command = (
-            sys.executable  # Uses the current Python interpreter from the activated venv
-            if is_python
-            else "node"
-        )
-        server_params = StdioServerParameters(
-            command=command, args=[server_path], env=None
-        )
+        command = sys.executable if is_python else "node"  # Uses the current Python interpreter from the activated venv
+        server_params = StdioServerParameters(command=command, args=[server_path], env=None)
 
         logging.info(f"Starting server: {server_name} with params: {server_params}")
-        stdio_transport = await exit_stack.enter_async_context(
-            stdio_client(server_params)
-        )
+        stdio_transport = await exit_stack.enter_async_context(stdio_client(server_params))
 
         stdio, write = stdio_transport
         session = await exit_stack.enter_async_context(ClientSession(stdio, write))
