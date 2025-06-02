@@ -1,19 +1,16 @@
 import datetime
-import html
 import json
 import random
 import warnings
 import geni.util
-from geni.aggregate.cloudlab import Clemson, Utah, Wisconsin
-import requests
-from bs4 import BeautifulSoup
 import geni.portal as portal
 from provisioner.utils.logger import logger
-from provisioner.utils.parser import parse_sliver_info, collect_and_parse_hardware_info
+from provisioner.utils.parser import collect_and_parse_hardware_info, parse_sliver_info
 from provisioner.config.settings import (
     AGGREGATES_MAP,
     PRIORITY_HARDWARE_TYPES,
     DefaultSettings,
+    DELETE_EXPERIMENT_ERRORS,
 )
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -47,26 +44,19 @@ class CloudlabProvisioner:
 
     def print_all_hardware_info(self):
         hardware_list = collect_and_parse_hardware_info()
-        print(
-            f"{'Hardware Name':<20} | {'Cluster Name':<30} | {'Total':<7} | {'Free':<7}"
-        )
+        print(f"{'Hardware Name':<20} | {'Cluster Name':<30} | {'Total':<7} | {'Free':<7}")
         print("-" * 100)
         for hardware in hardware_list:
             print(
                 f"{hardware['hardware_name']:<20} | {hardware['cluster_name']:<30} | {hardware['total']:<7} | {hardware['free']:<7}"
             )
 
-    def get_hardware_available_aggregate_name(
-        self, hardware_type: str, node_count: int
-    ):
+    def get_hardware_available_aggregate_name(self, hardware_type: str, node_count: int):
         hardware_list = self.get_all_hardware_info(hardware_type)
         aggregate_name = None
 
         for hardware in hardware_list:
-            if (
-                hardware["hardware_name"] == hardware_type
-                and hardware["free"] >= node_count
-            ):
+            if hardware["hardware_name"] == hardware_type and hardware["free"] >= node_count:
                 aggregate_name = hardware["cluster_name"].lower()
                 break
 
@@ -79,14 +69,10 @@ class CloudlabProvisioner:
     def generate_slice_name(self):
         return f"test-{random.randint(100000, 999999)}"
 
-    def create_slice(
-        self, slice_name: str, duration: float, description: str = "Cloudlab Experiment"
-    ):
+    def create_slice(self, slice_name: str, duration: float, description: str = "Cloudlab Experiment"):
         try:
             expiration = datetime.datetime.now() + datetime.timedelta(hours=duration)
-            res = self.context.cf.createSlice(
-                self.context, slice_name, exp=expiration, desc=description
-            )
+            res = self.context.cf.createSlice(self.context, slice_name, exp=expiration, desc=description)
             return res
         except Exception as e:
             logger.error(f"Error: {e}")
@@ -129,84 +115,122 @@ class CloudlabProvisioner:
 
     def create_experiment(
         self,
-        duration: float = DefaultSettings.DEFAULT_DURATION,
+        slice_name: str = None,
+        duration: float = DefaultSettings.DEFAULT_DURATION_HOURS,
         description: str = DefaultSettings.DEFAULT_DESCRIPTION,
         hardware_type: str = DefaultSettings.DEFAULT_HARDWARE_TYPE,
         os_type: str = DefaultSettings.DEFAULT_OS_TYPE,
         node_count: int = DefaultSettings.DEFAULT_NODE_COUNT,
+        save_info: bool = True,
     ):
-        slice_name = self.generate_slice_name()
+        logger.info(
+            f"Creating experiment with duration: {duration}, description: {description}, hardware_type: {hardware_type}, os_type: {os_type}, node_count: {node_count}"
+        )
+        if not slice_name:
+            slice_name = self.generate_slice_name()
 
-        for i in range(100):
+        for i in range(10):
+            logger.info(f"Creating slice {slice_name}: attempt {i+1}")
             slice_info = self.create_slice(slice_name, duration, description)
             if slice_info:
+                logger.info(f"Slice {slice_name} created successfully")
                 break
 
         if not slice_info:
             logger.error("Error: Failed to create slice")
             return None
 
-        # TODO: Save the slice info in a database for now save it in a file
-        with open(f"{slice_name}.slice.info.txt", "w") as f:
-            f.write(f"Slice Name: {slice_name}\n")
-            f.write(f"Duration: {duration}\n")
-            f.write(f"Description: {description}\n")
-            f.write(f"Slice Info: {json.dumps(slice_info, indent=4)}\n")
-
-        logger.info(
-            f"Slice Successfully created: {slice_name}, duration: {duration}, description: {description}"
-        )
         logger.info(f"Slice Info: {slice_info}")
 
         for i, hardware_type in enumerate(PRIORITY_HARDWARE_TYPES):
-            aggregate_name = self.get_hardware_available_aggregate_name(
-                hardware_type, node_count
-            )
+            logger.info(f"Getting hardware available aggregate name for {hardware_type}")
+            aggregate_name = self.get_hardware_available_aggregate_name(hardware_type, node_count)
 
+            if not aggregate_name:
+                logger.error(f"Error: No hardware available for {hardware_type}")
+                continue
+
+            logger.info(f"Found hardware available aggregate name: {aggregate_name}")
+
+            logger.info(f"Creating rspec file for {slice_name} in {aggregate_name}")
             rspec_file = self.create_rspec(hardware_type, os_type, node_count)
+            logger.info(f"Created rspec file for {slice_name} in {aggregate_name}")
+
+            logger.info(f"Creating sliver for {slice_name} in {aggregate_name}")
             login_info = self.create_sliver(slice_name, rspec_file, aggregate_name)
+            logger.info(f"Created sliver for {slice_name} in {aggregate_name}")
 
             if login_info:
+                logger.info(f"Created sliver for {hardware_type} in {aggregate_name}")
                 break
 
         if not login_info:
             logger.error("Error: Requested hardware is not available")
             return None
 
-        # TODO: Save the sliver and login info in a database for now save it in a file
-        with open(f"{slice_name}.sliver.info.txt", "w") as f:
-            f.write(f"Slice Name: {slice_name}\n")
-            f.write(f"Aggregate: {aggregate_name}\n")
-            f.write(f"Duration: {duration}\n")
-            f.write(f"Description: {description}\n")
-            f.write(f"Hardware Type: {hardware_type}\n")
-            f.write(f"OS Type: {os_type}\n")
-            f.write(f"Node Count: {node_count}\n")
-            f.write(f"Login Info: {json.dumps(login_info, indent=4)}\n")
+        experiment_info = {
+            "slice_name": slice_name,
+            "aggregate_name": aggregate_name,
+            "duration": duration,
+            "description": description,
+            "hardware_type": hardware_type,
+            "os_type": os_type,
+            "node_count": node_count,
+            "login_info": login_info,
+        }
+
+        if save_info:
+            with open(f"{slice_name}.experiment.info.json", "w") as f:
+                json.dump(experiment_info, f, indent=4)
 
         logger.info(
             f"Experiment Successfully created: {slice_name}, duration: {duration}, description: {description}, hardware_type: {hardware_type}, os_type: {os_type}, node_count: {node_count}"
         )
 
-        return True
+        return experiment_info
+
+    def renew_experiment(self, slice_name: str, duration: float, aggregate_name: str):
+        try:
+            logger.info(f"Renewing experiment {slice_name} for {duration} hours")
+
+            # Renew the slice (add 1 hour buffer to ensure slice outlives sliver)
+            slice_renewal_success = self.renew_slice(slice_name, duration + 1)
+            if not slice_renewal_success:
+                logger.error(f"Failed to renew slice {slice_name}")
+                return False
+
+            logger.info(f"Successfully renewed slice {slice_name} for {duration+1} hours")
+
+            # Renew the sliver
+            sliver_renewal_success = self.renew_sliver(slice_name, aggregate_name, duration)
+            if not sliver_renewal_success:
+                logger.error(f"Failed to renew sliver for slice {slice_name}")
+                return False
+
+            logger.info(f"Successfully renewed experiment {slice_name} for {duration} hours")
+            return True
+        except Exception as e:
+            logger.error(f"Error renewing experiment: {e}")
+            return False
 
     def delete_experiment(self, slice_name: str, aggregate_name: str):
         try:
+            logger.info(f"Deleting experiment {slice_name} in {aggregate_name}")
             aggregate = self.get_aggregate(aggregate_name)
             aggregate.deletesliver(self.context, slice_name)
+            logger.info(f"Successfully deleted experiment {slice_name} in {aggregate_name}")
             return True
         except Exception as e:
             logger.error(f"Error: {e}")
+            if DELETE_EXPERIMENT_ERRORS[1] in str(e):
+                return True
             return False
 
     # TODO: check the return of renewSlice
     def renew_slice(self, slice_name: str, duration: float):
         try:
-            new_expiration = datetime.datetime.now() + datetime.timedelta(
-                hours=duration
-            )
-            ret = self.context.cf.renewSlice(self.context, slice_name, new_expiration)
-            print(ret)
+            new_expiration = datetime.datetime.now() + datetime.timedelta(hours=duration)
+            self.context.cf.renewSlice(self.context, slice_name, new_expiration)
             return True
         except Exception as e:
             logger.error(f"Error: {e}")
@@ -216,11 +240,8 @@ class CloudlabProvisioner:
     def renew_sliver(self, slice_name: str, aggregate_name: str, duration: float):
         try:
             aggregate = self.get_aggregate(aggregate_name)
-            new_expiration = datetime.datetime.now() + datetime.timedelta(
-                hours=duration
-            )
-            ret = aggregate.renewsliver(self.context, slice_name, new_expiration)
-            print(ret)
+            new_expiration = datetime.datetime.now() + datetime.timedelta(hours=duration)
+            aggregate.renewsliver(self.context, slice_name, new_expiration)
             return True
         except Exception as e:
             logger.error(f"Error: {e}")
@@ -238,7 +259,7 @@ class CloudlabProvisioner:
     def get_sliver_spec(self, slice_name: str, aggregate_name: str):
         try:
             aggregate = self.get_aggregate(aggregate_name)
-            sliver_spec = aggregate.getsliver(self.context, slice_name)
+            sliver_spec = aggregate.listresources(self.context, slice_name)
             return sliver_spec
         except Exception as e:
             logger.error(f"Error: {e}")
@@ -246,13 +267,14 @@ class CloudlabProvisioner:
 
     def print_experiment_spec(self, slice_name: str, aggregate_name: str):
         sliver_spec = self.get_sliver_spec(slice_name, aggregate_name)
+        parsed_sliver_spec = parse_sliver_info(sliver_spec.text)
         try:
             print("\nExperiment Information:")
-            print(f"Description: {sliver_spec['description']}")
-            print(f"Expiration: {sliver_spec['expiration']}")
+            print(f"Description: {parsed_sliver_spec['description']}")
+            print(f"Expiration: {parsed_sliver_spec['expiration']}")
 
             print("\nNodes:")
-            for node in sliver_spec["nodes"]:
+            for node in parsed_sliver_spec["nodes"]:
                 print(f"\nNode: {node['client_id']}")
                 print(f"  Hostname: {node['hostname']}")
                 print(f"  Public IP: {node['public_ip']}")
@@ -261,9 +283,9 @@ class CloudlabProvisioner:
                 print(f"  OS Image: {node['os_image']}")
 
             print("\nLocation:")
-            print(f"  Country: {sliver_spec['location']['country']}")
-            print(f"  Latitude: {sliver_spec['location']['latitude']}")
-            print(f"  Longitude: {sliver_spec['location']['longitude']}")
+            print(f"  Country: {parsed_sliver_spec['location']['country']}")
+            print(f"  Latitude: {parsed_sliver_spec['location']['latitude']}")
+            print(f"  Longitude: {parsed_sliver_spec['location']['longitude']}")
         except Exception as e:
             logger.error(f"Error: {e}")
             return None

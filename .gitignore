@@ -366,6 +366,7 @@ scripts/ansible/inventory.yml
 
 # Ignore geni-lib login info
 *.login.info.txt
+*.experiment.info.json
 
 # Ignore geni-lib context file
 context.json

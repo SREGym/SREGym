@@ -11,6 +11,7 @@ dependencies = [
     "annotated-types==0.7.0",
     "anthropic>=0.52.0",
     "anyio==4.9.0",
+    "apscheduler>=3.11.0",
     "asgiref==3.8.1",
     "astor==0.8.1",
     "attrs==25.3.0",
@@ -227,4 +228,3 @@ packages = ["srearena", "clients", "provisioner"]
 
 [tool.uv.sources]
 geni-lib-xlab = { path = "scripts/geni-lib/mod/geni_lib_xlab-1.0.0.tar.gz" }
-packages = ["srearena", "clients"]
