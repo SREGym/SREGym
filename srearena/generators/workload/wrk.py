@@ -4,6 +4,7 @@ import time
 
 import yaml
 from kubernetes import client, config
+from rich.console import Console
 
 from srearena.paths import BASE_DIR
 
@@ -45,11 +46,34 @@ class Wrk:
         except client.exceptions.ApiException as e:
             print(f"Error creating ConfigMap '{name}': {e}")
 
+    def wait_for_job_deletion(self, job_name, namespace, sleep=2, max_wait=60):
+        """Wait for a Kubernetes Job to be deleted before proceeding."""
+        api_instance = client.BatchV1Api()
+        console = Console()
+        waited = 0
+
+        with console.status(f"[bold yellow]Waiting for job '{job_name}' to be deleted..."):
+            while waited < max_wait:
+                try:
+                    api_instance.read_namespaced_job(name=job_name, namespace=namespace)
+                    time.sleep(sleep)
+                    waited += sleep
+                except client.exceptions.ApiException as e:
+                    if e.status == 404:
+                        console.log(f"[bold green]Job '{job_name}' successfully deleted.")
+                        return
+                    else:
+                        console.log(f"[red]Error checking job deletion: {e}")
+                        raise
+
+        raise TimeoutError(f"[red]Timed out waiting for job '{job_name}' to be deleted.")
+
     def create_wrk_job(self, job_name, namespace, payload_script, url):
         wrk_job_yaml = BASE_DIR / "generators" / "workload" / "wrk-job-template.yaml"
         with open(wrk_job_yaml, "r") as f:
             job_template = yaml.safe_load(f)
 
+        # Configure job...
         job_template["metadata"]["name"] = job_name
         container = job_template["spec"]["template"]["spec"]["containers"][0]
         container["args"] = [
@@ -69,17 +93,14 @@ class Wrk:
             "-R",
             str(self.rate),
         ]
-
         if self.latency:
             container["args"].append("--latency")
 
+        # Set volumes and mounts
         job_template["spec"]["template"]["spec"]["volumes"] = [
-            {
-                "name": "wrk2-scripts",
-                "configMap": {"name": "wrk2-payload-script"},
-            }
+            {"name": "wrk2-scripts", "configMap": {"name": "wrk2-payload-script"}}
         ]
-        job_template["spec"]["template"]["spec"]["containers"][0]["volumeMounts"] = [
+        container["volumeMounts"] = [
             {
                 "name": "wrk2-scripts",
                 "mountPath": f"/scripts/{payload_script}",
@@ -97,7 +118,7 @@ class Wrk:
                     namespace=namespace,
                     body=client.V1DeleteOptions(propagation_policy="Foreground"),
                 )
-                time.sleep(5)
+                self.wait_for_job_deletion(job_name, namespace)
         except client.exceptions.ApiException as e:
             if e.status != 404:
                 print(f"Error checking for existing job: {e}")
@@ -108,20 +129,6 @@ class Wrk:
             print(f"Job created: {response.metadata.name}")
         except client.exceptions.ApiException as e:
             print(f"Error creating job: {e}")
-            return
-
-        try:
-            while True:
-                job_status = api_instance.read_namespaced_job_status(name=job_name, namespace=namespace)
-                if job_status.status.ready:
-                    print("Job completed successfully.")
-                    break
-                elif job_status.status.failed:
-                    print("Job failed.")
-                    break
-                time.sleep(5)
-        except client.exceptions.ApiException as e:
-            print(f"Error monitoring job: {e}")
 
     def start_workload(self, payload_script, url):
         namespace = "default"
