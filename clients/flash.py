@@ -2,14 +2,16 @@
 
 import asyncio
 import json
-import os
 import logging
+import os
+from typing import Any, Dict, List, Tuple
+
 import tiktoken
-from typing import List, Dict, Tuple, Any
 from pydantic import BaseModel
+
 from clients.utils.llm import GPTClient
-from aiopslab.orchestrator import Orchestrator
-from aiopslab.orchestrator.problems.registry import ProblemRegistry
+from srearena.conductor import Conductor
+from srearena.conductor.problems.registry import ProblemRegistry
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -20,6 +22,7 @@ def count_message_tokens(message, enc):
     tokens = 4  # <|start|>role/name + content + <|end|>
     tokens += len(enc.encode(message.get("content", "")))
     return tokens
+
 
 def trim_history_to_token_limit(history, max_tokens=90000, model="gpt-4"):
     enc = tiktoken.encoding_for_model(model)
@@ -33,9 +36,9 @@ def trim_history_to_token_limit(history, max_tokens=90000, model="gpt-4"):
 
     if last_msg_tokens > max_tokens:
         # If even the last message is too big, truncate its content
-        truncated_content = enc.decode(enc.encode(last_msg["content"])[:max_tokens - 4])
+        truncated_content = enc.decode(enc.encode(last_msg["content"])[: max_tokens - 4])
         return [{"role": last_msg["role"], "content": truncated_content}]
-    
+
     trimmed.insert(0, last_msg)
     total_tokens += last_msg_tokens
 
@@ -49,6 +52,7 @@ def trim_history_to_token_limit(history, max_tokens=90000, model="gpt-4"):
 
     return trimmed
 
+
 class FlashAgent:
     def __init__(self):
         self.history = []
@@ -58,9 +62,7 @@ class FlashAgent:
     def init_context(self, problem_desc: str, instructions: str, apis: dict):
         self.shell_api = self._filter_dict(apis, lambda k, _: "exec_shell" in k)
         self.submit_api = self._filter_dict(apis, lambda k, _: "submit" in k)
-        self.telemetry_apis = self._filter_dict(
-            apis, lambda k, _: "exec_shell" not in k and "submit" not in k
-        )
+        self.telemetry_apis = self._filter_dict(apis, lambda k, _: "exec_shell" not in k and "submit" not in k)
 
         self.system_message = f"""
         Problem Description: {problem_desc}
@@ -93,12 +95,7 @@ class FlashAgent:
         if hindsight:
             hightsight = hindsight[:1000]
 
-
-        combined_input = (
-            f"{input_text}\n\nHindsight from Flash agent:\n{hindsight}"
-            if hindsight
-            else input_text
-        )
+        combined_input = f"{input_text}\n\nHindsight from Flash agent:\n{hindsight}" if hindsight else input_text
         trimmed_history = trim_history_to_token_limit(self.history + [{"role": "user", "content": combined_input}])
         response = self.llm.run(trimmed_history)
         self.history = trimmed_history + [{"role": "assistant", "content": response[0]}]
@@ -123,7 +120,7 @@ class HindsightBuilder:
     def summarize_history(self, history: List[Dict]) -> str:
         summary = []
         for msg in history[-5:]:  # Keep only last 5 messages
-            content = msg['content']
+            content = msg["content"]
             summary.append(f"{msg['role']}: {content[:300]}")  # Truncate long messages
         return "\n".join(summary)
 
@@ -146,7 +143,6 @@ class HindsightBuilder:
     """
         return prompt
 
-
     def develop_hindsight(self, input: str, history: dict) -> str:
         """
         Develop hindsight based on the input and provide guidance for the next action.
@@ -162,20 +158,20 @@ if __name__ == "__main__":
 
     for pid in problems:
         flash_agent = FlashAgent()
-        orchestrator = Orchestrator()
+        conductor = Conductor()
 
-        orchestrator.register_agent(flash_agent, name="flash")
+        conductor.register_agent(flash_agent, name="flash")
 
         try:
-            problem_desc, instructs, apis = orchestrator.init_problem(pid)
+            problem_desc, instructs, apis = conductor.init_problem(pid)
             flash_agent.init_context(problem_desc, instructs, apis)
 
-            full_output = asyncio.run(orchestrator.start_problem(max_steps=30))
+            full_output = asyncio.run(conductor.start_problem())
             results = full_output.get("results", {})
-            
+
             filename = os.path.join("results", f"flash_{pid}.json")
             with open(filename, "w") as f:
                 json.dump(results, f, indent=2)
 
         except Exception as e:
-            print(f"Error while running problem {pid}: {e}")        
+            print(f"Error while running problem {pid}: {e}")

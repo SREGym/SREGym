@@ -1,6 +1,6 @@
 # Building your own image
 
-This document provides detailed, step-by-step instructions for building your own kind image to deploy AIOpsLab.
+This document provides detailed, step-by-step instructions for building your own kind image to deploy SREArena.
 
 ---
 
@@ -24,11 +24,11 @@ This document provides detailed, step-by-step instructions for building your own
 ---
 
 ## **Overview**
-AIOpsLab is deployed using **containerized components** and Kubernetes manifests. This guide provides a step-by-step deployment process, covering:
+SREArena is deployed using **containerized components** and Kubernetes manifests. This guide provides a step-by-step deployment process, covering:
 
 - Setting up **WSL2 (Windows Subsystem for Linux) or native Ubuntu 24.04**.
 - Installing **Docker, kind, kubectl, Helm, Lua, Luarocks, and Luasocket**.
-- Building a custom **kind image** and deploying AIOpsLab into a **local Kubernetes cluster**.
+- Building a custom **kind image** and deploying SREArena into a **local Kubernetes cluster**.
 
 ---
 
@@ -148,6 +148,6 @@ After finishing cluster creation, proceed to the next "Update config.yml" step.
 ---
 
 ## **Conclusion**
-This guide covers deploying **AIOpsLab** on **both WSL2 and Ubuntu 24.04**, ensuring compatibility across different environments. By following these steps, you can successfully set up **Docker, kind, and Kubernetes** and deploy the AIOpsLab application.
+This guide covers deploying **SREArena** on **both WSL2 and Ubuntu 24.04**, ensuring compatibility across different environments. By following these steps, you can successfully set up **Docker, kind, and Kubernetes** and deploy the SREArena application.
 
-For advanced configurations, refer to the [AIOpsLab documentation](https://github.com/Flemington8/AIOpsLab). 🚀
+For advanced configurations, refer to the [SREArena documentation](https://github.com/Flemington8/SREArena). 🚀

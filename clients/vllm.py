@@ -1,12 +1,13 @@
-import os
 import asyncio
+import os
 import time
 
 import wandb
-from aiopslab.orchestrator import Orchestrator
-from aiopslab.orchestrator.problems.registry import ProblemRegistry
+
 from clients.utils.llm import vLLMClient
 from clients.utils.templates import DOCS_SHELL_ONLY
+from srearena.conductor import Conductor
+from srearena.conductor.problems.registry import ProblemRegistry
 
 
 class Agent:
@@ -17,13 +18,11 @@ class Agent:
     def init_context(self, problem_desc: str, instructions: str, apis: str):
         """Initialize the context for the agent."""
 
-        self.shell_api = self._filter_dict(
-            apis, lambda k, _: "exec_shell" in k)
+        self.shell_api = self._filter_dict(apis, lambda k, _: "exec_shell" in k)
         self.submit_api = self._filter_dict(apis, lambda k, _: "submit" in k)
 
-        def stringify_apis(apis): return "\n\n".join(
-            [f"{k}\n{v}" for k, v in apis.items()]
-        )
+        def stringify_apis(apis):
+            return "\n\n".join([f"{k}\n{v}" for k, v in apis.items()])
 
         self.system_message = DOCS_SHELL_ONLY.format(
             prob_desc=problem_desc,
@@ -40,7 +39,7 @@ class Agent:
         """Wrapper to interface the agent with OpsBench.
 
         Args:
-            input (str): The input from the orchestrator/environment.
+            input (str): The input from the conductor/environment.
 
         Returns:
             str: The response from the agent.
@@ -60,26 +59,26 @@ if __name__ == "__main__":
 
     if use_wandb:
         # Initialize wandb run
-        wandb.init(project="AIOpsLab", entity="AIOpsLab")
+        wandb.init(project="SREArena", entity="SREArena")
 
     registry = ProblemRegistry()
     pids = list(registry.PROBLEM_REGISTRY.keys())
 
     for pid in pids:
-        agent = Agent() # Initialize the agent
+        agent = Agent()  # Initialize the agent
 
-        orchestrator = Orchestrator()
-        orchestrator.register_agent(agent, name="Qwen2.5-Coder-3B-Instruct")
+        conductor = Conductor()
+        conductor.register_agent(agent, name="Qwen2.5-Coder-3B-Instruct")
         try:
-            print(f"*"*30)
+            print(f"*" * 30)
             print(f"Began processing pid {pid}.")
-            print(f"*"*30)
-            problem_desc, instructs, apis = orchestrator.init_problem(pid)
+            print(f"*" * 30)
+            problem_desc, instructs, apis = conductor.init_problem(pid)
             agent.init_context(problem_desc, instructs, apis)
-            asyncio.run(orchestrator.start_problem(max_steps=10))
-            print(f"*"*30)
+            asyncio.run(conductor.start_problem())
+            print(f"*" * 30)
             print(f"Successfully processed pid {pid}.")
-            print(f"*"*30)
+            print(f"*" * 30)
 
         except Exception as e:
             print(f"Failed to process pid {pid}. Error: {e}")

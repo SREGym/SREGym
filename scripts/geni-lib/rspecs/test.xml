@@ -1,0 +1,28 @@
+<rspec xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns="http://www.geni.net/resources/rspec/3" xmlns:client="http://www.protogeni.net/resources/rspec/ext/client/1" xsi:schemaLocation="http://www.geni.net/resources/rspec/3 http://www.geni.net/resources/rspec/3/request.xsd" type="request">
+  <node client_id="control" exclusive="true">
+    <sliver_type name="raw">
+      <disk_image name="urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD"/>
+    </sliver_type>
+    <hardware_type name="c220g5"/>
+    <interface client_id="control:if0"/>
+  </node>
+  <node client_id="compute1" exclusive="true">
+    <sliver_type name="raw">
+      <disk_image name="urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD"/>
+    </sliver_type>
+    <hardware_type name="c220g5"/>
+    <interface client_id="compute1:if0"/>
+  </node>
+  <node client_id="compute2" exclusive="true">
+    <sliver_type name="raw">
+      <disk_image name="urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU22-64-STD"/>
+    </sliver_type>
+    <hardware_type name="c220g5"/>
+    <interface client_id="compute2:if0"/>
+  </node>
+  <link client_id="link-1">
+    <interface_ref client_id="control:if0"/>
+    <interface_ref client_id="compute1:if0"/>
+    <interface_ref client_id="compute2:if0"/>
+  </link>
+</rspec>

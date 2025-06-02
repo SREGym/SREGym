@@ -1,18 +1,18 @@
-"""Naive GPT client (with shell access) for AIOpsLab. Uses Azure Managed Identity for authentication.
+"""Naive GPT client (with shell access) for SREArena. Uses Azure Managed Identity for authentication.
 
-Achiam, Josh, Steven Adler, Sandhini Agarwal, Lama Ahmad, Ilge Akkaya, Florencia Leoni Aleman, Diogo Almeida et al. 
+Achiam, Josh, Steven Adler, Sandhini Agarwal, Lama Ahmad, Ilge Akkaya, Florencia Leoni Aleman, Diogo Almeida et al.
 "Gpt-4 technical report." arXiv preprint arXiv:2303.08774 (2023).
 
 Code: https://openai.com/index/gpt-4-research/
 Paper: https://arxiv.org/abs/2303.08774
 """
 
-import sys
 import asyncio
+import sys
 
-from aiopslab.orchestrator import Orchestrator
 from clients.utils.llm import GPTClient
 from clients.utils.templates import DOCS_SHELL_ONLY
+from srearena.conductor import Conductor
 
 
 class Agent:
@@ -25,9 +25,7 @@ class Agent:
 
         self.shell_api = self._filter_dict(apis, lambda k, _: "exec_shell" in k)
         self.submit_api = self._filter_dict(apis, lambda k, _: "submit" in k)
-        stringify_apis = lambda apis: "\n\n".join(
-            [f"{k}\n{v}" for k, v in apis.items()]
-        )
+        stringify_apis = lambda apis: "\n\n".join([f"{k}\n{v}" for k, v in apis.items()])
 
         self.system_message = DOCS_SHELL_ONLY.format(
             prob_desc=problem_desc,
@@ -44,7 +42,7 @@ class Agent:
         """Wrapper to interface the agent with OpsBench.
 
         Args:
-            input (str): The input from the orchestrator/environment.
+            input (str): The input from the conductor/environment.
 
         Returns:
             str: The response from the agent.
@@ -66,10 +64,10 @@ if __name__ == "__main__":
 
     agent = Agent(azure_config_file=sys.argv[1])
 
-    orchestrator = Orchestrator()
-    orchestrator.register_agent(agent, name="gpt-w-shell")
+    conductor = Conductor()
+    conductor.register_agent(agent, name="gpt-w-shell")
 
     pid = "misconfig_app_hotel_res-mitigation-1"
-    problem_desc, instructs, apis = orchestrator.init_problem(pid)
+    problem_desc, instructs, apis = conductor.init_problem(pid)
     agent.init_context(problem_desc, instructs, apis)
-    asyncio.run(orchestrator.start_problem(max_steps=10))
+    asyncio.run(conductor.start_problem())

@@ -1,28 +1,22 @@
 <div align="center">
 
-<h1>AIOpsLab</h1>
+<h1>SREArena</h1>
 
-[🤖Overview](#🤖overview) | 
+<!-- [🤖Overview](#🤖overview) |  -->
 [🚀Quick Start](#🚀quickstart) | 
 [📦Installation](#📦installation) | 
 [⚙️Usage](#⚙️usage) | 
 [📂Project Structure](#📂project-structure) |
-[📄How to Cite](#📄how-to-cite)
+<!-- [📄How to Cite](#📄how-to-cite) -->
 
-[![ArXiv Link](https://img.shields.io/badge/arXiv-2501.06706-red?logo=arxiv)](https://arxiv.org/pdf/2501.06706)
-[![ArXiv Link](https://img.shields.io/badge/arXiv-2407.12165-red?logo=arxiv)](https://arxiv.org/pdf/2407.12165)
+<!-- [![ArXiv Link](https://img.shields.io/badge/arXiv-2501.06706-red?logo=arxiv)](https://arxiv.org/pdf/2501.06706)
+[![ArXiv Link](https://img.shields.io/badge/arXiv-2407.12165-red?logo=arxiv)](https://arxiv.org/pdf/2407.12165) -->
 </div>
 
 
+SREArena is a holistic framework to enable the design, development, and evaluation of autonomous AIOps agents that, additionally, serve the purpose of building reproducible, standardized, interoperable and scalable benchmarks. SREArena can deploy microservice cloud environments, inject faults, generate workloads, and export telemetry data, while orchestrating these components and providing interfaces for interacting with and evaluating agents. 
 
-<h2 id="🤖overview">🤖 Overview</h2>
-
-![alt text](./assets/images/aiopslab-arch-open-source.png)
-
-
-AIOpsLab is a holistic framework to enable the design, development, and evaluation of autonomous AIOps agents that, additionally, serve the purpose of building reproducible, standardized, interoperable and scalable benchmarks. AIOpsLab can deploy microservice cloud environments, inject faults, generate workloads, and export telemetry data, while orchestrating these components and providing interfaces for interacting with and evaluating agents. 
-
-Moreover, AIOpsLab provides a built-in benchmark suite with a set of problems to evaluate AIOps agents in an interactive environment. This suite can be easily extended to meet user-specific needs. See the problem list [here](/aiopslab/orchestrator/problems/registry.py#L15).
+Moreover, SREArena provides a built-in benchmark suite with a set of problems to evaluate AIOps agents in an interactive environment. This suite can be easily extended to meet user-specific needs. See the problem list [here](/srearena/conductor/problems/registry.py#L15).
 
 <h2 id="📦installation">📦 Installation</h2>
 
@@ -53,7 +47,7 @@ uv sync
 Choose either a) or b) to set up your cluster and then proceed to the next steps.
 
 ### a) Local simulated cluster
-AIOpsLab can be run on a local simulated cluster using [kind](https://kind.sigs.k8s.io/) on your local machine.
+SREArena can be run on a local simulated cluster using [kind](https://kind.sigs.k8s.io/) on your local machine.
 
 ```bash
 # For x86 machines
@@ -66,7 +60,7 @@ kind create cluster --config kind/kind-config-arm.yaml
 If you're running into issues, consider building a Docker image for your machine by following this [README](kind/README.md). Please also open an issue.
 
 ### [Tips]
-If you are running AIOpsLab using a proxy, beware of exporting the HTTP proxy as `172.17.0.1`. When creating the kind cluster, all the nodes in the cluster will inherit the proxy setting from the host environment and the Docker container. 
+If you are running SREArena using a proxy, beware of exporting the HTTP proxy as `172.17.0.1`. When creating the kind cluster, all the nodes in the cluster will inherit the proxy setting from the host environment and the Docker container. 
 
 The `172.17.0.1` address is used to communicate with the host machine. For more details, refer to the official guide: [Configure Kind to Use a Proxy](https://kind.sigs.k8s.io/docs/user/quick-start/#configure-kind-to-use-a-proxy).
 
@@ -81,23 +75,23 @@ export no_proxy=localhost
 After finishing cluster creation, proceed to the next "Update `config.yml`" step.
 
 ### b) Remote cluster
-AIOpsLab supports any remote kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself. We have some Ansible playbooks to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster, and then proceed to the next "Update `config.yml`" step.
+SREArena supports any remote kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself. We have some Ansible playbooks to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster, and then proceed to the next "Update `config.yml`" step.
 
 ### Update `config.yml`
 ```bash
-cd aiopslab
+cd srearena
 cp config.yml.example config.yml
 ```
-Update your `config.yml` so that `k8s_host` is the host name of the control plane node of your cluster. Update `k8s_user` to be your username on the control plane node. If you are using a kind cluster, your `k8s_host` should be `kind`. If you're running AIOpsLab on cluster, your `k8s_host` should be `localhost`.
+Update your `config.yml` so that `k8s_host` is the host name of the control plane node of your cluster. Update `k8s_user` to be your username on the control plane node. If you are using a kind cluster, your `k8s_host` should be `kind`. If you're running SREArena on cluster, your `k8s_host` should be `localhost`.
 
 ### Running agents
 Human as the agent:
 
 ```bash
 python3 cli.py
-(aiopslab) $ start misconfig_app_hotel_res-detection-1 # or choose any problem you want to solve
+(srearena) $ start misconfig_app_hotel_res-detection-1 # or choose any problem you want to solve
 # ... wait for the setup ...
-(aiopslab) $ submit("Yes") # submit solution
+(srearena) $ submit("Yes") # submit solution
 ```
 
 Run GPT-4 baseline agent:
@@ -129,15 +123,15 @@ To browse your logged `session_id` values in the W&B app as a table:
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
-AIOpsLab can be used in the following ways:
-- [Onboard your agent to AIOpsLab](#how-to-onboard-your-agent-to-aiopslab)
-- [Add new applications to AIOpsLab](#how-to-add-new-applications-to-aiopslab)
-- [Add new problems to AIOpsLab](#how-to-add-new-problems-to-aiopslab)
+SREArena can be used in the following ways:
+- [Onboard your agent to SREArena](#how-to-onboard-your-agent-to-srearena)
+- [Add new applications to SREArena](#how-to-add-new-applications-to-srearena)
+- [Add new problems to SREArena](#how-to-add-new-problems-to-srearena)
 
 
-### How to onboard your agent to AIOpsLab?
+### How to onboard your agent to SREArena?
 
-AIOpsLab makes it extremely easy to develop and evaluate your agents. You can onboard your agent to AIOpsLab in 3 simple steps:
+SREArena makes it extremely easy to develop and evaluate your agents. You can onboard your agent to SREArena in 3 simple steps:
 
 1. **Create your agent**: You are free to develop agents using any framework of your choice. The only requirements are:
     - Wrap your agent in a Python class, say `Agent`
@@ -149,19 +143,19 @@ AIOpsLab makes it extremely easy to develop and evaluate your agents. You can on
             # <your agent's logic here>
         ```
 
-2. **Register your agent with AIOpsLab**: You can now register the agent with AIOpsLab's orchestrator. The orchestrator will manage the interaction between your agent and the environment:
+2. **Register your agent with SREArena**: You can now register the agent with SREArena's conductor. The conductor will manage the interaction between your agent and the environment:
 
     ```python
-    from aiopslab.orchestrator import Orchestrator
+    from srearena.conductor import Conductor
 
     agent = Agent()             # create an instance of your agent
-    orch = Orchestrator()       # get AIOpsLab's orchestrator
-    orch.register_agent(agent)  # register your agent with AIOpsLab
+    orch = Conductor()       # get SREArena's conductor
+    orch.register_agent(agent)  # register your agent with SREArena
     ```
 
 3. **Evaluate your agent on a problem**:
 
-    1. **Initialize a problem**: AIOpsLab provides a list of problems that you can evaluate your agent on. Find the list of available problems [here](/aiopslab/orchestrator/problems/registry.py) or using `orch.probs.get_problem_ids()`. Now initialize a problem by its ID: 
+    1. **Initialize a problem**: SREArena provides a list of problems that you can evaluate your agent on. Find the list of available problems [here](/srearena/conductor/problems/registry.py) or using `orch.problems.get_problem_ids()`. Now initialize a problem by its ID: 
 
         ```python
         problem_desc, instructs, apis = orch.init_problem("k8s_target_port-misconfig-mitigation-1")
@@ -174,19 +168,19 @@ AIOpsLab makes it extremely easy to develop and evaluate your agents. You can on
 
         ```python
         import asyncio
-        asyncio.run(orch.start_problem(max_steps=30))
+        asyncio.run(orch.start_problem())
         ```
 
-This process will create a [`Session`](/aiopslab/session.py) with the orchestrator, where the agent will solve the problem. The orchestrator will evaluate your agent's solution and provide results (stored under `data/results/`). You can use these to improve your agent.
+This process will create a [`Session`](/srearena/session.py) with the conductor, where the agent will solve the problem. The conductor will evaluate your agent's solution and provide results (stored under `data/results/`). You can use these to improve your agent.
 
 
-### How to add new applications to AIOpsLab?
+### How to add new applications to SREArena?
 
-AIOpsLab provides a default [list of applications](/aiopslab/service/apps/) to evaluate agents for operations tasks. However, as a developer you can add new applications to AIOpsLab and design problems around them.
+SREArena provides a default [list of applications](/srearena/service/apps/) to evaluate agents for operations tasks. However, as a developer you can add new applications to SREArena and design problems around them.
 
-> *Note*: for auto-deployment of some apps with K8S, we integrate Helm charts (you can also use `kubectl` to install as [HotelRes application](/aiopslab/service/apps/hotelres.py)). More on Helm [here](https://helm.sh).
+> *Note*: for auto-deployment of some apps with K8S, we integrate Helm charts (you can also use `kubectl` to install as [HotelRes application](/srearena/service/apps/hotelres.py)). More on Helm [here](https://helm.sh).
 
-To add a new application to AIOpsLab with Helm, you need to:
+To add a new application to SREArena with Helm, you need to:
 
 1. **Add application metadata**
     - Application metadata is a JSON object that describes the application.
@@ -200,18 +194,18 @@ To add a new application to AIOpsLab with Helm, you need to:
             "namespace": "<K8S namespace where app should be deployed>"
         }
         ```
-        > *Note*: The `Helm Config` is used by the orchestrator to auto-deploy your app when a problem associated with it is started.
+        > *Note*: The `Helm Config` is used by the conductor to auto-deploy your app when a problem associated with it is started.
 
-        > *Note*: The orchestrator will auto-provide *all other* fields as context to the agent for any problem associated with this app.
+        > *Note*: The conductor will auto-provide *all other* fields as context to the agent for any problem associated with this app.
 
-    Create a JSON file with this metadata and save it in the [`metadata`](/aiopslab/service/metadata) directory. For example the `social-network` app: [social-network.json](/aiopslab/service/metadata/social-network.json)
+    Create a JSON file with this metadata and save it in the [`metadata`](/srearena/service/metadata) directory. For example the `social-network` app: [social-network.json](/srearena/service/metadata/social-network.json)
 
 2. **Add application class**
 
-    Extend the base class in a new Python file in the [`apps`](/aiopslab/service/apps) directory:
+    Extend the base class in a new Python file in the [`apps`](/srearena/service/apps) directory:
 
     ```python
-    from aiopslab.service.apps.base import Application
+    from srearena.service.apps.base import Application
 
     class MyApp(Application):
         def __init__(self):
@@ -222,26 +216,26 @@ To add a new application to AIOpsLab with Helm, you need to:
 
 
 
-### How to add new problems to AIOpsLab?
+### How to add new problems to SREArena?
 
-Similar to applications, AIOpsLab provides a default [list of problems](/aiopslab/orchestrator/problems/registry.py) to evaluate agents. However, as a developer you can add new problems to AIOpsLab and design them around your applications.
+Similar to applications, SREArena provides a default [list of problems](/srearena/conductor/problems/registry.py) to evaluate agents. However, as a developer you can add new problems to SREArena and design them around your applications.
 
-Each problem in AIOpsLab has 5 components:
+Each problem in SREArena has 5 components:
 1. *Application*: The application on which the problem is based.
 2. *Task*: The AIOps task that the agent needs to perform.
- Currently we support: [Detection](/aiopslab/orchestrator/tasks/detection.py), [Localization](/aiopslab/orchestrator/tasks/localization.py), [Analysis](/aiopslab/orchestrator/tasks/analysis.py), and [Mitigation](/aiopslab/orchestrator/tasks/mitigation.py).
+ Currently we support: [Detection](/srearena/conductor/tasks/detection.py), [Localization](/srearena/conductor/tasks/localization.py), [Analysis](/srearena/conductor/tasks/analysis.py), and [Mitigation](/srearena/conductor/tasks/mitigation.py).
 3. *Fault*: The fault being introduced in the application.
 4. *Workload*: The workload that is generated for the application.
 5. *Evaluator*: The evaluator that checks the agent's performance.
 
-To add a new problem to AIOpsLab, create a new Python file 
-in the [`problems`](/aiopslab/orchestrator/problems) directory, as follows:
+To add a new problem to SREArena, create a new Python file 
+in the [`problems`](/srearena/conductor/problems) directory, as follows:
 
 1. **Setup**. Import your chosen application (say `MyApp`) and task (say `LocalizationTask`):
 
     ```python
-    from aiopslab.service.apps.myapp import MyApp
-    from aiopslab.orchestrator.tasks.localization import LocalizationTask
+    from srearena.service.apps.myapp import MyApp
+    from srearena.conductor.tasks.localization import LocalizationTask
     ```
 
 2. **Define**. To define a problem, create a class that inherits from your chosen `Task`, and defines 3 methods: `start_workload`, `inject_fault`, and `eval`:
@@ -261,33 +255,33 @@ in the [`problems`](/aiopslab/orchestrator/problems) directory, as follows:
             # <your evaluation logic here>
     ```
 
-3. **Register**. Finally, add your problem to the orchestrator's registry [here](/aiopslab/orchestrator/problems/registry.py).
+3. **Register**. Finally, add your problem to the conductor's registry [here](/srearena/conductor/problems/registry.py).
 
 
-See a full example of a problem [here](/aiopslab/orchestrator/problems/k8s_target_port_misconfig/target_port.py). 
+See a full example of a problem [here](/srearena/conductor/problems/k8s_target_port_misconfig/target_port.py). 
 <details>
   <summary>Click to show the description of the problem in detail</summary>
 
-- **`start_workload`**: Initiates the application's workload. Use your own generator or AIOpsLab's default, which is based on [wrk2](https://github.com/giltene/wrk2):
+- **`start_workload`**: Initiates the application's workload. Use your own generator or SREArena's default, which is based on [wrk2](https://github.com/giltene/wrk2):
 
     ```python
-    from aiopslab.generator.workload.wrk import Wrk
+    from srearena.generator.workload.wrk import Wrk
 
     wrk = Wrk(rate=100, duration=10)
     wrk.start_workload(payload="<wrk payload script>", url="<app URL>")
     ```
-    > Relevant Code: [aiopslab/generators/workload/wrk.py](/aiopslab/generators/workload/wrk.py)
+    > Relevant Code: [srearena/generators/workload/wrk.py](/srearena/generators/workload/wrk.py)
 
-- **`inject_fault`**: Introduces a fault into the application. Use your own injector or AIOpsLab's built-in one which you can also extend. E.g., a misconfig in the K8S layer:
+- **`inject_fault`**: Introduces a fault into the application. Use your own injector or SREArena's built-in one which you can also extend. E.g., a misconfig in the K8S layer:
 
     ```python
-    from aiopslab.generators.fault.inject_virtual import *
+    from srearena.generators.fault.inject_virtual import *
 
     inj = VirtualizationFaultInjector(testbed="<namespace>")
     inj.inject_fault(microservices=["<service-name>"], fault_type="misconfig")
     ```
 
-    > Relevant Code: [aiopslab/generators/fault](/aiopslab/generators/fault)
+    > Relevant Code: [srearena/generators/fault](/srearena/generators/fault)
 
 
 - **`eval`**: Evaluates the agent's solution using 3 params: (1) *soln*: agent's submitted solution if any, (2) *trace*: agent's action trace, and (3) *duration*: time taken by the agent.
@@ -300,9 +294,9 @@ See a full example of a problem [here](/aiopslab/orchestrator/problems/k8s_targe
         return self.results
     ```
 
-    > *Note*: When an agent starts a problem, the orchestrator creates a [`Session`](/aiopslab/session.py) object that stores the agent's interaction. The `trace` parameter is this session's recorded trace.
+    > *Note*: When an agent starts a problem, the conductor creates a [`Session`](/srearena/session.py) object that stores the agent's interaction. The `trace` parameter is this session's recorded trace.
 
-    > Relevant Code: [aiopslab/orchestrator/evaluators/](/aiopslab/orchestrator/evaluators/)
+    > Relevant Code: [srearena/conductor/evaluators/](/srearena/conductor/evaluators/)
 
 </details>
 
@@ -311,11 +305,11 @@ See a full example of a problem [here](/aiopslab/orchestrator/problems/k8s_targe
 
 <h2 id="📂project-structure">📂 Project Structure</h2>
 
-<summary><code>aiopslab</code></summary>
+<summary><code>srearena</code></summary>
 <details>
   <summary>Generators</summary>
   <pre>
-  generators - the problem generators for aiopslab
+  generators - the problem generators for srearena
   ├── fault - the fault generator organized by fault injection level
   │   ├── base.py
   │   ├── inject_app.py
@@ -327,16 +321,16 @@ See a full example of a problem [here](/aiopslab/orchestrator/problems/k8s_targe
 </details>
 
 <details>
-  <summary>Orchestrator</summary>
+  <summary>Conductor</summary>
   <pre>
-  orchestrator
-  ├── orchestrator.py - the main orchestration engine
+  conductor
+  ├── conductor.py - the main orchestration engine
   ├── parser.py - parser for agent responses
   ├── evaluators - eval metrics in the system
   │   ├── prompts.py - prompts for LLM-as-a-Judge
   │   ├── qualitative.py - qualitative metrics
   │   └── quantitative.py - quantitative metrics
-  ├── problems - problem definitions in aiopslab
+  ├── problems - problem definitions in srearena
   │   ├── k8s_target_port_misconfig - e.g., A K8S TargetPort misconfig problem
   │  ...
   │   └── registry.py
@@ -384,25 +378,25 @@ See a full example of a problem [here](/aiopslab/orchestrator/problems/k8s_targe
 <details>
   <summary>Utils</summary>
   <pre>
-  ├── config.yml - aiopslab configs
+  ├── config.yml - srearena configs
   ├── config.py - config parser
   ├── paths.py - paths and constants
-  ├── session.py - aiopslab session manager
+  ├── session.py - srearena session manager
   └── utils
       ├── actions.py - helpers for actions that agents can perform
       ├── cache.py - cache manager
-      └── status.py - aiopslab status, error, and warnings
+      └── status.py - srearena status, error, and warnings
   </pre>
 </details>
 
-<summary><code>cli.py</code>: A command line interface to interact with AIOpsLab, e.g., used by human operators.</summary>
+<summary><code>cli.py</code>: A command line interface to interact with SREArena, e.g., used by human operators.</summary>
 
 
-<h2 id="📄how-to-cite">📄 How to Cite</h2>
+<!-- <h2 id="📄how-to-cite">📄 How to Cite</h2>
 
 ```bibtex
 @misc{chen2024aiopslab,
-  title = {AIOpsLab: A Holistic Framework to Evaluate AI Agents for Enabling Autonomous Clouds},
+  title = {SREArena: A Holistic Framework to Evaluate AI Agents for Enabling Autonomous Clouds},
   author = {Chen, Yinfang and Shetty, Manish and Somashekar, Gagan and Ma, Minghua and Simmhan, Yogesh and Mace, Jonathan and Bansal, Chetan and Wang, Rujia and Rajmohan, Saravan},
   year = {2025},
   url = {https://arxiv.org/abs/2501.06706} 
@@ -413,20 +407,9 @@ See a full example of a problem [here](/aiopslab/orchestrator/problems/k8s_targe
   year = {2024},
   booktitle = {Proceedings of 15th ACM Symposium on Cloud Computing},
 }
-```
+``` -->
 
-## Code of Conduct
-
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
 
 ## License
-
-Copyright (c) Microsoft Corporation. All rights reserved.
-
 Licensed under the [MIT](LICENSE.txt) license.
-
-
-### Trademarks
-
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to and must follow [Microsoft’s Trademark & Brand Guidelines](https://www.microsoft.com/en-us/legal/intellectualproperty/trademarks). Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship. Any use of third-party trademarks or logos is subject to those third-party’s policies.

@@ -1,6 +1,6 @@
-"""Naive ReAct client for AIOpsLab.
+"""Naive ReAct client for SREArena.
 
-Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., & Cao, Y. (2022). 
+Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., & Cao, Y. (2022).
 React: Synergizing reasoning and acting in language models. arXiv preprint arXiv:2210.03629.
 
 Code: https://github.com/ysymyth/ReAct
@@ -9,22 +9,26 @@ Paper: https://arxiv.org/abs/2210.03629
 
 import asyncio
 import json
+
 import tiktoken
-from aiopslab.orchestrator import Orchestrator
-from aiopslab.orchestrator.problems.registry import ProblemRegistry
+
 from clients.utils.llm import GPTClient
 from clients.utils.templates import DOCS
+from srearena.conductor import Conductor
+from srearena.conductor.problems.registry import ProblemRegistry
 
 RESP_INSTR = """DO NOT REPEAT ACTIONS! Respond with:
 Thought: <your thought on the previous output>
 Action: <your action towards mitigating>
 """
 
+
 def count_message_tokens(message, enc):
     # Each message format adds ~4 tokens of overhead
     tokens = 4  # <|start|>role/name + content + <|end|>
     tokens += len(enc.encode(message.get("content", "")))
     return tokens
+
 
 def trim_history_to_token_limit(history, max_tokens=120000, model="gpt-4"):
     enc = tiktoken.encoding_for_model(model)
@@ -38,9 +42,9 @@ def trim_history_to_token_limit(history, max_tokens=120000, model="gpt-4"):
 
     if last_msg_tokens > max_tokens:
         # If even the last message is too big, truncate its content
-        truncated_content = enc.decode(enc.encode(last_msg["content"])[:max_tokens - 4])
+        truncated_content = enc.decode(enc.encode(last_msg["content"])[: max_tokens - 4])
         return [{"role": last_msg["role"], "content": truncated_content}]
-    
+
     trimmed.insert(0, last_msg)
     total_tokens += last_msg_tokens
 
@@ -65,13 +69,9 @@ class Agent:
 
         self.shell_api = self._filter_dict(apis, lambda k, _: "exec_shell" in k)
         self.submit_api = self._filter_dict(apis, lambda k, _: "submit" in k)
-        self.telemetry_apis = self._filter_dict(
-            apis, lambda k, _: "exec_shell" not in k and "submit" not in k
-        )
+        self.telemetry_apis = self._filter_dict(apis, lambda k, _: "exec_shell" not in k and "submit" not in k)
 
-        stringify_apis = lambda apis: "\n\n".join(
-            [f"{k}\n{v}" for k, v in apis.items()]
-        )
+        stringify_apis = lambda apis: "\n\n".join([f"{k}\n{v}" for k, v in apis.items()])
 
         self.system_message = DOCS.format(
             prob_desc=problem_desc,
@@ -89,7 +89,7 @@ class Agent:
         """Wrapper to interface the agent with OpsBench.
 
         Args:
-            input (str): The input from the orchestrator/environment.
+            input (str): The input from the conductor/environment.
 
         Returns:
             str: The response from the agent.
@@ -112,14 +112,14 @@ if __name__ == "__main__":
 
     for pid in problems:
         agent = Agent()
-        orchestrator = Orchestrator()
-        orchestrator.register_agent(agent, name="react")
+        conductor = Conductor()
+        conductor.register_agent(agent, name="react")
 
         try:
-            problem_desc, instructs, apis = orchestrator.init_problem(pid)
+            problem_desc, instructs, apis = conductor.init_problem(pid)
             agent.init_context(problem_desc, instructs, apis)
 
-            full_output = asyncio.run(orchestrator.start_problem(max_steps=30))
+            full_output = asyncio.run(conductor.start_problem())
             results = full_output.get("results", {})
 
             filename = f"react_{pid}.json"
