@@ -24,7 +24,7 @@ mcp = FastMCP("Observability MCP Server")
 grafana_url = "http://localhost:16686"
 observability_client = ObservabilityClient(grafana_url)
 
-USE_HTTP = False
+USE_HTTP = True
 
 
 @mcp.tool(name="get_services")
