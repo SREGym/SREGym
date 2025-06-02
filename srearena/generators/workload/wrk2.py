@@ -158,6 +158,7 @@ class Wrk2:
             existing_job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
             if existing_job:
                 print(f"Stopping job '{job_name}'...")
+                # @daklqw: I think there might be a better way
                 api_instance.patch_namespaced_job(name=job_name, namespace=namespace, body={"spec": {"suspend": True}})
                 time.sleep(5)
         except client.exceptions.ApiException as e:
@@ -263,7 +264,7 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
                 stdout=True,
                 tty=False,
             )
-            # print(f"Pod current time: {resp.strip()}")
+
             # 2025-01-01T12:34:56,123456
             shorter = resp.strip()[:26]
             pod_current_time = datetime.strptime(shorter, "%Y-%m-%dT%H:%M:%S,%f").timestamp()

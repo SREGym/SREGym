@@ -17,7 +17,7 @@ class SocialNetwork(Application):
         self.create_namespace()
         self.create_tls_secret()
 
-        self.payload_script = TARGET_MICROSERVICES / "socialNetwork/wrk2/scripts/social-network/compose-post.lua"
+        self.payload_script = TARGET_MICROSERVICES / "socialNetwork/wrk2/scripts/social-network/mixed-workload.lua"
 
     def load_app_json(self):
         super().load_app_json()

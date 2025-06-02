@@ -69,8 +69,8 @@ class StreamWorkloadManager(WorkloadManager):
         if since_seconds is not None:
             if not isinstance(since_seconds, (int, float)):
                 raise TypeError("since_seconds must be a int or float")
-            if since_seconds > STREAM_WORKLOAD_TIMEOUT:
-                raise ValueError(f"since_seconds is too large (> {STREAM_WORKLOAD_TIMEOUT} seconds)")
+            if since_seconds > self.last_log_time:
+                since_seconds = self.last_log_time
 
         # I put it here becuase the first run of it may be very late
         self._extractlog()

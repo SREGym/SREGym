@@ -72,8 +72,6 @@ class HotelReservation(Application):
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         self.kubectl.wait_for_ready(self.namespace)
 
-        self.wrk.start()
-
     def deploy_without_wait(self):
         """Deploy the Kubernetes configurations without waiting for ready."""
 
