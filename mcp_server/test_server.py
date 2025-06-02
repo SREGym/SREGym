@@ -16,14 +16,14 @@ mcp = FastMCP("Example MCP Server")
 @mcp.resource("resource://example-txt")
 def get_example_txt() -> Any:
     logger.debug("get_example_txt called")
-    with open("./mcp-server/example.txt", "r") as f:
+    with open("./mcp_server/example.txt", "r") as f:
         return f.read()
 
 
 @mcp.resource("resource://example-txt/{string}")
 def get_example_txt_with_str(string: str) -> Any:
     logger.debug("get_example_txt called")
-    with open("./mcp-server/example.txt", "r") as f:
+    with open("./mcp_server/example.txt", "r") as f:
         return f"inserted str: {string}, example txt content: {f.read()}"
 
 
