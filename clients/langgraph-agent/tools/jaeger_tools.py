@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
@@ -46,10 +47,11 @@ class GetTraces(BaseTool):
         logger.info(
             f"calling mcp get_traces from langchain get_traces, with service {service} and operation {operation}"
         )
-        server_path = "../../mcp_server/observability_server.py"
+        curr_dir = os.getcwd()
+        logger.info(f"current dir: {curr_dir}")
+        server_path = f"{curr_dir}/mcp_server/observability_server.py"
         server_name = "observability"
         exit_stack = AsyncExitStack()
-        server_path = Path(server_path).resolve().as_posix()
         logger.info(f"Connecting to server: {server_name} at path: {server_path}")
         is_python = server_path.endswith(".py")
         is_js = server_path.endswith(".js")
@@ -98,10 +100,11 @@ class GetServices(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         logger.info(f"calling mcp get_services from langchain get_services")
-        server_path = "../../mcp_server/observability_server.py"
+        curr_dir = os.getcwd()
+        logger.info(f"current dir: {curr_dir}")
+        server_path = f"{curr_dir}/mcp_server/observability_server.py"
         server_name = "observability"
         exit_stack = AsyncExitStack()
-        server_path = Path(server_path).resolve().as_posix()
         logger.info(f"Connecting to server: {server_name} at path: {server_path}")
         is_python = server_path.endswith(".py")
         is_js = server_path.endswith(".js")
@@ -148,10 +151,11 @@ class GetOperations(BaseTool):
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
         logger.info(f"calling mcp get_operations from langchain get_operations with service {service}")
-        server_path = "mcp_server/observability_server.py"
+        curr_dir = os.getcwd()
+        logger.info(f"current dir: {curr_dir}")
+        server_path = f"{curr_dir}/mcp_server/observability_server.py"
         server_name = "observability"
         exit_stack = AsyncExitStack()
-        server_path = Path(server_path).resolve().as_posix()
         logger.info(f"Connecting to server: {server_name} at path: {server_path}")
         is_python = server_path.endswith(".py")
         is_js = server_path.endswith(".js")
