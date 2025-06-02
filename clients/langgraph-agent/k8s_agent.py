@@ -63,9 +63,14 @@ class BasicToolNode:
             logger.info(f"invoking tool: {tool_call["name"]}, tool_call: {tool_call}")
             tool_result = asyncio.run(self.tools_by_name[tool_call["name"]].ainvoke(tool_call["args"]))
             logger.info(f"tool_result: {tool_result}")
+            tool_result_content = []
+            for text_content in tool_result.content:
+                tool_result_content.append(text_content.text)
+            # FIXME: Should we still json_dumps(tool_result)?
+            #   especially for json-formatted tool result like traces
             outputs.append(
                 ToolMessage(
-                    content=json.dumps(tool_result),
+                    content=tool_result,
                     name=tool_call["name"],
                     tool_call_id=tool_call["id"],
                 )
