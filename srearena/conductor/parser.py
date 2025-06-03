@@ -78,7 +78,7 @@ class ResponseParser:
             return response[:first_parenthesis].strip()
         return ""
 
-    def parse_args(self, response: str, is_shell_command=False) -> list:
+    def parse_args(self, response: str, is_shell_command=False) -> tuple[list, dict]:
         """Parses the arguments of a function call.
 
         >>> parse_args("get_logs(10, 'error')")
@@ -88,7 +88,8 @@ class ResponseParser:
             response (str): The response string.
 
         Returns:
-            list: The parsed arguments.
+            args (list): A list of positional arguments.
+            kwargs (dict): A dictionary of keyword arguments.
         """
         first_parenthesis = response.find("(")
         last_parenthesis = response.rfind(")")

@@ -33,22 +33,12 @@ class MCPClient:
         if not (is_python or is_js):
             raise ValueError("Server script must be a .py or .js file")
 
-        command = (
-            sys.executable  # Uses the current Python interpreter from the activated venv
-            if is_python
-            else "node"
-        )
-        server_params = StdioServerParameters(
-            command=command, args=[server_script_path], env=None
-        )
+        command = sys.executable if is_python else "node"  # Uses the current Python interpreter from the activated venv
+        server_params = StdioServerParameters(command=command, args=[server_script_path], env=None)
 
-        stdio_transport = await self.exit_stack.enter_async_context(
-            stdio_client(server_params)
-        )
+        stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
         self.stdio, self.write = stdio_transport
-        self.session = await self.exit_stack.enter_async_context(
-            ClientSession(self.stdio, self.write)
-        )
+        self.session = await self.exit_stack.enter_async_context(ClientSession(self.stdio, self.write))
 
         await self.session.initialize()
 

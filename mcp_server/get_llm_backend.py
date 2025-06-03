@@ -7,9 +7,7 @@ from typing import Dict, Optional
 import litellm
 from dotenv import load_dotenv
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -48,9 +46,7 @@ class LiteLLMBackend:
         self.extra_headers = extra_headers
         litellm.drop_params = True
 
-    def inference(
-        self, system_prompt: str, input: str, tools: Optional[list[any]] = None
-    ) -> (str, str):
+    def inference(self, system_prompt: str, input: str, tools: Optional[list[any]] = None) -> (str, str):
         logger.info(f"NL input received: {input}")
 
         messages = []
@@ -96,16 +92,10 @@ class LiteLLMBackend:
         tool_names = [tool["function"]["name"] for tool in tools]
         if finish_reason == "tool_calls" or finish_reason in tool_names:
             function_name = completion.choices[0].message.tool_calls[0].function.name
-            function_arguments = json.loads(
-                completion.choices[0].message.tool_calls[0].function.arguments
-            )
+            function_arguments = json.loads(completion.choices[0].message.tool_calls[0].function.arguments)
 
-            logger.info(
-                f"function arguments identified are: {function_name} {function_arguments}"
-            )
-            print(
-                f"function arguments identified are: {function_name} {function_arguments}"
-            )
+            logger.info(f"function arguments identified are: {function_name} {function_arguments}")
+            print(f"function arguments identified are: {function_name} {function_arguments}")
             return function_name, function_arguments
         else:
             return finish_reason, completion.choices[0].message

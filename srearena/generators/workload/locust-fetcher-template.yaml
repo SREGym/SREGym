@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: locust-fetcher
+  labels:
+    app: locust-fetcher
+spec:
+  containers:
+  - name: fetcher
+    image: python:3.12-slim
+    command: ["bash", "-c"]
+    args: # Another choice: use requests
+      - |
+        apt-get update -qq && apt-get install -y -qq curl && rm -rf /var/lib/apt/lists/*
+        round=0
+        while true; do
+          echo "Running Locust on round #${round}"
+          round=$((round + 1))
+          curl -s $LOCUST_URL/stats/requests | python -m json.tool --compact
+          curl -s $LOCUST_URL/stats/reset > /dev/null
+          sleep $INTERVAL_SECONDS
+        done
+    env:
+    - name: LOCUST_URL
+      value: "http://load-generator:8089"
+    - name: INTERVAL_SECONDS
+      value: "10"

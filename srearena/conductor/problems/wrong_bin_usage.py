@@ -5,12 +5,9 @@ from srearena.conductor.oracles.localization import LocalizationOracle
 from srearena.conductor.oracles.mitigation import MitigationOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
-from srearena.generators.workload.wrk import Wrk
 from srearena.paths import TARGET_MICROSERVICES
 from srearena.service.apps.hotelres import HotelReservation
 from srearena.service.kubectl import KubeCtl
-
-from .helpers import get_frontend_url
 
 
 class WrongBinUsage(Problem):
@@ -20,7 +17,7 @@ class WrongBinUsage(Problem):
         self.namespace = self.app.namespace
         self.faulty_service = faulty_service
 
-        self.payload_script = (
+        self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
         # === Attach evaluation oracles ===
@@ -29,16 +26,6 @@ class WrongBinUsage(Problem):
         self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
 
         self.mitigation_oracle = MitigationOracle(problem=self)
-
-    def start_workload(self):
-        print("== Start Workload ==")
-        frontend_url = get_frontend_url(self.app)
-
-        wrk = Wrk(rate=10, dist="exp", connections=2, duration=1000, threads=2)
-        wrk.start_workload(
-            payload_script=self.payload_script,
-            url=f"{frontend_url}",
-        )
 
     def inject_fault(self):
         print("== Fault Injection ==")

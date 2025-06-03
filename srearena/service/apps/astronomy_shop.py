@@ -2,6 +2,7 @@
 
 import time
 
+from srearena.generators.workload.locust import LocustWorkloadManager
 from srearena.paths import ASTRONOMY_SHOP_METADATA
 from srearena.service.apps.base import Application
 from srearena.service.helm import Helm
@@ -40,6 +41,19 @@ class AstronomyShop(Application):
     def cleanup(self):
         Helm.uninstall(**self.helm_configs)
         self.kubectl.delete_namespace(self.helm_configs["namespace"])
+
+        self.wrk.stop()
+
+    def create_workload(self):
+        self.wrk = LocustWorkloadManager(
+            namespace=self.namespace,
+            locust_url="load-generator:8089",
+        )
+
+    def start_workload(self):
+        if not hasattr(self, "wrk"):
+            self.create_workload()
+        self.wrk.start()
 
 
 # Run this code to test installation/deletion

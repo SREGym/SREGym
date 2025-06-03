@@ -238,15 +238,12 @@ in the [`problems`](/srearena/conductor/problems) directory, as follows:
     from srearena.conductor.tasks.localization import LocalizationTask
     ```
 
-2. **Define**. To define a problem, create a class that inherits from your chosen `Task`, and defines 3 methods: `start_workload`, `inject_fault`, and `eval`:
+2. **Define**. To define a problem, create a class that inherits from your chosen `Task`, and defines 2 methods:, `inject_fault`, and `eval`:
 
     ```python
     class MyProblem(LocalizationTask):
         def __init__(self):
             self.app = MyApp()
-        
-        def start_workload(self):
-            # <your workload logic here>
         
         def inject_fault(self)
             # <your fault injection logic here>
@@ -261,16 +258,6 @@ in the [`problems`](/srearena/conductor/problems) directory, as follows:
 See a full example of a problem [here](/srearena/conductor/problems/k8s_target_port_misconfig/target_port.py). 
 <details>
   <summary>Click to show the description of the problem in detail</summary>
-
-- **`start_workload`**: Initiates the application's workload. Use your own generator or SREArena's default, which is based on [wrk2](https://github.com/giltene/wrk2):
-
-    ```python
-    from srearena.generator.workload.wrk import Wrk
-
-    wrk = Wrk(rate=100, duration=1000)
-    wrk.start_workload(payload="<wrk payload script>", url="<app URL>")
-    ```
-    > Relevant Code: [srearena/generators/workload/wrk.py](/srearena/generators/workload/wrk.py)
 
 - **`inject_fault`**: Introduces a fault into the application. Use your own injector or SREArena's built-in one which you can also extend. E.g., a misconfig in the K8S layer:
 

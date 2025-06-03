@@ -10,9 +10,7 @@ def parse_sliver_info(xml_text):
     root = ET.fromstring(xml_text)
 
     # Get experiment description
-    rspec_tour = root.find(
-        ".//{http://www.protogeni.net/resources/rspec/ext/apt-tour/1}description"
-    )
+    rspec_tour = root.find(".//{http://www.protogeni.net/resources/rspec/ext/apt-tour/1}description")
     description = rspec_tour.text if rspec_tour is not None else "No description"
 
     # Get expiration
@@ -24,12 +22,10 @@ def parse_sliver_info(xml_text):
         node_info = {
             "client_id": node.get("client_id"),
             "component_id": node.get("component_id"),
-            "hardware": node.find(
-                ".//{http://www.protogeni.net/resources/rspec/ext/emulab/1}vnode"
-            ).get("hardware_type"),
-            "os_image": node.find(
-                ".//{http://www.protogeni.net/resources/rspec/ext/emulab/1}vnode"
-            ).get("disk_image"),
+            "hardware": node.find(".//{http://www.protogeni.net/resources/rspec/ext/emulab/1}vnode").get(
+                "hardware_type"
+            ),
+            "os_image": node.find(".//{http://www.protogeni.net/resources/rspec/ext/emulab/1}vnode").get("disk_image"),
         }
 
         # Get host information
@@ -49,9 +45,7 @@ def parse_sliver_info(xml_text):
         nodes.append(node_info)
 
     # Get location information
-    location = root.find(
-        ".//{http://www.protogeni.net/resources/rspec/ext/site-info/1}location"
-    )
+    location = root.find(".//{http://www.protogeni.net/resources/rspec/ext/site-info/1}location")
     location_info = {
         "country": location.get("country") if location is not None else None,
         "latitude": location.get("latitude") if location is not None else None,
@@ -74,9 +68,7 @@ def collect_and_parse_hardware_info():
         response.raise_for_status()
         html_content = response.text
         soup = BeautifulSoup(html_content, "html.parser")
-        amlist_script_tag = soup.find(
-            "script", {"id": "amlist-json", "type": "text/plain"}
-        )
+        amlist_script_tag = soup.find("script", {"id": "amlist-json", "type": "text/plain"})
 
         if not amlist_script_tag:
             return None

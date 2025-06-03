@@ -40,25 +40,19 @@ try:
     SEED_TOOLS = int(os.environ["SEED_TOOLS"])
 except KeyError:
     SEED_TOOLS = 10
-    print(
-        f"Unable to find environment variable - SEED_TOOLS. Defaulting to {SEED_TOOLS}."
-    )
+    print(f"Unable to find environment variable - SEED_TOOLS. Defaulting to {SEED_TOOLS}.")
 
 try:
     TOP_P_TOOLS = float(os.environ["TOP_P_TOOLS"])
 except KeyError:
     TOP_P_TOOLS = 0.95
-    print(
-        f"Unable to find environment variable - TOP_P_TOOLS. Defaulting to {TOP_P_TOOLS}."
-    )
+    print(f"Unable to find environment variable - TOP_P_TOOLS. Defaulting to {TOP_P_TOOLS}.")
 
 try:
     TEMPERATURE_TOOLS = float(os.environ["TEMPERATURE_TOOLS"])
 except KeyError:
     TEMPERATURE_TOOLS = 0.0
-    print(
-        f"Unable to find environment variable - TEMPERATURE_TOOLS. Defaulting to {TEMPERATURE_TOOLS}."
-    )
+    print(f"Unable to find environment variable - TEMPERATURE_TOOLS. Defaulting to {TEMPERATURE_TOOLS}.")
 except ValueError as e:
     print("Incorrect TEMPERATURE_TOOLS value:", e)
     raise
@@ -67,41 +61,31 @@ try:
     REASONING_EFFORT_TOOLS = str(os.environ["REASONING_EFFORT_TOOLS"]).lower()
 except KeyError:
     REASONING_EFFORT_TOOLS = ""
-    print(
-        f"Unable to find environment variable - REASONING_EFFORT_TOOLS. Setting to {REASONING_EFFORT_TOOLS}."
-    )
+    print(f"Unable to find environment variable - REASONING_EFFORT_TOOLS. Setting to {REASONING_EFFORT_TOOLS}.")
 
 try:
     API_VERSION_TOOLS = os.environ["API_VERSION_TOOLS"]
 except KeyError:
     API_VERSION_TOOLS = ""
-    print(
-        f"Unable to find environment variable - API_VERSION_TOOLS. Setting to {API_VERSION_TOOLS}."
-    )
+    print(f"Unable to find environment variable - API_VERSION_TOOLS. Setting to {API_VERSION_TOOLS}.")
 
 try:
     THINKING_TOOLS = os.environ["THINKING_TOOLS"]
 except KeyError:
     THINKING_TOOLS = ""
-    print(
-        f"Unable to find environment variable - THINKING_TOOLS. Setting to {THINKING_TOOLS}."
-    )
+    print(f"Unable to find environment variable - THINKING_TOOLS. Setting to {THINKING_TOOLS}.")
 
 try:
     THINKING_BUDGET_TOOLS = int(os.environ["THINKING_BUDGET_TOOLS"])
 except KeyError:
     THINKING_BUDGET_TOOLS = 16000
-    print(
-        f"Unable to find environment variable - THINKING_BUDGET_TOOLS. Setting to {THINKING_BUDGET_TOOLS}."
-    )
+    print(f"Unable to find environment variable - THINKING_BUDGET_TOOLS. Setting to {THINKING_BUDGET_TOOLS}.")
 
 try:
     MAX_TOKENS_TOOLS = int(os.environ["MAX_TOKENS_TOOLS"])
 except KeyError:
     MAX_TOKENS_TOOLS = 16000
-    print(
-        f"Unable to find environment variable - MAX_TOKENS_TOOLS. Setting to {MAX_TOKENS_TOOLS}."
-    )
+    print(f"Unable to find environment variable - MAX_TOKENS_TOOLS. Setting to {MAX_TOKENS_TOOLS}.")
 
 
 def get_llm_backend_for_tools():

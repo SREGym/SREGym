@@ -20,10 +20,6 @@ class ProductCatalogServiceFailure(Problem):
 
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 
-    def start_workload(self):
-        print("== Start Workload ==")
-        print("Workload skipped since AstronomyShop has a built-in load generator.")
-
     def inject_fault(self):
         print("== Fault Injection ==")
         self.injector.inject_fault("productCatalogFailure")

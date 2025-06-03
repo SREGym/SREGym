@@ -72,11 +72,7 @@ with open(f"{SLICE_NAME}.login.info.txt", "a") as f:
     f.write(login_info)
     f.write("\n")
     f.write(f"To delete the experiment, run the following command:\n")
-    f.write(
-        f"python3 genictl.py delete-sliver {SLICE_NAME} --site wisconsin\n"
-    )
+    f.write(f"python3 genictl.py delete-sliver {SLICE_NAME} --site wisconsin\n")
 print(f"\nSSH info saved to {SLICE_NAME}.login.info.txt\n")
 
-print(
-    f"Your experiment under slice: {SLICE_NAME} is successfully created for {DURATION} hours\n"
-)
+print(f"Your experiment under slice: {SLICE_NAME} is successfully created for {DURATION} hours\n")

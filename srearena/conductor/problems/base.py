@@ -21,6 +21,3 @@ class Problem(ABC):
     @abstractmethod
     def recover_fault(self):
         pass
-
-    def start_workload(self):
-        pass  # Optional, not all problems need traffic generation

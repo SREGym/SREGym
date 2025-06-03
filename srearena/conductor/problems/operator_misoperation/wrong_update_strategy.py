@@ -19,11 +19,6 @@ class K8SOperatorWrongUpdateStrategyBaseTask:
         self.app = TiDBCluster()
         self.faulty_cr = "tidbclusters"
 
-    def start_workload(self):
-        print("== Start Workload ==")
-        print("Workload is the CR applied to the operator.")
-        pass
-
     def inject_fault(self):
         print("== Fault Injection ==")
         self.injector._inject("wrong_update_strategy")

@@ -1,7 +1,9 @@
 """Interface to the social network application from DeathStarBench"""
 
+from srearena.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from srearena.paths import SOCIAL_NETWORK_METADATA, TARGET_MICROSERVICES
 from srearena.service.apps.base import Application
+from srearena.service.apps.helpers import get_frontend_url
 from srearena.service.helm import Helm
 from srearena.service.kubectl import KubeCtl
 
@@ -14,6 +16,8 @@ class SocialNetwork(Application):
         self.local_tls_path = TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork"
         self.create_namespace()
         self.create_tls_secret()
+
+        self.payload_script = TARGET_MICROSERVICES / "socialNetwork/wrk2/scripts/social-network/mixed-workload.lua"
 
     def load_app_json(self):
         super().load_app_json()
@@ -61,5 +65,22 @@ class SocialNetwork(Application):
     def cleanup(self):
         """Delete the entire namespace for the social network application."""
         Helm.uninstall(**self.helm_configs)
+
+        self.wrk.stop()
         # self.kubectl.delete_namespace(self.namespace)
         # time.sleep(15)
+
+    def create_workload(self):
+        frontend_url = get_frontend_url(self)
+
+        wrk2 = Wrk2WorkloadManager(
+            wrk=Wrk2(rate=20, dist="exp", connections=2, duration=10, threads=2),
+            payload_script=self.payload_script,
+            url=f"{frontend_url}/wrk2-api/post/compose",
+        )
+        self.wrk = wrk2
+
+    def start_workload(self):
+        if not hasattr(self, "wrk"):
+            self.create_workload()
+        self.wrk.start()

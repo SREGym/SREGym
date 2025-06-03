@@ -72,10 +72,7 @@ class Conductor:
             self.problem.inject_fault()
             atexit.register(exit_cleanup_fault, prob=self.problem)
 
-        if inspect.iscoroutinefunction(self.problem.start_workload):
-            asyncio.create_task(self.problem.start_workload())
-        else:
-            self.problem.start_workload()
+        self.problem.app.start_workload()
 
         # === Run agent loop ===
         instr = "Please take the next action"
@@ -128,10 +125,7 @@ class Conductor:
             self.problem.inject_fault()
             atexit.register(exit_cleanup_fault, prob=self.problem)
 
-        if inspect.iscoroutinefunction(self.problem.start_workload):
-            asyncio.create_task(self.problem.start_workload())
-        else:
-            self.problem.start_workload()
+        self.problem.app.start_workload()
 
         return (
             "Problem loaded.",

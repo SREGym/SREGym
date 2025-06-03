@@ -10,9 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 load_dotenv()
@@ -76,20 +74,14 @@ class LiteLLMBackend:
                 logger.info("No system message provided.")
                 system_message = SystemMessage(content="You are a helpful assistant.")
                 if system_prompt is None:
-                    logger.warning(
-                        "No system prompt provided. Using default system prompt."
-                    )
+                    logger.warning("No system prompt provided. Using default system prompt.")
                 else:
                     logger.info("Using system prompt provided.")
                     system_message.content = system_prompt
-                logger.info(
-                    f"inserting [{system_message}] at the beginning of messages"
-                )
+                logger.info(f"inserting [{system_message}] at the beginning of messages")
                 prompt_messages.insert(0, system_message)
         else:
-            raise ValueError(
-                f"messages must be either a string or a list of dicts, but got {type(messages)}"
-            )
+            raise ValueError(f"messages must be either a string or a list of dicts, but got {type(messages)}")
         logger.info(f"prompting llm with messages: {prompt_messages}")
 
         llm = ChatOpenAI(

@@ -1,7 +1,9 @@
 import time
 
-from srearena.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA
+from srearena.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
+from srearena.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA, TARGET_MICROSERVICES
 from srearena.service.apps.base import Application
+from srearena.service.apps.helpers import get_frontend_url
 from srearena.service.kubectl import KubeCtl
 
 
@@ -15,6 +17,10 @@ class HotelReservation(Application):
         self.load_app_json()
         self.create_namespace()
         self.create_configmaps()
+
+        self.payload_script = (
+            TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
+        )
 
     def load_app_json(self):
         super().load_app_json()
@@ -96,6 +102,8 @@ class HotelReservation(Application):
             print(f"Deleted PersistentVolume {pv}: {delete_result.strip()}")
         time.sleep(5)
 
+        self.wrk.stop()
+
     def _remove_pv_finalizers(self, pv_name: str):
         """Remove finalizers from the PersistentVolume to prevent it from being stuck in a 'Terminating' state."""
         # Patch the PersistentVolume to remove finalizers if it is stuck
@@ -112,3 +120,18 @@ class HotelReservation(Application):
     def _read_script(self, file_path: str) -> str:
         with open(file_path, "r") as file:
             return file.read()
+
+    def create_workload(self):
+        frontend_url = get_frontend_url(self)
+
+        wrk2 = Wrk2WorkloadManager(
+            wrk=Wrk2(rate=20, dist="exp", connections=2, duration=10, threads=2),
+            payload_script=self.payload_script,
+            url=f"{frontend_url}",
+        )
+        self.wrk = wrk2
+
+    def start_workload(self):
+        if not hasattr(self, "wrk"):
+            self.create_workload()
+        self.wrk.start()

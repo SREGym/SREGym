@@ -12,7 +12,7 @@ from prompt_toolkit.completion import WordCompleter
 from prompt_toolkit.enums import EditingMode
 from prompt_toolkit.key_binding import KeyBindings
 
-from provisioner.utils.parser import parse_sliver_info, collect_and_parse_hardware_info
+from provisioner.utils.parser import collect_and_parse_hardware_info, parse_sliver_info
 
 warnings.filterwarnings("ignore")
 
@@ -42,9 +42,7 @@ def create_slice(context, args):
     try:
         print(f"Creating slice '{args.slice_name}'...")
         expiration = datetime.datetime.now() + datetime.timedelta(hours=args.hours)
-        res = context.cf.createSlice(
-            context, args.slice_name, exp=expiration, desc=args.description
-        )
+        res = context.cf.createSlice(context, args.slice_name, exp=expiration, desc=args.description)
         print(f"Slice Info: \n{json.dumps(res, indent=2)}")
         print(f"Slice '{args.slice_name}' created")
     except Exception as e:
@@ -160,9 +158,7 @@ def get_aggregate(site):
 def get_hardware_info(context=None, args=None):
     hardware_info_list = collect_and_parse_hardware_info()
     if hardware_info_list:
-        print(
-            f"\n{'Hardware Name':<20} | {'Cluster Name':<30} | {'Total':<7} | {'Free':<7}"
-        )
+        print(f"\n{'Hardware Name':<20} | {'Cluster Name':<30} | {'Total':<7} | {'Free':<7}")
         print("-" * 100)
 
         for item in hardware_info_list:
@@ -182,9 +178,7 @@ def quick_experiment_creation(context, args):
         os_type = args.os_type if hasattr(args, "os_type") else "UBUNTU22-64-STD"
         os_urn = f"urn:publicid:IDN+emulab.net+image+emulab-ops//{os_type}"
 
-        print(
-            f"Creating a quick {node_count} node cluster of hardware type: {hardware_type}"
-        )
+        print(f"Creating a quick {node_count} node cluster of hardware type: {hardware_type}")
 
         hardware_info_list = collect_and_parse_hardware_info()
         slice_name = "test-" + str(random.randint(100000, 999999))
@@ -194,15 +188,11 @@ def quick_experiment_creation(context, args):
             # print(f"Checking {item['hardware_name']} at {item['cluster_name']}")
             if item["hardware_name"].strip() == hardware_type.strip():
                 if item["total"] >= node_count and item["free"] >= node_count:
-                    print(
-                        f"Creating a {node_count} node cluster of {hardware_type} at {item['cluster_name']}"
-                    )
+                    print(f"Creating a {node_count} node cluster of {hardware_type} at {item['cluster_name']}")
                     cluster_name = item["cluster_name"]
                     break
                 else:
-                    print(
-                        f"Not enough {hardware_type} nodes available at {item['cluster_name']}"
-                    )
+                    print(f"Not enough {hardware_type} nodes available at {item['cluster_name']}")
 
         if cluster_name is None:
             print(f"No {hardware_type} nodes available")
@@ -270,9 +260,7 @@ def quick_experiment_creation(context, args):
             f.write(login_info)
             f.write("\n")
             f.write("To delete the experiment, run the following command:\n")
-            f.write(
-                f"python3 genictl.py delete-sliver {slice_name} --site {aggregate_name}\n"
-            )
+            f.write(f"python3 genictl.py delete-sliver {slice_name} --site {aggregate_name}\n")
         print(f"\nSSH info saved to {slice_name}.login.info.txt\n")
 
         print(
@@ -306,21 +294,13 @@ def main():
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     # create slice parser
-    create_slice_parser = subparsers.add_parser(
-        "create-slice", help="Create a new slice"
-    )
+    create_slice_parser = subparsers.add_parser("create-slice", help="Create a new slice")
     create_slice_parser.add_argument("slice_name", help="Name of the slice")
-    create_slice_parser.add_argument(
-        "--hours", type=validate_hours, default=1, help="Hours until expiration"
-    )
-    create_slice_parser.add_argument(
-        "--description", default="CloudLab experiment", help="Slice description"
-    )
+    create_slice_parser.add_argument("--hours", type=validate_hours, default=1, help="Hours until expiration")
+    create_slice_parser.add_argument("--description", default="CloudLab experiment", help="Slice description")
 
     # create sliver parser
-    create_sliver_parser = subparsers.add_parser(
-        "create-sliver", help="Create a new sliver"
-    )
+    create_sliver_parser = subparsers.add_parser("create-sliver", help="Create a new sliver")
     create_sliver_parser.add_argument("slice_name", help="Name of the slice")
     create_sliver_parser.add_argument("rspec_file", help="Path to RSpec file")
     create_sliver_parser.add_argument(
@@ -342,16 +322,12 @@ def main():
 
     renew_slice_parser = subparsers.add_parser("renew-slice", help="Renew a slice")
     renew_slice_parser.add_argument("slice_name", help="Name of the slice")
-    renew_slice_parser.add_argument(
-        "--hours", type=validate_hours, default=1, help="Hours to extend"
-    )
+    renew_slice_parser.add_argument("--hours", type=validate_hours, default=1, help="Hours to extend")
 
     # renew sliver parser
     renew_sliver_parser = subparsers.add_parser("renew-sliver", help="Renew a sliver")
     renew_sliver_parser.add_argument("slice_name", help="Name of the slice")
-    renew_sliver_parser.add_argument(
-        "--hours", type=validate_hours, default=1, help="Hours to extend"
-    )
+    renew_sliver_parser.add_argument("--hours", type=validate_hours, default=1, help="Hours to extend")
     renew_sliver_parser.add_argument(
         "--site",
         choices=["utah", "clemson", "wisconsin"],
@@ -360,9 +336,7 @@ def main():
     )
 
     # list sliver spec parser
-    list_spec_parser = subparsers.add_parser(
-        "sliver-spec", help="List sliver specifications"
-    )
+    list_spec_parser = subparsers.add_parser("sliver-spec", help="List sliver specifications")
     list_spec_parser.add_argument("slice_name", help="Name of the slice")
     list_spec_parser.add_argument(
         "--site",
@@ -385,22 +359,16 @@ def main():
     list_slices_parser = subparsers.add_parser("list-slices", help="List all slices")
 
     # get hardware info parser
-    subparsers.add_parser(
-        "get-hardware-info", help="Get available hardware information from CloudLab"
-    )
+    subparsers.add_parser("get-hardware-info", help="Get available hardware information from CloudLab")
 
     # quick experiment parser
     quick_exp_parser = subparsers.add_parser(
         "quick-experiment",
         help="Create a quick 3-node experiment with specified hardware type",
     )
-    quick_exp_parser.add_argument(
-        "--hardware-type", required=True, help="Hardware type for the nodes"
-    )
+    quick_exp_parser.add_argument("--hardware-type", required=True, help="Hardware type for the nodes")
 
-    quick_exp_parser.add_argument(
-        "--duration", type=validate_hours, default=1, help="Duration in hours"
-    )
+    quick_exp_parser.add_argument("--duration", type=validate_hours, default=1, help="Duration in hours")
 
     quick_exp_parser.add_argument(
         "--node-count",
@@ -417,9 +385,7 @@ def main():
     )
 
     # Add interactive mode flag
-    parser.add_argument(
-        "--interactive", "-i", action="store_true", help="Run in interactive mode"
-    )
+    parser.add_argument("--interactive", "-i", action="store_true", help="Run in interactive mode")
 
     args = parser.parse_args()
 
@@ -503,14 +469,10 @@ def run_interactive_mode(parser, commands, sites):
                 "delete-sliver",
             ]:
                 while True:
-                    site = site_session.prompt(
-                        "Enter site (utah, clemson, wisconsin): "
-                    ).strip()
+                    site = site_session.prompt("Enter site (utah, clemson, wisconsin): ").strip()
                     if site in sites:
                         break
-                    print(
-                        "Error: Please enter a valid site (utah, clemson, or wisconsin)"
-                    )
+                    print("Error: Please enter a valid site (utah, clemson, or wisconsin)")
                 args_list.append("--site")
                 args_list.append(site)
 
@@ -539,25 +501,16 @@ def run_interactive_mode(parser, commands, sites):
                 args_list.append(rspec_file)
 
             if input_parts[0] in ["create-slice"]:
-                hours = (
-                    input("Enter expiration time (hours from now, default 1): ").strip()
-                    or "1"
-                )
+                hours = input("Enter expiration time (hours from now, default 1): ").strip() or "1"
                 args_list.extend(["--hours", hours])
 
             if input_parts[0] in ["renew-slice", "renew-sliver"]:
-                hours = (
-                    input(
-                        "Enter new expiration time (hours from now, default 1): "
-                    ).strip()
-                    or "1"
-                )
+                hours = input("Enter new expiration time (hours from now, default 1): ").strip() or "1"
                 args_list.extend(["--hours", hours])
 
             if input_parts[0] == "create-slice":
                 description = (
-                    input('Enter slice description (default "CloudLab experiment"): ')
-                    or "CloudLab experiment"
+                    input('Enter slice description (default "CloudLab experiment"): ') or "CloudLab experiment"
                 )
                 args_list.extend(["--description", description])
 
@@ -579,10 +532,7 @@ def run_interactive_mode(parser, commands, sites):
                 for os_type in OS_TYPES:
                     print(f"  - {os_type}")
                 os_response = (
-                    os_session.prompt(
-                        "Enter OS type (default UBUNTU22-64-STD): "
-                    ).strip()
-                    or "UBUNTU22-64-STD"
+                    os_session.prompt("Enter OS type (default UBUNTU22-64-STD): ").strip() or "UBUNTU22-64-STD"
                 )
                 if os_response:
                     args_list.extend(["--os-type", os_response])
