@@ -1,8 +1,8 @@
-import subprocess
-import os
 import logging
+import os
+import subprocess
 
-REPO = "/home/azureuser/AIOpsLab"
+REPO = "/home/azureuser/SREArena"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)  # Change to DEBUG for more detailed logs
@@ -13,16 +13,12 @@ def run_command(command, capture_output=False):
     """Runs a shell command and handles errors."""
     try:
         logger.debug(f"Running command: {' '.join(command)}")
-        result = subprocess.run(
-            command, capture_output=capture_output, text=True, check=True
-        )
+        result = subprocess.run(command, capture_output=capture_output, text=True, check=True)
         if capture_output:
             logger.debug(f"Command output: {result.stdout.strip()}")
         return result.stdout.strip() if capture_output else None
     except subprocess.CalledProcessError as e:
-        logger.error(
-            f"Command '{' '.join(command)}' failed with error: {e.stderr.strip() if e.stderr else str(e)}"
-        )
+        logger.error(f"Command '{' '.join(command)}' failed with error: {e.stderr.strip() if e.stderr else str(e)}")
         if capture_output:
             return None
 
@@ -44,9 +40,7 @@ def destroy_aiopslab():
 def get_terraform_output(output_name):
     """Retrieve Terraform output."""
     try:
-        result = run_command(
-            ["terraform", "output", "-raw", output_name], capture_output=True
-        )
+        result = run_command(["terraform", "output", "-raw", output_name], capture_output=True)
         return result
     except Exception as e:
         logger.error(f"Failed to get Terraform output for {output_name}: {str(e)}")
@@ -109,9 +103,7 @@ def get_kubeadm_join_remote(username, private_key, public_ip):
         result = run_command(generate_join_command, capture_output=True)
         return result
     except Exception as e:
-        logger.error(
-            f"Failed to retrieve kubeadm join command from {public_ip}: {str(e)}"
-        )
+        logger.error(f"Failed to retrieve kubeadm join command from {public_ip}: {str(e)}")
         return None
 
 
@@ -192,47 +184,31 @@ def main():
     prom_worker_setup_script = f"./scripts/prom_on_worker.sh"
 
     # Install kubeadm on all the VMs
-    copy_and_execute_script(
-        username, private_key_file_1, public_ip_1, kubeadm_shell_script
-    )
-    copy_and_execute_script(
-        username, private_key_file_2, public_ip_2, kubeadm_shell_script
-    )
+    copy_and_execute_script(username, private_key_file_1, public_ip_1, kubeadm_shell_script)
+    copy_and_execute_script(username, private_key_file_2, public_ip_2, kubeadm_shell_script)
 
     # Setup kube controller
-    copy_and_execute_script(
-        username, private_key_file_1, public_ip_1, controller_shell_script
-    )
+    copy_and_execute_script(username, private_key_file_1, public_ip_1, controller_shell_script)
 
     # Get join command and run on the worker
     join_command = get_kubeadm_join_remote(username, private_key_file_1, public_ip_1)
 
     if join_command:
         logger.info(f"Join command retrieved: {join_command}")
-        run_kubeadm_join_on_worker(
-            username, private_key_file_2, public_ip_2, join_command
-        )
+        run_kubeadm_join_on_worker(username, private_key_file_2, public_ip_2, join_command)
 
-    # Setup aiopslab
-    copy_and_execute_script(
-        username, private_key_file_1, public_ip_1, setup_aiopslab_script
-    )
+    # Setup srearena
+    copy_and_execute_script(username, private_key_file_1, public_ip_1, setup_aiopslab_script)
 
     # Deploy Prometheus on the worker node)
-    copy_and_execute_script(
-        username, private_key_file_2, public_ip_2, prom_worker_setup_script
-    )
+    copy_and_execute_script(username, private_key_file_2, public_ip_2, prom_worker_setup_script)
     deploy_prometheus(username, private_key_file_1, public_ip_1)
 
     # print public ip of controller and worker and give ssh command to access it
     logger.info(f"Controller Public IP: {public_ip_1}")
     logger.info(f"Worker Public IP: {public_ip_2}")
-    logger.info(
-        f"SSH command to access controller: ssh -i {private_key_file_1} {username}@{public_ip_1}"
-    )
-    logger.info(
-        f"SSH command to access worker: ssh -i {private_key_file_2} {username}@{public_ip_2}"
-    )
+    logger.info(f"SSH command to access controller: ssh -i {private_key_file_1} {username}@{public_ip_1}")
+    logger.info(f"SSH command to access worker: ssh -i {private_key_file_2} {username}@{public_ip_2}")
 
 
 if __name__ == "__main__":

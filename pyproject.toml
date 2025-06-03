@@ -1,13 +1,15 @@
 [project]
-name = "aiopslab"
+name = "srearena"
 requires-python = ">= 3.12"
 version = "0.0.1"
+
 dependencies = [
     "aiohappyeyeballs==2.6.1",
     "aiohttp==3.12.1",
     "aiosignal==1.3.2",
     "airportsdata==20250523",
     "annotated-types==0.7.0",
+    "anthropic>=0.52.0",
     "anyio==4.9.0",
     "asgiref==3.8.1",
     "astor==0.8.1",
@@ -27,6 +29,7 @@ dependencies = [
     "bcrypt==4.3.0",
     "black==24.10.0",
     "blake3==1.0.5",
+    "bs4>=0.0.2",
     "cachetools==5.5.2",
     "certifi==2025.4.26",
     "cffi==1.17.1",
@@ -59,6 +62,7 @@ dependencies = [
     "fonttools==4.58.0",
     "frozenlist==1.6.0",
     "fsspec==2025.5.1",
+    "geni-lib-xlab",
     "gguf==0.10.0",
     "gitdb==4.0.12",
     "gitpython==3.1.44",
@@ -81,13 +85,19 @@ dependencies = [
     "jsonschema-specifications==2025.4.1",
     "kiwisolver==1.4.8",
     "kubernetes==30.1.0",
+    "langchain>=0.3.25",
+    "langchain-openai>=0.3.18",
+    "langgraph>=0.4.7",
+    "langsmith>=0.3.43",
     "lark==1.2.2",
+    "litellm>=1.71.1",
     "llvmlite==0.43.0",
     "lm-format-enforcer==0.10.11",
     "markdown-it-py==3.0.0",
     "markupsafe==3.0.2",
     "marshmallow==3.26.1",
     "matplotlib==3.10.3",
+    "mcp[cli]>=1.9.1",
     "mdurl==0.1.2",
     "mistral-common==1.5.6",
     "mpmath==1.3.0",
@@ -104,7 +114,6 @@ dependencies = [
     "numba==0.60.0",
     "numpy==1.26.4",
     "oauthlib==3.2.2",
-    "openai==1.82.0",
     "opencv-python-headless==4.11.0.86",
     "opentelemetry-api==1.31.1",
     "opentelemetry-instrumentation==0.52b1",
@@ -124,7 +133,7 @@ dependencies = [
     "opentelemetry-util-http==0.52b1",
     "outlines==0.1.11",
     "outlines-core==0.1.26",
-    "packaging==25.0",
+    "packaging==24.0",
     "pandas==2.2.3",
     "paramiko==3.5.1",
     "partial-json-parser==0.2.1.1.post5",
@@ -205,9 +214,20 @@ dependencies = [
     "zipp==3.22.0",
 ]
 
+[tool.black]
+line-length = 120
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+line_length = 120
+
 [build-system]
 requires = ["setuptools>=80.8.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["aiopslab", "clients"]
+packages = ["srearena", "clients", "provisioner"]
+
+[tool.uv.sources]
+geni-lib-xlab = { path = "scripts/geni-lib/mod/geni_lib_xlab-1.0.0.tar.gz" }

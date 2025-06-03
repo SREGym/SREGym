@@ -14,9 +14,9 @@ generate_ssh_key() {
 # Generate the SSH key if it's not already there
 generate_ssh_key
 
-# AIOpsLab setup
-git clone https://github.com/microsoft/AIOpsLab.git
-cd AIOpsLab
+# SREArena setup
+git clone https://github.com/microsoft/SREArena.git
+cd SREArena
 sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt-get update
 sudo apt-get install -y python3.11

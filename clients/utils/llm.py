@@ -1,14 +1,11 @@
-# Copyright (c) Microsoft Corporation.
-# Licensed under the MIT License.
-
 """An common abstraction for a cached LLM inference setup. Currently supports OpenAI's gpt-4-turbo and other models."""
 
-
-import os
-from openai import OpenAI
-from pathlib import Path
 import json
+import os
+from pathlib import Path
+
 from dotenv import load_dotenv
+from openai import OpenAI
 
 # Load environment variables from the .env file
 load_dotenv()
@@ -101,8 +98,7 @@ class DeepSeekClient:
             if cache_result is not None:
                 return cache_result
 
-        client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"),
-                        base_url="https://api.deepseek.com")
+        client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
         try:
             response = client.chat.completions.create(
                 messages=payload,  # type: ignore
@@ -137,8 +133,10 @@ class QwenClient:
             if cache_result is not None:
                 return cache_result
 
-        client = OpenAI(api_key=os.getenv("DASHSCOPE_API_KEY"),
-                        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
+        client = OpenAI(
+            api_key=os.getenv("DASHSCOPE_API_KEY"),
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        )
         try:
             # TODO: Add constraints for the input context length
             response = client.chat.completions.create(
@@ -148,7 +146,7 @@ class QwenClient:
                 n=1,
                 timeout=60,
                 stop=[],
-                stream=True
+                stream=True,
             )
         except Exception as e:
             print(f"Exception: {repr(e)}")
@@ -164,7 +162,7 @@ class QwenClient:
                 print(chunk.usage)
             else:
                 delta = chunk.choices[0].delta
-                if hasattr(delta, 'reasoning_content') and delta.reasoning_content != None:
+                if hasattr(delta, "reasoning_content") and delta.reasoning_content != None:
                     reasoning_content += delta.reasoning_content
                 else:
                     if delta.content != "" and is_answering is False:

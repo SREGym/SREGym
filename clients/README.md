@@ -1,4 +1,4 @@
-# AIOpsLab Clients
+# SREArena Clients
 
 This directory contains implementation of clients that can interact with AIOPsLab.
 These clients are some baselines that we have implemented and evaluated to help you get started.
@@ -14,7 +14,7 @@ These clients are some baselines that we have implemented and evaluated to help 
 
 ### Using the vLLM Client
 
-The vLLM client allows you to run local open-source models as an agent for AIOpsLab tasks. This approach is particularly useful when you want to:
+The vLLM client allows you to run local open-source models as an agent for SREArena tasks. This approach is particularly useful when you want to:
 - Use your own hardware for inference
 - Experiment with different open-source models
 - Work in environments without internet access to cloud LLM providers
