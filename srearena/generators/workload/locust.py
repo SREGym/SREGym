@@ -20,6 +20,9 @@ class LocustWorkloadManager(StreamWorkloadManager):
         self.log_pool = []
         self.last_log_line_time = None
 
+        config.load_kube_config()
+        self.core_v1_api = client.CoreV1Api()
+
     def remove_fetcher(self):
         try:
             pods = self.core_v1_api.list_namespaced_pod(namespace=self.namespace, label_selector="app=locust-fetcher")
@@ -61,10 +64,13 @@ class LocustWorkloadManager(StreamWorkloadManager):
             )
             print("Waiting for locust-fetcher pod to be created...")
             while True:
-                pods = self.core_v1_api.list_namespaced_pod(
-                    namespace=self.namespace, label_selector="app=locust-fetcher"
+                pod = self.core_v1_api.read_namespaced_pod_status(
+                    name="locust-fetcher",
+                    namespace=self.namespace,
                 )
-                if pods.items:
+                conditions = pod.status.conditions or []
+                ready = any(cond.type == "Ready" and cond.status == "True" for cond in conditions)
+                if ready:
                     break
                 time.sleep(5)
             print(f"Pod locust-fetcher created.")
