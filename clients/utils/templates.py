@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """prompt templates to share API documentation and instructions with clients"""
 
 # standard documentation and apis template

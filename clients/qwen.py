@@ -1,13 +1,13 @@
-"""Naive Qwen client (with shell access) for SREArena."""
+"""Naive Qwen client (with shell access) for AIOpsLab.
+"""
 
-import asyncio
 import os
+import asyncio
 
 import wandb
-
+from aiopslab.orchestrator import Orchestrator
 from clients.utils.llm import QwenClient
 from clients.utils.templates import DOCS_SHELL_ONLY
-from srearena.conductor import Conductor
 
 
 class Agent:
@@ -18,11 +18,13 @@ class Agent:
     def init_context(self, problem_desc: str, instructions: str, apis: str):
         """Initialize the context for the agent."""
 
-        self.shell_api = self._filter_dict(apis, lambda k, _: "exec_shell" in k)
+        self.shell_api = self._filter_dict(
+            apis, lambda k, _: "exec_shell" in k)
         self.submit_api = self._filter_dict(apis, lambda k, _: "submit" in k)
 
-        def stringify_apis(apis):
-            return "\n\n".join([f"{k}\n{v}" for k, v in apis.items()])
+        def stringify_apis(apis): return "\n\n".join(
+            [f"{k}\n{v}" for k, v in apis.items()]
+        )
 
         self.system_message = DOCS_SHELL_ONLY.format(
             prob_desc=problem_desc,
@@ -39,7 +41,7 @@ class Agent:
         """Wrapper to interface the agent with OpsBench.
 
         Args:
-            input (str): The input from the conductor/environment.
+            input (str): The input from the orchestrator/environment.
 
         Returns:
             str: The response from the agent.
@@ -56,20 +58,20 @@ class Agent:
 if __name__ == "__main__":
     # Load use_wandb from environment variable with a default of False
     use_wandb = os.getenv("USE_WANDB", "false").lower() == "true"
-
+    
     if use_wandb:
         # Initialize wandb running
-        wandb.init(project="SREArena", entity="SREArena")
+        wandb.init(project="AIOpsLab", entity="AIOpsLab")
 
     agent = Agent()
 
-    conductor = Conductor()
-    conductor.register_agent(agent, name="qwq-32b")
+    orchestrator = Orchestrator()
+    orchestrator.register_agent(agent, name="qwq-32b")
 
     pid = "misconfig_app_hotel_res-mitigation-1"
-    problem_desc, instructs, apis = conductor.init_problem(pid)
+    problem_desc, instructs, apis = orchestrator.init_problem(pid)
     agent.init_context(problem_desc, instructs, apis)
-    asyncio.run(conductor.start_problem())
+    asyncio.run(orchestrator.start_problem(max_steps=10))
 
     if use_wandb:
         # Finish the wandb run

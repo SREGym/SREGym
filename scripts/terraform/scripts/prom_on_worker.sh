@@ -1,4 +1,6 @@
 #!/bin/sh
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
 
 echo "Checking /datadrive/prometheus directory"
 if [ ! -d "/datadrive/prometheus" ]; then

@@ -13,45 +13,12 @@ def load_cfg() -> dict:
     return yaml.safe_load(CFG_PATH.read_text())
 
 
-def nodes_reachable(cloud: dict, verbose: bool = True) -> bool:
-    """Check if all nodes are reachable with better error handling and retries"""
-    print(f"Checking {len(cloud['nodes'])} nodes for SSH connectivity...")
-    
-    for i, host in enumerate(cloud["nodes"], 1):
-        print(f"   [{i}/{len(cloud['nodes'])}] Testing {host}...", end=" ")
-        
-        max_retries = 3
-        success = False
-        
-        for retry in range(max_retries):
-            try:
-                executor = RemoteExecutor(host, cloud["ssh_user"], cloud.get("ssh_key"))
-                rc, stdout, stderr = executor.exec("echo 'SSH test successful'")
-                executor.close()
-                
-                if rc == 0:
-                    print("✅")
-                    success = True
-                    break
-                else:
-                    print(f"❌ (command failed: rc={rc})")
-                    if verbose and retry == max_retries - 1:
-                        print(f"      stdout: {stdout.strip()}")
-                        print(f"      stderr: {stderr.strip()}")
-                    
-            except Exception as e:
-                if retry < max_retries - 1:
-                    print(".", end="") 
-                    time.sleep(5) 
-                else:
-                    print(f"❌ ({type(e).__name__}: {str(e)[:80]}...)")
-                    if verbose:
-                        print(f"      Full error: {e}")
-        
-        if not success:
+def nodes_reachable(cloud: dict) -> bool:
+    for host in cloud["nodes"]:
+        try:
+            RemoteExecutor(host, cloud["ssh_user"], cloud["ssh_key"]).close()
+        except Exception:
             return False
-    
-    print("✅ All nodes reachable!")
     return True
 
 def install_k8s_components(ex: RemoteExecutor) -> None:
@@ -93,11 +60,8 @@ def install_k8s_components(ex: RemoteExecutor) -> None:
         "sudo kubeadm config images pull --kubernetes-version $(kubeadm version -o short)",
     ]
     for cmd in cmds:
-        print(f"      Running: {cmd[:60]}...")
-        rc, stdout, err = ex.exec(cmd)  # Removed timeout parameter
+        rc, _, err = ex.exec(cmd)
         if rc != 0:
-            print(f"      Failed command: {cmd}")
-            print(f"      Error: {err.strip()}")
             raise RuntimeError(f"[{ex.host}] `{cmd}` failed:\n{err.strip()}")
 
 
@@ -213,7 +177,7 @@ def setup_cloudlab_cluster(cfg: dict) -> None:
     try:
         for host in cloud["nodes"]:
             print(f"Installing K8s components on {host} …")
-            ex = RemoteExecutor(host, cloud["ssh_user"], cloud.get("ssh_key"))
+            ex = RemoteExecutor(host, cloud["ssh_user"], cloud["ssh_key"])
             install_k8s_components(ex)
             executors.append(ex)
 
