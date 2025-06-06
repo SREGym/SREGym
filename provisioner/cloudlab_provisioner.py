@@ -131,7 +131,7 @@ class CloudlabProvisioner:
         hardware_type: str = DefaultSettings.DEFAULT_HARDWARE_TYPE,
         os_type: str = DefaultSettings.DEFAULT_OS_TYPE,
         node_count: int = DefaultSettings.DEFAULT_NODE_COUNT,
-        save_info: bool = False,
+        save_info: bool = True,
     ):
         logger.info(
             f"Creating experiment with duration: {duration}, description: {description}, hardware_type: {hardware_type}, os_type: {os_type}, node_count: {node_count}"
