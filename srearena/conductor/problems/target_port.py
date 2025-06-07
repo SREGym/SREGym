@@ -2,7 +2,7 @@
 
 from srearena.conductor.oracles.detection import DetectionOracle
 from srearena.conductor.oracles.localization import LocalizationOracle
-from srearena.conductor.oracles.mitigation import MitigationOracle
+from srearena.conductor.oracles.target_port_mitigation import TargetPortMisconfigMitigationOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.paths import TARGET_MICROSERVICES
@@ -23,7 +23,7 @@ class K8STargetPortMisconfig(Problem):
 
         self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
 
-        self.mitigation_oracle = MitigationOracle(problem=self)
+        self.mitigation_oracle = TargetPortMisconfigMitigationOracle(problem=self)
 
     def inject_fault(self):
         injector = VirtualizationFaultInjector(namespace=self.namespace)
