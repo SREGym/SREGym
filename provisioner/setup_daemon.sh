@@ -3,8 +3,8 @@
 # Exit on error
 set -e
 
-USER="pial"
-GROUP="pial"
+USER="srearena"
+GROUP="srearena"
 
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then 

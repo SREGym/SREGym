@@ -2,14 +2,20 @@ import logging
 from provisioner.utils.ssh import SSHManager, SSHUtilError
 from provisioner.utils.logger import logger
 import os
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+# Put actual hostname here
+TEST_HOSTNAME = "YOUR_TEST_HOSTNAME_OR_IP"
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     logger.info("SSH Utils direct execution test started.")
 
-    test_hostname = "c220g5-120106.wisc.cloudlab.us"
-    test_username = "Pial"
-    test_private_key_path = "~/.ssh/id_cl"
+    test_hostname = TEST_HOSTNAME
+    test_username = "srearena"
+    test_private_key_path = os.getenv("PROVISIONER_SSH_PRIVATE_KEY_PATH")
 
     if test_hostname == "YOUR_TEST_HOSTNAME_OR_IP":
         logger.warning("Skipping SSH tests: Please update test_hostname and credentials in ssh_utils.py")
@@ -57,7 +63,7 @@ if __name__ == "__main__":
             if os.path.exists(local_downloaded_file):
                 os.remove(local_downloaded_file)
 
-            logger.info("\nSSH Utils tests completed successfully (if no errors above).")
+            logger.info("\nSSH Utils tests completed successfully.")
 
         except SSHUtilError as e:
             logger.error(f"SSH Util Test FAILED: {e}", exc_info=True)

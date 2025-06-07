@@ -5,7 +5,7 @@ from pathlib import Path
 
 if __name__ == "__main__":
     logger.info("StateManager direct execution test started.")
-    DB_FILE = "test_provisioner_state.db"
+    DB_FILE = "test_provisioner_state.sqlite3"
     db_path_obj = Path(DB_FILE)
     if db_path_obj.exists():
         os.remove(DB_FILE)
@@ -14,8 +14,8 @@ if __name__ == "__main__":
     sm.add_user("user1", "ssh-rsa AAA...")
 
     sample_login_info = [
-        ["control", "Pial", "c220g5-111307.wisc.cloudlab.us", 22],
-        ["compute1", "Pial", "c220g5-111311.wisc.cloudlab.us", 22]
+        ["control", "srearena", "c220g5-111111.wisc.cloudlab.us", 22],
+        ["compute1", "srearena", "c220g5-222222.wisc.cloudlab.us", 22]
     ]
 
     slice1 = sm.create_cluster_record(

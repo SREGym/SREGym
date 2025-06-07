@@ -97,9 +97,9 @@ For Gmail, you'll need to create an app password. Follow this [guide](https://be
 - Sends email notifications for important events
 - Handles automatic extensions and cleanup
 
-### As a Daemon Service
+### Running the Provisioner as a Daemon Service
 
-1. Edit `setup_daemon.sh` to set the correct `USER` and `GROUP`
+1. Edit `setup_daemon.sh` to set the correct `USER` and `GROUP` according to the machine you are using to run the provisioner.
 2. Run the setup script:
 ```bash
 chmod +x setup_daemon.sh
