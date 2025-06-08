@@ -27,114 +27,114 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]
 
 
-def route_tools(state: State):
-    """
-    Use in the conditional_edge to route to the ToolNode if the last message
-    has tool calls. Otherwise, route to the end.
-    """
-    logger.info(f"route_tools: {state}")
-    if isinstance(state, list):
-        ai_message = state[-1]
-    elif messages := state.get("messages", []):
-        ai_message = messages[-1]
-    else:
-        raise ValueError(f"No messages found in input state to tool_edge: {state}")
-    if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
-        logger.info("invoking tool node: observability_tool_node")
-        return "observability_tool_node"
-    logger.info("invoking node: end")
-    return END
+class XAgent:
+    # agents are modelled as graphs in langgraph, where each node in the graph
+    # represents a unit of work in the agent workflow.
+    # e.g., querying traces, running kubectl get pods, etc.
+    # it's completely up to us what we implement in each node,
+    # we don't have to query the llm at each step.
+    def __init__(self, llm):
+        self.graph_builder = StateGraph(State)
+        self.graph = None
+
+        get_traces = GetTraces()
+        get_services = GetServices()
+        get_operations = GetOperations()
+        self.tools = [
+            get_traces,
+            get_services,
+            get_operations,
+        ]
+        self.llm = llm
+
+    def route_tools(self, state: State):
+        """
+        Use in the conditional_edge to route to the ToolNode if the last message
+        has tool calls. Otherwise, route to the end.
+        """
+        logger.info(f"route_tools: {state}")
+        if isinstance(state, list):
+            ai_message = state[-1]
+        elif messages := state.get("messages", []):
+            ai_message = messages[-1]
+        else:
+            raise ValueError(f"No messages found in input state to tool_edge: {state}")
+        if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
+            logger.info("invoking tool node: observability_tool_node")
+            return "observability_tool_node"
+        logger.info("invoking node: end")
+        return END
+
+    # this is the agent node. it simply queries the llm and return the results
+    def llm_inference_step(self, state: State):
+        return {"messages": [self.llm.inference(messages=state["messages"], tools=self.tools)]}
+
+    def build_agent(self):
+        # we add the node to the graph
+        self.graph_builder.add_node("agent", self.llm_inference_step)
+
+        # we also have a tool node. this tool node connects to a jaeger MCP server
+        # and allows you to query any jaeger information
+
+        observability_tool_node = BasicToolNode(self.tools, is_async=True)
+
+        # we add the node to the graph
+        self.graph_builder.add_node("observability_tool_node", observability_tool_node)
+
+        # after creating the nodes, we now add the edges
+        # the start of the graph is denoted by the keyword START, end is END.
+        # here, we point START to the "agent" node
+        self.graph_builder.add_edge(START, "agent")
+
+        # once we arrive at the "agent" node, the execution graph can
+        # have 2 paths: either choosing to use a tool or not.
+        # e.g.,
+        # agent -> ob tool -> agent -> ob tool (tool loop)
+        # agent -> agent -> agent -> end (normal chatbot loop)
+        # this is accomplished by "conditional edges" in the graph
+        # we implement "route_tools," which routes the execution based on the agent's
+        # output. if the output is a tool usage, we direct the execution to the tool and loop back to the agent node
+        # if not, we finish *one* graph traversal (i.e., to END)
+        self.graph_builder.add_conditional_edges(
+            "agent",
+            self.route_tools,
+            # The following dictionary lets you tell the graph to interpret the condition's outputs as a specific node
+            # It defaults to the identity function, but if you
+            # want to use a node named something else apart from "tools",
+            # You can update the value of the dictionary to something else
+            # e.g., "tools": "my_tools"
+            {"observability_tool_node": "observability_tool_node", END: END},
+        )
+        # interestingly, for short-term memory (i.e., agent trajectories or conversation history), we need
+        # to explicitly implement it.
+        # here, it is implemented as a in-memory checkpointer.
+        self.graph_builder.add_edge("observability_tool_node", "agent")
+        memory = MemorySaver()
+        self.graph = self.graph_builder.compile(checkpointer=memory)
+
+    def graph_step(self):
+        config = {"configurable": {"thread_id": "1"}}
+        for event in self.graph.stream(
+            {"messages": [{"role": "user", "content": user_input}]},
+            config=config,
+            stream_mode="values",
+        ):
+            logger.info(event)
+            event["messages"][-1].pretty_print()
+            for value in event.values():
+                try:
+                    logger.info("Assistant: %s", value["messages"][-1].content)
+                except TypeError as e:
+                    logger.info(f"Please ignore, Error: {e}")
 
 
-llm = get_llm_backend_for_tools()
-get_traces = GetTraces()
-get_services = GetServices()
-get_operations = GetOperations()
-tools = [
-    get_traces,
-    get_services,
-    get_operations,
-]
-
-
-# agents are modelled as graphs in langgraph, where each node in the graph
-# represents a unit of work in the agent workflow.
-# e.g., querying traces, running kubectl get pods, etc.
-# it's completely up to us what we implement in each node,
-# we don't have to query the llm at each step.
-graph_builder = StateGraph(State)
-
-
-# this is the agent node. it simply queries the llm and return the results
-def agent(state: State):
-    return {"messages": [llm.inference(messages=state["messages"], tools=tools)]}
-
-
-# we add the node to the graph
-graph_builder.add_node("agent", agent)
-
-# we also have a tool node. this tool node connects to a jaeger MCP server
-# and allows you to query any jaeger information
-observability_tool_node = BasicToolNode(tools, is_async=True)
-
-# we add the node to the graph
-graph_builder.add_node("observability_tool_node", observability_tool_node)
-
-# after creating the nodes, we now add the edges
-# the start of the graph is denoted by the keyword START, end is END.
-# here, we point START to the "agent" node
-graph_builder.add_edge(START, "agent")
-
-# once we arrive at the "agent" node, the execution graph can
-# have 2 paths: either choosing to use a tool or not.
-# e.g.,
-# agent -> ob tool -> agent -> ob tool (tool loop)
-# agent -> agent -> agent -> end (normal chatbot loop)
-# this is accomplished by "conditional edges" in the graph
-# we implement "route_tools," which routes the execution based on the agent's
-# output. if the output is a tool usage, we direct the execution to the tool and loop back to the agent node
-# if not, we finish *one* graph traversal (i.e., to END)
-graph_builder.add_conditional_edges(
-    "agent",
-    route_tools,
-    # The following dictionary lets you tell the graph to interpret the condition's outputs as a specific node
-    # It defaults to the identity function, but if you
-    # want to use a node named something else apart from "tools",
-    # You can update the value of the dictionary to something else
-    # e.g., "tools": "my_tools"
-    {"observability_tool_node": "observability_tool_node", END: END},
-)
-graph_builder.add_edge("observability_tool_node", "agent")
-
-# interestingly, for short-term memory (i.e., agent trajectories or conversation history), we need
-# to explicitly implement it.
-# here, it is implemented as a in-memory checkpointer.
-memory = MemorySaver()
-graph = graph_builder.compile(checkpointer=memory)
-config = {"configurable": {"thread_id": "1"}}
-
-
-# this method streams one user input through the graph
-# this is how steps are implemented in langgraph.
-def stream_graph_updates(user_input: str):
-    for event in graph.stream(
-        {"messages": [{"role": "user", "content": user_input}]},
-        config=config,
-        stream_mode="values",
-    ):
-        logger.info(event)
-        event["messages"][-1].pretty_print()
-        for value in event.values():
-            try:
-                logger.info("Assistant: %s", value["messages"][-1].content)
-            except TypeError as e:
-                logger.info(f"Please ignore, Error: {e}")
-
-
-# a short chatbot loop to demonstrate the workflow.
-while True:
-    user_input = input("User: ")
-    if user_input.lower() in ["quit", "exit", "q"]:
-        print("Goodbye!")
-        break
-    stream_graph_updates(user_input)
+if __name__ == "__main__":
+    llm = get_llm_backend_for_tools()
+    xagent = XAgent(llm)
+    # a short chatbot loop to demonstrate the workflow.
+    while True:
+        user_input = input("User: ")
+        if user_input.lower() in ["quit", "exit", "q"]:
+            print("Goodbye!")
+            break
+        xagent.graph_step(user_input)
