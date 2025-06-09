@@ -1,8 +1,10 @@
 import logging
-from provisioner.utils.ssh import SSHManager, SSHUtilError
-from provisioner.utils.logger import logger
 import os
+
 from dotenv import load_dotenv
+
+from provisioner.utils.logger import logger
+from provisioner.utils.ssh import SSHManager, SSHUtilError
 
 load_dotenv(override=True)
 
@@ -24,7 +26,9 @@ if __name__ == "__main__":
             # Test execute_ssh_command
             logger.info("\n--- Testing execute_ssh_command ---")
             ssh_manager = SSHManager(test_hostname, test_username, test_private_key_path)
-            stdout, stderr, exit_code = ssh_manager.execute_ssh_command("echo 'Hello from Paramiko!' && ls -la / && date")
+            stdout, stderr, exit_code = ssh_manager.execute_ssh_command(
+                "echo 'Hello from Paramiko!' && ls -la / && date"
+            )
             logger.info(f"Execute Command Result:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}\nEXIT_CODE: {exit_code}")
             assert exit_code == 0
 

@@ -326,4 +326,4 @@ class CloudlabProvisioner:
             return all(resource.get("pg_status") == "ready" for resource in resources)
         except Exception as e:
             logger.error(f"Error: {e}")
-            return False
+            raise e

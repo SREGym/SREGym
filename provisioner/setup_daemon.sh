@@ -3,9 +3,6 @@
 # Exit on error
 set -e
 
-USER="srearena"
-GROUP="srearena"
-
 # Check if running as root
 if [ "$EUID" -ne 0 ]; then 
     echo "Please run as root"
@@ -26,8 +23,6 @@ After=network.target
 
 [Service]
 Type=simple
-User=$USER
-Group=$GROUP
 WorkingDirectory=$PROVISIONER_DIR
 ExecStart=$VENV_PATH/bin/python $PROVISIONER_DIR/daemon.py
 Restart=on-failure

@@ -211,6 +211,7 @@ class StateManager:
             "cloudlab_expires_at",
             "evaluation_override",
             "last_error_message",
+            "created_at",
         ]
 
         set_clauses = []

@@ -99,13 +99,12 @@ For Gmail, you'll need to create an app password. Follow this [guide](https://be
 
 ### Running the Provisioner as a Daemon Service
 
-1. Edit `setup_daemon.sh` to set the correct `USER` and `GROUP` according to the machine you are using to run the provisioner.
-2. Run the setup script:
+1. Run the setup script:
 ```bash
 chmod +x setup_daemon.sh
 sudo ./setup_daemon.sh
 ```
-3. To stop the daemon, run:
+2. To stop the daemon, run:
 ```bash
 sudo systemctl stop provisioner.service
 ```
@@ -140,3 +139,33 @@ python3 cli.py --help
 | `list` | List clusters for a user | `python3 cli.py list --email user@example.com` |
 | `relinquish` | Release a claimed cluster | `python3 cli.py relinquish --email user@example.com --experiment exp-name` |
 | `status` | Check cluster status | `python3 cli.py status --experiment exp-name` |
+
+
+## Testing
+The `tests/provisioner/test_provisioner.py` file contains a test suite that tests the core functionalities of the provisioner. Set `SET_TEST_VALUES` to `True` in `config/settings.py` to run the tests with test values. The tests provision actual CloudLab clusters for testing, so CloudLab credentials are required. Running all tests takes approximately 35-40 minutes.
+
+### Running Tests
+
+To run all tests:
+```bash
+cd tests/provisioner
+python3 pytest test_provisioner.py
+```
+
+To run a specific test:
+```bash
+python3 pytest test_provisioner.py::test_name
+```
+
+### Test Suite Overview
+
+The test suite includes the following tests:
+
+1. test_auto_provisioning - Verifies automatic cluster provisioning when lower than MIN_AVAILABLE_CLUSTERS
+2. test_user_claim_and_relinquish - Tests user cluster claim and release workflow
+3. test_max_clusters_per_user - Ensures users can't exceed their cluster limit
+4. test_unclaimed_cluster_timeout - Verifies automatic cleanup of unused clusters
+5. test_max_total_clusters_limit - Tests system-wide cluster limit enforcement
+6. test_claimed_cluster_inactivity_timeout - Verifies cleanup of inactive claimed clusters
+7. test_eval_override_for_inactivity - Tests evaluation mode claimed cluster protection
+8. test_claimed_cluster_extension - Verifies automatic claimed cluster reservation extension

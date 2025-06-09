@@ -2,6 +2,7 @@ import datetime
 import signal
 import subprocess
 import threading
+import time
 from typing import Optional
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -11,7 +12,7 @@ from provisioner.cloudlab_provisioner import CloudlabProvisioner
 from provisioner.config.settings import DefaultSettings
 from provisioner.state_manager import CLUSTER_STATUS, SREARENA_STATUS, StateManager
 from provisioner.utils.email_sender import EmailSender
-from provisioner.utils.logger import log_file, logger
+from provisioner.utils.logger import logger
 from provisioner.utils.ssh import SSHManager
 
 # Global stop event for graceful shutdown
@@ -100,6 +101,18 @@ class ProvisionerDaemon:
                         )
                         logger.info(f"Cluster {slice_name} provisioned by Cloudlab. Host: {hostname}")
 
+                        try:
+                            while not self.cloudlab.are_nodes_ready(slice_name, experiment_info["aggregate_name"]):
+                                logger.info(f"Waiting for nodes to be ready for {slice_name} on {hostname}...")
+                                time.sleep(10)
+                            logger.info(f"Nodes are ready for {slice_name} on {hostname}.")
+                        except Exception as e:
+                            logger.error(f"Error: {e}")
+                            self.state_manager.update_cluster_record(
+                                slice_name, status=CLUSTER_STATUS.STATUS_ERROR, last_error_message=str(e)
+                            )
+                            continue
+
                         self._setup_sre_arena_and_finalize(slice_name, hostname)
 
                     else:
@@ -134,6 +147,7 @@ class ProvisionerDaemon:
                 slice_name,
                 status=CLUSTER_STATUS.STATUS_UNCLAIMED_READY,
                 sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_SUCCESS,
+                created_at=datetime.datetime.now(),
             )
         except Exception as e:
             logger.error(f"Error during SRE Arena setup for {slice_name}: {e}", exc_info=True)
@@ -315,7 +329,7 @@ class ProvisionerDaemon:
             now = datetime.datetime.now()
             for cluster in claimed_clusters:
                 slice_name = cluster["slice_name"]
-                if cluster.get("evaluation_override", False):
+                if cluster.get("evaluation_override") in (True, 1):
                     logger.debug(f"Cluster {slice_name} has evaluation override. Skipping inactivity check.")
                     continue
 

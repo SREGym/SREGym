@@ -268,35 +268,33 @@ def claim(ctx, email, eval_override):
             while not cp.are_nodes_ready(slice_name, cluster_to_claim["aggregate_name"]):
                 click.echo(click.style(f"Waiting for nodes to be ready on {slice_name}...", fg="yellow"))
                 time.sleep(10)
+        except Exception as e:
+            click.echo(click.style(f"ERROR: Failed to wait for nodes to be ready on {slice_name}: {e}", fg="red"))
+            logger.error(f"Failed to wait for nodes to be ready on {slice_name}: {e}")
+            sm.update_cluster_record(slice_name, status=CLUSTER_STATUS.STATUS_ERROR, last_error_message=str(e))
+            return
 
-            try:
-                # add ssh public key to all nodes in the cluster
-                for node_info in cluster_to_claim["login_info"]:
-                    node_hostname = node_info[2]
-                    ssh_mgr = _get_ssh_manager(node_hostname)
-                    logger.info(f"Adding user SSH key to node {node_hostname} for user {email}")
-                    if not _add_user_ssh_key_to_node(ssh_mgr, user["ssh_public_key"], email):
-                        return
-                user_ssh_key_installed_flag = True
+        try:
+            # add ssh public key to all nodes in the cluster
+            for node_info in cluster_to_claim["login_info"]:
+                node_hostname = node_info[2]
+                ssh_mgr = _get_ssh_manager(node_hostname)
+                logger.info(f"Adding user SSH key to node {node_hostname} for user {email}")
+                if not _add_user_ssh_key_to_node(ssh_mgr, user["ssh_public_key"], email):
+                    return
+            user_ssh_key_installed_flag = True
 
-                # ssh_mgr = _get_ssh_manager(hostname)
-                # logger.info(f"Adding user SSH key to node {hostname} for user {email}")
-                # if not _add_user_ssh_key_to_node(ssh_mgr, user['ssh_public_key'], email):
-                #     return
-                # user_ssh_key_installed_flag = True
-            except (SSHUtilError, click.Abort) as e_ssh:  # Catch Abort from _get_ssh_manager
-                click.echo(click.style(f"ERROR: SSH operation failed for new cluster {slice_name}: {e_ssh}", fg="red"))
-                sm.update_cluster_record(
-                    slice_name,
-                    status=CLUSTER_STATUS.STATUS_ERROR,
-                    last_error_message=f"SSH key injection failed: {e_ssh}",
-                )
-                if cluster_to_claim.get("aggregate_name"):  # Attempt cleanup
-                    # Mark the experiment for termination
-                    logger.info(f"Marking experiment {slice_name} for termination")
-                    sm.update_cluster_record(slice_name, status=CLUSTER_STATUS.STATUS_TERMINATING)
-                return
-        except click.Abort:
+        except (SSHUtilError, click.Abort) as e_ssh:  # Catch Abort from _get_ssh_manager
+            click.echo(click.style(f"ERROR: SSH operation failed for new cluster {slice_name}: {e_ssh}", fg="red"))
+            sm.update_cluster_record(
+                slice_name,
+                status=CLUSTER_STATUS.STATUS_ERROR,
+                last_error_message=f"SSH key injection failed: {e_ssh}",
+            )
+            if cluster_to_claim.get("aggregate_name"):  # Attempt cleanup
+                # Mark the experiment for termination
+                logger.info(f"Marking experiment {slice_name} for termination")
+                sm.update_cluster_record(slice_name, status=CLUSTER_STATUS.STATUS_TERMINATING)
             return
 
         # Extend Cloudlab duration
@@ -390,9 +388,16 @@ def claim(ctx, email, eval_override):
             now = datetime.datetime.now()
             expires_at = now + datetime.timedelta(hours=experiment_info["duration"])
 
-            while not cp.are_nodes_ready(slice_name, experiment_info["aggregate_name"]):
-                click.echo(click.style(f"Waiting for nodes to be ready on {slice_name}...", fg="yellow"))
-                time.sleep(10)
+            try:
+                while not cp.are_nodes_ready(slice_name, experiment_info["aggregate_name"]):
+                    click.echo(click.style(f"Waiting for nodes to be ready on {slice_name}...", fg="yellow"))
+                    time.sleep(10)
+                logger.info(f"Nodes are ready for {slice_name}.")
+            except Exception as e:
+                click.echo(click.style(f"ERROR: Failed to wait for nodes to be ready on {slice_name}: {e}", fg="red"))
+                logger.error(f"Failed to wait for nodes to be ready on {slice_name}: {e}")
+                sm.update_cluster_record(slice_name, status=CLUSTER_STATUS.STATUS_ERROR, last_error_message=str(e))
+                return
 
             try:
                 # add ssh public key to all nodes in the cluster
@@ -404,10 +409,6 @@ def claim(ctx, email, eval_override):
                         return
                 user_ssh_key_installed_flag = True
 
-                # ssh_mgr = _get_ssh_manager(hostname)
-                # if not _add_user_ssh_key_to_node(ssh_mgr, user['ssh_public_key'], email):
-                #     raise SSHUtilError("Failed to add user SSH key to newly provisioned cluster.")
-                # user_ssh_key_installed_flag = True
             except (SSHUtilError, click.Abort) as e_ssh:  # Catch Abort from _get_ssh_manager
                 click.echo(click.style(f"ERROR: SSH operation failed for new cluster {slice_name}: {e_ssh}", fg="red"))
                 sm.update_cluster_record(
