@@ -1,8 +1,10 @@
 """K8S misconfig fault problem in the SocialNetwork application."""
 
+from srearena.conductor.oracles.compound import CompoundedOracle
 from srearena.conductor.oracles.detection import DetectionOracle
 from srearena.conductor.oracles.localization import LocalizationOracle
 from srearena.conductor.oracles.target_port_mitigation import TargetPortMisconfigMitigationOracle
+from srearena.conductor.oracles.workload import WorkloadOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.paths import TARGET_MICROSERVICES
@@ -23,7 +25,12 @@ class K8STargetPortMisconfig(Problem):
 
         self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
 
-        self.mitigation_oracle = TargetPortMisconfigMitigationOracle(problem=self)
+        self.app.create_workload()
+        self.mitigation_oracle = CompoundedOracle(
+            self,
+            TargetPortMisconfigMitigationOracle(problem=self),
+            WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
+        )
 
     def inject_fault(self):
         injector = VirtualizationFaultInjector(namespace=self.namespace)

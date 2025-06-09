@@ -122,16 +122,14 @@ class HotelReservation(Application):
             return file.read()
 
     def create_workload(self):
-        frontend_url = get_frontend_url(self)
-
-        wrk2 = Wrk2WorkloadManager(
-            wrk=Wrk2(rate=20, dist="exp", connections=2, duration=10, threads=2),
+        self.wrk = Wrk2WorkloadManager(
+            wrk=Wrk2(rate=100, dist="exp", connections=3, duration=10, threads=3),
             payload_script=self.payload_script,
-            url=f"{frontend_url}",
+            url=f"{{placeholder}}",
         )
-        self.wrk = wrk2
 
     def start_workload(self):
         if not hasattr(self, "wrk"):
             self.create_workload()
+        self.wrk.url = get_frontend_url(self)
         self.wrk.start()

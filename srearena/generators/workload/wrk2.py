@@ -8,7 +8,8 @@ import yaml
 from kubernetes import client, config, stream
 from rich.console import Console
 
-from srearena.generators.workload.stream import STREAM_WORKLOAD_EPS, StreamWorkloadManager, WorkloadEntry
+from srearena.generators.workload.base import WorkloadEntry
+from srearena.generators.workload.stream import STREAM_WORKLOAD_EPS, StreamWorkloadManager
 from srearena.paths import BASE_DIR
 
 
