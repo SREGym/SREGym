@@ -366,3 +366,6 @@ scripts/ansible/inventory.yml
 
 # Ignore geni-lib login info
 *.login.info.txt
+
+# Ignore JetBrains IDE files
+.idea
