@@ -11,6 +11,7 @@ from provisioner.cloudlab_provisioner import CloudlabProvisioner
 from provisioner.config.settings import DefaultSettings
 from provisioner.state_manager import CLUSTER_STATUS, SREARENA_STATUS, StateManager
 from provisioner.utils.ssh import SSHManager, SSHUtilError
+from scripts.geni_lib.cluster_setup import setup_cloudlab_cluster_with_srearena
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,39 @@ def _remove_user_ssh_key_from_node(ssh_mgr: SSHManager, user_public_key: str, us
         return False
 
 
+def _setup_sre_arena(cluster_info: dict) -> bool:
+    """
+    Setup SRE Arena on a newly provisioned cluster.
+    Returns True on success, False on failure.
+    """
+    try:
+        slice_name = cluster_info["slice_name"]
+        login_info = cluster_info["login_info"]
+
+        click.echo(click.style(f"Setting up SRE Arena on cluster {slice_name}...", fg="yellow"))
+        hosts = [info[2] for info in login_info]
+
+        cfg = {
+            "cloudlab": {
+                "ssh_user": DefaultSettings.PROVISIONER_DEFAULT_SSH_USERNAME,
+                "ssh_key": DefaultSettings.PROVISIONER_SSH_PRIVATE_KEY_PATH,
+                "nodes": hosts,
+            },
+            "pod_network_cidr": DefaultSettings.DEFAULT_POD_NETWORK_CIDR,
+            "deploy_srearena": True,
+            "deploy_key": DefaultSettings.DEPLOY_KEY_PATH,
+        }
+
+        setup_cloudlab_cluster_with_srearena(cfg)
+
+        click.echo(click.style(f"SRE Arena setup completed successfully for {slice_name}.", fg="green"))
+        return True
+    except Exception as e:
+        click.echo(click.style(f"Error setting up SRE Arena: {e}", fg="red"))
+        logger.error(f"Error setting up SRE Arena for {slice_name}: {e}", exc_info=True)
+        return False
+
+
 # --- Click Command Group ---
 @click.group()
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output for some operations.")
@@ -220,8 +254,9 @@ def register(email, ssh_key):
 @cli.command()
 @click.option("--email", required=True, help="Your registered email address.")
 @click.option("--eval-override", is_flag=True, help="Request evaluation override for longer inactivity timeout.")
+@click.option("--deploy-srearena", is_flag=True, help="Deploy SRE Arena on the cluster.")
 @click.pass_context
-def claim(ctx, email, eval_override):
+def claim(ctx, email, eval_override, deploy_srearena):
     """Claims an available cluster or requests a new one."""
     sm = get_state_manager()
     cp = get_cloudlab_provisioner()
@@ -319,6 +354,31 @@ def claim(ctx, email, eval_override):
                     fg="yellow",
                 )
             )
+
+        if deploy_srearena:
+            click.echo("Setting up SRE Arena for your cluster. This may take several minutes...")
+            experiment_info = {
+                "slice_name": slice_name,
+                "login_info": cluster_to_claim["login_info"],
+            }
+            setup_success = _setup_sre_arena(experiment_info)
+            if setup_success:
+                sm.update_cluster_record(
+                    slice_name,
+                    sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_SUCCESS,
+                )
+                click.echo(click.style("SRE Arena successfully set up on your cluster!", fg="green"))
+            else:
+                sm.update_cluster_record(
+                    slice_name,
+                    sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_FAILED,
+                    last_error_message="SRE Arena setup failed",
+                )
+                click.echo(
+                    click.style(
+                        "SRE Arena setup failed. You may still use the cluster for basic operations.", fg="yellow"
+                    )
+                )
 
         # Update DB
         sm.update_cluster_record(
@@ -422,6 +482,27 @@ def claim(ctx, email, eval_override):
                     sm.update_cluster_record(slice_name, status=CLUSTER_STATUS.STATUS_TERMINATING)
                 return
 
+            if deploy_srearena:
+                click.echo("Setting up SRE Arena for your cluster. This may take several minutes...")
+                setup_success = _setup_sre_arena(experiment_info)
+                if setup_success:
+                    sm.update_cluster_record(
+                        slice_name,
+                        sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_SUCCESS,
+                    )
+                    click.echo(click.style("SRE Arena successfully set up on your cluster!", fg="green"))
+                else:
+                    sm.update_cluster_record(
+                        slice_name,
+                        sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_FAILED,
+                        last_error_message="SRE Arena setup failed",
+                    )
+                    click.echo(
+                        click.style(
+                            "SRE Arena setup failed. You may still use the cluster for basic operations.", fg="yellow"
+                        )
+                    )
+
             sm.update_cluster_record(
                 slice_name,
                 status=CLUSTER_STATUS.STATUS_CLAIMED,
@@ -430,7 +511,6 @@ def claim(ctx, email, eval_override):
                 control_node_hostname=hostname,
                 login_info=experiment_info["login_info"],
                 user_ssh_key_installed=user_ssh_key_installed_flag,
-                sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_NOT_ATTEMPTED,
                 cloudlab_expires_at=expires_at,
                 claimed_at=now,
             )
@@ -439,11 +519,10 @@ def claim(ctx, email, eval_override):
                     f"New cluster '{slice_name}' successfully provisioned and claimed by '{email}'.", fg="green"
                 )
             )
-            click.echo("SSH Access (Control Node):")
+            click.echo("SSH Access:")
             if experiment_info.get("login_info"):
                 for node_info in experiment_info["login_info"]:
-                    if node_info[0] == "control":
-                        click.echo(f"  {_format_ssh_command(node_info)}")
+                    click.echo(f"  {_format_ssh_command(node_info)}")
             elif hostname:
                 click.echo(f"  ssh {DefaultSettings.PROVISIONER_DEFAULT_SSH_USERNAME}@{hostname}")
 

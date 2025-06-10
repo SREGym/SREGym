@@ -127,7 +127,7 @@ class CloudlabProvisioner:
     def create_experiment(
         self,
         slice_name: str = None,
-        duration: float = DefaultSettings.DEFAULT_DURATION_HOURS,
+        duration: float = DefaultSettings.UNCLAIMED_CLUSTER_TIMEOUT_HOURS,
         description: str = DefaultSettings.DEFAULT_DESCRIPTION,
         hardware_type: str = DefaultSettings.DEFAULT_HARDWARE_TYPE,
         os_type: str = DefaultSettings.DEFAULT_OS_TYPE,
@@ -194,6 +194,7 @@ class CloudlabProvisioner:
             "hardware_type": hardware_type,
             "os_type": os_type,
             "node_count": node_count,
+            "created_at": datetime.datetime.now().isoformat(),
             "login_info": login_info,
         }
 

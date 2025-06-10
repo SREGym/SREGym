@@ -5,7 +5,7 @@ from geni.aggregate.cloudlab import Clemson, Utah, Wisconsin
 
 load_dotenv(override=True)
 
-SET_TEST_VALUES = True
+SET_TEST_VALUES = False
 
 
 # Default settings
@@ -20,7 +20,7 @@ class DefaultSettings:
     MIN_AVAILABLE_CLUSTERS = 2 if not SET_TEST_VALUES else 1
     MAX_TOTAL_CLUSTERS = 8 if not SET_TEST_VALUES else 2
     MAX_CLUSTERS_PER_USER = 2 if not SET_TEST_VALUES else 1
-    UNCLAIMED_CLUSTER_TIMEOUT_HOURS = 16 if not SET_TEST_VALUES else 0.075
+    UNCLAIMED_CLUSTER_TIMEOUT_HOURS = 16 if not SET_TEST_VALUES else 1
     CLAIMED_CLUSTER_DEFAULT_DURATION_HOURS = 7 * 24 if not SET_TEST_VALUES else 0.1
     CLAIMED_CLUSTER_INACTIVITY_TIMEOUT_HOURS = 48 if not SET_TEST_VALUES else 0.05
     CLAIMED_CLUSTER_EXTENSION_CHECK_HOURS = 24 if not SET_TEST_VALUES else 0.025
@@ -37,6 +37,10 @@ class DefaultSettings:
 
     #### Daemon Settings ####
     SCHEDULER_INTERVAL_MINUTES = 5
+
+    #### SRE Arena Settings ####
+    DEFAULT_POD_NETWORK_CIDR = "192.168.0.0/16"
+    DEPLOY_KEY_PATH = os.getenv("DEPLOY_KEY_PATH")
 
 
 CLOUD_LAB_CONTEXT_JSON = {

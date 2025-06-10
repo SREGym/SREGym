@@ -14,6 +14,7 @@ from provisioner.state_manager import CLUSTER_STATUS, SREARENA_STATUS, StateMana
 from provisioner.utils.email_sender import EmailSender
 from provisioner.utils.logger import logger
 from provisioner.utils.ssh import SSHManager
+from scripts.geni_lib.cluster_setup import setup_cloudlab_cluster_with_srearena
 
 # Global stop event for graceful shutdown
 stop_event = threading.Event()
@@ -113,7 +114,12 @@ class ProvisionerDaemon:
                             )
                             continue
 
-                        self._setup_sre_arena_and_finalize(slice_name, hostname)
+                        # NOTE: not setting up SRE Arena when auto provisioning rather when user claims a cluster
+                        # self._setup_sre_arena_and_finalize(experiment_info)
+
+                        self.state_manager.update_cluster_record(
+                            slice_name, status=CLUSTER_STATUS.STATUS_UNCLAIMED_READY
+                        )
 
                     else:
                         err_msg = f"Failed to create experiment {slice_name} via Cloudlab."
@@ -135,19 +141,35 @@ class ProvisionerDaemon:
         except Exception as e:
             logger.error(f"Critical error in automatic provisioning check: {e}", exc_info=True)
 
-    # TODO: Add SRE Arena setup here
-    def _setup_sre_arena_and_finalize(self, slice_name: str, hostname: str):
-        """Placeholder for SRE Arena setup and finalizing cluster state."""
-        logger.info(f"Starting SRE Arena setup for {slice_name} on {hostname} (Placeholder)...")
-        sre_arena_status = SREARENA_STATUS.SRE_ARENA_NOT_ATTEMPTED
-
+    def _setup_sre_arena_and_finalize(self, experiment_info: dict):
+        """
+        Setup SRE Arena and finalize cluster state.
+        """
         try:
-            logger.info(f"Setting up SRE Arena for {slice_name} on {hostname}...")
+            slice_name = experiment_info["slice_name"]
+            login_info = experiment_info["login_info"]
+
+            hosts = [info[2] for info in login_info]
+
+            cfg = {
+                "cloudlab": {
+                    "ssh_user": DefaultSettings.PROVISIONER_DEFAULT_SSH_USERNAME,
+                    "ssh_key": DefaultSettings.PROVISIONER_SSH_PRIVATE_KEY_PATH,
+                    "nodes": hosts,
+                },
+                "pod_network_cidr": DefaultSettings.DEFAULT_POD_NETWORK_CIDR,
+                "deploy_srearena": True,
+                "deploy_key": DefaultSettings.DEPLOY_KEY_PATH,
+            }
+
+            setup_cloudlab_cluster_with_srearena(cfg)
+
+            logger.info(f"SRE Arena setup for {slice_name} completed successfully.")
+
             self.state_manager.update_cluster_record(
                 slice_name,
                 status=CLUSTER_STATUS.STATUS_UNCLAIMED_READY,
                 sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_SUCCESS,
-                created_at=datetime.datetime.now(),
             )
         except Exception as e:
             logger.error(f"Error during SRE Arena setup for {slice_name}: {e}", exc_info=True)
@@ -383,6 +405,7 @@ class ProvisionerDaemon:
         logger.info("Running: Process Terminating Clusters")
         try:
             terminating_clusters = self.state_manager.get_clusters_by_status(CLUSTER_STATUS.STATUS_TERMINATING)
+
             for cluster in terminating_clusters:
                 slice_name = cluster["slice_name"]
                 aggregate_name = cluster["aggregate_name"]

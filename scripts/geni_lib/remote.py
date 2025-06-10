@@ -1,6 +1,6 @@
 import os
-from pathlib import Path
 import time
+from pathlib import Path
 
 import paramiko
 from paramiko.ssh_exception import PasswordRequiredException, SSHException
@@ -27,7 +27,7 @@ class RemoteExecutor:
         max_retries = 5
         retry_delay = 2
         last_error = None
-        
+
         for attempt in range(max_retries):
             try:
                 self.client.connect(

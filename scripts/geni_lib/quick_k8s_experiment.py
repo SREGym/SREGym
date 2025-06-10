@@ -26,8 +26,7 @@ import geni.portal as portal
 import geni.util
 from geni.aggregate.cloudlab import Clemson, Utah, Wisconsin
 
-from cluster_setup import setup_cloudlab_cluster, nodes_reachable
-
+from scripts.geni_lib.cluster_setup import nodes_reachable, setup_cloudlab_cluster
 
 AGG = {"utah": Utah, "clemson": Clemson, "wisconsin": Wisconsin}
 
@@ -63,14 +62,13 @@ def main() -> None:
     ap.add_argument("--duration", type=int, default=2, help="hours")
     ap.add_argument("--os-type", default="UBUNTU22-64-STD")
     ap.add_argument("--ssh-user", required=True)
-    ap.add_argument("--ssh-key",
-                   help="private key file (optional, falls back to agent)")
+    ap.add_argument("--ssh-key", help="private key file (optional, falls back to agent)")
     ap.add_argument("--pod-network-cidr", default="192.168.0.0/16")
     args = ap.parse_args()
 
     ctx = geni.util.loadContext()
     slice_name = args.slice_name or f"k8s-{random.randint(100_000,999_999)}"
-    exp_time   = datetime.datetime.now() + datetime.timedelta(hours=args.duration)
+    exp_time = datetime.datetime.now() + datetime.timedelta(hours=args.duration)
 
     # tiny RSpec
     req = portal.context.makeRequestRSpec()
@@ -78,27 +76,27 @@ def main() -> None:
     for i in range(args.nodes):
         n = req.RawPC(f"node{i}")
         n.hardware_type = args.hardware_type
-        n.disk_image = (f"urn:publicid:IDN+emulab.net+image+emulab-ops//"
-                        f"{args.os_type}")
+        n.disk_image = f"urn:publicid:IDN+emulab.net+image+emulab-ops//" f"{args.os_type}"
         n.routable_control_ip = True
         pcs.append(n)
     req.Link(members=pcs)
 
     print(f"🛠  Slice {slice_name} → {args.site}")
-    ctx.cf.createSlice(ctx, slice_name, exp=exp_time,
-                       desc="Quick K8s experiment")
+    ctx.cf.createSlice(ctx, slice_name, exp=exp_time, desc="Quick K8s experiment")
     manifest = AGG[args.site].createsliver(ctx, slice_name, req)
 
     geni.util.printlogininfo(manifest=manifest)
 
     hosts = _extract_hosts(geni.util._corelogininfo(manifest))
-    cfg = {"cloudlab": {"ssh_user": args.ssh_user,
-                        "ssh_key":  args.ssh_key,
-                        "nodes":    hosts},
-           "pod_network_cidr": args.pod_network_cidr}
+    cfg = {
+        "cloudlab": {"ssh_user": args.ssh_user, "ssh_key": args.ssh_key, "nodes": hosts},
+        "pod_network_cidr": args.pod_network_cidr,
+    }
 
-    print("⌛  Waiting for SSH …"); wait_ssh(cfg["cloudlab"])
-    print("🚀  Bootstrapping Kubernetes …"); setup_cloudlab_cluster(cfg)
+    print("⌛  Waiting for SSH …")
+    wait_ssh(cfg["cloudlab"])
+    print("🚀  Bootstrapping Kubernetes …")
+    setup_cloudlab_cluster(cfg)
     print("✅  Cluster ready!")
 
 

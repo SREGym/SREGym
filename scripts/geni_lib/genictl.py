@@ -10,7 +10,6 @@ import click
 import geni.portal as portal
 import geni.util
 from cluster_setup import setup_cloudlab_cluster, setup_cloudlab_cluster_with_srearena
-from geni.aggregate.cloudlab import Clemson, Utah, Wisconsin
 
 from provisioner.config.settings import AGGREGATES_MAP
 from provisioner.utils.parser import collect_and_parse_hardware_info, parse_sliver_info
@@ -170,106 +169,6 @@ def get_hardware_info():
         print("No hardware information available")
 
 
-# def create_experiment(context, hardware_type, duration, node_count, os_type):
-#     try:
-#         os_urn = f"urn:publicid:IDN+emulab.net+image+emulab-ops//{os_type}"
-
-#         print(f"Creating a {node_count} node cluster of hardware type: {hardware_type}")
-
-#         hardware_info_list = collect_and_parse_hardware_info()
-#         slice_name = "test-" + str(random.randint(100000, 999999))
-#         cluster_name = None
-
-#         for item in hardware_info_list:
-#             # print(f"Checking {item['hardware_name']} at {item['cluster_name']}")
-#             if item["hardware_name"].strip() == hardware_type.strip():
-#                 if item["total"] >= node_count and item["free"] >= node_count:
-#                     print(f"Creating a {node_count} node cluster of {hardware_type} at {item['cluster_name']}")
-#                     cluster_name = item["cluster_name"]
-#                     break
-#                 else:
-#                     print(f"Not enough {hardware_type} nodes available at {item['cluster_name']}")
-
-#         if cluster_name is None:
-#             print(f"No {hardware_type} nodes available")
-#             return
-
-#         print(f"{hardware_type} is available at {cluster_name}\n")
-#         aggregate_name = cluster_name.replace("Cloudlab ", "").lower()
-#         aggregate = get_aggregate(aggregate_name)
-
-#         # Create a cluster of the desired hardware type with specified number of nodes
-#         request = portal.context.makeRequestRSpec()
-
-#         nodes = []
-#         # Create the control node
-#         nodes.append(request.RawPC("control"))
-#         # Create the compute nodes
-#         for i in range(1, node_count):
-#             nodes.append(request.RawPC(f"compute{i}"))
-
-#         # Set hardware type and OS image for all nodes
-#         for node in nodes:
-#             node.hardware_type = hardware_type
-#             node.disk_image = os_urn
-
-#         # Link all nodes together
-#         link1 = request.Link(members=nodes)
-
-#         ### Create the slice
-#         try:
-#             print(f"Creating slice: {slice_name}")
-#             expiration = datetime.datetime.now() + datetime.timedelta(hours=duration)
-#             ret = context.cf.createSlice(context, slice_name, exp=expiration)
-#             print(f"Slice created: {slice_name} for {duration} hours\n")
-#             print(f"Slice Info: {json.dumps(ret, indent=2)}\n")
-#         except Exception as e:
-#             print(f"Error creating slice: {e}")
-#             exit(1)
-
-#         ### Create the sliver (actual experiment)
-#         print(f"Creating sliver in slice: {slice_name}")
-#         try:
-#             igm = aggregate.createsliver(context, slice_name, request)
-#             print(f"Sliver created\n")
-#         except Exception as e:
-#             print(f"Error creating sliver: {e}")
-#             exit(1)
-
-#         geni.util.printlogininfo(manifest=igm)
-
-#         print("Your ssh info:")
-#         geni.util.printlogininfo(manifest=igm)
-
-#         ### Save the login info to a file
-#         login_info = geni.util._corelogininfo(igm)
-#         if isinstance(login_info, list):
-#             login_info = "\n".join(map(str, login_info))
-#         with open(f"{slice_name}.experiment.info.json", "w") as f:
-#             f.write(
-#                 json.dumps(
-#                     {
-#                         "slice_name": slice_name,
-#                         "cluster_name": cluster_name,
-#                         "duration": duration,
-#                         "hardware_type": hardware_type,
-#                         "node_count": node_count,
-#                         "os_type": os_type,
-#                         "login_info": login_info,
-#                     },
-#                     indent=2,
-#                 )
-#             )
-#         print(f"\nExperiment info saved to {slice_name}.experiment.info.json\n")
-
-#         print(
-#             f"Your experiment under slice: {slice_name} is successfully created for {duration} hours at {aggregate_name}\n"
-#         )
-
-#     except Exception as e:
-# print(f"Error: {e}")
-
-
 def renew_experiment(context, slice_name, site, hours):
     new_slice_expiration = datetime.datetime.now() + datetime.timedelta(hours=(hours + 1))
     new_sliver_expiration = datetime.datetime.now() + datetime.timedelta(hours=hours)
@@ -353,56 +252,8 @@ def are_nodes_ready(context, slice_name: str, aggregate_name: str) -> bool:
         raise e
 
 
-# def nodes_reachable_simple(cloud: dict, verbose: bool = True) -> bool:
-#     """Simplified nodes reachable check compatible with original RemoteExecutor"""
-
-#     print(f"🔍 Checking {len(cloud['nodes'])} nodes for SSH connectivity...")
-
-#     for i, host in enumerate(cloud["nodes"], 1):
-#         print(f"   [{i}/{len(cloud['nodes'])}] Testing {host}...", end=" ")
-
-#         # Try multiple times for each host
-#         max_retries = 3
-#         success = False
-
-#         for retry in range(max_retries):
-#             try:
-#                 executor = RemoteExecutor(host, cloud["ssh_user"], cloud.get("ssh_key"))
-#                 rc, stdout, stderr = executor.exec("echo 'SSH test successful'")
-#                 executor.close()
-
-#                 if rc == 0:
-#                     print("✅")
-#                     success = True
-#                     break
-#                 else:
-#                     if retry < max_retries - 1:
-#                         print(".", end="")
-#                         time.sleep(3)
-#                     else:
-#                         print(f"❌ (command failed: rc={rc})")
-#                         if verbose:
-#                             print(f"      stderr: {stderr.strip()}")
-
-#             except Exception as e:
-#                 if retry < max_retries - 1:
-#                     print(".", end="")  # Show retry progress
-#                     time.sleep(3)  # Wait between retries
-#                 else:
-#                     print(f"❌ ({type(e).__name__}: {str(e)[:50]}...)")
-#                     if verbose:
-#                         print(f"      Full error: {e}")
-
-#         if not success:
-#             return False
-
-#     print("✅ All nodes reachable!")
-#     return True
-
-
 def create_experiment(
     context,
-    site,
     hardware_type,
     nodes,
     duration,
@@ -414,6 +265,26 @@ def create_experiment(
     deploy_srearena,
     deploy_key,
 ):
+    hardware_info_list = collect_and_parse_hardware_info()
+    cluster_name = None
+
+    for item in hardware_info_list:
+        if item["hardware_name"].strip() == hardware_type.strip():
+            if item["total"] >= nodes and item["free"] >= nodes:
+                print(f"Creating a {nodes} node cluster of {hardware_type} at {item['cluster_name']}")
+                cluster_name = item["cluster_name"]
+                break
+            else:
+                print(f"Not enough {hardware_type} nodes available at {item['cluster_name']}")
+
+    if cluster_name is None:
+        print(f"No {hardware_type} nodes available")
+        return
+
+    print(f"{hardware_type} is available at {cluster_name}\n")
+    aggregate_name = cluster_name.replace("Cloudlab ", "").lower()
+    aggregate = get_aggregate(aggregate_name)
+
     slice_name = f"exp-{random.randint(100000,999999)}"
     expires = datetime.datetime.now() + datetime.timedelta(hours=duration)
 
@@ -428,33 +299,36 @@ def create_experiment(
         pcs.append(n)
     req.Link(members=pcs)
 
-    agg = get_aggregate(site)
-
     print(f"🔧  Creating slice {slice_name} …")
     context.cf.createSlice(context, slice_name, exp=expires, desc="Quick experiment via genictl")
 
-    print(f"🚜  Allocating sliver on {site.title()} …")
-    manifest = agg.createsliver(context, slice_name, req)
+    print(f"🚜  Allocating sliver on {aggregate_name} …")
+    manifest = aggregate.createsliver(context, slice_name, req)
 
     geni.util.printlogininfo(manifest=manifest)
 
     # save the manifest to a file
     login_info = geni.util._corelogininfo(manifest)
     with open(f"{slice_name}.experiment.info.json", "w") as f:
-        f.write(json.dumps({
-            "slice_name": slice_name,
-            "aggregate_name": site,
-            "duration": duration,
-            "hardware_type": hardware_type,
-            "nodes": nodes,
-            "os_type": os_type,
-            "k8s": k8s,
-            "deploy_srearena": deploy_srearena,
-            "deploy_key": deploy_key,
-            "pod_network_cidr": pod_network_cidr,
-            "created_at": datetime.datetime.now().isoformat(),
-            "login_info": login_info,
-        }, indent=2))
+        f.write(
+            json.dumps(
+                {
+                    "slice_name": slice_name,
+                    "aggregate_name": aggregate_name,
+                    "duration": duration,
+                    "hardware_type": hardware_type,
+                    "nodes": nodes,
+                    "os_type": os_type,
+                    "k8s": k8s,
+                    "deploy_srearena": deploy_srearena,
+                    "deploy_key": deploy_key,
+                    "pod_network_cidr": pod_network_cidr,
+                    "created_at": datetime.datetime.now().isoformat(),
+                    "login_info": login_info,
+                },
+                indent=2,
+            )
+        )
 
     if not k8s:
         return  # user didn't ask for Kubernetes
@@ -509,7 +383,7 @@ def create_experiment(
         check_count += 1
 
         try:
-            if are_nodes_ready(context, slice_name, site):
+            if are_nodes_ready(context, slice_name, aggregate_name):
                 print(f"✅  All nodes ready after {elapsed:.1f}s!")
                 break
         except Exception as e:
@@ -529,7 +403,7 @@ def create_experiment(
     print("🚀  Running cluster_setup …")
     try:
         if deploy_srearena:
-            setup_cloudlab_cluster_with_srearena(cfg, deploy_key)
+            setup_cloudlab_cluster_with_srearena(cfg)
         else:
             setup_cloudlab_cluster(cfg)
         print("✅  Kubernetes cluster ready!")
@@ -690,12 +564,6 @@ def cmd_renew_experiment(slice_name, site, hours):
 
 # Create experiment command
 @cli.command("create-experiment")
-@click.option(
-    "--site",
-    type=click.Choice(["utah", "clemson", "wisconsin"], case_sensitive=False),
-    default="wisconsin",
-    help="CloudLab site",
-)
 @click.option("--hardware-type", default="c220g5", help="Hardware type")
 @click.option("--nodes", type=int, default=3, help="Number of nodes")
 @click.option("--duration", type=int, default=1, help="Duration in hours")
@@ -707,13 +575,12 @@ def cmd_renew_experiment(slice_name, site, hours):
 @click.option("--deploy-srearena", is_flag=True, help="Deploy SREArena after K8s cluster is ready")
 @click.option("--deploy-key", help="Path to SSH deploy key for SREArena private repo")
 def cmd_create_experiment(
-    site, hardware_type, nodes, duration, os_type, k8s, ssh_user, ssh_key, pod_network_cidr, deploy_srearena, deploy_key
+    hardware_type, nodes, duration, os_type, k8s, ssh_user, ssh_key, pod_network_cidr, deploy_srearena, deploy_key
 ):
     """Create slice + sliver quickly"""
     context = geni.util.loadContext()
     create_experiment(
         context,
-        site,
         hardware_type,
         nodes,
         duration,
