@@ -146,6 +146,7 @@ if __name__ == "__main__":
     xagent = XAgent(llm)
     xagent.build_agent()
     # a short chatbot loop to demonstrate the workflow.
+    # TODO: make a real file-editing agent to test both state & memory mgmt and file editing tools
     while True:
         user_input = input("User: ")
         if user_input.lower() in ["quit", "exit", "q"]:
