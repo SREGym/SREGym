@@ -118,6 +118,55 @@ class KubeCtl:
 
             raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
 
+    def is_ready(self, pod):
+        phase = pod.status.phase or ""
+        container_statuses = pod.status.container_statuses or []
+        conditions = pod.status.conditions or []
+
+        if phase in ["Succeeded", "Failed"]:
+            return True
+
+        if phase == "Running":
+            if all(cs.ready for cs in container_statuses):
+                return True
+
+        for cs in container_statuses:
+            if cs.state and cs.state.waiting:
+                reason = cs.state.waiting.reason
+                if reason == "CrashLoopBackOff":
+                    return True
+
+        if phase == "Pending":
+            for cond in conditions:
+                if cond.type == "PodScheduled" and cond.status == "False":
+                    return True
+
+        return False
+
+    def wait_for_stable(self, namespace: str, sleep: int = 2, max_wait: int = 300):
+        console = Console()
+        console.log(f"[bold yellow]Waiting for namespace '{namespace}' to be stable...")
+
+        with console.status("[bold yellow]Waiting for pods to be stable...") as status:
+            wait = 0
+
+            while wait < max_wait:
+                try:
+                    pod_list = self.list_pods(namespace)
+
+                    if pod_list.items:
+
+                        if all(self.is_ready(pod) for pod in pod_list.items):
+                            console.log(f"[bold green]All pods in namespace '{namespace}' are stable.")
+                            return
+                except Exception as e:
+                    console.log(f"[red]Error checking pod statuses: {e}")
+
+                time.sleep(sleep)
+                wait += sleep
+
+            raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
+
     def update_deployment(self, name: str, namespace: str, deployment):
         """Update the deployment configuration."""
         return self.apps_v1_api.replace_namespaced_deployment(name, namespace, deployment)

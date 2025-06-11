@@ -234,7 +234,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
         # Restart all the pods
         self.kubectl.exec_command(f"kubectl delete pods --all -n {self.namespace}")
-        time.sleep(30)  # Wait for pods to restart
+        self.kubectl.wait_for_stable(namespace=self.namespace)
 
     def recover_missing_service(self, microservices: list[str]):
         """Recover the fault by recreating the specified service."""
