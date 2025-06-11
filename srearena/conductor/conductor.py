@@ -214,7 +214,11 @@ class Conductor:
             try:
                 self.problem.recover_fault()
             except (JSONDecodeError):
+                # CTRL+C before service is set up results in a JSONDecodeError
                 print("Service has not been set up. Skipping fault recovery.")
+            except (RuntimeError):
+                # When waiting for namespace deletion, console.status() is called and results in a RuntimeError
+                pass
             
             self.problem.app.cleanup()
 
