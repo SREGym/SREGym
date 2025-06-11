@@ -2,14 +2,18 @@ import logging
 from pathlib import Path
 from typing import Annotated, Optional, Union
 
-from flake8_utils import flake8, format_flake8_output  # type: ignore
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
-from windowed_file import FileNotOpened, TextNotFound, WindowedFile  # type: ignore
 
 from clients.langgraph_agent.state import State
+from clients.langgraph_agent.tools.text_editing.flake8_utils import flake8, format_flake8_output  # type: ignore
+from clients.langgraph_agent.tools.text_editing.windowed_file import (  # type: ignore
+    FileNotOpened,
+    TextNotFound,
+    WindowedFile,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
