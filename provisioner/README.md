@@ -51,24 +51,26 @@ The provisioner needs its own set of ssh keys. Generate ssh keys for the provisi
 ssh-keygen -t ed25519 -f provisioner_ssh_key
 ```
 
-Set the following required environment variables:
+Set the following required environment variables in `.env` file:
 
 ```bash
-export PROVISIONER_SSH_PRIVATE_KEY_PATH="/path/to/provisioner_ssh_key"
-export PROVISIONER_SSH_PUBLIC_KEY_PATH="/path/to/provisioner_ssh_key.pub"
+PROVISIONER_SSH_PRIVATE_KEY_PATH="/path/to/provisioner_ssh_key"
+PROVISIONER_SSH_PUBLIC_KEY_PATH="/path/to/provisioner_ssh_key.pub"
 
-export CLOUDLAB_CERT_PATH="/path/to/cloudlab.pem"
-export CLOUDLAB_KEY_PATH="/path/to/cloudlab_decrypted.pem"
-export CLOUD_PROJECT_NAME="your-cloudlab-project-name"
+CLOUDLAB_CERT_PATH="/path/to/cloudlab.pem"
+CLOUDLAB_KEY_PATH="/path/to/cloudlab_decrypted.pem"
+CLOUD_PROJECT_NAME="your-cloudlab-project-name"
+
+DEPLOY_KEY_PATH="/path/to/deploy-key
 ```
 
 Optional email notification settings:
 
 ```bash
-export SMTP_SERVER="smtp.gmail.com"
-export SMTP_PORT="587"
-export SMTP_USERNAME="your.email@gmail.com"
-export SMTP_PASSWORD="your-app-password"
+SMTP_SERVER="smtp.gmail.com"
+MTP_PORT="587"
+SMTP_USERNAME="your.email@gmail.com"
+SMTP_PASSWORD="your-app-password"
 ```
 
 For Gmail, you'll need to create an app password. Follow this [guide](https://bestsoftware.medium.com/how-to-create-an-app-password-on-gmail-e00eff3af4e0) to create one.
