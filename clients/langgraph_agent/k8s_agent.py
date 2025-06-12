@@ -2,13 +2,12 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import END
 from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import ToolNode
-from llm_backend.init_backend import get_llm_backend_for_tools
-from tools.basic_tool_node import BasicToolNode
-from tools.jaeger_tools import *
-from tools.text_editing.file_manip import create, goto_line, open_file
 
+from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
 from clients.langgraph_agent.state import State
-from clients.langgraph_agent.tools.text_editing.file_manip import edit, insert
+from clients.langgraph_agent.tools.basic_tool_node import BasicToolNode
+from clients.langgraph_agent.tools.jaeger_tools import *
+from clients.langgraph_agent.tools.text_editing.file_manip import create, edit, goto_line, insert, open_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -44,6 +43,8 @@ class XAgent:
         Use in the conditional_edge to route to the ToolNode if the last message
         has tool calls. Otherwise, route to the end.
         """
+        file_tool_names = ["open_file", "goto_line", "create", "edit", "insert"]
+        observability_tool_names = ["get_traces", "get_services", "get_operations"]
         if isinstance(state, list):
             ai_message = state[-1]
         elif messages := state.get("messages", []):
@@ -52,16 +53,15 @@ class XAgent:
             raise ValueError(f"No messages found in input state to tool_edge: {state}")
         if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
             tool_name = ai_message.tool_calls[0]["name"]
-            match tool_name:
-                case "open_file" | "goto_line" | "create" | "edit" | "insert":
-                    logger.info("invoking tool node: file tool")
-                    return "file_editing_tool_node"
-                case "get_traces" | "get_services" | "get_operations":
-                    logger.info("invoking tool node: observability tool")
-                    return "observability_tool_node"
-                case _:
-                    logger.info("invoking tool node: end")
-                    return END
+            if tool_name in file_tool_names:
+                logger.info("invoking tool node: file tool")
+                return "file_editing_tool_node"
+            elif tool_name in observability_tool_names:
+                logger.info("invoking tool node: observability tool")
+                return "observability_tool_node"
+            else:
+                logger.info("invoking tool node: end")
+                return END
         logger.info("no tool call, returning END")
         return END
 
@@ -128,9 +128,18 @@ class XAgent:
         if not self.graph:
             raise ValueError("Agent graph is None. Have you built the agent?")
         config = {"configurable": {"thread_id": "1"}}
-        print(list(self.graph.get_state_history(config)))
+        last_state = self.graph.get_state(config=config)
+        logger.info("last state: %s", last_state)
+        if len(last_state.values) != 0:
+            msgs = last_state.values["messages"] + [{"role": "user", "content": user_input}]
+            curr_file = last_state.values["curr_file"]
+            curr_line = last_state.values["curr_line"]
+            logger.info("last curr_file: %s, last curr_line: %s, last messages: %s", curr_file, curr_line, msgs)
+            state = {"messages": msgs, "curr_file": curr_file, "curr_line": curr_line}
+        else:
+            state = {"messages": [{"role": "user", "content": user_input}], "curr_file": "", "curr_line": 0}
         for event in self.graph.stream(
-            {"messages": [{"role": "user", "content": user_input}], "curr_file": "", "curr_line": 0},
+            state,
             config=config,
             stream_mode="values",
         ):
@@ -142,8 +151,6 @@ class XAgent:
                     pass
 
     def save_agent_graph_to_png(self):
-        from IPython.display import Image
-
         with open("./agent_graph.png", "wb") as png:
             png.write(self.graph.get_graph().draw_mermaid_png())
 
