@@ -28,6 +28,7 @@ class ResourceRequest(Problem):
         else:
             raise ValueError(f"Unsupported app_name: {app_name}")
 
+        super().__init__(app=self.app, namespace=self.app.namespace)
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
