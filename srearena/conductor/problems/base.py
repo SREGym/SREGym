@@ -7,10 +7,10 @@ class Problem(ABC):
     def __init__(self, app, namespace: str):
         self.app = app
         self.namespace = namespace
+        self.fault_injected = False
         self.results = {}
 
         # Optional: attach oracles in subclass
-        self.detection_oracle = None
         self.localization_oracle = None
         self.mitigation_oracle = None
 

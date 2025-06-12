@@ -1,7 +1,6 @@
 """K8S misconfig fault problem in the SocialNetwork application."""
 
 from srearena.conductor.oracles.compound import CompoundedOracle
-from srearena.conductor.oracles.detection import DetectionOracle
 from srearena.conductor.oracles.localization import LocalizationOracle
 from srearena.conductor.oracles.target_port_mitigation import TargetPortMisconfigMitigationOracle
 from srearena.conductor.oracles.workload import WorkloadOracle
@@ -10,6 +9,7 @@ from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.paths import TARGET_MICROSERVICES
 from srearena.service.apps.socialnet import SocialNetwork
 from srearena.service.kubectl import KubeCtl
+from srearena.utils.decorators import mark_fault_injected
 
 
 class K8STargetPortMisconfig(Problem):
@@ -21,8 +21,6 @@ class K8STargetPortMisconfig(Problem):
         self.kubectl = KubeCtl()
 
         # === Attach evaluation oracles ===
-        self.detection_oracle = DetectionOracle(problem=self, expected="Yes")
-
         self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
 
         self.app.create_workload()
@@ -32,6 +30,7 @@ class K8STargetPortMisconfig(Problem):
             WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
         )
 
+    @mark_fault_injected
     def inject_fault(self):
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector._inject(
@@ -40,6 +39,7 @@ class K8STargetPortMisconfig(Problem):
         )
         print(f"[FAULT INJECTED] {self.faulty_service} misconfigured")
 
+    @mark_fault_injected
     def recover_fault(self):
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector._recover(

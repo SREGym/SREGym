@@ -1,7 +1,6 @@
 """MongoDB revoke authentication problem in the HotelReservation application."""
 
 from srearena.conductor.oracles.compound import CompoundedOracle
-from srearena.conductor.oracles.detection import DetectionOracle
 from srearena.conductor.oracles.localization import LocalizationOracle
 from srearena.conductor.oracles.mitigation import MitigationOracle
 from srearena.conductor.oracles.workload import WorkloadOracle
@@ -10,6 +9,7 @@ from srearena.generators.fault.inject_app import ApplicationFaultInjector
 from srearena.paths import TARGET_MICROSERVICES
 from srearena.service.apps.hotelres import HotelReservation
 from srearena.service.kubectl import KubeCtl
+from srearena.utils.decorators import mark_fault_injected
 
 
 class MongoDBRevokeAuth(Problem):
@@ -24,8 +24,6 @@ class MongoDBRevokeAuth(Problem):
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
         # === Attach evaluation oracles ===
-        self.detection_oracle = DetectionOracle(problem=self, expected="Yes")
-
         self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
 
         self.app.create_workload()
@@ -35,6 +33,7 @@ class MongoDBRevokeAuth(Problem):
             WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
         )
 
+    @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
         injector = ApplicationFaultInjector(namespace=self.namespace)
@@ -44,6 +43,7 @@ class MongoDBRevokeAuth(Problem):
         )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
+    @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
         injector = ApplicationFaultInjector(namespace=self.namespace)
