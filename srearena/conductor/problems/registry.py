@@ -26,6 +26,7 @@ from srearena.conductor.problems.service_dns_resolution_failure import ServiceDN
 from srearena.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from srearena.conductor.problems.target_port import K8STargetPortMisconfig
 from srearena.conductor.problems.wrong_bin_usage import WrongBinUsage
+from srearena.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from srearena.conductor.problems.wrong_service_selector import WrongServiceSelector
 
 
@@ -84,6 +85,12 @@ class ProblemRegistry:
                 app_name="astronomy_shop", faulty_service="frontend"
             ),
             "service_dns_resolution_failure_social_network": lambda: ServiceDNSResolutionFailure(
+                app_name="social_network", faulty_service="user-service"
+            ),
+            "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(
+                app_name="astronomy_shop", faulty_service="frontend"
+            ),
+            "wrong_dns_policy_social_network": lambda: WrongDNSPolicy(
                 app_name="social_network", faulty_service="user-service"
             ),
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
