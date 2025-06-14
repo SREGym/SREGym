@@ -281,11 +281,8 @@ class XAgent:
 if __name__ == "__main__":
     llm = get_llm_backend_for_tools()
     xagent = XAgent(llm)
-    xagent.build_agent(mock=True)
-    xagent.test_campaign_setter(f"{ROOT_REPO_PATH}/tests/file_editing/open_2.yaml")
+    xagent.build_agent()
     xagent.save_agent_graph_to_png()
-    # a short chatbot loop to demonstrate the workflow.
-    # TODO: make a real file-editing agent to test both state & memory mgmt and file editing tools
     while True:
         user_input = input("User: ")
         if user_input.lower() in ["quit", "exit", "q"]:
