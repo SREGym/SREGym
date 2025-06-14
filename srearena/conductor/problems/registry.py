@@ -80,8 +80,14 @@ class ProblemRegistry:
             "wrong_service_selector_social_network": lambda: WrongServiceSelector(
                 app_name="social_network", faulty_service="frontend"
             ),
-            "service_dns_resolution_failure": lambda: ServiceDNSResolutionFailure(
+            "service_dns_resolution_failure_astronomy_shop": lambda: ServiceDNSResolutionFailure(
+                app_name="astronomy_shop", faulty_service="frontend"
+            ),
+            "service_dns_resolution_failure_social_network": lambda: ServiceDNSResolutionFailure(
                 app_name="social_network", faulty_service="user-service"
+            ),
+            "service_dns_resolution_failure_hotel_reservation": lambda: ServiceDNSResolutionFailure(
+                app_name="hotel_reservation", faulty_service="frontend"
             ),
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
