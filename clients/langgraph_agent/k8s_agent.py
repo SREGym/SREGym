@@ -40,6 +40,7 @@ class XAgent:
         self.file_editing_tools = [open_file, goto_line, create, edit, insert]
         self.llm = llm
         self.test_campaign_file = ""
+        self.test_tool_or_ai_response = "tool"
 
     def test_campaign_setter(self, test_campaign_file):
         self.test_campaign_file = test_campaign_file
@@ -134,11 +135,10 @@ class XAgent:
             },
         )
 
-        tool_or_ai_response = "tool"
         logger.info("invoking mock llm inference, custom state: %s", state)
         test_campaign = yaml.safe_load(open(self.test_campaign_file, "r"))
         for tool_call in test_campaign["tool_calls"]:
-            if tool_or_ai_response == "tool":
+            if self.test_tool_or_ai_response == "tool":
                 function_name = tool_call["name"]
                 function_args = {key: value for key, value in tool_call.items() if key != "name"}
                 function_args_str = json.dumps(function_args)
@@ -149,13 +149,22 @@ class XAgent:
                 logger.info(
                     "[mock llm] type: %s, ai message returned: %s", type(ai_message_template), ai_message_template
                 )
-                logger.info("[mock llm] messages returns: %s", [state["messages"] + [ai_message_template]])
-                tool_or_ai_response = "ai"
-            elif tool_or_ai_response == "ai":
+                logger.info("[mock llm] tool calling, returning to ai")
+            elif self.test_tool_or_ai_response == "ai":
                 ai_message_template.tool_calls = []
                 ai_message_template.content = "test"
-                tool_or_ai_response = "tool"
+                logger.info("[mock llm] ai messaging, returning to tool")
 
+            if self.test_tool_or_ai_response == "tool":
+                self.test_tool_or_ai_response = "ai"
+            elif self.test_tool_or_ai_response == "ai":
+                self.test_tool_or_ai_response = "tool"
+
+            logger.info(
+                "[mock llm] msg branch: %s, messages returns: %s",
+                self.test_tool_or_ai_response,
+                [state["messages"] + [ai_message_template]],
+            )
             yield {
                 "messages": state["messages"] + [ai_message_template],
                 "curr_file": state["curr_file"],
