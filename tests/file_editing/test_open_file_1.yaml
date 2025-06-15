@@ -1,0 +1,9 @@
+tool_calls:
+  - name: "open_file"
+    path: "tests/file_editing/example.txt"
+    line_number: "1"
+user_inputs:
+  - "open tests/file_editing/example.txt at line 1"
+expected_curr_file: "tests/file_editing/example.txt"
+expected_curr_line: "1"
+expected_output: "hello world"
