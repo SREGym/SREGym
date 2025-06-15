@@ -418,6 +418,44 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered Service DNS Resolution Failure fault for service: {service}")
 
+    # V.11 - Inject a fault by modifying the DNS policy of a service
+    def inject_wrong_dns_policy(self, microservices: list[str]):
+        for service in microservices:
+            patch = (
+                '[{"op":"replace","path":"/spec/template/spec/dnsPolicy","value":"None"},'
+                '{"op":"add","path":"/spec/template/spec/dnsConfig","value":'
+                '{"nameservers":["8.8.8.8"],"searches":[]}}]'
+            )
+            patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} --type json -p '{patch}'"
+            result = self.kubectl.exec_command(patch_cmd)
+            print(f"Patch result for {service}: {result}")
+
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace}")
+
+            # Check if nameserver 8.8.8.8 present in the pods
+            self._wait_for_dns_policy_propagation(service, external_ns="8.8.8.8", expect_external=True)
+
+            print(f"Injected wrong DNS policy fault for service: {service}")
+
+    def recover_wrong_dns_policy(self, microservices: list[str]):
+        for service in microservices:
+            patch = (
+                '[{"op":"remove","path":"/spec/template/spec/dnsPolicy"},'
+                '{"op":"remove","path":"/spec/template/spec/dnsConfig"}]'
+            )
+            patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} --type json -p '{patch}'"
+            result = self.kubectl.exec_command(patch_cmd)
+            print(f"Patch result for {service}: {result}")
+
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace}")
+
+            # Check if nameserver 8.8.8.8 absent in the pods
+            self._wait_for_dns_policy_propagation(service, external_ns="8.8.8.8", expect_external=False)
+
+            print(f"Recovered wrong DNS policy fault for service: {service}")
+
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
@@ -483,6 +521,53 @@ class VirtualizationFaultInjector(FaultInjector):
         with open(file_path, "w") as file:
             yaml.dump(yaml_content, file)
         return file_path
+
+    def _wait_for_dns_policy_propagation(
+        self, service: str, external_ns: str, expect_external: bool, sleep: int = 2, max_wait: int = 120
+    ):
+
+        waited = 0
+        while waited < max_wait:
+
+            try:
+                deploy = self.kubectl.apps_v1_api.read_namespaced_deployment(service, self.namespace)
+                selector_dict = deploy.spec.selector.match_labels or {}
+                label_selector = ",".join([f"{k}={v}" for k, v in selector_dict.items()]) if selector_dict else None
+            except Exception:
+                label_selector = None
+
+            pods = self.kubectl.core_v1_api.list_namespaced_pod(self.namespace, label_selector=label_selector)
+
+            target_pods = [pod.metadata.name for pod in pods.items if (label_selector or service in pod.metadata.name)]
+
+            if not target_pods:
+                time.sleep(sleep)
+                waited += sleep
+                continue
+
+            state_ok = True
+
+            for pod in target_pods:
+                try:
+                    resolv = self.kubectl.exec_command(
+                        f"kubectl exec {pod} -n {self.namespace} -- cat /etc/resolv.conf"
+                    )
+                except Exception:
+                    state_ok = False
+                    break
+                has_external = external_ns in resolv
+
+                if expect_external != has_external:
+                    state_ok = False
+                    break
+
+            if state_ok:
+                return
+
+            time.sleep(sleep)
+            waited += sleep
+
+        print(f"DNS policy propagation check for service '{service}' failed after {max_wait}s.")
 
 
 if __name__ == "__main__":
