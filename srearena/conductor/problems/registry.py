@@ -23,6 +23,7 @@ from srearena.conductor.problems.resource_request import ResourceRequestTooLarge
 from srearena.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from srearena.conductor.problems.scale_pod import ScalePodSocialNet
 from srearena.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
+from srearena.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from srearena.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from srearena.conductor.problems.target_port import K8STargetPortMisconfig
 from srearena.conductor.problems.wrong_bin_usage import WrongBinUsage
@@ -96,6 +97,8 @@ class ProblemRegistry:
             "wrong_dns_policy_hotel_reservation": lambda: WrongDNSPolicy(
                 app_name="hotel_reservation", faulty_service="profile"
             ),
+            "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
+            "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.
