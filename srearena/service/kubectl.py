@@ -4,7 +4,11 @@ import json
 import subprocess
 import time
 
-from kubernetes import client, config
+try:
+    from kubernetes import client, config
+except ModuleNotFoundError as e: 
+    print("Your Kubeconfig is missing. Please set up a cluster.")
+    exit(1) 
 from kubernetes.client.rest import ApiException
 from rich.console import Console
 
