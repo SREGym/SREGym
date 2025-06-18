@@ -1,7 +1,7 @@
 import logging
 import threading
 
-from rollback_tool import RollbackNode
+from .rollback_tool import RollbackNode
 
 logging.basicConfig(
     level=logging.INFO,

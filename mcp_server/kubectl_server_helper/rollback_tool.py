@@ -5,10 +5,10 @@ import time
 import traceback
 from typing import Optional
 import yaml
-from kubectl import KubeCtl
+from .kubectl import KubeCtl
 from pydantic.dataclasses import dataclass
 from mcp_server.configs.kubectl_tool_cfg import KubectlToolCfg
-from utils import cleanup_kubernetes_yaml
+from .utils import cleanup_kubernetes_yaml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -224,10 +224,6 @@ class RollbackTool:
         return "".join(result)
 
     def rollback(self) -> str:
-        # I have no idea how to bypass the ToolUsage._check_tool_repeated_usage() method
-        # So, I added an argument that won't be used
-        # Please DO NOT remove this argument if you don't know how to bypass in other ways.
-
         if not hasattr(self, "action_stack") or self.action_stack is None:
             return "Warning: Action Stack disabled. Stop rolling back."
 

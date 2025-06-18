@@ -1,8 +1,13 @@
 from pydantic import BaseModel, Field, field_validator
 from pathlib import Path
 import os
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 parent_parent_dir = Path(__file__).resolve().parent.parent
+output_parent_dir = parent_parent_dir / "data"
 
 
 class KubectlToolCfg(BaseModel):
@@ -22,9 +27,10 @@ class KubectlToolCfg(BaseModel):
         description="Enable verification of dry run results.",
     )
 
-    # update the output dir with session id if using remote mcp server
+    # Update "default" with session id if using remote mcp server
+    # If you see default dir, something went wrong.
     output_dir: str = Field(
-        default=str(parent_parent_dir / "data"),
+        default=str(output_parent_dir / "default"),
         description="Directory to store some data used by kubectl server."
     )
 
@@ -54,14 +60,16 @@ class KubectlToolCfg(BaseModel):
         description="Seconds to wait before clearing replicaset.",
     )
 
-    @classmethod
     @field_validator("output_dir")
-    def name_must_not_be_empty(cls, v):
+    @classmethod
+    def validate_output_dir(cls, v):
         output_dir = v
         if not os.path.exists(output_dir):
+            logger.info(f"creating output directory {v}")
             os.makedirs(output_dir, exist_ok=True)
+        else:
+            logger.info(f"Directory {v} exists already")
 
         if not os.access(output_dir, os.W_OK):
             raise PermissionError(f"Output directory {output_dir} is not writable.")
         return output_dir
-

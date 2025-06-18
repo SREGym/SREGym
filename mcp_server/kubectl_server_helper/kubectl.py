@@ -10,7 +10,7 @@ import bashlex
 from kubernetes import config
 from pydantic.dataclasses import dataclass
 
-from utils import parse_text
+from .utils import parse_text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
