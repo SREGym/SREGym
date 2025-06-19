@@ -28,7 +28,7 @@ class GetTraces(BaseTool):
 
     def _run(
         self,
-        service: str,                                   
+        service: str,
         last_n_minutes: int,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
