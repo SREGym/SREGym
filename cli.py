@@ -1,6 +1,7 @@
 """SREArena CLI client."""
 
 import asyncio
+import atexit
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -10,8 +11,9 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from srearena.conductor import Conductor
+from srearena.conductor import Conductor, exit_cleanup_fault
 from srearena.service.shell import Shell
+from srearena.utils.sigint_aware_section import SigintAwareSection
 
 WELCOME = """
 # SREArena
@@ -79,7 +81,7 @@ class HumanAgent:
                 self.console.print("Invalid command. Please use `start <problem_id>`")
                 return
 
-            self.init_problem(problem_id.strip())
+            self.conductor.problem_id = problem_id.strip()
 
         else:
             self.console.print("Invalid command. Please use `start <problem_id>`")
@@ -98,10 +100,6 @@ class HumanAgent:
 
         return f"Action:```\n{user_input}\n```"
 
-    def init_problem(self, problem_id="misconfig-mitigation-1"):
-        problem_desc, _, apis = self.conductor.init_problem(problem_id)
-        self.display_context(problem_desc, apis)
-
     async def get_user_input(self, completer=None):
         loop = asyncio.get_running_loop()
         style = Style.from_dict({"prompt": "ansigreen bold"})
@@ -109,21 +107,22 @@ class HumanAgent:
 
         with patch_stdout():
             try:
-                input = await loop.run_in_executor(
-                    None,
-                    lambda: self.session.prompt(prompt_text, style=style, completer=completer),
-                )
+                with SigintAwareSection():
+                    input = await loop.run_in_executor(
+                        None,
+                        lambda: self.session.prompt(prompt_text, style=style, completer=completer),
+                    )
 
-                if input.lower() == "exit":
-                    raise SystemExit
+                    if input.lower() == "exit":
+                        raise SystemExit
 
-                return input
+                    return input
             except (SystemExit, KeyboardInterrupt, EOFError):
+                atexit.register(exit_cleanup_fault, conductor=self.conductor)
                 raise SystemExit from None
 
     def _filter_dict(self, dictionary, filter_func):
         return {k: v for k, v in dictionary.items() if filter_func(k, v)}
-
 
 async def main():
     conductor = Conductor()
@@ -135,7 +134,6 @@ async def main():
 
     results = await conductor.start_problem()
     print(results)
-
 
 if __name__ == "__main__":
     asyncio.run(main())

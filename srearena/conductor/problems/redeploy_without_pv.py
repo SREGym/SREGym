@@ -1,13 +1,15 @@
 """Redeployment of the HotelReservation application but do not handle PV."""
 
-from srearena.conductor.oracles.detection import DetectionOracle
+from srearena.conductor.oracles.compound import CompoundedOracle
 from srearena.conductor.oracles.localization import LocalizationOracle
 from srearena.conductor.oracles.mitigation import MitigationOracle
+from srearena.conductor.oracles.workload import WorkloadOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.paths import TARGET_MICROSERVICES
 from srearena.service.apps.hotelres import HotelReservation
 from srearena.service.kubectl import KubeCtl
+from srearena.utils.decorators import mark_fault_injected
 
 
 class RedeployWithoutPV(Problem):
@@ -32,13 +34,18 @@ class RedeployWithoutPV(Problem):
             "mongodb-user",
         ]
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)
+        super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.detection_oracle = DetectionOracle(problem=self, expected="Yes")
-
         self.localization_oracle = LocalizationOracle(problem=self, expected=self.faulty_service)
 
-        self.mitigation_oracle = MitigationOracle(problem=self)
+        self.app.create_workload()
+        self.mitigation_oracle = CompoundedOracle(
+            self,
+            MitigationOracle(problem=self),
+            WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
+        )
 
+    @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
         self.injector.inject_redeploy_without_pv(app=self.app)
@@ -48,6 +55,7 @@ class RedeployWithoutPV(Problem):
         # )
         # print(f"Application: {self.faulty_service} | Namespace: {self.namespace}\n")
 
+    @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
         self.injector.recover_redeploy_without_pv(app=self.app)

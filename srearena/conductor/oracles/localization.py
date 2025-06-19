@@ -15,7 +15,7 @@ class LocalizationOracle(Oracle):
         if isinstance(solution, str):
             solution = [solution]
         elif not isinstance(solution, list):
-            results["Localization Accuracy"] = 0.0
+            results["accuracy"] = 0.0
             results["success"] = False
             results["is_subset"] = False
             print("❌ Invalid format: expected string or list of strings")
@@ -23,7 +23,7 @@ class LocalizationOracle(Oracle):
 
         # Safety check: ensure all items are strings
         if not all(isinstance(item, str) for item in solution):
-            results["Localization Accuracy"] = 0.0
+            results["accuracy"] = 0.0
             results["success"] = False
             results["is_subset"] = False
             print("❌ Invalid content: all items must be strings")
@@ -42,7 +42,7 @@ class LocalizationOracle(Oracle):
             acc = 0.0
             print(f"❌ No match: {solution}")
 
-        results["Localization Accuracy"] = acc
+        results["accuracy"] = acc
         results["success"] = is_exact or (is_sub and len(solution) == len(self.expected))
         results["is_subset"] = is_sub
 

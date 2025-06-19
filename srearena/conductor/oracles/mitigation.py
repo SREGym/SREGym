@@ -2,6 +2,8 @@ from srearena.conductor.oracles.base import Oracle
 
 
 class MitigationOracle(Oracle):
+    importance = 1.0
+
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation ==")
 
@@ -34,6 +36,5 @@ class MitigationOracle(Oracle):
             if not all_normal:
                 break
 
-        results["Mitigation Success"] = all_normal
         results["success"] = all_normal
         return results

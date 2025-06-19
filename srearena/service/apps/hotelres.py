@@ -80,7 +80,7 @@ class HotelReservation(Application):
         print(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         print(f"Waiting for stability...")
-        time.sleep(30)
+        self.kubectl.wait_for_stable(namespace=self.namespace)
 
     def delete(self):
         """Delete the configmap."""
@@ -102,7 +102,8 @@ class HotelReservation(Application):
             print(f"Deleted PersistentVolume {pv}: {delete_result.strip()}")
         time.sleep(5)
 
-        self.wrk.stop()
+        if hasattr(self, "wrk"):
+            self.wrk.stop()
 
     def _remove_pv_finalizers(self, pv_name: str):
         """Remove finalizers from the PersistentVolume to prevent it from being stuck in a 'Terminating' state."""
@@ -122,16 +123,14 @@ class HotelReservation(Application):
             return file.read()
 
     def create_workload(self):
-        frontend_url = get_frontend_url(self)
-
-        wrk2 = Wrk2WorkloadManager(
-            wrk=Wrk2(rate=20, dist="exp", connections=2, duration=10, threads=2),
+        self.wrk = Wrk2WorkloadManager(
+            wrk=Wrk2(rate=100, dist="exp", connections=3, duration=10, threads=3),
             payload_script=self.payload_script,
-            url=f"{frontend_url}",
+            url=f"{{placeholder}}",
         )
-        self.wrk = wrk2
 
     def start_workload(self):
         if not hasattr(self, "wrk"):
             self.create_workload()
+        self.wrk.url = get_frontend_url(self)
         self.wrk.start()

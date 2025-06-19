@@ -42,7 +42,8 @@ class AstronomyShop(Application):
         Helm.uninstall(**self.helm_configs)
         self.kubectl.delete_namespace(self.helm_configs["namespace"])
 
-        self.wrk.stop()
+        if hasattr(self, "wrk"):
+            self.wrk.stop()
 
     def create_workload(self):
         self.wrk = LocustWorkloadManager(

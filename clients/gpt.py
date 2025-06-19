@@ -13,7 +13,6 @@ import os
 import tiktoken
 import wandb
 from dotenv import load_dotenv
-from parse_result import DOCS_SHELL_ONLY
 
 from clients.utils.llm import GPTClient
 from clients.utils.templates import DOCS_SHELL_ONLY

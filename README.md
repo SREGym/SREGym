@@ -59,6 +59,8 @@ kind create cluster --config kind/kind-config-arm.yaml
 
 If you're running into issues, consider building a Docker image for your machine by following this [README](kind/README.md). Please also open an issue.
 
+When using kind, each node pulls images from docker hub independently, which can easily hit the rate limitation. You can uncomment `containerdConfigPatches` in the corresponding kind config file to pull images from our exclusive image registry without rate limiting.
+
 ### [Tips]
 If you are running SREArena using a proxy, beware of exporting the HTTP proxy as `172.17.0.1`. When creating the kind cluster, all the nodes in the cluster will inherit the proxy setting from the host environment and the Docker container. 
 
@@ -89,7 +91,7 @@ Human as the agent:
 
 ```bash
 python3 cli.py
-(srearena) $ start misconfig_app_hotel_res-detection-1 # or choose any problem you want to solve
+(srearena) $ start k8s_target_port-misconfig # or choose any problem you want to solve
 # ... wait for the setup ...
 (srearena) $ submit("Yes") # submit solution
 ```

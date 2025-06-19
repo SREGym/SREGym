@@ -2,20 +2,10 @@ import time
 from abc import abstractmethod
 from bisect import bisect_left
 
-from pydantic.dataclasses import dataclass
-
-from srearena.generators.workload.base import WorkloadManager
+from srearena.generators.workload.base import WorkloadEntry, WorkloadManager
 
 STREAM_WORKLOAD_TIMEOUT = 60 * 1.5  # 1.5 minutes
 STREAM_WORKLOAD_EPS = 10  # 5 seconds
-
-
-@dataclass
-class WorkloadEntry:
-    time: float  # Start time of the workload run
-    number: int  # Number of requests generated in this workload run
-    log: str  # Log of the workload run
-    ok: bool  # Indicates if the workload was successful
 
 
 class StreamWorkloadManager(WorkloadManager):
@@ -62,7 +52,7 @@ class StreamWorkloadManager(WorkloadManager):
                 self.log_history.extend(new_logs[first_greater:])
                 self.last_log_time = new_logs[-1].time
 
-    def collect(self, number=100, since_seconds=None):
+    def collect(self, number=100, since_seconds=None) -> list[WorkloadEntry]:
         """
         Run the workload generator until collected data is sufficient.
         """
@@ -101,7 +91,7 @@ class StreamWorkloadManager(WorkloadManager):
 
         raise TimeoutError("Workload generator did not collect enough data within the timeout period.")
 
-    def recent_entries(self, duration=30):
+    def recent_entries(self, duration=30) -> list[WorkloadEntry]:
         """
         Return recently collected data within the given duration (seconds).
         """

@@ -11,6 +11,7 @@ dependencies = [
     "annotated-types==0.7.0",
     "anthropic>=0.52.0",
     "anyio==4.9.0",
+    "apscheduler>=3.11.0",
     "asgiref==3.8.1",
     "astor==0.8.1",
     "attrs==25.3.0",
@@ -161,6 +162,7 @@ dependencies = [
     "pynacl==1.5.0",
     "pyparsing==3.2.3",
     "pyright==1.1.401",
+    "pytest>=8.3.5",
     "python-dateutil==2.9.0.post0",
     "python-dotenv==1.1.0",
     "python-multipart==0.0.20",
@@ -227,7 +229,7 @@ requires = ["setuptools>=80.8.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["srearena", "clients", "provisioner"]
+packages = ["srearena", "clients", "provisioner", "scripts"]
 
 [tool.uv.sources]
-geni-lib-xlab = { path = "scripts/geni-lib/mod/geni_lib_xlab-1.0.0.tar.gz" }
+geni-lib-xlab = { path = "scripts/geni_lib/mod/geni_lib_xlab-1.0.0.tar.gz" }

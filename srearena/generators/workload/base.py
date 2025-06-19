@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 
+from pydantic.dataclasses import dataclass
+
 # Two types of workload generators:
 # 1. Constantly running workload generator
 # 2. Workload generator that runs for a fixed duration
@@ -8,6 +10,14 @@ from abc import ABC, abstractmethod
 # Two purposes:
 # 1. To generate traces
 # 2. Validation
+
+
+@dataclass
+class WorkloadEntry:
+    time: float  # Start time of the workload run
+    number: int  # Number of requests generated in this workload run
+    log: str  # Log of the workload run
+    ok: bool  # Indicates if the workload was successful
 
 
 class WorkloadManager(ABC):
@@ -33,7 +43,7 @@ class WorkloadManager(ABC):
         pass
 
     @abstractmethod
-    def collect(self, number=100, since_seconds=None):
+    def collect(self, number=100, since_seconds=None) -> list[WorkloadEntry]:
         """
         Run the workload generator until collected data is sufficient.
         - Number of requests should be at least `number` starting from `since_seconds` ago.
@@ -43,7 +53,7 @@ class WorkloadManager(ABC):
         pass
 
     @abstractmethod
-    def recent_entries(self, duration=30):
+    def recent_entries(self, duration=30) -> list[WorkloadEntry]:
         """
         Return recently collected data within the given duration (seconds).
         """

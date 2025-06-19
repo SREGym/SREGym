@@ -1,14 +1,16 @@
 import asyncio
 import atexit
-import inspect
 import os
 import time
+from json.decoder import JSONDecodeError
 
+from srearena.conductor.oracles.detection import DetectionOracle
 from srearena.conductor.parser import ResponseParser
 from srearena.conductor.problems.registry import ProblemRegistry
 from srearena.service.kubectl import KubeCtl
 from srearena.service.telemetry.prometheus import Prometheus
 from srearena.utils.critical_section import CriticalSection
+from srearena.utils.sigint_aware_section import SigintAwareSection
 from srearena.utils.status import SessionPrint, SubmissionStatus
 
 
@@ -26,118 +28,35 @@ class Conductor:
         self.use_wandb = os.getenv("USE_WANDB", "false").lower() == "true"
 
         self.problem = None
+        self.detection_oracle = None
         self.problem_id = None
-        self.submission_stage = "detection"  # → detection → localization → mitigation → done
+        self.submission_stage = None  # "noop", "detection", "localization", "mitigation", "done"
         self.results = {}
 
     def register_agent(self, agent, name="agent"):
         self.agent = agent
         self.agent_name = name
 
-    def _get_matching_noop_id(self, problem_id: str) -> str | None:
-        app_name = self.problem.app.__class__.__name__.lower()
-
-        if "hotel" in app_name:
-            return "noop_hotel_reservation"
-        elif "social" in app_name:
-            return "noop_social_network"
-        elif "astronomy" in app_name or "shop" in app_name:
-            return "noop_astronomy_shop"
-        else:
-            print(f"[WARN] No matching noop problem found for app: {app_name}")
-            return None
-
-    async def _run_single_problem(self, problem_id: str, is_noop: bool = False):
-        self.problem = self.problems.get_problem_instance(problem_id)
-        self.problem_id = problem_id
-        self.submission_stage = "detection"
-        self.results = {}
-
-        self.execution_start_time = time.time()
-
-        print(f"[Session Start] Problem ID: {problem_id}")
-        print("Setting up OpenEBS...")
-        self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
-        self.kubectl.exec_command(
-            'kubectl patch storageclass openebs-hostpath -p \'{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
-        )
-        self.kubectl.wait_for_ready("openebs")
-        print("OpenEBS setup completed.")
-
-        self.prometheus.deploy()
-        self.problem.app.delete()
-        self.problem.app.deploy()
-
-        with CriticalSection():
-            self.problem.inject_fault()
-            atexit.register(exit_cleanup_fault, prob=self.problem)
-
-        self.problem.app.start_workload()
-
-        # === Run agent loop ===
-        instr = "Please take the next action"
+    async def run_problem(self):
         try:
             while self.submission_stage != "done":
+                instr = "Please take the next action"
                 action = await self.ask_agent(instr)
                 self.sprint.agent(action)
                 env_response = await self.ask_env(action)
                 self.sprint.service(env_response)
-
         except Exception as e:
             with CriticalSection():
                 self.problem.recover_fault()
-                atexit.unregister(exit_cleanup_fault)
+                atexit.unregister(self.exit_cleanup_and_recover_fault)
             raise e
 
-        self.execution_end_time = time.time()
-
-        with CriticalSection():
-            self.problem.recover_fault()
-            atexit.unregister(exit_cleanup_fault)
-
-        self.problem.app.cleanup()
-        self.prometheus.teardown()
-        self.kubectl.exec_command("kubectl delete sc openebs-hostpath openebs-device --ignore-not-found")
-        self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
-        self.kubectl.wait_for_namespace_deletion("openebs")
-
         return self.results
-
-    def init_problem(self, problem_id: str):
-        self.execution_start_time = time.time()
-        self.problem_id = problem_id
-        self.problem = self.problems.get_problem_instance(problem_id)
-
-        print(f"[Session Start] Problem ID: {problem_id}")
-        print("Setting up OpenEBS...")
-        self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
-        self.kubectl.exec_command(
-            'kubectl patch storageclass openebs-hostpath -p \'{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
-        )
-        self.kubectl.wait_for_ready("openebs")
-        print("OpenEBS setup completed.")
-
-        self.prometheus.deploy()
-        self.problem.app.delete()
-        self.problem.app.deploy()
-
-        with CriticalSection():
-            self.problem.inject_fault()
-            atexit.register(exit_cleanup_fault, prob=self.problem)
-
-        self.problem.app.start_workload()
-
-        return (
-            "Problem loaded.",
-            "Use submit(...) when ready.",
-            {"submit(...)": "Submit your solution"},
-        )
 
     async def ask_agent(self, input: str):
         return await self.agent.get_action(input)
 
     async def ask_env(self, input: str):
-        # Parse input and ensure it's a submit(...) call
         try:
             parsed = self.parser.parse(input)
         except Exception as e:
@@ -148,15 +67,17 @@ class Conductor:
 
         solution = parsed["args"][0] if parsed["args"] else None
 
-        # === Evaluate based on available oracles ===
-        if self.submission_stage == "detection":
-            if not hasattr(self.problem, "detection_oracle") or self.problem.detection_oracle is None:
-                return "[⚠️] This problem does not support detection evaluation."
+        if self.submission_stage == "noop":
+            results = self.detection_oracle.evaluate(solution)
+            self.results["NOOP Detection"] = results
+            self.submission_stage = "done"
+            return "[✅] NO OP detection evaluated."
 
-            results = self.problem.detection_oracle.evaluate(solution)
+        if self.submission_stage == "detection":
+            results = self.detection_oracle.evaluate(solution)
             self.results["Detection"] = results
 
-            if results["Detection Accuracy"] == "Invalid Format":
+            if results.get("reason") == "Invalid Format":
                 return "[⚠️] Invalid detection format. Please try again."
 
             self.results["TTD"] = time.time() - self.execution_start_time
@@ -165,10 +86,9 @@ class Conductor:
                 self.submission_stage = "done"
                 return "[❌] Incorrect detection. Ending evaluation."
 
-            # Advance to next available stage
-            if hasattr(self.problem, "localization_oracle") and self.problem.localization_oracle is not None:
+            if self.problem.localization_oracle:
                 self.submission_stage = "localization"
-            elif hasattr(self.problem, "mitigation_oracle") and self.problem.mitigation_oracle is not None:
+            elif self.problem.mitigation_oracle:
                 self.submission_stage = "mitigation"
             else:
                 self.submission_stage = "done"
@@ -177,68 +97,128 @@ class Conductor:
             return SubmissionStatus.VALID_SUBMISSION
 
         elif self.submission_stage == "localization":
-            if not hasattr(self.problem, "localization_oracle") or self.problem.localization_oracle is None:
+            if not self.problem.localization_oracle:
                 return "[⚠️] This problem does not support localization evaluation."
 
             results = self.problem.localization_oracle.evaluate(solution)
             self.results["Localization"] = results
-
-            if (
-                "Localization Accuracy" not in results
-                or results.get("Localization Accuracy") == 0.0
-                and not results.get("is_subset", False)
-            ):
-                if not isinstance(solution, (str, list)):
-                    return "[⚠️] Invalid localization format. Please try again."
-                if isinstance(solution, list) and not all(isinstance(x, str) for x in solution):
-                    return "[⚠️] Invalid localization list contents. Please try again."
-
             self.results["TTL"] = time.time() - self.execution_start_time
 
-            if hasattr(self.problem, "mitigation_oracle") and self.problem.mitigation_oracle is not None:
+            if self.problem.mitigation_oracle:
                 self.submission_stage = "mitigation"
             else:
                 self.submission_stage = "done"
-                return "[✅] Localization complete. No mitigation required."
 
-            return SubmissionStatus.VALID_SUBMISSION
+            if results.get("success", False):
+                return "[✅] Localization successful. Proceeding..."
+            else:
+                return "[❌] Incorrect localization. Proceeding anyway..."
 
-        elif self.submission_stage == "mitigation":
-            if not hasattr(self.problem, "mitigation_oracle") or self.problem.mitigation_oracle is None:
-                return "[⚠️] This problem does not support mitigation evaluation."
-
+        if self.submission_stage == "mitigation":
             results = self.problem.mitigation_oracle.evaluate()
             self.results["Mitigation"] = results
             self.results["TTM"] = time.time() - self.execution_start_time
             self.submission_stage = "done"
             return SubmissionStatus.VALID_SUBMISSION
 
-        elif self.submission_stage == "done":
-            return "[✅] Problem completed."
+        return "[✅] Problem completed."
 
     async def start_problem(self):
-        # === Run main problem ===
-        faulty_results = await self._run_single_problem(self.problem_id, is_noop=False)
+        self.execution_start_time = time.time()
+        self.problem = self.problems.get_problem_instance(self.problem_id)
+        self.detection_oracle = DetectionOracle(self.problem)
+        self.results = {}
 
-        # === Get and run noop problem ===
-        noop_id = self._get_matching_noop_id(self.problem_id)
-        if noop_id is not None:
-            print(f"\n[INFO] Running NOOP problem: {noop_id}")
-            noop_results = await self._run_single_problem(noop_id, is_noop=True)
-        else:
-            print(f"[WARN] No matching NOOP found for {self.problem_id}. Skipping NOOP.")
-            noop_results = {}
+        try:
+            with SigintAwareSection():
+                print(f"[Session Start] Problem ID: {self.problem_id}")
 
-        # === Return both results ===
-        return {
-            "results": {
-                "faulty": faulty_results,
-                "noop": noop_results,
-            }
-        }
+                print("Setting up metrics-server...")
+                self.kubectl.exec_command(
+                    "kubectl apply -f "
+                    "https://github.com/kubernetes-sigs/metrics-server/"
+                    "releases/latest/download/components.yaml"
+                )
+                self.kubectl.exec_command(
+                    "kubectl -n kube-system patch deployment metrics-server "
+                    "--type=json -p='["
+                    '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"},'
+                    '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
+                    "]'"
+                )
+                self.kubectl.wait_for_ready("kube-system")  # metrics-server is deployed in kube-system
+
+                print("Setting up OpenEBS...")
+                self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
+                self.kubectl.exec_command(
+                    "kubectl patch storageclass openebs-hostpath "
+                    '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
+                )
+                self.kubectl.wait_for_ready("openebs")
+                print("OpenEBS setup completed.")
+
+                self.prometheus.deploy()
+
+                self.problem.app.delete()
+                self.problem.app.deploy()
+                self.problem.app.start_workload()
+        except KeyboardInterrupt:
+            print("\nImmediately terminating and Cleaning up...")
+            atexit.register(self.exit_cleanup_and_recover_fault)
+            raise SystemExit from None
+
+        # Phase 1: NO OP
+        print("\n[NO OP Evaluation] System is healthy. Agent should detect no issue.")
+        self.submission_stage = "noop"
+        noop_results = await self.run_problem()
+        print(f"NO OP Detection Result: {'✅' if noop_results.get('NOOP Detection', {}).get('success') else '❌'}")
+
+        # Phase 2: Inject Fault
+        print("[Injecting fault now...]")
+        with CriticalSection():
+            self.problem.inject_fault()
+            atexit.register(self.exit_cleanup_and_recover_fault)
+
+        # Phase 3: Faulty system
+        self.submission_stage = "detection"
+        fault_results = await self.run_problem()
+
+        # Final cleanup
+        self.execution_end_time = time.time()
+        with CriticalSection():
+            self.problem.recover_fault()
+            atexit.unregister(self.exit_cleanup_and_recover_fault)
+
+        self.problem.app.cleanup()
+        self.prometheus.teardown()
+        self.kubectl.exec_command("kubectl delete sc openebs-hostpath openebs-device --ignore-not-found")
+        self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
+        self.kubectl.wait_for_namespace_deletion("openebs")
+
+        self.results.update(fault_results)
+        return self.results
+
+    def exit_cleanup_and_recover_fault(self):
+        if self.problem:
+            print("Recovering fault before exit...")
+            try:
+                self.problem.recover_fault()
+            except JSONDecodeError:
+                # CTRL+C before service is set up results in a JSONDecodeError
+                print("Service has not been set up. Skipping fault recovery.")
+            except RuntimeError:
+                # When waiting for namespace deletion, console.status() is called and results in a RuntimeError
+                pass
+
+            self.problem.app.cleanup()
+
+        self.prometheus.teardown()
+
+        self.kubectl.exec_command("kubectl delete sc openebs-hostpath openebs-device --ignore-not-found")
+        self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
+
+        print("\nCleanup complete!")
 
 
-def exit_cleanup_fault(prob):
-    print("Recovering fault before exit...")
-    prob.recover_fault()
-    # TODO: Clean up everything else too
+def exit_cleanup_fault(conductor):
+    conductor.exit_cleanup_and_recover_fault()

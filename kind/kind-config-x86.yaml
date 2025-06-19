@@ -1,5 +1,10 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
+# uncomment below content to enable nodes to pull images from our exclusive docker registry
+#containerdConfigPatches:
+#  - |
+#    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
+#      endpoint = ["http://128.105.144.30:5000"]
 nodes:
   - role: control-plane
     image: jacksonarthurclark/aiopslab-kind-x86:latest
