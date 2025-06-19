@@ -636,6 +636,13 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from sidecar port conflict fault for service: {service}")
 
+    # V.16 - Inject a persistent volume affinity violation/ conflict
+    def inject_persistent_volume_affinity_violation(self, microservices: list[str]):
+        pass
+
+    def recover_persistent_volume_affinity_violation(self, microservices: list[str]):
+        pass
+
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
