@@ -10,14 +10,14 @@ from srearena.paths import TARGET_MICROSERVICES
 from srearena.service.apps.socialnet import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
+from srearena.utils.select_random_service import select_random_service
 
 
 class K8STargetPortMisconfig(Problem):
-    def __init__(self, faulty_service="user-service"):
+    def __init__(self):
         app = SocialNetwork()
         super().__init__(app=app, namespace=app.namespace)
 
-        self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
 
         # === Attach evaluation oracles ===
@@ -32,6 +32,8 @@ class K8STargetPortMisconfig(Problem):
 
     @mark_fault_injected
     def inject_fault(self):
+        self.faulty_service = select_random_service(self.kubectl, self.namespace)
+
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector._inject(
             fault_type="misconfig_k8s",

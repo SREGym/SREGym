@@ -35,7 +35,7 @@ from srearena.conductor.problems.wrong_service_selector import WrongServiceSelec
 class ProblemRegistry:
     def __init__(self):
         self.PROBLEM_REGISTRY = {
-            "k8s_target_port-misconfig": lambda: K8STargetPortMisconfig(faulty_service="user-service"),
+            "k8s_target_port-misconfig": K8STargetPortMisconfig,
             "auth_miss_mongodb": MongoDBAuthMissing,
             "revoke_auth_mongodb-1": lambda: MongoDBRevokeAuth(faulty_service="mongodb-geo"),
             "revoke_auth_mongodb-2": lambda: MongoDBRevokeAuth(faulty_service="mongodb-rate"),

@@ -11,6 +11,7 @@ from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.service.apps.socialnet import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
+from srearena.utils.select_random_service import select_random_service
 
 
 class ScalePodSocialNet(Problem):
@@ -18,8 +19,7 @@ class ScalePodSocialNet(Problem):
         self.app = SocialNetwork()
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-        # self.faulty_service = "url-shorten-mongodb"
-        self.faulty_service = "user-service"
+
         # Choose a very front service to test - this will directly cause an exception
         # TODO: We should create more problems with this using different faulty services
         # self.faulty_service = "nginx-thrift"
@@ -36,6 +36,8 @@ class ScalePodSocialNet(Problem):
 
     @mark_fault_injected
     def inject_fault(self):
+        self.faulty_service = select_random_service(self.kubectl, self.namespace)
+
         print("== Fault Injection ==")
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector._inject(
