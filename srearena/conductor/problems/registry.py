@@ -110,8 +110,11 @@ class ProblemRegistry:
             "sidecar_port_conflict_hotel_reservation": lambda: SidecarPortConflict(
                 app_name="hotel_reservation", faulty_service="frontend"
             ),
-            "env_variable_leak": lambda: EnvVariableLeak(
-                faulty_service="media-mongodb"
+            "env_variable_leak_social_network": lambda: EnvVariableLeak(
+                app_name="social_network" , faulty_service="media-mongodb"
+            ),
+            "env_variable_leak_hotel_reservation": lambda: EnvVariableLeak(
+                app_name="hotel_reservation" , faulty_service="mongodb-geo"
             ),
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working

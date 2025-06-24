@@ -636,22 +636,30 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from sidecar port conflict fault for service: {service}")
 
+    # V.14 - Injects an environment variable leak by deleting a ConfigMap and restarting the associated deployment.
     def inject_env_variable_leak(self, microservices: list[str]):
         for microservice in microservices:
-            configmap_name = f"{microservice}"  
-
+            configmap_name = None
+            if self.namespace == "test-social-network":
+                configmap_name = "media-mongodb"
+            elif self.namespace == "test-hotel-reservation":
+                configmap_name = "mongo-geo-script"
+            else:
+                raise ValueError(f"Unknown namespace: {self.namespace}")  
+                          
             get_cmd = f"kubectl get configmap {configmap_name} -n {self.namespace} -o yaml"
             original_yaml = self.kubectl.exec_command(get_cmd)
             parsed_yaml = yaml.safe_load(original_yaml)
 
-            self._write_yaml_to_file(configmap_name, parsed_yaml)
+            self._write_yaml_to_file(microservice, parsed_yaml)
 
             delete_cmd = f"kubectl delete configmap {configmap_name} -n {self.namespace}"
             self.kubectl.exec_command(delete_cmd)
             print(f"Deleted ConfigMap: {configmap_name}")
 
-            self.kubectl.exec_command(f"kubectl delete pod -l app={microservice} -n {self.namespace}")
-            print(f"Restarted pods for {microservice} to apply ConfigMap fault")
+            restart_cmd = f"kubectl rollout restart deployment {microservice} -n {self.namespace}"
+            self.kubectl.exec_command(restart_cmd)
+            print(f"Restarted pods to apply ConfigMap fault")
 
     def recover_env_variable_leak(self, microservices: list[str]):
         for microservice in microservices:

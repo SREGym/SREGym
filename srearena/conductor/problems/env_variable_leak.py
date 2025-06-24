@@ -12,10 +12,16 @@ from srearena.utils.decorators import mark_fault_injected
 
 
 class EnvVariableLeak(Problem):
-    def __init__(self, faulty_service: str="media-mongodb"):
+    def __init__(self, app_name: str = "social_network", faulty_service: str="media-mongodb"):
         self.faulty_service = faulty_service
-
-        self.app = SocialNetwork()
+        self.app_name = app_name
+        
+        if self.app_name == "social_network":
+            self.app = SocialNetwork()
+        elif self.app_name == "hotel_reservation":
+            self.app = HotelReservation()
+        else:
+            raise ValueError(f"Unsupported app name: {app_name}")
         
         super().__init__(app=self.app, namespace=self.app.namespace)
         
