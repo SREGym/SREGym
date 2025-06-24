@@ -11,11 +11,12 @@ from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.service.apps.socialnet import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
-from srearena.utils.select_random_service import select_random_service
 
 
 class ScalePodSocialNet(Problem):
     def __init__(self):
+        # Faulty_service affects localization oracle as well!
+
         self.app = SocialNetwork()
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace

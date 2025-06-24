@@ -10,15 +10,19 @@ from srearena.paths import TARGET_MICROSERVICES
 from srearena.service.apps.socialnet import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
-from srearena.utils.select_random_service import select_random_service
+from srearena.utils.randomizer import Randomizer
 
 
 class K8STargetPortMisconfig(Problem):
     def __init__(self):
-        app = SocialNetwork()
-        super().__init__(app=app, namespace=app.namespace)
+        # Faulty service is put in localization oracle!
 
         self.kubectl = KubeCtl()
+
+        self.randomizer = Randomizer(self.kubectl)
+        app = randomizer.select_app()
+
+        super().__init__(app=app, namespace=app.namespace)
 
         # === Attach evaluation oracles ===
         self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
@@ -32,7 +36,7 @@ class K8STargetPortMisconfig(Problem):
 
     @mark_fault_injected
     def inject_fault(self):
-        self.faulty_service = select_random_service(self.kubectl, self.namespace)
+        self.faulty_service = self.randomizer.select_service()
 
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector._inject(
