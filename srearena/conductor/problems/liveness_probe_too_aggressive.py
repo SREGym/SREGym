@@ -1,7 +1,6 @@
 from srearena.conductor.oracles.compound import CompoundedOracle
 from srearena.conductor.oracles.localization import LocalizationOracle
-from srearena.conductor.oracles.mitigation import MitigationOracle
-from srearena.conductor.oracles.workload import WorkloadOracle
+from srearena.conductor.oracles.sustained_readiness import SustainedReadinessOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.service.apps.astronomy_shop import AstronomyShop
@@ -35,8 +34,7 @@ class LivenessProbeTooAggressive(Problem):
         self.app.create_workload()
         self.mitigation_oracle = CompoundedOracle(
             self,
-            MitigationOracle(problem=self),
-            # WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
+            SustainedReadinessOracle(problem=self, sustained_period=30),
         )
 
     @mark_fault_injected
