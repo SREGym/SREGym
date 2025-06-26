@@ -137,7 +137,7 @@ class Conductor:
         self.results = {}
 
         # Check for required binaries
-        self._check_required_binaries(["kubectl", "helm"])
+        self.check_required_binaries(["kubectl", "helm"])
 
         try:
             with SigintAwareSection():
