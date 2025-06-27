@@ -162,6 +162,9 @@ class Conductor:
                 self.problem.app.delete()
                 self.problem.app.deploy()
                 self.problem.app.start_workload()
+
+                if self.problem.randomizable:
+                    self.problem.select_faulty_service()
         except KeyboardInterrupt:
             print("\nImmediately terminating and Cleaning up...")
             atexit.register(self.exit_cleanup_and_recover_fault)

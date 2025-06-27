@@ -42,7 +42,7 @@ class ProblemRegistry:
             "storage_user_unregistered-1": lambda: MongoDBUserUnregistered(faulty_service="mongodb-geo"),
             "storage_user_unregistered-2": lambda: MongoDBUserUnregistered(faulty_service="mongodb-rate"),
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
-            "scale_pod_zero_social_net": ScalePodSocialNet,
+            # "scale_pod_zero_social_net": ScalePodSocialNet,
             "assign_to_non_existent_node": AssignNonExistentNode,
             "chaos_mesh_container_kill": ChaosMeshContainerKill,
             "chaos_mesh_pod_failure": ChaosMeshPodFailure,

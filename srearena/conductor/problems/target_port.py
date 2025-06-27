@@ -15,17 +15,15 @@ from srearena.utils.randomizer import Randomizer
 
 class K8STargetPortMisconfig(Problem):
     def __init__(self):
-        # Faulty service is put in localization oracle!
-
         self.kubectl = KubeCtl()
+        self.faulty_service = None
+        self.localization_oracle = None
+        self.randomizable = True
 
         self.randomizer = Randomizer(self.kubectl)
-        app = randomizer.select_app()
+        app = self.randomizer.select_app()
 
         super().__init__(app=app, namespace=app.namespace)
-
-        # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
 
         self.app.create_workload()
         self.mitigation_oracle = CompoundedOracle(
@@ -34,10 +32,14 @@ class K8STargetPortMisconfig(Problem):
             WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
         )
 
-    @mark_fault_injected
-    def inject_fault(self):
+    def select_faulty_service(self):
         self.faulty_service = self.randomizer.select_service()
 
+        # === Attach evaluation oracles ===
+        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+
+    @mark_fault_injected
+    def inject_fault(self):
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector._inject(
             fault_type="misconfig_k8s",
