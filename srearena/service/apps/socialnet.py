@@ -71,9 +71,9 @@ class SocialNetwork(Application):
         # self.kubectl.delete_namespace(self.namespace)
         # time.sleep(15)
 
-    def create_workload(self):
+    def create_workload(self, rate: int = 100, dist: str = "exp", connections: int = 3, duration: int = 10, threads: int = 3):
         self.wrk = Wrk2WorkloadManager(
-            wrk=Wrk2(rate=100, dist="exp", connections=3, duration=10, threads=3),
+            wrk=Wrk2(rate=rate, dist=dist, connections=connections, duration=duration, threads=threads),
             payload_script=self.payload_script,
             url=f"{{placeholder}}/wrk2-api/post/compose",
         )

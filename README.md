@@ -24,12 +24,8 @@ Moreover, SREArena provides a built-in benchmark suite with a set of problems to
 - Python >= 3.12
 - [Helm](https://helm.sh/)
 - [brew](https://docs.brew.sh/Homebrew-and-Python)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
 
-Recommended installation:
-```bash
-brew install python@3.12 uv
-```
-https://github.com/astral-sh/uv
 We recommend [uv](https://github.com/astral-sh/uv) for managing dependencies. You can also use a standard `pip install -e .` to install the dependencies.
 
 ```bash

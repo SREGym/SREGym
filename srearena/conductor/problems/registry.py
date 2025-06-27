@@ -4,10 +4,12 @@ from srearena.conductor.problems.ad_service_manual_gc import AdServiceManualGc
 from srearena.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from srearena.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from srearena.conductor.problems.cart_service_failure import CartServiceFailure
+from srearena.conductor.problems.configmap_drift import ConfigMapDrift
 from srearena.conductor.problems.container_kill import ChaosMeshContainerKill
 from srearena.conductor.problems.image_slow_load import ImageSlowLoad
 from srearena.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from srearena.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
+from srearena.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from srearena.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
 from srearena.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from srearena.conductor.problems.missing_service import MissingService
@@ -18,6 +20,7 @@ from srearena.conductor.problems.payment_service_unreachable import PaymentServi
 from srearena.conductor.problems.pod_failure import ChaosMeshPodFailure
 from srearena.conductor.problems.pod_kill import ChaosMeshPodKill
 from srearena.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
+from srearena.conductor.problems.readiness_probe_misconfiguration import ReadinessProbeMisconfiguration
 from srearena.conductor.problems.recommendation_service_cache_failure import RecommendationServiceCacheFailure
 from srearena.conductor.problems.redeploy_without_pv import RedeployWithoutPV
 from srearena.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
@@ -26,6 +29,7 @@ from srearena.conductor.problems.scale_pod import ScalePodSocialNet
 from srearena.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from srearena.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from srearena.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
+from srearena.conductor.problems.env_variable_leak import EnvVariableLeak
 from srearena.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from srearena.conductor.problems.target_port import K8STargetPortMisconfig
 from srearena.conductor.problems.wrong_bin_usage import WrongBinUsage
@@ -112,6 +116,30 @@ class ProblemRegistry:
             ),
             "liveness_probe_too_aggressive_astronomy_shop": lambda: LivenessProbeTooAggressive(
                 app_name="astronomy_shop", faulty_service="grafana"
+            ),
+            "env_variable_leak_social_network": lambda: EnvVariableLeak(
+                app_name="social_network" , faulty_service="media-mongodb"
+            ),
+            "env_variable_leak_hotel_reservation": lambda: EnvVariableLeak(
+                app_name="hotel_reservation" , faulty_service="mongodb-geo"
+            "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
+            "readiness_probe_misconfiguration_astronomy_shop": lambda: ReadinessProbeMisconfiguration(
+                app_name="astronomy_shop", faulty_service="frontend"
+            ),
+            "readiness_probe_misconfiguration_social_network": lambda: ReadinessProbeMisconfiguration(
+                app_name="social_network", faulty_service="user-service"
+            ),
+            "readiness_probe_misconfiguration_hotel_reservation": lambda: ReadinessProbeMisconfiguration(
+                app_name="hotel_reservation", faulty_service="frontend"
+            ),
+            "liveness_probe_misconfiguration_astronomy_shop": lambda: LivenessProbeMisconfiguration(
+                app_name="astronomy_shop", faulty_service="frontend"
+            ),
+            "liveness_probe_misconfiguration_social_network": lambda: LivenessProbeMisconfiguration(
+                app_name="social_network", faulty_service="user-service"
+            ),
+            "liveness_probe_misconfiguration_hotel_reservation": lambda: LivenessProbeMisconfiguration(
+                app_name="hotel_reservation", faulty_service="recommendation"
             ),
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working

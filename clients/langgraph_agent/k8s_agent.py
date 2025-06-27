@@ -12,6 +12,7 @@ from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for
 from clients.langgraph_agent.state import State
 from clients.langgraph_agent.tools.basic_tool_node import BasicToolNode
 from clients.langgraph_agent.tools.jaeger_tools import *
+from clients.langgraph_agent.tools.prometheus_tools import *
 from clients.langgraph_agent.tools.text_editing.file_manip import create, edit, goto_line, insert, open_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -33,10 +34,12 @@ class XAgent:
         get_traces = GetTraces()
         get_services = GetServices()
         get_operations = GetOperations()
+        get_metrics = GetMetrics()
         self.observability_tools = [
             get_traces,
             get_services,
             get_operations,
+            get_metrics,
         ]
         self.file_editing_tools = [open_file, goto_line, create, edit, insert]
         self.llm = llm
@@ -61,7 +64,7 @@ class XAgent:
         print(f"[route tools] in route tools: {state}")
         logger.info("in route tools: %s", state)
         file_tool_names = ["open_file", "goto_line", "create", "edit", "insert"]
-        observability_tool_names = ["get_traces", "get_services", "get_operations"]
+        observability_tool_names = ["get_traces", "get_services", "get_operations", "get_metrics"]
         if isinstance(state, list):
             ai_message = state[-1]
         elif messages := state.get("messages", []):
