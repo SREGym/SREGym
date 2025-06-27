@@ -637,6 +637,44 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from sidecar port conflict fault for service: {service}")
 
+    # V.14 - Injects an environment variable leak by deleting a ConfigMap and restarting the associated deployment.
+    def inject_env_variable_leak(self, microservices: list[str]):
+        for microservice in microservices:
+            configmap_name = None
+            if self.namespace == "test-social-network":
+                configmap_name = "media-mongodb"
+            elif self.namespace == "test-hotel-reservation":
+                configmap_name = "mongo-geo-script"
+            else:
+                raise ValueError(f"Unknown namespace: {self.namespace}")  
+                          
+            get_cmd = f"kubectl get configmap {configmap_name} -n {self.namespace} -o yaml"
+            original_yaml = self.kubectl.exec_command(get_cmd)
+            parsed_yaml = yaml.safe_load(original_yaml)
+
+            self._write_yaml_to_file(microservice, parsed_yaml)
+
+            delete_cmd = f"kubectl delete configmap {configmap_name} -n {self.namespace}"
+            self.kubectl.exec_command(delete_cmd)
+            print(f"Deleted ConfigMap: {configmap_name}")
+
+            restart_cmd = f"kubectl rollout restart deployment {microservice} -n {self.namespace}"
+            self.kubectl.exec_command(restart_cmd)
+            print(f"Restarted pods to apply ConfigMap fault")
+
+    def recover_env_variable_leak(self, microservices: list[str]):
+        for microservice in microservices:
+            configmap_name = f"{microservice}"
+            backup_path = f"/tmp/{configmap_name}_modified.yaml"
+
+            apply_cmd = f"kubectl apply -f {backup_path} -n {self.namespace}"
+            self.kubectl.exec_command(apply_cmd)
+            print(f"Restored ConfigMap: {configmap_name}")
+
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {microservice} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl rollout status deployment {microservice} -n {self.namespace}")
+            print(f"Deployment {microservice} restarted and should now be healthy")
+
     # Inject ConfigMap drift by removing critical keys
     def inject_configmap_drift(self, microservices: list[str]):
 

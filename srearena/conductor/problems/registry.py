@@ -28,6 +28,7 @@ from srearena.conductor.problems.scale_pod import ScalePodSocialNet
 from srearena.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from srearena.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from srearena.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
+from srearena.conductor.problems.env_variable_leak import EnvVariableLeak
 from srearena.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from srearena.conductor.problems.target_port import K8STargetPortMisconfig
 from srearena.conductor.problems.wrong_bin_usage import WrongBinUsage
@@ -112,6 +113,11 @@ class ProblemRegistry:
             "sidecar_port_conflict_hotel_reservation": lambda: SidecarPortConflict(
                 app_name="hotel_reservation", faulty_service="frontend"
             ),
+            "env_variable_leak_social_network": lambda: EnvVariableLeak(
+                app_name="social_network" , faulty_service="media-mongodb"
+            ),
+            "env_variable_leak_hotel_reservation": lambda: EnvVariableLeak(
+                app_name="hotel_reservation" , faulty_service="mongodb-geo"
             "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
             "readiness_probe_misconfiguration_astronomy_shop": lambda: ReadinessProbeMisconfiguration(
                 app_name="astronomy_shop", faulty_service="frontend"
