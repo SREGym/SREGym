@@ -235,8 +235,9 @@ in the [`problems`](/srearena/conductor/problems) directory, as follows:
     from srearena.service.apps.myapp import MyApp
     from srearena.conductor.oracles.detection import DetectionOracle
     from srearena.conductor.oracles.localization import LocalizationOracle
-    from srearena.conductor.oracles.mitigation import MitigationOracle
+    from srearena.conductor.oracles.mitigation import MitigationOracle # or custom oracle
     from srearena.conductor.problems.base import Problem
+    from srearena.utils.decorators import mark_fault_injected
     ```
 
 2. **Define**. To define a problem, create a class that inherits from the `Problem` class, and defines 2 methods:, `inject_fault`, and `recover_fault`. Remember to setup your oracles as well!:
@@ -247,15 +248,15 @@ in the [`problems`](/srearena/conductor/problems) directory, as follows:
             self.app = MyApp()
             self.faulty_service # Used for localization, can be None or a list
             # === Attach evaluation oracles ===
-            self.detection_oracle = DetectionOracle(problem=self, expected="Yes")
-
             self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 
             self.mitigation_oracle = MitigationOracle(problem=self)
         
+        @mark_fault_injected
         def inject_fault(self)
             # <your fault injection logic here>
         
+        @mark_fault_injected
         def recover_fault(self):
             # <your fault recovery logic here>
     ```
