@@ -21,7 +21,7 @@ from srearena.conductor.problems.recommendation_service_cache_failure import Rec
 from srearena.conductor.problems.redeploy_without_pv import RedeployWithoutPV
 from srearena.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
 from srearena.conductor.problems.revoke_auth import MongoDBRevokeAuth
-from srearena.conductor.problems.scale_pod import ScalePodSocialNet
+from srearena.conductor.problems.scale_pod import ScalePod
 from srearena.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from srearena.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from srearena.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
@@ -37,12 +37,10 @@ class ProblemRegistry:
         self.PROBLEM_REGISTRY = {
             "k8s_target_port-misconfig": K8STargetPortMisconfig,
             "auth_miss_mongodb": MongoDBAuthMissing,
-            "revoke_auth_mongodb-1": lambda: MongoDBRevokeAuth(faulty_service="mongodb-geo"),
-            "revoke_auth_mongodb-2": lambda: MongoDBRevokeAuth(faulty_service="mongodb-rate"),
-            "storage_user_unregistered-1": lambda: MongoDBUserUnregistered(faulty_service="mongodb-geo"),
-            "storage_user_unregistered-2": lambda: MongoDBUserUnregistered(faulty_service="mongodb-rate"),
+            "revoke_auth_mongodb": MongoDBRevokeAuth,
+            "storage_user_unregistered": MongoDBUserUnregistered,
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
-            # "scale_pod_zero_social_net": ScalePodSocialNet,
+            "scale_pod": ScalePod,
             "assign_to_non_existent_node": AssignNonExistentNode,
             "chaos_mesh_container_kill": ChaosMeshContainerKill,
             "chaos_mesh_pod_failure": ChaosMeshPodFailure,

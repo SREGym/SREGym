@@ -10,24 +10,27 @@ from srearena.paths import TARGET_MICROSERVICES
 from srearena.service.apps.hotelres import HotelReservation
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
-
+import random
 
 class MongoDBRevokeAuth(Problem):
-    def __init__(self, faulty_service: str = "mongodb-geo"):
+    def __init__(self):
         self.app = HotelReservation()
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-        self.faulty_service = faulty_service
-        # NOTE: change the faulty service to mongodb-rate to create another scenario
-        # self.faulty_service = "mongodb-rate"
+
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
         super().__init__(app=self.app, namespace=self.app.namespace)
-        # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
 
         self.app.create_workload()
+
+    def decide_targeted_service(self):
+        possible_services = ["mongodb-geo", "mongodb-rate"]
+        self.faulty_service = random.choice(possible_services)
+
+        # === Attach evaluation oracles ===
+        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
         self.mitigation_oracle = CompoundedOracle(
             self,
             MitigationOracle(problem=self),

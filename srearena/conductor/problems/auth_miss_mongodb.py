@@ -16,17 +16,21 @@ class MongoDBAuthMissing(Problem):
         self.app = SocialNetwork()
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-        self.faulty_service = "url-shorten-mongodb"
+
         super().__init__(app=self.app, namespace=self.app.namespace)
-        # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 
         self.app.create_workload()
+    
+    def decide_targeted_service(self):
+        self.faulty_service = "url-shorten-mongodb"
+        # === Attach evaluation oracles ===
+        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
         self.mitigation_oracle = CompoundedOracle(
             self,
             MitigationOracle(problem=self),
             WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
         )
+
 
     @mark_fault_injected
     def inject_fault(self):

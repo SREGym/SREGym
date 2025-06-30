@@ -11,24 +11,24 @@ from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.service.apps.socialnet import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
+from srearena.utils.randomizer import Randomizer
 
-
-class ScalePodSocialNet(Problem):
+class ScalePod(Problem):
     def __init__(self):
-        # Faulty_service affects localization oracle as well!
-
-        self.app = SocialNetwork()
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
 
-        # Choose a very front service to test - this will directly cause an exception
-        # TODO: We should create more problems with this using different faulty services
-        # self.faulty_service = "nginx-thrift"
-        super().__init__(app=self.app, namespace=self.app.namespace)
-        # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.randomizer = Randomizer(self.kubectl)
+        app = self.randomizer.select_app()
+
+        super().__init__(app=app, namespace=app.namespace)
 
         self.app.create_workload()
+
+    def decide_targeted_service(self):
+        self.faulty_service = self.randomizer.select_service()
+
+        # === Attach evaluation oracles ===
+        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
         self.mitigation_oracle = CompoundedOracle(
             self,
             ScalePodZeroMitigationOracle(problem=self),
@@ -37,7 +37,7 @@ class ScalePodSocialNet(Problem):
 
     @mark_fault_injected
     def inject_fault(self):
-        self.faulty_service = select_random_service(self.kubectl, self.namespace)
+        self.faulty_service = self.randomizer.select_service()
 
         print("== Fault Injection ==")
         injector = VirtualizationFaultInjector(namespace=self.namespace)

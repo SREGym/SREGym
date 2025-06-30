@@ -16,9 +16,6 @@ from srearena.utils.randomizer import Randomizer
 class K8STargetPortMisconfig(Problem):
     def __init__(self):
         self.kubectl = KubeCtl()
-        self.faulty_service = None
-        self.localization_oracle = None
-        self.randomizable = True
 
         self.randomizer = Randomizer(self.kubectl)
         app = self.randomizer.select_app()
