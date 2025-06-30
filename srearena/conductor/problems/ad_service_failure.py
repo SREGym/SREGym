@@ -14,8 +14,11 @@ class AdServiceFailure(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
-        self.faulty_service = "ad"
         super().__init__(app=self.app, namespace=self.app.namespace)
+
+    def decide_targeted_service(self):
+        self.faulty_service = "ad"
+        
         # === Attach evaluation oracles ===
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 
