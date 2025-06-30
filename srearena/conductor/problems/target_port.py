@@ -26,17 +26,17 @@ class K8STargetPortMisconfig(Problem):
         super().__init__(app=app, namespace=app.namespace)
 
         self.app.create_workload()
+
+    def decide_targeted_service(self):
+        self.faulty_service = self.randomizer.select_service()
+
+        # === Attach evaluation oracles ===
+        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
         self.mitigation_oracle = CompoundedOracle(
             self,
             TargetPortMisconfigMitigationOracle(problem=self),
             WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
         )
-
-    def select_faulty_service(self):
-        self.faulty_service = self.randomizer.select_service()
-
-        # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 
     @mark_fault_injected
     def inject_fault(self):

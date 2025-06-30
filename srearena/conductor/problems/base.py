@@ -15,6 +15,10 @@ class Problem(ABC):
         self.mitigation_oracle = None
 
     @abstractmethod
+    def decide_targeted_service(self):
+        pass
+
+    @abstractmethod
     def inject_fault(self):
         pass
 

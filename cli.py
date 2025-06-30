@@ -114,7 +114,7 @@ class HumanAgent:
                     )
 
                     if input.lower() == "exit":
-                        raise SystemExit
+                        raise SystemExit from None
 
                     return input
             except (SystemExit, KeyboardInterrupt, EOFError):
