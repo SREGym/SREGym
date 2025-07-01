@@ -16,9 +16,7 @@ class MongoDBAuthMissing(Problem):
         self.app = SocialNetwork()
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-
         super().__init__(app=self.app, namespace=self.app.namespace)
-
         self.app.create_workload()
     
     def decide_targeted_service(self):
@@ -30,7 +28,6 @@ class MongoDBAuthMissing(Problem):
             MitigationOracle(problem=self),
             WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
         )
-
 
     @mark_fault_injected
     def inject_fault(self):

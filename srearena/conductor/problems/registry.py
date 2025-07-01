@@ -60,12 +60,8 @@ class ProblemRegistry:
             "astronomy_shop_recommendation_service_cache_failure": RecommendationServiceCacheFailure,
             "redeploy_without_PV": RedeployWithoutPV,
             "wrong_bin_usage": WrongBinUsage,
-            "missing_service_hotel_reservation": lambda: MissingService(
-                app_name="hotel_reservation", faulty_service="mongodb-rate"
-            ),
-            "missing_service_social_network": lambda: MissingService(
-                app_name="social_network", faulty_service="user-service"
-            ),
+            "missing_service_hotel_reservation": MissingService,
+            #here
             "resource_request_too_large": lambda: ResourceRequestTooLarge(
                 app_name="hotel_reservation", faulty_service="mongodb-rate"
             ),

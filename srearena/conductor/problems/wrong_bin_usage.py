@@ -13,20 +13,23 @@ from srearena.utils.decorators import mark_fault_injected
 
 
 class WrongBinUsage(Problem):
-    def __init__(self, faulty_service: str = "profile"):
+    def __init__(self):
         self.app = HotelReservation()
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-        self.faulty_service = faulty_service
 
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
         super().__init__(app=self.app, namespace=self.app.namespace)
-        # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
-
+    
         self.app.create_workload()
+
+    def decide_targeted_service(self):
+        self.faulty_service = "profile"
+
+        # === Attach evaluation oracles ===
+        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
         self.mitigation_oracle = CompoundedOracle(
             self,
             WrongBinMitigationOracle(problem=self),

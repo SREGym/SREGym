@@ -17,21 +17,24 @@ class ChaosMeshNetworkDelay(Problem):
         self.app = HotelReservation()
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-        self.faulty_service = "user"
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
         self.injector = SymptomFaultInjector(namespace=self.namespace)
         super().__init__(app=self.app, namespace=self.app.namespace)
-        # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 
         self.app.create_workload()
+    
+    def decide_targeted_service(self):
+        self.faulty_service = "user"
+        # === Attach evaluation oracles ===
+        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
         self.mitigation_oracle = CompoundedOracle(
             self,
             MitigationOracle(problem=self),
             WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
         )
+
 
     @mark_fault_injected
     def inject_fault(self):

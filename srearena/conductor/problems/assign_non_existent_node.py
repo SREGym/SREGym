@@ -11,19 +11,21 @@ from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.service.apps.socialnet import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
-
+from srearena.utils.randomizer import Randomizer
 
 class AssignNonExistentNode(Problem):
     def __init__(self):
-        self.app = SocialNetwork()
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
-        self.faulty_service = "user-service"
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        self.randomizer = Randomizer(kubectl=self.kubectl)
+        app = self.randomizer.select_app()
+        super().__init__(app=app, namespace=app.namespace)
+        self.app.create_workload()
+
+    def decide_targeted_service(self):
+        self.faulty_service = self.randomizer.select_service()
+
         # === Attach evaluation oracles ===
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
-
-        self.app.create_workload()
         self.mitigation_oracle = CompoundedOracle(
             self,
             AssignNonExistentNodeMitigationOracle(problem=self),

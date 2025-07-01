@@ -20,6 +20,13 @@ class RedeployWithoutPV(Problem):
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
+        
+        self.injector = VirtualizationFaultInjector(namespace=self.namespace)
+        super().__init__(app=self.app, namespace=self.app.namespace)
+
+        self.app.create_workload()
+
+    def decide_targeted_service(self):
         self.faulty_service = [
             "geo",
             "profile",
@@ -33,12 +40,9 @@ class RedeployWithoutPV(Problem):
             "mongodb-reservation",
             "mongodb-user",
         ]
-        self.injector = VirtualizationFaultInjector(namespace=self.namespace)
-        super().__init__(app=self.app, namespace=self.app.namespace)
+
         # === Attach evaluation oracles ===
         self.localization_oracle = LocalizationOracle(problem=self, expected=self.faulty_service)
-
-        self.app.create_workload()
         self.mitigation_oracle = CompoundedOracle(
             self,
             MitigationOracle(problem=self),
