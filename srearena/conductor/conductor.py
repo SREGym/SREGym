@@ -201,7 +201,7 @@ class Conductor:
         return self.results
 
     def exit_cleanup_and_recover_fault(self):
-        if self.problem:
+        if self.problem and self.problem.faulty_service:
             print("Recovering fault before exit...")
             try:
                 self.problem.recover_fault()

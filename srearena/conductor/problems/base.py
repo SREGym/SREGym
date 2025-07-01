@@ -9,6 +9,7 @@ class Problem(ABC):
         self.namespace = namespace
         self.fault_injected = False
         self.results = {}
+        self.faulty_service = None
 
         # Optional: attach oracles in subclass
         self.localization_oracle = None
