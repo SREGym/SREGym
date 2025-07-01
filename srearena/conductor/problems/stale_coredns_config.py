@@ -9,29 +9,20 @@ from srearena.service.apps.hotelres import HotelReservation
 from srearena.service.apps.socialnet import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
-
+from srearena.utils.randomizer import Randomizer
 
 class StaleCoreDNSConfig(Problem):
-    def __init__(self, app_name="astronomy_shop"):
-        self.app_name = app_name
-        self.faulty_service = None
-
-        if app_name == "social_network":
-            self.app = SocialNetwork()
-        elif app_name == "hotel_reservation":
-            self.app = HotelReservation()
-        elif app_name == "astronomy_shop":
-            self.app = AstronomyShop()
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
-
-        super().__init__(app=self.app, namespace=self.app.namespace)
-
+    def __init__(self):
         self.kubectl = KubeCtl()
-
-        self.localization_oracle = LocalizationOracle(problem=self, expected=["coredns"])
-
+        self.randomizer = Randomizer(kubectl=self.kubectl)
+        app = self.randomizer.select_app()
+        super().__init__(app=app, namespace=app.namespace)
         self.app.create_workload()
+
+    def decide_targeted_service(self):
+        self.faulty_service = None
+        
+        self.localization_oracle = LocalizationOracle(problem=self, expected=["coredns"])
         self.mitigation_oracle = CompoundedOracle(
             self,
             DNSResolutionMitigationOracle(problem=self),

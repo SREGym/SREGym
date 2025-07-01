@@ -4,33 +4,22 @@ from srearena.conductor.oracles.mitigation import MitigationOracle
 from srearena.conductor.oracles.workload import WorkloadOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
-from srearena.service.apps.astronomy_shop import AstronomyShop
-from srearena.service.apps.hotelres import HotelReservation
-from srearena.service.apps.socialnet import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
-
+from srearena.utils.randomizer import Randomizer
 
 class SidecarPortConflict(Problem):
-    def __init__(self, app_name: str = "astronomy_shop", faulty_service: str = "frontend"):
-        self.app_name = app_name
-        self.faulty_service = faulty_service
-
-        if app_name == "social_network":
-            self.app = SocialNetwork()
-        elif app_name == "hotel_reservation":
-            self.app = HotelReservation()
-        elif app_name == "astronomy_shop":
-            self.app = AstronomyShop()
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
-
-        super().__init__(app=self.app, namespace=self.app.namespace)
-
+    def __init__(self):
         self.kubectl = KubeCtl()
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
-
+        self.randomizer = Randomizer(kubectl=self.kubectl)
+        app = self.randomizer.select_app()
+        super().__init__(app=app, namespace=app.namespace)
         self.app.create_workload()
+
+    def decide_targeted_service(self):
+        self.faulty_service = self.randomizer.select_service()
+        
+        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
         self.mitigation_oracle = CompoundedOracle(
             self,
             MitigationOracle(problem=self),

@@ -60,49 +60,14 @@ class ProblemRegistry:
             "astronomy_shop_recommendation_service_cache_failure": RecommendationServiceCacheFailure,
             "redeploy_without_PV": RedeployWithoutPV,
             "wrong_bin_usage": WrongBinUsage,
-            "missing_service_hotel_reservation": MissingService,
-            #here
-            "resource_request_too_large": lambda: ResourceRequestTooLarge(
-                app_name="hotel_reservation", faulty_service="mongodb-rate"
-            ),
-            "resource_request_too_small": lambda: ResourceRequestTooSmall(
-                app_name="hotel_reservation", faulty_service="mongodb-rate"
-            ),
-            "wrong_service_selector_astronomy_shop": lambda: WrongServiceSelector(
-                app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "wrong_service_selector_hotel_reservation": lambda: WrongServiceSelector(
-                app_name="hotel_reservation", faulty_service="frontend"
-            ),
-            "wrong_service_selector_social_network": lambda: WrongServiceSelector(
-                app_name="social_network", faulty_service="user-service"
-            ),
-            "service_dns_resolution_failure_astronomy_shop": lambda: ServiceDNSResolutionFailure(
-                app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "service_dns_resolution_failure_social_network": lambda: ServiceDNSResolutionFailure(
-                app_name="social_network", faulty_service="user-service"
-            ),
-            "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(
-                app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "wrong_dns_policy_social_network": lambda: WrongDNSPolicy(
-                app_name="social_network", faulty_service="user-service"
-            ),
-            "wrong_dns_policy_hotel_reservation": lambda: WrongDNSPolicy(
-                app_name="hotel_reservation", faulty_service="profile"
-            ),
-            "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
-            "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
-            "sidecar_port_conflict_astronomy_shop": lambda: SidecarPortConflict(
-                app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "sidecar_port_conflict_social_network": lambda: SidecarPortConflict(
-                app_name="social_network", faulty_service="user-service"
-            ),
-            "sidecar_port_conflict_hotel_reservation": lambda: SidecarPortConflict(
-                app_name="hotel_reservation", faulty_service="frontend"
-            ),
+            "missing_service": MissingService,
+            "resource_request_too_large": ResourceRequestTooLarge,
+            "resource_request_too_small": ResourceRequestTooSmall,
+            "wrong_service_selector": WrongServiceSelector,
+            "service_dns_resolution_failure": ServiceDNSResolutionFailure,
+            "wrong_dns_policy": WrongDNSPolicy,
+            "stale_coredns_config": StaleCoreDNSConfig,
+            "sidecar_port_conflict": SidecarPortConflict,
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.
