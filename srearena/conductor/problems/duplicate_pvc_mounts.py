@@ -36,7 +36,7 @@ class DuplicatePVCMounts(Problem):
         self.mitigation_oracle = CompoundedOracle(
             self,
             SustainedReadinessOracle(problem=self, buffer_period=20, sustained_period=30),
-            # WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
+            WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
         )
 
     @mark_fault_injected
