@@ -89,7 +89,7 @@ class HotelReservation(Application):
     def cleanup(self):
         """Delete the entire namespace for the hotel reservation application."""
         self.kubectl.delete_namespace(self.namespace)
-        time.sleep(10)
+        self.kubectl.wait_for_namespace_deletion(self.namespace)
         pvs = self.kubectl.exec_command(
             "kubectl get pv --no-headers | grep 'test-hotel-reservation' | awk '{print $1}'"
         ).splitlines()
@@ -122,9 +122,9 @@ class HotelReservation(Application):
         with open(file_path, "r") as file:
             return file.read()
 
-    def create_workload(self):
+    def create_workload(self, rate: int = 100, dist: str = "exp", connections: int = 3, duration: int = 10, threads: int = 3):
         self.wrk = Wrk2WorkloadManager(
-            wrk=Wrk2(rate=100, dist="exp", connections=3, duration=10, threads=3),
+            wrk=Wrk2(rate=rate, dist=dist, connections=connections, duration=duration, threads=threads),
             payload_script=self.payload_script,
             url=f"{{placeholder}}",
         )

@@ -4,9 +4,13 @@ from srearena.conductor.problems.ad_service_manual_gc import AdServiceManualGc
 from srearena.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from srearena.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from srearena.conductor.problems.cart_service_failure import CartServiceFailure
+from srearena.conductor.problems.configmap_drift import ConfigMapDrift
 from srearena.conductor.problems.container_kill import ChaosMeshContainerKill
+from srearena.conductor.problems.env_variable_leak import EnvVariableLeak
 from srearena.conductor.problems.image_slow_load import ImageSlowLoad
 from srearena.conductor.problems.kafka_queue_problems import KafkaQueueProblems
+from srearena.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
+from srearena.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from srearena.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
 from srearena.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from srearena.conductor.problems.missing_service import MissingService
@@ -17,6 +21,7 @@ from srearena.conductor.problems.payment_service_unreachable import PaymentServi
 from srearena.conductor.problems.pod_failure import ChaosMeshPodFailure
 from srearena.conductor.problems.pod_kill import ChaosMeshPodKill
 from srearena.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
+from srearena.conductor.problems.readiness_probe_misconfiguration import ReadinessProbeMisconfiguration
 from srearena.conductor.problems.recommendation_service_cache_failure import RecommendationServiceCacheFailure
 from srearena.conductor.problems.redeploy_without_pv import RedeployWithoutPV
 from srearena.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
@@ -30,6 +35,7 @@ from srearena.conductor.problems.target_port import K8STargetPortMisconfig
 from srearena.conductor.problems.wrong_bin_usage import WrongBinUsage
 from srearena.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from srearena.conductor.problems.wrong_service_selector import WrongServiceSelector
+from srearena.conductor.problems.taint_no_toleration import TaintNoToleration
 
 
 class ProblemRegistry:
@@ -60,6 +66,7 @@ class ProblemRegistry:
             "astronomy_shop_recommendation_service_cache_failure": RecommendationServiceCacheFailure,
             "redeploy_without_PV": RedeployWithoutPV,
             "wrong_bin_usage": WrongBinUsage,
+            "taint_no_toleration": TaintNoToleration,
             "missing_service": MissingService,
             "resource_request_too_large": ResourceRequestTooLarge,
             "resource_request_too_small": ResourceRequestTooSmall,
@@ -68,6 +75,11 @@ class ProblemRegistry:
             "wrong_dns_policy": WrongDNSPolicy,
             "stale_coredns_config": StaleCoreDNSConfig,
             "sidecar_port_conflict": SidecarPortConflict,
+            "env_variable_leak": EnvVariableLeak,
+            "configmap_drift_hotel_reservation": ConfigMapDrift,
+            "readiness_probe_misconfiguration": ReadinessProbeMisconfiguration,
+            "liveness_probe_misconfiguration": LivenessProbeMisconfiguration,
+            "liveness_probe_too_aggressive": LivenessProbeTooAggressive,
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.

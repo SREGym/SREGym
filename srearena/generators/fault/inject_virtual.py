@@ -1,6 +1,8 @@
 """Inject faults at the virtualization layer: K8S, Docker, etc."""
 
 import copy
+from pathlib import Path
+import json
 import time
 
 import yaml
@@ -636,6 +638,311 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from sidecar port conflict fault for service: {service}")
 
+    # Inject a liveness probe too aggressive fault
+    def inject_liveness_probe_too_aggressive(self, microservices: list[str]):
+        for service in microservices:
+
+            script_path = Path(__file__).parent / "custom" / f"slow_service.py"
+            self.deploy_custom_service(service, script_path)
+
+            deployment_yaml = self._get_deployment_yaml(service)
+            original_deployment_yaml = copy.deepcopy(deployment_yaml)
+
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+
+            for container in containers:
+                probe = container.get("livenessProbe")
+                if probe:
+                    probe["initialDelaySeconds"] = 0
+                    probe["periodSeconds"] = 1
+                    probe["failureThreshold"] = 1
+
+            deployment_yaml["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] = 0
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            # Save the *original* deployment YAML for recovery
+            self._write_yaml_to_file(service, original_deployment_yaml)
+
+            self.kubectl.wait_for_stable(self.namespace)
+
+            print(f"Injected liveness probe too aggressive fault for service: {service}")
+
+    def recover_liveness_probe_too_aggressive(self, microservices: list[str]):
+        for service in microservices:
+            original_yaml_path = f"/tmp/{service}_modified.yaml"
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            self.kubectl.wait_for_ready(self.namespace)
+
+            print(f"Recovered from liveness probe too aggressive fault for service: {service}")
+    # V.14 - Injects an environment variable leak by deleting a ConfigMap and restarting the associated deployment.
+    def inject_env_variable_leak(self, microservices: list[str]):
+        for microservice in microservices:
+            configmap_name = None
+            if self.namespace == "test-social-network":
+                configmap_name = "media-mongodb"
+            elif self.namespace == "test-hotel-reservation":
+                configmap_name = "mongo-geo-script"
+            else:
+                raise ValueError(f"Unknown namespace: {self.namespace}")  
+                          
+            get_cmd = f"kubectl get configmap {configmap_name} -n {self.namespace} -o yaml"
+            original_yaml = self.kubectl.exec_command(get_cmd)
+            parsed_yaml = yaml.safe_load(original_yaml)
+
+            self._write_yaml_to_file(microservice, parsed_yaml)
+
+            delete_cmd = f"kubectl delete configmap {configmap_name} -n {self.namespace}"
+            self.kubectl.exec_command(delete_cmd)
+            print(f"Deleted ConfigMap: {configmap_name}")
+
+            restart_cmd = f"kubectl rollout restart deployment {microservice} -n {self.namespace}"
+            self.kubectl.exec_command(restart_cmd)
+            print(f"Restarted pods to apply ConfigMap fault")
+
+    def recover_env_variable_leak(self, microservices: list[str]):
+        for microservice in microservices:
+            configmap_name = f"{microservice}"
+            backup_path = f"/tmp/{configmap_name}_modified.yaml"
+
+            apply_cmd = f"kubectl apply -f {backup_path} -n {self.namespace}"
+            self.kubectl.exec_command(apply_cmd)
+            print(f"Restored ConfigMap: {configmap_name}")
+
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {microservice} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl rollout status deployment {microservice} -n {self.namespace}")
+            print(f"Deployment {microservice} restarted and should now be healthy")
+
+    # Inject ConfigMap drift by removing critical keys
+    def inject_configmap_drift(self, microservices: list[str]):
+
+        for service in microservices:
+
+            # Read the actual config.json from the running pod
+            read_config_cmd = f"kubectl exec deployment/{service} -n {self.namespace} -- cat /go/src/github.com/harlow/go-micro-services/config.json"
+            config_json_str = self.kubectl.exec_command(read_config_cmd)
+            original_config = json.loads(config_json_str)
+            print(f"Read original config from {service} pod")
+
+            # Save the original config to a file for recovery
+            original_config_path = f"/tmp/{service}-original-config.json"
+            with open(original_config_path, "w") as f:
+                json.dump(original_config, f, indent=2)
+            print(f"Saved original config to {original_config_path}")
+
+            fault_config = copy.deepcopy(original_config)
+            key_to_remove = None
+
+            if service == "geo" and "GeoMongoAddress" in fault_config:
+                del fault_config["GeoMongoAddress"]
+                key_to_remove = "GeoMongoAddress"
+            else:
+                print(f"Service {service} not supported for ConfigMap drift fault")
+                continue
+
+            configmap_name = f"{service}-config"
+            fault_config_json = json.dumps(fault_config, indent=2)
+
+            create_cm_cmd = f"""kubectl create configmap {configmap_name} -n {self.namespace} --from-literal=config.json='{fault_config_json}' --dry-run=client -o yaml | kubectl apply -f -"""
+            self.kubectl.exec_command(create_cm_cmd)
+            print(f"Created ConfigMap {configmap_name} with {key_to_remove} removed")
+
+            json_patch = [
+                {
+                    "op": "add",
+                    "path": "/spec/template/spec/volumes/-",
+                    "value": {"name": "config-volume", "configMap": {"name": configmap_name}},
+                },
+                {
+                    "op": "add",
+                    "path": "/spec/template/spec/containers/0/volumeMounts/-",
+                    "value": {
+                        "name": "config-volume",
+                        "mountPath": "/go/src/github.com/harlow/go-micro-services/config.json",
+                        "subPath": "config.json",
+                    },
+                },
+            ]
+
+            # Check if volumes array exists, if not create it
+            check_volumes_cmd = (
+                f"kubectl get deployment {service} -n {self.namespace} -o jsonpath='{{.spec.template.spec.volumes}}'"
+            )
+            volumes_exist = self.kubectl.exec_command(check_volumes_cmd).strip()
+
+            if not volumes_exist or volumes_exist == "[]":
+                # Need to create the volumes array first
+                json_patch[0]["op"] = "add"
+                json_patch[0]["path"] = "/spec/template/spec/volumes"
+                json_patch[0]["value"] = [json_patch[0]["value"]]
+
+            # Check if volumeMounts array exists
+            check_mounts_cmd = f"kubectl get deployment {service} -n {self.namespace} -o jsonpath='{{.spec.template.spec.containers[0].volumeMounts}}'"
+            mounts_exist = self.kubectl.exec_command(check_mounts_cmd).strip()
+
+            if not mounts_exist or mounts_exist == "[]":
+                # Need to create the volumeMounts array first
+                json_patch[1]["op"] = "add"
+                json_patch[1]["path"] = "/spec/template/spec/containers/0/volumeMounts"
+                json_patch[1]["value"] = [json_patch[1]["value"]]
+
+            patch_json_str = json.dumps(json_patch)
+            patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} --type='json' -p='{patch_json_str}'"
+            patch_result = self.kubectl.exec_command(patch_cmd)
+            print(f"Patch result for {service}: {patch_result}")
+
+            self.kubectl.exec_command(f"kubectl rollout status deployment/{service} -n {self.namespace} --timeout=30s")
+
+            print(f"Injected ConfigMap drift fault for service: {service} - removed {key_to_remove}")
+
+    def recover_configmap_drift(self, microservices: list[str]):
+
+        for service in microservices:
+            # Use the same ConfigMap name as in injection
+            configmap_name = f"{service}-config"
+
+            # Read the saved original config instead of trying to read from the pod
+            original_config_path = f"/tmp/{service}-original-config.json"
+            with open(original_config_path, "r") as f:
+                original_config = json.load(f)
+            print(f"Read original config from saved file: {original_config_path}")
+
+            original_config_json = json.dumps(original_config, indent=2)
+            update_cm_cmd = f"""kubectl create configmap {configmap_name} -n {self.namespace} --from-literal=config.json='{original_config_json}' --dry-run=client -o yaml | kubectl apply -f -"""
+            self.kubectl.exec_command(update_cm_cmd)
+            print(f"Updated ConfigMap {configmap_name} with complete configuration")
+
+            self.kubectl.exec_command(f"kubectl rollout restart deployment/{service} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl rollout status deployment/{service} -n {self.namespace} --timeout=30s")
+
+            print(f"Recovered ConfigMap drift fault for service: {service}")
+    
+    # V.14 - Inject a readiness probe misconfiguration fault
+    def inject_readiness_probe_misconfiguration(self, microservices: list[str]):
+        for service in microservices:
+
+            deployment_yaml = self._get_deployment_yaml(service)
+            original_deployment_yaml = copy.deepcopy(deployment_yaml)
+
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            
+            initial_delay = 10
+
+            for container in containers:
+                container["readinessProbe"] = {
+                    "httpGet": {"path": f"/healthz", "port": 8080},
+                    "initialDelaySeconds": initial_delay,
+                    "periodSeconds": 10,
+                    "failureThreshold": 1,
+                }
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            # Save the *original* deployment YAML for recovery
+            self._write_yaml_to_file(service, original_deployment_yaml)
+
+            print(f"Injected readiness probe misconfiguration fault for service: {service}")
+
+    def recover_readiness_probe_misconfiguration(self, microservices: list[str]):
+        for service in microservices:
+
+            original_yaml_path = f"/tmp/{service}_modified.yaml"
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            self.kubectl.wait_for_ready(self.namespace)
+
+            print(f"Recovered from readiness probe misconfiguration fault for service: {service}")
+
+    # V.15 - Inject a liveness probe misconfiguration fault
+    def inject_liveness_probe_misconfiguration(self, microservices: list[str]):
+        for service in microservices:
+
+            deployment_yaml = self._get_deployment_yaml(service)
+            original_deployment_yaml = copy.deepcopy(deployment_yaml)
+
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            initial_delay = 10
+
+            for container in containers:
+                container["livenessProbe"] = {
+                    "httpGet": {"path": f"/healthz", "port": 8080},
+                    "initialDelaySeconds": initial_delay,
+                    "periodSeconds": 10,
+                    "failureThreshold": 1,
+                }
+
+            # Set terminationGracePeriodSeconds at the pod template spec level (not inside a container spec)
+            deployment_yaml["spec"]["template"]["spec"]["terminationGracePeriodSeconds"] = 0
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            # Save the *original* deployment YAML for recovery
+            self._write_yaml_to_file(service, original_deployment_yaml)
+
+            
+            print(f"Injected liveness probe misconfiguration fault for service: {service}")
+
+    def recover_liveness_probe_misconfiguration(self, microservices: list[str]):
+        for service in microservices:
+            original_yaml_path = f"/tmp/{service}_modified.yaml"
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            self.kubectl.wait_for_ready(self.namespace)
+
+            print(f"Recovered from liveness probe misconfiguration fault for service: {service}")
+
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
@@ -748,7 +1055,150 @@ class VirtualizationFaultInjector(FaultInjector):
             waited += sleep
 
         print(f"DNS policy propagation check for service '{service}' failed after {max_wait}s.")
+    
+    def deploy_custom_service(self, service_name: str, script_path: str):
+        print(f"Deploying {service_name} Service...................................")
+        import tempfile
+        import yaml
 
+        with open(script_path, "r") as sf:
+            script_body = sf.read()
+
+        script_filename = "service.py"
+
+        configmap = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": f"{service_name}-script",
+                "namespace": self.namespace,
+            },
+            "data": {script_filename: script_body},
+        }
+
+        self.kubectl.exec_command(
+            f"kubectl apply -f - <<'CM'\n{yaml.dump(configmap)}\nCM"
+        )
+
+        deployment = {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {
+                "name": service_name,
+                "namespace": self.namespace,
+                "labels": {"app": service_name},
+            },
+            "spec": {
+                "replicas": 1,
+                "selector": {"matchLabels": {"app": service_name}},
+                "template": {
+                    "metadata": {"labels": {"app": service_name}},
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": f"{service_name}-container",
+                                "image": "python:3.9-slim",
+                                "command": ["python", "/app/service.py"],
+                                "ports": [{"containerPort": 8080, "name": "http"}],
+                                "volumeMounts": [
+                                    {
+                                        "name": "script-vol",
+                                        "mountPath": "/app/service.py",
+                                        "subPath": "service.py",
+                                    }
+                                ],
+                                "livenessProbe": {
+                                    "httpGet": {"path": "/health", "port": 8080},
+                                    "initialDelaySeconds": 60,
+                                    "periodSeconds": 10,
+                                    "failureThreshold": 3,
+                                },
+                                "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}},
+                            }
+                        ],
+                        "volumes": [
+                            {
+                                "name": "script-vol",
+                                "configMap": {"name": f"{service_name}-script"},
+                            }
+                        ]
+                    },
+                },
+            },
+        }
+
+        service = {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": service_name,
+                "namespace": self.namespace,
+                "labels": {"app": service_name},
+            },
+            "spec": {
+                "selector": {"app": service_name},
+                "ports": [
+                    {
+                        "port": 8080,
+                        "targetPort": 8080,
+                        "protocol": "TCP",
+                        "name": "http",
+                    }
+                ],
+                "type": "ClusterIP",
+            },
+        }
+
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
+            yaml.dump_all([deployment, service], tmp)
+            tmp_path = tmp.name
+
+        self.kubectl.exec_command(f"kubectl apply -f {tmp_path}")
+        self.kubectl.wait_for_ready(namespace=self.namespace)
+        
+        print(f"Deployed {service_name} Service...................................")
+
+    def inject_toleration_without_matching_taint(
+        self,
+        microservices: list[str],
+        node_name: str,
+        taint_key: str = "sre-fault",
+        taint_value: str = "blocked",
+        effect: str = "NoSchedule",
+    ):
+
+        self.kubectl.exec_command(
+            f"kubectl taint node {node_name} {taint_key}={taint_value}:{effect} --overwrite"
+        )
+        print(f"Tainted node {node_name} with {taint_key}={taint_value}:{effect}")
+
+        for svc in microservices:
+            self.kubectl.exec_command(
+                f"kubectl delete pod -l app={svc} -n {self.namespace}"
+            )
+        print(f"Deleted pods for {microservices}; they should now be unschedulable.")
+
+
+    def recover_toleration_without_matching_taint(
+        self,
+        microservices: list[str],
+        node_name: str,
+        taint_key: str = "sre-fault",
+        taint_value: str = "blocked",
+        effect: str = "NoSchedule",
+    ):
+
+        self.kubectl.exec_command(
+            f"kubectl taint node {node_name} {taint_key}={taint_value}:{effect}-"
+        )
+        print(f"Removed taint from node {node_name}")
+
+        for svc in microservices:
+            self.kubectl.exec_command(
+                f"kubectl rollout restart deployment {svc} -n {self.namespace}"
+            )
+        self.kubectl.wait_for_stable(self.namespace)
+        print(f"Pods for {microservices} are back to Running")
 
 if __name__ == "__main__":
     namespace = "test-social-network"

@@ -31,7 +31,7 @@ class TrainTicket(Application):
         """Delete the Helm configurations."""
         # Helm.uninstall(**self.helm_configs) # Don't helm uninstall until cleanup job is fixed on train-ticket
         self.kubectl.delete_namespace(self.namespace)
-        time.sleep(30)
+        self.kubectl.wait_for_namespace_deletion(self.namespace)
 
     def cleanup(self):
         # Helm.uninstall(**self.helm_configs)
