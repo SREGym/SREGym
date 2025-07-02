@@ -98,6 +98,6 @@ class LiteLLMBackend:
         #   if the model decides to do function calling
         # TODO: check how does function call looks like in langchain
 
-        completion = llm.invoke(input=messages)
+        completion = llm.invoke(input=prompt_messages)
         logger.info(f"llm response: {completion}")
         return completion

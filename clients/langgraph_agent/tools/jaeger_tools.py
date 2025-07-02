@@ -9,6 +9,8 @@ from langchain_core.tools.base import ArgsSchema, BaseTool
 from mcp import ClientSession, StdioServerParameters, stdio_client
 from mcp.client.sse import sse_client
 from pydantic import BaseModel, Field
+from langchain_core.messages import  HumanMessage, SystemMessage
+
 from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
 
 USE_HTTP = True
@@ -29,6 +31,8 @@ class GetTraces(BaseTool):
 
 
     def _summarize_traces(self, traces):
+        logger.info("=== _summarize_traces called ===")
+
         system_prompt = """
         You are a tool for a Site Reliability Engineering team. Currently, the team faces an incident in the cluster and needs to fix it ASAP.
             Your job is to analyze and summarize given microservice traces, given in format of dictionaries.
@@ -40,12 +44,18 @@ class GetTraces(BaseTool):
             SERVICE NAME: <insert service name>
             SUMMARY: <insert summary of traces>
 
+            STRICTLY FOLLOW THIS FORMAT
             """
         logger.info(f"raw traces received: {traces}")
         llm = get_llm_backend_for_tools()
-        traces_summary = llm.inference(messages=traces.content[0].text, system_prompt=system_prompt)
+        messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=traces.content[0].text),
+        ]
+
+        traces_summary =  llm.inference(messages=messages)
         logger.info(f"Traces summary: {traces_summary}")
-        return traces_summary
+        return traces_summary 
 
     def _run(
         self,
@@ -104,7 +114,7 @@ class GetTraces(BaseTool):
         )
         await exit_stack.aclose()
         summary = self._summarize_traces(result)
-        return summary
+        return summary 
 
 
 class GetServices(BaseTool):
@@ -221,22 +231,4 @@ class GetOperations(BaseTool):
         return summary
 
 
-def _summarize_traces(self, traces):
-    system_prompt = """
-    You are a tool for a Site Reliability Engineering team. Currently, the team faces an incident in the cluster and needs to fix it ASAP.
-        Your job is to analyze and summarize given microservice traces, given in format of dictionaries.
-        Read the given traces. Summarize the traces. Analyze what could be the root cause of the incident.
-        Be succinct and concise. Include important traces that reflects the root cause of the incident in format of raw traces as strings, no need to prettify the json.
-        DO NOT truncate the traces.
 
-        Return your response in this format:
-        SERVICE NAME: <insert service name>
-        SUMMARY: <insert summary of traces>
-
-        """
-    logger.info(f"raw traces received: {traces}")
-    llm = get_llm_backend_for_tools()
-        # then use this `llm` for inference 
-    traces_summary = llm.inference(messages=traces.content[0].text, system_prompt=system_prompt)
-    logger.info(f"Traces summary: {traces_summary}")
-    return traces_summary

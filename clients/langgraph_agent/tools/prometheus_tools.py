@@ -9,6 +9,8 @@ from langchain_core.tools.base import ArgsSchema, BaseTool
 from mcp import ClientSession, StdioServerParameters, stdio_client
 from mcp.client.sse import sse_client
 from pydantic import BaseModel, Field
+from langchain_core.messages import  HumanMessage, SystemMessage
+
 from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
 
 
@@ -31,22 +33,44 @@ class GetMetrics(BaseTool):
     args_schema: Optional[ArgsSchema] = GetMetricsInput
 
     def _summarize_metrics(self, metrics):
+        logger.info("=== _summarize_metrics called ===")
+
         system_prompt = """
-        You are a tool for a Site Reliability Engineering team. Currently, the team faces an incident in the cluster and needs to fix it ASAP.
-            Your job is to analyze and summarize given microservice metrics, given in format of dictionaries.
-            Read the given metrics. Summarize the metrics. Analyze what could be the root cause of the incident.
-            Be succinct and concise. Include important metrics that reflects the root cause of the incident in format of raw metrics as strings, no need to prettify the json.
-            DO NOT truncate the metrics.
+You are an expert Site Reliability Engineering tool. You are given raw microservice metrics as JSON dictionaries.
 
-            Return your response in this format:
-            SERVICE NAME: <insert service name>
-            SUMMARY: <insert summary of metrics>
+Your task:
 
-            """
+1. Parse the raw metrics to identify potential root causes for incidents.
+2. Summarize the metrics succinctly.
+3. Provide raw metrics data as strings (do not explain them generically).
+4. Use the following output format STRICTLY:
+
+SERVICE NAME: <insert service name from metric>
+SUMMARY:
+<summary of metrics, possible root cause, and raw metrics as string>
+
+Example:
+
+SERVICE NAME: auth-service
+SUMMARY:
+High CPU usage detected (90%+), memory usage stable. Possible cause: infinite loop in request handler.
+
+Raw metrics:
+{"cpu_usage": "95", "memory_usage": "512MB"}
+
+If you do not have enough data to determine root cause, state 'Insufficient data to determine root cause' and provide raw metrics.
+"""
+
         logger.info(f"raw traces received: {metrics}")
         llm = get_llm_backend_for_tools()
         # then use this `llm` for inference
-        metrics_summary = llm.inference(messages=metrics.content[0].text, system_prompt=system_prompt)
+        messages = [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=metrics.content[0].text),
+        ]
+
+        metrics_summary =  llm.inference(messages=messages)
+        #metrics_summary = llm.inference(messages=metrics.content[0].text, system_prompt=system_prompt)
         logger.info(f"Traces summary: {metrics_summary}")
         return metrics_summary
 
@@ -60,7 +84,8 @@ class GetMetrics(BaseTool):
         server_name = "prometheus"
         if USE_HTTP:
             logger.info("Using HTTP, connecting to server.")
-            server_url = "http://127.0.0.1:9953/sse"
+           #server_url = "http://127.0.0.1:9953/sse"
+            server_url = "http://127.0.0.1:8000/sse"
             # Register both the SSE client and session with an async exit stack so they will automatically clean up when you're done (e.g. close connections properly
 
             # opens the actual communication channel to the MCP server
