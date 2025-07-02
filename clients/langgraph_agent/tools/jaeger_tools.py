@@ -5,11 +5,11 @@ from contextlib import AsyncExitStack
 from typing import Optional
 
 from langchain_core.callbacks import CallbackManagerForToolRun
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools.base import ArgsSchema, BaseTool
 from mcp import ClientSession, StdioServerParameters, stdio_client
 from mcp.client.sse import sse_client
 from pydantic import BaseModel, Field
-from langchain_core.messages import  HumanMessage, SystemMessage
 
 from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
 
@@ -28,7 +28,6 @@ class GetTraces(BaseTool):
     name: str = "get_traces"
     description: str = "get traces of last n minutes from jaeger by service and operation"
     args_schema: Optional[ArgsSchema] = GetTracesInput
-
 
     def _summarize_traces(self, traces):
         logger.info("=== _summarize_traces called ===")
@@ -49,17 +48,17 @@ class GetTraces(BaseTool):
         logger.info(f"raw traces received: {traces}")
         llm = get_llm_backend_for_tools()
         messages = [
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=traces.content[0].text),
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=traces.content[0].text),
         ]
 
-        traces_summary =  llm.inference(messages=messages)
+        traces_summary = llm.inference(messages=messages)
         logger.info(f"Traces summary: {traces_summary}")
-        return traces_summary 
+        return traces_summary
 
     def _run(
         self,
-        service: str,                                   
+        service: str,
         last_n_minutes: int,
         run_manager: Optional[CallbackManagerForToolRun] = None,
     ) -> str:
@@ -114,7 +113,7 @@ class GetTraces(BaseTool):
         )
         await exit_stack.aclose()
         summary = self._summarize_traces(result)
-        return summary 
+        return summary
 
 
 class GetServices(BaseTool):
@@ -226,9 +225,5 @@ class GetOperations(BaseTool):
             arguments={"service": service},
         )
 
-        summary = self._summarize_traces(result)
         await exit_stack.aclose()
-        return summary
-
-
-
+        return result
