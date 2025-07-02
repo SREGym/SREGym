@@ -6,9 +6,9 @@ import time
 
 try:
     from kubernetes import client, config
-except ModuleNotFoundError as e: 
+except ModuleNotFoundError as e:
     print("Your Kubeconfig is missing. Please set up a cluster.")
-    exit(1) 
+    exit(1)
 from kubernetes.client.rest import ApiException
 from rich.console import Console
 
@@ -71,7 +71,7 @@ class KubeCtl:
         """Fetch the deployment configuration."""
         return self.apps_v1_api.read_namespaced_deployment(name, namespace)
 
-    def wait_for_ready(self, namespace, sleep=2, max_wait=300):
+    def wait_for_ready(self, namespace, sleep=2, max_wait=500):
         """Wait for all pods in a namespace to be in a Ready state before proceeding."""
 
         console = Console()
