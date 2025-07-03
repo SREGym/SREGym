@@ -5,10 +5,13 @@ from contextlib import AsyncExitStack
 from typing import Optional
 
 from langchain_core.callbacks import CallbackManagerForToolRun
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools.base import ArgsSchema, BaseTool
 from mcp import ClientSession, StdioServerParameters, stdio_client
 from mcp.client.sse import sse_client
 from pydantic import BaseModel, Field
+
+from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
 
 USE_HTTP = True
 
@@ -25,6 +28,33 @@ class GetTraces(BaseTool):
     name: str = "get_traces"
     description: str = "get traces of last n minutes from jaeger by service and operation"
     args_schema: Optional[ArgsSchema] = GetTracesInput
+
+    def _summarize_traces(self, traces):
+        logger.info("=== _summarize_traces called ===")
+
+        system_prompt = """
+You are a tool for a Site Reliability Engineering team. Currently, the team faces an incident in the cluster and needs to fix it ASAP.
+Your job is to analyze and summarize given microservice traces, given in format of dictionaries.
+Read the given traces. Summarize the traces. Analyze what could be the root cause of the incident.
+Be succinct and concise. Include important traces that reflects the root cause of the incident in format of raw traces as strings, no need to prettify the json.
+DO NOT truncate the traces.
+
+Return your response in this format:
+SERVICE NAME: <insert service name>
+SUMMARY: <insert summary of traces>
+
+STRICTLY FOLLOW THIS FORMAT
+            """
+        logger.info(f"raw traces received: {traces}")
+        llm = get_llm_backend_for_tools()
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=traces.content[0].text),
+        ]
+
+        traces_summary = llm.inference(messages=messages)
+        logger.info(f"Traces summary: {traces_summary}")
+        return traces_summary
 
     def _run(
         self,
@@ -46,7 +76,7 @@ class GetTraces(BaseTool):
         server_name = "observability"
         if USE_HTTP:
             logger.info("Using HTTP, connecting to server.")
-            server_url = "http://127.0.0.1:9953/sse"
+            server_url = "http://127.0.0.1:8000/sse"
             http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
             session = await exit_stack.enter_async_context(ClientSession(*http_transport))
         else:
@@ -82,7 +112,8 @@ class GetTraces(BaseTool):
             },
         )
         await exit_stack.aclose()
-        return result
+        summary = self._summarize_traces(result)
+        return summary
 
 
 class GetServices(BaseTool):
@@ -193,5 +224,6 @@ class GetOperations(BaseTool):
             "get_operations",
             arguments={"service": service},
         )
+
         await exit_stack.aclose()
         return result

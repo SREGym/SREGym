@@ -29,9 +29,6 @@ class BasicToolNode:
             else:
                 tool_result = self.tools_by_name[tool_call["name"]].invoke(tool_call["args"])
             logger.info(f"tool_result: {tool_result}")
-            tool_result_content = []
-            for text_content in tool_result.content:
-                tool_result_content.append(text_content.text)
             outputs.append(
                 ToolMessage(
                     content=tool_result,

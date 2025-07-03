@@ -118,7 +118,8 @@ class HumanAgent:
 
                     return input
             except (SystemExit, KeyboardInterrupt, EOFError):
-                atexit.register(exit_cleanup_fault, conductor=self.conductor)
+                if self.conductor.submission_stage != "detection":
+                    atexit.register(exit_cleanup_fault, conductor=self.conductor)
                 raise SystemExit from None
 
     def _filter_dict(self, dictionary, filter_func):
