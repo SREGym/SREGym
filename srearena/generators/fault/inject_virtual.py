@@ -1031,13 +1031,20 @@ class VirtualizationFaultInjector(FaultInjector):
             selector = deployment_yaml["spec"]["selector"]
 
             pod_spec = template["spec"]
-            pod_spec["volumes"] = []
+            
+            existing_volumes = pod_spec.get("volumes", [])
+            config_volumes = [vol for vol in existing_volumes if "configMap" in vol]
+            pod_spec["volumes"] = config_volumes
 
             if pod_spec.get("containers"):
-                if "volumeMounts" not in pod_spec["containers"][0]:
-                    pod_spec["containers"][0]["volumeMounts"] = []
+                containers = pod_spec["containers"]
+                if containers:
 
-                pod_spec["containers"][0]["volumeMounts"] = [{"name": "data-volume", "mountPath": f"/{service}-data"}]
+                    existing_mounts = containers[0].get("volumeMounts", [])
+                    config_mounts = [mount for mount in existing_mounts if mount.get("name") != f"{service}-volume"]
+                    
+                    config_mounts.append({"name": "data-volume", "mountPath": f"/{service}-data"})
+                    containers[0]["volumeMounts"] = config_mounts
 
             # Convert Deployment to StatefulSet
             statefulset_yaml = {
