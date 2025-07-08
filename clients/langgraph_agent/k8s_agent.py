@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import logging
 
 import yaml
 from langchain_core.messages import AIMessage
@@ -13,8 +14,8 @@ from langgraph.prebuilt import ToolNode
 from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
 from clients.langgraph_agent.state import State
 from clients.langgraph_agent.tools.basic_tool_node import BasicToolNode
-from clients.langgraph_agent.tools.jaeger_tools import GetTracesInput, get_operations, get_services, get_traces
-from clients.langgraph_agent.tools.prometheus_tools import *
+from clients.langgraph_agent.tools.jaeger_tools import get_operations, get_services, get_traces
+from clients.langgraph_agent.tools.prometheus_tools import get_metrics
 from clients.langgraph_agent.tools.text_editing.file_manip import create, edit, goto_line, insert, open_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -39,7 +40,7 @@ class XAgent:
         #     description="get_traces",
         #     args_schema=GetTracesInput,
         # )
-        self.observability_tools = [get_traces, get_services, get_operations]
+        self.observability_tools = [get_traces, get_services, get_operations, get_metrics]
 
         self.file_editing_tools = [open_file, goto_line, create, edit, insert]
         self.llm = llm

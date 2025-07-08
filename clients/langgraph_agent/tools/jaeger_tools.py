@@ -26,14 +26,10 @@ from clients.langgraph_agent.tools.text_editing.windowed_file import (  # type: 
     WindowedFile,
 )
 
-USE_HTTP = True  # Set to False to use local server
+USE_HTTP = True 
+USE_SUMMARIES = True # Set to False to use local server
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-
-class GetTracesInput(BaseModel):
-    service: str = Field(description="service name")
-    last_n_minutes: int = Field(description="last n minutes of traces")
 
 
 @tool("get_traces", description="get traces")
@@ -84,14 +80,20 @@ async def get_traces(
             "last_n_minutes": last_n_minutes,
         },
     )
+    traces = result.content[0].text
     await exit_stack.aclose()
-    traces_summary = _summarize_traces(result)
-    logger.info(f"Traces summary: {traces_summary}")
+    if USE_SUMMARIES:
+        logger.info("Using summaries for traces.")
+        traces = _summarize_traces(result)
+        logger.info(f"Traces summary: {traces}")
+    else:
+        logger.info("Not using summaries, using raw traces data.")
+        
     return Command(
         update=update_file_vars_in_state(
             state,
             ToolMessage(
-                content=traces_summary,
+                content= traces,
                 tool_call_id=tool_call_id,
             ),
         )
@@ -122,8 +124,61 @@ def _summarize_traces(traces):
     ]
 
     traces_summary = llm.inference(messages=messages)
-    logger.info(f"Traces summary: {traces_summary}")
+    #logger.info(f"Traces summary: {traces_summary}")
     return traces_summary
+
+def _summarize_operations(operations):
+    logger.info("=== _summarize_operations called ===")
+
+    system_prompt = """
+        You are a tool for a Site Reliability Engineering team. Currently, the team faces an incident in the cluster and needs to fix it ASAP.
+            Your job is to analyze and summarize given microservice operations, given in format of dictionaries.
+            Read the given operations. Summarize the operations. Analyze what could be the root cause of the incident.
+            Be succinct and concise. 
+
+            Return your response in this format:
+            SERVICE NAME: <insert service name>
+            SUMMARY: <insert summary of operations>
+
+            STRICTLY FOLLOW THIS FORMAT
+            
+            """
+    llm = get_llm_backend_for_tools()
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=operations),
+    ]
+
+    operations_summary = llm.inference(messages=messages)
+    logger.info(f"Operations summary: {operations_summary}")
+    return operations_summary
+
+
+def _summarize_services(services):
+    logger.info("=== summarize_services called ===")
+
+    system_prompt = """
+        You are a tool for a Site Reliability Engineering team. Currently, the team faces an incident in the cluster and needs to fix it ASAP.
+            Your job is to analyze and summarize given microservice operations, given in format of dictionaries.
+            Read the given operations. Summarize the services. Analyze what could be the root cause of the incident.
+            Be succinct and concise. 
+
+            Return your response in this format:
+            SERVICE NAME: <insert service name>
+            SUMMARY: <insert summary of services>
+            DO NOT truncate the services.
+            STRICTLY FOLLOW THIS FORMAT
+            
+            """
+    llm = get_llm_backend_for_tools()
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=services),
+    ]
+
+    services_summary = llm.inference(messages=messages)
+    logger.info(f"Operations summary: {services_summary}")
+    return services_summary
 
 
 @tool("get_services", description="Get all services in the cluster")
@@ -136,7 +191,7 @@ async def get_services(
     server_name = "observability"
     if USE_HTTP:
         logger.info("Using HTTP, connecting to server.")
-        server_url = "http://127.0.0.1:9953/sse"
+        server_url = "http://127.0.0.1:8000/sse"
         http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
         session = await exit_stack.enter_async_context(ClientSession(*http_transport))
     else:
@@ -167,6 +222,15 @@ async def get_services(
     await exit_stack.aclose()
     logger.info(f"Result from get_services: {result}")
     services = result.content[0].text
+    logger.info(f"Services: {services}")
+    if USE_SUMMARIES:
+        logger.info("Using summaries for services.")
+        services = _summarize_services(result)
+        logger.info(f"Services summary: {services}")
+
+    else:
+        logger.info("Not using summaries, using raw services data.")
+    logger.info(f"Services summary: {services}")
     return Command(
         update=update_file_vars_in_state(
             state,
@@ -189,7 +253,7 @@ async def get_operations(
     server_name = "observability"
     if USE_HTTP:
         logger.info("Using HTTP, connecting to server.")
-        server_url = "http://127.0.0.1:9953/sse"
+        server_url = "http://127.0.0.1:8000/sse"
         http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
         session = await exit_stack.enter_async_context(ClientSession(*http_transport))
     else:
@@ -223,6 +287,10 @@ async def get_operations(
     await exit_stack.aclose()
     operations = result.content[0].text
     logger.info(f"Result from get_operations: {operations}")
+    if USE_SUMMARIES: 
+        logger.info("Using summaries for operations.")
+        operations = _summarize_operations(result)
+        logger.info(f"Operations summaries: {operations}")
     return Command(
         update=update_file_vars_in_state(
             state,
