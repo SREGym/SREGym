@@ -16,12 +16,12 @@ class MisconfigAppHotelRes(Problem):
         self.app = HotelReservation()
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-        self.faulty_service = "geo"
         super().__init__(app=self.app, namespace=self.app.namespace)
-        # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
-
         self.app.create_workload()
+
+    def decide_targeted_service(self):
+        self.faulty_service = "geo"
+        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
         self.mitigation_oracle = CompoundedOracle(
             self,
             MitigationOracle(problem=self),

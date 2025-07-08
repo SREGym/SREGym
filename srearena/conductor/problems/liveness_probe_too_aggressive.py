@@ -20,7 +20,7 @@ class LivenessProbeTooAggressive(Problem):
             self.app.create_workload(duration=30)
 
     def decide_targeted_service(self):
-        self.faulty_service = self.randomizer.select_service()
+        self.faulty_service = "aux-service"
 
         # === Attach evaluation oracles ===
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
