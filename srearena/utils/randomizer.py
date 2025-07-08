@@ -19,21 +19,13 @@ class Randomizer:
         with open(service_path, "r") as file:
             app_metadata = json.load(file)
         
-        match app_metadata["Name"]:
-            case "OpenTelemetry Demo Astronomy Shop":
-                app = AstronomyShop()
-            case "Flight Ticket":
-                app = FlightTicket()
-            case "Hotel Reservation":
-                app = HotelReservation()
-            case "Social Network":
-                app = SocialNetwork()
-            case "Train Ticket":
-                app = TrainTicket()
+        app = app_directory.get(app_metadata["Name"], None)
+        if not app:
+            raise RuntimeError("App name not found")
 
         self.namespace = app_metadata["Namespace"]
 
-        return app 
+        return app()
 
     def select_service(self):
         # Queue kubectl for all available services in app, return service name.
