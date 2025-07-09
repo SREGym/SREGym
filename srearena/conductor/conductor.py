@@ -87,19 +87,23 @@ class Conductor:
 
             self.results["TTD"] = time.time() - self.execution_start_time
 
-            if not results.get("success", False):
-                self.submission_stage = "done"
-                return "[❌] Incorrect detection. Ending evaluation."
-
             if self.problem.localization_oracle:
                 self.submission_stage = "localization"
             elif self.problem.mitigation_oracle:
                 self.submission_stage = "mitigation"
             else:
                 self.submission_stage = "done"
-                return "[✅] Detection successful. No further stages to evaluate."
 
-            return SubmissionStatus.VALID_SUBMISSION
+            if results.get("success", False):
+                if self.submission_stage == "done":
+                    return "[✅] Detection successful. No further stages to evaluate."
+                else:
+                    return "[✅] Detection successful. Proceeding to next stage..."
+            else:
+                if self.submission_stage == "done":
+                    return "[❌] Incorrect detection. No further stages to evaluate."
+                else:
+                    return "[❌] Incorrect detection. Proceeding anyway..."
 
         elif self.submission_stage == "localization":
             if not self.problem.localization_oracle:
