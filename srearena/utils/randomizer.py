@@ -2,12 +2,13 @@ import random
 import json
 
 from srearena.paths import APP_PATH_LIST
-from srearena.service.apps import *
+from srearena.service.apps.registry import AppRegistry
 
 class Randomizer:
     def __init__(self, kubectl):
         self.kubectl = kubectl
         self.namespace = None
+        self.apps = AppRegistry()
 
     def select_app(self, service_paths=[]):
         # Randomly choose an app from service_paths. If service_paths not provided, choose from list of all available apps. Return reference to app.
@@ -19,13 +20,11 @@ class Randomizer:
         with open(service_path, "r") as file:
             app_metadata = json.load(file)
         
-        app = app_directory.get(app_metadata["Name"], None)
-        if not app:
-            raise RuntimeError("App name not found")
+        app = self.apps.get_app_instance(app_metadata["Name"])
 
         self.namespace = app_metadata["Namespace"]
 
-        return app()
+        return app
 
     def select_service(self):
         # Queue kubectl for all available services in app, return service name.
