@@ -68,6 +68,8 @@ class HumanAgent:
         self.console.print(Markdown(self.task_message))
 
     def display_env_message(self, env_input):
+        if not env_input:
+            return
         self.console.print(Panel(env_input, title="Environment", style="white on blue"))
         self.console.print()
 
@@ -82,6 +84,8 @@ class HumanAgent:
                 return
 
             self.conductor.problem_id = problem_id.strip()
+            self.completer = None
+            self.session = PromptSession()
 
         else:
             self.console.print("Invalid command. Please use `start <problem_id>`")

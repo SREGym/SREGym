@@ -46,8 +46,7 @@ class Conductor:
     async def run_problem(self):
         try:
             while self.submission_stage != "done":
-                instr = "Please take the next action"
-                action = await self.ask_agent(instr)
+                action = await self.ask_agent("")
                 self.sprint.agent(action)
                 env_response = await self.ask_env(action)
                 self.sprint.service(env_response)
