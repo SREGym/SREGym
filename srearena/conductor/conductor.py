@@ -34,6 +34,8 @@ class Conductor:
         self.submission_stage = None  # "noop", "detection", "localization", "mitigation", "done"
         self.results = {}
 
+        self.strict_detection_mode = False
+
     def dependency_check(self, binaries: list[str]):
         for binary in binaries:
             if shutil.which(binary) is None:
@@ -93,6 +95,11 @@ class Conductor:
                 self.submission_stage = "mitigation"
             else:
                 self.submission_stage = "done"
+
+            if self.strict_detection_mode:
+                if not results.get("success", False):
+                    self.submission_stage = "done"
+                    return "[❌] Incorrect detection. Ending evaluation."
 
             if results.get("success", False):
                 if self.submission_stage == "done":
