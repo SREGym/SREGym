@@ -1,9 +1,6 @@
 """Network delay problem in the HotelReservation application."""
 
-from srearena.conductor.oracles.compound import CompoundedOracle
 from srearena.conductor.oracles.localization import LocalizationOracle
-from srearena.conductor.oracles.mitigation import MitigationOracle
-from srearena.conductor.oracles.workload import WorkloadOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_symp import SymptomFaultInjector
 from srearena.paths import TARGET_MICROSERVICES
@@ -29,12 +26,6 @@ class ChaosMeshNetworkDelay(Problem):
         self.faulty_service = "user"
         # === Attach evaluation oracles ===
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
-        self.mitigation_oracle = CompoundedOracle(
-            self,
-            MitigationOracle(problem=self),
-            WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
-        )
-
 
     @mark_fault_injected
     def inject_fault(self):

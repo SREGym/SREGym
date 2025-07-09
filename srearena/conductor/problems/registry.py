@@ -8,6 +8,7 @@ from srearena.conductor.problems.configmap_drift import ConfigMapDrift
 from srearena.conductor.problems.container_kill import ChaosMeshContainerKill
 from srearena.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from srearena.conductor.problems.env_variable_leak import EnvVariableLeak
+from srearena.conductor.problems.env_variable_shadowing import EnvVariableShadowing
 from srearena.conductor.problems.image_slow_load import ImageSlowLoad
 from srearena.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from srearena.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
@@ -37,6 +38,9 @@ from srearena.conductor.problems.target_port import K8STargetPortMisconfig
 from srearena.conductor.problems.wrong_bin_usage import WrongBinUsage
 from srearena.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from srearena.conductor.problems.wrong_service_selector import WrongServiceSelector
+from srearena.conductor.problems.network_policy_block import NetworkPolicyBlock
+from srearena.conductor.problems.taint_no_toleration import TaintNoToleration
+
 
 
 class ProblemRegistry:
@@ -81,7 +85,9 @@ class ProblemRegistry:
             "readiness_probe_misconfiguration": ReadinessProbeMisconfiguration,
             "liveness_probe_misconfiguration": LivenessProbeMisconfiguration,
             "liveness_probe_too_aggressive": LivenessProbeTooAggressive,
-            "duplicate_pvc_mounts": DuplicatePVCMounts
+            "duplicate_pvc_mounts": DuplicatePVCMounts,
+            "network_policy_block": NetworkPolicyBlock,
+            "env_variable_shadowing": EnvVariableShadowing
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.
             # "operator_overload_replicas-detection-1": K8SOperatorOverloadReplicasDetection,

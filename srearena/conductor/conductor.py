@@ -33,6 +33,7 @@ class Conductor:
         self.problem_id = None
         self.submission_stage = None  # "noop", "detection", "localization", "mitigation", "done"
         self.results = {}
+        self.cleanup_initiated = False
 
     def dependency_check(self, binaries: list[str]):
         for binary in binaries:
@@ -210,6 +211,11 @@ class Conductor:
         return self.results
 
     def exit_cleanup_and_recover_fault(self):
+        if self.cleanup_initiated:
+            return
+
+        self.cleanup_initiated = True
+
         if self.problem and self.problem.faulty_service:
             print("Recovering fault before exit...")
             try:

@@ -1031,13 +1031,20 @@ class VirtualizationFaultInjector(FaultInjector):
             selector = deployment_yaml["spec"]["selector"]
 
             pod_spec = template["spec"]
-            pod_spec["volumes"] = []
+
+            existing_volumes = pod_spec.get("volumes", [])
+            config_volumes = [vol for vol in existing_volumes if "configMap" in vol]
+            pod_spec["volumes"] = config_volumes
 
             if pod_spec.get("containers"):
-                if "volumeMounts" not in pod_spec["containers"][0]:
-                    pod_spec["containers"][0]["volumeMounts"] = []
+                containers = pod_spec["containers"]
+                if containers:
 
-                pod_spec["containers"][0]["volumeMounts"] = [{"name": "data-volume", "mountPath": f"/{service}-data"}]
+                    existing_mounts = containers[0].get("volumeMounts", [])
+                    config_mounts = [mount for mount in existing_mounts if mount.get("name") != f"{service}-volume"]
+
+                    config_mounts.append({"name": "data-volume", "mountPath": f"/{service}-data"})
+                    containers[0]["volumeMounts"] = config_mounts
 
             # Convert Deployment to StatefulSet
             statefulset_yaml = {
@@ -1074,6 +1081,77 @@ class VirtualizationFaultInjector(FaultInjector):
             )
 
             print(f"Converted {service} to StatefulSet with unique PVC per replica and scaled to {replicas}")
+
+    # Inject environment variable shadowing fault
+    def inject_env_variable_shadowing(self, microservices: list[str]):
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+            original_deployment_yaml = copy.deepcopy(deployment_yaml)
+
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+
+            shadow_vars = None
+
+            if self.namespace == "astronomy-shop":
+                if service == "frontend-proxy":
+                    shadow_vars = {"FRONTEND_HOST": "localhost"}
+
+            for container in containers:
+                if "env" not in container:
+                    container["env"] = []
+
+                for env_var, value in shadow_vars.items():
+                    env_exists = False
+                    for existing_env in container["env"]:
+                        if existing_env.get("name") == env_var:
+                            existing_env["value"] = value
+                            env_exists = True
+                            break
+
+                    if not env_exists:
+                        container["env"].append({"name": env_var, "value": value})
+
+                print(
+                    f"Added shadowing environment variables to container {container.get('name', 'unnamed')}: {list(shadow_vars.keys())}"
+                )
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            # Save the *original* deployment YAML for recovery
+            self._write_yaml_to_file(service, original_deployment_yaml)
+
+            print(f"Injected environment variable shadowing fault for service: {service}")
+
+    def recover_env_variable_shadowing(self, microservices: list[str]):
+        for service in microservices:
+            original_yaml_path = f"/tmp/{service}_modified.yaml"
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            self.kubectl.exec_command(f"kubectl rollout restart deployment/load-generator -n {self.namespace}")
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment/load-generator -n {self.namespace} --timeout=60s"
+            )
+
+            self.kubectl.wait_for_ready(self.namespace)
+
+            print(f"Recovered from environment variable shadowing fault for service: {service}")
 
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):

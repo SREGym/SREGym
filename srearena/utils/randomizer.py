@@ -31,6 +31,7 @@ class Randomizer:
         # Queue kubectl for all available services in app, return service name.
         service_list = [svc.metadata.name for svc in self.kubectl.list_services(namespace=self.namespace).items]
         service = random.choice(service_list)
+        print(f"Random service chosen: {service}")
         return service
 
 
