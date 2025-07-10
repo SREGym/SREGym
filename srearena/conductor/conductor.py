@@ -34,7 +34,9 @@ class Conductor:
         self.submission_stage = None  # "noop", "detection", "localization", "mitigation", "done"
         self.results = {}
 
-        self.strict_detection_mode = False
+        self.strict_detection_mode = False  # With strict detection as True, if the agent doesn't
+        # get the anomaly detection correct, it cannot advance to
+        # later stages.
 
     def dependency_check(self, binaries: list[str]):
         for binary in binaries:
