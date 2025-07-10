@@ -170,7 +170,7 @@ class ProblemRegistry:
             ),
             "env_variable_shadowing_astronomy_shop": lambda: EnvVariableShadowing(),
             "rolling_update_misconfigured": lambda: RollingUpdateMisconfigured(
-                app_name="social_network", faulty_service="media-mongodb"),
+                app_name="social_network", faulty_service="user-service"),
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.

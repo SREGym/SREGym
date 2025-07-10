@@ -1162,23 +1162,32 @@ class VirtualizationFaultInjector(FaultInjector):
                 "type": "RollingUpdate",
                 "rollingUpdate": {
                     "maxUnavailable": "100%",
-                    "maxSurge": "0%"  
+                    "maxSurge": "0%"
                 }
             }
 
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            for container in containers:
+                container["lifecycle"] = {
+                    "postStart": {
+                        "exec": {
+                            "command": ["/bin/sh", "-c", "sleep 100"]  
+                        }
+                    }
+                }
+                
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
-            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
-            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+            patch_command = f"kubectl patch deployment {service} -n {self.namespace} --patch-file {modified_yaml_path}"
+            patch_result = self.kubectl.exec_command(patch_command)
+            print(f"Patched deployment {service}: {patch_result}")
 
-            delete_result = self.kubectl.exec_command(delete_command)
-            print(f"Deleted deployment {service}: {delete_result}")
+            rollout_command = f"kubectl rollout restart deployment {service} -n {self.namespace}"
+            rollout_result = self.kubectl.exec_command(rollout_command)
+            print(f"Triggered rollout for {service}: {rollout_result}")
 
-            apply_result = self.kubectl.exec_command(apply_command)
-            print(f"Applied faulty deployment {service}: {apply_result}")
-
-            self._write_yaml_to_file(service, original_deployment_yaml)
-            print(f"Injected maxUnavailable fault for {service}")
-
+            self._write_yaml_to_file(f"{service}-original", original_deployment_yaml)
+            print(f"Injected maxUnavailable fault with startup delay for {service}")
+    
     def recover_rolling_update_misconfigured(self, microservices: list[str]):
         for service in microservices:
             original_yaml_path = f"/tmp/{service}_modified.yaml"
@@ -1190,7 +1199,6 @@ class VirtualizationFaultInjector(FaultInjector):
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
             apply_result = self.kubectl.exec_command(apply_command)
             print(f"Restored original deployment {service}: {apply_result}")
-
 
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
