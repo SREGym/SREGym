@@ -58,7 +58,16 @@ class AstronomyShop(Application):
 
 
 # Run this code to test installation/deletion
-# if __name__ == "__main__":
-#     shop = AstronomyShop()
-#     shop.deploy()
-#     shop.delete()
+if __name__ == "__main__":
+    shop = AstronomyShop()
+    shop.deploy()
+
+    # print("Astronomy Shop deployed. Waiting for 60 seconds before cleanup...")
+    # try:
+    #     for i in range(60):
+    #         print(f"{i+1}/60 seconds elapsed...", end="\r")
+    #         time.sleep(1)
+    # except KeyboardInterrupt:
+    #     print("\n Interrupted by user. Proceeding to cleanup...")
+    # shop.delete()
+    # print("\n🧹 Cleanup complete.")

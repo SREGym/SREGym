@@ -17,6 +17,13 @@
         "release_name": "astronomy-shop",
         "chart_path": "open-telemetry/opentelemetry-demo",
         "namespace": "astronomy-shop",
-        "remote_chart": true
+        "remote_chart": true,
+        "extra_args": [
+            "--set", "components.load-generator.enabled=true",
+            "--set", "components.load-generator.env[0].name=LOCUST_HEADLESS",
+            "--set", "components.load-generator.env[0].value=\\\"true\\\"",
+            "--set", "components.load-generator.env[1].name=LOCUST_BROWSER_TRAFFIC_ENABLED",
+            "--set", "components.load-generator.env[1].value=\\\"false\\\""
+        ]
     }
 }
