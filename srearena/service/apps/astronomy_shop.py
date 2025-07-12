@@ -58,10 +58,9 @@ class AstronomyShop(Application):
 
 
 # Run this code to test installation/deletion
-if __name__ == "__main__":
-    shop = AstronomyShop()
-    shop.deploy()
-
+# if __name__ == "__main__":
+    # shop = AstronomyShop()
+    # shop.deploy()
     # print("Astronomy Shop deployed. Waiting for 60 seconds before cleanup...")
     # try:
     #     for i in range(60):
