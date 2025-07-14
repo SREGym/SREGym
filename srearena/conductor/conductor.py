@@ -8,6 +8,7 @@ from srearena.conductor.parser import ResponseParser
 from srearena.conductor.problems.registry import ProblemRegistry
 from srearena.service.kubectl import KubeCtl
 from srearena.service.telemetry.prometheus import Prometheus
+from srearena.service.apps.registry import AppRegistry
 from srearena.utils.critical_section import CriticalSection
 from srearena.utils.sigint_aware_section import SigintAwareSection
 from srearena.utils.status import SessionPrint, SubmissionStatus
@@ -223,3 +224,14 @@ class Conductor:
 
 def exit_cleanup_fault(conductor):
     conductor.exit_cleanup_and_recover_fault()
+
+def get_deployed_apps(kubectl):
+        deployed_apps = []
+        running_namespaces = [ns.metadata.name for ns in kubectl.list_namespaces().items]
+        apps = AppRegistry()
+        for app_name in apps.get_app_names():
+            namespace = apps.get_app_metadata(app_name)["Namespace"]
+            if namespace in running_namespaces:
+                deployed_apps.append(app_name)
+
+        return deployed_apps
