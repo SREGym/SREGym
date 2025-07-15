@@ -89,7 +89,9 @@ class ProblemRegistry:
             "liveness_probe_too_aggressive": LivenessProbeTooAggressive,
             "duplicate_pvc_mounts": DuplicatePVCMounts,
             "network_policy_block": NetworkPolicyBlock,
-            "env_variable_shadowing": EnvVariableShadowing
+            "env_variable_shadowing": EnvVariableShadowing,
+            "rolling_update_misconfigured": RollingUpdateMisconfigured,
+            "ingress_misroute": IngressMisroute,
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.
             # "operator_overload_replicas-detection-1": K8SOperatorOverloadReplicasDetection,

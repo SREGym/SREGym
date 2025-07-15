@@ -1,7 +1,6 @@
 import random
 import json
 
-from srearena.paths import APP_PATH_LIST
 from srearena.service.apps.registry import AppRegistry
 
 class Randomizer:
@@ -10,20 +9,16 @@ class Randomizer:
         self.namespace = None
         self.apps = AppRegistry()
 
-    def select_app(self, service_paths=[]):
+    def select_app(self, app_names=None):
         # Randomly choose an app from service_paths. If service_paths not provided, choose from list of all available apps. Return reference to app.
-        if not service_paths:
-            service_path = random.choice(APP_PATH_LIST)
-        else:
-            service_path = random.choice(service_paths)
+        if not app_names:
+            app_names = self.apps.get_app_names()
+        app_name = random.choice(app_names)
 
-        with open(service_path, "r") as file:
-            app_metadata = json.load(file)
-        
-        app = self.apps.get_app_instance(app_metadata["Name"])
-
+        app_metadata = self.apps.get_app_metadata(app_name)
         self.namespace = app_metadata["Namespace"]
 
+        app = self.apps.get_app_instance(app_name)
         return app
 
     def select_service(self):

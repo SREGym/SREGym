@@ -32,6 +32,3 @@ ASTRONOMY_SHOP_METADATA = BASE_DIR / "service" / "metadata" / "astronomy-shop.js
 TIDB_METADATA = BASE_DIR / "service" / "metadata" / "tidb-with-operator.json"
 FLIGHT_TICKET_METADATA = BASE_DIR / "service" / "metadata" / "flight-ticket.json"
 
-# List of available apps for fault injection
-# APP_PATH_LIST = [SOCIAL_NETWORK_METADATA, HOTEL_RES_METADATA, TRAIN_TICKET_METADATA, ASTRONOMY_SHOP_METADATA, FLIGHT_TICKET_METADATA]
-APP_PATH_LIST = [SOCIAL_NETWORK_METADATA, HOTEL_RES_METADATA, ASTRONOMY_SHOP_METADATA]

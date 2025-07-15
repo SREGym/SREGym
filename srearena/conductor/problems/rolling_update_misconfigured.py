@@ -9,27 +9,23 @@ from srearena.service.apps.hotelres import HotelReservation
 from srearena.service.apps.socialnet import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
+from srearena.utils.randomizer import Randomizer
 from srearena.conductor.oracles.rolling_update_misconfiguration_mitigation import RollingUpdateMitigationOracle
 
-
 class RollingUpdateMisconfigured(Problem):
-    def __init__(self, app_name: str = "social_network"):
-        self.faulty_service = "custom-service"
-        self.app_name = app_name
-        
-        if self.app_name == "social_network":
-            self.app = SocialNetwork()
-        elif self.app_name == "hotel_reservation":
-            self.app = HotelReservation()
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
+    def __init__(self):    
+        self.kubectl = KubeCtl()
+        self.randomizer = Randomizer(kubectl=self.kubectl)
+        self.app = self.randomizer.select_app(["Social Network", "Hotel Reservation"])
         
         super().__init__(app=self.app, namespace=self.app.namespace)
         
-        self.kubectl = KubeCtl()
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
-        
         self.app.create_workload()
+
+    def decide_targeted_service(self):
+        self.faulty_service = "custom-service"
+
+        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
         self.mitigation_oracle = CompoundedOracle(
             self,
             RollingUpdateMitigationOracle(problem=self,deployment_name=self.faulty_service),

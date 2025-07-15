@@ -22,6 +22,9 @@ class IngressMisroute(Problem):
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.correct_service])
         self.mitigation_oracle = IngressMisrouteMitigationOracle(problem=self)
 
+    def decide_targeted_service(self):
+        pass
+
     @mark_fault_injected
     def inject_fault(self):
         """Misroute /api to wrong backend"""

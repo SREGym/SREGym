@@ -7,13 +7,12 @@ from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
 from srearena.utils.randomizer import Randomizer
-from srearena.paths import HOTEL_RES_METADATA, SOCIAL_NETWORK_METADATA
 
 class EnvVariableLeak(Problem):
     def __init__(self):
         self.kubectl = KubeCtl()
         self.randomizer = Randomizer(self.kubectl)
-        app = self.randomizer.select_app([HOTEL_RES_METADATA, SOCIAL_NETWORK_METADATA])
+        app = self.randomizer.select_app(["Hotel Reservation", "Social Network"])
         super().__init__(app=app, namespace=app.namespace)
         self.app.create_workload()
 
