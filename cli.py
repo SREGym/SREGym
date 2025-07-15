@@ -11,32 +11,28 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from srearena.conductor import Conductor, exit_cleanup_fault, get_deployed_apps
+from srearena.conductor import Conductor, exit_cleanup_fault
 from srearena.service.shell import Shell
 from srearena.service.kubectl import KubeCtl
 from srearena.service.telemetry.prometheus import Prometheus
 from srearena.service.apps.registry import AppRegistry
 from srearena.utils.sigint_aware_section import SigintAwareSection
-from srearena.utils.dependency_check import dependency_check
 
 WELCOME = """
 # SREArena
 - Type your commands or actions below.
-- Use `options` to see available commands.
 """
 
 OPTIONS = """
-# SREArena
-- Type your commands or actions below.
 - Use `start <problem_id>` to begin a new problem.
 - Use `deploy <app_name>` to deploy an available app.
 - Use `undeploy <app_name>` to undeploy a running app.
 - Use `list` to list the applications currently deployed on SREArena.
 - Use `options` to list available commands.
 - Use `exit` to quit the application.
-[Warning]: Starting a new problem that uses a running app will restart the app. Please make sure you have concluded your work on a deployed app before starting any problem.
 """
 
+WARNING = "[bold yellow][WARNING][/bold yellow] Starting a new problem that uses a running app will restart the app. Please make sure you have concluded your work on a deployed app before starting any problem."
 
 TASK_MESSAGE = """{prob_desc}
 You are provided with the following APIs to interact with the service:
@@ -68,8 +64,6 @@ class HumanAgent:
 
         self.kubectl = KubeCtl()
         self.prometheus = Prometheus()
-        
-        self._get_deployed_apps()
 
     def instantiate_completer_options(self):
         pids = self.conductor.problems.get_problem_ids()
@@ -86,7 +80,13 @@ class HumanAgent:
 
     def display_welcome_message(self):
         self.console.print(Markdown(WELCOME), justify="center")
+        self.display_options_message()
         self.console.print()
+
+    def display_options_message(self):
+        self.console.print(Markdown(OPTIONS), justify="center")
+        self.console.print()
+        self.console.print(WARNING)
 
     def display_context(self, problem_desc, apis):
         self.shell_api = self._filter_dict(apis, lambda k, _: "exec_shell" in k)
@@ -108,6 +108,11 @@ class HumanAgent:
         if not env_input:
             return
         self.console.print(Panel(env_input, title="Environment", style="white on blue"))
+        self.console.print()
+
+    def print_running_apps(self):
+        deployed_apps = self.conductor.get_deployed_apps()
+        self.console.print(Panel('\n'.join(deployed_apps) if len(deployed_apps) > 0 else "No app currently deployed", title="Deployed Apps", style="white on blue"))
         self.console.print()
 
     async def process_user_command(self):
@@ -139,11 +144,9 @@ class HumanAgent:
             self.app_name = app_name.strip()
             self.session_purpose = "app_undeploy"
         elif user_input.strip() == "list":
-            # printRunningApps
-            pass
+            self.print_running_apps()
         elif user_input.strip() == "options":
-            # printAvailableOptions
-            pass
+            self.display_options_message()
         else:
             self.console.print("Invalid command. Please use the available options. Type `options` to see availble commands.")
 
@@ -179,78 +182,12 @@ class HumanAgent:
 
                     return input
             except (SystemExit, KeyboardInterrupt, EOFError):
-                if self.session_purpose == "problem":
+                if self.session_purpose and self.session_purpose == "problem":
                     atexit.register(exit_cleanup_fault, conductor=self.conductor)
                 raise SystemExit from None
 
-    def deploy_app(self):
-        self.app = self.apps.get_app_instance(self.app_name)
-
-        try:
-            print(f"[Session Start] App: {self.app_name}")
-
-            if self.deployed_apps.empty():
-                print("Setting up metrics-server...")
-                self.conductor.kubectl.exec_command(
-                    "kubectl apply -f "
-                    "https://github.com/kubernetes-sigs/metrics-server/"
-                    "releases/latest/download/components.yaml"
-                )
-                self.conductor.kubectl.exec_command(
-                    "kubectl -n kube-system patch deployment metrics-server "
-                    "--type=json -p='["
-                    '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"},'
-                    '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
-                    "]'"
-                )
-                self.conductor.kubectl.wait_for_ready("kube-system")  # metrics-server is deployed in kube-system
-
-                print("Setting up OpenEBS...")
-                self.conductor.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
-                self.conductor.kubectl.exec_command(
-                    "kubectl patch storageclass openebs-hostpath "
-                    '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
-                )
-                self.conductor.kubectl.wait_for_ready("openebs")
-                print("OpenEBS setup completed.")
-
-                self.conductor.prometheus.deploy()
-
-            if self.app_name not in self.deployed_apps:
-                self.deployed_apps.append(self.app_name)
-
-            self.app.delete()
-            self.app.deploy()
-            self.app.start_workload()
-        except KeyboardInterrupt:
-            print("\nImmediately terminating and Cleaning up...")
-            atexit.register(self.cleanup_app)
-            raise SystemExit from None
-
-    def cleanup_app(self):
-        if self.app_name not in self.deployed_apps:
-            if self.session_purpose == "app_undeploy":
-                print(f"{self.app_name} has not been deployed.")
-            return
-
-        self.app.cleanup()
-
-        self.deployed_apps.remove(self.app_name)
-        if self.deployed_apps.empty():
-            self.prometheus.teardown()
-            self.kubectl.exec_command("kubectl delete sc openebs-hostpath openebs-device --ignore-not-found")
-            self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
-
     def _filter_dict(self, dictionary, filter_func):
         return {k: v for k, v in dictionary.items() if filter_func(k, v)}
-    
-    def _get_deployed_apps(self):
-        self.deployed_apps = []
-        running_namespaces = [ns.metadata.name for ns in self.kubectl.list_namespaces().items]
-        for app_name in self.apps.get_app_names():
-            namespace = self.apps.get_app_metadata(app_name)["Namespace"]
-            if namespace in running_namespaces and len(self.kubectl.get_namespace_deployments(namespace).items) > 0:
-                self.deployed_apps.append(app_name)
 
 async def main():
     conductor = Conductor()
@@ -267,9 +204,11 @@ async def main():
             results = await conductor.start_problem()
             print(results)
         case "app_deploy":
-            agent.deploy_app()
+            conductor.app = conductor.apps.get_app_instance(agent.app_name)
+            conductor.deploy_app()
         case "app_undeploy":
-            agent.cleanup_app()
+            conductor.app = conductor.apps.get_app_instance(agent.app_name)
+            conductor.undeploy_app()
         case _:
             pass
 
