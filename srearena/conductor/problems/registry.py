@@ -40,6 +40,8 @@ from srearena.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from srearena.conductor.problems.wrong_service_selector import WrongServiceSelector
 from srearena.conductor.problems.network_policy_block import NetworkPolicyBlock
 from srearena.conductor.problems.taint_no_toleration import TaintNoToleration
+from srearena.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
+from srearena.conductor.problems.ingress_misroute import IngressMisroute
 
 
 

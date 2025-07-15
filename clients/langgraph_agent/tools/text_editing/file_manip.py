@@ -26,6 +26,7 @@ def update_file_vars_in_state(
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> State:
     logger.info("updating state with message: %s", message)
+    logger.info(f"state: {state}, tool_call_id: {tool_call_id}")
     new_state = state
 
     match message:
@@ -33,6 +34,7 @@ def update_file_vars_in_state(
             logger.info("Not updating state as message is a string")
             new_state["messages"] = new_state["messages"] + [ToolMessage(content=message, tool_call_id=tool_call_id)]
         case ToolMessage():
+            logger.info("Trying to update states with message as ToolMessage")
             tool_call_msg = ""
             for i in range(len(new_state["messages"]) - 1, -1, -1):
                 if hasattr(new_state["messages"][i], "tool_calls") and len(new_state["messages"][i].tool_calls) > 0:

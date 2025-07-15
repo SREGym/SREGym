@@ -1,8 +1,11 @@
+import asyncio
 import json
 import os
+import logging
 
 import yaml
 from langchain_core.messages import AIMessage
+from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import END
 from langgraph.graph import START, StateGraph
@@ -11,8 +14,8 @@ from langgraph.prebuilt import ToolNode
 from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
 from clients.langgraph_agent.state import State
 from clients.langgraph_agent.tools.basic_tool_node import BasicToolNode
-from clients.langgraph_agent.tools.jaeger_tools import *
-from clients.langgraph_agent.tools.prometheus_tools import *
+from clients.langgraph_agent.tools.jaeger_tools import get_operations, get_services, get_traces
+from clients.langgraph_agent.tools.prometheus_tools import get_metrics
 from clients.langgraph_agent.tools.text_editing.file_manip import create, edit, goto_line, insert, open_file
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -30,17 +33,15 @@ class XAgent:
     def __init__(self, llm):
         self.graph_builder = StateGraph(State)
         self.graph = None
+        # get_traces_tool = StructuredTool.from_function(
+        #     name="get_traces",
+        #     func=lambda x: "Not implemented sync version of tool",
+        #     coroutine=get_traces,
+        #     description="get_traces",
+        #     args_schema=GetTracesInput,
+        # )
+        self.observability_tools = [get_traces, get_services, get_operations, get_metrics]
 
-        get_traces = GetTraces()
-        get_services = GetServices()
-        get_operations = GetOperations()
-        get_metrics = GetMetrics()
-        self.observability_tools = [
-            get_traces,
-            get_services,
-            get_operations,
-            get_metrics,
-        ]
         self.file_editing_tools = [open_file, goto_line, create, edit, insert]
         self.llm = llm
 
@@ -252,7 +253,7 @@ class XAgent:
         memory = MemorySaver()
         self.graph = self.graph_builder.compile(checkpointer=memory)
 
-    def graph_step(self, user_input: str):
+    async def graph_step(self, user_input: str):
         if not self.graph:
             raise ValueError("Agent graph is None. Have you built the agent?")
         config = {"configurable": {"thread_id": "1"}}
@@ -273,7 +274,7 @@ class XAgent:
                 "curr_file": "",
                 "curr_line": 0,
             }
-        for event in self.graph.stream(
+        async for event in self.graph.astream(
             state,
             config=config,
             stream_mode="values",
@@ -285,7 +286,7 @@ class XAgent:
             png.write(self.graph.get_graph().draw_mermaid_png())
 
 
-if __name__ == "__main__":
+async def main():
     llm = get_llm_backend_for_tools()
     xagent = XAgent(llm)
     xagent.build_agent()
@@ -295,4 +296,8 @@ if __name__ == "__main__":
         if user_input.lower() in ["quit", "exit", "q"]:
             print("Goodbye!")
             break
-        xagent.graph_step(user_input)
+        await xagent.graph_step(user_input)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

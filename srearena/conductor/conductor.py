@@ -35,6 +35,10 @@ class Conductor:
         self.results = {}
         self.cleanup_initiated = False
 
+        self.strict_detection_mode = False  # With strict detection as True, if the agent doesn't
+        # get the anomaly detection correct, it cannot advance to
+        # later stages.
+
     def dependency_check(self, binaries: list[str]):
         for binary in binaries:
             if shutil.which(binary) is None:
@@ -47,8 +51,7 @@ class Conductor:
     async def run_problem(self):
         try:
             while self.submission_stage != "done":
-                instr = "Please take the next action"
-                action = await self.ask_agent(instr)
+                action = await self.ask_agent("")
                 self.sprint.agent(action)
                 env_response = await self.ask_env(action)
                 self.sprint.service(env_response)
@@ -89,19 +92,28 @@ class Conductor:
 
             self.results["TTD"] = time.time() - self.execution_start_time
 
-            if not results.get("success", False):
-                self.submission_stage = "done"
-                return "[❌] Incorrect detection. Ending evaluation."
-
             if self.problem.localization_oracle:
                 self.submission_stage = "localization"
             elif self.problem.mitigation_oracle:
                 self.submission_stage = "mitigation"
             else:
                 self.submission_stage = "done"
-                return "[✅] Detection successful. No further stages to evaluate."
 
-            return SubmissionStatus.VALID_SUBMISSION
+            if self.strict_detection_mode:
+                if not results.get("success", False):
+                    self.submission_stage = "done"
+                    return "[❌] Incorrect detection. Ending evaluation."
+
+            if results.get("success", False):
+                if self.submission_stage == "done":
+                    return "[✅] Detection successful. No further stages to evaluate."
+                else:
+                    return "[✅] Detection successful. Proceeding to next stage..."
+            else:
+                if self.submission_stage == "done":
+                    return "[❌] Incorrect detection. No further stages to evaluate."
+                else:
+                    return "[❌] Incorrect detection. Proceeding anyway..."
 
         elif self.submission_stage == "localization":
             if not self.problem.localization_oracle:
