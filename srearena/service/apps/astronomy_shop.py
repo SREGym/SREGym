@@ -1,9 +1,11 @@
 """Interface to the OpenTelemetry Astronomy Shop application"""
 
-import time
+import tempfile
+
+import yaml
 
 from srearena.generators.workload.locust import LocustWorkloadManager
-from srearena.paths import ASTRONOMY_SHOP_METADATA
+from srearena.paths import ASTRONOMY_SHOP_EXTRA_ARGS, ASTRONOMY_SHOP_METADATA
 from srearena.service.apps.base import Application
 from srearena.service.helm import Helm
 from srearena.service.kubectl import KubeCtl
@@ -23,12 +25,24 @@ class AstronomyShop(Application):
         self.frontend_port = 8080
 
     def deploy(self):
-        """Deploy the Helm configurations."""
+        """Deploy the Helm configurations using extra arguments from a YAML file."""
         self.kubectl.create_namespace_if_not_exist(self.namespace)
         Helm.add_repo(
             "open-telemetry",
             "https://open-telemetry.github.io/opentelemetry-helm-charts",
         )
+
+        # Load extra args from YAML file
+        with open(ASTRONOMY_SHOP_EXTRA_ARGS, "r") as f:
+            extra_values = yaml.safe_load(f)
+
+        # Write values to a temporary file for Helm
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmpfile:
+            yaml.dump(extra_values, tmpfile)
+            values_file_path = tmpfile.name
+
+        self.helm_configs["extra_args"] = [f"--values {values_file_path}"]
+
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
@@ -59,14 +73,14 @@ class AstronomyShop(Application):
 
 # Run this code to test installation/deletion
 # if __name__ == "__main__":
-    # shop = AstronomyShop()
-    # shop.deploy()
-    # print("Astronomy Shop deployed. Waiting for 60 seconds before cleanup...")
-    # try:
-    #     for i in range(60):
-    #         print(f"{i+1}/60 seconds elapsed...", end="\r")
-    #         time.sleep(1)
-    # except KeyboardInterrupt:
-    #     print("\n Interrupted by user. Proceeding to cleanup...")
-    # shop.delete()
-    # print("\n🧹 Cleanup complete.")
+# shop = AstronomyShop()
+# shop.deploy()
+# print("Astronomy Shop deployed. Waiting for 60 seconds before cleanup...")
+# try:
+#     for i in range(60):
+#         print(f"{i+1}/60 seconds elapsed...", end="\r")
+#         time.sleep(1)
+# except KeyboardInterrupt:
+#     print("\n Interrupted by user. Proceeding to cleanup...")
+# shop.delete()
+# print("\n🧹 Cleanup complete.")
