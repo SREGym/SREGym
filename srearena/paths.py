@@ -29,5 +29,6 @@ HOTEL_RES_METADATA = BASE_DIR / "service" / "metadata" / "hotel-reservation.json
 PROMETHEUS_METADATA = BASE_DIR / "service" / "metadata" / "prometheus.json"
 TRAIN_TICKET_METADATA = BASE_DIR / "service" / "metadata" / "train-ticket.json"
 ASTRONOMY_SHOP_METADATA = BASE_DIR / "service" / "metadata" / "astronomy-shop.json"
+ASTRONOMY_SHOP_EXTRA_ARGS = BASE_DIR / "service" / "metadata" / "astronomy-shop-extra-args.yaml"
 TIDB_METADATA = BASE_DIR / "service" / "metadata" / "tidb-with-operator.json"
 FLIGHT_TICKET_METADATA = BASE_DIR / "service" / "metadata" / "flight-ticket.json"
