@@ -1,0 +1,10 @@
+components:
+  load-generator:
+    enabled: true
+    env:
+      - name: LOCUST_HEADLESS
+        value: "true"
+      - name: LOCUST_BROWSER_TRAFFIC_ENABLED
+        value: "false"
+      - name: LOCUST_HOST
+        value: "http://frontend-proxy:8080"
