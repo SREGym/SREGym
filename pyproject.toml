@@ -57,6 +57,7 @@ dependencies = [
     "email-validator==2.2.0",
     "fastapi==0.115.12",
     "fastapi-cli==0.0.7",
+    "fastmcp>=2.9.2",
     "filelock==3.18.0",
     "fixedint==0.1.6",
     "flaml==2.3.4",

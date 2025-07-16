@@ -3,22 +3,16 @@ import os
 import os.path
 import sys
 from contextlib import AsyncExitStack
-from pathlib import Path
-from typing import Annotated, Optional, Union
+from typing import Annotated
 
-from langchain_core.callbacks import CallbackManagerForToolRun
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import InjectedToolCallId, tool
-from langchain_core.tools.base import ArgsSchema, BaseTool
-from langgraph.prebuilt import InjectedState
 from langgraph.types import Command
 from mcp import ClientSession, StdioServerParameters, stdio_client
 from mcp.client.sse import sse_client
-from pydantic import BaseModel, Field
 
+from clients.configs.langgraph_tool_configs import langToolCfg
 from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
-from clients.langgraph_agent.state import State
-from clients.langgraph_agent.tools.text_editing.file_manip import update_file_vars_in_state
 from clients.langgraph_agent.tools.text_editing.flake8_utils import flake8, format_flake8_output  # type: ignore
 from clients.langgraph_agent.tools.text_editing.windowed_file import (  # type: ignore
     FileNotOpened,
@@ -32,22 +26,29 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 
-@tool("get_traces", description="get traces")
+get_traces_docstring = """
+Get Jaeger traces for a given service in the last n minutes.
+
+    Args:
+        service (str): The name of the service for which to retrieve trace data.
+        last_n_minutes (int): The time range (in minutes) to look back from the current time.
+"""
+
+
+@tool(description=get_traces_docstring)
 async def get_traces(
-    service: str,
-    last_n_minutes: int,
-    state: Annotated[dict, InjectedState] = None,
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
+        service: str,
+        last_n_minutes: int,
+        tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> Command:
-    """Get Jaeger traces for a given service in the last n minutes."""
+
     logging.info(f"Getting traces for service {service} in the last {last_n_minutes} minutes")
-    logger.info(f"Raw state: {state}, tool_call_id: {tool_call_id}")
 
     exit_stack = AsyncExitStack()
     server_name = "observability"
     if USE_HTTP:
         logger.info("Using HTTP, connecting to server.")
-        server_url = "http://127.0.0.1:8000/sse"
+        server_url = langToolCfg.mcp_observability
         http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
         session = await exit_stack.enter_async_context(ClientSession(*http_transport))
     else:
@@ -68,11 +69,7 @@ async def get_traces(
         session = await exit_stack.enter_async_context(ClientSession(stdio, write))
 
     await session.initialize()
-    logger.info(f"Connected to server: {server_name}, adding to session dict")
-    logger.info(f"Listing tools for server: {server_name}")
-    response = await session.list_tools()
-    tools = response.tools
-    logger.info("Connected to server with tools, %s", [tool.name for tool in tools])
+
     result = await session.call_tool(
         "get_traces",
         arguments={
@@ -80,23 +77,19 @@ async def get_traces(
             "last_n_minutes": last_n_minutes,
         },
     )
-    traces = result.content[0].text
     await exit_stack.aclose()
+    traces = result.content[0].text
     if USE_SUMMARIES:
         logger.info("Using summaries for traces.")
-        traces = _summarize_traces(result)
-        logger.info(f"Traces summary: {traces}")
-    else:
-        logger.info("Not using summaries, using raw traces data.")
+        traces = _summarize_traces(traces)
 
     return Command(
-        update=update_file_vars_in_state(
-            state,
-            ToolMessage(
-                content=traces,
-                tool_call_id=tool_call_id,
-            ),
-        )
+        update={
+            "messages": [
+                ToolMessage(content=traces,
+                            tool_call_id=tool_call_id, ),
+            ]
+        }
     )
 
 
@@ -120,11 +113,11 @@ def _summarize_traces(traces):
     llm = get_llm_backend_for_tools()
     messages = [
         SystemMessage(content=system_prompt),
-        HumanMessage(content=traces.content[0].text),
+        HumanMessage(content=traces),
     ]
 
     traces_summary = llm.inference(messages=messages)
-    # logger.info(f"Traces summary: {traces_summary}")
+    logger.info(f"Traces summary: {traces_summary}")
     return traces_summary
 
 
@@ -155,44 +148,27 @@ def _summarize_operations(operations):
     return operations_summary
 
 
-def _summarize_services(services):
-    logger.info("=== summarize_services called ===")
+get_services_docstring = """
+Retrieve the list of service names from the Grafana instance.
 
-    system_prompt = """
-        You are a tool for a Site Reliability Engineering team. Currently, the team faces an incident in the cluster and needs to fix it ASAP.
-            Your job is to analyze and summarize given microservice operations, given in format of dictionaries.
-            Read the given operations. Summarize the services. Analyze what could be the root cause of the incident.
-            Be succinct and concise. 
+    Args:
 
-            Return your response in this format:
-            SERVICE NAME: <insert service name>
-            SUMMARY: <insert summary of services>
-            DO NOT truncate the services.
-            STRICTLY FOLLOW THIS FORMAT
-            
-            """
-    llm = get_llm_backend_for_tools()
-    messages = [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=services),
-    ]
-
-    services_summary = llm.inference(messages=messages)
-    logger.info(f"Operations summary: {services_summary}")
-    return services_summary
+    Returns:
+        List[str]: A list of service names available in Grafana.
+"""
 
 
-@tool("get_services", description="Get all services in the cluster")
+@tool(description=get_services_docstring)
 async def get_services(
-    state: Annotated[dict, InjectedState] = None,
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
+        tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> Command:
+
     logger.info(f"calling mcp get_services from langchain get_services")
     exit_stack = AsyncExitStack()
     server_name = "observability"
     if USE_HTTP:
         logger.info("Using HTTP, connecting to server.")
-        server_url = "http://127.0.0.1:8000/sse"
+        server_url = langToolCfg.mcp_observability
         http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
         session = await exit_stack.enter_async_context(ClientSession(*http_transport))
     else:
@@ -213,48 +189,44 @@ async def get_services(
         session = await exit_stack.enter_async_context(ClientSession(stdio, write))
 
     await session.initialize()
-    logger.info(f"Connected to server: {server_name}, adding to session dict")
 
-    logger.info(f"Listing tools for server: {server_name}")
-    response = await session.list_tools()
-    tools = response.tools
-    logger.info("Connected to server with tools, %s", [tool.name for tool in tools])
     result = await session.call_tool("get_services")
     await exit_stack.aclose()
-    logger.info(f"Result from get_services: {result}")
     services = result.content[0].text
-    logger.info(f"Services: {services}")
-    if USE_SUMMARIES:
-        logger.info("Using summaries for services.")
-        services = _summarize_services(result)
-        logger.info(f"Services summary: {services}")
-
-    else:
-        logger.info("Not using summaries, using raw services data.")
-    logger.info(f"Services summary: {services}")
+    logger.info(f"Result from get_services mcp tools: f{services}")
     return Command(
-        update=update_file_vars_in_state(
-            state,
-            ToolMessage(
-                content=services,
-                tool_call_id=tool_call_id,
-            ),
-        )
+        update={
+            "messages": [
+                ToolMessage(content=services,
+                            tool_call_id=tool_call_id, ),
+            ]
+        }
     )
 
 
-@tool("get_operations", description="Get all operations in the cluster")
+get_operations_docstring = """
+Query available operations for a specific service from the Grafana instance.
+
+    Args:
+        service (str): The name of the service whose operations should be retrieved.
+
+    Returns:
+        List[str]: A list of operation names associated with the specified service.
+"""
+
+
+@tool(description=get_operations_docstring)
 async def get_operations(
-    service: str,
-    state: Annotated[dict, InjectedState] = None,
-    tool_call_id: Annotated[str, InjectedToolCallId] = "",
+        service: str,
+        tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
+
     logger.info(f"calling mcp get_operations from langchain get_operations with service {service}")
     exit_stack = AsyncExitStack()
     server_name = "observability"
     if USE_HTTP:
         logger.info("Using HTTP, connecting to server.")
-        server_url = "http://127.0.0.1:8000/sse"
+        server_url = langToolCfg.mcp_observability
         http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
         session = await exit_stack.enter_async_context(ClientSession(*http_transport))
     else:
@@ -275,29 +247,21 @@ async def get_operations(
         session = await exit_stack.enter_async_context(ClientSession(stdio, write))
 
     await session.initialize()
-    logger.info(f"Connected to server: {server_name}, adding to session dict")
 
-    logger.info(f"Listing tools for server: {server_name}")
-    response = await session.list_tools()
-    tools = response.tools
-    logger.info("Connected to server with tools, %s", [tool.name for tool in tools])
     result = await session.call_tool(
         "get_operations",
         arguments={"service": service},
     )
     await exit_stack.aclose()
     operations = result.content[0].text
-    logger.info(f"Result from get_operations: {operations}")
     if USE_SUMMARIES:
         logger.info("Using summaries for operations.")
-        operations = _summarize_operations(result)
-        logger.info(f"Operations summaries: {operations}")
+        operations = _summarize_operations(operations)
     return Command(
-        update=update_file_vars_in_state(
-            state,
-            ToolMessage(
-                content=operations,
-                tool_call_id=tool_call_id,
-            ),
-        )
+        update={
+            "messages": [
+                ToolMessage(content=operations,
+                            tool_call_id=tool_call_id),
+            ]
+        }
     )
