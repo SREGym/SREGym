@@ -3,7 +3,7 @@ import os
 os.environ["PROVIDER_TOOLS"] = "openai"
 os.environ["MODEL_TOOLS"] = "gpt-4o-mini"
 os.environ["URL_TOOLS"] = "https://api.openai.com/v1"
-os.environ["API_KEY_TOOLS"] = ""
+os.environ["API_KEY_TOOLS"] = "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"
 
 import atexit
 import logging
@@ -68,8 +68,9 @@ def setup_port_forwarding():
 if __name__ == "__main__":
     llm = get_llm_backend_for_tools()
 
-    diagnosis_agent = BaseAgent(llm, diagnosis_agent_cfg.copy(update={"max_tool_call": 3}))
+    diagnosis_agent = BaseAgent(llm, diagnosis_agent_cfg.copy(update={"max_tool_call": 4}))
     diagnosis_agent.build_agent()
+    diagnosis_agent.save_agent_graph_to_png()
 
     pid = "revoke_auth_mongodb-1"
     conductor = Conductor()

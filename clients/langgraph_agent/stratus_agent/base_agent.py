@@ -1,9 +1,13 @@
 import logging
 import yaml
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langgraph.constants import END
 from langgraph.graph import START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
+
+import os
+from collections import Counter
 
 from clients.configs.stratus_config import BaseAgentCfg
 from clients.langgraph_agent.state import State
@@ -43,6 +47,99 @@ class BaseAgent:
             return END
         else:
             return "agent"
+    
+    def check_if_summaries_needed(self, state: State):
+        """ Check if summaries are needed based on the number of messages."""
+        messages = state["messages"]
+        tool_calls = state["tool_calling_times"]
+
+        logger.info("Checking if summaries are needed, current messages: %s", messages)
+        logger.info("Number of tool calls: %d", tool_calls)
+
+        if tool_calls >=3  and tool_calls % 3 == 0:
+            logger.info("Summaries are needed, multiple of 10 messages.")
+            return True
+        else:
+            logger.info("No summaries needed")
+
+
+            return False
+   
+    
+    def summarize_messages(self, state: State):
+        """ Summarize the messages in the conversation history."""
+        messages = [msg for msg in state["messages"] if not (isinstance(msg, AIMessage) and msg.additional_kwargs.get("is_summary"))][-(int(os.environ["SUMMARY_FREQUENCY"])-1):]
+        def format_messages(msgs):
+            formatted = ""
+            for msg in msgs:
+                # Skip summary messages
+                if isinstance(msg, AIMessage) and msg.additional_kwargs.get("is_summary", False):
+                    continue
+                if isinstance(msg, (AIMessage, HumanMessage)):
+                    role = "Ai" if isinstance(msg, AIMessage) else "Human"
+                    formatted += f"{role}: {msg.content}\n"
+            return formatted
+        
+
+            return type_counts
+        logger.info("Summarizing messages: %s", messages)
+        # Count the number of messages of each type
+        formatted_history = format_messages(messages)
+        logger.info("Formatted conversation history: %s", formatted_history)
+        summary_prompt = [
+    SystemMessage(content="You are a helpful assistant that summarizes conversations."),
+    HumanMessage(content="""
+Summarize the following conversation history in concise bullet points.
+At the end, add a final line beginning with 'Answer:' that gives the AI's most recent reply.
+
+Format:
+- [bullet point]
+- ...
+Answer: [final AI reply]
+
+Conversation:
+""" + formatted_history)
+]
+        llm = get_llm_backend_for_tools()    
+
+        messages_summary = llm.inference(messages=summary_prompt)
+
+# If the response is an AIMessage or similar, extract `.content`
+        if isinstance(messages_summary, AIMessage):
+            summary_content = messages_summary.content
+        else:
+            summary_content = str(messages_summary)
+        answer = ""
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and not msg.additional_kwargs.get("is_summary", False):
+                answer = msg.content.strip()
+            break
+        # Format the summary content
+        lines = summary_content.strip().split("\n")
+        formatted_summary_lines = []
+
+        for line in lines:
+            clean_line = line.strip().lstrip("-").strip()
+            # Filter out any existing "Answer:" lines
+            if clean_line.lower().startswith("answer:"):
+                continue
+            if clean_line:
+                formatted_summary_lines.append(f"- {clean_line}")
+
+# Append the actual last AI answer at the end
+        formatted_summary = "\n".join(formatted_summary_lines + [f"\nAnswer: {answer}"])
+    
+        summary_message = HumanMessage(
+            content=formatted_summary,
+            additional_kwargs={"is_summary": True})             
+        logger.info("Produced Summary: %s", formatted_summary)
+        new_messages = state["messages"] + [summary_message] 
+        return {
+        "messages": new_messages,
+        "curr_file": state["curr_file"],
+        "curr_line": state["curr_line"],
+        "workdir": state["workdir"],
+    }
 
     def post_tool_hook(self, state: State):
         """Post-tool hook."""
@@ -77,6 +174,8 @@ class BaseAgent:
 
         # we add the node to the graph
         self.graph_builder.add_node("agent", self.llm_inference_step)
+
+        self.graph_builder.add_node("summarize_messages", self.summarize_messages)
         self.graph_builder.add_node("tool_node", tool_node)
         self.graph_builder.add_node("post_tool_hook", self.post_tool_hook)
 
@@ -85,11 +184,21 @@ class BaseAgent:
         self.graph_builder.add_edge("tool_node", "post_tool_hook")
 
         self.graph_builder.add_conditional_edges(
+        "agent",
+        self.check_if_summaries_needed,  # This must return True or False
+        {
+            True: "summarize_messages",
+            False: "tool_node",
+        }
+    )
+        self.graph_builder.add_edge("summarize_messages", "agent")
+
+        self.graph_builder.add_conditional_edges(
             "post_tool_hook",
             self.post_tool_route,
             {"agent": "agent", END: END},
         )
-
+        
         self.graph = self.graph_builder.compile()
 
     def get_init_prompts(self, app_summary):
@@ -104,6 +213,10 @@ class BaseAgent:
             if user_prompt:
                 prompts.append(HumanMessage(user_prompt))
             return prompts
+        
+    def save_agent_graph_to_png(self):
+        with open("./agent_graph.png", "wb") as png:
+            png.write(self.graph.get_graph().draw_mermaid_png())
 
     def run(self, app_summary):
         if not self.graph:
