@@ -21,7 +21,7 @@ class BaseAgent:
     def __init__(self, llm, config: BaseAgentCfg):
         self.graph_builder = StateGraph(State)
         self.graph: CompiledStateGraph | None = None
-        self.max_tool_call = config.max_tool_call
+        self.max_round = config.max_round
         self.prompts_file_path = config.prompts_file_path
         self.async_tools = config.async_tools
         self.sync_tools = config.sync_tools
@@ -30,12 +30,26 @@ class BaseAgent:
         # self.llm = llm.bind_tools(self.sync_tools + self.async_tools, tool_choice="required")
 
     def llm_inference_step(self, state: State):
-        logger.info(f"The agent has called tools {state['tool_calling_times']} times!")
         return {
             # "messages": [self.llm.invoke(state["messages"])]
             "messages": [self.llm.inference(messages=state["messages"],
                                             tools=self.async_tools + self.sync_tools)],
         }
+
+    def llm_explanation_step(self, state: State):
+        state["messages"].append(
+            HumanMessage(content="You are now in explanation stage; "
+                                 "please explain why you want to call the tools with the arguments next; "
+                                 "the tools you mentioned must be available to you at first.")
+        )
+        return self.llm_inference_step(state)
+
+    def llm_tool_call_step(self, state: State):
+        state["messages"].append(
+            HumanMessage(content="You are now in tool-call stage; "
+                                 "please make tool calls consistent with your explanation")
+        )
+        return self.llm_inference_step(state)
 
     def post_tool_route(self, state: State):
         """
@@ -43,7 +57,7 @@ class BaseAgent:
         Route to END if tool calling quota is used up or the state's 'submitted' value
         is True; otherwise, route to the agent.
         """
-        if state["tool_calling_times"] > self.max_tool_call or state["submitted"]:
+        if state["num_rounds"] > self.max_round or state["submitted"]:
             return END
         else:
             return "agent"
@@ -143,44 +157,45 @@ Conversation:
 
     def post_tool_hook(self, state: State):
         """Post-tool hook."""
-        tool_calling_times = state["tool_calling_times"]
+        num_rounds = state["num_rounds"]
         # Limited times to call tools other than the submit tool
         if not state["submitted"]:
-            tool_calling_times += 1
+            num_rounds += 1
 
-            if tool_calling_times > self.max_tool_call:
-                sys_mes = f"You have reached to the limit of max tool calling. Will be forced to end."
+            if num_rounds > self.max_round:
+                sys_mes = f"You have reached to the limit of max number of rounds. Will be forced to end."
                 logger.info(sys_mes)
             else:
-                if tool_calling_times < self.max_tool_call:
-                    sys_mes = f"You have already called the tools {tool_calling_times} times. " \
-                              f"You can still call the tools " \
-                              f"{self.max_tool_call - tool_calling_times} more times."
+                if num_rounds < self.max_round:
+                    sys_mes = f"You have already ran {num_rounds} rounds. " \
+                              f"You can still run " \
+                              f"{self.max_round - num_rounds} more rounds."
                 else:
-                    sys_mes = f"You have already used up all your tool call attempts. " \
-                              f"You should call the submit_tool and submit your answer. " \
+                    sys_mes = f"You have already reached the limit of max number of rounds. " \
+                              f"You should call the submit_tool and submit your answer in the " \
+                              f"tool-call stage of next round. " \
                               f"If you keep calling other tools, the process will be forced to end " \
                               f"and you will be considered failing the tasks."
         else:
             sys_mes = f"Submission has been detected. Will be routed to END."
 
-        # update messages and tool_calling_times of state
+        # update messages and num_rounds of state
         return {"messages": [SystemMessage(sys_mes)],
-                "tool_calling_times": tool_calling_times}
+                "num_rounds": num_rounds}
 
     def build_agent(self):
         tool_node = StratusToolNode(async_tools=self.async_tools,
                                     sync_tools=self.sync_tools)
 
         # we add the node to the graph
-        self.graph_builder.add_node("agent", self.llm_inference_step)
-
-        self.graph_builder.add_node("summarize_messages", self.summarize_messages)
+        self.graph_builder.add_node("explanation_agent", self.llm_explanation_step)
+        self.graph_builder.add_node("tool_agent", self.llm_tool_call_step)
         self.graph_builder.add_node("tool_node", tool_node)
         self.graph_builder.add_node("post_tool_hook", self.post_tool_hook)
 
-        self.graph_builder.add_edge(START, "agent")
-        self.graph_builder.add_edge("agent", "tool_node")
+        self.graph_builder.add_edge(START, "explanation_agent")
+        self.graph_builder.add_edge("explanation_agent", "tool_agent")
+        self.graph_builder.add_edge("tool_agent", "tool_node")
         self.graph_builder.add_edge("tool_node", "post_tool_hook")
 
         self.graph_builder.add_conditional_edges(
@@ -196,7 +211,7 @@ Conversation:
         self.graph_builder.add_conditional_edges(
             "post_tool_hook",
             self.post_tool_route,
-            {"agent": "agent", END: END},
+            {"agent": "explanation_agent", END: END},
         )
         
         self.graph = self.graph_builder.compile()
@@ -204,7 +219,7 @@ Conversation:
     def get_init_prompts(self, app_summary):
         with open(self.prompts_file_path, "r") as file:
             data = yaml.safe_load(file)
-            sys_prompt = data["diagnosis_agent"]["system"].format(max_tool_call=self.max_tool_call,
+            sys_prompt = data["diagnosis_agent"]["system"].format(max_round=self.max_round,
                                                                   app_summary=app_summary)
             user_prompt = data["diagnosis_agent"]["user"]
             prompts = []
@@ -231,11 +246,12 @@ Conversation:
             "workdir": "",
             "curr_file": "",
             "curr_line": 0,
-            "tool_calling_times": 0,
+            "num_rounds": 0,
             "submitted": False,
             "ans": dict(),
         }
 
         return list(self.graph.stream(state,
-                                      config={"recursion_limit": 100},
+                                      # recursion_limit could be as large as possible as we have our own limit.
+                                      config={"recursion_limit": 10000},
                                       stream_mode="values"))[-1]

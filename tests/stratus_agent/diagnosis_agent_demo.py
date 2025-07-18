@@ -1,5 +1,7 @@
 import os
 
+os.environ["PROVIDER"] = "openai"
+os.environ["WATSONX_API_KEY"] = ""
 os.environ["PROVIDER_TOOLS"] = "openai"
 os.environ["MODEL_TOOLS"] = "gpt-4o-mini"
 os.environ["URL_TOOLS"] = "https://api.openai.com/v1"
@@ -68,7 +70,7 @@ def setup_port_forwarding():
 if __name__ == "__main__":
     llm = get_llm_backend_for_tools()
 
-    diagnosis_agent = BaseAgent(llm, diagnosis_agent_cfg.copy(update={"max_tool_call": 4}))
+    diagnosis_agent = BaseAgent(llm, diagnosis_agent_cfg.model_copy(update={"max_round": 3}))
     diagnosis_agent.build_agent()
     diagnosis_agent.save_agent_graph_to_png()
 
@@ -112,7 +114,10 @@ if __name__ == "__main__":
     # Phase 1: NO OP
     final_state = diagnosis_agent.run(problem.app.get_app_summary())
     logger.info(f"Final state: {final_state}")
-    print(f"NO OP Detection Result: {'✅' if not final_state['ans']['detection'] else '❌'}")
+    if 'detection' in final_state['ans'] and isinstance(final_state['ans']['detection'], bool):
+        print(f"NO OP Detection Result: {'✅' if not final_state['ans']['detection'] else '❌'}")
+    else:
+        print(f"NO OP Detection Result: '❌'; Invalid answer provided by the agent!")
 
     # Phase 2: Inject Fault
     print("[Injecting fault now...]")
@@ -123,9 +128,10 @@ if __name__ == "__main__":
     # Phase 3: Faulty system
     final_state = diagnosis_agent.run(problem.app.get_app_summary())
     logger.info(f"Final state: {final_state}")
-    print("--------------------**********************----------------------")
-    print(f"Faulty Result: {'✅' if final_state['ans']['detection'] else '❌'}")
-    print("--------------------**********************----------------------")
+    if 'detection' in final_state['ans'] and isinstance(final_state['ans']['detection'], bool):
+        print(f"Faulty Result: {'✅' if final_state['ans']['detection'] else '❌'}")
+    else:
+        print(f"Faulty Result: '❌'; Invalid answer provided by the agent!")
 
     # Final cleanup
     with CriticalSection():

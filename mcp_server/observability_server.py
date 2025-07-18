@@ -13,15 +13,20 @@ logger = logging.getLogger("Observability MCP Server")
 logger.info("Starting Observability MCP Server")
 mcp = FastMCP("Observability MCP Server")
 
-
 grafana_url = "http://localhost:16686"
 observability_client = ObservabilityClient(grafana_url)
 
-USE_HTTP = True
-
 
 @mcp.tool(name="get_services")
-def get_services():
+def get_services() -> str:
+    """Retrieve the list of service names from the Grafana instance.
+
+        Args:
+
+        Returns:
+            str: String of a list of service names available in Grafana or error information.
+    """
+
     logger.info("[ob_mcp] get_services called, getting jaeger services")
     try:
         url = f"{grafana_url}/api/services"
@@ -29,12 +34,8 @@ def get_services():
         logger.info(f"[ob_mcp] get_services status code: {response.status_code}")
         logger.info(f"[ob_mcp] get_services result: {response}")
         logger.info(f"[ob_mcp] result: {response.json()}")
-        services = response.json()["data"]
-        assert type(services) == list, f"The type of the returned result should be list but get {type(services)}."
-        if len(services) > 0:
-            return services
-        else:
-            return "The result of your query is empty. Please recheck the parameters you use."
+        services = str(response.json()["data"])
+        return services if services else "None"
     except Exception as e:
         err_str = f"[ob_mcp] Error querying get_services: {str(e)}"
         logger.error(err_str)
@@ -42,26 +43,42 @@ def get_services():
 
 
 @mcp.tool(name="get_operations")
-def get_operations(service: str):
+def get_operations(service: str) -> str:
+    """Query available operations for a specific service from the Grafana instance.
+
+        Args:
+            service (str): The name of the service whose operations should be retrieved.
+
+        Returns:
+            str: String of a list of operation names associated with the specified service or error information.
+    """
+
     logger.info("[ob_mcp] get_operations called, getting jaeger operations")
     try:
         url = f"{grafana_url}/api/operations"
         params = {"service": service}
         response = observability_client.make_request("GET", url, params=params)
         logger.info(f"[ob_mcp] get_operations: {response.status_code}")
-        operations = response.json()["data"]
-        assert type(operations) == list, f"The type of the returned result should be list but get {type(operations)}."
-        if len(operations) > 0:
-            return operations
-        else:
-            return "The result of your query is empty. Please recheck the parameters you use."
+        operations = str(response.json()["data"])
+        return operations if operations else "None"
     except Exception as e:
-        logger.error(f"[ob_mcp] Error querying get_operations: {str(e)}")
-        return None
+        err_str = f"[ob_mcp] Error querying get_operations: {str(e)}"
+        logger.error(err_str)
+        return err_str
 
 
 @mcp.tool(name="get_traces")
-def get_traces(service: str, last_n_minutes: int):
+def get_traces(service: str, last_n_minutes: int) -> str:
+    """Get Jaeger traces for a given service in the last n minutes.
+
+        Args:
+            service (str): The name of the service for which to retrieve trace data.
+            last_n_minutes (int): The time range (in minutes) to look back from the current time.
+
+        Returns:
+            str: String of Jaeger traces or error information
+    """
+
     logger.info("[ob_mcp] get_traces called, getting jaeger traces")
     try:
         url = f"{grafana_url}/api/traces"
@@ -77,15 +94,12 @@ def get_traces(service: str, last_n_minutes: int):
         }
         response = observability_client.make_request("GET", url, params=params)
         logger.info(f"[ob_mcp] get_traces: {response.status_code}")
-        traces = response.json()["data"]
-        assert type(traces) == list, f"The type of the returned result should be list but get {type(traces)}."
-        if len(traces) > 0:
-            return traces
-        else:
-            return "The result of your query is empty. Please recheck the parameters you use."
+        traces = str(response.json()["data"])
+        return traces if traces else "None"
     except Exception as e:
-        logger.error(f"[ob_mcp] Error querying get_traces: {str(e)}")
-        return None
+        err_str = f"[ob_mcp] Error querying get_traces: {str(e)}"
+        logger.error(err_str)
+        return err_str
 
 
 if __name__ == "__main__":

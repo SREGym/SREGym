@@ -1,14 +1,11 @@
 import logging
-import os
-import os.path
-import sys
 from contextlib import AsyncExitStack
 from typing import Annotated
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.types import Command
-from mcp import ClientSession, StdioServerParameters, stdio_client
+from mcp import ClientSession
 from mcp.client.sse import sse_client
 
 from clients.configs.langgraph_tool_configs import langToolCfg
@@ -20,14 +17,11 @@ from clients.langgraph_agent.tools.text_editing.windowed_file import (  # type: 
     WindowedFile,
 )
 
-USE_HTTP = True
-USE_SUMMARIES = True  # Set to False to use local server
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
-get_traces_docstring = """
-Get Jaeger traces for a given service in the last n minutes.
+get_traces_docstring = """Get Jaeger traces for a given service in the last n minutes.
 
     Args:
         service (str): The name of the service for which to retrieve trace data.
@@ -45,28 +39,10 @@ async def get_traces(
     logging.info(f"Getting traces for service {service} in the last {last_n_minutes} minutes")
 
     exit_stack = AsyncExitStack()
-    server_name = "observability"
-    if USE_HTTP:
-        logger.info("Using HTTP, connecting to server.")
-        server_url = langToolCfg.mcp_observability
-        http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
-        session = await exit_stack.enter_async_context(ClientSession(*http_transport))
-    else:
-        logger.info("Not using HTTP, booting server locally, not recommended.")
-        curr_dir = os.getcwd()
-        logger.info(f"current dir: {curr_dir}")
-        server_path = f"{curr_dir}/mcp_server/observability_server.py"
-        logger.info(f"Connecting to server: {server_name} at path: {server_path}")
-        is_python = server_path.endswith(".py")
-        is_js = server_path.endswith(".js")
-        if not (is_python or is_js):
-            raise ValueError("Server script must be a .py or .js file")
-        command = sys.executable if is_python else "node"  # Uses the current Python interpreter from the activated venv
-        server_params = StdioServerParameters(command=command, args=[server_path], env=None)
-        logging.info(f"Starting server: {server_name} with params: {server_params}")
-        stdio_transport = await exit_stack.enter_async_context(stdio_client(server_params))
-        stdio, write = stdio_transport
-        session = await exit_stack.enter_async_context(ClientSession(stdio, write))
+    logger.info("Using HTTP, connecting to server.")
+    server_url = langToolCfg.mcp_observability
+    http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
+    session = await exit_stack.enter_async_context(ClientSession(*http_transport))
 
     await session.initialize()
 
@@ -79,7 +55,7 @@ async def get_traces(
     )
     await exit_stack.aclose()
     traces = result.content[0].text
-    if USE_SUMMARIES:
+    if langToolCfg.use_summaries and len(traces) >= langToolCfg.min_len_to_sum:
         logger.info("Using summaries for traces.")
         traces = _summarize_traces(traces)
 
@@ -165,28 +141,10 @@ async def get_services(
 
     logger.info(f"calling mcp get_services from langchain get_services")
     exit_stack = AsyncExitStack()
-    server_name = "observability"
-    if USE_HTTP:
-        logger.info("Using HTTP, connecting to server.")
-        server_url = langToolCfg.mcp_observability
-        http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
-        session = await exit_stack.enter_async_context(ClientSession(*http_transport))
-    else:
-        logger.info("Not using HTTP, booting server locally, not recommended.")
-        curr_dir = os.getcwd()
-        logger.info(f"current dir: {curr_dir}")
-        server_path = f"{curr_dir}/mcp_server/observability_server.py"
-        logger.info(f"Connecting to server: {server_name} at path: {server_path}")
-        is_python = server_path.endswith(".py")
-        is_js = server_path.endswith(".js")
-        if not (is_python or is_js):
-            raise ValueError("Server script must be a .py or .js file")
-        command = sys.executable if is_python else "node"  # Uses the current Python interpreter from the activated venv
-        server_params = StdioServerParameters(command=command, args=[server_path], env=None)
-        logging.info(f"Starting server: {server_name} with params: {server_params}")
-        stdio_transport = await exit_stack.enter_async_context(stdio_client(server_params))
-        stdio, write = stdio_transport
-        session = await exit_stack.enter_async_context(ClientSession(stdio, write))
+    logger.info("Using HTTP, connecting to server.")
+    server_url = langToolCfg.mcp_observability
+    http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
+    session = await exit_stack.enter_async_context(ClientSession(*http_transport))
 
     await session.initialize()
 
@@ -223,28 +181,10 @@ async def get_operations(
 
     logger.info(f"calling mcp get_operations from langchain get_operations with service {service}")
     exit_stack = AsyncExitStack()
-    server_name = "observability"
-    if USE_HTTP:
-        logger.info("Using HTTP, connecting to server.")
-        server_url = langToolCfg.mcp_observability
-        http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
-        session = await exit_stack.enter_async_context(ClientSession(*http_transport))
-    else:
-        logger.info("Not using HTTP, booting server locally, not recommended.")
-        curr_dir = os.getcwd()
-        logger.info(f"current dir: {curr_dir}")
-        server_path = f"{curr_dir}/mcp_server/observability_server.py"
-        logger.info(f"Connecting to server: {server_name} at path: {server_path}")
-        is_python = server_path.endswith(".py")
-        is_js = server_path.endswith(".js")
-        if not (is_python or is_js):
-            raise ValueError("Server script must be a .py or .js file")
-        command = sys.executable if is_python else "node"  # Uses the current Python interpreter from the activated venv
-        server_params = StdioServerParameters(command=command, args=[server_path], env=None)
-        logging.info(f"Starting server: {server_name} with params: {server_params}")
-        stdio_transport = await exit_stack.enter_async_context(stdio_client(server_params))
-        stdio, write = stdio_transport
-        session = await exit_stack.enter_async_context(ClientSession(stdio, write))
+    logger.info("Using HTTP, connecting to server.")
+    server_url = langToolCfg.mcp_observability
+    http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
+    session = await exit_stack.enter_async_context(ClientSession(*http_transport))
 
     await session.initialize()
 
@@ -254,7 +194,7 @@ async def get_operations(
     )
     await exit_stack.aclose()
     operations = result.content[0].text
-    if USE_SUMMARIES:
+    if langToolCfg.use_summaries and len(operations) >= langToolCfg.min_len_to_sum:
         logger.info("Using summaries for operations.")
         operations = _summarize_operations(operations)
     return Command(

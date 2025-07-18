@@ -11,6 +11,13 @@ load_dotenv()
 global PROVIDER_TOOLS, MODEL_TOOLS, URL_TOOLS, API_VERSION_TOOLS, API_KEY_TOOLS, REASONING_EFFORT_TOOLS, SEED_TOOLS, TOP_P_TOOLS, TEMPERATURE_TOOLS, THINKING_TOOLS, THINKING_BUDGET_TOOLS, MAX_TOKENS_TOOLS
 
 try:
+    PROVIDER = os.environ["PROVIDER"]
+except KeyError:
+    PROVIDER = "openai"
+    print("Unable to find environment variable - PROVIDER, setting to openai...")
+    raise
+
+try:
     PROVIDER_TOOLS = os.environ["PROVIDER_TOOLS"]
 except KeyError:
     PROVIDER_TOOLS = ""
@@ -86,14 +93,14 @@ except KeyError:
 try:
     WATSONX_API_BASE = os.environ["WATSONX_API_BASE"]
 except KeyError:
-    WATSONX_API_BASE = ""
+    WATSONX_API_BASE = "https://us-south.ml.cloud.ibm.com"
     print(f"Unable to find environment variable - WATSONX_API_BASE. Setting to {WATSONX_API_BASE}.")
 
 try:
     WATSONX_API_KEY = os.environ["WATSONX_API_KEY"]
 except KeyError:
-    WATSONX_API_KEY = ""
-    print(f"Unable to find environment variable - WATSONX_API_KEY. Setting to {WATSONX_API_KEY}.")
+    print(f"Unable to find environment variable - WATSONX_API_KEY. Exiting...")
+    exit(1)
 
 try:
     THINKING_BUDGET_TOOLS = int(os.environ["THINKING_BUDGET_TOOLS"])
@@ -127,7 +134,7 @@ def get_llm_backend_for_tools():
         )
     else:
         return LiteLLMBackend(
-            provider=PROVIDER_TOOLS,
+            provider=PROVIDER,
             model_name=MODEL_TOOLS,
             url=URL_TOOLS,
             api_key=API_KEY_TOOLS,

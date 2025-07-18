@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
@@ -25,35 +26,41 @@ class StratusToolNode:
         new_messages = []
         for tool_call in message.tool_calls:
             logger.info(f"invoking tool: {tool_call['name']}, tool_call: {tool_call}")
-            if tool_call["name"] in self.async_tools_by_name:
-                tool_result = asyncio.run(self.async_tools_by_name[tool_call["name"]].ainvoke(
-                    {
-                        "type": "tool_call",
-                        "name": tool_call["name"],
-                        "args": {"state": inputs, **tool_call["args"]},
-                        "id": tool_call["id"],
-                    }
-                ))
-            elif tool_call["name"] in self.sync_tools_by_name:
-                tool_result = self.sync_tools_by_name[tool_call["name"]].invoke(
-                    {
-                        "type": "tool_call",
-                        "name": tool_call["name"],
-                        "args": {"state": inputs, **tool_call["args"]},
-                        "id": tool_call["id"],
-                    }
-                )
-            else:
-                raise ValueError(f'Tool {tool_call["name"]} does not exist!')
+            try:
+                if tool_call["name"] in self.async_tools_by_name:
+                    tool_result = asyncio.run(self.async_tools_by_name[tool_call["name"]].ainvoke(
+                        {
+                            "type": "tool_call",
+                            "name": tool_call["name"],
+                            "args": {"state": inputs, **tool_call["args"]},
+                            "id": tool_call["id"],
+                        }
+                    ))
+                elif tool_call["name"] in self.sync_tools_by_name:
+                    tool_result = self.sync_tools_by_name[tool_call["name"]].invoke(
+                        {
+                            "type": "tool_call",
+                            "name": tool_call["name"],
+                            "args": {"state": inputs, **tool_call["args"]},
+                            "id": tool_call["id"],
+                        }
+                    )
+                else:
+                    raise ValueError(f'Tool {tool_call["name"]} does not exist!')
 
-            assert isinstance(tool_result, Command), \
-                f"Tool {tool_call['name']} should return a Command object, but return {type(tool_result)}"
-            logger.info(f"tool_result: {tool_result}")
-            new_messages += tool_result.update["messages"]
-            to_update = {
-                **to_update,
-                **tool_result.update,  # this is the key part
-            }
+                assert isinstance(tool_result, Command), \
+                    f"Tool {tool_call['name']} should return a Command object, but return {type(tool_result)}"
+                logger.info(f"tool_result: {tool_result}")
+                new_messages += tool_result.update["messages"]
+                to_update = {
+                    **to_update,
+                    **tool_result.update,  # this is the key part
+                }
+            except Exception as e:
+                new_messages += [ToolMessage(
+                    content=f"Error: {e}",
+                    tool_call_id=tool_call["id"]
+                )]
 
         to_update["messages"] = new_messages
         return to_update

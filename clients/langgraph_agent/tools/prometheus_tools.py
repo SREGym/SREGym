@@ -1,14 +1,11 @@
 import logging
-import os
-import os.path
-import sys
 from contextlib import AsyncExitStack
 from typing import Annotated
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.types import Command
-from mcp import ClientSession, StdioServerParameters, stdio_client
+from mcp import ClientSession
 from mcp.client.sse import sse_client
 
 from clients.configs.langgraph_tool_configs import langToolCfg
@@ -20,8 +17,6 @@ from clients.langgraph_agent.tools.text_editing.windowed_file import (  # type: 
     WindowedFile,
 )
 
-USE_HTTP = True
-USE_SUMMARIES = True
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -46,37 +41,19 @@ async def get_metrics(
     logger.info(f"get_metrics called with query: {query}")
     logger.info("Calling MCP get_metrics from langchain get_metrics")
     exit_stack = AsyncExitStack()
-    server_name = "prometheus"
-    if USE_HTTP:
-        logger.info("Using HTTP, connecting to server.")
-        # server_url = "http://127.0.0.1:9953/sse"
-        server_url = langToolCfg.mcp_prometheus
-        # Register both the SSE client and session with an async exit stack so they will automatically clean up when
-        # you're done (e.g. close connections properly
+    logger.info("Using HTTP, connecting to server.")
+    # server_url = "http://127.0.0.1:9953/sse"
+    server_url = langToolCfg.mcp_prometheus
+    # Register both the SSE client and session with an async exit stack so they will automatically clean up when
+    # you're done (e.g. close connections properly
 
-        # opens the actual communication channel to the MCP server
-        # Connect to the SSE stream
-        # Wrap that connection in a ClientSession so you can call MCP tools
-        # Automatically clean up everything when the async block finishes
-        http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
-        session = await exit_stack.enter_async_context(ClientSession(*http_transport))
-    else:
-        server_path = f"{os.getcwd()}/mcp_server/prometheus_server.py"
-        logger.info(f"Connecting to server: {server_name} at path: {server_path}")
-        is_python = server_path.endswith(".py")
-        is_js = server_path.endswith(".js")
-        if not (is_python or is_js):
-            raise ValueError("Server path must be a Python or JavaScript file.")
-        command = sys.executable if is_python else "node"
-        server_parameters = StdioServerParameters(
-            command=command,
-            args=[server_path],
-            server_name=server_name,
-            is_python=is_python,
-            is_js=is_js,
-        )
-        stdio_transport = await exit_stack.enter_async_context(stdio_client(server_parameters))
-        session = await exit_stack.enter_async_context(ClientSession(*stdio_transport))
+    # opens the actual communication channel to the MCP server
+    # Connect to the SSE stream
+    # Wrap that connection in a ClientSession so you can call MCP tools
+    # Automatically clean up everything when the async block finishes
+    http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
+    session = await exit_stack.enter_async_context(ClientSession(*http_transport))
+
     await session.initialize()
 
     result = await session.call_tool(
@@ -90,7 +67,7 @@ async def get_metrics(
     logger.info(f"Metrics received: {metrics}")
     await exit_stack.aclose()
 
-    if USE_SUMMARIES:
+    if langToolCfg.use_summaries and len(metrics) >= langToolCfg.min_len_to_sum:
         metrics = _summarize_metrics(result)
         # logger.info(f"Summary: {metrics}")
 

@@ -19,7 +19,7 @@ parent_dir = Path(__file__).resolve().parent
 
 
 class BaseAgentCfg(BaseModel):
-    max_tool_call: int = Field(
+    max_round: int = Field(
         default=20,
         description="maximum times of allowed tool calling ",
         gt=0

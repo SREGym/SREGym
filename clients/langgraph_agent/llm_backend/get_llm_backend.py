@@ -85,17 +85,19 @@ class LiteLLMBackend:
             raise ValueError(f"messages must be either a string or a list of dicts, but got {type(messages)}")
         # logger.info(f"prompting llm with messages: {prompt_messages}")
 
-        # llm = ChatOpenAI(
-        #     model=self.model_name,
-        #     temperature=self.temperature,
-        #     top_p=self.top_p,
-        # )
-        llm = ChatLiteLLM(
-            model = self.model_name,
-            api_key=self.api_key,
-            temperature=self.temperature,
-            custom_llm_provider = self.provider,   
-        )
+        if self.provider == "openai":
+            llm = ChatOpenAI(
+                model=self.model_name,
+                temperature=self.temperature,
+                top_p=self.top_p,
+            )
+        elif self.provider == "watsonx":
+            llm = ChatLiteLLM(
+                model = self.model_name,
+                api_key=self.api_key,
+                temperature=self.temperature,
+                custom_llm_provider = self.provider,   
+            )
         
        
 
