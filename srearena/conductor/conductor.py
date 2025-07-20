@@ -202,7 +202,8 @@ class Conductor:
 
         # Phase 3: Faulty system
         self.submission_stage = "detection"
-        fault_results = await self.run_problem()
+        # fault_results = await self.run_problem()
+        print(f"!!! Skipping for sanity check, only running noop detection.")
 
         # Final cleanup
         self.execution_end_time = time.time()
@@ -216,7 +217,10 @@ class Conductor:
         self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
         self.kubectl.wait_for_namespace_deletion("openebs")
 
-        self.results.update(fault_results)
+        print(f"!!! Skipping fault_results and update with noop_results instead.")
+        self.results.update(noop_results)
+        # commenting out, only no op detection problem testing
+        # self.results.update(fault_results)
         return self.results
 
     def exit_cleanup_and_recover_fault(self):
