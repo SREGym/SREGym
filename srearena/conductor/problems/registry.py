@@ -19,6 +19,7 @@ from srearena.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from srearena.conductor.problems.missing_service import MissingService
 from srearena.conductor.problems.network_delay import ChaosMeshNetworkDelay
 from srearena.conductor.problems.network_loss import ChaosMeshNetworkLoss
+from srearena.conductor.problems.network_partition import ChaosMeshNetworkPartition
 from srearena.conductor.problems.network_policy_block import NetworkPolicyBlock
 from srearena.conductor.problems.payment_service_failure import PaymentServiceFailure
 from srearena.conductor.problems.payment_service_unreachable import PaymentServiceUnreachable
@@ -62,6 +63,7 @@ class ProblemRegistry:
             "chaos_mesh_pod_kill": ChaosMeshPodKill,
             "chaos_mesh_network_loss": ChaosMeshNetworkLoss,
             "chaos_mesh_network_delay": ChaosMeshNetworkDelay,
+            "chaos_mesh_network_partition": ChaosMeshNetworkPartition,
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
             "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,

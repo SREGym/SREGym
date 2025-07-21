@@ -155,6 +155,51 @@ class SymptomFaultInjector(FaultInjector):
     def recover_network_delay(self):
         self.delete_chaos_experiment("network-delay")
 
+    def inject_network_partition(self, from_service: str, to_service: str):
+        """
+        Inject a network partition between two services using Chaos Mesh.
+
+        Args:
+            from_service (str): The service initiating the connection.
+            to_service (str): The service that will be isolated from the initiator.
+        """
+        chaos_experiment = {
+            "apiVersion": "chaos-mesh.org/v1alpha1",
+            "kind": "NetworkChaos",
+            "metadata": {
+                "name": f"network-partition-{from_service}-to-{to_service}",
+                "namespace": self.namespace,
+            },
+            "spec": {
+                "action": "partition",
+                "mode": "all",
+                "selector": {
+                    "namespaces": [self.namespace],
+                    "labelSelectors": {"app.kubernetes.io/component": from_service},
+                },
+                "direction": "to",
+                "target": {
+                    "mode": "all",
+                    "selector": {
+                        "namespaces": [self.namespace],
+                        "labelSelectors": {"app.kubernetes.io/component": to_service},
+                    },
+                },
+            },
+        }
+
+        self.create_chaos_experiment(chaos_experiment, f"network-partition-{from_service}-to-{to_service}")
+
+    def recover_network_partition(self, from_service: str, to_service: str):
+        """
+        Recover from a network partition fault.
+
+        Args:
+            from_service (str): The service that initiated the partition.
+            to_service (str): The service that was isolated.
+        """
+        self.delete_chaos_experiment(f"network-partition-{from_service}-to-{to_service}")
+
     def inject_pod_kill(self, microservices: List[str], duration: str = "200s"):
         """
         Inject a pod kill fault targeting specified microservices by label in the configured namespace.
