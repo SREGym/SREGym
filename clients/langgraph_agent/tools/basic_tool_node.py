@@ -23,15 +23,16 @@ class BasicToolNode:
         logger.info(f"BasicToolNode: {message}")
         outputs = []
         for tool_call in message.tool_calls:
+            # tool_call["args"]["tool_call_id"] = tool_call["id"]
+            # tool_call["args"].pop("id", None)
             logger.info(f"invoking tool: {tool_call["name"]}, tool_call: {tool_call}")
             if self.is_async:
-                tool_result = asyncio.run(self.tools_by_name[tool_call["name"]].ainvoke(tool_call["args"]))
+                tool_call["args"].update({"state": inputs})
+                tool_result = asyncio.run(self.tools_by_name[tool_call["name"]].ainvoke(tool_call))
+                tool_call["args"].pop("state", None)
             else:
                 tool_result = self.tools_by_name[tool_call["name"]].invoke(tool_call["args"])
             logger.info(f"tool_result: {tool_result}")
-            tool_result_content = []
-            for text_content in tool_result.content:
-                tool_result_content.append(text_content.text)
             outputs.append(
                 ToolMessage(
                     content=tool_result,

@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
+from langchain_litellm import ChatLiteLLM 
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -84,11 +85,21 @@ class LiteLLMBackend:
             raise ValueError(f"messages must be either a string or a list of dicts, but got {type(messages)}")
         logger.info(f"prompting llm with messages: {prompt_messages}")
 
-        llm = ChatOpenAI(
-            model=self.model_name,
-            temperature=self.temperature,
-            top_p=self.top_p,
-        )
+        if self.provider == "openai":
+            llm = ChatOpenAI(
+                model=self.model_name,
+                temperature=self.temperature,
+                top_p=self.top_p,
+            )
+        elif self.provider == "watsonx":
+            llm = ChatLiteLLM(
+                model = self.model_name,
+                api_key=self.api_key,
+                temperature=self.temperature,
+                custom_llm_provider = self.provider,   
+            )
+        
+       
 
         if tools:
             logger.info(f"binding tools to llm: {tools}")
@@ -98,6 +109,6 @@ class LiteLLMBackend:
         #   if the model decides to do function calling
         # TODO: check how does function call looks like in langchain
 
-        completion = llm.invoke(input=messages)
+        completion = llm.invoke(input=prompt_messages)
         logger.info(f"llm response: {completion}")
         return completion

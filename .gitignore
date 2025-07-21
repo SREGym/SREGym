@@ -749,3 +749,4 @@ context.json
 # Ignore provisioner ssh keys
 provisioner_ssh_key
 provisioner_ssh_key.pub
+agent_graph.png

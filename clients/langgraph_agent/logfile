@@ -1,0 +1,22 @@
+2025-07-12 13:55:33.664 CDT [34559] FATAL:  lock file "postmaster.pid" already exists
+2025-07-12 13:55:33.664 CDT [34559] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?
+2025-07-12 13:56:37.308 CDT [36926] FATAL:  lock file "postmaster.pid" already exists
+2025-07-12 13:56:37.308 CDT [36926] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?
+2025-07-12 14:02:36.901 CDT [50202] FATAL:  lock file "postmaster.pid" already exists
+2025-07-12 14:02:36.901 CDT [50202] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?
+2025-07-12 14:12:52.446 CDT [72839] FATAL:  lock file "postmaster.pid" already exists
+2025-07-12 14:12:52.446 CDT [72839] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?
+2025-07-12 14:15:00.474 CDT [77594] FATAL:  lock file "postmaster.pid" already exists
+2025-07-12 14:15:00.474 CDT [77594] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?
+2025-07-14 15:10:43.272 CDT [83996] FATAL:  lock file "postmaster.pid" already exists
+2025-07-14 15:10:43.272 CDT [83996] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?
+2025-07-14 15:18:08.987 CDT [86689] FATAL:  lock file "postmaster.pid" already exists
+2025-07-14 15:18:08.987 CDT [86689] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?
+2025-07-14 15:22:16.688 CDT [88235] FATAL:  lock file "postmaster.pid" already exists
+2025-07-14 15:22:16.688 CDT [88235] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?
+2025-07-14 15:26:34.934 CDT [90016] FATAL:  lock file "postmaster.pid" already exists
+2025-07-14 15:26:34.934 CDT [90016] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?
+2025-07-14 15:29:12.410 CDT [90994] FATAL:  lock file "postmaster.pid" already exists
+2025-07-14 15:29:12.410 CDT [90994] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?
+2025-07-14 15:31:11.712 CDT [91759] FATAL:  lock file "postmaster.pid" already exists
+2025-07-14 15:31:11.712 CDT [91759] HINT:  Is another postmaster (PID 82061) running in data directory "/Users/lilygniedz/pgsql/data"?

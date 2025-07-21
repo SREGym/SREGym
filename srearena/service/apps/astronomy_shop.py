@@ -36,7 +36,7 @@ class AstronomyShop(Application):
         """Delete the Helm configurations."""
         Helm.uninstall(**self.helm_configs)
         self.kubectl.delete_namespace(self.helm_configs["namespace"])
-        time.sleep(30)
+        self.kubectl.wait_for_namespace_deletion(self.namespace)
 
     def cleanup(self):
         Helm.uninstall(**self.helm_configs)

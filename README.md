@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>SREArena</h1>
+<h1>A Unified Framework for Benchmarking SRE Agents</h1>
 
 <!-- [🤖Overview](#🤖overview) |  -->
 [🚀Quick Start](#🚀quickstart) | 
@@ -14,9 +14,12 @@
 </div>
 
 
-SREArena is a holistic framework to enable the design, development, and evaluation of autonomous AIOps agents that, additionally, serve the purpose of building reproducible, standardized, interoperable and scalable benchmarks. SREArena can deploy microservice cloud environments, inject faults, generate workloads, and export telemetry data, while orchestrating these components and providing interfaces for interacting with and evaluating agents. 
+SREArena is a unified framework to enable the design, development, and evaluation of autonomous AIOps agents that, additionally, serve the purpose of building reproducible, standardized, interoperable and scalable benchmarks. SREArena can deploy microservice cloud environments, inject faults, generate workloads, and export telemetry data, while orchestrating these components and providing interfaces for interacting with and evaluating agents. 
 
-Moreover, SREArena provides a built-in benchmark suite with a set of problems to evaluate AIOps agents in an interactive environment. This suite can be easily extended to meet user-specific needs. See the problem list [here](/srearena/conductor/problems/registry.py#L15).
+Moreover, SREArena provides a built-in benchmark suite with a set of problems to evaluate AIOps agents in an interactive environment. This suite can be easily extended to meet user-specific needs.
+
+### Problems
+See a complete problem list with descriptions [here](https://docs.google.com/spreadsheets/d/1FGIeLNcKsHjrZGQ_VJcQRGl6oTmYyzjW0_ve5tfM_eg/edit?usp=sharing).
 
 <h2 id="📦installation">📦 Installation</h2>
 
@@ -24,12 +27,8 @@ Moreover, SREArena provides a built-in benchmark suite with a set of problems to
 - Python >= 3.12
 - [Helm](https://helm.sh/)
 - [brew](https://docs.brew.sh/Homebrew-and-Python)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
 
-Recommended installation:
-```bash
-brew install python@3.12 uv
-```
-https://github.com/astral-sh/uv
 We recommend [uv](https://github.com/astral-sh/uv) for managing dependencies. You can also use a standard `pip install -e .` to install the dependencies.
 
 ```bash
@@ -236,8 +235,9 @@ in the [`problems`](/srearena/conductor/problems) directory, as follows:
     from srearena.service.apps.myapp import MyApp
     from srearena.conductor.oracles.detection import DetectionOracle
     from srearena.conductor.oracles.localization import LocalizationOracle
-    from srearena.conductor.oracles.mitigation import MitigationOracle
+    from srearena.conductor.oracles.mitigation import MitigationOracle # or custom oracle
     from srearena.conductor.problems.base import Problem
+    from srearena.utils.decorators import mark_fault_injected
     ```
 
 2. **Define**. To define a problem, create a class that inherits from the `Problem` class, and defines 2 methods:, `inject_fault`, and `recover_fault`. Remember to setup your oracles as well!:
@@ -248,15 +248,15 @@ in the [`problems`](/srearena/conductor/problems) directory, as follows:
             self.app = MyApp()
             self.faulty_service # Used for localization, can be None or a list
             # === Attach evaluation oracles ===
-            self.detection_oracle = DetectionOracle(problem=self, expected="Yes")
-
             self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 
             self.mitigation_oracle = MitigationOracle(problem=self)
         
+        @mark_fault_injected
         def inject_fault(self)
             # <your fault injection logic here>
         
+        @mark_fault_injected
         def recover_fault(self):
             # <your fault recovery logic here>
     ```

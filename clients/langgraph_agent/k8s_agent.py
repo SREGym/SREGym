@@ -1,8 +1,11 @@
+import asyncio
 import json
 import os
+import logging
 
 import yaml
 from langchain_core.messages import AIMessage
+from langchain_core.tools import StructuredTool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import END
 from langgraph.graph import START, StateGraph
@@ -11,8 +14,10 @@ from langgraph.prebuilt import ToolNode
 from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
 from clients.langgraph_agent.state import State
 from clients.langgraph_agent.tools.basic_tool_node import BasicToolNode
-from clients.langgraph_agent.tools.jaeger_tools import *
+from clients.langgraph_agent.tools.jaeger_tools import get_operations, get_services, get_traces
+from clients.langgraph_agent.tools.prometheus_tools import get_metrics
 from clients.langgraph_agent.tools.text_editing.file_manip import create, edit, goto_line, insert, open_file
+from clients.langgraph_agent.tools.compile.compile_tool import compile_postgresql_server  
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -29,16 +34,18 @@ class XAgent:
     def __init__(self, llm):
         self.graph_builder = StateGraph(State)
         self.graph = None
+        # get_traces_tool = StructuredTool.from_function(
+        #     name="get_traces",
+        #     func=lambda x: "Not implemented sync version of tool",
+        #     coroutine=get_traces,
+        #     description="get_traces",
+        #     args_schema=GetTracesInput,
+        # )
+        self.observability_tools = [get_traces, get_services, get_operations, get_metrics]
 
-        get_traces = GetTraces()
-        get_services = GetServices()
-        get_operations = GetOperations()
-        self.observability_tools = [
-            get_traces,
-            get_services,
-            get_operations,
-        ]
         self.file_editing_tools = [open_file, goto_line, create, edit, insert]
+
+        self.compile_tools = [compile_postgresql_server]
         self.llm = llm
 
         # here are testing purposes attr
@@ -51,7 +58,7 @@ class XAgent:
 
     @property
     def all_tools(self):
-        return [*self.observability_tools, *self.file_editing_tools]
+        return [*self.observability_tools, *self.file_editing_tools, *self.compile_tools]
 
     def route_tools(self, state: State):
         """
@@ -61,7 +68,8 @@ class XAgent:
         print(f"[route tools] in route tools: {state}")
         logger.info("in route tools: %s", state)
         file_tool_names = ["open_file", "goto_line", "create", "edit", "insert"]
-        observability_tool_names = ["get_traces", "get_services", "get_operations"]
+        observability_tool_names = ["get_traces", "get_services", "get_operations", "get_metrics"]
+        compile_tool_names = ["compile_postgresql_server"]
         if isinstance(state, list):
             ai_message = state[-1]
         elif messages := state.get("messages", []):
@@ -74,6 +82,9 @@ class XAgent:
             if tool_name in file_tool_names:
                 logger.info("invoking tool node: file tool")
                 return "file_editing_tool_node"
+            elif tool_name in compile_tool_names:
+                logger.info("invoking tool node: compile tool")
+                return "compile_tool_node"
             elif tool_name in observability_tool_names:
                 logger.info("invoking tool node: observability tool")
                 return "observability_tool_node"
@@ -185,6 +196,7 @@ class XAgent:
             "messages": output,
             "curr_file": state["curr_file"],
             "curr_line": state["curr_line"],
+            "workdir": state["workdir"],
         }
 
     # this is the agent node. it simply queries the llm and return the results
@@ -194,6 +206,7 @@ class XAgent:
             "messages": [self.llm.inference(messages=state["messages"], tools=self.all_tools)],
             "curr_file": state["curr_file"],
             "curr_line": state["curr_line"],
+            "workdir": state["workdir"],
         }
 
     def build_agent(self, mock: bool = False):
@@ -208,10 +221,12 @@ class XAgent:
 
         observability_tool_node = BasicToolNode(self.observability_tools, is_async=True)
         file_editing_tool_node = ToolNode(self.file_editing_tools)
+        compile_tool_node = ToolNode(self.compile_tools)
 
         # we add the node to the graph
         self.graph_builder.add_node("observability_tool_node", observability_tool_node)
         self.graph_builder.add_node("file_editing_tool_node", file_editing_tool_node)
+        self.graph_builder.add_node("compile_tool_node", compile_tool_node)
 
         # after creating the nodes, we now add the edges
         # the start of the graph is denoted by the keyword START, end is END.
@@ -238,6 +253,7 @@ class XAgent:
             {
                 "observability_tool_node": "observability_tool_node",
                 "file_editing_tool_node": "file_editing_tool_node",
+                "compile_tool_node": "compile_tool_node",
                 END: END,
             },
         )
@@ -246,10 +262,11 @@ class XAgent:
         # here, it is implemented as a in-memory checkpointer.
         self.graph_builder.add_edge("observability_tool_node", "agent")
         self.graph_builder.add_edge("file_editing_tool_node", "agent")
+        self.graph_builder.add_edge("compile_tool_node", "agent")
         memory = MemorySaver()
         self.graph = self.graph_builder.compile(checkpointer=memory)
 
-    def graph_step(self, user_input: str):
+    async def graph_step(self, user_input: str):
         if not self.graph:
             raise ValueError("Agent graph is None. Have you built the agent?")
         config = {"configurable": {"thread_id": "1"}}
@@ -270,7 +287,7 @@ class XAgent:
                 "curr_file": "",
                 "curr_line": 0,
             }
-        for event in self.graph.stream(
+        async for event in self.graph.astream(
             state,
             config=config,
             stream_mode="values",
@@ -282,7 +299,7 @@ class XAgent:
             png.write(self.graph.get_graph().draw_mermaid_png())
 
 
-if __name__ == "__main__":
+async def main():
     llm = get_llm_backend_for_tools()
     xagent = XAgent(llm)
     xagent.build_agent()
@@ -292,4 +309,8 @@ if __name__ == "__main__":
         if user_input.lower() in ["quit", "exit", "q"]:
             print("Goodbye!")
             break
-        xagent.graph_step(user_input)
+        await xagent.graph_step(user_input)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
