@@ -13,6 +13,7 @@ from srearena.conductor.problems.env_variable_shadowing import EnvVariableShadow
 from srearena.conductor.problems.http_abort import ChaosMeshHttpAbort
 from srearena.conductor.problems.image_slow_load import ImageSlowLoad
 from srearena.conductor.problems.ingress_misroute import IngressMisroute
+from srearena.conductor.problems.jvm_heap_stress import ChaosMeshJVMHeapStress
 from srearena.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from srearena.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from srearena.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
@@ -185,6 +186,7 @@ class ProblemRegistry:
             "valkey_auth_disruption": ValkeyAuthDisruption,
             "valkey_memory_disruption": ValkeyMemoryDisruption,
             "chaos_mesh_cpu_stress": ChaosMeshCPUStress,
+            "chaos_mesh_jvm_stress": ChaosMeshJVMHeapStress,
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.

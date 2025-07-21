@@ -1,6 +1,8 @@
+import os
 from typing import List
 
 import yaml
+from kubernetes import client
 
 from srearena.generators.fault.base import FaultInjector
 from srearena.service.helm import Helm
@@ -357,6 +359,155 @@ class SymptomFaultInjector(FaultInjector):
     def recover_http_abort(self, microservice: str):
         experiment_name = f"http-abort-{microservice}"
         self.delete_chaos_experiment(experiment_name)
+
+    def inject_jvm_heap_stress(self, deployment_name: str = "ad", component_label: str = "ad"):
+        """
+        Replace the adservice deployment with a Job and inject JVM heap stress using Chaos Mesh.
+        """
+        tmp_yaml = "/tmp/jvm_heap_deployment.yaml"
+
+        # Get deployment info BEFORE deletion
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        container = deployment.spec.template.spec.containers[0]
+        container_name = container.name
+        image = container.image
+        memory_limit = container.resources.limits.get("memory")
+
+        # Get service info BEFORE deletion
+        svc = self.kubectl.get_service(deployment_name, self.namespace)
+        cluster_ip = svc.spec.cluster_ip
+
+        # Save deployment YAML and delete deployment and service
+        self.kubectl.exec_command(f"kubectl get deployment/{deployment_name} -n {self.namespace} -o yaml > {tmp_yaml}")
+        self.kubectl.exec_command(f"kubectl delete deployment/{deployment_name} -n {self.namespace}")
+        self.kubectl.exec_command(f"kubectl delete service/{deployment_name} -n {self.namespace}")
+
+        # Create Job that mirrors the original deployment
+        job_spec = {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": deployment_name,
+                "namespace": self.namespace,
+                "labels": {
+                    "app.kubernetes.io/component": component_label,
+                    "app.kubernetes.io/name": component_label,
+                    "app.kubernetes.io/instance": self.namespace,
+                },
+            },
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "labels": {
+                            "app.kubernetes.io/component": component_label,
+                            "app.kubernetes.io/name": component_label,
+                            "app.kubernetes.io/instance": self.namespace,
+                        },
+                    },
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": container_name,
+                                "image": image,
+                                "imagePullPolicy": "IfNotPresent",
+                                "env": [
+                                    {"name": "JAVA_OPTS", "value": "-Xmx256M -Xms256M"},
+                                    {
+                                        "name": "OTEL_SERVICE_NAME",
+                                        "valueFrom": {
+                                            "fieldRef": {
+                                                "apiVersion": "v1",
+                                                "fieldPath": "metadata.labels['app.kubernetes.io/component']",
+                                            }
+                                        },
+                                    },
+                                    {"name": "OTEL_COLLECTOR_NAME", "value": "otel-collector"},
+                                    {
+                                        "name": "OTEL_EXPORTER_OTLP_ENDPOINT",
+                                        "value": "http://$(OTEL_COLLECTOR_NAME):4318",
+                                    },
+                                    {"name": "OTEL_LOGS_EXPORTER", "value": "otlp"},
+                                    {
+                                        "name": "OTEL_RESOURCE_ATTRIBUTES",
+                                        "value": f"service.name=$(OTEL_SERVICE_NAME),service.namespace={self.namespace},service.version=2.0.1",
+                                    },
+                                    {"name": "FLAGD_HOST", "value": "flagd"},
+                                    {"name": "FLAGD_PORT", "value": "8013"},
+                                    {
+                                        "name": f"{component_label.upper().replace('SERVICE', '')}_SERVICE_PORT",
+                                        "value": "8080",
+                                    },
+                                ],
+                                "resources": {"limits": {"memory": memory_limit}},
+                                "ports": [{"containerPort": 8080, "name": component_label, "protocol": "TCP"}],
+                                "securityContext": {"runAsUser": 999, "runAsGroup": 1000, "runAsNonRoot": True},
+                            }
+                        ],
+                        "restartPolicy": "Never",
+                    },
+                },
+                "backoffLimit": 0,
+            },
+        }
+
+        client.BatchV1Api().create_namespaced_job(namespace=self.namespace, body=job_spec)
+
+        # Recreate Service
+        service_spec = {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {
+                "name": deployment_name,
+                "namespace": self.namespace,
+                "labels": {
+                    "app.kubernetes.io/component": component_label,
+                    "app.kubernetes.io/name": component_label,
+                    "app.kubernetes.io/instance": self.namespace,
+                },
+            },
+            "spec": {
+                "clusterIP": cluster_ip,
+                "selector": {"app.kubernetes.io/name": deployment_name},
+                "ports": [{"port": 8080, "targetPort": 8080}],
+            },
+        }
+
+        client.CoreV1Api().create_namespaced_service(namespace=self.namespace, body=service_spec)
+
+        # Inject Chaos Mesh JVM Heap Stress
+        chaos_spec = {
+            "apiVersion": "chaos-mesh.org/v1alpha1",
+            "kind": "Schedule",
+            "metadata": {
+                "name": f"schedule-jvmheapstress-{deployment_name}",
+                "namespace": self.namespace,
+            },
+            "spec": {
+                "schedule": "* * * * *",
+                "historyLimit": 1,
+                "concurrencyPolicy": "Forbid",
+                "type": "JVMChaos",
+                "jvmChaos": {
+                    "mode": "all",
+                    "selector": {
+                        "namespaces": [self.namespace],
+                        "labelSelectors": {"app.kubernetes.io/component": component_label},
+                    },
+                    "action": "stress",
+                    "memType": "heap",
+                },
+            },
+        }
+
+        self.create_chaos_experiment(chaos_spec, f"schedule-jvmheapstress-{deployment_name}")
+
+    def recover_jvm_heap_stress(self, deployment_name: str):
+        tmp_yaml = "/tmp/jvm_heap_deployment.yaml"
+
+        self.delete_chaos_experiment(f"schedule-jvmheapstress-{deployment_name}")
+        self.kubectl.exec_command(f"kubectl delete job/{deployment_name} -n {self.namespace}")
+        self.kubectl.exec_command(f"kubectl apply -f {tmp_yaml} -n {self.namespace}")
+        os.system(f"rm -f {tmp_yaml}")
 
 
 if __name__ == "__main__":
