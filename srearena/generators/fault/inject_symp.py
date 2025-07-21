@@ -319,6 +319,45 @@ class SymptomFaultInjector(FaultInjector):
         print(f"Reverting CPU patch for deployment {deployment_name}")
         self.kubectl.exec_command(patch_cmd)
 
+    def inject_http_abort(self, microservice: str, port: int = 8080, method: str = "POST"):
+        """
+        Inject an HTTP abort fault using Chaos Mesh HTTPChaos. Aborts all POST requests on a given port.
+
+        Args:
+            microservice (str): Label of the microservice to target.
+            port (int): Port to intercept (default is 8080).
+            method (str): HTTP method to abort (default is POST).
+        """
+        experiment_name = f"http-abort-{microservice}"
+        chaos_experiment = {
+            "apiVersion": "chaos-mesh.org/v1alpha1",
+            "kind": "HTTPChaos",
+            "metadata": {
+                "name": experiment_name,
+                "namespace": self.namespace,
+            },
+            "spec": {
+                "mode": "all",
+                "selector": {
+                    "namespaces": [self.namespace],
+                    "labelSelectors": {
+                        "app.kubernetes.io/component": microservice,
+                    },
+                },
+                "target": "Request",
+                "port": port,
+                "method": method.upper(),
+                "path": "*",
+                "abort": True,
+            },
+        }
+
+        self.create_chaos_experiment(chaos_experiment, experiment_name)
+
+    def recover_http_abort(self, microservice: str):
+        experiment_name = f"http-abort-{microservice}"
+        self.delete_chaos_experiment(experiment_name)
+
 
 if __name__ == "__main__":
     namespace = "test-hotel-reservation"

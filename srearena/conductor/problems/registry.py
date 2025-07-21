@@ -10,6 +10,7 @@ from srearena.conductor.problems.cpu_stress import ChaosMeshCPUStress
 from srearena.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from srearena.conductor.problems.env_variable_leak import EnvVariableLeak
 from srearena.conductor.problems.env_variable_shadowing import EnvVariableShadowing
+from srearena.conductor.problems.http_abort import ChaosMeshHttpAbort
 from srearena.conductor.problems.image_slow_load import ImageSlowLoad
 from srearena.conductor.problems.ingress_misroute import IngressMisroute
 from srearena.conductor.problems.kafka_queue_problems import KafkaQueueProblems
@@ -65,6 +66,7 @@ class ProblemRegistry:
             "chaos_mesh_network_loss": ChaosMeshNetworkLoss,
             "chaos_mesh_network_delay": ChaosMeshNetworkDelay,
             "chaos_mesh_network_partition": ChaosMeshNetworkPartition,
+            "chaos_mesh_http_abort": ChaosMeshHttpAbort,
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
             "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,
