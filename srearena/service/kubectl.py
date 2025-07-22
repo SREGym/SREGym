@@ -183,6 +183,9 @@ class KubeCtl:
         """Update the deployment configuration."""
         return self.apps_v1_api.replace_namespaced_deployment(name, namespace, deployment)
 
+    def patch_deployment(self, name: str, namespace: str, patch_body: dict):
+        return self.apps_v1_api.patch_namespaced_deployment(name=name, namespace=namespace, body=patch_body)
+
     def patch_service(self, name, namespace, body):
         """Patch a Kubernetes service in a specified namespace."""
         try:
