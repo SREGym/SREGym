@@ -703,7 +703,6 @@ class SymptomFaultInjector(FaultInjector):
                     "labelSelectors": {"app.kubernetes.io/component": component_label},
                 },
                 "stressors": {"memory": {"workers": 4, "size": "100%"}},
-                "duration": "60s",
             },
         }
         self.create_chaos_experiment(chaos_spec, f"memory-stress-{deployment_name}")
@@ -727,6 +726,38 @@ class SymptomFaultInjector(FaultInjector):
 
         # Clean up the temporary YAML
         os.system(f"rm -f {tmp_yaml}")
+
+    def inject_http_post_tamper(self, component_label: str = "email", port: int = 8080):
+        """
+        Inject Chaos Mesh HTTPChaos to tamper POST requests to the given component.
+        """
+        chaos_name = f"http-tamper-{component_label}"
+
+        chaos_spec = {
+            "apiVersion": "chaos-mesh.org/v1alpha1",
+            "kind": "HTTPChaos",
+            "metadata": {
+                "name": chaos_name,
+                "namespace": self.namespace,
+            },
+            "spec": {
+                "target": "Request",
+                "port": port,
+                "method": "POST",
+                "path": "*",
+                "mode": "all",
+                "selector": {
+                    "namespaces": [self.namespace],
+                    "labelSelectors": {"app.kubernetes.io/component": component_label},
+                },
+                "patch": {"body": {"type": "JSON", "value": '{"email": "12345", "order": "error body"}'}},
+            },
+        }
+
+        self.create_chaos_experiment(chaos_spec, chaos_name)
+
+    def recover_http_post_tamper(self, component_label: str = "email"):
+        self.delete_chaos_experiment(f"http-tamper-{component_label}")
 
 
 if __name__ == "__main__":

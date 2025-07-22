@@ -11,6 +11,7 @@ from srearena.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from srearena.conductor.problems.env_variable_leak import EnvVariableLeak
 from srearena.conductor.problems.env_variable_shadowing import EnvVariableShadowing
 from srearena.conductor.problems.http_abort import ChaosMeshHttpAbort
+from srearena.conductor.problems.http_post_tamper import ChaosMeshHttpPostTamper
 from srearena.conductor.problems.image_slow_load import ImageSlowLoad
 from srearena.conductor.problems.ingress_misroute import IngressMisroute
 from srearena.conductor.problems.jvm_heap_stress import ChaosMeshJVMHeapStress
@@ -191,6 +192,7 @@ class ProblemRegistry:
             "chaos_mesh_jvm_stress": ChaosMeshJVMHeapStress,
             "chaos_mesh_jvm_return": ChaosMeshJVMReturnFault,
             "chaos_mesh_memory_stress": ChaosMeshMemoryStress,
+            "chaos_mesh_http_post_tamper": ChaosMeshHttpPostTamper,
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.
