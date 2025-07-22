@@ -353,6 +353,37 @@ class ApplicationFaultInjector(FaultInjector):
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(f"Recovered {env_var} in {deployment_name} to use port {correct_port}.")
 
+    # A.6 incorrect_image: checkout service is updated to use a bad image
+    def inject_incorrect_image(self, deployment_name: str, namespace: str, bad_image: str = "app-image:latest"):
+        # Get current deployment for container name
+        deployment = self.kubectl.get_deployment(deployment_name, namespace)
+        container_name = deployment.spec.template.spec.containers[0].name
+
+        # Set replicas to 0 before updating image
+        self.kubectl.patch_deployment(name=deployment_name, namespace=namespace, patch_body={"spec": {"replicas": 0}})
+
+        # Patch image
+        self.kubectl.patch_deployment(
+            name=deployment_name,
+            namespace=namespace,
+            patch_body={"spec": {"template": {"spec": {"containers": [{"name": container_name, "image": bad_image}]}}}},
+        )
+
+        # Restore replicas to 1
+        self.kubectl.patch_deployment(name=deployment_name, namespace=namespace, patch_body={"spec": {"replicas": 1}})
+
+    def recover_incorrect_image(self, deployment_name: str, namespace: str, correct_image: str):
+        deployment = self.kubectl.get_deployment(deployment_name, namespace)
+        container_name = deployment.spec.template.spec.containers[0].name
+
+        self.kubectl.patch_deployment(
+            name=deployment_name,
+            namespace=namespace,
+            patch_body={
+                "spec": {"template": {"spec": {"containers": [{"name": container_name, "image": correct_image}]}}}
+            },
+        )
+
 
 if __name__ == "__main__":
     namespace = "test-hotel-reservation"

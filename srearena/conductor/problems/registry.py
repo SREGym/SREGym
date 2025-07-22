@@ -13,6 +13,7 @@ from srearena.conductor.problems.env_variable_shadowing import EnvVariableShadow
 from srearena.conductor.problems.http_abort import ChaosMeshHttpAbort
 from srearena.conductor.problems.http_post_tamper import ChaosMeshHttpPostTamper
 from srearena.conductor.problems.image_slow_load import ImageSlowLoad
+from srearena.conductor.problems.incorrect_image import IncorrectImage
 from srearena.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from srearena.conductor.problems.ingress_misroute import IngressMisroute
 from srearena.conductor.problems.jvm_heap_stress import ChaosMeshJVMHeapStress
@@ -195,6 +196,7 @@ class ProblemRegistry:
             "chaos_mesh_memory_stress": ChaosMeshMemoryStress,
             "chaos_mesh_http_post_tamper": ChaosMeshHttpPostTamper,
             "incorrect_port_assignment": IncorrectPortAssignment,
+            "incorrect_image": IncorrectImage,
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.
