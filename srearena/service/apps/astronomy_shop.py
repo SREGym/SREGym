@@ -32,6 +32,8 @@ class AstronomyShop(Application):
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
+        self._set_load_generator_env()
+
     def delete(self):
         """Delete the Helm configurations."""
         Helm.uninstall(**self.helm_configs)
@@ -55,6 +57,17 @@ class AstronomyShop(Application):
         if not hasattr(self, "wrk"):
             self.create_workload()
         self.wrk.start()
+
+    def _set_load_generator_env(self):
+        try:
+            self.kubectl.exec_command(
+                f"kubectl set env deployment/load-generator -n {self.namespace} "
+                f"LOCUST_BROWSER_TRAFFIC_ENABLED=false"
+            )
+            print("Successfully set LOCUST_BROWSER_TRAFFIC_ENABLED=false for load-generator deployment")
+        except Exception as e:
+            print(f"Warning: Failed to set environment variable for load-generator deployment: {e}")
+            print("The load generator will use default environment variables")
 
 
 # Run this code to test installation/deletion
