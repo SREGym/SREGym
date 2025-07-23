@@ -3,6 +3,7 @@ from srearena.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from srearena.conductor.problems.ad_service_manual_gc import AdServiceManualGc
 from srearena.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from srearena.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
+from srearena.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 from srearena.conductor.problems.cart_service_failure import CartServiceFailure
 from srearena.conductor.problems.configmap_drift import ConfigMapDrift
 from srearena.conductor.problems.container_kill import ChaosMeshContainerKill
@@ -40,7 +41,7 @@ from srearena.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from srearena.conductor.problems.wrong_service_selector import WrongServiceSelector
 from srearena.conductor.problems.network_policy_block import NetworkPolicyBlock
 from srearena.conductor.problems.taint_no_toleration import TaintNoToleration
-
+from srearena.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 
 
 class ProblemRegistry:
@@ -55,6 +56,7 @@ class ProblemRegistry:
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
             "scale_pod_zero_social_net": ScalePodSocialNet,
             "assign_to_non_existent_node": AssignNonExistentNode,
+	    "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
             "chaos_mesh_container_kill": ChaosMeshContainerKill,
             "chaos_mesh_pod_failure": ChaosMeshPodFailure,
             "chaos_mesh_pod_kill": ChaosMeshPodKill,

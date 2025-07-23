@@ -1400,6 +1400,108 @@ class VirtualizationFaultInjector(FaultInjector):
         self.kubectl.wait_for_stable(self.namespace)
         print(f"Pods for {microservices} are back to Running")
 
+    def inject_pod_anti_affinity_deadlock(self, microservices: list[str]):
+        """
+        Inject a fault that creates pod anti-affinity deadlock.
+        Sets requiredDuringScheduling anti-affinity that excludes all nodes.
+        """
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+            
+            # Ensure we have replicas > 1 to create potential deadlock
+            if "replicas" not in deployment_yaml["spec"] or deployment_yaml["spec"]["replicas"] < 2:
+                deployment_yaml["spec"]["replicas"] = 3  # Force multiple replicas
+            
+            # Create anti-affinity rules that prevent pods from being scheduled on same nodes
+            anti_affinity_rules = {
+                "podAntiAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": [
+                        {
+                            "labelSelector": {
+                                "matchExpressions": [
+                                    {
+                                        "key": "app",
+                                        "operator": "In",
+                                        "values": [service]
+                                    }
+                                ]
+                            },
+                            "topologyKey": "kubernetes.io/hostname"
+                        }
+                    ]
+                }
+            }
+            
+            # Add affinity to deployment spec
+            if "affinity" not in deployment_yaml["spec"]["template"]["spec"]:
+                deployment_yaml["spec"]["template"]["spec"]["affinity"] = {}
+                
+            deployment_yaml["spec"]["template"]["spec"]["affinity"].update(anti_affinity_rules)
+            
+            # Write the modified YAML to a temporary file
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            # Delete and redeploy with anti-affinity rules
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            self.kubectl.exec_command(delete_command)
+
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+            self.kubectl.exec_command(apply_command)
+            
+            print(f"Injected pod anti-affinity deadlock for service: {service}")
+            print(f"  - Set replicas to {deployment_yaml['spec']['replicas']}")
+            print(f"  - Added strict anti-affinity rules")
+
+    def recover_pod_anti_affinity_deadlock(self, microservices: list[str]):
+        """
+        Recover from pod anti-affinity deadlock by removing anti-affinity rules.
+        """
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+            
+            # Remove affinity rules
+            if "affinity" in deployment_yaml["spec"]["template"]["spec"]:
+                if "podAntiAffinity" in deployment_yaml["spec"]["template"]["spec"]["affinity"]:
+                    del deployment_yaml["spec"]["template"]["spec"]["affinity"]["podAntiAffinity"]
+                    
+                # If affinity is now empty, remove it entirely
+                if not deployment_yaml["spec"]["template"]["spec"]["affinity"]:
+                    del deployment_yaml["spec"]["template"]["spec"]["affinity"]
+            
+            # Reset replicas to 1 for recovery
+            deployment_yaml["spec"]["replicas"] = 1
+
+            # Write the modified YAML to a temporary file
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            # Delete and redeploy without anti-affinity rules
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            self.kubectl.exec_command(delete_command)
+
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+            self.kubectl.exec_command(apply_command)
+            
+            print(f"Recovered pod anti-affinity deadlock for service: {service}")
+            print(f"  - Removed anti-affinity rules")
+            print(f"  - Reset replicas to 1")
+
+    def _inject(self, fault_type: str, microservices: list[str]):
+        """Generic injection method dispatcher."""
+        method_name = f"inject_{fault_type}"
+        if hasattr(self, method_name):
+            method = getattr(self, method_name)
+            method(microservices)
+        else:
+            raise ValueError(f"Unknown fault type: {fault_type}")
+
+    def _recover(self, fault_type: str, microservices: list[str]):
+        """Generic recovery method dispatcher."""
+        method_name = f"recover_{fault_type}"
+        if hasattr(self, method_name):
+            method = getattr(self, method_name)
+            method(microservices)
+        else:
+            raise ValueError(f"Unknown fault type: {fault_type}")
 
 if __name__ == "__main__":
     namespace = "test-social-network"
