@@ -64,7 +64,12 @@ class AstronomyShop(Application):
                 f"kubectl set env deployment/load-generator -n {self.namespace} "
                 f"LOCUST_BROWSER_TRAFFIC_ENABLED=false"
             )
-            print("Successfully set LOCUST_BROWSER_TRAFFIC_ENABLED=false for load-generator deployment")
+
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment/load-generator -n {self.namespace}"
+            )
+            print("Load-generator deployment is ready with updated environment variables")
+            
         except Exception as e:
             print(f"Warning: Failed to set environment variable for load-generator deployment: {e}")
             print("The load generator will use default environment variables")
