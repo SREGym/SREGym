@@ -1,9 +1,20 @@
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, field_validator
-from pathlib import Path
-import os
 import logging
 import yaml
+import os
+import uuid
+from pathlib import Path
+
+from fastmcp.client.transports import SSETransport
+from fastmcp import Client
+
+from dotenv import load_dotenv
+from clients.langgraph_agent.tools.kubectl_tools import \
+    ExecKubectlCmdSafely, \
+    RollbackCommand, \
+    GetPreviousRollbackableCmd, \
+    ExecReadOnlyKubectlCmd
 from clients.langgraph_agent.tools.jaeger_tools import \
     get_traces, \
     get_services, \
@@ -60,8 +71,23 @@ class BaseAgentCfg(BaseModel):
         return v
 
 
-diagnosis_agent_cfg = BaseAgentCfg(
-    prompts_file_path=str(parent_dir / "stratus_diagnosis_agent_prompts.yaml"),
-    sync_tools=[submit_tool],
-    async_tools=[get_traces, get_services, get_operations, get_metrics],
-)
+load_dotenv()
+
+
+def get_diagnosis_agent_cfg():
+    session_id = str(uuid.uuid4())
+    transport = SSETransport(
+        url=f"{os.environ['MCP_SERVER_URL']}/kubectl_mcp_tools/sse",
+        headers={"srearena_ssid": session_id},
+    )
+    client = Client(transport)
+
+    exec_read_only_kubectl_cmd = ExecReadOnlyKubectlCmd(client)
+    diagnosis_agent_cfg = BaseAgentCfg(
+        prompts_file_path=str(parent_dir / "stratus_diagnosis_agent_prompts.yaml"),
+        sync_tools=[submit_tool],
+        async_tools=[get_traces, get_services,
+                     get_operations, get_metrics,
+                     exec_read_only_kubectl_cmd],
+    )
+    return diagnosis_agent_cfg

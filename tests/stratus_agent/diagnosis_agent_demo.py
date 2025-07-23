@@ -1,12 +1,3 @@
-import os
-
-os.environ["PROVIDER"] = "openai"
-os.environ["WATSONX_API_KEY"] = ""
-os.environ["PROVIDER_TOOLS"] = "openai"
-os.environ["MODEL_TOOLS"] = "gpt-4o-mini"
-os.environ["URL_TOOLS"] = "https://api.openai.com/v1"
-os.environ["API_KEY_TOOLS"] = ""
-
 import atexit
 import logging
 import subprocess
@@ -16,7 +7,7 @@ from srearena.conductor import Conductor
 from srearena.utils.critical_section import CriticalSection
 from clients.langgraph_agent.stratus_agent.base_agent import BaseAgent
 from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
-from clients.configs.stratus_config import diagnosis_agent_cfg
+from clients.configs.stratus_config import get_diagnosis_agent_cfg
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -70,6 +61,9 @@ def setup_port_forwarding():
 if __name__ == "__main__":
     llm = get_llm_backend_for_tools()
 
+    # NOTE: Some of the tools are stateful. If you want to start a new session,
+    # you have to get a new config, which renews the stateful tools.
+    diagnosis_agent_cfg = get_diagnosis_agent_cfg()
     diagnosis_agent = BaseAgent(llm, diagnosis_agent_cfg.model_copy(update={"max_round": 3}))
     diagnosis_agent.build_agent()
 

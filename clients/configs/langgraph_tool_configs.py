@@ -1,3 +1,6 @@
+import os
+
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 
@@ -19,6 +22,10 @@ class LangToolCfg(BaseModel):
     )
 
 
+load_dotenv()
+
 langToolCfg = LangToolCfg(
-    mcp_prometheus="http://127.0.0.1:8000/prometheus/sse", mcp_observability="http://127.0.0.1:8000/jaeger/sse"
+    mcp_prometheus=f"{os.environ['MCP_SERVER_URL']}/prometheus/sse",
+    mcp_observability=f"{os.environ['MCP_SERVER_URL']}/jaeger/sse",
+    mcp_kubectl=f"{os.environ['MCP_SERVER_URL']}/kubectl_mcp_tools/sse",
 )
