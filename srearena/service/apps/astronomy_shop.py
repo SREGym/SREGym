@@ -25,10 +25,6 @@ class AstronomyShop(Application):
     def deploy(self):
         """Deploy the Helm configurations."""
         self.kubectl.create_namespace_if_not_exist(self.namespace)
-        Helm.add_repo(
-            "open-telemetry",
-            "https://open-telemetry.github.io/opentelemetry-helm-charts",
-        )
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
