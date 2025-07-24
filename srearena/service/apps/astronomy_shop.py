@@ -29,7 +29,16 @@ class AstronomyShop(Application):
             "open-telemetry",
             "https://open-telemetry.github.io/opentelemetry-helm-charts",
         )
-        Helm.install(**self.helm_configs)
+
+        helm_configs = self.helm_configs.copy()
+        helm_configs["extra_args"] = [
+            "--set-string",
+            "components.load-generator.envOverrides[0].name=LOCUST_BROWSER_TRAFFIC_ENABLED",
+            "--set-string",
+            "components.load-generator.envOverrides[0].value=false",
+        ]
+
+        Helm.install(**helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
     def delete(self):
