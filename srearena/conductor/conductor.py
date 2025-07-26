@@ -27,7 +27,8 @@ class Conductor:
         self.execution_start_time = None
         self.execution_end_time = None
         self.use_wandb = os.getenv("USE_WANDB", "false").lower() == "true"
-
+        self.reuse_prometheus = os.getenv("REUSE_PROMETHEUS", "true").lower() == "true"
+        self.reuse_openebs = os.getenv("REUSE_OPENEBS", "true").lower() == "true"
         self.problem = None
         self.detection_oracle = None
         self.problem_id = None
@@ -218,6 +219,20 @@ class Conductor:
         self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
         self.kubectl.wait_for_namespace_deletion("openebs")
 
+        if self.reuse_prometheus:
+            self.prometheus.clear_data()
+        else:
+            self.prometheus.teardown()
+
+        if self.reuse_openebs:
+            from srearena.utils.reuse_cleanup import wipe_openebs_volumes
+
+            wipe_openebs_volumes()
+        else:
+            self.kubectl.exec_command("kubectl delete sc openebs-hostpath openebs-device --ignore-not-found")
+            self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
+            self.kubectl.wait_for_namespace_deletion("openebs")
+
         self.results.update(fault_results)
         return self.results
 
@@ -235,10 +250,17 @@ class Conductor:
 
             self.problem.app.cleanup()
 
-        self.prometheus.teardown()
+        if self.reuse_prometheus:
+            self.prometheus.clear_data()
+        else:
+            self.prometheus.teardown()
 
-        self.kubectl.exec_command("kubectl delete sc openebs-hostpath openebs-device --ignore-not-found")
-        self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
+        if self.reuse_openebs:
+            from srearena.utils.reuse_cleanup import wipe_openebs_volumes
+            wipe_openebs_volumes()
+        else:
+            self.kubectl.exec_command("kubectl delete sc openebs-hostpath openebs-device --ignore-not-found")
+            self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
 
         print("\nCleanup complete!")
 

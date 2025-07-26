@@ -457,6 +457,23 @@ class KubeCtl:
             print(f"✅ Scaled deployment '{name}' in namespace '{namespace}' to {replicas} replicas.")
         except client.exceptions.ApiException as e:
             raise RuntimeError(f"❌ Failed to scale deployment '{name}' in namespace '{namespace}': {e}")
+        
+    
+    def delete_pvcs_by_storageclass(self, storage_classes: list[str]) -> None:
+
+        v1 = self.core_v1_api
+        pvcs = v1.list_persistent_volume_claim_for_all_namespaces().items
+        for pvc in pvcs:
+            if pvc.spec.storage_class_name in storage_classes:
+                try:
+                    v1.delete_namespaced_persistent_volume_claim(
+                        name=pvc.metadata.name,
+                        namespace=pvc.metadata.namespace,
+                        body=client.V1DeleteOptions(propagation_policy="Foreground"),
+                    )
+                    print(f"Deleted PVC {pvc.metadata.name} in {pvc.metadata.namespace}")
+                except client.exceptions.ApiException as e:
+                    print(f"Could not delete PVC {pvc.metadata.name}: {e}")
 
 
 # Example usage:

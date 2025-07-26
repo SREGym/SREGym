@@ -8,6 +8,7 @@ import yaml
 from srearena.paths import BASE_DIR, PROMETHEUS_METADATA
 from srearena.service.helm import Helm
 from srearena.service.kubectl import KubeCtl
+from srearena.utils.reuse_cleanup import wipe_prometheus_tsdb
 
 
 class Prometheus:
@@ -129,3 +130,8 @@ class Prometheus:
         except CalledProcessError:
             return False
         return False
+    
+    def clear_data(self):
+        print("Clearing Prometheus TSDB …")
+        wipe_prometheus_tsdb(namespace=self.namespace)
+        print("Prometheus TSDB cleared.")
