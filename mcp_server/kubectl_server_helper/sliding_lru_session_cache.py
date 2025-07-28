@@ -5,7 +5,7 @@ from pathlib import Path
 import time
 import threading
 from collections import OrderedDict
-from .kubctl_tool_set import KubectlToolSet
+from mcp_server.kubectl_server_helper.kubctl_tool_set import KubectlToolSet
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)

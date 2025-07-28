@@ -3,12 +3,12 @@ import logging
 import os
 import time
 import bashlex
-from .kubectl import KubeCtl, DryRunResult, DryRunStatus
+from mcp_server.kubectl_server_helper.kubectl import KubeCtl, DryRunResult, DryRunStatus
 
 from mcp_server.configs.kubectl_tool_cfg import KubectlToolCfg
-from .utils import cleanup_kubernetes_yaml, parse_text
-from .rollback_tool import RollbackCommand, RollbackNode, RollbackTool
-from .cmd_category import \
+from mcp_server.kubectl_server_helper.utils import cleanup_kubernetes_yaml, parse_text
+from mcp_server.kubectl_server_helper.rollback_tool import RollbackCommand, RollbackNode, RollbackTool
+from mcp_server.kubectl_server_helper.cmd_category import \
     kubectl_safe_commands, \
     kubectl_unsupported_commands
 
