@@ -56,7 +56,7 @@ dependencies = [
     "elastic-transport==8.17.1",
     "elasticsearch==8.18.1",
     "email-validator==2.2.0",
-    "fastapi==0.115.12",
+    "fastapi[standard]==0.115.12",
     "fastapi-cli==0.0.7",
     "filelock==3.18.0",
     "fixedint==0.1.6",
