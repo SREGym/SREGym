@@ -35,6 +35,10 @@ class KubeCtl:
     def list_services(self, namespace):
         """Return a list of all services within a specified namespace."""
         return self.core_v1_api.list_namespaced_service(namespace)
+    
+    def list_nodes(self):
+        """Return a list of all running nodes."""
+        return self.core_v1_api.list_node()
 
     def get_cluster_ip(self, service_name, namespace):
         """Retrieve the cluster IP address of a specified service within a namespace."""

@@ -42,7 +42,7 @@ from srearena.conductor.problems.network_policy_block import NetworkPolicyBlock
 from srearena.conductor.problems.taint_no_toleration import TaintNoToleration
 from srearena.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
 from srearena.conductor.problems.ingress_misroute import IngressMisroute
-
+from srearena.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
 
 
 class ProblemRegistry:
@@ -178,6 +178,7 @@ class ProblemRegistry:
                 path="/api",
                 correct_service="frontend-service",
                 wrong_service="recommendation-service"),
+            "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation
 
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
