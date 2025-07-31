@@ -1,6 +1,10 @@
 """Inject faults at the application layer: Code, MongoDB, Redis, etc."""
 
+import base64
+import textwrap
 import time
+
+from kubernetes import client
 
 from srearena.generators.fault.base import FaultInjector
 from srearena.service.kubectl import KubeCtl
@@ -146,6 +150,239 @@ class ApplicationFaultInjector(FaultInjector):
                     if container.name == f"hotel-reserv-{service}":
                         container.image = f"yinfangchen/hotelreservation:latest"
                 self.kubectl.update_deployment(service, self.namespace, deployment)
+
+    # A.4 valkey_auth_disruption: Invalidate the password in valkey so dependent services cannot work
+    def inject_valkey_auth_disruption(self, target_service="cart"):
+        pods = self.kubectl.list_pods(self.namespace)
+        valkey_pods = [p.metadata.name for p in pods.items if "valkey-cart" in p.metadata.name]
+        if not valkey_pods:
+            print("[❌] No Valkey pod found!")
+            return
+
+        valkey_pod = valkey_pods[0]
+        print(f"[🔐] Found Valkey pod: {valkey_pod}")
+        command = f"kubectl exec -n {self.namespace} {valkey_pod} -- valkey-cli CONFIG SET requirepass 'invalid_pass'"
+        result = self.kubectl.exec_command(command)
+        print(f"[⚠️] Injection result: {result}")
+
+        # Restart cartservice to force it to re-authenticate
+        self.kubectl.exec_command(f"kubectl delete pod -l app.kubernetes.io/name={target_service} -n {self.namespace}")
+        time.sleep(3)
+
+    def recover_valkey_auth_disruption(self, target_service="cart"):
+        pods = self.kubectl.list_pods(self.namespace)
+        valkey_pods = [p.metadata.name for p in pods.items if "valkey-cart" in p.metadata.name]
+        if not valkey_pods:
+            print("[❌] No Valkey pod found for recovery!")
+            return
+
+        valkey_pod = valkey_pods[0]
+        print(f"[🔓] Found Valkey pod: {valkey_pod}")
+        command = f"kubectl exec -n {self.namespace} {valkey_pod} -- valkey-cli CONFIG SET requirepass ''"
+        result = self.kubectl.exec_command(command)
+        print(f"[✅] Recovery result: {result}")
+
+        # Restart cartservice to restore normal behavior
+        self.kubectl.exec_command(f"kubectl delete pod -l app.kubernetes.io/name={target_service} -n {self.namespace}")
+        time.sleep(3)
+
+    # A.5 valkey_memory disruption: Write large 10MB payloads to the valkey store making it go into OOM state
+    def inject_valkey_memory_disruption(self):
+        print("Injecting Valkey memory disruption via in-cluster job...")
+
+        script = textwrap.dedent(
+            """
+            import redis
+            import threading
+            import time
+
+            def flood_redis():
+                client = redis.Redis(host='valkey-cart', port=6379)
+                while True:
+                    try:
+                        payload = 'x' * 1000000
+                        client.set(f"key_{time.time()}", payload)
+                    except Exception as e:
+                        print(f"Error: {e}")
+                        time.sleep(1)
+
+            threads = []
+            for _ in range(10):
+                t = threading.Thread(target=flood_redis)
+                t.start()
+                threads.append(t)
+
+            for t in threads:
+                t.join()
+        """
+        ).strip()
+
+        encoded_script = base64.b64encode(script.encode()).decode()
+
+        job_spec = {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": "valkey-memory-flood",
+                "namespace": self.namespace,
+            },
+            "spec": {
+                "template": {
+                    "spec": {
+                        "restartPolicy": "Never",
+                        "containers": [
+                            {
+                                "name": "flooder",
+                                "image": "python:3.10-slim",
+                                "command": [
+                                    "sh",
+                                    "-c",
+                                    f"pip install redis && python3 -c \"import base64; exec(base64.b64decode('{encoded_script}'))\"",
+                                ],
+                            }
+                        ],
+                    }
+                }
+            },
+        }
+
+        batch_v1 = client.BatchV1Api()
+        batch_v1.create_namespaced_job(namespace=self.namespace, body=job_spec)
+        print("Valkey memory flood job submitted.")
+
+    def recover_valkey_memory_disruption(self):
+        print("Cleaning up Valkey memory flood job...")
+        batch_v1 = client.BatchV1Api()
+        try:
+            batch_v1.delete_namespaced_job(
+                name="valkey-memory-flood",
+                namespace=self.namespace,
+                propagation_policy="Foreground",
+            )
+            print("Job deleted.")
+        except Exception as e:
+            print(f"Error deleting job: {e}")
+
+    # A.5 incorrect_port_assignment: Update an env var to use the wrong port value
+    def inject_incorrect_port_assignment(
+        self, deployment_name: str, component_label: str, env_var: str, incorrect_port: str = "8082"
+    ):
+        """
+        Patch the deployment to modify a specific environment variable (e.g., PRODUCT_CATALOG_SERVICE_ADDR)
+        to an incorrect port (e.g., 8082 instead of 8080).
+        """
+        # Fetch current deployment
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        container = deployment.spec.template.spec.containers[0]
+        container_name = container.name
+        current_env = container.env
+
+        # Modify the target env var
+        updated_env = []
+        found = False
+        for e in current_env:
+            if e.name == env_var:
+                updated_env.append(client.V1EnvVar(name=env_var, value=f"{e.value.split(':')[0]}:{incorrect_port}"))
+                found = True
+            else:
+                updated_env.append(e)
+
+        if not found:
+            raise ValueError(f"Environment variable '{env_var}' not found in deployment '{deployment_name}'")
+
+        # Create patch body
+        patch_body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": container_name,
+                                "env": [{"name": var.name, "value": var.value} for var in updated_env],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+        self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
+        print(f"Injected incorrect port assignment in {env_var} of {deployment_name}.")
+
+    def recover_incorrect_port_assignment(self, deployment_name: str, env_var: str, correct_port: str = "8080"):
+        """
+        Revert the previously patched environment variable (e.g., PRODUCT_CATALOG_SERVICE_ADDR)
+        to use the correct port (e.g., 8080).
+        """
+        # Fetch current deployment
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        container = deployment.spec.template.spec.containers[0]
+        container_name = container.name
+        current_env = container.env
+
+        # Revert the target env var
+        updated_env = []
+        found = False
+        for e in current_env:
+            if e.name == env_var:
+                base_host = e.value.split(":")[0]
+                updated_env.append(client.V1EnvVar(name=env_var, value=f"{base_host}:{correct_port}"))
+                found = True
+            else:
+                updated_env.append(e)
+
+        if not found:
+            raise ValueError(f"Environment variable '{env_var}' not found in deployment '{deployment_name}'")
+
+        # Create patch body
+        patch_body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": container_name,
+                                "env": [{"name": var.name, "value": var.value} for var in updated_env],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+        self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
+        print(f"Recovered {env_var} in {deployment_name} to use port {correct_port}.")
+
+    # A.6 incorrect_image: checkout service is updated to use a bad image
+    def inject_incorrect_image(self, deployment_name: str, namespace: str, bad_image: str = "app-image:latest"):
+        # Get current deployment for container name
+        deployment = self.kubectl.get_deployment(deployment_name, namespace)
+        container_name = deployment.spec.template.spec.containers[0].name
+
+        # Set replicas to 0 before updating image
+        self.kubectl.patch_deployment(name=deployment_name, namespace=namespace, patch_body={"spec": {"replicas": 0}})
+
+        # Patch image
+        self.kubectl.patch_deployment(
+            name=deployment_name,
+            namespace=namespace,
+            patch_body={"spec": {"template": {"spec": {"containers": [{"name": container_name, "image": bad_image}]}}}},
+        )
+
+        # Restore replicas to 1
+        self.kubectl.patch_deployment(name=deployment_name, namespace=namespace, patch_body={"spec": {"replicas": 1}})
+
+    def recover_incorrect_image(self, deployment_name: str, namespace: str, correct_image: str):
+        deployment = self.kubectl.get_deployment(deployment_name, namespace)
+        container_name = deployment.spec.template.spec.containers[0].name
+
+        self.kubectl.patch_deployment(
+            name=deployment_name,
+            namespace=namespace,
+            patch_body={
+                "spec": {"template": {"spec": {"containers": [{"name": container_name, "image": correct_image}]}}}
+            },
+        )
 
 
 if __name__ == "__main__":

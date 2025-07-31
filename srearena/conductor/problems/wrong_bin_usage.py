@@ -7,7 +7,7 @@ from srearena.conductor.oracles.wrong_bin_mitigation import WrongBinMitigationOr
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.paths import TARGET_MICROSERVICES
-from srearena.service.apps.hotelres import HotelReservation
+from srearena.service.apps.hotel_reservation import HotelReservation
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
 

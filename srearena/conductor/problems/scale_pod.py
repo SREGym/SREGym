@@ -8,7 +8,7 @@ from srearena.conductor.oracles.scale_pod_zero_mitigation import ScalePodZeroMit
 from srearena.conductor.oracles.workload import WorkloadOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
-from srearena.service.apps.socialnet import SocialNetwork
+from srearena.service.apps.social_network import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
 

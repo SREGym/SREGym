@@ -79,6 +79,8 @@ class Conductor:
         if self.submission_stage == "noop":
             results = self.detection_oracle.evaluate(solution)
             self.results["NOOP Detection"] = results
+            if results.get("reason") == "Invalid Format":
+                return "[⚠️] Invalid detection format. Please try again."
             self.submission_stage = "done"
             return "[✅] NO OP detection evaluated."
 

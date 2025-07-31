@@ -1,11 +1,12 @@
 from kubernetes import client
 
-from srearena.conductor.problems.base import Problem
-from srearena.conductor.oracles.localization import LocalizationOracle
 from srearena.conductor.oracles.ingress_misroute_oracle import IngressMisrouteMitigationOracle
-from srearena.service.apps.hotelres import HotelReservation
+from srearena.conductor.oracles.localization import LocalizationOracle
+from srearena.conductor.problems.base import Problem
+from srearena.service.apps.hotel_reservation import HotelReservation
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
+
 
 class IngressMisroute(Problem):
     def __init__(self, path="/api", correct_service="frontend-service", wrong_service="recommendation-service"):
@@ -35,21 +36,22 @@ class IngressMisroute(Problem):
                     "kind": "Ingress",
                     "metadata": {"name": self.ingress_name, "namespace": self.namespace},
                     "spec": {
-                        "rules": [{
-                            "http": {
-                                "paths": [{
-                                    "path": self.path,
-                                    "pathType": "Prefix",
-                                    "backend": {
-                                        "service": {
-                                            "name": self.correct_service,
-                                            "port": {"number": 80}
+                        "rules": [
+                            {
+                                "http": {
+                                    "paths": [
+                                        {
+                                            "path": self.path,
+                                            "pathType": "Prefix",
+                                            "backend": {
+                                                "service": {"name": self.correct_service, "port": {"number": 80}}
+                                            },
                                         }
-                                    }
-                                }]
+                                    ]
+                                }
                             }
-                        }]
-                    }
+                        ]
+                    },
                 }
                 self.networking_v1.create_namespaced_ingress(namespace=self.namespace, body=ingress_manifest)
                 ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.namespace)

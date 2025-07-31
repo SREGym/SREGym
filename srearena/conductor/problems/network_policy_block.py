@@ -4,7 +4,7 @@ from srearena.conductor.oracles.localization import LocalizationOracle
 from srearena.conductor.oracles.network_policy_oracle import NetworkPolicyMitigationOracle
 from srearena.conductor.problems.base import Problem
 from srearena.paths import TARGET_MICROSERVICES
-from srearena.service.apps.hotelres import HotelReservation
+from srearena.service.apps.hotel_reservation import HotelReservation
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
 

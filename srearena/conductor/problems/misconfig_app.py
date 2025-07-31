@@ -6,7 +6,7 @@ from srearena.conductor.oracles.mitigation import MitigationOracle
 from srearena.conductor.oracles.workload import WorkloadOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_app import ApplicationFaultInjector
-from srearena.service.apps.hotelres import HotelReservation
+from srearena.service.apps.hotel_reservation import HotelReservation
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
 

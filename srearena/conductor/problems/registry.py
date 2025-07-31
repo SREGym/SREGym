@@ -3,21 +3,34 @@ from srearena.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from srearena.conductor.problems.ad_service_manual_gc import AdServiceManualGc
 from srearena.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from srearena.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
+from srearena.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 from srearena.conductor.problems.cart_service_failure import CartServiceFailure
 from srearena.conductor.problems.configmap_drift import ConfigMapDrift
 from srearena.conductor.problems.container_kill import ChaosMeshContainerKill
+from srearena.conductor.problems.cpu_stress import ChaosMeshCPUStress
 from srearena.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from srearena.conductor.problems.env_variable_leak import EnvVariableLeak
 from srearena.conductor.problems.env_variable_shadowing import EnvVariableShadowing
+from srearena.conductor.problems.http_abort import ChaosMeshHttpAbort
+from srearena.conductor.problems.http_post_tamper import ChaosMeshHttpPostTamper
 from srearena.conductor.problems.image_slow_load import ImageSlowLoad
+from srearena.conductor.problems.incorrect_image import IncorrectImage
+from srearena.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
+from srearena.conductor.problems.ingress_misroute import IngressMisroute
+from srearena.conductor.problems.jvm_heap_stress import ChaosMeshJVMHeapStress
+from srearena.conductor.problems.jvm_return import ChaosMeshJVMReturnFault
 from srearena.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from srearena.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from srearena.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from srearena.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
+from srearena.conductor.problems.memory_stress import ChaosMeshMemoryStress
 from srearena.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from srearena.conductor.problems.missing_service import MissingService
+from srearena.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from srearena.conductor.problems.network_delay import ChaosMeshNetworkDelay
 from srearena.conductor.problems.network_loss import ChaosMeshNetworkLoss
+from srearena.conductor.problems.network_partition import ChaosMeshNetworkPartition
+from srearena.conductor.problems.network_policy_block import NetworkPolicyBlock
 from srearena.conductor.problems.payment_service_failure import PaymentServiceFailure
 from srearena.conductor.problems.payment_service_unreachable import PaymentServiceUnreachable
 from srearena.conductor.problems.pod_failure import ChaosMeshPodFailure
@@ -28,6 +41,7 @@ from srearena.conductor.problems.recommendation_service_cache_failure import Rec
 from srearena.conductor.problems.redeploy_without_pv import RedeployWithoutPV
 from srearena.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
 from srearena.conductor.problems.revoke_auth import MongoDBRevokeAuth
+from srearena.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
 from srearena.conductor.problems.scale_pod import ScalePodSocialNet
 from srearena.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from srearena.conductor.problems.sidecar_port_conflict import SidecarPortConflict
@@ -35,14 +49,14 @@ from srearena.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from srearena.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from srearena.conductor.problems.taint_no_toleration import TaintNoToleration
 from srearena.conductor.problems.target_port import K8STargetPortMisconfig
+from srearena.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
+from srearena.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
 from srearena.conductor.problems.wrong_bin_usage import WrongBinUsage
 from srearena.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from srearena.conductor.problems.wrong_service_selector import WrongServiceSelector
 from srearena.conductor.problems.network_policy_block import NetworkPolicyBlock
 from srearena.conductor.problems.taint_no_toleration import TaintNoToleration
-from srearena.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
-from srearena.conductor.problems.ingress_misroute import IngressMisroute
-
+from srearena.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 
 
 class ProblemRegistry:
@@ -57,11 +71,19 @@ class ProblemRegistry:
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
             "scale_pod_zero_social_net": ScalePodSocialNet,
             "assign_to_non_existent_node": AssignNonExistentNode,
+	    "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
             "chaos_mesh_container_kill": ChaosMeshContainerKill,
             "chaos_mesh_pod_failure": ChaosMeshPodFailure,
             "chaos_mesh_pod_kill": ChaosMeshPodKill,
             "chaos_mesh_network_loss": ChaosMeshNetworkLoss,
             "chaos_mesh_network_delay": ChaosMeshNetworkDelay,
+            "chaos_mesh_network_partition": ChaosMeshNetworkPartition,
+            "chaos_mesh_http_abort": ChaosMeshHttpAbort,
+            "chaos_mesh_cpu_stress": ChaosMeshCPUStress,
+            "chaos_mesh_jvm_stress": ChaosMeshJVMHeapStress,
+            "chaos_mesh_jvm_return": ChaosMeshJVMReturnFault,
+            "chaos_mesh_memory_stress": ChaosMeshMemoryStress,
+            "chaos_mesh_http_post_tamper": ChaosMeshHttpPostTamper,
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
             "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,
@@ -148,9 +170,7 @@ class ProblemRegistry:
             "liveness_probe_misconfiguration_hotel_reservation": lambda: LivenessProbeMisconfiguration(
                 app_name="hotel_reservation", faulty_service="recommendation"
             ),
-            "network_policy_block": lambda: NetworkPolicyBlock(
-                faulty_service="payment-service"
-            ),
+            "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
             "liveness_probe_too_aggressive_astronomy_shop": lambda: LivenessProbeTooAggressive(
                 app_name="astronomy_shop"
             ),
@@ -171,14 +191,19 @@ class ProblemRegistry:
             ),
             "env_variable_shadowing_astronomy_shop": lambda: EnvVariableShadowing(),
             "rolling_update_misconfigured_social_network": lambda: RollingUpdateMisconfigured(
-                app_name="social_network"),
+                app_name="social_network"
+            ),
             "rolling_update_misconfigured_hotel_reservation": lambda: RollingUpdateMisconfigured(
-                app_name="hotel_reservation"),
+                app_name="hotel_reservation"
+            ),
             "ingress_misroute": lambda: IngressMisroute(
-                path="/api",
-                correct_service="frontend-service",
-                wrong_service="recommendation-service"),
-
+                path="/api", correct_service="frontend-service", wrong_service="recommendation-service"
+            ),
+            "valkey_auth_disruption": ValkeyAuthDisruption,
+            "valkey_memory_disruption": ValkeyMemoryDisruption,
+            "incorrect_port_assignment": IncorrectPortAssignment,
+            "incorrect_image": IncorrectImage,
+            "namespace_memory_limit": NamespaceMemoryLimit,
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.

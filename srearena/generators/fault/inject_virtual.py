@@ -1153,17 +1153,18 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from environment variable shadowing fault for service: {service}")
 
-    # Inject Rolling Update Misconfiguration 
+    # Inject Rolling Update Misconfiguration
     def inject_rolling_update_misconfigured(self, microservices: list[str]):
         import tempfile
+
         for service in microservices:
             base_dep = {
                 "apiVersion": "apps/v1",
-                "kind":       "Deployment",
+                "kind": "Deployment",
                 "metadata": {
-                    "name":      service,
+                    "name": service,
                     "namespace": self.namespace,
-                    "labels":    {"app": service},
+                    "labels": {"app": service},
                 },
                 "spec": {
                     "replicas": 3,
@@ -1173,7 +1174,7 @@ class VirtualizationFaultInjector(FaultInjector):
                         "spec": {
                             "containers": [
                                 {
-                                    "name":  f"{service}-main",
+                                    "name": f"{service}-main",
                                     "image": "python:3.9-slim",
                                     "command": ["python3", "-m", "http.server", "8080"],
                                     "ports": [{"containerPort": 8080}],
@@ -1199,22 +1200,20 @@ class VirtualizationFaultInjector(FaultInjector):
                 "rollingUpdate": {"maxUnavailable": "100%", "maxSurge": "0%"},
             }
             init = {
-                "name":    "hang-init",
-                "image":   "busybox",
+                "name": "hang-init",
+                "image": "busybox",
                 "command": ["/bin/sh", "-c", "sleep infinity"],
             }
-            dep.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {}).setdefault("initContainers", []).append(init)
+            dep.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {}).setdefault(
+                "initContainers", []
+            ).append(init)
 
             with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tmp2:
                 yaml.safe_dump(dep, tmp2)
                 path1 = tmp2.name
 
-            self.kubectl.exec_command(
-                f"kubectl patch deployment {service} -n {self.namespace} --patch-file {path1}"
-            )
-            self.kubectl.exec_command(
-                f"kubectl rollout restart deployment {service} -n {self.namespace}"
-            )
+            self.kubectl.exec_command(f"kubectl patch deployment {service} -n {self.namespace} --patch-file {path1}")
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
             print(f"⚠️ Injected Rolling Update Misconfiguration fault into `{service}`")
 
     def recover_rolling_update_misconfigured(self, microservices: list[str]):
@@ -1228,6 +1227,33 @@ class VirtualizationFaultInjector(FaultInjector):
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
             apply_result = self.kubectl.exec_command(apply_command)
             print(f"Restored original deployment {service}: {apply_result}")
+
+    def inject_namespace_memory_limit(self, deployment_name: str, namespace: str, memory_limit: str):
+        # Delete associated ReplicaSet
+        rs_list = self.kubectl.get_matching_replicasets(namespace, deployment_name)
+        if not rs_list:
+            raise RuntimeError(f"No ReplicaSet found for deployment {deployment_name} in {namespace}")
+        rs_name = rs_list[0].metadata.name
+        self.kubectl.delete_replicaset(name=rs_name, namespace=namespace)
+
+        # Create memory resource quota
+        quota_body = {
+            "apiVersion": "v1",
+            "kind": "ResourceQuota",
+            "metadata": {"name": "memory-limit-quota", "namespace": namespace},
+            "spec": {"hard": {"memory": memory_limit}},
+        }
+        self.kubectl.apply_resource(quota_body)
+
+    def recover_namespace_memory_limit(self, deployment_name: str, namespace: str):
+        # Remove all memory-based quotas
+        quotas = self.kubectl.get_resource_quotas(namespace)
+        for quota in quotas:
+            if "memory" in quota.spec.hard:
+                self.kubectl.delete_resource_quota(name=quota.metadata.name, namespace=namespace)
+
+        # Scale deployment to 1 replica (if needed)
+        self.kubectl.scale_deployment(name=deployment_name, namespace=namespace, replicas=1)
 
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
@@ -1475,6 +1501,85 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl rollout restart deployment {svc} -n {self.namespace}")
         self.kubectl.wait_for_stable(self.namespace)
         print(f"Pods for {microservices} are back to Running")
+
+    def inject_pod_anti_affinity_deadlock(self, microservices: list[str]):
+        """
+        Inject a fault that creates pod anti-affinity deadlock.
+        Sets requiredDuringScheduling anti-affinity that excludes all nodes.
+        """
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+
+            # Ensure we have replicas > 1 to create potential deadlock
+            if "replicas" not in deployment_yaml["spec"] or deployment_yaml["spec"]["replicas"] < 2:
+                deployment_yaml["spec"]["replicas"] = 3  # Force multiple replicas
+
+            # Create anti-affinity rules that prevent pods from being scheduled on same nodes
+            anti_affinity_rules = {
+                "podAntiAffinity": {
+                    "requiredDuringSchedulingIgnoredDuringExecution": [
+                        {
+                            "labelSelector": {
+                                "matchExpressions": [{"key": "app", "operator": "In", "values": [service]}]
+                            },
+                            "topologyKey": "kubernetes.io/hostname",
+                        }
+                    ]
+                }
+            }
+
+            # Add affinity to deployment spec
+            if "affinity" not in deployment_yaml["spec"]["template"]["spec"]:
+                deployment_yaml["spec"]["template"]["spec"]["affinity"] = {}
+
+            deployment_yaml["spec"]["template"]["spec"]["affinity"].update(anti_affinity_rules)
+
+            # Write the modified YAML to a temporary file
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            # Delete and redeploy with anti-affinity rules
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            self.kubectl.exec_command(delete_command)
+
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+            self.kubectl.exec_command(apply_command)
+
+            print(f"Injected pod anti-affinity deadlock for service: {service}")
+            print(f"  - Set replicas to {deployment_yaml['spec']['replicas']}")
+            print(f"  - Added strict anti-affinity rules")
+
+    def recover_pod_anti_affinity_deadlock(self, microservices: list[str]):
+        """
+        Recover from pod anti-affinity deadlock by removing anti-affinity rules.
+        """
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+
+            # Remove affinity rules
+            if "affinity" in deployment_yaml["spec"]["template"]["spec"]:
+                if "podAntiAffinity" in deployment_yaml["spec"]["template"]["spec"]["affinity"]:
+                    del deployment_yaml["spec"]["template"]["spec"]["affinity"]["podAntiAffinity"]
+
+                # If affinity is now empty, remove it entirely
+                if not deployment_yaml["spec"]["template"]["spec"]["affinity"]:
+                    del deployment_yaml["spec"]["template"]["spec"]["affinity"]
+
+            # Reset replicas to 1 for recovery
+            deployment_yaml["spec"]["replicas"] = 1
+
+            # Write the modified YAML to a temporary file
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            # Delete and redeploy without anti-affinity rules
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            self.kubectl.exec_command(delete_command)
+
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+            self.kubectl.exec_command(apply_command)
+
+            print(f"Recovered pod anti-affinity deadlock for service: {service}")
+            print(f"  - Removed anti-affinity rules")
+            print(f"  - Reset replicas to 1")
 
 
 if __name__ == "__main__":

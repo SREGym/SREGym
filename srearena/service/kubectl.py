@@ -5,10 +5,11 @@ import subprocess
 import time
 
 try:
-    from kubernetes import client, config
+    from kubernetes import client, config, dynamic
 except ModuleNotFoundError as e:
     print("Your Kubeconfig is missing. Please set up a cluster.")
     exit(1)
+from kubernetes.client import api_client
 from kubernetes.client.rest import ApiException
 from rich.console import Console
 
@@ -70,6 +71,10 @@ class KubeCtl:
     def get_deployment(self, name: str, namespace: str):
         """Fetch the deployment configuration."""
         return self.apps_v1_api.read_namespaced_deployment(name, namespace)
+
+    def get_service(self, name: str, namespace: str):
+        """Fetch the service configuration."""
+        return client.CoreV1Api().read_namespaced_service(name=name, namespace=namespace)
 
     def wait_for_ready(self, namespace, sleep=2, max_wait=500):
         """Wait for all pods in a namespace to be in a Ready state before proceeding."""
@@ -179,6 +184,9 @@ class KubeCtl:
         """Update the deployment configuration."""
         return self.apps_v1_api.replace_namespaced_deployment(name, namespace, deployment)
 
+    def patch_deployment(self, name: str, namespace: str, patch_body: dict):
+        return self.apps_v1_api.patch_namespaced_deployment(name=name, namespace=namespace, body=patch_body)
+
     def patch_service(self, name, namespace, body):
         """Patch a Kubernetes service in a specified namespace."""
         try:
@@ -187,6 +195,12 @@ class KubeCtl:
         except ApiException as e:
             print(f"Exception when patching service: {e}\n")
             return None
+
+    def patch_custom_object(self, group, version, namespace, plural, name, body):
+        """Patch a custom Kubernetes object (e.g., Chaos Mesh CRD)."""
+        return self.custom_api.patch_namespaced_custom_object(
+            group=group, version=version, namespace=namespace, plural=plural, name=name, body=body
+        )
 
     def create_configmap(self, name, namespace, data):
         """Create or update a configmap from a dictionary of data."""
@@ -367,6 +381,82 @@ class KubeCtl:
                 return f"{round(value, 2)}{unit}"
             value /= 1024
         return f"{round(value, 2)}Ei"
+
+    def get_matching_replicasets(self, namespace: str, deployment_name: str) -> list[client.V1ReplicaSet]:
+        apps_v1 = self.apps_v1_api
+        rs_list = apps_v1.list_namespaced_replica_set(namespace)
+        matching_rs = []
+
+        for rs in rs_list.items:
+            owner_refs = rs.metadata.owner_references
+            if owner_refs:
+                for owner in owner_refs:
+                    if owner.kind == "Deployment" and owner.name == deployment_name:
+                        matching_rs.append(rs)
+                        break
+
+        return matching_rs
+
+    def delete_replicaset(self, name: str, namespace: str):
+        body = client.V1DeleteOptions(propagation_policy="Foreground")
+        try:
+            self.apps_v1_api.delete_namespaced_replica_set(
+                name=name,
+                namespace=namespace,
+                body=body,
+            )
+            print(f"✅ Deleted ReplicaSet '{name}' in namespace '{namespace}'")
+        except client.exceptions.ApiException as e:
+            raise RuntimeError(f"Failed to delete ReplicaSet {name} in {namespace}: {e}")
+
+    def apply_resource(self, manifest: dict):
+
+        dyn_client = dynamic.DynamicClient(api_client.ApiClient())
+
+        gvk = {
+            ("v1", "ResourceQuota"): dyn_client.resources.get(api_version="v1", kind="ResourceQuota"),
+            # Add more mappings here if needed in the future
+        }
+
+        key = (manifest["apiVersion"], manifest["kind"])
+        if key not in gvk:
+            raise ValueError(f"Unsupported resource type: {key}")
+
+        resource = gvk[key]
+        namespace = manifest["metadata"].get("namespace")
+
+        try:
+            existing = resource.get(name=manifest["metadata"]["name"], namespace=namespace)
+            # If exists, patch it
+            resource.patch(body=manifest, name=manifest["metadata"]["name"], namespace=namespace)
+            print(f"✅ Patched existing {manifest['kind']} '{manifest['metadata']['name']}'")
+        except dynamic.exceptions.NotFoundError:
+            resource.create(body=manifest, namespace=namespace)
+            print(f"✅ Created new {manifest['kind']} '{manifest['metadata']['name']}'")
+
+    def get_resource_quotas(self, namespace: str) -> list:
+        try:
+            response = self.core_v1_api.list_namespaced_resource_quota(namespace=namespace)
+            return response.items
+        except client.exceptions.ApiException as e:
+            raise RuntimeError(f"Failed to get resource quotas in namespace '{namespace}': {e}")
+
+    def delete_resource_quota(self, name: str, namespace: str):
+        try:
+            self.core_v1_api.delete_namespaced_resource_quota(
+                name=name, namespace=namespace, body=client.V1DeleteOptions(propagation_policy="Foreground")
+            )
+            print(f"✅ Deleted resource quota '{name}' in namespace '{namespace}'")
+        except client.exceptions.ApiException as e:
+            raise RuntimeError(f"❌ Failed to delete resource quota '{name}' in namespace '{namespace}': {e}")
+
+    def scale_deployment(self, name: str, namespace: str, replicas: int):
+        try:
+            body = {"spec": {"replicas": replicas}}
+            self.apps_v1_api.patch_namespaced_deployment(name=name, namespace=namespace, body=body)
+            print(f"✅ Scaled deployment '{name}' in namespace '{namespace}' to {replicas} replicas.")
+        except client.exceptions.ApiException as e:
+            raise RuntimeError(f"❌ Failed to scale deployment '{name}' in namespace '{namespace}': {e}")
 
 
 # Example usage:

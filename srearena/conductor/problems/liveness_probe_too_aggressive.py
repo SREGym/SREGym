@@ -4,8 +4,8 @@ from srearena.conductor.oracles.sustained_readiness import SustainedReadinessOra
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.service.apps.astronomy_shop import AstronomyShop
-from srearena.service.apps.hotelres import HotelReservation
-from srearena.service.apps.socialnet import SocialNetwork
+from srearena.service.apps.hotel_reservation import HotelReservation
+from srearena.service.apps.social_network import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
 
@@ -28,7 +28,6 @@ class LivenessProbeTooAggressive(Problem):
 
         self.kubectl = KubeCtl()
         self.injector = VirtualizationFaultInjector(namespace=self.app.namespace)
-
 
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 

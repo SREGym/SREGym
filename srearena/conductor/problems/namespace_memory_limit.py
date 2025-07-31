@@ -1,39 +1,35 @@
-"""Network loss problem in the HotelReservation application."""
-
 from srearena.conductor.oracles.localization import LocalizationOracle
+from srearena.conductor.oracles.namespace_memory_limit_mitigation import NamespaceMemoryLimitMitigationOracle
 from srearena.conductor.problems.base import Problem
-from srearena.generators.fault.inject_symp import SymptomFaultInjector
-from srearena.paths import TARGET_MICROSERVICES
+from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.service.apps.hotel_reservation import HotelReservation
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
 
 
-class ChaosMeshNetworkLoss(Problem):
+class NamespaceMemoryLimit(Problem):
     def __init__(self):
         self.app = HotelReservation()
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-        self.faulty_service = "user"
-        self.app.payload_script = (
-            TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
-        )
-        self.injector = SymptomFaultInjector(namespace=self.namespace)
-        super().__init__(app=self.app, namespace=self.app.namespace)
-        # === Attach evaluation oracles ===
+        self.faulty_service = "search"
+        self.injector = VirtualizationFaultInjector(namespace=self.namespace)
+        super().__init__(app=self.app, namespace=self.namespace)
+
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.mitigation_oracle = NamespaceMemoryLimitMitigationOracle(problem=self)
 
         self.app.create_workload()
 
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector._inject(fault_type="network_loss", microservices=[self.faulty_service])
+        self.injector.inject_namespace_memory_limit(
+            deployment_name=self.faulty_service, namespace=self.namespace, memory_limit="1Gi"
+        )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector._recover(
-            fault_type="network_loss",
-        )
+        self.injector.recover_namespace_memory_limit(deployment_name=self.faulty_service, namespace=self.namespace)

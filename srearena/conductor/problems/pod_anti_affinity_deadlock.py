@@ -1,58 +1,60 @@
-from srearena.conductor.oracles.compound import CompoundedOracle
+"""Pod Anti-Affinity Deadlock problem for microservice applications."""
+
+import time
+
 from srearena.conductor.oracles.localization import LocalizationOracle
 from srearena.conductor.oracles.mitigation import MitigationOracle
-from srearena.conductor.oracles.workload import WorkloadOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
-from srearena.service.apps.astronomy_shop import AstronomyShop
-from srearena.service.apps.hotel_reservation import HotelReservation
 from srearena.service.apps.social_network import SocialNetwork
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
 
 
-class SidecarPortConflict(Problem):
-    def __init__(self, app_name: str = "astronomy_shop", faulty_service: str = "frontend"):
-        self.app_name = app_name
+class PodAntiAffinityDeadlock(Problem):
+    def __init__(self, faulty_service: str = "user-service"):
+        self.app = SocialNetwork()
+        self.kubectl = KubeCtl()
+        self.namespace = self.app.namespace
         self.faulty_service = faulty_service
-
-        if app_name == "social_network":
-            self.app = SocialNetwork()
-        elif app_name == "hotel_reservation":
-            self.app = HotelReservation()
-        elif app_name == "astronomy_shop":
-            self.app = AstronomyShop()
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
-
         super().__init__(app=self.app, namespace=self.app.namespace)
 
-        self.kubectl = KubeCtl()
+        # === Attach evaluation oracles ===
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 
+        # Create workload for evaluation
         self.app.create_workload()
-        self.mitigation_oracle = CompoundedOracle(
-            self,
-            MitigationOracle(problem=self),
-            WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
-        )
+        self.mitigation_oracle = MitigationOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
+        print("Creating Pod Anti-Affinity Deadlock...")
+        print("Setting requiredDuringScheduling anti-affinity that excludes all nodes")
+
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector._inject(
-            fault_type="sidecar_port_conflict",
+            fault_type="pod_anti_affinity_deadlock",
             microservices=[self.faulty_service],
         )
+
+        # Wait for the deadlock to manifest
+        time.sleep(30)
+
+        print(f"Expected effect: Pods should be in Pending state with:")
+        print(f"  '0/X nodes are available: X node(s) didn't match pod anti-affinity rules'")
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
+        print("Removing pod anti-affinity deadlock...")
+        print("Changing requiredDuring to preferredDuring or removing anti-affinity rules")
+
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector._recover(
-            fault_type="sidecar_port_conflict",
+            fault_type="pod_anti_affinity_deadlock",
             microservices=[self.faulty_service],
         )
+
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")

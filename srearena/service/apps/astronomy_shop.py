@@ -25,10 +25,14 @@ class AstronomyShop(Application):
     def deploy(self):
         """Deploy the Helm configurations."""
         self.kubectl.create_namespace_if_not_exist(self.namespace)
-        Helm.add_repo(
-            "open-telemetry",
-            "https://open-telemetry.github.io/opentelemetry-helm-charts",
-        )
+
+        self.helm_configs["extra_args"] = [
+            "--set-string",
+            "components.load-generator.envOverrides[0].name=LOCUST_BROWSER_TRAFFIC_ENABLED",
+            "--set-string",
+            "components.load-generator.envOverrides[0].value=false",
+        ]
+
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
