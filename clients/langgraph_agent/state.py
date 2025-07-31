@@ -10,6 +10,10 @@ class State(TypedDict):
     workdir: str
     curr_file: str
     curr_line: int
+    # number or rounds used to finish assigned tasks
     num_rounds: int
+    # number of rounds used for rectifying submission
+    rec_submission_rounds: int
     submitted: bool
+    submit_tried: bool
     ans: dict

@@ -8,8 +8,8 @@ Use this tool to submit your answer to the assigned tasks. You can give partial 
     (still of type dict) if you can not solve all of them.
 
     Args:
-        ans (dict): Your answers to submit. For each item in it, the key corresponds to the task name and the value
-            corresponds to your answer to this task.
+        ans (dict): It contains your answers to submit. For each item in ans, its key corresponds to a
+            task name and its value corresponds to your answer to this task.
 """
 
 

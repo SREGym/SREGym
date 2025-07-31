@@ -7,7 +7,7 @@ from srearena.conductor import Conductor
 from srearena.utils.critical_section import CriticalSection
 from clients.langgraph_agent.stratus_agent.base_agent import BaseAgent
 from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
-from clients.configs.stratus_config import get_diagnosis_agent_cfg
+from clients.configs.stratus_config import get_diagnosis_agent_cfg, get_mitigation_agent_cfg
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ if __name__ == "__main__":
     pf_processes = setup_port_forwarding()
 
     # Phase 1: NO OP
-    final_state = diagnosis_agent.run(problem.app.get_app_summary())
+    final_state = diagnosis_agent.run({"app_summary": problem.app.get_app_summary()})
     logger.info(f"Final state: {final_state}")
     if 'detection' in final_state['ans'] and isinstance(final_state['ans']['detection'], bool):
         print(f"NO OP Detection Result: {'✅' if not final_state['ans']['detection'] else '❌'}")
@@ -119,12 +119,29 @@ if __name__ == "__main__":
         atexit.register(conductor.exit_cleanup_and_recover_fault)
 
     # Phase 3: Faulty system
-    final_state = diagnosis_agent.run(problem.app.get_app_summary())
+    final_state = diagnosis_agent.run({"app_summary": problem.app.get_app_summary()})
     logger.info(f"Final state: {final_state}")
     if 'detection' in final_state['ans'] and isinstance(final_state['ans']['detection'], bool):
         print(f"Faulty Result: {'✅' if final_state['ans']['detection'] else '❌'}")
     else:
         print(f"Faulty Result: '❌'; Invalid answer provided by the agent!")
+
+    # mitigation
+    mitigation_agent_cfg = get_mitigation_agent_cfg()
+    mitigation_agent = BaseAgent(llm, mitigation_agent_cfg.model_copy(update={"max_round": 10}))
+    mitigation_agent.build_agent()
+
+    faults_info = "The diagnosis_agent failed to give summarization."
+    if 'summarization' in final_state['ans'] and isinstance(final_state['ans']['summarization'], str):
+        faults_info = final_state["ans"]['summarization']
+
+    final_state = mitigation_agent.run({
+        "app_summary": problem.app.get_app_summary(),
+        "faults_info": faults_info
+    })
+    logger.info(f"Final state: {final_state}")
+
+    problem.mitigation_oracle.evaluate()
 
     # Final cleanup
     with CriticalSection():
