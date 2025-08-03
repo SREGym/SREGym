@@ -23,6 +23,9 @@ class FlightTicket(Application):
 
     def deploy(self):
         """Deploy the Helm configurations."""
+        if self.kubectl.check_if_ready(self.namespace):
+            print("Flight Ticket is already deployed. Skipping deployment.")
+            return False
         self.kubectl.create_namespace_if_not_exist(self.namespace)
         Helm.add_repo(
             "flight-ticket",
@@ -30,7 +33,8 @@ class FlightTicket(Application):
         )
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
-
+        return True
+    
     def delete(self):
         """Delete the Helm configurations."""
         # NOTE: We should probably clear redis?

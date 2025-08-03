@@ -76,6 +76,16 @@ class KubeCtl:
         """Fetch the service configuration."""
         return client.CoreV1Api().read_namespaced_service(name=name, namespace=namespace)
 
+    def check_if_ready(self, namespace: str) -> bool:
+        """Check if all pods in a namespace are in a Ready state."""
+        pod_list = self.list_pods(namespace)
+        if not pod_list.items:
+            return False
+        for pod in pod_list.items:
+            if not (pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses)):
+                return False
+        return True
+
     def wait_for_ready(self, namespace, sleep=2, max_wait=500):
         """Wait for all pods in a namespace to be in a Ready state before proceeding."""
 

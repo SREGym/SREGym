@@ -15,6 +15,9 @@
       add_host:
         name: "global"
         resolved_control_plane_ip: "{{ resolved_control_plane_ip }}"
+    - name: Install etcd-client
+      shell: |
+        sudo apt install etcd-client
     - name: Initialize Kubernetes control plane
       shell: |
         kubeadm init --pod-network-cidr=10.244.0.0/16 --cri-socket /var/run/cri-dockerd.sock --apiserver-advertise-address={{ resolved_control_plane_ip }}

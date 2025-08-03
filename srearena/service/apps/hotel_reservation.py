@@ -5,7 +5,7 @@ from srearena.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA, TARGET_MICROSERVIC
 from srearena.service.apps.base import Application
 from srearena.service.apps.helpers import get_frontend_url
 from srearena.service.kubectl import KubeCtl
-
+from srearena.service.helm import Helm
 
 class HotelReservation(Application):
     def __init__(self):
@@ -68,20 +68,28 @@ class HotelReservation(Application):
             data=self._prepare_configmap_data(script_files),
         )
 
-    def deploy(self):
+    def deploy(self, original=False):
         """Deploy the Kubernetes configurations."""
+        if not original:
+            if self.kubectl.check_if_ready(self.namespace):
+                print("Hotel Reservation is already deployed. Skipping deployment.")
+                return False
         print(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         self.kubectl.wait_for_ready(self.namespace)
-
+        return True
+    
     def deploy_without_wait(self):
         """Deploy the Kubernetes configurations without waiting for ready."""
-
+        if self.kubectl.check_if_ready(self.namespace):
+            print("Hotel Reservation is already deployed. Skipping deployment.")
+            return False
         print(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         print(f"Waiting for stability...")
         self.kubectl.wait_for_stable(namespace=self.namespace)
-
+        return True
+    
     def delete(self):
         """Delete the configmap."""
         self.kubectl.delete_configs(self.namespace, self.k8s_deploy_path)

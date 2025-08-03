@@ -13,7 +13,7 @@ from srearena.service.telemetry.prometheus import Prometheus
 from srearena.utils.critical_section import CriticalSection
 from srearena.utils.sigint_aware_section import SigintAwareSection
 from srearena.utils.status import SessionPrint, SubmissionStatus
-
+from srearena.conductor.cluster_snapshot import backup_etcd, restore_etcd
 
 class Conductor:
     def __init__(self):
@@ -141,14 +141,15 @@ class Conductor:
 
         return "[✅] Problem completed."
 
-    async def start_problem(self):
+    async def start_problem(self, original:bool, master_node:str=None, worker_nodes: list[str]=None):
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.detection_oracle = DetectionOracle(self.problem)
         self.results = {}
-
         # Dependency check
         self.dependency_check(["kubectl", "helm"])
+
+        backup_success = True
 
         try:
             with SigintAwareSection():
@@ -179,9 +180,24 @@ class Conductor:
                 print("OpenEBS setup completed.")
 
                 self.prometheus.deploy()
-
-                self.problem.app.delete()
-                self.problem.app.deploy()
+                t1_stamp = time.time()
+                if original:
+                    self.problem.app.delete()
+                flag = self.problem.app.deploy(original=original)
+                if not original:
+                    if flag:
+                        try:
+                            backup_etcd(
+                                control_node="remote",
+                                hostname=master_node,
+                                username="jqlefty",
+                                key_filename="/home/lefty777/.ssh/id_rsa",
+                                snapshot_path="etcd-snapshot.db"
+                            )
+                        except Exception as e:
+                            print(f"Failed to backup etcd snapshot: {e}")
+                            backup_success = False
+                t2_stamp = time.time()
                 self.problem.app.start_workload()
         except KeyboardInterrupt:
             print("\nImmediately terminating and Cleaning up...")
@@ -209,14 +225,36 @@ class Conductor:
         with CriticalSection():
             self.problem.recover_fault()
             atexit.unregister(self.exit_cleanup_and_recover_fault)
+        t3_stamp = time.time()
+        if not original:
+            if backup_success:
+                # Try to restore etcd snapshot
+                try:
+                    restore_etcd(
+                        control_node="remote",
+                        hostname=master_node,
+                        username="jqlefty",
+                        key_filename="/home/lefty777/.ssh/id_rsa",
+                        snapshot_path="etcd-snapshot.db",
+                        worker_nodes=worker_nodes
+                    )
+                except Exception as e:
+                    print(f"Failed to restore etcd snapshot: {e}")
+                    self.problem.app.cleanup()
+            else:
+                self.problem.app.cleanup()
+        else:
+            self.problem.app.cleanup()
+        t4_stamp = time.time()
 
-        self.problem.app.cleanup()
         self.prometheus.teardown()
         self.kubectl.exec_command("kubectl delete sc openebs-hostpath openebs-device --ignore-not-found")
         self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
         self.kubectl.wait_for_namespace_deletion("openebs")
 
         self.results.update(fault_results)
+        self.results["deploy_and_backup_time"] = t2_stamp - t1_stamp
+        self.results["cleanup_or_restoration_time"] = t4_stamp - t3_stamp
         return self.results
 
     def exit_cleanup_and_recover_fault(self):

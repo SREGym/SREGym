@@ -23,10 +23,14 @@ class TrainTicket(Application):
 
     def deploy(self):
         """Deploy the Helm configurations."""
+        if self.kubectl.check_if_ready(self.namespace):
+            print("Train Ticket is already deployed. Skipping deployment.")
+            return False
         self.kubectl.create_namespace_if_not_exist(self.namespace)
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
-
+        return True
+    
     def delete(self):
         """Delete the Helm configurations."""
         # Helm.uninstall(**self.helm_configs) # Don't helm uninstall until cleanup job is fixed on train-ticket

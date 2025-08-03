@@ -42,8 +42,12 @@ class SocialNetwork(Application):
         else:
             print("TLS secret already exists. Skipping creation.")
 
-    def deploy(self):
+    def deploy(self, original=False):
         """Deploy the Helm configurations with architecture-aware image selection."""
+        if not original:
+            if self.kubectl.check_if_ready(self.namespace):
+                print("Social Network is already deployed. Skipping deployment.")
+                return False
         node_architectures = self.kubectl.get_node_architectures()
         is_arm = any(arch in ["arm64", "aarch64"] for arch in node_architectures)
 
@@ -59,7 +63,8 @@ class SocialNetwork(Application):
 
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
-
+        return True
+    
     def delete(self):
         """Delete the Helm configurations."""
         Helm.uninstall(**self.helm_configs)

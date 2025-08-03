@@ -22,8 +22,13 @@ class AstronomyShop(Application):
         self.frontend_service = "frontend-proxy"
         self.frontend_port = 8080
 
-    def deploy(self):
+    def deploy(self, original=False):
         """Deploy the Helm configurations."""
+        if not original:
+            if self.kubectl.check_if_ready(self.namespace):
+                print("Astronomy Shop is already deployed. Skipping deployment.")
+                return False
+        
         self.kubectl.create_namespace_if_not_exist(self.namespace)
         Helm.add_repo(
             "open-telemetry",
@@ -31,7 +36,8 @@ class AstronomyShop(Application):
         )
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
-
+        return True
+    
     def delete(self):
         """Delete the Helm configurations."""
         Helm.uninstall(**self.helm_configs)
