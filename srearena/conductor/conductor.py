@@ -1,10 +1,11 @@
-import asyncio
 import atexit
 import os
 import shutil
+import threading
 import time
 from json.decoder import JSONDecodeError
 
+from api import run_api
 from srearena.conductor.oracles.detection import DetectionOracle
 from srearena.conductor.parser import ResponseParser
 from srearena.conductor.problems.registry import ProblemRegistry
@@ -189,6 +190,10 @@ class Conductor:
             print("\nImmediately terminating and Cleaning up...")
             atexit.register(self.exit_cleanup_and_recover_fault)
             raise SystemExit from None
+
+        # Start http api server
+        api_thread = threading.Thread(target=lambda: run_api(self, host="0.0.0.0", port=8000), daemon=True)
+        api_thread.start()
 
         # Phase 1: NO OP
         print("\n[NO OP Evaluation] System is healthy. Agent should detect no issue.")
