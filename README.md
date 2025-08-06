@@ -38,6 +38,7 @@ which python3.12 # finds the python interpreter path
 uv venv -p <python_interpreter_path>
 source .venv/bin/activate
 uv sync
+pre-commit install
 ```
 
 <h2 id="🚀quickstart">🚀 Quick Start </h2>
