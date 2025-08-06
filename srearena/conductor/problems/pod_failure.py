@@ -29,11 +29,7 @@ class ChaosMeshPodFailure(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector._inject(
-            fault_type="pod_failure",
-            microservices=[self.faulty_service],
-            duration="100s",
-        )
+        self.injector._inject(fault_type="pod_failure", microservices=[self.faulty_service])
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected

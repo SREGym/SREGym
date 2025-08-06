@@ -16,3 +16,14 @@ nodes:
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev
+  - role: worker
+    image: jacksonarthurclark/aiopslab-kind-arm:latest
+    extraMounts:
+      - hostPath: /run/udev
+        containerPath: /run/udev
+  - role: worker
+    image: jacksonarthurclark/aiopslab-kind-arm:latest
+    extraMounts:
+      - hostPath: /run/udev
+        containerPath: /run/udev
+      

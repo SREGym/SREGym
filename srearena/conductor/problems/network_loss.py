@@ -28,11 +28,7 @@ class ChaosMeshNetworkLoss(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector._inject(
-            fault_type="network_loss",
-            microservices=[self.faulty_service],
-            duration="200s",
-        )
+        self.injector._inject(fault_type="network_loss", microservices=[self.faulty_service])
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
