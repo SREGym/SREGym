@@ -45,7 +45,7 @@ class SocialNetwork(Application):
 
     def deploy(self):
         """Deploy the Helm configurations with architecture-aware image selection."""
-        if self.kubectl.check_if_ready(self.namespace):
+        if self.kubectl.get_namespace_deployment_status(self.namespace):
             print("Social Network is already deployed. Skipping deployment.")
             return False
         node_architectures = self.kubectl.get_node_architectures()

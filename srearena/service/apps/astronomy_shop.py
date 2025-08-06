@@ -25,7 +25,7 @@ class AstronomyShop(Application):
 
     def deploy(self):
         """Deploy the Helm configurations."""
-        if self.kubectl.check_if_ready(self.namespace):
+        if self.kubectl.get_namespace_deployment_status(self.namespace):
             print("Astronomy Shop is already deployed. Skipping deployment.")
             return False
         

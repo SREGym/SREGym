@@ -152,14 +152,6 @@ class Conductor:
         return "[✅] Problem completed."
 
     def load_workers(self):
-        # with open(path, "r") as f:
-        #     inventory = yaml.safe_load(f)
-        # control_host = list(inventory["all"]["children"]["control_nodes"]["hosts"].values())[0]["ansible_host"]
-        # worker_hosts = [
-        #     v["ansible_host"]
-        #     for v in inventory["all"]["children"]["worker_nodes"]["hosts"].values()
-        # ]
-        # return control_host, worker_hosts
         worker_hosts = [
             v.get("ansible_host")
             for v in inventory.get("all", {}).get("children", {}).get("worker_nodes", {}).get("hosts", {}).values()
@@ -167,13 +159,11 @@ class Conductor:
         return worker_hosts
 
     def prepare_app(self):
-        print("helm install:", self.problem.app.helm_install)
-        if self.problem.app.helm_install is False:
-                    self.problem.app.delete()
+        if self.app.helm_install is False:
+                    self.app.delete()
                     backupsuccess = False
-        first_deployed = self.problem.app.deploy()
-        if self.problem.app.helm_install is True:
-            print("Waiting for the application to be ready...")
+        first_deployed = self.app.deploy()
+        if self.app.helm_install is True:
             if first_deployed:
                 print("First deployment detected. Taking etcd snapshot...")
                 try:
@@ -192,7 +182,7 @@ class Conductor:
         return backupsuccess
     
     def cleanup_app(self, backup_success: bool=True):
-        if self.problem.app.helm_install is True:
+        if self.app.helm_install is True:
             if backup_success:
                 # Try to restore etcd snapshot
                 try:
@@ -206,11 +196,11 @@ class Conductor:
                     )
                 except Exception as e:
                     print(f"Failed to restore etcd snapshot: {e}")
-                    self.problem.app.cleanup()
+                    self.app.cleanup()
             else:
-                self.problem.app.cleanup()
+                self.app.cleanup()
         else:
-            self.problem.app.cleanup()
+            self.app.cleanup()
     
     async def start_problem(self):
         self.execution_start_time = time.time()
@@ -244,11 +234,9 @@ class Conductor:
         with CriticalSection():
             self.problem.recover_fault()
             atexit.unregister(self.exit_cleanup_and_recover_fault)
-        
-        self.cleanup_app(backup_success = backupsuccess)
 
 
-        self.undeploy_app()
+        self.undeploy_app(backup_success=backupsuccess)
 
         self.results.update(fault_results)
         return self.results
@@ -301,8 +289,7 @@ class Conductor:
         return backup_success
     
     def undeploy_app(self, backup_success: bool=True):    
-        # self.app.cleanup()
-        self.cleanup_app(backup_success)
+        self.cleanup_app(backup_success = backup_success)
         deployed_apps = self.get_deployed_apps()
         if len(deployed_apps) == 0:
             self.prometheus.teardown()
