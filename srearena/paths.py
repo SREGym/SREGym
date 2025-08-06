@@ -7,6 +7,7 @@ HOME_DIR = Path(os.path.expanduser("~"))
 BASE_DIR = Path(__file__).resolve().parent
 BASE_PARENT_DIR = Path(__file__).resolve().parent.parent
 config = Config(BASE_DIR / "config.yml")
+inventory = Config(BASE_PARENT_DIR / "scripts" / "ansible" / "inventory.yml")
 
 # Targe microservice and its utilities directories
 TARGET_MICROSERVICES = BASE_PARENT_DIR / "aiopslab-applications"

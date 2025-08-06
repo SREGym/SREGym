@@ -14,6 +14,7 @@ class FlightTicket(Application):
         self.load_app_json()
         self.kubectl = KubeCtl()
         self.create_namespace()
+        self.helm_install = True
 
     def load_app_json(self):
         super().load_app_json()

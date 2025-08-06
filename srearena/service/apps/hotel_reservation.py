@@ -21,6 +21,8 @@ class HotelReservation(Application):
         self.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
+    
+        self.helm_install = False
 
     def load_app_json(self):
         super().load_app_json()
@@ -68,12 +70,8 @@ class HotelReservation(Application):
             data=self._prepare_configmap_data(script_files),
         )
 
-    def deploy(self, original=False):
+    def deploy(self):
         """Deploy the Kubernetes configurations."""
-        if not original:
-            if self.kubectl.check_if_ready(self.namespace):
-                print("Hotel Reservation is already deployed. Skipping deployment.")
-                return False
         print(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         self.kubectl.wait_for_ready(self.namespace)
@@ -81,9 +79,6 @@ class HotelReservation(Application):
     
     def deploy_without_wait(self):
         """Deploy the Kubernetes configurations without waiting for ready."""
-        if self.kubectl.check_if_ready(self.namespace):
-            print("Hotel Reservation is already deployed. Skipping deployment.")
-            return False
         print(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         print(f"Waiting for stability...")

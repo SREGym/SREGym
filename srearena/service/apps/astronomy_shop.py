@@ -15,6 +15,7 @@ class AstronomyShop(Application):
         self.load_app_json()
         self.kubectl = KubeCtl()
         self.create_namespace()
+        self.helm_install = True
 
     def load_app_json(self):
         super().load_app_json()
@@ -22,12 +23,11 @@ class AstronomyShop(Application):
         self.frontend_service = "frontend-proxy"
         self.frontend_port = 8080
 
-    def deploy(self, original=False):
+    def deploy(self):
         """Deploy the Helm configurations."""
-        if not original:
-            if self.kubectl.check_if_ready(self.namespace):
-                print("Astronomy Shop is already deployed. Skipping deployment.")
-                return False
+        if self.kubectl.check_if_ready(self.namespace):
+            print("Astronomy Shop is already deployed. Skipping deployment.")
+            return False
         
         self.kubectl.create_namespace_if_not_exist(self.namespace)
         Helm.add_repo(

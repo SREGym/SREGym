@@ -20,7 +20,8 @@ class SocialNetwork(Application):
         self.create_tls_secret()
 
         self.payload_script = TARGET_MICROSERVICES / "socialNetwork/wrk2/scripts/social-network/mixed-workload.lua"
-
+        self.helm_install = True
+        
     def load_app_json(self):
         super().load_app_json()
         metadata = self.get_app_json()
@@ -42,12 +43,11 @@ class SocialNetwork(Application):
         else:
             print("TLS secret already exists. Skipping creation.")
 
-    def deploy(self, original=False):
+    def deploy(self):
         """Deploy the Helm configurations with architecture-aware image selection."""
-        if not original:
-            if self.kubectl.check_if_ready(self.namespace):
-                print("Social Network is already deployed. Skipping deployment.")
-                return False
+        if self.kubectl.check_if_ready(self.namespace):
+            print("Social Network is already deployed. Skipping deployment.")
+            return False
         node_architectures = self.kubectl.get_node_architectures()
         is_arm = any(arch in ["arm64", "aarch64"] for arch in node_architectures)
 
