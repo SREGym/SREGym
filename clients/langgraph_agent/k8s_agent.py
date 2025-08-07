@@ -10,6 +10,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import END
 from langgraph.graph import START, StateGraph
 from langgraph.prebuilt import ToolNode
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from collections import Counter
 
 from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
 from clients.langgraph_agent.state import State
@@ -208,6 +210,113 @@ class XAgent:
             "curr_line": state["curr_line"],
             "workdir": state["workdir"],
         }
+    def check_if_summaries_needed(self, state: State):
+        """ Check if summaries are needed based on the number of messages."""
+        messages = state["messages"]
+        logger.info("Checking if summaries are needed, current messages: %s", messages)
+        logger.info("Number of messages: %d", len(messages))
+
+        if len(messages) -1 >=10  and (len(messages) - 1 )% 10 == 0:
+            logger.info("Summaries are needed, multiple of 10 messages.")
+            return True
+        else:
+            logger.info("No summaries needed")
+            logger.info("Number of messages: %d", len(messages) - 1)
+
+
+            return False
+   
+    
+    def summarize_messages(self, state: State):
+        """ Summarize the messages in the conversation history."""
+        messages = [msg for msg in state["messages"] if not (isinstance(msg, AIMessage) and msg.additional_kwargs.get("is_summary"))][-(int(os.environ["SUMMARY_FREQUENCY"])-1):]
+        def format_messages(msgs):
+            formatted = ""
+            for msg in msgs:
+                # Skip summary messages
+                if isinstance(msg, AIMessage) and msg.additional_kwargs.get("is_summary", False):
+                    continue
+                if isinstance(msg, (AIMessage, HumanMessage)):
+                    role = "Ai" if isinstance(msg, AIMessage) else "Human"
+                    formatted += f"{role}: {msg.content}\n"
+            return formatted
+        
+        def count_message_types(messages):
+            type_counts = Counter()
+
+            for msg in messages:
+                if isinstance(msg, AIMessage):
+                  type_counts["AIMessage"] += 1
+                elif isinstance(msg, HumanMessage):
+                 type_counts["HumanMessage"] += 1
+                elif isinstance(msg, SystemMessage):
+                 type_counts["SystemMessage"] += 1
+                elif isinstance(msg, ToolMessage):
+                    type_counts["ToolMessage"] += 1
+                else:
+                    type_counts[str(type(msg))] += 1  # fallback for unknown types
+
+            return type_counts
+        logger.info("Summarizing messages: %s", messages)
+        # Count the number of messages of each type
+        type_counts = count_message_types(messages)
+        logger.info("Message type counts: %s", type_counts)
+        formatted_history = format_messages(messages)
+        logger.info("Formatted conversation history: %s", formatted_history)
+        summary_prompt = [
+    SystemMessage(content="You are a helpful assistant that summarizes conversations."),
+    HumanMessage(content="""
+Summarize the following conversation history in concise bullet points.
+At the end, add a final line beginning with 'Answer:' that gives the AI's most recent reply.
+
+Format:
+- [bullet point]
+- ...
+Answer: [final AI reply]
+
+Conversation:
+""" + formatted_history)
+]
+        llm = get_llm_backend_for_tools()    
+
+        messages_summary = llm.inference(messages=summary_prompt)
+
+# If the response is an AIMessage or similar, extract `.content`
+        if isinstance(messages_summary, AIMessage):
+            summary_content = messages_summary.content
+        else:
+            summary_content = str(messages_summary)
+        answer = ""
+        for msg in reversed(messages):
+            if isinstance(msg, AIMessage) and not msg.additional_kwargs.get("is_summary", False):
+                answer = msg.content.strip()
+            break
+        # Format the summary content
+        lines = summary_content.strip().split("\n")
+        formatted_summary_lines = []
+
+        for line in lines:
+            clean_line = line.strip().lstrip("-").strip()
+            # Filter out any existing "Answer:" lines
+            if clean_line.lower().startswith("answer:"):
+                continue
+            if clean_line:
+                formatted_summary_lines.append(f"- {clean_line}")
+
+# Append the actual last AI answer at the end
+        formatted_summary = "\n".join(formatted_summary_lines + [f"\nAnswer: {answer}"])
+    
+        summary_message = HumanMessage(
+            content=formatted_summary,
+            additional_kwargs={"is_summary": True})             
+        logger.info("Produced Summary: %s", formatted_summary)
+        new_messages = state["messages"] + [summary_message] 
+        return {
+        "messages": new_messages,
+        "curr_file": state["curr_file"],
+        "curr_line": state["curr_line"],
+        "workdir": state["workdir"],
+    }
 
     def build_agent(self, mock: bool = False):
         # we add the node to the graph
@@ -222,16 +331,24 @@ class XAgent:
         observability_tool_node = BasicToolNode(self.observability_tools, is_async=True)
         file_editing_tool_node = ToolNode(self.file_editing_tools)
         compile_tool_node = ToolNode(self.compile_tools)
+        
 
         # we add the node to the graph
         self.graph_builder.add_node("observability_tool_node", observability_tool_node)
         self.graph_builder.add_node("file_editing_tool_node", file_editing_tool_node)
         self.graph_builder.add_node("compile_tool_node", compile_tool_node)
 
+        #Add summary logic nodes
+        self.graph_builder.add_node("tool_router_node", lambda state: state)
+        self.graph_builder.add_node("summary_router_node", lambda state: state)
+
+        self.graph_builder.add_node("summarize_messages", self.summarize_messages)
+
         # after creating the nodes, we now add the edges
         # the start of the graph is denoted by the keyword START, end is END.
         # here, we point START to the "agent" node
         self.graph_builder.add_edge(START, "agent")
+        self.graph_builder.add_edge("agent", "summary_router_node")
 
         # once we arrive at the "agent" node, the execution graph can
         # have 2 paths: either choosing to use a tool or not.
@@ -242,8 +359,17 @@ class XAgent:
         # we implement "route_tools," which routes the execution based on the agent's
         # output. if the output is a tool usage, we direct the execution to the tool and loop back to the agent node
         # if not, we finish *one* graph traversal (i.e., to END)
+        self.graph_builder.add_conditional_edges(   
+            "summary_router_node",
+            self.check_if_summaries_needed, {
+                True: "summarize_messages",
+                 False: "tool_router_node",
+            },
+        )
+        
+       
         self.graph_builder.add_conditional_edges(
-            "agent",
+            "tool_router_node",
             self.route_tools,
             # The following dictionary lets you tell the graph to interpret the condition's outputs as a specific node
             # It text_editing to the identity function, but if you

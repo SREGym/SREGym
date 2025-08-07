@@ -7,6 +7,7 @@ from json.decoder import JSONDecodeError
 
 from srearena.conductor.oracles.detection import DetectionOracle
 from srearena.conductor.problems.registry import ProblemRegistry
+from srearena.service.apps.registry import AppRegistry
 from srearena.service.kubectl import KubeCtl
 from srearena.service.telemetry.prometheus import Prometheus
 from srearena.utils.critical_section import CriticalSection
@@ -19,15 +20,16 @@ class Conductor:
         self.problems = ProblemRegistry()
         self.kubectl = KubeCtl()
         self.prometheus = Prometheus()
+        self.apps = AppRegistry()
 
         # runtime state
         self.problem_id = None
         self.problem = None
+        self.app = None
         self.detection_oracle = None
         self.execution_start_time = None
         self.agent_name = None
 
-        # drives HTTP flow: noop→detection→localization→mitigation→done
         self.submission_stage = None
         self.results = {}
 
@@ -148,19 +150,128 @@ class Conductor:
             self.submission_stage = "done"
             return "[✅] Mitigation evaluated."
 
-        return "[✅] All stages completed."
+        return "[✅] Problem completed."
+
+    async def start_problem(self):
+        self.execution_start_time = time.time()
+        self.problem = self.problems.get_problem_instance(self.problem_id)
+        self.app = self.problem.app
+        self.detection_oracle = DetectionOracle(self.problem)
+        self.results = {}
+
+        print(f"[Session Start] Problem ID: {self.problem_id}")
+
+        self.deploy_app()
+
+        # Phase 1: NO OP
+        print("\n[NO OP Evaluation] System is healthy. Agent should detect no issue.")
+        self.submission_stage = "noop"
+        noop_results = await self.run_problem()
+        print(f"NO OP Detection Result: {'✅' if noop_results.get('NOOP Detection', {}).get('success') else '❌'}")
+
+        # Phase 2: Inject Fault
+        print("[Injecting fault now...]")
+        with CriticalSection():
+            self.problem.inject_fault()
+            atexit.register(self.exit_cleanup_and_recover_fault)
+
+        # Phase 3: Faulty system
+        self.submission_stage = "detection"
+        fault_results = await self.run_problem()
+
+        # Final cleanup
+        self.execution_end_time = time.time()
+        with CriticalSection():
+            self.problem.recover_fault()
+            atexit.unregister(self.exit_cleanup_and_recover_fault)
+
+        self.undeploy_app()
+
+        self.results.update(fault_results)
+        return self.results
+
+    def deploy_app(self):
+        try:
+            with SigintAwareSection():
+                if not self.kubectl.get_service_deployment_status("metrics-server", "kube-system"):
+                    print("Setting up metrics-server...")
+                    self.kubectl.exec_command(
+                        "kubectl apply -f "
+                        "https://github.com/kubernetes-sigs/metrics-server/"
+                        "releases/latest/download/components.yaml"
+                    )
+                    self.kubectl.exec_command(
+                        "kubectl -n kube-system patch deployment metrics-server "
+                        "--type=json -p='["
+                        '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"},'
+                        '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
+                        "]'"
+                    )
+                    self.kubectl.wait_for_ready("kube-system")  # metrics-server is deployed in kube-system
+                else:
+                    print("metrics-server already deployed. Skipping setup.")
+
+                if not self.kubectl.get_namespace_deployment_status("openebs"):
+                    print("Setting up OpenEBS...")
+                    self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
+                    self.kubectl.exec_command(
+                        "kubectl patch storageclass openebs-hostpath "
+                        '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
+                    )
+                    self.kubectl.wait_for_ready("openebs")
+                    print("OpenEBS setup completed.")
+                else:
+                    print("OpenEBS already deployed. Skipping setup.")
+
+                self.prometheus.deploy()
+
+                self.app.delete()
+                self.app.deploy()
+                self.app.start_workload()
+        except KeyboardInterrupt:
+            print("\nImmediately terminating and Cleaning up...")
+            atexit.register(self.exit_cleanup_and_recover_fault)
+            raise SystemExit from None
+
+        print("\nApp has successfully been deployed!")
+
+    def undeploy_app(self):
+        self.app.cleanup()
+
+        deployed_apps = self.get_deployed_apps()
+        if len(deployed_apps) == 0:
+            self.prometheus.teardown()
+            self.kubectl.exec_command("kubectl delete sc openebs-hostpath openebs-device --ignore-not-found")
+            self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
+            self.kubectl.wait_for_namespace_deletion("openebs")
+        else:
+            print("Other apps still running. Skipping OpenEBS and Prometheus deletion.")
+
+        print("\nApp has successfully been undeployed!")
 
     def exit_cleanup_and_recover_fault(self):
         """Cleanup on exit or SIGINT."""
         try:
             if self.problem:
                 self.problem.recover_fault()
-                self.problem.app.cleanup()
-        except (JSONDecodeError, RuntimeError):
+        except JSONDecodeError:
+            # CTRL+C before service is set up results in a JSONDecodeError
+            print("Service has not been set up. Skipping fault recovery.")
+        except RuntimeError:
+            # When waiting for namespace deletion, console.status() is called and results in a RuntimeError
             pass
-        self.prometheus.teardown()
-        self.kubectl.exec_command("kubectl delete sc openebs-hostpath openebs-device --ignore-not-found")
-        self.kubectl.exec_command("kubectl delete -f https://openebs.github.io/charts/openebs-operator.yaml")
+
+        self.undeploy_app()
+        print("\nCleanup complete!")
+
+    def get_deployed_apps(self):
+        deployed_apps = []
+        for app_name in self.apps.get_app_names():
+            namespace = self.apps.get_app_metadata(app_name)["Namespace"]
+            if self.kubectl.get_namespace_deployment_status(namespace):
+                deployed_apps.append(app_name)
+
+        return deployed_apps
 
 
 def exit_cleanup_fault(conductor):

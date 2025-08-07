@@ -32,6 +32,7 @@ from srearena.conductor.problems.network_partition import ChaosMeshNetworkPartit
 from srearena.conductor.problems.network_policy_block import NetworkPolicyBlock
 from srearena.conductor.problems.payment_service_failure import PaymentServiceFailure
 from srearena.conductor.problems.payment_service_unreachable import PaymentServiceUnreachable
+from srearena.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
 from srearena.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 from srearena.conductor.problems.pod_failure import ChaosMeshPodFailure
 from srearena.conductor.problems.pod_kill import ChaosMeshPodKill
@@ -196,6 +197,7 @@ class ProblemRegistry:
             "ingress_misroute": lambda: IngressMisroute(
                 path="/api", correct_service="frontend-service", wrong_service="recommendation-service"
             ),
+            "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
             "valkey_auth_disruption": ValkeyAuthDisruption,
             "valkey_memory_disruption": ValkeyMemoryDisruption,
             "incorrect_port_assignment": IncorrectPortAssignment,

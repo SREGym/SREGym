@@ -10,3 +10,6 @@ class State(TypedDict):
     workdir: str
     curr_file: str
     curr_line: int
+    num_rounds: int
+    submitted: bool
+    ans: dict

@@ -58,7 +58,7 @@ class Application:
         supported_operations = app_json.get("Supported Operations", [])
         operations_str = "\n".join([f"  - {op}" for op in supported_operations])
 
-        description = f"Service Name: {app_name}\nNamespace: {namespace}\nDescription: {desc}\nSupported Operations:\n{operations_str}"
+        description = f"App Name: {app_name}\nNamespace: {namespace}\nDescription: {desc}\nSupported Operations:\n{operations_str}"
 
         return description
 

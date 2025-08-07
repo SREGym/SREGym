@@ -57,7 +57,7 @@ class LiteLLMBackend:
         tools: Optional[list[any]] = None,
     ):
         if isinstance(messages, str):
-            logger.info(f"NL input as str received: {messages}")
+            # logger.info(f"NL input as str received: {messages}")
             # FIXME: This should be deprecated as it does not contain prior history of chat.
             #   We are building new agents on langgraph, which will change how messages are
             #   composed.
@@ -69,7 +69,7 @@ class LiteLLMBackend:
                 HumanMessage(content=messages),
             ]
         elif isinstance(messages, list):
-            logger.info(f"NL input as list received: {messages}")
+            # logger.info(f"NL input as list received: {messages}")
             prompt_messages = messages
             if isinstance(messages[0], HumanMessage):
                 logger.info("No system message provided.")
@@ -83,7 +83,7 @@ class LiteLLMBackend:
                 prompt_messages.insert(0, system_message)
         else:
             raise ValueError(f"messages must be either a string or a list of dicts, but got {type(messages)}")
-        logger.info(f"prompting llm with messages: {prompt_messages}")
+        # logger.info(f"prompting llm with messages: {prompt_messages}")
 
         if self.provider == "openai":
             llm = ChatOpenAI(

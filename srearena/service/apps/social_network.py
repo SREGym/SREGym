@@ -71,7 +71,6 @@ class SocialNetwork(Application):
         if hasattr(self, "wrk"):
             self.wrk.stop()
         self.kubectl.delete_namespace(self.namespace)
-        self.kubectl.wait_for_namespace_deletion(self.namespace)
 
     def create_workload(
         self, rate: int = 100, dist: str = "exp", connections: int = 3, duration: int = 10, threads: int = 3

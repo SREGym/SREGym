@@ -39,7 +39,7 @@ class FlightTicket(Application):
 
     def cleanup(self):
         Helm.uninstall(**self.helm_configs)
-
+        self.kubectl.delete_namespace(self.helm_configs["namespace"])
 
 # if __name__ == "__main__":
 #     app = FlightTicket()

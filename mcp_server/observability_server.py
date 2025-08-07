@@ -1,35 +1,32 @@
-import argparse
 import logging
-import os
 from datetime import datetime, timedelta
-from typing import Any, Coroutine
 
-import httpx
-import mcp.types as types
 import uvicorn
-from mcp.server import Server
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.prompts import base
-from mcp.server.sse import SseServerTransport
-from pydantic import AnyUrl
+from fastmcp import FastMCP
+from fastmcp.server.http import create_sse_app
+from prometheus_server import mcp as prometheus_mcp
 from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.routing import Mount, Route
+from starlette.routing import Mount
 from utils import ObservabilityClient
 
 logger = logging.getLogger("Observability MCP Server")
 logger.info("Starting Observability MCP Server")
 mcp = FastMCP("Observability MCP Server")
 
-
 grafana_url = "http://localhost:16686"
 observability_client = ObservabilityClient(grafana_url)
 
-USE_HTTP = True
-
 
 @mcp.tool(name="get_services")
-def get_services():
+def get_services() -> str:
+    """Retrieve the list of service names from the Grafana instance.
+
+        Args:
+
+        Returns:
+            str: String of a list of service names available in Grafana or error information.
+    """
+
     logger.info("[ob_mcp] get_services called, getting jaeger services")
     try:
         url = f"{grafana_url}/api/services"
@@ -37,8 +34,8 @@ def get_services():
         logger.info(f"[ob_mcp] get_services status code: {response.status_code}")
         logger.info(f"[ob_mcp] get_services result: {response}")
         logger.info(f"[ob_mcp] result: {response.json()}")
-        # FIXME: if response.json()["data"] is empty, forge an empty response
-        return response.json()["data"]
+        services = str(response.json()["data"])
+        return services if services else "None"
     except Exception as e:
         err_str = f"[ob_mcp] Error querying get_services: {str(e)}"
         logger.error(err_str)
@@ -46,22 +43,42 @@ def get_services():
 
 
 @mcp.tool(name="get_operations")
-def get_operations(service: str):
+def get_operations(service: str) -> str:
+    """Query available operations for a specific service from the Grafana instance.
+
+        Args:
+            service (str): The name of the service whose operations should be retrieved.
+
+        Returns:
+            str: String of a list of operation names associated with the specified service or error information.
+    """
+
     logger.info("[ob_mcp] get_operations called, getting jaeger operations")
     try:
         url = f"{grafana_url}/api/operations"
         params = {"service": service}
         response = observability_client.make_request("GET", url, params=params)
         logger.info(f"[ob_mcp] get_operations: {response.status_code}")
-        return response.json()["data"]
-        # FIXME: if response.json()["data"] is empty, forge an empty response
+        operations = str(response.json()["data"])
+        return operations if operations else "None"
     except Exception as e:
-        logger.error(f"[ob_mcp] Error querying get_operations: {str(e)}")
-        return None
+        err_str = f"[ob_mcp] Error querying get_operations: {str(e)}"
+        logger.error(err_str)
+        return err_str
 
 
 @mcp.tool(name="get_traces")
-def get_traces(service: str, last_n_minutes: int):
+def get_traces(service: str, last_n_minutes: int) -> str:
+    """Get Jaeger traces for a given service in the last n minutes.
+
+        Args:
+            service (str): The name of the service for which to retrieve trace data.
+            last_n_minutes (int): The time range (in minutes) to look back from the current time.
+
+        Returns:
+            str: String of Jaeger traces or error information
+    """
+
     logger.info("[ob_mcp] get_traces called, getting jaeger traces")
     try:
         url = f"{grafana_url}/api/traces"
@@ -77,40 +94,20 @@ def get_traces(service: str, last_n_minutes: int):
         }
         response = observability_client.make_request("GET", url, params=params)
         logger.info(f"[ob_mcp] get_traces: {response.status_code}")
-        return response.json()["data"]
-        # FIXME: if response.json()["data"] is empty, forge an empty response
+        traces = str(response.json()["data"])
+        return traces if traces else "None"
     except Exception as e:
-        logger.error(f"[ob_mcp] Error querying get_traces: {str(e)}")
-        return None
-
-
-def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
-    """Create a Starlette application that can server the provied mcp server with SSE."""
-    sse = SseServerTransport("/messages/")
-
-    async def handle_sse(request: Request) -> None:
-        async with sse.connect_sse(
-            request.scope,
-            request.receive,
-            request._send,  # noqa: SLF001
-        ) as (read_stream, write_stream):
-            await mcp_server.run(
-                read_stream,
-                write_stream,
-                mcp_server.create_initialization_options(),
-            )
-
-    return Starlette(
-        debug=debug,
-        routes=[
-            Route("/sse", endpoint=handle_sse),
-            Mount("/messages/", app=sse.handle_post_message),
-        ],
-    )
+        err_str = f"[ob_mcp] Error querying get_traces: {str(e)}"
+        logger.error(err_str)
+        return err_str
 
 
 if __name__ == "__main__":
-    if USE_HTTP:
-        mcp.run(transport="sse")
-    else:
-        mcp.run()
+    app = Starlette(
+        routes=[
+            Mount("/jaeger", app=create_sse_app(mcp, "/messages/", "/sse")),
+            Mount("/prometheus", app=create_sse_app(prometheus_mcp, "/messages/", "/sse")),
+        ]
+    )
+
+    uvicorn.run(app, host="127.0.0.1", port=8000)
