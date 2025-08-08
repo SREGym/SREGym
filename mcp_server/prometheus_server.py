@@ -1,6 +1,8 @@
 import logging
+
 from fastmcp import FastMCP
-from utils import ObservabilityClient
+
+from mcp_server.utils import ObservabilityClient
 
 logger = logging.getLogger("Prometheus MCP Server")
 logger.info("Starting Prometheus MCP Server")
@@ -13,11 +15,11 @@ mcp = FastMCP("Prometheus MCP Server")
 def get_metrics(query: str) -> str:
     """Query real-time metrics data from the Prometheus instance.
 
-        Args:
-            query (str): A Prometheus Query Language (PromQL) expression used to fetch metric values.
+    Args:
+        query (str): A Prometheus Query Language (PromQL) expression used to fetch metric values.
 
-        Returns:
-            str: String of metric results, including timestamps, values, and labels or error information.
+    Returns:
+        str: String of metric results, including timestamps, values, and labels or error information.
     """
 
     logger.info("[prom_mcp] get_metrics called, getting prometheus metrics")

@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from fastmcp import FastMCP
 
-from utils import ObservabilityClient
+from mcp_server.utils import ObservabilityClient
 
 logger = logging.getLogger("Observability MCP Server")
 logger.info("Starting Observability MCP Server")
@@ -17,10 +17,10 @@ observability_client = ObservabilityClient(grafana_url)
 def get_services() -> str:
     """Retrieve the list of service names from the Grafana instance.
 
-        Args:
+    Args:
 
-        Returns:
-            str: String of a list of service names available in Grafana or error information.
+    Returns:
+        str: String of a list of service names available in Grafana or error information.
     """
 
     logger.info("[ob_mcp] get_services called, getting jaeger services")
@@ -42,11 +42,11 @@ def get_services() -> str:
 def get_operations(service: str) -> str:
     """Query available operations for a specific service from the Grafana instance.
 
-        Args:
-            service (str): The name of the service whose operations should be retrieved.
+    Args:
+        service (str): The name of the service whose operations should be retrieved.
 
-        Returns:
-            str: String of a list of operation names associated with the specified service or error information.
+    Returns:
+        str: String of a list of operation names associated with the specified service or error information.
     """
 
     logger.info("[ob_mcp] get_operations called, getting jaeger operations")
@@ -67,12 +67,12 @@ def get_operations(service: str) -> str:
 def get_traces(service: str, last_n_minutes: int) -> str:
     """Get Jaeger traces for a given service in the last n minutes.
 
-        Args:
-            service (str): The name of the service for which to retrieve trace data.
-            last_n_minutes (int): The time range (in minutes) to look back from the current time.
+    Args:
+        service (str): The name of the service for which to retrieve trace data.
+        last_n_minutes (int): The time range (in minutes) to look back from the current time.
 
-        Returns:
-            str: String of Jaeger traces or error information
+    Returns:
+        str: String of Jaeger traces or error information
     """
 
     logger.info("[ob_mcp] get_traces called, getting jaeger traces")

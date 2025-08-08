@@ -1,11 +1,12 @@
 import logging
 import os
 import shutil
-from pathlib import Path
-import time
 import threading
+import time
 from collections import OrderedDict
-from mcp_server.kubectl_server_helper.kubctl_tool_set import KubectlToolSet
+from pathlib import Path
+
+from mcp_server.kubectl_server_helper.kubectl_tool_set import KubectlToolSet
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ class SlidingLRUSessionCache:
         Thread-safe (via threading.Lock)
         Automatic cleanup on access and insertion
     """
+
     def __init__(self, max_size: int, ttl_seconds: int | float):
         self.max_size = max_size
         self.ttl = ttl_seconds
@@ -108,8 +110,12 @@ class SlidingLRUSessionCache:
                 logger.info(f"Tool file directory {opt_dir} of session {key} will be deleted.")
                 shutil.rmtree(opt_dir)
             else:
-                logger.info(f"Tool file directory {opt_dir} of session {key} is not the default one. "
-                            f"For safety issues, please clean it up by yourself.")
+                logger.info(
+                    f"Tool file directory {opt_dir} of session {key} is not the default one. "
+                    f"For safety issues, please clean it up by yourself."
+                )
         else:
-            logger.info(f"Tool file directory {opt_dir} of session {key} does not exist when trying to clean it or "
-                        f"path {opt_dir} is not a valid directory.")
+            logger.info(
+                f"Tool file directory {opt_dir} of session {key} does not exist when trying to clean it or "
+                f"path {opt_dir} is not a valid directory."
+            )

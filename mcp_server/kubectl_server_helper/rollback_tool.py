@@ -4,11 +4,13 @@ import tempfile
 import time
 import traceback
 from typing import Optional
+
 import yaml
-from .kubectl import KubeCtl
 from pydantic.dataclasses import dataclass
+
 from mcp_server.configs.kubectl_tool_cfg import KubectlToolCfg
-from .utils import cleanup_kubernetes_yaml, parse_text
+from mcp_server.kubectl_server_helper.kubectl import KubeCtl
+from mcp_server.kubectl_server_helper.utils import cleanup_kubernetes_yaml, parse_text
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -243,22 +245,24 @@ class RollbackTool:
 
                         if one_step_result.returncode == 0:
                             output = parse_text(one_step_result.stdout, 1000)
-                            result.append(f"Rollback command: {rollback.content}; "
-                                          f"Execution result: {output}")
+                            result.append(f"Rollback command: {rollback.content}; " f"Execution result: {output}")
                             logger.info(result[-1])
                         else:
                             raise RuntimeError(f"Error executing rollback command: {one_step_result.stderr}")
 
                     elif rollback.command_type == "file":
                         one_step_result = self._restore_cluster_state(rollback.content)
-                        result.append(f"Try to restore cluster state with file {rollback.content}. "
-                                      f"Result: {one_step_result}")
+                        result.append(
+                            f"Try to restore cluster state with file {rollback.content}. " f"Result: {one_step_result}"
+                        )
                         logger.info(result[-1])
                     else:
                         raise ValueError(f"Unknown rollback type: {rollback.type}")
 
-                rollback_process_desc = f"Rolled back the previous command: {last_action.action}.\n" \
-                                        f"-------------------Rollback Process:-------------------\n"
+                rollback_process_desc = (
+                    f"Rolled back the previous command: {last_action.action}.\n"
+                    f"-------------------Rollback Process:-------------------\n"
+                )
                 for i, one_step_txt in enumerate(result):
                     rollback_process_desc += f"\nStep {i + 1}:\n{one_step_txt}\n"
                 rollback_process_desc += f"-------------------End of Rollback Process:-------------------\n"

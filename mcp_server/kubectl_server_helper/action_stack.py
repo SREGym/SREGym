@@ -1,6 +1,6 @@
 import logging
 
-from .rollback_tool import RollbackNode
+from mcp_server.kubectl_server_helper.rollback_tool import RollbackNode
 
 logging.basicConfig(
     level=logging.INFO,
