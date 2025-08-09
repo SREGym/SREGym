@@ -60,12 +60,12 @@ from srearena.conductor.problems.wrong_service_selector import WrongServiceSelec
 class ProblemRegistry:
     def __init__(self):
         self.PROBLEM_REGISTRY = {
-            # "k8s_target_port-misconfig": lambda: K8STargetPortMisconfig(faulty_service="user-service"),
-            # "auth_miss_mongodb": MongoDBAuthMissing,
-            # "revoke_auth_mongodb-1": lambda: MongoDBRevokeAuth(faulty_service="mongodb-geo"),
-            # "revoke_auth_mongodb-2": lambda: MongoDBRevokeAuth(faulty_service="mongodb-rate"),
-            # "storage_user_unregistered-1": lambda: MongoDBUserUnregistered(faulty_service="mongodb-geo"),
-            # "storage_user_unregistered-2": lambda: MongoDBUserUnregistered(faulty_service="mongodb-rate"),
+            "k8s_target_port-misconfig": lambda: K8STargetPortMisconfig(faulty_service="user-service"),
+            "auth_miss_mongodb": MongoDBAuthMissing,
+            "revoke_auth_mongodb-1": lambda: MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+            "revoke_auth_mongodb-2": lambda: MongoDBRevokeAuth(faulty_service="mongodb-rate"),
+            "storage_user_unregistered-1": lambda: MongoDBUserUnregistered(faulty_service="mongodb-geo"),
+            "storage_user_unregistered-2": lambda: MongoDBUserUnregistered(faulty_service="mongodb-rate"),
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
             "scale_pod_zero_social_net": ScalePodSocialNet,
             "assign_to_non_existent_node": AssignNonExistentNode,
