@@ -6,7 +6,7 @@ async_tools:
   - get_services
   - get_operations
   - get_metrics
-  - exec_read_only_kubectl_cmd
+  - exec_kubectl_cmd_safely
   - submit_tool
 prompts_path: mitigation_agent_prompts.yaml
 
