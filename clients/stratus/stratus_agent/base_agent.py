@@ -30,23 +30,19 @@ class BaseAgent:
     def llm_inference_step(self, messages, tools):
         return self.llm.inference(messages=messages, tools=tools)
 
-    def llm_explanation_step(self, state: State):
+    def llm_thinking_step(self, state: State, tool_descs: str):
         human_prompt = HumanMessage(
-            content="You are now in explanation stage; please briefly explain why you "
-            "want to call the tools with the arguments in next tool-call stage; "
-            "the tools you mentioned must be available to you at first. "
-            "You should not call any tools in this stage; "
+            content="You are now in the thinking stage. Here are all the tools you can use:\n"
+            + tool_descs
+            + "Choose a tool from the list and output the tool name. Justify your tool choice. In the next step, you will generate a tool call for this tool"
         )
-        ai_message = self.llm_inference_step(state["messages"] + [human_prompt])
-        ai_message.additional_kwargs["is_thought"] = True
-        new_messages = [human_prompt, ai_message]
-        for tool_call in ai_message.tool_calls:
-            tool_call_message = ToolMessage(
-                content="Error: You should not call any tools in the explanation stage!", tool_call_id=tool_call["id"]
-            )
-            new_messages.append(tool_call_message)
+        # planning step, not providing tool
+        ai_message = self.llm_inference_step(state["messages"] + [human_prompt], tools=[])
+        # ai_message.additional_kwargs["is_thought"] = True
+        # let's rely on the annotated dict type
+        # new_messages = [human_prompt, ai_message]
         return {
-            "messages": new_messages,
+            "messages": ai_message,
         }
 
     def save_agent_graph_to_png(self):
