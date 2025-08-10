@@ -54,6 +54,7 @@ class Conductor:
         self.deploy_app()
 
         self.submission_stage = "noop"
+        print("✅ Deployment complete. Ready for submission.")
 
     async def submit(self, wrapped_cmd: str) -> dict:
         """
@@ -91,6 +92,7 @@ class Conductor:
             if not self.problem.localization_oracle and not self.problem.mitigation_oracle:
                 self.submission_stage = "done"
                 snapshot = dict(self.results)
+                self.undeploy_app()
                 return snapshot
 
             # otherwise advance
@@ -109,6 +111,7 @@ class Conductor:
             if not self.problem.mitigation_oracle:
                 snapshot = dict(self.results)
                 self.submission_stage = "done"
+                self.undeploy_app()
                 return snapshot
 
             self.submission_stage = "mitigation"
@@ -122,6 +125,7 @@ class Conductor:
 
             snapshot = dict(self.results)
             self.submission_stage = "done"
+            self.undeploy_app()
             return snapshot
 
         return dict(self.results)
