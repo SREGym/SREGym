@@ -5,18 +5,20 @@ os.environ["WATSONX_API_KEY"] = ""
 os.environ["PROVIDER_TOOLS"] = "openai"
 os.environ["MODEL_TOOLS"] = "gpt-4o-mini"
 os.environ["URL_TOOLS"] = "https://api.openai.com/v1"
-os.environ["API_KEY_TOOLS"] = "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"
+os.environ["API_KEY_TOOLS"] = (
+    "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"
+)
 
 import atexit
 import logging
-import subprocess
 import socket
+import subprocess
 import time
-from srearena.conductor import Conductor
-from srearena.utils.critical_section import CriticalSection
-from clients.langgraph_agent.stratus_agent.base_agent import BaseAgent
-from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
+
 from clients.configs.stratus_config import diagnosis_agent_cfg
+from clients.langgraph_agent.llm_backend.init_backend import get_llm_backend_for_tools
+from clients.langgraph_agent.stratus_agent.base_agent import BaseAgent
+from srearena.conductor import Conductor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -37,7 +39,7 @@ def setup_port_forwarding():
     pf_jaeger = subprocess.Popen(
         ["kubectl", "port-forward", "svc/jaeger", "16686:16686", "-n", "test-hotel-reservation"],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        stderr=subprocess.DEVNULL,
     )
 
     try:
@@ -52,7 +54,7 @@ def setup_port_forwarding():
     pf_prometheus = subprocess.Popen(
         ["kubectl", "port-forward", "svc/prometheus-server", "32000:80", "-n", "observe"],
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
+        stderr=subprocess.DEVNULL,
     )
 
     try:
@@ -114,29 +116,27 @@ if __name__ == "__main__":
     # Phase 1: NO OP
     final_state = diagnosis_agent.run(problem.app.get_app_summary())
     logger.info(f"Final state: {final_state}")
-    if 'detection' in final_state['ans'] and isinstance(final_state['ans']['detection'], bool):
+    if "detection" in final_state["ans"] and isinstance(final_state["ans"]["detection"], bool):
         print(f"NO OP Detection Result: {'✅' if not final_state['ans']['detection'] else '❌'}")
     else:
         print(f"NO OP Detection Result: '❌'; Invalid answer provided by the agent!")
 
     # Phase 2: Inject Fault
     print("[Injecting fault now...]")
-    with CriticalSection():
-        problem.inject_fault()
-        atexit.register(conductor.exit_cleanup_and_recover_fault)
+    problem.inject_fault()
+    atexit.register(conductor.exit_cleanup_and_recover_fault)
 
     # Phase 3: Faulty system
     final_state = diagnosis_agent.run(problem.app.get_app_summary())
     logger.info(f"Final state: {final_state}")
-    if 'detection' in final_state['ans'] and isinstance(final_state['ans']['detection'], bool):
+    if "detection" in final_state["ans"] and isinstance(final_state["ans"]["detection"], bool):
         print(f"Faulty Result: {'✅' if final_state['ans']['detection'] else '❌'}")
     else:
         print(f"Faulty Result: '❌'; Invalid answer provided by the agent!")
 
     # Final cleanup
-    with CriticalSection():
-        problem.recover_fault()
-        atexit.unregister(conductor.exit_cleanup_and_recover_fault)
+    problem.recover_fault()
+    atexit.unregister(conductor.exit_cleanup_and_recover_fault)
 
     for p in pf_processes:
         p.terminate()
