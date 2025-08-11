@@ -1,98 +1,83 @@
 import json
 import time
+import subprocess
+import os
 
-from srearena.paths import TIDB_METADATA
-from srearena.service.apps.base import Application
-from srearena.service.helm import Helm
-from srearena.service.kubectl import KubeCtl
-
-
-class TiDBCluster(Application):
-    def __init__(self):
-        super().__init__(TIDB_METADATA)
-        self.load_app_json()
-        self.kubectl = KubeCtl()
-        self.helm_operator_config = self.metadata.get("Helm Operator Config", {})
-        self.k8s_config = self.metadata.get("K8S Config", {})
-
-        # self.create_namespace()
-        # self.deploy_tidb_operator()
-
-    def load_app_json(self):
-        with open(self.config_file, "r") as file:
-            self.metadata = json.load(file)
+class TiDBClusterDeployer:
+    def __init__(self, metadata_path):
+        with open(metadata_path, "r") as f:
+            self.metadata = json.load(f)
 
         self.name = self.metadata["Name"]
-        self.namespace = self.metadata["Namespace"]  # tidb cluster namespace
+        self.namespace_tidb_cluster = self.metadata["K8S Config"]["namespace"]
+        self.cluster_config_url = self.metadata["K8S Config"]["config_url"]
 
-    def deploy(self):
-        """Deploy the TiDB operator and cluster."""
-        # self.install_crd()
-        # self.install_tidb_operator()
-        # self.deploy_tidb_cluster()
-        # NOTE: use Ansible to deploy
-        pass
+        # Helm Operator config details
+        self.operator_namespace = self.metadata["Helm Operator Config"]["namespace"]
+        self.operator_release_name = self.metadata["Helm Operator Config"]["release_name"]
+        self.operator_chart = self.metadata["Helm Operator Config"]["chart_path"]
+        self.operator_version = self.metadata["Helm Operator Config"]["version"]
 
-    def install_crd(self):
-        """Install the Custom Resource Definitions (CRDs) for TiDB Operator."""
-        crd_url = self.helm_operator_config.get("CRD")
-        if not crd_url:
-            raise ValueError("CRD URL is not specified in the configuration.")
+        # **IMPORTANT: local values.yaml path**
+        # Adjust this path as needed (path to your local values.yaml)
+        self.operator_values_path = os.path.join(os.path.dirname(__file__), "tidb-operator", "values.yaml")
 
-        print("Installing CRDs...")
-        command = f"kubectl create -f {crd_url}"
-        self.kubectl.exec_command(command)
+    def run_cmd(self, cmd):
+        print(f"Running: {cmd}")
+        subprocess.run(cmd, shell=True, check=True)
 
-    def install_tidb_operator(self):
-        """Install TiDB Operator using Helm."""
-        repo_name = "pingcap"
-        repo_url = "https://charts.pingcap.org/"
-        Helm.add_repo(repo_name, repo_url)
+    def create_namespace(self, ns):
+        self.run_cmd(f"kubectl create ns {ns} --dry-run=client -o yaml | kubectl apply -f -")
 
-        operator_namespace = self.helm_operator_config.get("namespace", "tidb-admin")
-        self.kubectl.create_namespace_if_not_exist(operator_namespace)
+    def install_operator_with_values(self):
+        print(f"Installing/upgrading TiDB Operator via Helm in namespace '{self.operator_namespace}'...")
+        self.create_namespace(self.operator_namespace)
 
-        print("Installing TiDB Operator...")
-        Helm.install(**self.helm_operator_config)
-        Helm.assert_if_deployed(operator_namespace)
-        time.sleep(5)
+        # Add pingcap repo if needed (ignore error)
+        subprocess.run("helm repo add pingcap https://charts.pingcap.org", shell=True)
+
+        self.run_cmd("helm repo update")
+
+        # Helm install/upgrade command using local values.yaml
+        self.run_cmd(
+            f"helm upgrade --install {self.operator_release_name} {self.operator_chart} "
+            f"--version {self.operator_version} -n {self.operator_namespace} "
+            f"--create-namespace -f {self.operator_values_path}"
+        )
+
+    def wait_for_operator_ready(self):
+        print("Waiting for tidb-controller-manager pod to be running...")
+        label = "app.kubernetes.io/component=controller-manager"
+        for _ in range(24):
+            try:
+                status = subprocess.check_output(
+                    f"kubectl get pods -n {self.operator_namespace} -l {label} -o jsonpath='{{.items[0].status.phase}}'",
+                    shell=True,
+                ).decode().strip()
+                if status == "Running":
+                    print("tidb-controller-manager pod is running.")
+                    return
+            except subprocess.CalledProcessError:
+                pass
+            print("Pod not ready yet, retrying in 5 seconds...")
+            time.sleep(5)
+        raise RuntimeError("Timeout waiting for tidb-controller-manager pod")
 
     def deploy_tidb_cluster(self):
-        """Deploy the TiDB Cluster using Helm."""
-        # cluster_namespace = self.k8s_config.get("namespace", "tidb-cluster")
-        # self.kubectl.create_namespace_if_not_exist(cluster_namespace)
-        # cluster_config_url = self.k8s_config.get("config_url")
+        print(f"Creating TiDB cluster namespace '{self.namespace_tidb_cluster}'...")
+        self.create_namespace(self.namespace_tidb_cluster)
+        print(f"Deploying TiDB cluster manifest from {self.cluster_config_url}...")
+        self.run_cmd(f"kubectl apply -f {self.cluster_config_url} -n {self.namespace_tidb_cluster}")
 
-        # print("Deploying TiDB cluster...")
-        # command = f"kubectl -n {cluster_namespace} apply -f {cluster_config_url}"
-        # self.kubectl.exec_command(command)
-        # NOTE: use Ansible to deploy
-        pass
-
-    def delete_tidb_cluster(self):
-        """Delete the TiDB Cluster."""
-        self.kubectl.exec_command(f"kubectl delete tc basic -n {self.namespace}")
-
-    def delete_tidb_operator(self):
-        """Delete the TiDB Operator."""
-        Helm.uninstall(**self.helm_operator_config)
-
-    def delete(self):
-        """Delete the TiDB Operator and Cluster."""
-        # self.kubectl.delete_namespace(self.namespace)
-        # self.delete_tidb_operator()
-        # time.sleep(5)
-        pass
-
-    def cleanup(self):
-        """Clean up the namespace and all resources."""
-        # self.delete_tidb_cluster()
-        # self.delete_tidb_operator()
-        # self.kubectl.delete_namespace(self.namespace)
-        # time.sleep(15)
-        pass
-
+    def deploy_all(self):
+        print(f"Starting deployment: {self.name}")
+        self.create_namespace(self.namespace_tidb_cluster)
+        self.install_operator_with_values()
+        self.wait_for_operator_ready()
+        self.deploy_tidb_cluster()
+        print("Deployment complete.")
 
 if __name__ == "__main__":
-    tidb_app = TiDBCluster()
-    tidb_app.deploy_tidb_cluster()
+    # Replace path below with your actual JSON config path
+    deployer = TiDBClusterDeployer("path/to/metadata.json")
+    deployer.deploy_all()
