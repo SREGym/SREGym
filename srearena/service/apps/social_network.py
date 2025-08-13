@@ -71,7 +71,7 @@ class SocialNetwork(Application):
     def cleanup(self):
         """Delete the entire namespace for the social network application."""
         if self.trace_api:
-            self.trace_api.stop_port_forward()
+            self.trace_api.cleanup()
         Helm.uninstall(**self.helm_configs)
 
         if hasattr(self, "wrk"):

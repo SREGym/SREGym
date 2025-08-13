@@ -86,7 +86,7 @@ class HotelReservation(Application):
     def cleanup(self):
         """Delete the entire namespace for the hotel reservation application."""
         if self.trace_api:
-            self.trace_api.stop_port_forward()
+            self.trace_api.cleanup()
         self.kubectl.delete_namespace(self.namespace)
         self.kubectl.wait_for_namespace_deletion(self.namespace)
         pvs = self.kubectl.exec_command(
