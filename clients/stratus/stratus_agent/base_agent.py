@@ -26,6 +26,8 @@ class BaseAgent:
         self.llm = llm
         self.tool_descs = tool_descs
         self.submit_tool = submit_tool
+        self.force_submit_node = "force_submit"
+        self.llm_force_submit_tool_call_node = StratusToolNode(sync_tools=[], async_tools=[submit_tool])
 
     def llm_inference_step(self, messages, tools):
         return self.llm.inference(messages=messages, tools=tools)
@@ -53,7 +55,8 @@ class BaseAgent:
             ),
         }
 
-    def llm_submit_tool_call_step(self, state: State):
+    def llm_force_submit_thinking_step(self, state: State):
+        # actual tool node defined in __init__
         human_prompt = HumanMessage(
             content="You have reached your step limit, please submit your results by generating a `submit` tool's tool call."
         )

@@ -26,15 +26,11 @@ class DiagnosisAgent(BaseAgent):
         self.tool_calling_node = "tool_calling_step"
         self.process_tool_call_node = "process_tool_call"
         self.post_round_process_node = "post_round_process"
-        self.force_submit_node = "force_submit"
 
     def should_submit_router(self, state: State):
-        should_submit = state["num_steps"] == self.max_step
+        should_submit = state["num_steps"] == self.max_step and state["submitted"] == False
         logger.info("Should the agent submit?" + "Yes!" if should_submit else "No!")
-        return self.force_submit_node if should_submit else END
-
-    def force_submit_thinking_step(self, state: State):
-        logger.info("Agent reached 20 steps, forcing the agent to make a ToolCall")
+        return self.force_submit_node if should_submit else self.post_round_process_node
 
     def post_round_process(self, state: State):
         logger.info("agent finished a round")
@@ -51,16 +47,26 @@ class DiagnosisAgent(BaseAgent):
         self.graph_builder.add_node(self.tool_calling_node, self.llm_tool_call_step)
         self.graph_builder.add_node(self.process_tool_call_node, self.tool_node)
         self.graph_builder.add_node(self.post_round_process_node, self.post_round_process)
+        self.graph_builder.add_node(self.force_submit_node, self.llm_force_submit_tool_call_node)
 
         # commenting these out first, focusing on basic diagnosis capability
         # self.graph_builder.add_node("post_tool_hook", self.post_tool_hook)
         # self.graph_builder.add_node("summarize_messages", self.summarize_messages)
 
-        self.graph_builder.add_edge(START, thinking_node)
-        self.graph_builder.add_edge(thinking_node, tool_calling_node)
-        self.graph_builder.add_edge(tool_calling_node, process_tool_call_node)
-        self.graph_builder.add_edge(process_tool_call_node, post_round_process_node)
-        self.graph_builder.add_edge(post_round_process_node, END)
+        self.graph_builder.add_edge(START, self.thinking_node)
+        self.graph_builder.add_edge(self.thinking_node, self.tool_calling_node)
+        self.graph_builder.add_edge(self.tool_calling_node, self.process_tool_call_node)
+        self.graph_builder.add_edge(self.process_tool_call_node, self.post_round_process_node)
+        self.graph_builder.add_conditional_edges(
+            self.process_tool_call_node,
+            self.should_submit_router,
+            {
+                self.force_submit_node: self.force_submit_node,
+                self.post_round_process_node: self.post_round_process_node,
+            },
+        )
+        self.graph_builder.add_edge(self.force_submit_node, END)
+        self.graph_builder.add_edge(self.post_round_process_node, END)
 
         #     self.graph_builder.add_conditional_edges(
         #     "explanation_agent",
@@ -167,6 +173,7 @@ def main():
         tool_descs=tool_descriptions,
     )
     agent.build_agent()
+    agent.save_agent_graph_to_png()
 
     res = asyncio.run(agent.arun(get_starting_prompts(prompt_path, max_step=max_step)))
     print(res)
