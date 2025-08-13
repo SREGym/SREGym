@@ -1,7 +1,9 @@
 import json
 import os
+import socket
+import subprocess
+import threading
 import time
-from subprocess import CalledProcessError
 
 import yaml
 
@@ -17,6 +19,8 @@ class Prometheus:
         self.namespace = None
         self.helm_configs = {}
         self.pvc_config_file = None
+        self.port = self.find_free_port()
+        self.port_forward_process = None
 
         self.load_service_json()
 
@@ -77,6 +81,7 @@ class Prometheus:
 
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.namespace)
+        self.start_port_forward()
 
     def teardown(self):
         """Teardown the metric collector deployment."""
@@ -84,6 +89,66 @@ class Prometheus:
 
         if self.pvc_config_file:
             self._delete_pvc()
+        self.stop_port_forward()
+
+    def start_port_forward(self):
+        """Starts port-forwarding to access Prometheus."""
+        if self.port_forward_process and self.port_forward_process.poll() is None:
+            print("Port-forwarding already active.")
+            return
+
+        for attempt in range(3):
+            if self.is_port_in_use(self.port):
+                print(f"Port {self.port} is already in use. Attempt {attempt + 1} of 3. Retrying in 3 seconds...")
+                time.sleep(3)
+                continue
+
+            command = f"kubectl port-forward svc/prometheus-server {self.port}:80 -n observe"
+            self.port_forward_process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+
+            time.sleep(3)  # Wait a bit for the port-forward to establish
+
+            if self.port_forward_process.poll() is None:
+                print(f"Port forwarding established at {self.port}.")
+                break
+            else:
+                print("Port forwarding failed. Retrying...")
+        else:
+            print("Failed to establish port forwarding after multiple attempts.")
+
+    def stop_port_forward(self):
+        """Stops the kubectl port-forward command and cleans up resources."""
+        if self.port_forward_process:
+            self.port_forward_process.terminate()
+            try:
+                self.port_forward_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print("Port-forward process did not terminate in time, killing...")
+                self.port_forward_process.kill()
+
+            if self.port_forward_process.stdout:
+                self.port_forward_process.stdout.close()
+            if self.port_forward_process.stderr:
+                self.port_forward_process.stderr.close()
+
+            print("Port forwarding stopped.")
+
+    def is_port_in_use(self, port):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            return s.connect_ex(("127.0.0.1", port)) == 0
+
+    def find_free_port(self, start=32000, end=32100):
+        for port in range(start, end):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                if s.connect_ex(("127.0.0.1", port)) != 0:
+                    return port
+        raise RuntimeError("No free ports available in the range.")
 
     def _apply_pvc(self):
         """Apply the PersistentVolumeClaim configuration."""
@@ -115,7 +180,7 @@ class Prometheus:
             result = KubeCtl().exec_command(command)
             if "No resources found" in result or "Error" in result:
                 return False
-        except CalledProcessError as e:
+        except subprocess.CalledProcessError as e:
             return False
         return True
 
@@ -126,6 +191,6 @@ class Prometheus:
             result = KubeCtl().exec_command(command)
             if "Running" in result:
                 return True
-        except CalledProcessError:
+        except subprocess.CalledProcessError:
             return False
         return False

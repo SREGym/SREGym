@@ -141,7 +141,6 @@ class KubeCtl:
         """Wait for a namespace to be fully deleted before proceeding."""
 
         console = Console()
-        console.log(f"[bold yellow]Waiting for namespace '{namespace}' to be deleted...")
 
         with console.status("[bold yellow]Waiting for namespace deletion...") as status:
             wait = 0

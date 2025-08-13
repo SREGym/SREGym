@@ -1,6 +1,5 @@
 import shutil
 import time
-from json.decoder import JSONDecodeError
 
 from srearena.conductor.oracles.detection import DetectionOracle
 from srearena.conductor.problems.registry import ProblemRegistry
@@ -50,7 +49,7 @@ class Conductor:
 
         self.dependency_check(["kubectl", "helm"])
         print(f"[Session Start] Problem ID: {self.problem_id}")
-        self.undeploy_app()  # Cleanup any leftovers
+        self.undeploy_app(setup=True)  # Cleanup any leftovers
         self.deploy_app()
 
         self.submission_stage = "noop"
@@ -162,12 +161,10 @@ class Conductor:
         self.problem.app.deploy()
         self.problem.app.start_workload()
 
-    def undeploy_app(self):
-        self.submission_stage = "teardown"
+    def undeploy_app(self, setup: bool = False):
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""
         if self.problem:
             self.problem.app.cleanup()
-        self.prometheus.teardown()
 
     def get_deployed_apps(self):
         deployed_apps = []
