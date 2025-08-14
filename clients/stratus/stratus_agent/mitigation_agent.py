@@ -111,26 +111,28 @@ class MitigationAgent(BaseAgent):
 
 
 def main():
+    # agent config and init setup
     file_parent_dir = Path(__file__).resolve().parent
     mitigation_agent_config_path = file_parent_dir.parent / "configs" / "mitigation_agent_config.yaml"
     mitigation_agent_config = yaml.safe_load(open(mitigation_agent_config_path, "r"))
-    max_step = mitigation_agent_config["max_step"]
-    prompt_path = file_parent_dir.parent / "configs" / mitigation_agent_config["prompts_path"]
-    sync_tools = []
-    async_tools = []
-    tool_descriptions = ""
+    mitigation_agent_max_step = mitigation_agent_config["max_step"]
+    mitigation_agent_prompt_path = file_parent_dir.parent / "configs" / mitigation_agent_config["prompts_path"]
+
+    mitigation_agent_sync_tools = []
+    mitigation_agent_async_tools = []
+    mitigation_agent_tool_descriptions = ""
     if mitigation_agent_config["sync_tools"] is not None:
         for sync_tool_struct in mitigation_agent_config["sync_tools"]:
-            sync_tools.append(str_to_tool(sync_tool_struct))
-            tool_descriptions += sync_tool_struct["description"] + "\n\n"
+            mitigation_agent_sync_tools.append(str_to_tool(sync_tool_struct))
+            mitigation_agent_tool_descriptions += sync_tool_struct["description"] + "\n\n"
     else:
-        sync_tools = None
+        mitigation_agent_sync_tools = None
     if mitigation_agent_config["async_tools"] is not None:
         for async_tool_struct in mitigation_agent_config["async_tools"]:
-            async_tools.append(str_to_tool(async_tool_struct))
-            tool_descriptions += async_tool_struct["description"] + "\n\n"
+            mitigation_agent_async_tools.append(str_to_tool(async_tool_struct))
+            mitigation_agent_tool_descriptions += async_tool_struct["description"] + "\n\n"
     else:
-        async_tools = None
+        mitigation_agent_async_tools = None
 
     submit_tool = str_to_tool(
         {
@@ -144,18 +146,21 @@ def main():
         }
     )
 
+    # defining mitigation agent
     mitigation_agent = MitigationAgent(
         llm=get_llm_backend_for_tools(),
-        max_step=max_step,
-        sync_tools=sync_tools,
-        async_tools=async_tools,
+        max_step=mitigation_agent_max_step,
+        sync_tools=mitigation_agent_sync_tools,
+        async_tools=mitigation_agent_async_tools,
         submit_tool=submit_tool,
-        tool_descs=tool_descriptions,
+        tool_descs=mitigation_agent_tool_descriptions,
     )
     mitigation_agent.build_agent()
     mitigation_agent.save_agent_graph_to_png()
 
-    res = asyncio.run(mitigation_agent.arun(get_starting_prompts(prompt_path, max_step=max_step)))
+    res = asyncio.run(
+        mitigation_agent.arun(get_starting_prompts(mitigation_agent_prompt_path, max_step=mitigation_agent_max_step))
+    )
     print(res)
 
 
