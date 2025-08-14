@@ -161,6 +161,7 @@ class Conductor:
     def undeploy_app(self):
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""
         if self.problem:
+            self.problem.recover_fault()
             self.problem.app.cleanup()
         self.submission_stage = "done"
 
