@@ -2,10 +2,14 @@ import asyncio
 import csv
 import sys
 import threading
+import time
 
+import uvicorn
 from rich.console import Console
 from rich.prompt import Prompt
 
+from mcp_server.configs.load_all_cfg import mcp_server_cfg
+from mcp_server.srearena_mcp_server import app as mcp_app
 from srearena.conductor.conductor import Conductor
 from srearena.conductor.conductor_api import run_api
 
@@ -18,7 +22,7 @@ def driver_loop(conductor: Conductor):
 
     async def driver():
         console = Console()
-        # give the API  a moment to bind
+        # give the API a moment to bind
         await asyncio.sleep(1)
 
         all_results = []
@@ -45,8 +49,28 @@ def driver_loop(conductor: Conductor):
 
         return all_results
 
-    # run the async driver and return its results
     return asyncio.run(driver())
+
+
+def start_mcp_server_after_api():
+    # Small delay so the main API binds first (avoid port races if clients hit MCP immediately)
+    time.sleep(1.0)
+
+    host = "0.0.0.0" if mcp_server_cfg.expose_server else "127.0.0.1"
+    port = mcp_server_cfg.mcp_server_port
+
+    config = uvicorn.Config(
+        app=mcp_app,
+        host=host,
+        port=port,
+        log_level="info",
+    )
+    # IMPORTANT: we're not in the main thread
+    config.install_signal_handlers = False
+
+    server = uvicorn.Server(config)
+    # This call blocks *this* thread; it's fine because we're daemonizing the thread
+    server.run()
 
 
 def main():
@@ -54,16 +78,26 @@ def main():
     conductor = Conductor()
     conductor.register_agent(agent_name)
 
-    # -- kick off the driver in a background thread --
-    #    it will deploy each problem and then wait for your HTTP POSTs to /submit
-    driver_thread = threading.Thread(target=lambda: setattr(main, "results", driver_loop(conductor)), daemon=True)
+    # Start the driver in the background
+    driver_thread = threading.Thread(
+        target=lambda: setattr(main, "results", driver_loop(conductor)),
+        name="driver",
+        daemon=True,
+    )
     driver_thread.start()
 
-    # -- start the API server in the MAIN thread --
+    # Start the MCP server in the background (lets the main thread run the Conductor API)
+    mcp_thread = threading.Thread(
+        target=start_mcp_server_after_api,
+        name="mcp-server",
+        daemon=True,
+    )
+    mcp_thread.start()
+
+    # Start the Conductor HTTP API in the MAIN thread (blocking)
     run_api(conductor)
 
-    # once run_api returns (i.e. server shuts down), we know driver is done
-    # fetch the results we stored on the `main` function object
+    # When API shuts down, collect results from driver
     results = getattr(main, "results", [])
 
     if results:
