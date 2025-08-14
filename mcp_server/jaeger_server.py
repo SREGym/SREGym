@@ -3,14 +3,14 @@ from datetime import datetime, timedelta
 
 from fastmcp import FastMCP
 
-from mcp_server.utils import JaegerClient
+from mcp_server.utils import ObservabilityClient
 
 logger = logging.getLogger("Jaeger MCP Server")
 logger.info("Starting Jaeger MCP Server")
 mcp = FastMCP("Jaeger MCP Server")
 
 grafana_url = "http://localhost:16686"
-jaeger_client = JaegerClient(grafana_url)
+jaeger_client = ObservabilityClient(grafana_url)
 
 
 @mcp.tool(name="get_services")
