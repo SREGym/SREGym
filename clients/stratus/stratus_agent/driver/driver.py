@@ -6,6 +6,9 @@ import yaml
 
 from clients.stratus.stratus_agent.diagnosis_agent import main as diagnosis_task_main
 from clients.stratus.stratus_agent.localization_agent import main as localization_task_main
+from clients.stratus.stratus_agent.mitigation_agent import (
+    reflect_run,
+)
 from clients.stratus.stratus_agent.mitigation_agent import retry_run_with_feedback as mitigation_agent_retry_run
 from clients.stratus.stratus_agent.mitigation_agent import (
     single_run_with_predefined_prompts as mitigation_agent_single_run,
@@ -78,9 +81,25 @@ async def mitigation_task_main():
         # if the retry mode is validation, run mitigation agent with rollback and weak oracle.
         # each start of new agent trial, the agent should receive the last run's oracle results
         # and some reflections as input
-        # TODO: need new agent node for trajectory reflection
-        # TODO: need new agent node for starting new attempt with reflections and past oracle result as input
-        pass
+        # TODO: need new function for trajectory reflection
+        curr_attempt = 0
+        mitigation_agent_last_state = ""
+        rollback_agent_last_state = ""
+        while curr_attempt < mitigation_agent_max_retry_attempts:
+            if curr_attempt == 0:
+                mitigation_agent_last_state = await mitigation_agent_single_run()
+            else:
+                mitigation_agent_last_state = await mitigation_agent_retry_run(reflect_run(mitigation_agent_last_state))
+            oracle_results = validate_oracles(oracles)
+            if oracle_results[0] is True:
+                # agent succeeds, let's finish here.
+                break
+            # otherwise, rollback all changes
+            # rollback agent is stateless and "best effort" idempotent, just rollback
+            # memory is cleared in the retry_run() method, so the agent can start anew.
+            rollback_agent_last_state = rollback_agent_main()
+            curr_attempt += 1
+        return mitigation_agent_last_state
 
 
 async def main():

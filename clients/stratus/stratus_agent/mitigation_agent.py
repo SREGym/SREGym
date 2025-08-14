@@ -201,6 +201,7 @@ async def single_run_with_predefined_prompts():
 async def retry_run_with_feedback(feedback_prompts):
     agent, prompt_path, max_step = build_default_mitigation_agent()
     res = await agent.arun(feedback_prompts)
+    agent.clear_memory()
     return res
 
 
