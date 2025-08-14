@@ -23,15 +23,14 @@ def get_services() -> str:
     """
 
     logger.info("[ob_mcp] get_services called, getting jaeger services")
-    jaeger_port = os.environ.get("JAEGER_PORT", None)
-    if jaeger_port is None:
-        err_msg = "JAEGER_PORT environment variable is not set!"
+    jaeger_url = os.environ.get("JAEGER_BASE_URL", None)
+    if jaeger_url is None:
+        err_msg = "JAEGER_BASE_URL environment variable is not set!"
         logger.error(err_msg)
         raise RuntimeError(err_msg)
-    grafana_url = "http://localhost:" + os.environ["JAEGER_PORT"]
-    jaeger_client = ObservabilityClient(grafana_url)
+    jaeger_client = ObservabilityClient(jaeger_url)
     try:
-        url = f"{grafana_url}/api/services"
+        url = f"{jaeger_url}/api/services"
         response = jaeger_client.make_request("GET", url)
         logger.info(f"[ob_mcp] get_services status code: {response.status_code}")
         logger.info(f"[ob_mcp] get_services result: {response}")
@@ -56,10 +55,14 @@ def get_operations(service: str) -> str:
     """
 
     logger.info("[ob_mcp] get_operations called, getting jaeger operations")
-    grafana_url = "http://localhost:" + os.environ["JAEGER_PORT"]
-    jaeger_client = ObservabilityClient(grafana_url)
+    jaeger_url = os.environ.get("JAEGER_BASE_URL", None)
+    if jaeger_url is None:
+        err_msg = "JAEGER_BASE_URL environment variable is not set!"
+        logger.error(err_msg)
+        raise RuntimeError(err_msg)
+    jaeger_client = ObservabilityClient(jaeger_url)
     try:
-        url = f"{grafana_url}/api/operations"
+        url = f"{jaeger_url}/api/operations"
         params = {"service": service}
         response = jaeger_client.make_request("GET", url, params=params)
         logger.info(f"[ob_mcp] get_operations: {response.status_code}")
@@ -84,10 +87,14 @@ def get_traces(service: str, last_n_minutes: int) -> str:
     """
 
     logger.info("[ob_mcp] get_traces called, getting jaeger traces")
-    grafana_url = "http://localhost:" + os.environ["JAEGER_PORT"]
-    jaeger_client = ObservabilityClient(grafana_url)
+    jaeger_url = os.environ.get("JAEGER_BASE_URL", None)
+    if jaeger_url is None:
+        err_msg = "JAEGER_BASE_URL environment variable is not set!"
+        logger.error(err_msg)
+        raise RuntimeError(err_msg)
+    jaeger_client = ObservabilityClient(jaeger_url)
     try:
-        url = f"{grafana_url}/api/traces"
+        url = f"{jaeger_url}/api/traces"
         start_time = datetime.now() - timedelta(minutes=last_n_minutes)
         start_time = int(start_time.timestamp() * 1_000_000)
         end_time = int(datetime.now().timestamp() * 1_000_000)
