@@ -110,7 +110,7 @@ class TrainTicketFaultInjector(FaultInjector):
                 self._restart_flagd()
                 print("✅ flagd restarted successfully")
 
-                print("Sleeping for 15 seconds to flag value change to take effect...")
+                print("Sleeping for 20 seconds to flag value change to take effect...")
                 time.sleep(20)
                 return True
             else:
