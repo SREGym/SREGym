@@ -60,149 +60,149 @@ from srearena.conductor.problems.wrong_service_selector import WrongServiceSelec
 class ProblemRegistry:
     def __init__(self):
         self.PROBLEM_REGISTRY = {
-            "k8s_target_port-misconfig": lambda: K8STargetPortMisconfig(faulty_service="user-service"),
-            "auth_miss_mongodb": MongoDBAuthMissing,
-            "revoke_auth_mongodb-1": lambda: MongoDBRevokeAuth(faulty_service="mongodb-geo"),
-            "revoke_auth_mongodb-2": lambda: MongoDBRevokeAuth(faulty_service="mongodb-rate"),
-            "storage_user_unregistered-1": lambda: MongoDBUserUnregistered(faulty_service="mongodb-geo"),
-            "storage_user_unregistered-2": lambda: MongoDBUserUnregistered(faulty_service="mongodb-rate"),
-            "misconfig_app_hotel_res": MisconfigAppHotelRes,
-            "scale_pod_zero_social_net": ScalePodSocialNet,
-            "assign_to_non_existent_node": AssignNonExistentNode,
-	        "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
-            "chaos_mesh_container_kill": ChaosMeshContainerKill,
-            "chaos_mesh_pod_failure": ChaosMeshPodFailure,
-            "chaos_mesh_pod_kill": ChaosMeshPodKill,
-            "chaos_mesh_network_loss": ChaosMeshNetworkLoss,
-            "chaos_mesh_network_delay": ChaosMeshNetworkDelay,
-            "chaos_mesh_network_partition": ChaosMeshNetworkPartition,
-            "chaos_mesh_http_abort": ChaosMeshHttpAbort,
-            "chaos_mesh_cpu_stress": ChaosMeshCPUStress,
-            "chaos_mesh_jvm_stress": ChaosMeshJVMHeapStress,
-            "chaos_mesh_jvm_return": ChaosMeshJVMReturnFault,
-            "chaos_mesh_memory_stress": ChaosMeshMemoryStress,
-            "chaos_mesh_http_post_tamper": ChaosMeshHttpPostTamper,
-            "astronomy_shop_ad_service_failure": AdServiceFailure,
-            "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
-            "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,
-            "astronomy_shop_kafka_queue_problems": KafkaQueueProblems,
-            "astronomy_shop_cart_service_failure": CartServiceFailure,
-            "astronomy_shop_image_slow_load": ImageSlowLoad,
-            "astronomy_shop_loadgenerator_flood_homepage": LoadGeneratorFloodHomepage,
-            "astronomy_shop_payment_service_failure": PaymentServiceFailure,
-            "astronomy_shop_payment_service_unreachable": PaymentServiceUnreachable,
-            "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
-            "astronomy_shop_recommendation_service_cache_failure": RecommendationServiceCacheFailure,
-            "redeploy_without_PV": RedeployWithoutPV,
-            "wrong_bin_usage": WrongBinUsage,
-            "taint_no_toleration_social_network": lambda: TaintNoToleration(),
-            "missing_service_hotel_reservation": lambda: MissingService(
+            "k8s_target_port-misconfig": {"creator": lambda: K8STargetPortMisconfig(faulty_service="user-service"), "agnostic": False},
+            "auth_miss_mongodb": {"creator": MongoDBAuthMissing, "agnostic": False},
+            "revoke_auth_mongodb-1": {"creator": lambda: MongoDBRevokeAuth(faulty_service="mongodb-geo"), "agnostic": False},
+            "revoke_auth_mongodb-2": {"creator": lambda: MongoDBRevokeAuth(faulty_service="mongodb-rate"), "agnostic": False},
+            "storage_user_unregistered-1": {"creator": lambda: MongoDBUserUnregistered(faulty_service="mongodb-geo"), "agnostic": False},
+            "storage_user_unregistered-2": {"creator": lambda: MongoDBUserUnregistered(faulty_service="mongodb-rate"), "agnostic": False},
+            "misconfig_app_hotel_res": {"creator": MisconfigAppHotelRes, "agnostic": False},
+            "scale_pod_zero_social_net": {"creator": ScalePodSocialNet, "agnostic": False},
+            "assign_to_non_existent_node": {"creator": AssignNonExistentNode, "agnostic": False},
+	        "pod_anti_affinity_deadlock": {"creator": PodAntiAffinityDeadlock, "agnostic": False},
+            "chaos_mesh_container_kill": {"creator": ChaosMeshContainerKill, "agnostic": False},
+            "chaos_mesh_pod_failure": {"creator": ChaosMeshPodFailure, "agnostic": False},
+            "chaos_mesh_pod_kill": {"creator": ChaosMeshPodKill, "agnostic": False},
+            "chaos_mesh_network_loss": {"creator": ChaosMeshNetworkLoss, "agnostic": False},
+            "chaos_mesh_network_delay": {"creator": ChaosMeshNetworkDelay, "agnostic": False},
+            "chaos_mesh_network_partition": {"creator": ChaosMeshNetworkPartition, "agnostic": False},
+            "chaos_mesh_http_abort": {"creator": ChaosMeshHttpAbort, "agnostic": False},
+            "chaos_mesh_cpu_stress": {"creator": ChaosMeshCPUStress, "agnostic": False},
+            "chaos_mesh_jvm_stress": {"creator": ChaosMeshJVMHeapStress, "agnostic": False},
+            "chaos_mesh_jvm_return": {"creator": ChaosMeshJVMReturnFault, "agnostic": False},
+            "chaos_mesh_memory_stress": {"creator": ChaosMeshMemoryStress, "agnostic": False},
+            "chaos_mesh_http_post_tamper": {"creator": ChaosMeshHttpPostTamper, "agnostic": False},
+            "astronomy_shop_ad_service_failure": {"creator": AdServiceFailure, "agnostic": False},
+            "astronomy_shop_ad_service_high_cpu": {"creator": AdServiceHighCpu, "agnostic": False},
+            "astronomy_shop_ad_service_manual_gc": {"creator": AdServiceManualGc, "agnostic": False},
+            "astronomy_shop_kafka_queue_problems": {"creator": KafkaQueueProblems, "agnostic": False},
+            "astronomy_shop_cart_service_failure": {"creator": CartServiceFailure, "agnostic": False},
+            "astronomy_shop_image_slow_load": {"creator": ImageSlowLoad, "agnostic": False},
+            "astronomy_shop_loadgenerator_flood_homepage": {"creator": LoadGeneratorFloodHomepage, "agnostic": False},
+            "astronomy_shop_payment_service_failure": {"creator": PaymentServiceFailure, "agnostic": False},
+            "astronomy_shop_payment_service_unreachable": {"creator": PaymentServiceUnreachable, "agnostic": False},
+            "astronomy_shop_product_catalog_service_failure": {"creator": ProductCatalogServiceFailure, "agnostic": False},
+            "astronomy_shop_recommendation_service_cache_failure": {"creator": RecommendationServiceCacheFailure, "agnostic": False},
+            "redeploy_without_PV": {"creator": RedeployWithoutPV, "agnostic": False},
+            "wrong_bin_usage": {"creator": WrongBinUsage, "agnostic": False},
+            "taint_no_toleration_social_network": {"creator": lambda: TaintNoToleration(), "agnostic": False},
+            "missing_service_hotel_reservation": {"creator": lambda: MissingService(
                 app_name="hotel_reservation", faulty_service="mongodb-rate"
-            ),
-            "missing_service_social_network": lambda: MissingService(
+            ), "agnostic": False},
+            "missing_service_social_network": {"creator": lambda: MissingService(
                 app_name="social_network", faulty_service="user-service"
-            ),
-            "resource_request_too_large": lambda: ResourceRequestTooLarge(
+            ), "agnostic": False},
+            "resource_request_too_large": {"creator": lambda: ResourceRequestTooLarge(
                 app_name="hotel_reservation", faulty_service="mongodb-rate"
-            ),
-            "resource_request_too_small": lambda: ResourceRequestTooSmall(
+            ), "agnostic": False},
+            "resource_request_too_small": {"creator": lambda: ResourceRequestTooSmall(
                 app_name="hotel_reservation", faulty_service="mongodb-rate"
-            ),
-            "wrong_service_selector_astronomy_shop": lambda: WrongServiceSelector(
+            ), "agnostic": False},
+            "wrong_service_selector_astronomy_shop": {"creator": lambda: WrongServiceSelector(
                 app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "wrong_service_selector_hotel_reservation": lambda: WrongServiceSelector(
+            ), "agnostic": False},
+            "wrong_service_selector_hotel_reservation": {"creator": lambda: WrongServiceSelector(
                 app_name="hotel_reservation", faulty_service="frontend"
-            ),
-            "wrong_service_selector_social_network": lambda: WrongServiceSelector(
+            ), "agnostic": False},
+            "wrong_service_selector_social_network": {"creator": lambda: WrongServiceSelector(
                 app_name="social_network", faulty_service="user-service"
-            ),
-            "service_dns_resolution_failure_astronomy_shop": lambda: ServiceDNSResolutionFailure(
+            ), "agnostic": False},
+            "service_dns_resolution_failure_astronomy_shop": {"creator": lambda: ServiceDNSResolutionFailure(
                 app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "service_dns_resolution_failure_social_network": lambda: ServiceDNSResolutionFailure(
+            ), "agnostic": False},
+            "service_dns_resolution_failure_social_network": {"creator": lambda: ServiceDNSResolutionFailure(
                 app_name="social_network", faulty_service="user-service"
-            ),
-            "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(
+            ), "agnostic": False},
+            "wrong_dns_policy_astronomy_shop": {"creator": lambda: WrongDNSPolicy(
                 app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "wrong_dns_policy_social_network": lambda: WrongDNSPolicy(
+            ), "agnostic": False},
+            "wrong_dns_policy_social_network": {"creator": lambda: WrongDNSPolicy(
                 app_name="social_network", faulty_service="user-service"
-            ),
-            "wrong_dns_policy_hotel_reservation": lambda: WrongDNSPolicy(
+            ), "agnostic": False},
+            "wrong_dns_policy_hotel_reservation": {"creator": lambda: WrongDNSPolicy(
                 app_name="hotel_reservation", faulty_service="profile"
-            ),
-            "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
-            "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
-            "sidecar_port_conflict_astronomy_shop": lambda: SidecarPortConflict(
+            ), "agnostic": False},
+            "stale_coredns_config_astronomy_shop": {"creator": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"), "agnostic": False},
+            "stale_coredns_config_social_network": {"creator": lambda: StaleCoreDNSConfig(app_name="social_network"), "agnostic": False},
+            "sidecar_port_conflict_astronomy_shop": {"creator": lambda: SidecarPortConflict(
                 app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "sidecar_port_conflict_social_network": lambda: SidecarPortConflict(
+            ), "agnostic": False},
+            "sidecar_port_conflict_social_network": {"creator": lambda: SidecarPortConflict(
                 app_name="social_network", faulty_service="user-service"
-            ),
-            "sidecar_port_conflict_hotel_reservation": lambda: SidecarPortConflict(
+            ), "agnostic": False},
+            "sidecar_port_conflict_hotel_reservation": {"creator": lambda: SidecarPortConflict(
                 app_name="hotel_reservation", faulty_service="frontend"
-            ),
-            "env_variable_leak_social_network": lambda: EnvVariableLeak(
+            ), "agnostic": False},
+            "env_variable_leak_social_network": {"creator": lambda: EnvVariableLeak(
                 app_name="social_network", faulty_service="media-mongodb"
-            ),
-            "env_variable_leak_hotel_reservation": lambda: EnvVariableLeak(
+            ), "agnostic": False},
+            "env_variable_leak_hotel_reservation": {"creator": lambda: EnvVariableLeak(
                 app_name="hotel_reservation", faulty_service="mongodb-geo"
-            ),
-            "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
-            "readiness_probe_misconfiguration_astronomy_shop": lambda: ReadinessProbeMisconfiguration(
+            ), "agnostic": False},
+            "configmap_drift_hotel_reservation": {"creator": lambda: ConfigMapDrift(faulty_service="geo"), "agnostic": False},
+            "readiness_probe_misconfiguration_astronomy_shop": {"creator": lambda: ReadinessProbeMisconfiguration(
                 app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "readiness_probe_misconfiguration_social_network": lambda: ReadinessProbeMisconfiguration(
+            ), "agnostic": False},
+            "readiness_probe_misconfiguration_social_network": {"creator": lambda: ReadinessProbeMisconfiguration(
                 app_name="social_network", faulty_service="user-service"
-            ),
-            "readiness_probe_misconfiguration_hotel_reservation": lambda: ReadinessProbeMisconfiguration(
+            ), "agnostic": False},
+            "readiness_probe_misconfiguration_hotel_reservation": {"creator": lambda: ReadinessProbeMisconfiguration(
                 app_name="hotel_reservation", faulty_service="frontend"
-            ),
-            "liveness_probe_misconfiguration_astronomy_shop": lambda: LivenessProbeMisconfiguration(
+            ), "agnostic": False},
+            "liveness_probe_misconfiguration_astronomy_shop": {"creator": lambda: LivenessProbeMisconfiguration(
                 app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "liveness_probe_misconfiguration_social_network": lambda: LivenessProbeMisconfiguration(
+            ), "agnostic": False},
+            "liveness_probe_misconfiguration_social_network": {"creator": lambda: LivenessProbeMisconfiguration(
                 app_name="social_network", faulty_service="user-service"
-            ),
-            "liveness_probe_misconfiguration_hotel_reservation": lambda: LivenessProbeMisconfiguration(
+            ), "agnostic": False},
+            "liveness_probe_misconfiguration_hotel_reservation": {"creator": lambda: LivenessProbeMisconfiguration(
                 app_name="hotel_reservation", faulty_service="recommendation"
-            ),
-            "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
-            "liveness_probe_too_aggressive_astronomy_shop": lambda: LivenessProbeTooAggressive(
+            ), "agnostic": False},
+            "network_policy_block": {"creator": lambda: NetworkPolicyBlock(faulty_service="payment-service"), "agnostic": False},
+            "liveness_probe_too_aggressive_astronomy_shop": {"creator": lambda: LivenessProbeTooAggressive(
                 app_name="astronomy_shop"
-            ),
-            "liveness_probe_too_aggressive_social_network": lambda: LivenessProbeTooAggressive(
+            ), "agnostic": False},
+            "liveness_probe_too_aggressive_social_network": {"creator": lambda: LivenessProbeTooAggressive(
                 app_name="social_network"
-            ),
-            "liveness_probe_too_aggressive_hotel_reservation": lambda: LivenessProbeTooAggressive(
+            ), "agnostic": False},
+            "liveness_probe_too_aggressive_hotel_reservation": {"creator": lambda: LivenessProbeTooAggressive(
                 app_name="hotel_reservation"
-            ),
-            "duplicate_pvc_mounts_astronomy_shop": lambda: DuplicatePVCMounts(
+            ), "agnostic": False},
+            "duplicate_pvc_mounts_astronomy_shop": {"creator": lambda: DuplicatePVCMounts(
                 app_name="astronomy_shop", faulty_service="frontend"
-            ),
-            "duplicate_pvc_mounts_social_network": lambda: DuplicatePVCMounts(
+            ), "agnostic": False},
+            "duplicate_pvc_mounts_social_network": {"creator": lambda: DuplicatePVCMounts(
                 app_name="social_network", faulty_service="jaeger"
-            ),
-            "duplicate_pvc_mounts_hotel_reservation": lambda: DuplicatePVCMounts(
+            ), "agnostic": False},
+            "duplicate_pvc_mounts_hotel_reservation": {"creator": lambda: DuplicatePVCMounts(
                 app_name="hotel_reservation", faulty_service="frontend"
-            ),
-            "env_variable_shadowing_astronomy_shop": lambda: EnvVariableShadowing(),
-            "rolling_update_misconfigured_social_network": lambda: RollingUpdateMisconfigured(
+            ), "agnostic": False},
+            "env_variable_shadowing_astronomy_shop": {"creator": lambda: EnvVariableShadowing(), "agnostic": False},
+            "rolling_update_misconfigured_social_network": {"creator": lambda: RollingUpdateMisconfigured(
                 app_name="social_network"
-            ),
-            "rolling_update_misconfigured_hotel_reservation": lambda: RollingUpdateMisconfigured(
+            ), "agnostic": False},
+            "rolling_update_misconfigured_hotel_reservation": {"creator": lambda: RollingUpdateMisconfigured(
                 app_name="hotel_reservation"
-            ),
-            "ingress_misroute": lambda: IngressMisroute(
+            ), "agnostic": False},
+            "ingress_misroute": {"creator": lambda: IngressMisroute(
                 path="/api", correct_service="frontend-service", wrong_service="recommendation-service"
-            ),
-            "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
-            "valkey_auth_disruption": ValkeyAuthDisruption,
-            "valkey_memory_disruption": ValkeyMemoryDisruption,
-            "incorrect_port_assignment": IncorrectPortAssignment,
-            "incorrect_image": IncorrectImage,
-            "namespace_memory_limit": NamespaceMemoryLimit,
+            ), "agnostic": False},
+            "persistent_volume_affinity_violation": {"creator": PersistentVolumeAffinityViolation, "agnostic": False},
+            "valkey_auth_disruption": {"creator": ValkeyAuthDisruption, "agnostic": False},
+            "valkey_memory_disruption": {"creator": ValkeyMemoryDisruption, "agnostic": False},
+            "incorrect_port_assignment": {"creator": IncorrectPortAssignment, "agnostic": False},
+            "incorrect_image": {"creator": IncorrectImage, "agnostic": False},
+            "namespace_memory_limit": {"creator": NamespaceMemoryLimit, "agnostic": False},
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.
@@ -222,10 +222,14 @@ class ProblemRegistry:
         if problem_id not in self.PROBLEM_REGISTRY:
             raise ValueError(f"Problem ID {problem_id} not found in registry.")
 
-        return self.PROBLEM_REGISTRY.get(problem_id)()
+        problem_config = self.PROBLEM_REGISTRY.get(problem_id)
+        return problem_config["creator"]()
 
     def get_problem(self, problem_id: str):
-        return self.PROBLEM_REGISTRY.get(problem_id)
+        problem_config = self.PROBLEM_REGISTRY.get(problem_id)
+        if problem_config:
+            return problem_config["creator"]
+        return None
 
     def get_problem_ids(self, task_type: str = None):
         if task_type:
