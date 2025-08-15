@@ -1,0 +1,20 @@
+{
+  "Name": "Elasticsearch 8.5.1 Cluster",
+  "Namespace": "elasticsearch",
+  "Desc": "A 3-node Elasticsearch 8.5.1 cluster deployed using the official Elastic Helm chart with default configuration.",
+  "Supported Operations": [
+    "Store and index documents",
+    "Search documents",
+    "Cluster health monitoring",
+    "Node scaling",
+    "Rolling upgrades"
+  ],
+  "Helm Config": {
+    "release_name": "elasticsearch",
+    "chart_path": "elasticsearch",
+    "namespace": "elasticsearch",
+    "remote_chart": true,
+    "repo": "https://helm.elastic.co",
+    "extra_args": ["--version", "8.5.1", "--set", "replicas=3"]
+  }
+}
