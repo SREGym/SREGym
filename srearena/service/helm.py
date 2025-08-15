@@ -21,7 +21,6 @@ class Helm:
         if not release_name or not chart_path or not namespace:
             raise ValueError("Helm.install requires release_name, chart_path and namespace")
 
-        # 本地 chart 先更新依赖（remote_chart=False 才需要）
         if not remote_chart:
             dep_cmd = f"helm dependency update {shlex.quote(chart_path)}"
             dep = subprocess.run(dep_cmd, shell=True, capture_output=True, text=True)
@@ -34,7 +33,6 @@ class Helm:
         if version:
             cmd += ["--version", version]
 
-        # 远程 chart 时加 --repo
         if remote_chart and repo:
             cmd += ["--repo", repo]
 
@@ -45,7 +43,6 @@ class Helm:
         if proc.stdout:
             print(proc.stdout.strip())
         if proc.returncode != 0:
-            # 失败时抛异常，阻止后续 wait_for_ready 一直等
             print(proc.stderr.strip())
             raise RuntimeError(f"helm install failed (rc={proc.returncode})")
 
@@ -71,7 +68,6 @@ class Helm:
 
     @staticmethod
     def exists_release(release_name: str, namespace: str) -> bool:
-        # helm status 返回码 0 表示存在
         proc = subprocess.run(["helm", "status", release_name, "-n", namespace],
                               capture_output=True, text=True)
         return proc.returncode == 0
