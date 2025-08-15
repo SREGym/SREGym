@@ -155,6 +155,7 @@ async def mitigation_task_main(localization_summary):
     if app_name not in ["Social Network", "Hotel Reservation"]:
         logger.info("Current app does not support workload oracle")
     else:
+        logger.info(f"adding oracle for app [{app_name}]")
         workload_oracle = WorkloadOracle(app_name)
         oracles.append(workload_oracle)
 
