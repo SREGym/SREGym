@@ -14,12 +14,9 @@
         "Calculate order totals and apply discounts"
     ],
     "Helm Config": {
-    "release_name": "elasticsearch",
-    "chart_path": "elasticsearch",
-    "namespace": "elasticsearch",
-    "remote_chart": true,
-    "repo": "https://helm.elastic.co",
-    "extra_args": ["--version", "8.5.1", "--set", "replicas=3"]
+        "release_name": "astronomy-shop",
+        "chart_path": "astronomy-shop/charts/opentelemetry-demo",
+        "namespace": "astronomy-shop",
+        "remote_chart": false
     }
-
 }
