@@ -49,3 +49,41 @@ async def submit_tool(ans: str, tool_call_id: Annotated[str, InjectedToolCallId]
             "messages": [ToolMessage(f"Submission complete. No further action is needed.", tool_call_id=tool_call_id)],
         }
     )
+
+
+@tool(description=submit_tool_docstring)
+async def fake_submit_tool(ans: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
+    # makes http call to benchmark submission server
+    logging.info(f"_NOT_ submitting to benchmark, answer: {ans}")
+    logger.info(f"This method is to only change the state[submitted] value.")
+    logger.info(f"mitigation submission is done out side of agent logic, for retry")
+
+    return Command(
+        update={
+            "submitted": True,
+            "messages": [ToolMessage(f"Submission complete. No further action is needed.", tool_call_id=tool_call_id)],
+        }
+    )
+
+
+async def manual_submit_tool(ans: str) -> str:
+    # makes http call to benchmark submission server
+    logging.info(f"_manually_ submitting to benchmark, answer: {ans}")
+
+    exit_stack = AsyncExitStack()
+    logger.info("Using HTTP, connecting to server.")
+    server_url = langgraph_tool_config.submit_mcp_url
+    http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
+    session = await exit_stack.enter_async_context(ClientSession(*http_transport))
+
+    await session.initialize()
+
+    result = await session.call_tool(
+        "submit",
+        arguments={
+            "ans": ans,
+        },
+    )
+    await exit_stack.aclose()
+    logger.info("Submission complete. No further action is needed.")
+    return "Submitted"

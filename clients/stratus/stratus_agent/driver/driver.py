@@ -23,6 +23,7 @@ from clients.stratus.stratus_agent.mitigation_agent import (
 )
 from clients.stratus.stratus_agent.rollback_agent import main as rollback_agent_main
 from clients.stratus.stratus_utils.get_logger import get_logger
+from clients.stratus.tools.submit_tool import manual_submit_tool
 from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
 from clients.stratus.weak_oracles.cluster_state_oracle import ClusterStateOracle
 from clients.stratus.weak_oracles.workload_oracle import WorkloadOracle
@@ -233,17 +234,38 @@ async def mitigation_task_main(localization_summary):
                 logger.info(f"composed retry prompts: {retry_run_initial_messages}")
                 mitigation_agent_last_state = await mitigation_agent_retry_run(retry_run_initial_messages)
             oracle_results = validate_oracles(oracles)
-            if oracle_results[0] is True:
+            has_succeeded = True
+            for result in oracle_results:
+                if not result.success:
+                    has_succeeded = False
+
+            if has_succeeded:
                 # agent succeeds, let's finish here.
-                logger.info("agent succeeds, breaking!")
+                logger.info("agent succeeds! manually submitting for the agent")
+                await manual_submit_tool("")
+                logger.info("breaking the retry loop")
                 break
-            # otherwise, rollback all changes
-            # rollback agent is stateless and "best effort" idempotent, just rollback
-            # memory is cleared in the retry_run() method, so the agent can start anew.
-            logger.info(f"agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
-            logger.info(f"running rollback agent to reverse progress")
-            rollback_agent_last_state = await rollback_agent_main()
-            curr_attempt += 1
+            else:
+                # here the agent fails, we make decision if we should retry
+                should_retry = curr_attempt + 1 < mitigation_agent_max_retry_attempts
+                logger.info(f"agent failed, should we retry? {"Yes!" if should_retry else "No!"}")
+                if should_retry:
+                    # we should retry as we have more trials left
+                    logger.info(
+                        f"we should retry as we have more attempts left. attempts left: {(mitigation_agent_max_retry_attempts - 1) - (curr_attempt + 1)}"
+                    )
+                    # rollback all changes
+                    # rollback agent is stateless and "best effort" idempotent, just rollback
+                    # memory is cleared in the retry_run() method, so the agent can start anew.
+                    logger.info(f"agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
+                    logger.info(f"running rollback agent to reverse progress")
+                    rollback_agent_last_state = await rollback_agent_main()
+                    curr_attempt += 1
+                else:
+                    logger.info("we shouldn't retry as we don't have more attempts left.")
+                    logger.info(f"making a real submission for the agent.")
+                    await manual_submit_tool("")
+
         return mitigation_agent_last_state, rollback_agent_last_state
 
 

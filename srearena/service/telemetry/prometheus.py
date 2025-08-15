@@ -93,6 +93,7 @@ class Prometheus:
 
     def start_port_forward(self):
         """Starts port-forwarding to access Prometheus."""
+        print("Start port-forwarding for Prometheus.")
         if self.port_forward_process and self.port_forward_process.poll() is None:
             print("Port-forwarding already active.")
             return
@@ -111,7 +112,7 @@ class Prometheus:
                 stderr=subprocess.PIPE,
                 text=True,
             )
-
+            os.environ["PROMETHEUS_PORT"] = str(self.port)
             time.sleep(3)  # Wait a bit for the port-forward to establish
 
             if self.port_forward_process.poll() is None:

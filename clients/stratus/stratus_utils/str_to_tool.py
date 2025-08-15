@@ -16,7 +16,7 @@ from clients.stratus.tools.kubectl_tools import (
     RollbackCommand,
 )
 from clients.stratus.tools.prometheus_tools import get_metrics
-from clients.stratus.tools.submit_tool import submit_tool
+from clients.stratus.tools.submit_tool import fake_submit_tool, submit_tool
 from clients.stratus.tools.wait_tool import wait_tool
 
 logger = get_logger()
@@ -43,6 +43,8 @@ def str_to_tool(tool_struct: dict[str, str]):
         return get_metrics
     elif tool_struct["name"] == "submit_tool":
         return submit_tool
+    elif tool_struct["name"] == "f_submit_tool":
+        return fake_submit_tool
     elif tool_struct["name"] == "wait_tool":
         return wait_tool
     elif tool_struct["name"] == "exec_read_only_kubectl_cmd":

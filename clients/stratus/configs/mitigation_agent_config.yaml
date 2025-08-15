@@ -54,7 +54,7 @@ async_tools:
       
           Args:
               command (str): The kubectl command you would like to execute, must start with "kubectl"
-  - name: submit_tool
+  - name: f_submit_tool
     description: |
       The tool to submit benchmark results
           
