@@ -19,7 +19,10 @@ system: >
   
 
 user: >
-  You can run up to {max_round} rounds to finish the tasks.
-  If you call submit_tool in tool-call stage, the process will end immediately and this round won’t count toward the limit.
-  If you exceed this limitation, the system will force to end the conversation and you will be considered failing the tasks.
-  You should minimize the number of interaction rounds while ensuring task completion.
+  In each round, there is a thinking stage. In the thinking stage, you are given a list of tools. Think about what you want to call. Return your tool choice and the reasoning behind.
+  When choosing the tool, refer to the tool by its name.
+  Then, there is a tool-call stage, where you make a tool_call consistent with your explanation.
+  You can run up to {max_step} rounds to finish the tasks.
+  If you call submit_tool in tool-call stage, the process will end immediately.
+  If you exceed this limitation, the system will force you to make a submission.
+  You will begin by analyzing the service's state and telemetry with the tools.
