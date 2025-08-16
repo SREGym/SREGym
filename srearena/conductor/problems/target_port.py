@@ -13,7 +13,7 @@ from srearena.utils.decorators import mark_fault_injected
 
 
 class K8STargetPortMisconfig(Problem):
-    def __init__(self, faulty_service="user-service"):
+    def __init__(self, faulty_service="compose-post-service"):
         app = SocialNetwork()
         super().__init__(app=app, namespace=app.namespace)
 

@@ -337,6 +337,7 @@ data
 taskweaver_proj
 trace_output/
 metrics_output/
+topology_graph/
 
 # Ignore telemetry data directories
 srearena/observer/telemetry_data_*/

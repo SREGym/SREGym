@@ -11,6 +11,7 @@ import pandas as pd
 import requests
 
 from srearena.observer import root_path
+import networkx as nx
 
 
 class TraceAPI:
@@ -297,21 +298,58 @@ class TraceAPI:
                 "response": response_list,
             }
         )
+
+        self.construct_topology_graph(df)
+
         return df
 
+    def construct_topology_graph(self, df):
+        try:
+            span_to_service = dict(zip(df["span_id"], df["service_name"]))
+
+            edges = []
+
+            for _, row in df.iterrows():
+                parent_span = row["parent_span"]
+                child_service = row["service_name"]
+
+                if parent_span in span_to_service:
+                    parent_service = span_to_service[parent_span]
+                    
+                    if parent_service != child_service:
+                        edges.append((parent_service, child_service))
+
+            G = nx.DiGraph()
+            for parent, child in edges:
+                if not G.has_edge(parent, child):
+                    G.add_edge(parent, child, weight=1)
+
+            self.topology_graph = G
+
+        except Exception as e:
+            print(e)
+            return
+        
+    def save_graph(self, path):
+        os.makedirs(path, exist_ok=True)
+        file_path = os.path.join(path, f"{self.namespace}.csv")
+        edges_df = nx.to_pandas_edgelist(self.topology_graph)
+        edges_df.to_csv(file_path, index=False)
+    
     def save_traces(self, df, path) -> str:
         os.makedirs(path, exist_ok=True)
         file_path = os.path.join(path, f"traces_{int(time.time())}.csv")
         df.to_csv(file_path, index=False)
         self.cleanup()  # Stop port-forwarding after traces are exported
         return f"Traces data exported to: {file_path}"
-
-
+    
 if __name__ == "__main__":
-    tracer = TraceAPI(namespace="hotel-reservation")
+    tracer = TraceAPI(namespace="test-social-network")
     end_time = datetime.now()
-    start_time = end_time - timedelta(minutes=9)  # Example time window
+    start_time = end_time - timedelta(minutes=30)  # Example time window
     traces = tracer.extract_traces(start_time, end_time)
     df_traces = tracer.process_traces(traces)
     save_path = root_path / "trace_output"
     tracer.save_traces(df_traces, save_path)
+    save_path_graph = root_path / "topology_graph"
+    tracer.save_graph(save_path_graph)
