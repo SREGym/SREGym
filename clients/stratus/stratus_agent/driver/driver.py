@@ -121,7 +121,8 @@ async def diagnosis_task_main():
     agent_time = time.perf_counter() - start_time
     agent_exec_stats = dict()
     # assuming we only use one model
-    usage_metadata = next(iter(agent.callback.usage_metadata.items()))
+    usage_metadata = next(iter(agent.callback.usage_metadata.items()))[1]
+    logger.info(f"agent usage metadata: {usage_metadata}")
     agent_exec_stats["input_tokens"] = usage_metadata["input_tokens"]
     agent_exec_stats["output_tokens"] = usage_metadata["output_tokens"]
     agent_exec_stats["total_tokens"] = usage_metadata["total_tokens"]
@@ -163,7 +164,7 @@ async def localization_task_main():
     agent, last_state = await localization_single_run(first_run_initial_messages)
     agent_time = time.perf_counter() - start_time
     agent_exec_stats = dict()
-    usage_metadata = next(iter(agent.callback.usage_metadata.items()))
+    usage_metadata = next(iter(agent.callback.usage_metadata.items()))[1]
     agent_exec_stats["input_tokens"] = usage_metadata["input_tokens"]
     agent_exec_stats["output_tokens"] = usage_metadata["output_tokens"]
     agent_exec_stats["total_tokens"] = usage_metadata["total_tokens"]
@@ -246,7 +247,7 @@ async def mitigation_task_main(localization_summary):
         agent_time = time.perf_counter() - start_time
         agent_exec_stats = dict()
         agent_exec_stats["agent_name"] = "mitigation_agent_none"
-        usage_metadata = next(iter(agent.callback.usage_metadata.items()))
+        usage_metadata = next(iter(agent.callback.usage_metadata.items()))[1]
         agent_exec_stats["input_tokens"] = usage_metadata["input_tokens"]
         agent_exec_stats["output_tokens"] = usage_metadata["output_tokens"]
         agent_exec_stats["total_tokens"] = usage_metadata["total_tokens"]
@@ -284,7 +285,7 @@ async def mitigation_task_main(localization_summary):
             # recording post-run data
             agent_time = time.perf_counter() - start_time
             agent_names_lst.append("mitigation_agent_naive")
-            usage_metadata = next(iter(agent.callback.usage_metadata.items()))
+            usage_metadata = next(iter(agent.callback.usage_metadata.items()))[1]
             input_tokens_lst.append(usage_metadata["input_tokens"])
             output_tokens_lst.append(usage_metadata["output_tokens"])
             total_tokens_lst.append(usage_metadata["total_tokens"])
@@ -370,7 +371,7 @@ async def mitigation_task_main(localization_summary):
             # recording post-run data
             agent_time = time.perf_counter() - start_time
             agent_names_lst.append("mitigation_agent_validate")
-            usage_metadata = next(iter(agent.callback.usage_metadata.items()))
+            usage_metadata = next(iter(agent.callback.usage_metadata.items()))[1]
             input_tokens_lst.append(usage_metadata["input_tokens"])
             output_tokens_lst.append(usage_metadata["output_tokens"])
             total_tokens_lst.append(usage_metadata["total_tokens"])
