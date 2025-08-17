@@ -59,7 +59,23 @@ def get_app_info():
         logger.info(f"app info: {app_info}")
         return app_info
     except Exception as e:
-        logger.error(f"[submit_mcp] HTTP submission failed: {e}")
+        logger.error(f"[get_app_info] HTTP submission failed: {e}")
+        return "error"
+
+
+def get_curr_problem():
+    ltc = LanggraphToolConfig()
+    url = ltc.problem_url
+    try:
+        response = requests.get(url)
+        logger.info(f"Response status: {response.status_code}, text: {response.text}")
+        problem_str = str(response.text)
+        logger.info(f"problem as str: {problem_str}")
+        problem = literal_eval(problem_str)
+        logger.info(f"problem info: {problem}")
+        return problem["problem_id"]
+    except Exception as e:
+        logger.error(f"[get_curr_problem] HTTP submission failed: {e}")
         return "error"
 
 
@@ -443,6 +459,7 @@ async def main():
     # run diagnosis agent 2 times
     # here, running the file's main function should suffice.
     # 1 for noop diagnosis
+    current_problem = get_curr_problem()
     agent_output_df = pd.DataFrame()
     agent_names = []
     agent_in_tokens = []
@@ -542,7 +559,7 @@ async def main():
     agent_output_df["num_retry_attempts"] = agent_retry_attempts
     agent_output_df["rollback_stack"] = agent_rollback_stack
     agent_output_df["oracle_results"] = agent_oracle_results
-    agent_output_df.to_csv("./output.csv", index=False, header=True)
+    agent_output_df.to_csv(f"./{current_problem}_stratus_output.csv", index=False, header=True)
 
 
 if __name__ == "__main__":

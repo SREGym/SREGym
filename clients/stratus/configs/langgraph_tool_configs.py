@@ -28,6 +28,10 @@ class LanggraphToolConfig(BaseModel):
         description="url for getting benchmark application information, default to http://localhost:8000/get_app",
         default=f"http://localhost:8000/get_app",
     )
+    benchmark_current_problem: str = Field(
+        description="url for getting current benchmark problem, default to http://localhost:8000/get_problem",
+        default=f"http://localhost:8000/get_problem",
+    )
 
     min_len_to_sum: int = Field(
         description="Minimum length of text that will be summarized " "first before being input to the main agent.",
