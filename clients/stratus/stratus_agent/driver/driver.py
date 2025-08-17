@@ -120,9 +120,11 @@ async def diagnosis_task_main():
     agent, last_state = await diagnosis_single_run(first_run_initial_messages)
     agent_time = time.perf_counter() - start_time
     agent_exec_stats = dict()
-    agent_exec_stats["input_tokens"] = agent.callback.usage_metadata[0]["input_tokens"]
-    agent_exec_stats["output_tokens"] = agent.callback.usage_metadata[0]["output_tokens"]
-    agent_exec_stats["total_tokens"] = agent.callback.usage_metadata[0]["total_tokens"]
+    # assuming we only use one model
+    usage_metadata = next(iter(agent.callback.usage_metadata.items()))
+    agent_exec_stats["input_tokens"] = usage_metadata["input_tokens"]
+    agent_exec_stats["output_tokens"] = usage_metadata["output_tokens"]
+    agent_exec_stats["total_tokens"] = usage_metadata["total_tokens"]
     # assuming time in seconds.
     agent_exec_stats["time"] = str(agent_time)
     agent_exec_stats["steps"] = last_state.values["num_steps"]
@@ -161,9 +163,10 @@ async def localization_task_main():
     agent, last_state = await localization_single_run(first_run_initial_messages)
     agent_time = time.perf_counter() - start_time
     agent_exec_stats = dict()
-    agent_exec_stats["input_tokens"] = agent.callback.usage_metadata[0]["input_tokens"]
-    agent_exec_stats["output_tokens"] = agent.callback.usage_metadata[0]["output_tokens"]
-    agent_exec_stats["total_tokens"] = agent.callback.usage_metadata[0]["total_tokens"]
+    usage_metadata = next(iter(agent.callback.usage_metadata.items()))
+    agent_exec_stats["input_tokens"] = usage_metadata["input_tokens"]
+    agent_exec_stats["output_tokens"] = usage_metadata["output_tokens"]
+    agent_exec_stats["total_tokens"] = usage_metadata["total_tokens"]
     # assuming time in seconds.
     agent_exec_stats["time"] = str(agent_time)
     agent_exec_stats["steps"] = last_state.values["num_steps"]
@@ -243,9 +246,10 @@ async def mitigation_task_main(localization_summary):
         agent_time = time.perf_counter() - start_time
         agent_exec_stats = dict()
         agent_exec_stats["agent_name"] = "mitigation_agent_none"
-        agent_exec_stats["input_tokens"] = agent.callback.usage_metadata[0]["input_tokens"]
-        agent_exec_stats["output_tokens"] = agent.callback.usage_metadata[0]["output_tokens"]
-        agent_exec_stats["total_tokens"] = agent.callback.usage_metadata[0]["total_tokens"]
+        usage_metadata = next(iter(agent.callback.usage_metadata.items()))
+        agent_exec_stats["input_tokens"] = usage_metadata["input_tokens"]
+        agent_exec_stats["output_tokens"] = usage_metadata["output_tokens"]
+        agent_exec_stats["total_tokens"] = usage_metadata["total_tokens"]
         # assuming time in seconds.
         agent_exec_stats["time"] = str(agent_time)
         agent_exec_stats["steps"] = last_state.values["num_steps"]
@@ -280,11 +284,12 @@ async def mitigation_task_main(localization_summary):
             # recording post-run data
             agent_time = time.perf_counter() - start_time
             agent_names_lst.append("mitigation_agent_naive")
-            input_tokens_lst.append(agent.callback.usage_metadata[0]["input_tokens"])
-            output_tokens_lst.append(agent.callback.usage_metadata[0]["output_tokens"])
-            total_tokens_lst.append(agent.callback.usage_metadata[0]["total_tokens"])
+            usage_metadata = next(iter(agent.callback.usage_metadata.items()))
+            input_tokens_lst.append(usage_metadata["input_tokens"])
+            output_tokens_lst.append(usage_metadata["output_tokens"])
+            total_tokens_lst.append(usage_metadata["total_tokens"])
             time_lst.append(str(agent_time))
-            steps_lst.append(agent.callback.usage_metadata[0]["num_steps"])
+            steps_lst.append(last_state.values["num_steps"])
             num_retry_attempts_lst.append(str(curr_attempt))
             rollback_stack_lst.append("N/A, naive retry")
 
@@ -365,11 +370,12 @@ async def mitigation_task_main(localization_summary):
             # recording post-run data
             agent_time = time.perf_counter() - start_time
             agent_names_lst.append("mitigation_agent_validate")
-            input_tokens_lst.append(agent.callback.usage_metadata[0]["input_tokens"])
-            output_tokens_lst.append(agent.callback.usage_metadata[0]["output_tokens"])
-            total_tokens_lst.append(agent.callback.usage_metadata[0]["total_tokens"])
+            usage_metadata = next(iter(agent.callback.usage_metadata.items()))
+            input_tokens_lst.append(usage_metadata["input_tokens"])
+            output_tokens_lst.append(usage_metadata["output_tokens"])
+            total_tokens_lst.append(usage_metadata["total_tokens"])
             time_lst.append(str(agent_time))
-            steps_lst.append(agent.callback.usage_metadata[0]["num_steps"])
+            steps_lst.append(mitigation_agent_last_state.values["num_steps"])
             num_retry_attempts_lst.append(str(curr_attempt))
             rollback_stack_lst.append("N/A, mitigation agent")
 
@@ -401,11 +407,12 @@ async def mitigation_task_main(localization_summary):
                     rollback_agent, rollback_agent_last_state = await rollback_agent_main()
                     rollback_end_time = time.perf_counter() - rollback_start_time
                     agent_names_lst.append("rollback_agent")
-                    input_tokens_lst.append(rollback_agent.callback.usage_metadata[0]["input_tokens"])
-                    output_tokens_lst.append(rollback_agent.callback.usage_metadata[0]["output_tokens"])
-                    total_tokens_lst.append(rollback_agent.callback.usage_metadata[0]["total_tokens"])
+                    usage_metadata = next(iter(rollback_agent.callback.usage_metadata.items()))
+                    input_tokens_lst.append(usage_metadata["input_tokens"])
+                    output_tokens_lst.append(usage_metadata["output_tokens"])
+                    total_tokens_lst.append(usage_metadata["total_tokens"])
                     time_lst.append(str(rollback_end_time))
-                    steps_lst.append(rollback_agent.callback.usage_metadata[0]["num_steps"])
+                    steps_lst.append(rollback_agent_last_state.values["num_steps"])
                     num_retry_attempts_lst.append(str(curr_attempt))
 
                     # FIXME: get rollback stack here.
