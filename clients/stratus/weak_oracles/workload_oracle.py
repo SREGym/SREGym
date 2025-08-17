@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import yaml
@@ -196,7 +197,7 @@ class WorkloadOracle(BaseOracle):
                     return True
         return False
 
-    def wait_for_job_completion(self, job_name):
+    async def wait_for_job_completion(self, job_name):
         namespace = "default"
 
         print(f"--- Waiting for the job {job_name} ---")
@@ -207,12 +208,12 @@ class WorkloadOracle(BaseOracle):
                 if WorkloadOracle.is_job_completed(job_status):
                     print("Job completed successfully.", flush=True)
                     break
-                time.sleep(5)
+                await asyncio.sleep(5)
         except client.exceptions.ApiException as e:
             print(f"Error monitoring job: {e}")
 
-    def get_workload_result(self, job_name):
-        self.wait_for_job_completion(job_name)
+    async def get_workload_result(self, job_name):
+        await self.wait_for_job_completion(job_name)
 
         namespace = "default"
 
@@ -236,7 +237,7 @@ class WorkloadOracle(BaseOracle):
 
         self.wrk.create_wrk_job(job_name=job_name, namespace=namespace, payload_script=payload_script.name, url=url)
 
-    def validate(self) -> OracleResult:
+    async def validate(self) -> OracleResult:
         print("Testing workload generator...", flush=True)
         self.wrk = Wrk(rate=10, dist="exp", connections=2, duration=10, threads=2)
 
@@ -250,7 +251,7 @@ class WorkloadOracle(BaseOracle):
             job_name = f"wrk2-job-{runid}"
 
             self.start_workload(payload_script, url, job_name)
-            wrk_result = self.get_workload_result(job_name)
+            wrk_result = await self.get_workload_result(job_name)
             if (
                 "Workload Generator Error:" in wrk_result
                 or "Requests/sec:" not in wrk_result
