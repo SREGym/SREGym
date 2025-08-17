@@ -41,7 +41,7 @@ uv sync
 pre-commit install
 ```
 
-<h2 id="🚀quickstart">🚀 Quick Start </h2>
+<h2 id="🚀quickstart">🚀 Create your cluster</h2>
 
 <!-- TODO: Add instructions for both local cluster and remote cluster -->
 Choose either a) or b) to set up your cluster and then proceed to the next steps.
@@ -77,7 +77,9 @@ export no_proxy=localhost
 After finishing cluster creation, proceed to the next "Update `config.yml`" step.
 
 ### b) Remote cluster
-SREArena supports any remote kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself. We have some Ansible playbooks to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster, and then proceed to the next "Update `config.yml`" step.
+SREArena supports any remote kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself. 
+
+We have some Ansible playbooks to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster, and then proceed to the next "Update `config.yml`" step.
 
 ### Update `config.yml`
 ```bash
@@ -87,30 +89,14 @@ cp config.yml.example config.yml
 Update your `config.yml` so that `k8s_host` is the host name of the control plane node of your cluster. Update `k8s_user` to be your username on the control plane node. If you are using a kind cluster, your `k8s_host` should be `kind`. If you're running SREArena on cluster, your `k8s_host` should be `localhost`.
 
 ### Running agents
-Human as the agent:
+We have ported [the Stratus agent](https://anonymous.4open.science/r/stratus-agent/README.md) to SREArena as a demo agent.
 
-```bash
-python3 cli.py
-(srearena) $ start k8s_target_port-misconfig # or choose any problem you want to solve
-# ... wait for the setup ...
-(srearena) $ submit("Yes") # submit solution
-```
+To run the benchmark with Stratus as the demo agent, uncomment line 43 in [`main.py`](https://github.com/xlab-uiuc/SREArena/blob/c4b6c61c30eaf898168d07b8cb4624544b68fe89/main.py#L43).
+It allows the benchmark to kicks start the agent when the problem setup is done.
 
-Run GPT-4 baseline agent:
+If you would like to run Stratus by itself, please take a look at [`driver.py`](https://github.com/xlab-uiuc/SREArena/blob/stratus_eval/clients/stratus/stratus_agent/driver/driver.py).
 
-```bash
-# Create a .env file in the project root (if not exists)
-echo "OPENAI_API_KEY=<YOUR_OPENAI_API_KEY>" > .env
-# Add more API keys as needed:
-# echo "QWEN_API_KEY=<YOUR_QWEN_API_KEY>" >> .env
-# echo "DEEPSEEK_API_KEY=<YOUR_DEEPSEEK_API_KEY>" >> .env
-
-python3 clients/gpt.py # you can also change the problem to solve in the main() function
-```
-
-The clients will automatically load API keys from your .env file.
-
-You can check the running status of the cluster using [k9s](https://k9scli.io/) or other cluster monitoring tools conveniently.
+We support 
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
