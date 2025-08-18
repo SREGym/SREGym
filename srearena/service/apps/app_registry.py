@@ -49,3 +49,21 @@ class AppRegistry:
             metadata = json.load(file)
 
         return metadata
+    
+    
+    def load_app_agnostic_information(self, app_name: str):
+        """ Deploy the given app, try to find the necessary information to inject fault to the app."""
+        app_metadata = self.get_app_metadata(app_name)
+        if app_metadata.get("Agnostic Info Ready", False):
+            print(f"App {app_name} has already loaded agnostic information.")
+            return
+        
+        print(f"Loading agnostic information for app {app_name}...")
+        app_metadata["Agnostic Info Ready"] = True
+        
+
+if __name__ == "__main__":
+    app_registry = AppRegistry()
+    for app_name in app_registry.get_app_names():
+        app_registry.load_app_agnostic_information(app_name)
+        
