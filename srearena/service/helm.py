@@ -2,75 +2,104 @@
 
 import subprocess
 import time
-import subprocess, shlex
+
 from srearena.service.kubectl import KubeCtl
 
 
 class Helm:
     @staticmethod
     def install(**args):
+        """Install a helm chart
+
+        Args:
+            release_name (str): Name of the release
+            chart_path (str): Path to the helm chart
+            namespace (str): Namespace to install the chart
+            version (str): Version of the chart
+            extra_args (List[str)]: Extra arguments for the helm install command
+            remote_chart (bool): Whether the chart is remote (from a Helm repo)
+        """
         print("== Helm Install ==")
         release_name = args.get("release_name")
-        chart_path   = args.get("chart_path")
-        namespace    = args.get("namespace")
-        version      = args.get("version")
-        extra_args   = args.get("extra_args") or []
-        remote_chart = bool(args.get("remote_chart", False))
-        repo         = args.get("repo")
-
-        if not release_name or not chart_path or not namespace:
-            raise ValueError("Helm.install requires release_name, chart_path and namespace")
+        chart_path = args.get("chart_path")
+        namespace = args.get("namespace")
+        version = args.get("version")
+        extra_args = args.get("extra_args")
+        remote_chart = args.get("remote_chart", False)
 
         if not remote_chart:
-            dep_cmd = f"helm dependency update {shlex.quote(chart_path)}"
-            dep = subprocess.run(dep_cmd, shell=True, capture_output=True, text=True)
-            if dep.returncode != 0:
-                print(dep.stdout); print(dep.stderr)
-                raise RuntimeError(f"helm dependency update failed for {chart_path}")
+            # Install dependencies for chart before installation
+            dependency_command = f"helm dependency update {chart_path}"
+            dependency_process = subprocess.Popen(
+                dependency_command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            dependency_output, dependency_error = dependency_process.communicate()
 
-        cmd = ["helm", "install", release_name, chart_path, "-n", namespace, "--create-namespace"]
+        command = f"helm install {release_name} {chart_path} -n {namespace} --create-namespace"
 
         if version:
-            cmd += ["--version", version]
-
-        if remote_chart and repo:
-            cmd += ["--repo", repo]
+            command += f" --version {version}"
 
         if extra_args:
-            cmd += list(extra_args)
+            command += " " + " ".join(extra_args)
 
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.stdout:
-            print(proc.stdout.strip())
-        if proc.returncode != 0:
-            print(proc.stderr.strip())
-            raise RuntimeError(f"helm install failed (rc={proc.returncode})")
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        output, error = process.communicate()
+
+        if error:
+            print(error.decode("utf-8"))
+        else:
+            print(output.decode("utf-8"))
 
     @staticmethod
     def uninstall(**args):
+        """Uninstall a helm chart
+
+        Args:
+            release_name (str): Name of the release
+            namespace (str): Namespace to uninstall the chart
+        """
         print("== Helm Uninstall ==")
         release_name = args.get("release_name")
-        namespace    = args.get("namespace")
-        if not release_name or not namespace:
-            raise ValueError("Helm.uninstall requires release_name and namespace")
+        namespace = args.get("namespace")
 
         if not Helm.exists_release(release_name, namespace):
             print(f"Release {release_name} does not exist. Skipping uninstall.")
             return
 
-        cmd = ["helm", "uninstall", release_name, "-n", namespace]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.stdout:
-            print(proc.stdout.strip())
-        if proc.returncode != 0:
-            print(proc.stderr.strip())
-            raise RuntimeError(f"helm uninstall failed (rc={proc.returncode})")
+        command = f"helm uninstall {release_name} -n {namespace}"
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        output, error = process.communicate()
+
+        if error:
+            print(error.decode("utf-8"))
+        else:
+            print(output.decode("utf-8"))
 
     @staticmethod
     def exists_release(release_name: str, namespace: str) -> bool:
-        proc = subprocess.run(["helm", "status", release_name, "-n", namespace],
-                              capture_output=True, text=True)
-        return proc.returncode == 0
+        """Check if a Helm release exists
+
+        Args:
+            release_name (str): Name of the release
+            namespace (str): Namespace to check
+
+        Returns:
+            bool: True if release exists
+        """
+        command = f"helm list -n {namespace}"
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        output, error = process.communicate()
+
+        if error:
+            print(error.decode("utf-8"))
+            return False
+        else:
+            return release_name in output.decode("utf-8")
+
     @staticmethod
     def assert_if_deployed(namespace: str):
         """Assert if all services in the application are deployed
@@ -158,7 +187,7 @@ class Helm:
 # Example usage
 if __name__ == "__main__":
     sn_configs = {
-        "release_name": "test-social-network",
+        "release_name": "social-network",
         "chart_path": "/home/oppertune/DeathStarBench/socialNetwork/helm-chart/socialnetwork",
         "namespace": "social-network",
     }
