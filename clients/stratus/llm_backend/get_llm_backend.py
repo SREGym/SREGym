@@ -121,7 +121,7 @@ class LiteLLMBackend:
                 # logger.info(f"llm response: {completion}")
                 return completion
             except HTTPError as e:
-                if e.response.status_code == 429:  # Rate-limiting error
+                if e.response.status_code == 429 or e.response.status_code == 502 or e.response.status_code == 400:  # Rate-limiting error
                     logger.warning(
                         f"Rate-limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                     )
