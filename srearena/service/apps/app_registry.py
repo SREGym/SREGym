@@ -60,12 +60,18 @@ class AppRegistry:
     
     def load_app_agnostic_information(self, app_name: str):
         """ Deploy the given app, try to find the necessary information to inject fault to the app."""
+        
+        # delete and reload the application 
+        app_instance = self.get_app_instance(app_name)
+        app_instance.delete()
+        app_instance.deploy()
+        
         app_metadata = self.get_app_metadata(app_name)
         if app_metadata.get("Agnostic Info Ready", False):
             print(f"App {app_name} has already loaded agnostic information.")
             return
         
-        print(f"Loading agnostic information for app {app_name}...")
+        print(f"== Loading agnostic information for app {app_name}... == ")
         
         self.kubectl = KubeCtl()
         namespace = app_metadata.get("Namespace")
@@ -91,8 +97,10 @@ class AppRegistry:
             
         
         
-        
+        app_instance.cleanup() # not sure
         app_metadata["Agnostic Info Ready"] = True
+        print(f"== Loading agnostic information for app {app_name} finished. == ")
+        
         
         
     def load_arbitrary_deployment_name(self, app_metadata, namespace):
