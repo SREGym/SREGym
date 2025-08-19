@@ -6,6 +6,7 @@ from srearena.service.apps.flight_ticket import FlightTicket
 from srearena.service.apps.hotel_reservation import HotelReservation
 from srearena.service.apps.social_network import SocialNetwork
 from srearena.service.helm import Helm
+from srearena.service.kubectl import KubeCtl
 
 # from srearena.service.apps.train_ticket import TrainTicket
 
@@ -50,6 +51,11 @@ class AppRegistry:
 
         return metadata
     
+    def dump_app_metadata(self, app_metadata, app_name: str):
+        config_file = self.get_app_config_file(app_name)
+        with open(config_file, "w") as file:
+            json.dump(app_metadata, file, indent=4)
+    
     
     def load_app_agnostic_information(self, app_name: str):
         """ Deploy the given app, try to find the necessary information to inject fault to the app."""
@@ -59,7 +65,40 @@ class AppRegistry:
             return
         
         print(f"Loading agnostic information for app {app_name}...")
+        
+        self.kubectl = KubeCtl()
+        namespace = app_metadata.get("Namespace")
+        if not namespace:
+            raise ValueError(f"Namespace not found in app metadata for app {app_name} You should specify it.")
+        
+        app_metadata["Agnostic Info"] = {}
+        
+        # arbitrarily find the first deployment in the namespace
+        # this is for problem: SPSN, ANEN, 
+        if app_metadata.get("Agnostic Info", {}).get("Arbitrary Deployment Name", None) is None:
+            self.load_arbitrary_deployment_name(app_metadata, namespace)
+            self.dump_app_metadata(app_metadata, app_name)
+        
+        # find two pods from different deployments has the same image and there entrypoint
+        # TODO: Not sure if the ENV is needed to overwrite,
+        # this is for WBU
+        if app_metadata.get("Agnostic Info", {}).get("For WBU", None) is None:
+            self.load_for_wbu(app_metadata, namespace)
+            self.dump_app_metadata(app_metadata, app_name)
+        
         app_metadata["Agnostic Info Ready"] = True
+        
+        
+    def load_arbitrary_deployment_name(self, app_metadata, namespace):
+        deployments = self.kubectl.get_deployments(namespace)
+        if not deployments:
+            raise ValueError(f"No deployments found in namespace {namespace} for app {app_name}. Your app should have at least one deployment.")        
+        deployment_name = deployments[0].metadata.name
+        app_metadata["Agnostic Info"]["Arbitrary Deployment Name"] = deployment_name
+        
+    def load_for_wbu(self, app_metadata, namespace):
+        pass
+    
         
 
 if __name__ == "__main__":
