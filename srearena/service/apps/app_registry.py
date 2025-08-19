@@ -1,4 +1,5 @@
 import json
+from sys import flags
 
 from srearena.paths import *
 from srearena.service.apps.astronomy_shop import AstronomyShop
@@ -82,9 +83,14 @@ class AppRegistry:
         # find two pods from different deployments has the same image and there entrypoint
         # TODO: Not sure if the ENV is needed to overwrite,
         # this is for WBU
-        if app_metadata.get("Agnostic Info", {}).get("For WBU", None) is None:
+        if app_metadata.get("Agnostic Info", {}).get("For WBU", None) is None or \
+           app_metadata.get("Agnostic Info", {}).get("For WBU", {}).get("Ready", False) is False:
             self.load_for_wbu(app_metadata, namespace)
+            app_metadata["Agnostic Info"]["For WBU"]["Ready"] = True # Enable crash recovery
             self.dump_app_metadata(app_metadata, app_name)
+            
+        
+        
         
         app_metadata["Agnostic Info Ready"] = True
         
@@ -97,9 +103,46 @@ class AppRegistry:
         app_metadata["Agnostic Info"]["Arbitrary Deployment Name"] = deployment_name
         
     def load_for_wbu(self, app_metadata, namespace):
-        pass
-    
+        deployment_list = self.kubectl.get_deployments(namespace)
+        for deployment1 in deployment_list:
+            for deployment2 in deployment_list:
+                if deployment1.metadata.name != deployment2.metadata.name:
+                    container1 = self.find_main_container(deployment1)
+                    container2 = self.find_main_container(deployment2)
+                    if container1.image == container2.image and container1 and container2:
+                        app_metadata["Agnostic Info"]["For WBU"] = {
+                            "From Deployment": deployment1.metadata.name,
+                            "To Deployment": deployment2.metadata.name,
+                            "From Container": container1.name,
+                            "To Container": container2.name,
+                            "From Entrypoint": container1.command,
+                            "To Entrypoint": container2.command,
+                        }
+                        return
+
+    # helper function to find the main container of a deployment
+    # Caution this practice try to be robust but still may introduce uncertainty.
+    def find_main_container(self, deployment):
         
+        # if one container is the only one, it could be the main container'
+        if len(deployment.spec.template.spec.containers) == 1:
+            return deployment.spec.template.spec.containers[0]
+        
+        # if there only one container with the key words, then assume it is the main container
+        candidate = None
+        only = False
+        for container in deployment.spec.template.spec.containers:
+            for keyword in ['app', 'main', 'primary', 'application']:
+                if keyword in container.name:
+                    candidate = container
+                    only = True
+                    break
+        if only:
+            return candidate
+        
+        return None
+        
+
 
 if __name__ == "__main__":
     app_registry = AppRegistry()
