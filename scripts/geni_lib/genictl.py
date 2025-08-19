@@ -169,6 +169,7 @@ def get_hardware_info():
         print("No hardware information available")
 
 
+# Gives error when hours too high -> Error: expiration increment is greater then the maximum number (7200) of minutes
 def renew_experiment(context, slice_name, site, hours):
     new_slice_expiration = datetime.datetime.now() + datetime.timedelta(hours=(hours + 1))
     new_sliver_expiration = datetime.datetime.now() + datetime.timedelta(hours=hours)
@@ -176,7 +177,14 @@ def renew_experiment(context, slice_name, site, hours):
         print(f"Renewing slice: {slice_name}")
         context.cf.renewSlice(context, slice_name, new_slice_expiration)
         print(f"Slice '{slice_name}' renewed")
+    except Exception as e:
+        if "Cannot shorten slice lifetime" in str(e):
+            print(f"Slice already has sufficient lifetime")
+        else:
+            print(f"Error: {e}")
+            return
 
+    try:
         aggregate = get_aggregate(site)
 
         print(f"Renewing sliver: {slice_name}")

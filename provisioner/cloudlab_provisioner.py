@@ -255,6 +255,9 @@ class CloudlabProvisioner:
             self.context.cf.renewSlice(self.context, slice_name, new_expiration)
             return True
         except Exception as e:
+            if "Cannot shorten slice lifetime" in str(e):
+                logger.info(f"Slice '{slice_name}' already has sufficient lifetime")
+                return True
             logger.error(f"Error: {e}")
             return False
 
