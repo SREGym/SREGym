@@ -154,6 +154,5 @@ class AppRegistry:
 
 if __name__ == "__main__":
     app_registry = AppRegistry()
-    for app_name in app_registry.get_app_names():
-        app_registry.load_app_agnostic_information(app_name)
+    app_registry.load_app_agnostic_information("Astronomy Shop")
         

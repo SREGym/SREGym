@@ -75,6 +75,10 @@ class KubeCtl:
     def get_deployment(self, name: str, namespace: str):
         """Fetch the deployment configuration."""
         return self.apps_v1_api.read_namespaced_deployment(name, namespace)
+    
+    def get_deployments(self, namespace: str):
+        """Fetch the deployment configuration."""
+        return self.apps_v1_api.list_namespaced_deployment(namespace)
 
     def get_namespace_deployment_status(self, namespace: str):
         """Return the deployment status of an app within a namespace."""
