@@ -2,6 +2,7 @@ import json
 import time
 import subprocess
 import os
+from textwrap import dedent
 
 #This script deploys a TIDB Cluster, configuring it to the FleetCast TiDB application.
 class TiDBClusterDeployer:
@@ -20,6 +21,11 @@ class TiDBClusterDeployer:
         self.operator_crd_url = self.metadata["Helm Operator Config"]["CRD"]
 
         self.operator_values_path = "../../../aiopslab-applications/FleetCast/satellite-app/values.yaml"
+
+        self.tidb_service = self.metadata.get("TiDB Service", "basic-tidb")
+        self.tidb_port = int(self.metadata.get("TiDB Port", 4000))
+        self.tidb_user = self.metadata.get("TiDB User", "root")
+
     def run_cmd(self, cmd):
         print(f"Running: {cmd}")
         subprocess.run(cmd, shell=True, check=True)
@@ -71,15 +77,79 @@ class TiDBClusterDeployer:
         print(f"Deploying TiDB cluster manifest from {self.cluster_config_url}...")
         self.run_cmd(f"kubectl apply -f {self.cluster_config_url} -n {self.namespace_tidb_cluster}")
 
+    def run_sql(self, sql_text: str):
+        ns = self.namespace_tidb_cluster
+        svc = f"{self.tidb_service}.{ns}.svc"
+        port = self.tidb_port
+        user = self.tidb_user
+
+    
+        self.run_cmd(
+            f"kubectl -n {ns} run mysql-client --image=mysql:8 --restart=Never "
+            f"--command -- sleep 3600 || true"
+        )
+        wait_cmd = f"kubectl -n {ns} wait --for=condition=Ready pod/mysql-client --timeout=90s"
+        self.run_cmd(wait_cmd)
+
+        heredoc = f"""kubectl -n {ns} exec -i mysql-client -- bash -lc "cat <<'SQL' | mysql -h {svc} -P {port} -u{user}
+    {sql_text}
+    SQL"
+    """
+        self.run_cmd(heredoc)
+
+        self.run_cmd(f"kubectl -n {ns} delete pod mysql-client --wait=false || true")
+
+
+    def init_schema_and_seed(self):
+        print("Initializing schema and seeding data in satellite_sim ...")
+        sql = """
+        CREATE DATABASE IF NOT EXISTS satellite_sim;
+        USE satellite_sim;
+
+        DROP TABLE IF EXISTS telemetry;
+        DROP TABLE IF EXISTS contact_windows;
+
+        CREATE TABLE contact_windows (
+          id BIGINT PRIMARY KEY AUTO_INCREMENT,
+          satellite_id VARCHAR(20),
+          ground_station_id VARCHAR(20),
+          start_time DATETIME,
+          end_time DATETIME,
+          timestamp DATETIME,
+          distance FLOAT,
+          datavolume INT,
+          priority INT,
+          assigned BOOLEAN DEFAULT FALSE,
+          KEY idx_active (assigned, end_time),
+          KEY idx_gs_sat (ground_station_id, satellite_id)
+        );
+
+        CREATE TABLE telemetry (
+          id BIGINT PRIMARY KEY AUTO_INCREMENT,
+          satellite_id VARCHAR(20),
+          ground_station_id VARCHAR(20),
+          timestamp DATETIME,
+          battery_level FLOAT,
+          temperature FLOAT,
+          position_lat FLOAT,
+          position_lon FLOAT,
+          status VARCHAR(20),
+          KEY idx_sat_time (satellite_id, timestamp),
+          KEY idx_gs_time  (ground_station_id, timestamp)
+        );
+
+        """
+        self.run_sql(dedent(sql).strip())
+
     def deploy_all(self):
         print(f"----------Starting deployment: {self.name}")
         self.create_namespace(self.namespace_tidb_cluster)
         self.install_local_path_provisioner()
-        self.install_crds()  
+        self.install_crds()
         self.install_operator_with_values()
-        self.wait_for_operator_ready()
         self.deploy_tidb_cluster()
-        print("-------------TiDB cluster deployment complete.")
+        self.init_schema_and_seed()
+        print("-------------TiDB cluster deployment complete (schema initialized & seeded).")
 
 
 if __name__ == "__main__":
