@@ -61,32 +61,10 @@ If you're running into issues, consider building a Docker image for your machine
 
 When using kind, each node pulls images from docker hub independently, which can easily hit the rate limitation. You can uncomment `containerdConfigPatches` in the corresponding kind config file to pull images from our exclusive image registry without rate limiting.
 
-### [Tips]
-If you are running SREArena using a proxy, beware of exporting the HTTP proxy as `172.17.0.1`. When creating the kind cluster, all the nodes in the cluster will inherit the proxy setting from the host environment and the Docker container. 
-
-The `172.17.0.1` address is used to communicate with the host machine. For more details, refer to the official guide: [Configure Kind to Use a Proxy](https://kind.sigs.k8s.io/docs/user/quick-start/#configure-kind-to-use-a-proxy).
-
-Additionally, Docker doesn't support SOCKS5 proxy directly. If you're using a SOCKS5 protocol to proxy, you may need to use [Privoxy](https://www.privoxy.org) to forward SOCKS5 to HTTP.
-
-If you're running VLLM and the LLM agent locally, Privoxy will by default proxy `localhost`, which will cause errors. To avoid this issue, you should set the following environment variable:
-
-```bash
-export no_proxy=localhost
-``` 
-
-After finishing cluster creation, proceed to the next "Update `config.yml`" step.
-
 ### b) Remote cluster
 SREArena supports any remote kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself. 
 
-We have some Ansible playbooks to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster, and then proceed to the next "Update `config.yml`" step.
-
-### Update `config.yml`
-```bash
-cd srearena
-cp config.yml.example config.yml
-```
-Update your `config.yml` so that `k8s_host` is the host name of the control plane node of your cluster. Update `k8s_user` to be your username on the control plane node. If you are using a kind cluster, your `k8s_host` should be `kind`. If you're running SREArena on cluster, your `k8s_host` should be `localhost`.
+We have some Ansible playbooks to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster.
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
@@ -102,7 +80,7 @@ SREArena can be used in the following ways:
 We have ported [the Stratus agent](https://anonymous.4open.science/r/stratus-agent/README.md) to SREArena as a demo agent.
 
 To run the benchmark with Stratus as the demo agent, uncomment line 43 in [`main.py`](https://github.com/xlab-uiuc/SREArena/blob/main/main.py#L43).
-It allows the benchmark to kicks start the agent when the problem setup is done.
+It allows the benchmark to kick start the agent when the problem setup is done.
 
 If you would like to run Stratus by itself, please take a look at [`driver.py`](https://github.com/xlab-uiuc/SREArena/blob/stratus_eval/clients/stratus/stratus_agent/driver/driver.py).
 
@@ -322,7 +300,6 @@ See a full example of a problem [here](/srearena/conductor/problems/target_port.
 <details>
   <summary>Utils</summary>
   <pre>
-  ├── config.yml - srearena configs
   ├── config.py - config parser
   ├── paths.py - paths and constants
   ├── session.py - srearena session manager
@@ -335,6 +312,18 @@ See a full example of a problem [here](/srearena/conductor/problems/target_port.
 
 <summary><code>cli.py</code>: A command line interface to interact with SREArena, e.g., used by human operators.</summary>
 
+### [Tips]
+If you are running SREArena using a proxy, beware of exporting the HTTP proxy as `172.17.0.1`. When creating the kind cluster, all the nodes in the cluster will inherit the proxy setting from the host environment and the Docker container. 
+
+The `172.17.0.1` address is used to communicate with the host machine. For more details, refer to the official guide: [Configure Kind to Use a Proxy](https://kind.sigs.k8s.io/docs/user/quick-start/#configure-kind-to-use-a-proxy).
+
+Additionally, Docker doesn't support SOCKS5 proxy directly. If you're using a SOCKS5 protocol to proxy, you may need to use [Privoxy](https://www.privoxy.org) to forward SOCKS5 to HTTP.
+
+If you're running VLLM and the LLM agent locally, Privoxy will by default proxy `localhost`, which will cause errors. To avoid this issue, you should set the following environment variable:
+
+```bash
+export no_proxy=localhost
+``` 
 
 <!-- <h2 id="📄how-to-cite">📄 How to Cite</h2>
 
