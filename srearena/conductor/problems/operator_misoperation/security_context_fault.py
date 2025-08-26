@@ -9,14 +9,14 @@ from typing import Any
 from srearena.conductor.evaluators.quantitative import *
 from srearena.conductor.tasks import *
 from srearena.generators.fault.inject_operator import K8SOperatorFaultInjector
-from srearena.service.apps.tidb_cluster_operator import TiDBCluster
+from srearena.service.apps.tidb_cluster_operator import TiDBClusterDeployer
 from srearena.session import SessionItem
 
 
 class K8SOperatorSecurityContextFaultBaseTask:
     def __init__(self):
         self.injector = K8SOperatorFaultInjector("tidb-cluster")
-        self.app = TiDBCluster()
+        self.app = TiDBClusterDeployer()
         self.faulty_cr = "tidbclusters"
 
     def inject_fault(self):
