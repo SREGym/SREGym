@@ -1,41 +1,72 @@
-import json
 import os
 import select
 import socket
 import subprocess
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
+from typing import List, Optional
 
 import pandas as pd
 import requests
 
-from srearena.observer import root_path
-import networkx as nx
-
 
 class TraceAPI:
-    def __init__(self, namespace: str):
-        self.port_forward_process = None
+    """
+    Jaeger HTTP API helper.
+
+    - For most apps:
+        * Prefer NodePort on svc/jaeger
+        * Otherwise port-forward svc/jaeger :16686
+        * Base URL: http://127.0.0.1:<port>
+
+    - For Astronomy Shop:
+        * Jaeger is exposed THROUGH the frontend proxy on 8080, under /jaeger
+        * Prefer NodePort on svc/frontend-proxy
+        * Otherwise port-forward svc/frontend-proxy :8080
+        * Base URL: http://127.0.0.1:<port>/jaeger
+    """
+
+    _instance_lock: threading.Lock
+
+    def __init__(self, namespace: str, prefer_nodeport: bool = True, pf_ready_sleep: float = 2.0):
         self.namespace = namespace
+        self.prefer_nodeport = prefer_nodeport
+        self.pf_ready_sleep = pf_ready_sleep
+
+        self.port_forward_process: Optional[subprocess.Popen] = None
+        self.local_port: Optional[int] = None
         self.stop_event = threading.Event()
-        self.output_threads = []
+        self.output_threads: List[threading.Thread] = []
+        self._instance_lock = threading.Lock()
 
-        if self.namespace == "astronomy-shop":
-            # No NodePort in astronomy shop
-            self.base_url = "http://localhost:16686/jaeger/ui"
-            self.start_port_forward()
+        # Decide service/port/prefix based on namespace
+        self._is_astronomy = self.namespace == "astronomy-shop"
+        self._svc_name = "frontend-proxy" if self._is_astronomy else "jaeger"
+        self._remote_port = "8080" if self._is_astronomy else "16686"
+        self._url_prefix = "/jaeger" if self._is_astronomy else ""
+
+        # Choose access path: NodePort (if available) else port-forward
+        node_port = None
+        if self.prefer_nodeport:
+            node_port = self.get_nodeport(self._svc_name, self.namespace)
+
+        if node_port:
+            # Use NodePort directly
+            self.base_url = f"http://localhost:{node_port}{self._url_prefix}"
+            self.using_port_forward = False
+            self._export_env(port=node_port)  # <<< ensure env set for NodePort (incl. astronomy-shop)
         else:
-            # Other namespaces may expose a NodePort
-            node_port = self.get_nodeport("jaeger", namespace)
-            if node_port:
-                self.base_url = f"http://localhost:{node_port}"
-            else:
-                self.base_url = "http://localhost:16686"
-                self.start_port_forward()
+            # Fall back to port-forward on a free local port
+            self.using_port_forward = True
+            self.start_port_forward()  # sets base_url and env
 
-    def get_nodeport(self, service_name, namespace):
-        """Fetch the NodePort for the given service."""
+    # ------------------------
+    # Cluster discovery helpers
+    # ------------------------
+
+    def get_nodeport(self, service_name: str, namespace: str) -> Optional[str]:
+        """Return NodePort string if present; otherwise None."""
         try:
             result = subprocess.check_output(
                 [
@@ -49,37 +80,19 @@ class TraceAPI:
                     "jsonpath={.spec.ports[0].nodePort}",
                 ],
                 text=True,
-            )
-            nodeport = result.strip()
-            print(f"NodePort for service {service_name}: {nodeport}")
-            return nodeport
+            ).strip()
+            if result:
+                print(f"NodePort for service {service_name}: {result}")
+                return result
+            return None
         except subprocess.CalledProcessError as e:
-            print(f"Error getting NodePort: {e.output}")
+            msg = (e.output or "").strip()
+            if msg:
+                print(f"Error getting NodePort: {msg}")
             return None
 
-    def print_output(self, stream):
-        """Thread function to print output from a subprocess stream non-blockingly."""
-        while not self.stop_event.is_set():
-            # Check if there is content to read
-            ready, _, _ = select.select([stream], [], [], 0.1)  # 0.1-second timeout
-            if ready:
-                try:
-                    line = stream.readline()
-                    if line:
-                        print(line, end="")
-                    else:
-                        break  # Exit if no more data and process ended
-                except ValueError as e:
-                    print("Stream closed:", e)
-                    break
-            if self.port_forward_process.poll() is not None:
-                break
-
-    def is_port_in_use(self, port):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            return s.connect_ex(("127.0.0.1", port)) == 0
-
-    def get_jaeger_pod_name(self):
+    def get_jaeger_pod_name(self) -> str:
+        """Resolve the Jaeger pod name (if you ever need pod forwarding)."""
         try:
             result = subprocess.check_output(
                 [
@@ -95,69 +108,112 @@ class TraceAPI:
                 ],
                 text=True,
             )
-            return result.strip()
+            name = result.strip()
+            if not name:
+                raise RuntimeError("No Jaeger pods found")
+            return name
         except subprocess.CalledProcessError as e:
-            print("Error getting Jaeger pod name:", e)
-            raise
+            raise RuntimeError(f"Error getting Jaeger pod name: {e.output}") from e
+
+    # ------------------------
+    # Port-forward management
+    # ------------------------
+
+    @staticmethod
+    def _pick_free_port() -> int:
+        """Pick a free local TCP port."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", 0))
+            return s.getsockname()[1]
+
+    def _build_pf_cmd(self, local_port: int) -> list:
+        """
+        Build a kubectl port-forward command that binds only to 127.0.0.1.
+        """
+        target = f"svc/{self._svc_name}"
+        return [
+            "kubectl",
+            "-n",
+            self.namespace,
+            "port-forward",
+            target,
+            f"{local_port}:{self._remote_port}",
+            "--address",
+            "127.0.0.1",
+        ]
+
+    def _print_output(self, stream):
+        """Non-blocking reader for subprocess stdout/stderr."""
+        while not self.stop_event.is_set():
+            if self.port_forward_process and self.port_forward_process.poll() is not None:
+                break
+            try:
+                ready, _, _ = select.select([stream], [], [], 0.1)
+            except (ValueError, OSError):
+                break
+            if ready:
+                line = stream.readline()
+                if line:
+                    print(line, end="")
+                else:
+                    break
 
     def start_port_forward(self):
-        """Starts kubectl port-forward command to access Jaeger service or pod."""
-        for attempt in range(3):
-            if self.is_port_in_use(16686):
-                print(f"Port 16686 is already in use. Attempt {attempt + 1} of 3. Retrying in 3 seconds...")
-                time.sleep(3)
-                continue
+        """Start kubectl port-forward exactly once; idempotent."""
+        with self._instance_lock:
+            if self.port_forward_process and self.port_forward_process.poll() is None:
+                return
 
-            # Use pod port-forwarding for astronomy-shop only
-            if self.namespace == "astronomy-shop":
-                pod_name = self.get_jaeger_pod_name()
-                command = f"kubectl port-forward pod/{pod_name} 16686:16686 -n {self.namespace}"
-            else:
-                command = f"kubectl port-forward svc/jaeger 16686:16686 -n {self.namespace}"
+            self.local_port = self._pick_free_port()
+            cmd = self._build_pf_cmd(self.local_port)
 
-            print("Starting port-forward with command:", command)
+            print("Starting port-forward with command:", " ".join(cmd))
             self.port_forward_process = subprocess.Popen(
-                command,
-                shell=True,
+                cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
             )
 
-            thread_out = threading.Thread(target=self.print_output, args=(self.port_forward_process.stdout,))
-            thread_err = threading.Thread(target=self.print_output, args=(self.port_forward_process.stderr,))
-            thread_out.start()
-            thread_err.start()
+            if self.port_forward_process.stdout:
+                t_out = threading.Thread(
+                    target=self._print_output, args=(self.port_forward_process.stdout,), daemon=True
+                )
+                t_out.start()
+                self.output_threads.append(t_out)
+            if self.port_forward_process.stderr:
+                t_err = threading.Thread(
+                    target=self._print_output, args=(self.port_forward_process.stderr,), daemon=True
+                )
+                t_err.start()
+                self.output_threads.append(t_err)
 
-            time.sleep(3)  # Let port-forward initialize
+        # Let kubectl set up the tunnel
+        time.sleep(self.pf_ready_sleep)
 
-            if self.port_forward_process.poll() is None:
-                print("Port forwarding established successfully.")
-                break
-            else:
-                print("Port forwarding failed. Retrying...")
+        if self.port_forward_process and self.port_forward_process.poll() is None:
+            print("Port forwarding established successfully.")
+            self.base_url = f"http://127.0.0.1:{self.local_port}{self._url_prefix}"
+            self._export_env(port=self.local_port)  # <<< ensure env set for PF case (incl. astronomy-shop)
         else:
-            print("Failed to establish port forwarding after 3 attempts.")
-
-        # TODO: modify this command for other microservices
-        # command = "kubectl port-forward svc/jaeger 16686:16686 -n hotel-reservation"
-        # self.port_forward_process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
-        # thread_out = threading.Thread(target=self.print_output, args=(self.port_forward_process.stdout,))
-        # thread_err = threading.Thread(target=self.print_output, args=(self.port_forward_process.stderr,))
-        # thread_out.start()
-        # thread_err.start()
-        # # self.output_threads.extend([thread_out, thread_err])
-        # time.sleep(3)  # Wait a bit for the port-forward to establish
+            raise RuntimeError("Port forwarding failed to start")
 
     def stop_port_forward(self):
-        if self.port_forward_process:
-            self.stop_event.set()  # Signal threads to exit
+        """Terminate kubectl and close streams."""
+        with self._instance_lock:
+            if not self.port_forward_process:
+                return
+
+            self.stop_event.set()
             try:
                 self.port_forward_process.terminate()
                 self.port_forward_process.wait(timeout=5)
             except Exception as e:
                 print("Error terminating port-forward process:", e)
+                try:
+                    self.port_forward_process.kill()
+                except Exception:
+                    pass
 
             try:
                 if self.port_forward_process.stdout:
@@ -166,190 +222,140 @@ class TraceAPI:
                     self.port_forward_process.stderr.close()
             except Exception as e:
                 print("Error closing process streams:", e)
+
             self.port_forward_process = None
+            self.local_port = None
+
+        for t in self.output_threads:
+            t.join(timeout=2)
+        self.output_threads.clear()
+        print("Port-forward stopped.")
 
     def cleanup(self):
-        self.stop_port_forward()
-        for thread in self.output_threads:
-            thread.join(timeout=5)
-            if thread.is_alive():
-                print(f"Thread {thread.name} could not be joined and may need to be stopped forcefully.")
-        self.output_threads.clear()
+        """Public cleanup (safe to call multiple times)."""
+        if self.using_port_forward:
+            self.stop_port_forward()
         print("Cleanup completed.")
 
-    def get_services(self) -> list:
-        """Fetch a list of services from the tracing API."""
-        url = f"{self.base_url}/api/services"
-        headers = {"Accept": "application/json"} if self.namespace == "astronomy-shop" else {}
+    # ------------------------
+    # Environment export
+    # ------------------------
 
+    def _export_env(self, port: int):
+        """
+        Standardize env for downstream tools:
+          - JAEGER_PORT: the local port to reach Jaeger (NodePort or PF)
+          - JAEGER_BASE_URL: full base URL (includes prefix for astronomy-shop)
+        """
+        os.environ["JAEGER_PORT"] = str(port)
+        os.environ["JAEGER_BASE_URL"] = self.base_url
+
+    # ------------------------
+    # Jaeger API wrappers
+    # ------------------------
+
+    @staticmethod
+    def _api_headers():
+        # Some proxies are picky; be explicit about JSON.
+        return {"Accept": "application/json"}
+
+    def get_services(self) -> List[str]:
+        """Fetch list of service names known to Jaeger."""
+        url = f"{self.base_url}/api/services"
         try:
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-            return response.json().get("data", [])
+            resp = requests.get(url, headers=self._api_headers(), timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            return data.get("data", []) or []
         except Exception as e:
             print(f"Failed to get services: {e}")
             return []
 
     def get_traces(
-        self,
-        service_name: str,
-        start_time: datetime,
-        end_time: datetime,
-        limit: int = None,
+        self, service_name: str, start_time: datetime, end_time: datetime, limit: Optional[int] = None
     ) -> list:
         """
-        Fetch traces for a specific service between start_time and end_time.
-        If limit is not specified, all available traces are fetched.
+        Fetch traces for a service between start_time and end_time.
+        Jaeger HTTP API supports lookback + optional limit.
         """
-        lookback = int((datetime.now() - start_time).total_seconds())
-        url = f"{self.base_url}/api/traces?service={service_name}&lookback={lookback}s"
+        lookback_sec = int((datetime.now() - start_time).total_seconds())
+        url = f"{self.base_url}/api/traces?service={service_name}&lookback={lookback_sec}s"
         if limit is not None:
             url += f"&limit={limit}"
 
-        headers = {"Accept": "application/json"} if self.namespace == "astronomy-shop" else {}
         try:
-            response = requests.get(url, headers=headers)
-            response.raise_for_status()
-            return response.json().get("data", [])
-        except requests.RequestException as e:
+            resp = requests.get(url, headers=self._api_headers(), timeout=15)
+            resp.raise_for_status()
+            return resp.json().get("data", []) or []
+        except Exception as e:
             print(f"Failed to get traces for {service_name}: {e}")
             return []
 
-    def extract_traces(self, start_time: datetime, end_time: datetime, limit: int = None) -> list:
+    def extract_traces(self, start_time: datetime, end_time: datetime, limit: Optional[int] = None) -> list:
         """
-        Extract traces for all services between start_time and end_time.
+        Extract traces across all services (except utility ones) in the time range.
+        Automatically calls cleanup() when done.
         """
-        services = self.get_services()
-        print(f"services: {services}")
-        all_traces = []
-        # Check if services is None - sometimes Jaeger's sampling
-        # will lead the number of traces very small or even none
-        if services is None:
-            print("No services found.")
+        try:
+            services = self.get_services()
+            print(f"services: {services}")
+            all_traces = []
+            if not services:
+                print("No services found.")
+                return all_traces
+
+            for svc in services:
+                if svc == "jaeger-all-in-one":
+                    continue
+                traces = self.get_traces(svc, start_time, end_time, limit=limit)
+                for trace in traces:
+                    # Normalize serviceName into spans for easier downstream processing
+                    proc_map = trace.get("processes", {})
+                    for span in trace.get("spans", []):
+                        span["serviceName"] = proc_map.get(span.get("processID"), {}).get("serviceName", "unknown")
+                    all_traces.append(trace)
             return all_traces
-        for service in services:
-            if service == "jaeger-all-in-one":  # Skip utility service
-                continue
-            traces = self.get_traces(
-                service_name=service,
-                start_time=start_time,
-                end_time=end_time,
-                limit=limit,
-            )
-            for trace in traces:
-                for span in trace["spans"]:
-                    span["serviceName"] = trace["processes"][span["processID"]]["serviceName"]
-                all_traces.append(trace)  # Collect the trace with service name included
-        self.cleanup()
-        print("Cleanup completed.")
-        # print(f"all_traces: {all_traces}")
-        return all_traces
+        finally:
+            self.cleanup()
 
-    def process_traces(self, traces) -> pd.DataFrame:
-        """Process raw traces data into a structured DataFrame."""
-        trace_id_list = []
-        span_id_list = []
-        service_name_list = []
-        operation_name_list = []
-        start_time_list = []
-        duration_list = []
-        parent_span_list = []
-        error_list = []
-        response_list = []
-
+    def process_traces(self, traces: list) -> pd.DataFrame:
+        """Flatten raw Jaeger traces into a DataFrame."""
+        rows = []
         for trace in traces:
-            trace_id = trace["traceID"]
-            for span in trace["spans"]:
-                trace_id_list.append(trace_id)
-                span_id_list.append(span["spanID"])
+            tid = trace.get("traceID")
+            for span in trace.get("spans", []):
                 parent_span = "ROOT"
-                if "references" in span:
-                    for ref in span["references"]:
-                        if ref["refType"] == "CHILD_OF":
-                            parent_span = ref["spanID"]
-                            break
-                parent_span_list.append(parent_span)
-
-                service_name_list.append(span["serviceName"])  # Use the correct service name from the span
-                operation_name_list.append(span["operationName"])
-                start_time_list.append(span["startTime"])
-                duration_list.append(span["duration"])
+                for ref in span.get("references", []):
+                    if ref.get("refType") == "CHILD_OF":
+                        parent_span = ref.get("spanID")
+                        break
 
                 has_error = False
                 response = "Unknown"
                 for tag in span.get("tags", []):
-                    if tag["key"] == "error" and tag["value"] == True:
+                    if tag.get("key") == "error" and bool(tag.get("value")):
                         has_error = True
-                    if tag["key"] == "http.status_code" or tag["key"] == "response_class":
-                        response = tag["value"]
-                error_list.append(has_error)
-                response_list.append(response)
+                    if tag.get("key") in ("http.status_code", "response_class"):
+                        response = tag.get("value")
 
-        df = pd.DataFrame(
-            {
-                "trace_id": trace_id_list,
-                "span_id": span_id_list,
-                "parent_span": parent_span_list,
-                "service_name": service_name_list,
-                "operation_name": operation_name_list,
-                "start_time": start_time_list,
-                "duration": duration_list,
-                "has_error": error_list,
-                "response": response_list,
-            }
-        )
+                rows.append(
+                    {
+                        "trace_id": tid,
+                        "span_id": span.get("spanID"),
+                        "parent_span": parent_span,
+                        "service_name": span.get("serviceName"),
+                        "operation_name": span.get("operationName"),
+                        "start_time": span.get("startTime"),
+                        "duration": span.get("duration"),
+                        "has_error": has_error,
+                        "response": response,
+                    }
+                )
 
-        self.construct_topology_graph(df)
+        return pd.DataFrame(rows)
 
-        return df
-
-    def construct_topology_graph(self, df):
-        try:
-            span_to_service = dict(zip(df["span_id"], df["service_name"]))
-
-            edges = []
-
-            for _, row in df.iterrows():
-                parent_span = row["parent_span"]
-                child_service = row["service_name"]
-
-                if parent_span in span_to_service:
-                    parent_service = span_to_service[parent_span]
-                    
-                    if parent_service != child_service:
-                        edges.append((parent_service, child_service))
-
-            G = nx.DiGraph()
-            for parent, child in edges:
-                if not G.has_edge(parent, child):
-                    G.add_edge(parent, child, weight=1)
-
-            self.topology_graph = G
-
-        except Exception as e:
-            print(e)
-            return
-        
-    def save_graph(self, path):
-        os.makedirs(path, exist_ok=True)
-        file_path = os.path.join(path, f"{self.namespace}.csv")
-        edges_df = nx.to_pandas_edgelist(self.topology_graph)
-        edges_df.to_csv(file_path, index=False)
-    
-    def save_traces(self, df, path) -> str:
+    def save_traces(self, df: pd.DataFrame, path: str) -> str:
         os.makedirs(path, exist_ok=True)
         file_path = os.path.join(path, f"traces_{int(time.time())}.csv")
         df.to_csv(file_path, index=False)
-        self.cleanup()  # Stop port-forwarding after traces are exported
         return f"Traces data exported to: {file_path}"
-    
-if __name__ == "__main__":
-    tracer = TraceAPI(namespace="test-social-network")
-    end_time = datetime.now()
-    start_time = end_time - timedelta(minutes=30)  # Example time window
-    traces = tracer.extract_traces(start_time, end_time)
-    df_traces = tracer.process_traces(traces)
-    save_path = root_path / "trace_output"
-    tracer.save_traces(df_traces, save_path)
-    save_path_graph = root_path / "topology_graph"
-    tracer.save_graph(save_path_graph)
