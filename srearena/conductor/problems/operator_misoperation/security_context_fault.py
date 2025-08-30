@@ -20,7 +20,7 @@ from srearena.utils.decorators import mark_fault_injected
 class K8SOperatorSecurityContextFault(Problem):
     def __init__(self, faulty_service="tidb-app"):
         app = FleetCast()
-        super().__init__(app=app, namespace=app.namespace)
+        super().__init__(app=app, namespace='tidb-cluster')
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
         # === Attach evaluation oracles ===
