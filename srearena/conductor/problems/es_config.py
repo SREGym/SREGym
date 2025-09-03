@@ -18,7 +18,6 @@ class MisconfigAppEsSearch(Problem):
         self.namespace = self.app.namespace
         self.faulty_service = "geo"
         super().__init__(app=self.app, namespace=self.app.namespace)
-        # === Attach evaluation oracles ===
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 
         self.app.create_workload()
