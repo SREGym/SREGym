@@ -8,29 +8,34 @@ from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.service.apps.social_network import SocialNetwork
 from srearena.service.kubectl import KubeCtl
+from srearena.service.composite_app import CompositeApp
 from srearena.utils.decorators import mark_fault_injected
 
 
-class MultipleIndependenetFailures(Problem):
+class MultipleIndependentFailures(Problem):
     def __init__(self, problems: list[Problem]):
-        
+        self.problems = problems
+        apps = [p.app for p in problems]
+        self.app = CompositeApp(apps)
+        self.namespaces = [p.namespace for p in problems]
 
-class Problem(ABC):
-    def __init__(self, app, namespace: str):
-        self.app = app
-        self.namespace = namespace
-        self.fault_injected = False
-        self.results = {}
-
-        # Optional: attach oracles in subclass
-        self.localization_oracle = None
-        self.mitigation_oracle = None
-
-    @abstractmethod
+    @mark_fault_injected
     def inject_fault(self):
-        pass
+        print("== Fault Injection ==")
+        for p in self.problems:
+            p.inject_fault()
+            time.sleep(2)
+        self.faults_str = " | ".join([f"{p.__name__}" for p in self.problems])
+        print(
+            f"Injecting Fault: Multiple faults from included problems: [{self.faults_str}]| Namespace: {self.namespaces}\n"
+        )
 
-    @abstractmethod
+    @mark_fault_injected
     def recover_fault(self):
-        pass
-        
+        print("== Fault Recovery ==")
+        for p in self.problems:
+            p.recover_fault()
+            time.sleep(2)
+        print(
+            f"Recovering Fault: Multiple faults from included problems: [{self.faults_str}]| Namespace: {self.namespaces}\n"
+        )
