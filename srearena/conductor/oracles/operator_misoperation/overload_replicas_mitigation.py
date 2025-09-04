@@ -3,7 +3,7 @@ import yaml
 import tempfile
 from srearena.conductor.oracles.base import Oracle
 
-class NonExistentStorageMitigationOracle(Oracle):
+class OverloadReplicasMitigation(Oracle):
     def __init__(self, problem, deployment_name: str):
         super().__init__(problem)
         self.deployment_name = deployment_name
@@ -54,9 +54,10 @@ class NonExistentStorageMitigationOracle(Oracle):
               )
         deployment = yaml.safe_load(output)
         pd = deployment["spec"].get("pd")
-        storage = deployment["tidb"].get("podSecurity")
-        if (storage == "ThisIsAStorageClass"):
+        replicas = deployment["tidb"].get("replicas")
+        if (replicas == 100000):
             return {"success": False}
+        return {"success": True}
 
 
        
