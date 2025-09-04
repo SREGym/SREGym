@@ -184,7 +184,7 @@ class K8SOperatorFaultInjector(FaultInjector):
                     "replicas": 2,
                     "service": {"type": "ClusterIP"},
                     "config": {},
-                    "statefulSetUpdateStrategy": "SomeStrategyForUpdata",  # invalid update strategy
+                    "statefulSetUpdateStrategy": "SomeStrategyForUpdate",  # invalid update strategy
                 },
             },
         }

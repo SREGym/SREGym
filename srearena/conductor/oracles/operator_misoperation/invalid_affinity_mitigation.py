@@ -50,15 +50,26 @@ class PodReadinessCheck(Oracle):
 
     def getTheValue(self) -> dict:
         output = self.kubectl.exec_command(
-               f"kubectl get deployment {self.deployment_name} -n {self.namespace} -o yaml"
-              )
-        deployment = yaml.safe_load(output)
-        pd = deployment["spec"].get("pd")
-        storage = deployment["pd"].get("storageClassName")
-        if (storage == "ThisIsAStorageClass"):
-            return {"success": False}
-        
-        return {"success": True}
+            f"kubectl get tidbcluster basic -n {self.namespace} -o json"
+        )
+
+        obj = json.loads(output)
+        tolerations = (
+            obj.get("spec", {})
+            .get("tidb", {})
+            .get("tolerations", []) or []
+        )
+
+        effects = []
+        for tol in tolerations:
+            if isinstance(tol, dict):
+                effects.append(tol.get("effect"))
+
+        if "TAKE_SOME_EFFECT" in effects:
+            return {"success": False, "effects": effects}
+
+        return {"success": True, "effects": effects}
+
 
 
        

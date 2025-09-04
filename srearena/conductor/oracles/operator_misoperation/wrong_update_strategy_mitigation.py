@@ -3,7 +3,7 @@ import yaml
 import tempfile
 from srearena.conductor.oracles.base import Oracle
 
-class PodReadinessCheck(Oracle):
+class OverloadReplicasMitigation(Oracle):
     def __init__(self, problem, deployment_name: str):
         super().__init__(problem)
         self.deployment_name = deployment_name
@@ -53,13 +53,10 @@ class PodReadinessCheck(Oracle):
                f"kubectl get deployment {self.deployment_name} -n {self.namespace} -o yaml"
               )
         deployment = yaml.safe_load(output)
-        pd = deployment["spec"].get("pd")
-        storage = deployment["pd"].get("storageClassName")
-        if (storage == "ThisIsAStorageClass"):
+        statefulUpdateStrategy = deployment.get("spec", {}).get("tidb", {}).get("statefulSetUpdateStrategy")
+        if (statefulUpdateStrategy == "SomeStrategyForUpdate"):
             return {"success": False}
-        
         return {"success": True}
-
 
        
 
