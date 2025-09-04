@@ -3,14 +3,14 @@ import yaml
 import tempfile
 from srearena.conductor.oracles.base import Oracle
 
-class PodReadinessCheck(Oracle):
+class NonExistentStorageMitigationOracle(Oracle):
     def __init__(self, problem, deployment_name: str):
         super().__init__(problem)
         self.deployment_name = deployment_name
         self.namespace = problem.namespace
         self.kubectl = problem.kubectl
 
-    def evaluate(self) -> dict:
+    def evaluatePods(self) -> dict:
         print("== Evaluating pod readiness ==")
         try:
             output = self.kubectl.exec_command(
@@ -54,7 +54,7 @@ class PodReadinessCheck(Oracle):
               )
         deployment = yaml.safe_load(output)
         pd = deployment["spec"].get("pd")
-        storage = deployment["spec"].get("storageClassName")
+        storage = deployment["tidb"].get("podSecurity")
         if (storage == "ThisIsAStorageClass"):
             return {"success": False}
 
