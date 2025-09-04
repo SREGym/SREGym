@@ -3,7 +3,7 @@ import yaml
 import tempfile
 from srearena.conductor.oracles.base import Oracle
 
-class InvalidAffinityMitigationOracle(Oracle):
+class SecurityContextMitigationOracle(Oracle):
     def __init__(self, problem, deployment_name: str):
         super().__init__(problem)
         self.deployment_name = deployment_name
@@ -50,27 +50,18 @@ class InvalidAffinityMitigationOracle(Oracle):
 
     def getTheValue(self) -> dict:
         output = self.kubectl.exec_command(
-            f"kubectl get tidbcluster basic -n {self.namespace} -o json"
+               f"kubectl get deployment {self.deployment_name} -n {self.namespace} -o yaml"
+              )
+        deployment = yaml.safe_load(output)
+        run_as_user = (
+            deployment.get("spec", {})
+               .get("tidb", {})
+               .get("podSecurityContext", {})
+               .get("runAsUser")
         )
-
-        obj = json.loads(output)
-        tolerations = (
-            obj.get("spec", {})
-            .get("tidb", {})
-            .get("tolerations", []) or []
-        )
-
-        effects = []
-        for tol in tolerations:
-            if isinstance(tol, dict):
-                effects.append(tol.get("effect"))
-
-        if "TAKE_SOME_EFFECT" in effects:
-            return {"success": False, "effects": effects}
-
-        return {"success": True, "effects": effects}
-
-
+        if run_as_user == -1:
+            return {"success": False, "runAsUser": run_as_user}
+        return {"success": True, "runAsUser": run_as_user}
 
        
 

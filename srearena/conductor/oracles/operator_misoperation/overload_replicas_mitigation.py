@@ -3,7 +3,7 @@ import yaml
 import tempfile
 from srearena.conductor.oracles.base import Oracle
 
-class OverloadReplicasMitigation(Oracle):
+class OverloadReplicasMitigationOracle(Oracle):
     def __init__(self, problem, deployment_name: str):
         super().__init__(problem)
         self.deployment_name = deployment_name
