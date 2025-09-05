@@ -104,7 +104,8 @@ class HotelReservation(Application):
         time.sleep(5)
 
         if hasattr(self, "wrk"):
-            self.wrk.stop()
+            # self.wrk.stop()
+            self.kubectl.delete_job(label="job=workload")
 
     def _remove_pv_finalizers(self, pv_name: str):
         """Remove finalizers from the PersistentVolume to prevent it from being stuck in a 'Terminating' state."""

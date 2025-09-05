@@ -4,6 +4,7 @@ import time
 from srearena.conductor.oracles.detection import DetectionOracle
 from srearena.conductor.problems.registry import ProblemRegistry
 from srearena.service.apps.app_registry import AppRegistry
+from srearena.service.khaos import KhaosController
 from srearena.service.kubectl import KubeCtl
 from srearena.service.telemetry.prometheus import Prometheus
 
@@ -17,7 +18,10 @@ class Conductor:
         self.apps = AppRegistry()
         self.agent_name = None
 
-        # runtime state
+        self.khaos = KhaosController(self.kubectl)
+
+        self.problem = None
+        self.detection_oracle = None
         self.problem_id = None
         self.problem = None
         self.app = None
@@ -145,6 +149,9 @@ class Conductor:
             "]'"
         )
         self.kubectl.wait_for_ready("kube-system")
+
+        print("Deploying Khaos DaemonSet...")
+        self.khaos.ensure_deployed()
 
         print("Setting up OpenEBS…")
         self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")

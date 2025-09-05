@@ -77,7 +77,8 @@ class SocialNetwork(Application):
         Helm.uninstall(**self.helm_configs)
 
         if hasattr(self, "wrk"):
-            self.wrk.stop()
+            # self.wrk.stop()
+            self.kubectl.delete_job(label="job=workload")
         self.kubectl.delete_namespace(self.namespace)
 
     def create_workload(
