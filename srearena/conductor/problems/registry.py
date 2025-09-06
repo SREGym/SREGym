@@ -351,7 +351,7 @@ class ProblemRegistry:
                     ValkeyMemoryDisruption,  # AstroShop
                     IncorrectPortAssignment,  # AstroShop
                     IncorrectImage,  # AstroShop
-                    MissingService(app_name="astronomy_shop", faulty_service="ad")
+                    MissingService(app_name="astronomy_shop", faulty_service="ad"),
                     AdServiceFailure,
                     AdServiceHighCpu,
                     AdServiceManualGc,
