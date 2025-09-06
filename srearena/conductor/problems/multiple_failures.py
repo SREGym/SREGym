@@ -13,7 +13,6 @@ from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
 
 
-# TODO: Need to implement all corresponding oracle wrappers
 class MultipleIndependentFailures(Problem):
     def __init__(self, problems: list[Problem]):
         self.problems = problems
