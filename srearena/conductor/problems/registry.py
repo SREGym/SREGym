@@ -28,6 +28,7 @@ from srearena.conductor.problems.loadgenerator_flood_homepage import LoadGenerat
 from srearena.conductor.problems.memory_stress import ChaosMeshMemoryStress
 from srearena.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from srearena.conductor.problems.missing_service import MissingService
+from srearena.conductor.problems.multiple_failures import MultipleIndependentFailures
 from srearena.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from srearena.conductor.problems.network_delay import ChaosMeshNetworkDelay
 from srearena.conductor.problems.network_loss import ChaosMeshNetworkLoss
@@ -47,6 +48,7 @@ from srearena.conductor.problems.recommendation_service_cache_failure import Rec
 from srearena.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
 from srearena.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from srearena.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
+from srearena.conductor.problems.rpc_retry_storm import RPCRetryStorm
 from srearena.conductor.problems.scale_pod import ScalePodSocialNet
 from srearena.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from srearena.conductor.problems.sidecar_port_conflict import SidecarPortConflict
@@ -64,6 +66,7 @@ from srearena.conductor.problems.wrong_service_selector import WrongServiceSelec
 from srearena.conductor.problems.missing_env_variable import MissingEnvVariable
 from srearena.conductor.problems.rpc_retry_storm import RPCRetryStorm
 from srearena.service.kubectl import KubeCtl
+
 
 class ProblemRegistry:
     def __init__(self):
@@ -241,6 +244,13 @@ class ProblemRegistry:
             # "operator_wrong_update_strategy-detection-1": K8SOperatorWrongUpdateStrategyDetection,
             # "operator_wrong_update_strategy-localization-1": K8SOperatorWrongUpdateStrategyLocalization,
             "rpc_retry_storm": RPCRetryStorm,
+            "social_net_hotel_res_astro_shop_concurrent_failures": lambda: MultipleIndependentFailures(
+                problems=[
+                    K8STargetPortMisconfig(faulty_service="user-service"),
+                    MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+                    WrongServiceSelector(),
+                ]
+            ),
         }
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = ["rpc_retry_storm"]
@@ -248,11 +258,11 @@ class ProblemRegistry:
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
             raise ValueError(f"Problem ID {problem_id} not found in registry.")
-        
+
         is_emulated_cluster = self.kubectl.is_emulated_cluster()
         if is_emulated_cluster and problem_id in self.non_emulated_cluster_problems:
             raise RuntimeError(f"Problem ID {problem_id} is not supported in emulated clusters.")
-        
+
         return self.PROBLEM_REGISTRY.get(problem_id)()
 
     def get_problem(self, problem_id: str):
