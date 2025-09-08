@@ -109,6 +109,15 @@ There are at most 4 phases in each problem of SREArena:
 
    **Expected submission**: empty submission to indicate that the agent is satisfied with the cluster.
 
+To configure what tasks you want the conductor to run on a particular problem, edit its entry (identified by problem_id) in [`tasklist.yml`](./srearena/conductor/tasklist.yml). Specify any task(s) of `detection`, `localization` or `mitigation` (in this order) to tell the conductor to run them. `noop` is automatically assumed to be the starting stage of a problem. If there is no entry for a problem, the conductor will assume that all tasks are to be run for that one. `localization` and `mitigation` may be skipped if there is corresponding oracle attached to the problem. Example:
+
+```yaml
+k8s_target_port-misconfig:
+  - detection
+  - mitigation
+```
+
+The entry above tells the conductor to start at `noop` then run `detection` and `mitigation` when starting `k8s_target_port-misconfig`, skipping `localization`.
 
 The benchmark is driven by agent submissions. The benchmark expects the agent to submit a `POST` HTTP API call to the `http://localhost:8000/submit` HTTP endpoint.
 Each submission pushes the benchmark to the next phase.
