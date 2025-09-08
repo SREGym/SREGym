@@ -384,6 +384,81 @@ class ApplicationFaultInjector(FaultInjector):
             },
         )
 
+    def inject_missing_env_variable(self, deployment_name: str, env_var: str):
+        """
+        Patch the deployment to delete a specific environment variable.
+        """
+        # Fetch current deployment
+        try:
+            deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+            container = deployment.spec.template.spec.containers[0]
+            current_env = container.env
+        except Exception as e:
+            raise ValueError(f"Failed to get deployment '{deployment_name}': {e}")
+        
+        # Remove the target env var
+        updated_env = []
+        found = False
+        for e in current_env:
+            if e.name == env_var:
+                found = True
+                # Skip this environment variable (delete it)
+                continue
+            else:
+                updated_env.append(e)
+
+        if not found:
+            raise ValueError(f"Environment variable '{env_var}' not found in deployment '{deployment_name}'")
+        
+        # Update the container's env list
+        container.env = updated_env
+        
+        # Use update_deployment instead of patch_deployment
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        print(f"Deleted environment variable '{env_var}' from deployment '{deployment_name}'.")
+
+    def recover_missing_env_variable(self, deployment_name: str, env_var: str, env_value: str):
+        """
+        Restore the previously deleted environment variable.
+        """
+        # Fetch current deployment
+        try:
+            deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+            container = deployment.spec.template.spec.containers[0]
+            container_name = container.name
+            current_env = container.env
+        except Exception as e:
+            raise ValueError(f"Failed to get deployment '{deployment_name}': {e}")
+        
+        # Check if env var already exists
+        for e in current_env:
+            if e.name == env_var:
+                print(f"Environment variable '{env_var}' already exists in deployment '{deployment_name}'.")
+                return
+
+        # Add the environment variable back
+        updated_env = list(current_env)
+        updated_env.append(client.V1EnvVar(name=env_var, value=env_value))
+
+        # Create patch body
+        patch_body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": container_name,
+                                "env": [{"name": var.name, "value": var.value} for var in updated_env],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+        self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
+        print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
+
 
 if __name__ == "__main__":
     namespace = "hotel-reservation"

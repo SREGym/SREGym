@@ -765,7 +765,7 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from liveness probe too aggressive fault for service: {service}")
 
     # V.14 - Injects an environment variable leak by deleting a ConfigMap and restarting the associated deployment.
-    def inject_env_variable_leak(self, microservices: list[str]):
+    def inject_missing_configmap(self, microservices: list[str]):
         for microservice in microservices:
             configmap_name = None
             if self.namespace == "social-network":
@@ -789,7 +789,7 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(restart_cmd)
             print(f"Restarted pods to apply ConfigMap fault")
 
-    def recover_env_variable_leak(self, microservices: list[str]):
+    def recover_missing_configmap(self, microservices: list[str]):
         for microservice in microservices:
             configmap_name = f"{microservice}"
             backup_path = f"/tmp/{configmap_name}_modified.yaml"
