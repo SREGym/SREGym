@@ -32,11 +32,6 @@ class ReadError(Problem):
 
         self.localization_oracle = None
 
-        self.mitigation_oracle = CompoundedOracle(
-            self,
-            WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
-        )
-
     # --------- Fault actions ----------
 
     @mark_fault_injected
