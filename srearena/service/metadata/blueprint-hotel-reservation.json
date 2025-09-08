@@ -1,0 +1,13 @@
+{
+    "Name": "Blueprint Hotel Reservation",
+    "Namespace": "blueprint-hotel-reservation",
+    "Desc": "A blueprint-compiled version of the hotel reservation application built with Go and gRPC, providing backend in-memory and persistent databases, a recommender system for hotel recommendations, and a functionality to place reservations.",
+    "Supported Operations": [
+        "Get profile and rates of nearby hotels available during given time periods",
+        "Recommend hotels based on user provided metrics",
+        "Place reservations",
+        "Run a workload generator job to simulate user activity"
+    ],
+    "K8S Deploy Path": "BlueprintHotelReservation/kubernetes",
+    "K8S Workload Job Path": "BlueprintHotelReservation/wlgen"
+}

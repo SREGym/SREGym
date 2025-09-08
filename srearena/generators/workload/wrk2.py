@@ -18,13 +18,14 @@ class Wrk2:
     Persistent workload generator
     """
 
-    def __init__(self, rate, dist="norm", connections=2, duration=6, threads=2, latency=True):
+    def __init__(self, rate, dist="norm", connections=2, duration=6, threads=2, latency=True, namespace="default"):
         self.rate = rate
         self.dist = dist
         self.connections = connections
         self.duration = duration
         self.threads = threads
         self.latency = latency
+        self.namespace = namespace
 
         config.load_kube_config()
 
@@ -64,7 +65,7 @@ class Wrk2:
         api_instance = client.CoreV1Api()
         try:
             print(f"Checking for existing ConfigMap '{name}'...")
-            api_instance.delete_namespaced_config_map(name=name, namespace=namespace)
+            api_instance.delete_namespaced_config_map(name=name, namespace=self.namespace)
             print(f"ConfigMap '{name}' deleted.")
         except client.exceptions.ApiException as e:
             if e.status != 404:
@@ -73,7 +74,7 @@ class Wrk2:
 
         try:
             print(f"Creating ConfigMap '{name}'...")
-            api_instance.create_namespaced_config_map(namespace=namespace, body=configmap_body)
+            api_instance.create_namespaced_config_map(namespace=self.namespace, body=configmap_body)
             print(f"ConfigMap '{name}' created successfully.")
         except client.exceptions.ApiException as e:
             print(f"Error creating ConfigMap '{name}': {e}")
@@ -108,44 +109,41 @@ class Wrk2:
 
         api_instance = client.BatchV1Api()
         try:
-            existing_job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
+            existing_job = api_instance.read_namespaced_job(name=job_name, namespace=self.namespace)
             if existing_job:
                 print(f"Job '{job_name}' already exists. Deleting it...")
                 api_instance.delete_namespaced_job(
                     name=job_name,
-                    namespace=namespace,
+                    namespace=self.namespace,
                     body=client.V1DeleteOptions(propagation_policy="Foreground"),
                 )
-                self.wait_for_job_deletion(job_name, namespace)
+                self.wait_for_job_deletion(job_name, self.namespace)
         except client.exceptions.ApiException as e:
             if e.status != 404:
                 print(f"Error checking for existing job: {e}")
                 return
 
         try:
-            response = api_instance.create_namespaced_job(namespace=namespace, body=job_template)
+            response = api_instance.create_namespaced_job(namespace=self.namespace, body=job_template)
             print(f"Job created: {response.metadata.name}")
         except client.exceptions.ApiException as e:
             print(f"Error creating job: {e}")
 
     def start_workload(self, payload_script, url):
-        namespace = "default"
         configmap_name = "wrk2-payload-script"
 
-        self.create_configmap(name=configmap_name, namespace=namespace, payload_script_path=payload_script, url=url)
+        self.create_configmap(name=configmap_name, namespace=self.namespace, payload_script_path=payload_script, url=url)
 
-        self.create_wrk_job(job_name="wrk2-job", namespace=namespace, payload_script=payload_script.name)
+        self.create_wrk_job(job_name="wrk2-job", namespace=self.namespace, payload_script=payload_script.name)
 
     def stop_workload(self, job_name="wrk2-job"):
-        namespace = "default"
-
         api_instance = client.BatchV1Api()
         try:
-            existing_job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
+            existing_job = api_instance.read_namespaced_job(name=job_name, namespace=self.namespace)
             if existing_job:
                 print(f"Stopping job '{job_name}'...")
                 # @daklqw: I think there might be a better way
-                api_instance.patch_namespaced_job(name=job_name, namespace=namespace, body={"spec": {"suspend": True}})
+                api_instance.patch_namespaced_job(name=job_name, namespace=self.namespace, body={"spec": {"suspend": True}})
                 time.sleep(5)
         except client.exceptions.ApiException as e:
             if e.status != 404:
@@ -160,7 +158,7 @@ class Wrk2:
 
         while waited < max_wait:
             try:
-                api_instance.read_namespaced_job(name=job_name, namespace=namespace)
+                api_instance.read_namespaced_job(name=job_name, namespace=self.namespace)
                 time.sleep(sleep)
                 waited += sleep
             except client.exceptions.ApiException as e:
@@ -179,12 +177,13 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
     Wrk2 workload generator for Kubernetes.
     """
 
-    def __init__(self, wrk: Wrk2, payload_script: Path, url, job_name="wrk2-job"):
+    def __init__(self, wrk: Wrk2, payload_script: Path, url, job_name="wrk2-job", namespace="default"):
         super().__init__()
         self.wrk = wrk
         self.payload_script = payload_script
         self.url = url
         self.job_name = job_name
+        self.namespace = namespace
 
         config.load_kube_config()
         self.core_v1_api = client.CoreV1Api()
@@ -196,19 +195,18 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
         self.last_log_line_time = None
 
     def create_task(self):
-        namespace = "default"
         configmap_name = "wrk2-payload-script"
 
         self.wrk.create_configmap(
             name=configmap_name,
-            namespace=namespace,
+            namespace=self.namespace,
             payload_script_path=self.payload_script,
             url=self.url,
         )
 
         self.wrk.create_wrk_job(
             job_name=self.job_name,
-            namespace=namespace,
+            namespace=self.namespace,
             payload_script=self.payload_script.name,
         )
 
@@ -250,11 +248,9 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
         )
 
     def retrievelog(self, start_time: float | None = None) -> list[WorkloadEntry]:
-        namespace = "default"
-
-        pods = self.core_v1_api.list_namespaced_pod(namespace, label_selector=f"job-name={self.job_name}")
+        pods = self.core_v1_api.list_namespaced_pod(self.namespace, label_selector=f"job-name={self.job_name}")
         if len(pods.items) == 0:
-            raise Exception(f"No pods found for job {self.job_name} in namespace {namespace}")
+            raise Exception(f"No pods found for job {self.job_name} in namespace {self.namespace}")
 
         kwargs = {
             "timestamps": True,
@@ -264,7 +260,7 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
             resp = stream.stream(
                 self.core_v1_api.connect_get_namespaced_pod_exec,
                 name=pods.items[0].metadata.name,
-                namespace=namespace,
+                namespace=self.namespace,
                 command=["date", "-Ins"],
                 stderr=True,
                 stdin=False,
@@ -279,7 +275,7 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
             kwargs["since_seconds"] = math.ceil(pod_current_time - start_time) + STREAM_WORKLOAD_EPS
 
         try:
-            logs = self.core_v1_api.read_namespaced_pod_log(pods.items[0].metadata.name, namespace, **kwargs)
+            logs = self.core_v1_api.read_namespaced_pod_log(pods.items[0].metadata.name, self.namespace, **kwargs)
             logs = logs.split("\n")
         except Exception as e:
             print(f"Error retrieving logs from {self.job_name} : {e}")

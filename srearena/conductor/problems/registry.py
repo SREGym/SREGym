@@ -1,14 +1,17 @@
+from typing import List
+
 from srearena.conductor.problems.ad_service_failure import AdServiceFailure
 from srearena.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from srearena.conductor.problems.ad_service_manual_gc import AdServiceManualGc
 from srearena.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from srearena.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
+from srearena.conductor.problems.base import Problem
 from srearena.conductor.problems.cart_service_failure import CartServiceFailure
 from srearena.conductor.problems.configmap_drift import ConfigMapDrift
 from srearena.conductor.problems.container_kill import ChaosMeshContainerKill
 from srearena.conductor.problems.cpu_stress import ChaosMeshCPUStress
 from srearena.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
-from srearena.conductor.problems.env_variable_leak import EnvVariableLeak
+from srearena.conductor.problems.missing_configmap import MissingConfigMap
 from srearena.conductor.problems.env_variable_shadowing import EnvVariableShadowing
 from srearena.conductor.problems.http_abort import ChaosMeshHttpAbort
 from srearena.conductor.problems.http_post_tamper import ChaosMeshHttpPostTamper
@@ -25,6 +28,7 @@ from srearena.conductor.problems.loadgenerator_flood_homepage import LoadGenerat
 from srearena.conductor.problems.memory_stress import ChaosMeshMemoryStress
 from srearena.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from srearena.conductor.problems.missing_service import MissingService
+from srearena.conductor.problems.multiple_failures import MultipleIndependentFailures
 from srearena.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from srearena.conductor.problems.network_delay import ChaosMeshNetworkDelay
 from srearena.conductor.problems.network_loss import ChaosMeshNetworkLoss
@@ -38,11 +42,13 @@ from srearena.conductor.problems.pod_failure import ChaosMeshPodFailure
 from srearena.conductor.problems.pod_kill import ChaosMeshPodKill
 from srearena.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
 from srearena.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
+from srearena.conductor.problems.read_error import ReadError
 from srearena.conductor.problems.readiness_probe_misconfiguration import ReadinessProbeMisconfiguration
 from srearena.conductor.problems.recommendation_service_cache_failure import RecommendationServiceCacheFailure
 from srearena.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
 from srearena.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from srearena.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
+from srearena.conductor.problems.rpc_retry_storm import RPCRetryStorm
 from srearena.conductor.problems.scale_pod import ScalePodSocialNet
 from srearena.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from srearena.conductor.problems.sidecar_port_conflict import SidecarPortConflict
@@ -50,13 +56,21 @@ from srearena.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from srearena.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from srearena.conductor.problems.taint_no_toleration import TaintNoToleration
 from srearena.conductor.problems.target_port import K8STargetPortMisconfig
+from srearena.conductor.problems.train_ticket_f22 import TrainTicketF22
+from srearena.conductor.problems.trainticket_f17 import TrainTicketF17
 from srearena.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from srearena.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
 from srearena.conductor.problems.wrong_bin_usage import WrongBinUsage
 from srearena.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from srearena.conductor.problems.wrong_service_selector import WrongServiceSelector
+<<<<<<< HEAD
 from srearena.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from srearena.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
+=======
+from srearena.conductor.problems.missing_env_variable import MissingEnvVariable
+from srearena.conductor.problems.rpc_retry_storm import RPCRetryStorm
+from srearena.service.kubectl import KubeCtl
+>>>>>>> origin/main
 
 
 class ProblemRegistry:
@@ -90,23 +104,31 @@ class ProblemRegistry:
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
             "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,
-            "astronomy_shop_kafka_queue_problems": KafkaQueueProblems,
             "astronomy_shop_cart_service_failure": CartServiceFailure,
-            "astronomy_shop_image_slow_load": ImageSlowLoad,
-            "astronomy_shop_loadgenerator_flood_homepage": LoadGeneratorFloodHomepage,
+            "astronomy_shop_ad_service_image_slow_load": ImageSlowLoad,
             "astronomy_shop_payment_service_failure": PaymentServiceFailure,
             "astronomy_shop_payment_service_unreachable": PaymentServiceUnreachable,
             "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
             "astronomy_shop_recommendation_service_cache_failure": RecommendationServiceCacheFailure,
             # ---
             "wrong_bin_usage": WrongBinUsage,
+            "trainticket_f17_nested_sql_select_clause_error": TrainTicketF17,
+            "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
             "missing_service_hotel_reservation": lambda: MissingService(
                 app_name="hotel_reservation", faulty_service="mongodb-rate"
             ),
-            "missing_service_social_network": lambda: MissingService(
-                app_name="social_network", faulty_service="user-service"
+            "kafka_queue_problems_hotel_reservation": lambda: KafkaQueueProblems(
+                app_name="hotel_reservation", faulty_service="memcached-rate"
             ),
+            "loadgenerator_flood_homepage": LoadGeneratorFloodHomepage,
+            "k8s_dns_resolution_failure": ServiceDNSResolutionFailure,
+            "k8s_sidecar_port_conflict": SidecarPortConflict,
+            "k8s_stale_coredns_config": StaleCoreDNSConfig,
+            "k8s_resource_request_too_large": ResourceRequestTooLarge,
+            "k8s_resource_request_too_small": ResourceRequestTooSmall,
+            "k8s_wrong_dns_policy": WrongDNSPolicy,
+            "k8s_wrong_service_selector": WrongServiceSelector,
             "resource_request_too_large": lambda: ResourceRequestTooLarge(
                 app_name="hotel_reservation", faulty_service="mongodb-rate"
             ),
@@ -148,10 +170,10 @@ class ProblemRegistry:
             "sidecar_port_conflict_hotel_reservation": lambda: SidecarPortConflict(
                 app_name="hotel_reservation", faulty_service="frontend"
             ),
-            "env_variable_leak_social_network": lambda: EnvVariableLeak(
+            "missing_configmap_social_network": lambda: MissingConfigMap(
                 app_name="social_network", faulty_service="media-mongodb"
             ),
-            "env_variable_leak_hotel_reservation": lambda: EnvVariableLeak(
+            "missing_configmap_hotel_reservation": lambda: MissingConfigMap(
                 app_name="hotel_reservation", faulty_service="mongodb-geo"
             ),
             "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
@@ -211,8 +233,13 @@ class ProblemRegistry:
             "incorrect_image": IncorrectImage,
             "namespace_memory_limit": NamespaceMemoryLimit,
             "pvc_claim_mismatch": PVCClaimMismatch,
+
             "faulty_image_correlated": FaultyImageCorrelated,
             "update_incompatible_correlated": UpdateIncompatibleCorrelated,
+
+            "read_error": ReadError,
+            "missing_env_variable_astronomy_shop": lambda: MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend"),
+
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
             # K8S operator misoperation -> Refactor later, not sure if they're working
             # They will also need to be updated to the new problem format.
@@ -226,11 +253,25 @@ class ProblemRegistry:
             # "operator_security_context_fault-localization-1": K8SOperatorSecurityContextFaultLocalization,
             # "operator_wrong_update_strategy-detection-1": K8SOperatorWrongUpdateStrategyDetection,
             # "operator_wrong_update_strategy-localization-1": K8SOperatorWrongUpdateStrategyLocalization,
+            "rpc_retry_storm": RPCRetryStorm,
+            "social_net_hotel_res_astro_shop_concurrent_failures": lambda: MultipleIndependentFailures(
+                problems=[
+                    K8STargetPortMisconfig(faulty_service="user-service"),
+                    MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+                    WrongServiceSelector(),
+                ]
+            ),
         }
+        self.kubectl = KubeCtl()
+        self.non_emulated_cluster_problems = ["rpc_retry_storm"]
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
             raise ValueError(f"Problem ID {problem_id} not found in registry.")
+
+        is_emulated_cluster = self.kubectl.is_emulated_cluster()
+        if is_emulated_cluster and problem_id in self.non_emulated_cluster_problems:
+            raise RuntimeError(f"Problem ID {problem_id} is not supported in emulated clusters.")
 
         return self.PROBLEM_REGISTRY.get(problem_id)()
 

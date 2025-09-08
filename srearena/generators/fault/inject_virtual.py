@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import yaml
+from kubernetes import config
 
 from srearena.generators.fault.base import FaultInjector
 from srearena.paths import TARGET_MICROSERVICES
@@ -764,7 +765,7 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from liveness probe too aggressive fault for service: {service}")
 
     # V.14 - Injects an environment variable leak by deleting a ConfigMap and restarting the associated deployment.
-    def inject_env_variable_leak(self, microservices: list[str]):
+    def inject_missing_configmap(self, microservices: list[str]):
         for microservice in microservices:
             configmap_name = None
             if self.namespace == "social-network":
@@ -788,7 +789,7 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(restart_cmd)
             print(f"Restarted pods to apply ConfigMap fault")
 
-    def recover_env_variable_leak(self, microservices: list[str]):
+    def recover_missing_configmap(self, microservices: list[str]):
         for microservice in microservices:
             configmap_name = f"{microservice}"
             backup_path = f"/tmp/{configmap_name}_modified.yaml"
@@ -1664,6 +1665,24 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered pod anti-affinity deadlock for service: {service}")
             print(f"  - Removed anti-affinity rules")
             print(f"  - Reset replicas to 1")
+
+    def inject_rpc_timeout_retries_misconfiguration(self, configmap:str):
+        GRPC_CLIENT_TIMEOUT = "50ms"
+        GRPC_CLIENT_RETRIES_ON_ERROR = "30"
+        config_patch_command = f'kubectl patch configmap {configmap} -n {self.namespace} -p \'{{"data":{{"GRPC_CLIENT_TIMEOUT":"{GRPC_CLIENT_TIMEOUT}","GRPC_CLIENT_RETRIES_ON_ERROR":"{GRPC_CLIENT_RETRIES_ON_ERROR}"}}}}\''
+        self.kubectl.exec_command(config_patch_command)
+        deployment_rollout_command = f"kubectl rollout restart deployment -l configmap={configmap} -n {self.namespace}"
+        self.kubectl.exec_command(deployment_rollout_command)
+        self.kubectl.wait_for_ready(self.namespace)
+
+    def recover_rpc_timeout_retries_misconfiguration(self, configmap: str):
+        GRPC_CLIENT_TIMEOUT = "1s"
+        GRPC_CLIENT_RETRIES_ON_ERROR = "1"
+        config_patch_command = f'kubectl patch configmap {configmap} -n {self.namespace} -p \'{{"data":{{"GRPC_CLIENT_TIMEOUT":"{GRPC_CLIENT_TIMEOUT}","GRPC_CLIENT_RETRIES_ON_ERROR":"{GRPC_CLIENT_RETRIES_ON_ERROR}"}}}}\''
+        self.kubectl.exec_command(config_patch_command)
+        deployment_rollout_command = f"kubectl rollout restart deployment -l configmap={configmap} -n {self.namespace}"
+        self.kubectl.exec_command(deployment_rollout_command)
+        self.kubectl.wait_for_ready(self.namespace)
 
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):

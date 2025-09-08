@@ -55,7 +55,8 @@ class AstronomyShop(Application):
         self.kubectl.delete_namespace(self.helm_configs["namespace"])
 
         if hasattr(self, "wrk"):
-            self.wrk.stop()
+            # self.wrk.stop()
+            self.kubectl.delete_job(label="job=workload")
 
     def create_workload(self):
         self.wrk = LocustWorkloadManager(

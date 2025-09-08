@@ -4,6 +4,7 @@ metadata:
   name: locust-fetcher
   labels:
     app: locust-fetcher
+    job: workload
 spec:
   containers:
   - name: fetcher

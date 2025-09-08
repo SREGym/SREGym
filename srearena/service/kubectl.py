@@ -5,7 +5,7 @@ import subprocess
 import time
 
 try:
-    from kubernetes import client, config, dynamic
+    from kubernetes import client, config
 except ModuleNotFoundError as e:
     print("Your Kubeconfig is missing. Please set up a cluster.")
     exit(1)
@@ -157,6 +157,35 @@ class KubeCtl:
 
         raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
 
+    def wait_for_job_completion(self, name: str, namespace: str, sleep: int = 5, max_wait: int = 10_000):
+        """Wait for a Kubernetes Job to complete."""
+        batch_v1 = client.BatchV1Api()
+        console = Console()
+        console.log(f"[bold yellow]Waiting for Job '{name}' in namespace '{namespace}' to complete...")
+
+        with console.status("[bold yellow]Monitoring job status..."):
+            elapsed = 0
+            while elapsed < max_wait:
+                try:
+                    job = batch_v1.read_namespaced_job(name=name, namespace=namespace)
+                    status = job.status
+
+                    if status.succeeded and status.succeeded >= 1:
+                        console.log(f"[bold green]Job '{name}' completed successfully.")
+                        return
+
+                    if status.failed and status.failed > 0:
+                        raise Exception(f"[red]Job '{name}' failed.")
+
+                except ApiException as e:
+                    console.log(f"[red]Exception when checking job status: {e}")
+                    raise
+
+                time.sleep(sleep)
+                elapsed += sleep
+
+            raise TimeoutError(f"[red]Timeout: Job '{name}' did not complete within {max_wait} seconds.")
+
     def is_ready(self, pod):
         phase = pod.status.phase or ""
         container_statuses = pod.status.container_statuses or []
@@ -205,6 +234,87 @@ class KubeCtl:
                 wait += sleep
 
             raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
+
+    def delete_job(self, job_name: str = None, label: str = None, namespace: str = 'default'):
+        """Delete a Kubernetes Job."""
+        console = Console()
+        api_instance = client.BatchV1Api()
+        try:
+            if job_name:
+                api_instance.delete_namespaced_job(name=job_name, namespace=namespace, body=client.V1DeleteOptions(propagation_policy="Foreground"))
+                console.log(f"[bold green]Job '{job_name}' deleted successfully.")
+            elif label:
+                # If label is provided, delete jobs by label
+                jobs = api_instance.list_namespaced_job(namespace=namespace, label_selector=label)
+                if jobs.items:
+                    for job in jobs.items:
+                        api_instance.delete_namespaced_job(name=job.metadata.name, namespace=namespace, body=client.V1DeleteOptions(propagation_policy="Foreground"))
+                        console.log(f"[bold green]Job with label '{label}' deleted successfully.")
+                else:
+                    console.log(f"[yellow]No jobs found with label '{label}' in namespace '{namespace}'.")
+            return True
+        except client.exceptions.ApiException as e:
+            if e.status == 404:
+                console.log(f"[yellow]Job '{job_name}' not found in namespace '{namespace}' (already deleted)")
+                return True 
+            else:
+                console.log(f"[red]Error deleting job '{job_name}': {e}")
+                return False
+        except Exception as e:
+            console.log(f"[red]Unexpected error deleting job '{job_name}': {e}")
+            return False
+
+    def wait_for_job_completion(self, job_name: str, namespace: str='default', timeout: int = 600):
+        """Wait for a Kubernetes Job to complete successfully within a specified timeout."""
+        api_instance = client.BatchV1Api()
+        console = Console()
+        start_time = time.time()
+        
+        console.log(f"[yellow]Waiting for job '{job_name}' to complete...")
+        with console.status("[bold green]Waiting for job to be done...") as status:
+            while time.time() - start_time < timeout:
+                try:
+                    job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
+
+                    # Check job status
+                    if job.status.conditions:
+                        for condition in job.status.conditions:
+                            if condition.type == "Complete" and condition.status == "True":
+                                console.log(f"[bold green]Job '{job_name}' completed successfully!")
+                                return True
+                            elif condition.type == "Failed" and condition.status == "True":
+                                console.log(f"[bold red]Job '{job_name}' failed!")
+                                console.log(f"[red]Failure reason: {condition.reason}")
+                                console.log(f"[red]Failure message: {condition.message}")
+                                return False
+
+                    # Check numeric status
+                    succeeded = job.status.succeeded or 0
+                    failed = job.status.failed or 0
+                    active = job.status.active or 0
+                    
+                    if succeeded > 0:
+                        console.log(f"[bold green]Job '{job_name}' completed successfully! (succeeded: {succeeded})")
+                        return True
+                    elif failed > 0:
+                        console.log(f"[bold red]Job '{job_name}' failed! (failed: {failed})")
+                        return False
+                    
+                    time.sleep(2)
+                    
+                except client.exceptions.ApiException as e:
+                    if e.status == 404:
+                        console.log(f"[red]Job '{job_name}' not found!")
+                        return False
+                    else:
+                        console.log(f"[red]Error checking job status: {e}")
+                        time.sleep(2)
+                except Exception as e:
+                    console.log(f"[red]Unexpected error: {e}")
+                    time.sleep(2)
+            
+            console.log(f"[bold red]Timeout waiting for job '{job_name}' to complete!")
+        return False
 
     def update_deployment(self, name: str, namespace: str, deployment):
         """Update the deployment configuration."""
@@ -407,6 +517,29 @@ class KubeCtl:
                 return f"{round(value, 2)}{unit}"
             value /= 1024
         return f"{round(value, 2)}Ei"
+
+    def is_emulated_cluster(self) -> bool:
+        try:
+            nodes = self.core_v1_api.list_node()
+            for node in nodes.items:
+                provider_id = (node.spec.provider_id or "").lower()
+                runtime = node.status.node_info.container_runtime_version.lower()
+                kubelet = node.status.node_info.kubelet_version.lower()
+                node_name = node.metadata.name.lower()
+
+                if any(keyword in provider_id for keyword in ["kind", "k3d", "minikube"]):
+                    return True
+                if any(keyword in runtime for keyword in ["containerd://", "docker://"]) and "kind" in node_name:
+                    return True
+                if "minikube" in node_name or "k3d" in node_name:
+                    return True
+                if "kind" in kubelet:
+                    return True
+
+            return False
+        except Exception as e:
+            print(f"Error detecting cluster type: {e}")
+            return False
 
     def get_matching_replicasets(self, namespace: str, deployment_name: str) -> list[client.V1ReplicaSet]:
         apps_v1 = self.apps_v1_api

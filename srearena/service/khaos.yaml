@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: khaos
+  namespace: khaos
+spec:
+  selector:
+    matchLabels:
+      app: khaos
+  template:
+    metadata:
+      labels:
+        app: khaos
+    spec:
+      hostPID: true
+      hostNetwork: true
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "node-role.kubernetes.io/master"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: khaos
+          image: saad1038/khaos-x86:latest
+          imagePullPolicy: IfNotPresent
+          command: ["sleep", "infinity"]
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - { name: sys-bpf,      mountPath: /sys/fs/bpf }
+            - { name: sys-debug,    mountPath: /sys/kernel/debug }
+            - { name: host-proc,    mountPath: /host/proc, readOnly: true }
+            - { name: lib-modules,  mountPath: /lib/modules, readOnly: true }
+            - { name: btf,          mountPath: /sys/kernel/btf, readOnly: true }
+            - { name: run-dir,      mountPath: /run, readOnly: true }
+            - { name: var-run,      mountPath: /var/run, readOnly: true }
+      volumes:
+        - { name: sys-bpf,     hostPath: { path: /sys/fs/bpf, type: Directory } }
+        - { name: sys-debug,   hostPath: { path: /sys/kernel/debug, type: Directory } }
+        - { name: host-proc,   hostPath: { path: /proc, type: Directory } }
+        - { name: lib-modules, hostPath: { path: /lib/modules, type: Directory } }
+        - { name: btf,         hostPath: { path: /sys/kernel/btf, type: DirectoryOrCreate } }
+        - { name: run-dir,     hostPath: { path: /run, type: Directory } }
+        - { name: var-run,     hostPath: { path: /var/run, type: Directory } }
