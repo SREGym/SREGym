@@ -1,0 +1,6 @@
+agents:
+- name: stratus
+  kickoff_command: python -m clients.stratus.stratus_agent.driver.driver --server
+    http://localhost:8000
+  kickoff_workdir: .
+  kickoff_env: null
