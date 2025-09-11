@@ -233,6 +233,7 @@ class ProblemRegistry:
             # "operator_security_context_fault-localization-1": K8SOperatorSecurityContextFaultLocalization,
             # "operator_wrong_update_strategy-detection-1": K8SOperatorWrongUpdateStrategyDetection,
             # "operator_wrong_update_strategy-localization-1": K8SOperatorWrongUpdateStrategyLocalization,
+            "read_error": ReadError,
             "rpc_retry_storm": RPCRetryStorm,
             "social_net_hotel_res_astro_shop_concurrent_failures": lambda: MultipleIndependentFailures(
                 problems=[
