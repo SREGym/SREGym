@@ -1,10 +1,14 @@
 import shutil
 import time
+from pathlib import Path
+
+import yaml
 
 import yaml
 
 from srearena.conductor.oracles.detection import DetectionOracle
 from srearena.conductor.problems.registry import ProblemRegistry
+from srearena.conductor.utils import is_ordered_subset
 from srearena.service.apps.app_registry import AppRegistry
 from srearena.service.khaos import KhaosController
 from srearena.service.kubectl import KubeCtl
@@ -34,6 +38,8 @@ class Conductor:
         self.submission_stage = None  # "noop", "detection", "localization", "mitigation", "done"
         self.results = {}
 
+        self.tasklist = None
+
     def register_agent(self, name="agent"):
         self.agent_name = name
 
@@ -41,6 +47,33 @@ class Conductor:
         for b in binaries:
             if shutil.which(b) is None:
                 raise RuntimeError(f"[❌] Required dependency '{b}' not found.")
+
+    def get_tasklist(self):
+        file_dir = Path(__file__).resolve().parent
+        tasklist_path = file_dir / "tasklist.yml"
+
+        with open(tasklist_path, "r") as f:
+            tasklist = yaml.safe_load(f)
+            if not tasklist:
+                raise RuntimeError("Badly formatted tasklist.yml")
+            problems = tasklist["all"]["problems"]
+
+        if self.problem_id not in (problems if problems else []):
+            print("problem_id not found in tasklist. Currently assuming that all tasks will be run.")
+            self.tasklist = ["noop", "detection", "localization", "mitigation", "done"]
+        else:
+            problem_tasklist = problems[self.problem_id]
+            if not problem_tasklist:
+                raise RuntimeError(f"No tasks specified for {self.problem_id}")
+
+            if not is_ordered_subset(problem_tasklist, ["detection", "localization", "mitigation"]):
+                raise RuntimeError(f"Task list for {self.problem_id} is either out of order or has an unknown step")
+
+            print(f"Tasklist specified for {self.problem_id}. Configured tasks to run: {problem_tasklist}")
+
+            problem_tasklist.append("done")
+            problem_tasklist.insert(0, "noop")
+            self.tasklist = problem_tasklist
 
     async def start_problem(self):
         """
@@ -56,11 +89,14 @@ class Conductor:
         self.dependency_check(["kubectl", "helm"])
         print(f"[Session Start] Problem ID: {self.problem_id}")
         self.fix_kubernetes()
+        self.get_tasklist()
+
         self.undeploy_app()  # Cleanup any leftovers
         self.deploy_app()
 
-        self.submission_stage = "noop"
-        print("✅ Deployment complete. Ready for submission.")
+        self.submission_stage = self.tasklist[0]  # always noop
+
+        print(f"✅ Deployment complete. Ready for submission. Current stage is: {self.tasklist[0]}")
 
     async def submit(self, wrapped_cmd: str) -> dict:
         """
@@ -85,28 +121,11 @@ class Conductor:
 
             self.problem.inject_fault()
 
-            self.submission_stage = "detection"
-            return dict(self.results)
-
         # DETECTION
         if self.submission_stage == "detection":
             r = self.detection_oracle.evaluate(sol)
             self.results["Detection"] = r
             self.results["TTD"] = time.time() - self.execution_start_time
-
-            # if no further stages, finalize here
-            if not self.problem.localization_oracle and not self.problem.mitigation_oracle:
-                snapshot = dict(self.results)
-                self.problem.recover_fault()
-                self.undeploy_app()
-                return snapshot
-
-            # otherwise advance
-            if self.problem.localization_oracle:
-                self.submission_stage = "localization"
-            else:
-                self.submission_stage = "mitigation"
-            return dict(self.results)
 
         # LOCALIZATION
         if self.submission_stage == "localization":
@@ -114,21 +133,28 @@ class Conductor:
             self.results["Localization"] = r
             self.results["TTL"] = time.time() - self.execution_start_time
 
-            if not self.problem.mitigation_oracle:
-                snapshot = dict(self.results)
-                self.problem.recover_fault()
-                self.undeploy_app()
-                return snapshot
-
-            self.submission_stage = "mitigation"
-            return dict(self.results)
-
         # MITIGATION
         if self.submission_stage == "mitigation":
             r = self.problem.mitigation_oracle.evaluate()
             self.results["Mitigation"] = r
             self.results["TTM"] = time.time() - self.execution_start_time
 
+        next_stage_idx = self.tasklist.index(self.submission_stage) + 1
+
+        if self.tasklist[next_stage_idx] == "localization" and not self.problem.localization_oracle:
+            print("⏩ Localization oracle is not attached. Skipping localization.")
+            next_stage_idx += 1
+
+        if self.tasklist[next_stage_idx] == "mitigation" and not self.problem.mitigation_oracle:
+            print("⏩ Mitigation oracle is not attached. Skipping mitigation.")
+            next_stage_idx += 1
+
+        self.submission_stage = self.tasklist[next_stage_idx]
+
+        if self.submission_stage != "done":
+            print(f"👉 Next task: {self.submission_stage}")
+            return dict(self.results)
+        else:
             snapshot = dict(self.results)
             self.problem.recover_fault()
             self.undeploy_app()
@@ -156,6 +182,7 @@ class Conductor:
                             self.kubectl.exec_command(f"kubectl rollout restart ds kube-proxy -n kube-system")
                             self.kubectl.exec_command(f"kubectl rollout status ds kube-proxy -n kube-system --timeout=60s")
                             break
+
 
     def deploy_app(self):
         """Kubectl + Prometheus + problem.app deployment."""
@@ -196,7 +223,6 @@ class Conductor:
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""
         if self.problem:
             self.problem.app.cleanup()
-        self.submission_stage = "done"
 
     def get_deployed_apps(self):
         deployed_apps = []

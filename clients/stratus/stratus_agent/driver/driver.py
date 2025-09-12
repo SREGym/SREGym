@@ -3,6 +3,7 @@ import time
 
 # for parsing return values from benchmark app info as python dict
 from ast import literal_eval
+from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -32,10 +33,18 @@ from clients.stratus.weak_oracles.workload_oracle import WorkloadOracle
 
 logger = get_logger()
 
+
 def get_current_datetime_formatted():
     now = datetime.now()
     formatted_datetime = now.strftime("%m-%d_%H-%M")
     return formatted_datetime
+
+
+def get_current_datetime_formatted():
+    now = datetime.now()
+    formatted_datetime = now.strftime("%m-%d_%H-%M")
+    return formatted_datetime
+
 
 async def validate_oracles(oracles: List[BaseOracle]) -> List[bool | List[OracleResult]]:
     results = []
@@ -69,7 +78,7 @@ def get_app_info():
 
 def get_curr_problem():
     ltc = LanggraphToolConfig()
-    url = ltc.problem_url
+    url = ltc.benchmark_current_problem
     try:
         response = requests.get(url)
         logger.info(f"Response status: {response.status_code}, text: {response.text}")
@@ -464,6 +473,9 @@ async def main():
     # here, running the file's main function should suffice.
     # 1 for noop diagnosis
     current_problem = get_curr_problem()
+    logger.info("*" * 25 + f" Testing {current_problem} ! " + "*" * 25)
+    logger.info("*" * 25 + f" Testing {current_problem} ! " + "*" * 25)
+    logger.info("*" * 25 + f" Testing {current_problem} ! " + "*" * 25)
     agent_output_df = pd.DataFrame()
     agent_names = []
     agent_in_tokens = []
@@ -486,6 +498,8 @@ async def main():
     agent_rollback_stack.append(diagnosis_agent_exec_stats["rollback_stack"])
     agent_oracle_results.append(diagnosis_agent_exec_stats["oracle_results"])
     logger.info("*" * 25 + " Finished [diagnosis agent] " + "*" * 25)
+    logger.info("sleeping for a minute for fault propagation")
+    await asyncio.sleep(60)
 
     # 1 for faulty diagnosis
     logger.info("*" * 25 + " Starting [diagnosis agent] for [Faulty detection] " + "*" * 25)
@@ -528,18 +542,18 @@ async def main():
 
     # run mitigation task 1 time for mitigation
     # it includes retry logics
-    logger.info("*" * 25 + " Starting [mitigation agent] for [mitigation] " + "*" * 25)
-    mitigation_agent_exec_stats = await mitigation_task_main(localization_fault_summary)
-    agent_names.extend(mitigation_agent_exec_stats["agent_name"])
-    agent_in_tokens.extend(mitigation_agent_exec_stats["input_tokens"])
-    agent_out_tokens.extend(mitigation_agent_exec_stats["output_tokens"])
-    agent_total_tokens.extend(mitigation_agent_exec_stats["total_tokens"])
-    agent_times.extend(mitigation_agent_exec_stats["time"])
-    agent_steps.extend(mitigation_agent_exec_stats["steps"])
-    agent_retry_attempts.extend(mitigation_agent_exec_stats["num_retry_attempts"])
-    agent_rollback_stack.extend(mitigation_agent_exec_stats["rollback_stack"])
-    agent_oracle_results.extend(mitigation_agent_exec_stats["oracle_results"])
-    logger.info("*" * 25 + " Finished [mitigation agent] " + "*" * 25)
+    # logger.info("*" * 25 + " Starting [mitigation agent] for [mitigation] " + "*" * 25)
+    # mitigation_agent_exec_stats = await mitigation_task_main(localization_fault_summary)
+    # agent_names.extend(mitigation_agent_exec_stats["agent_name"])
+    # agent_in_tokens.extend(mitigation_agent_exec_stats["input_tokens"])
+    # agent_out_tokens.extend(mitigation_agent_exec_stats["output_tokens"])
+    # agent_total_tokens.extend(mitigation_agent_exec_stats["total_tokens"])
+    # agent_times.extend(mitigation_agent_exec_stats["time"])
+    # agent_steps.extend(mitigation_agent_exec_stats["steps"])
+    # agent_retry_attempts.extend(mitigation_agent_exec_stats["num_retry_attempts"])
+    # agent_rollback_stack.extend(mitigation_agent_exec_stats["rollback_stack"])
+    # agent_oracle_results.extend(mitigation_agent_exec_stats["oracle_results"])
+    # logger.info("*" * 25 + " Finished [mitigation agent] " + "*" * 25)
 
     for lst in [
         agent_names,
@@ -565,6 +579,9 @@ async def main():
     agent_output_df["oracle_results"] = agent_oracle_results
     current_datetime = get_current_datetime_formatted()
     agent_output_df.to_csv(f"./{current_datetime}_{current_problem}_stratus_output.csv", index=False, header=True)
+    logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
+    logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
+    logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
 
 
 if __name__ == "__main__":

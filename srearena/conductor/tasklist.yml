@@ -1,0 +1,11 @@
+# Don't specify noop in the task list. The problem will always start at noop.
+# Specify any task(s) of [detection, localization, mitigation] in that order for the conductor to run
+all:
+  problems:
+    k8s_target_port-misconfig:
+      - detection
+      - localization
+      - mitigation
+    # auth_miss_mongodb:
+    #   - noop
+    #   - mitigation

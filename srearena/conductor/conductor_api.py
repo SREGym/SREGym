@@ -43,7 +43,7 @@ async def submit_solution(req: SubmitRequest):
     if _conductor is None or _conductor.submission_stage not in allowed:
         raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {_conductor.submission_stage!r}")
 
-    wrapped = f"```\nsubmit({req.solution})\n```"
+    wrapped = f'```\nsubmit("{req.solution}")\n```'
     try:
         results = await _conductor.submit(wrapped)
     except Exception as e:

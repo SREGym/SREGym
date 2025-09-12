@@ -1,7 +1,7 @@
 import tiktoken
 
 
-def truncate_to_tokens(text: str, max_tokens: int = 16000, model: str = "gpt-4o-mini"):
+def truncate_to_tokens(text: str, max_tokens: int = 6000, model: str = "gpt-4o-mini"):
     try:
         enc = tiktoken.encoding_for_model(model)
     except KeyError:

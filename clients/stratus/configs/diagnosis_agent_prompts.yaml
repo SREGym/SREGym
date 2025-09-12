@@ -43,6 +43,9 @@ system: >
     - **ClusterRole and Role**: Define permissions for resources at the cluster or namespace level.
     - **ClusterRoleBinding and RoleBinding**: Bind roles to users or groups for authorization.
     - **ServiceAccount**: Associates processes in pods with permissions for accessing the Kubernetes API.
+
+    After you finished, submit "Yes" to denote that there's an incident in the cluster. 
+    Submit "No" to denote that there is no incidents identified.
   
 
 user: >
