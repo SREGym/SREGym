@@ -11,6 +11,7 @@ from srearena.service.apps.app_registry import AppRegistry
 from srearena.service.khaos import KhaosController
 from srearena.service.kubectl import KubeCtl
 from srearena.service.telemetry.prometheus import Prometheus
+from srearena.generators.noise.transient_issues import TransientIssuesGenerator, FaultType, PodScope
 
 
 class Conductor:
@@ -118,7 +119,14 @@ class Conductor:
                 return dict(self.results)
 
             self.problem.inject_fault()
-
+            self.transient_issue_generator = TransientIssuesGenerator(namespace=self.problem.app.namespace,
+                                                                        target_services=self.problem.faulty_service,
+                                                                        min_duration=40,
+                                                                        max_duration=60,)
+            self.transient_issue_generator.start_continuous_injection(fault_types=[FaultType.FAIL_SLOW, FaultType.FAIL_STOP],
+                                                                      scopes=[PodScope.TARGET_NAMESPACE],
+                                                                      interval_min=20,
+                                                                      interval_max=30)
         # DETECTION
         if self.submission_stage == "detection":
             r = self.detection_oracle.evaluate(sol)
@@ -154,6 +162,7 @@ class Conductor:
             return dict(self.results)
         else:
             snapshot = dict(self.results)
+            self.transient_issue_generator.stop_continuous_injection()
             self.problem.recover_fault()
             self.undeploy_app()
             return snapshot
