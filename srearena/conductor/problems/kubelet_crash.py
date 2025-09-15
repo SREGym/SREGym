@@ -33,7 +33,6 @@ class KubeletCrash(Problem):
     def recover_fault(self):
         print("== Fault Recovery ==")
         self.injector.recover_kubelet_crash()
-        return
         for service in self.rollout_services:
             print(f"Rolling out {service}...")
             self.normal_op.trigger_rollout(deployment_name=service, namespace=self.namespace)

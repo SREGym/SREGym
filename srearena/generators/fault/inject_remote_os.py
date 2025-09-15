@@ -97,7 +97,7 @@ class RemoteOSFaultInjector(FaultInjector):
         return re.sub(r'\{\{\s*(\w+)\s*\}\}', replace_var, text)
 
     def inject_kubelet_crash(self):
-    # write a script to create a process, keep send SIGTERM to kubelet
+    # inject a script to create a process, keep send SIGTERM to kubelet
         if not self.check_remote_host():
             print("Your cluster is not applicable for this fault injector, It should be remote.")
             return
@@ -128,6 +128,7 @@ class RemoteOSFaultInjector(FaultInjector):
             self.worker_info = self.get_host_info()
         for host, user in self.worker_info.items():
             self.clean_up_script_on_host(host, user, "kill_kubelet.sh")
+        time.sleep(3)
         return
         
     ###### Helpers ######
