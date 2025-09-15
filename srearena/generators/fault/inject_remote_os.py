@@ -4,6 +4,7 @@
 import json
 import subprocess
 import os
+import time
 
 import paramiko
 from paramiko.client import AutoAddPolicy
@@ -26,14 +27,13 @@ KILL_KUBELET_SCRIPT = """
 #!/bin/bash
 while true; do
     sudo pkill -TERM kubelet
-    sleep 3
+    sleep 1
 done
 """
 
 class RemoteOSFaultInjector(FaultInjector):
     def __init__(self):
         self.kubectl = KubeCtl()
-        self.pids = {}
     
     def check_remote_host(self):
         # kubectl get nodes -o json, if  (kind-worker) is in the nodes, return False
@@ -105,20 +105,22 @@ class RemoteOSFaultInjector(FaultInjector):
         if not self.worker_info:
             return
         for host, user in self.worker_info.items():
-            #print(f"Injecting kubelet crash on {host} with user {user}")
             pid = self.inject_script_on_host(host, user, KILL_KUBELET_SCRIPT, "kill_kubelet.sh")
             if pid:
                 print(f"Successfully started kubelet killer on {host} with PID {pid}")
-                self.pids[host] = pid
             else:
                 print(f"Failed to start kubelet killer on {host}")
                 return
         return
     
     def recover_kubelet_crash(self):
-        for host, pid in self.pids.items():
-            # print(f"Cleaning up kubelet crash on {host} with PID {pid}")
-            self.clean_up_script_on_host(host, self.worker_info[host], pid, "kill_kubelet.sh")
+        if not self.check_remote_host():
+            print("No need to clean up.")
+            return
+        if not hasattr(self, "worker_info"):
+            self.worker_info = self.get_host_info()
+        for host, user in self.worker_info.items():
+            self.clean_up_script_on_host(host, user, "kill_kubelet.sh")
         return
         
     ###### Helpers ######
@@ -165,7 +167,7 @@ class RemoteOSFaultInjector(FaultInjector):
         finally:
             ssh.close()
 
-    def clean_up_script_on_host(self, host: str, user: str, pid: str, script_name: str):
+    def clean_up_script_on_host(self, host: str, user: str, script_name: str):
         """Clean up the script on the remote host."""
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(AutoAddPolicy())
@@ -175,10 +177,19 @@ class RemoteOSFaultInjector(FaultInjector):
         
         try:
             ssh.connect(host, username=user)
-            # Kill the process and clean up the script
-            cmd = f"kill {pid} 2>/dev/null; rm -f {script_path} {log_path} {pid_path}"
-            stdin, stdout, stderr = ssh.exec_command(cmd)
-            print(f"Cleaned up {script_name} on {host} (PID {pid})")
+            
+            # First, try to read the PID from the file
+            stdin, stdout, stderr = ssh.exec_command(f"cat {pid_path} 2>/dev/null")
+            pid = stdout.readline().strip()
+            
+            if pid:
+                # Kill the process and clean up the script
+                cmd = f"kill {pid} 2>/dev/null; rm -f {script_path} {log_path} {pid_path}"
+                stdin, stdout, stderr = ssh.exec_command(cmd)
+                print(f"Cleaned up {script_name} on {host} (PID {pid})")
+                print(f"Waiting for kubelet to restart...")
+                time.sleep(3)
+                
         except Exception as e:
             print(f"Failed to clean up {script_name} on {host}: {e}")
         finally:

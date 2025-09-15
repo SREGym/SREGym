@@ -22,6 +22,7 @@ from srearena.conductor.problems.ingress_misroute import IngressMisroute
 from srearena.conductor.problems.jvm_heap_stress import ChaosMeshJVMHeapStress
 from srearena.conductor.problems.jvm_return import ChaosMeshJVMReturnFault
 from srearena.conductor.problems.kafka_queue_problems import KafkaQueueProblems
+from srearena.conductor.problems.kubelet_crash import KubeletCrash
 from srearena.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from srearena.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from srearena.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
@@ -233,6 +234,7 @@ class ProblemRegistry:
             "missing_env_variable_astronomy_shop": lambda: MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend"),
 
             "workload_imbalance": WorkloadImbalance,
+            "kubelet_crash": KubeletCrash,
             # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
 
             # these two below are also astro shop
