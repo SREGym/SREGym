@@ -39,6 +39,8 @@ spec:
             - { name: btf,          mountPath: /sys/kernel/btf, readOnly: true }
             - { name: run-dir,      mountPath: /run, readOnly: true }
             - { name: var-run,      mountPath: /var/run, readOnly: true }
+            - { name: openebs,      mountPath: /var/openebs }
+            - { name: host-dev,     mountPath: /dev }
       volumes:
         - { name: sys-bpf,     hostPath: { path: /sys/fs/bpf, type: Directory } }
         - { name: sys-debug,   hostPath: { path: /sys/kernel/debug, type: Directory } }
@@ -47,3 +49,5 @@ spec:
         - { name: btf,         hostPath: { path: /sys/kernel/btf, type: DirectoryOrCreate } }
         - { name: run-dir,     hostPath: { path: /run, type: Directory } }
         - { name: var-run,     hostPath: { path: /var/run, type: Directory } }
+        - { name: openebs,     hostPath: { path: /var/openebs, type: Directory } }
+        - { name: host-dev,    hostPath: { path: /dev, type: Directory } }
