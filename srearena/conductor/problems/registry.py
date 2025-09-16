@@ -8,38 +8,26 @@ from srearena.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from srearena.conductor.problems.base import Problem
 from srearena.conductor.problems.cart_service_failure import CartServiceFailure
 from srearena.conductor.problems.configmap_drift import ConfigMapDrift
-from srearena.conductor.problems.container_kill import ChaosMeshContainerKill
-from srearena.conductor.problems.cpu_stress import ChaosMeshCPUStress
 from srearena.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from srearena.conductor.problems.missing_configmap import MissingConfigMap
 from srearena.conductor.problems.env_variable_shadowing import EnvVariableShadowing
-from srearena.conductor.problems.http_abort import ChaosMeshHttpAbort
-from srearena.conductor.problems.http_post_tamper import ChaosMeshHttpPostTamper
 from srearena.conductor.problems.image_slow_load import ImageSlowLoad
 from srearena.conductor.problems.incorrect_image import IncorrectImage
 from srearena.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from srearena.conductor.problems.ingress_misroute import IngressMisroute
-from srearena.conductor.problems.jvm_heap_stress import ChaosMeshJVMHeapStress
-from srearena.conductor.problems.jvm_return import ChaosMeshJVMReturnFault
 from srearena.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from srearena.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from srearena.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from srearena.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
-from srearena.conductor.problems.memory_stress import ChaosMeshMemoryStress
 from srearena.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from srearena.conductor.problems.missing_service import MissingService
 from srearena.conductor.problems.multiple_failures import MultipleIndependentFailures
 from srearena.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
-from srearena.conductor.problems.network_delay import ChaosMeshNetworkDelay
-from srearena.conductor.problems.network_loss import ChaosMeshNetworkLoss
-from srearena.conductor.problems.network_partition import ChaosMeshNetworkPartition
 from srearena.conductor.problems.network_policy_block import NetworkPolicyBlock
 from srearena.conductor.problems.payment_service_failure import PaymentServiceFailure
 from srearena.conductor.problems.payment_service_unreachable import PaymentServiceUnreachable
 from srearena.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
 from srearena.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
-from srearena.conductor.problems.pod_failure import ChaosMeshPodFailure
-from srearena.conductor.problems.pod_kill import ChaosMeshPodKill
 from srearena.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
 from srearena.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from srearena.conductor.problems.read_error import ReadError
@@ -86,19 +74,6 @@ class ProblemRegistry:
             "scale_pod_zero_social_net": ScalePodSocialNet,
             "assign_to_non_existent_node": AssignNonExistentNode,
             "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
-            # --- Chaos Mesh problems (No mitigation oracle)
-            "chaos_mesh_container_kill": ChaosMeshContainerKill,
-            "chaos_mesh_pod_failure": ChaosMeshPodFailure,
-            "chaos_mesh_pod_kill": ChaosMeshPodKill,
-            "chaos_mesh_network_loss": ChaosMeshNetworkLoss,
-            "chaos_mesh_network_delay": ChaosMeshNetworkDelay,
-            "chaos_mesh_network_partition": ChaosMeshNetworkPartition,
-            "chaos_mesh_http_abort": ChaosMeshHttpAbort,
-            "chaos_mesh_cpu_stress": ChaosMeshCPUStress,
-            "chaos_mesh_jvm_stress": ChaosMeshJVMHeapStress,
-            "chaos_mesh_jvm_return": ChaosMeshJVMReturnFault,
-            "chaos_mesh_memory_stress": ChaosMeshMemoryStress,
-            "chaos_mesh_http_post_tamper": ChaosMeshHttpPostTamper,
             # ---
             # --- Astro shop problems with no mitigation oracle
             "astronomy_shop_ad_service_failure": AdServiceFailure,
