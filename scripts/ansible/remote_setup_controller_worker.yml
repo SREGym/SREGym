@@ -82,6 +82,24 @@
         KUBECONFIG: "{{ kubeconfig_path }}"
     - name: Untaint the control plane to host pods
       shell: kubectl taint nodes $(hostname) node-role.kubernetes.io/control-plane:NoSchedule- || true
+    - name: Wait for worker nodes to join
+      shell: kubectl get nodes --no-headers | grep -v "control-plane" | wc -l
+      register: worker_count
+      until: worker_count.stdout|int >= 2
+      retries: 30
+      delay: 10
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+    - name: Get worker node names
+      shell: kubectl get nodes --no-headers | grep -v "control-plane" | awk '{print $1}'
+      register: worker_node_names
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+    - name: Label worker nodes
+      shell: kubectl label node {{ item }} node-role.kubernetes.io/worker=worker --overwrite
+      loop: "{{ worker_node_names.stdout_lines }}"
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
 # Worker Node Setup
 - hosts: worker_nodes
   become: true
