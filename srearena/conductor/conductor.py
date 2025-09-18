@@ -11,7 +11,7 @@ from srearena.service.apps.app_registry import AppRegistry
 from srearena.service.khaos import KhaosController
 from srearena.service.kubectl import KubeCtl
 from srearena.service.telemetry.prometheus import Prometheus
-from srearena.generators.noise.transient_issues import TransientIssuesGenerator, FaultType, PodScope
+from srearena.generators.noise.transient_issues.transient_issues import TransientIssuesGenerator, FaultType, PodScope
 
 
 class Conductor:
@@ -40,7 +40,7 @@ class Conductor:
         self.tasklist = None
 
         self.transient_config = {
-            'switch': False,
+            'switch': True,
             'min_duration': 40,
             'max_duration': 60,
             'fault_types': [FaultType.FAIL_SLOW, FaultType.FAIL_STOP],
@@ -129,6 +129,7 @@ class Conductor:
                 return dict(self.results)
 
             self.problem.inject_fault()
+            self.configure_transient_issues()
             if self.transient_config['switch']:
                 self._start_transient_issues()
         # DETECTION
@@ -220,27 +221,46 @@ class Conductor:
 
         return deployed_apps
     
-    def configure_transient_issues(self, **kwargs):
+    def configure_transient_issues(self):
         """
-        Configure transient issues parameters
-        
-        Args:
-            min_duration: Minimum duration in seconds
-            max_duration: Maximum duration in seconds  
-            fault_types: List of FaultType enums
-            scopes: List of PodScope enums
-            interval_min: Minimum injection interval in seconds
-            interval_max: Maximum injection interval in seconds
+        Read transient issues configuration from srearena/generators/noise/transient_issues/configuration.yml file.
         """
-        valid_keys = ['min_duration', 'max_duration', 'fault_types', 'scopes', 'interval_min', 'interval_max']
-        
-        for key, value in kwargs.items():
-            if key in valid_keys:
-                self.transient_config[key] = value
-            else:
-                print(f"Warning: Unknown parameter '{key}' ignored")
-        
-        print(f"✅ Transient issues configuration updated: {self.transient_config}")
+        import yaml
+        from srearena.generators.noise.transient_issues.transient_issues import FaultType, PodScope
+        import os
+
+        config_path = os.path.join(
+            os.path.dirname(__file__),
+            '../generators/noise/transient_issues/configuration.yml'
+        )
+        config_path = os.path.abspath(config_path)
+
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+        except Exception as e:
+            print(f"[❌] Failed to load configuration: {e}")
+            return
+
+        # Parse configuration and convert to required types
+        def parse_fault_types(types):
+            if not types:
+                return []
+            return [getattr(FaultType, t) if isinstance(t, str) else t for t in types]
+
+        def parse_scopes(scopes):
+            if not scopes:
+                return []
+            return [getattr(PodScope, s) if isinstance(s, str) else s for s in scopes]
+
+        self.transient_config['min_duration'] = config.get('min_duration', 40)
+        self.transient_config['max_duration'] = config.get('max_duration', 60)
+        self.transient_config['fault_types'] = parse_fault_types(config.get('fault_types', ['FAIL_SLOW', 'FAIL_STOP']))
+        self.transient_config['scopes'] = parse_scopes(config.get('scopes', ['TARGET_NAMESPACE']))
+        self.transient_config['interval_min'] = config.get('interval_min', 20)
+        self.transient_config['interval_max'] = config.get('interval_max', 30)
+
+        print(f"✅ Transient issues configuration loaded from {config_path}: {self.transient_config}")
 
     def _start_transient_issues(self):
         """Start transient issues with current configuration"""
