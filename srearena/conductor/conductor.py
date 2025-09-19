@@ -11,6 +11,7 @@ from srearena.service.apps.app_registry import AppRegistry
 from srearena.service.khaos import KhaosController
 from srearena.service.kubectl import KubeCtl
 from srearena.service.telemetry.prometheus import Prometheus
+from srearena.generators.noise.transient_issues.transient_issues import TransientIssuesGenerator, FaultType, PodScope
 
 
 class Conductor:
@@ -37,6 +38,16 @@ class Conductor:
         self.results = {}
 
         self.tasklist = None
+
+        self.transient_config = {
+            'switch': True,
+            'min_duration': 40,
+            'max_duration': 60,
+            'fault_types': [FaultType.FAIL_SLOW, FaultType.FAIL_STOP],
+            'scopes': [PodScope.TARGET_NAMESPACE],
+            'interval_min': 20,
+            'interval_max': 30
+        }
 
     def register_agent(self, name="agent"):
         self.agent_name = name
@@ -118,7 +129,9 @@ class Conductor:
                 return dict(self.results)
 
             self.problem.inject_fault()
-
+            self.configure_transient_issues()
+            if self.transient_config['switch']:
+                self._start_transient_issues()
         # DETECTION
         if self.submission_stage == "detection":
             r = self.detection_oracle.evaluate(sol)
@@ -154,6 +167,7 @@ class Conductor:
             return dict(self.results)
         else:
             snapshot = dict(self.results)
+            self.transient_issue_generator.stop_continuous_injection()
             self.problem.recover_fault()
             self.undeploy_app()
             return snapshot
@@ -206,3 +220,61 @@ class Conductor:
                 deployed_apps.append(app_name)
 
         return deployed_apps
+    
+    def configure_transient_issues(self):
+        """
+        Read transient issues configuration from srearena/generators/noise/transient_issues/configuration.yml file.
+        """
+        import yaml
+        from srearena.generators.noise.transient_issues.transient_issues import FaultType, PodScope
+        import os
+
+        config_path = os.path.join(
+            os.path.dirname(__file__),
+            '../generators/noise/transient_issues/configuration.yml'
+        )
+        config_path = os.path.abspath(config_path)
+
+        try:
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+        except Exception as e:
+            print(f"[❌] Failed to load configuration: {e}")
+            return
+
+        # Parse configuration and convert to required types
+        def parse_fault_types(types):
+            if not types:
+                return []
+            return [getattr(FaultType, t) if isinstance(t, str) else t for t in types]
+
+        def parse_scopes(scopes):
+            if not scopes:
+                return []
+            return [getattr(PodScope, s) if isinstance(s, str) else s for s in scopes]
+
+        self.transient_config['min_duration'] = config.get('min_duration', 40)
+        self.transient_config['max_duration'] = config.get('max_duration', 60)
+        self.transient_config['fault_types'] = parse_fault_types(config.get('fault_types', ['FAIL_SLOW', 'FAIL_STOP']))
+        self.transient_config['scopes'] = parse_scopes(config.get('scopes', ['TARGET_NAMESPACE']))
+        self.transient_config['interval_min'] = config.get('interval_min', 20)
+        self.transient_config['interval_max'] = config.get('interval_max', 30)
+
+        print(f"✅ Transient issues configuration loaded from {config_path}: {self.transient_config}")
+
+    def _start_transient_issues(self):
+        """Start transient issues with current configuration"""
+        if self.problem:
+            faulty_services = self.problem.faulty_service if isinstance(self.problem.faulty_service, (list, tuple)) else [self.problem.faulty_service]
+            self.transient_issue_generator = TransientIssuesGenerator(
+                namespace=self.problem.app.namespace,
+                target_services=faulty_services,
+                min_duration=self.transient_config['min_duration'],
+                max_duration=self.transient_config['max_duration']
+            )
+            self.transient_issue_generator.start_continuous_injection(
+                fault_types=self.transient_config['fault_types'],
+                scopes=self.transient_config['scopes'],
+                interval_min=self.transient_config['interval_min'],
+                interval_max=self.transient_config['interval_max']
+            )
