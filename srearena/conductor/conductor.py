@@ -186,6 +186,21 @@ class Conductor:
         )
         self.kubectl.wait_for_ready("openebs")
 
+        print("Setting up OpenEBS LocalPV-Device…")
+        device_sc_yaml = """
+        apiVersion: storage.k8s.io/v1
+        kind: StorageClass
+        metadata:
+        name: openebs-device
+        annotations:
+            openebs.io/cas-type: local
+        provisioner: openebs.io/local
+        parameters:
+        localpvType: "device"
+        volumeBindingMode: WaitForFirstConsumer
+        """
+        self.kubectl.exec_command("kubectl apply -f - <<EOF\n" + device_sc_yaml + "\nEOF")
+
         print("Deploying Prometheus…")
         self.prometheus.deploy()
 
