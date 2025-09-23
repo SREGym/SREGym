@@ -50,6 +50,7 @@
         name: libssl-dev
         state: present
 
+
     - name: Add Docker GPG key and repository
       shell: |
         sudo install -m 0755 -d /etc/apt/keyrings
@@ -165,12 +166,95 @@
         sudo swapoff -a
         sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
 
+    - name: Install additional packages for dm_dust module building
+      apt:
+        name:
+          - flex
+          - bison
+          - bc
+          - libssl-dev
+          - libelf-dev
+          - linux-source-5.15.0
+        state: present
+
+    - name: Build and install dm_dust module
+      block:
+        - name: Extract kernel source
+          unarchive:
+            src: /usr/src/linux-source-5.15.0.tar.bz2
+            dest: /tmp
+            remote_src: yes
+            creates: /tmp/linux-source-5.15.0
+
+        - name: Create dm-dust build directory
+          file:
+            path: /tmp/dm-dust-build
+            state: directory
+
+        - name: Copy dm-dust source file
+          copy:
+            src: /tmp/linux-source-5.15.0/drivers/md/dm-dust.c
+            dest: /tmp/dm-dust-build/dm-dust.c
+            remote_src: yes
+
+        - name: Create Makefile for dm-dust
+          copy:
+            content: |
+              obj-m := dm-dust.o
+              KDIR := /lib/modules/$(shell uname -r)/build
+              PWD := $(shell pwd)
+
+              default:
+              	$(MAKE) -C $(KDIR) M=$(PWD) modules
+
+              clean:
+              	$(MAKE) -C $(KDIR) M=$(PWD) clean
+
+              install:
+              	cp dm-dust.ko /lib/modules/$(shell uname -r)/kernel/drivers/md/
+              	depmod -a
+            dest: /tmp/dm-dust-build/Makefile
+
+        - name: Build dm-dust module
+          make:
+            chdir: /tmp/dm-dust-build
+
+        - name: Install dm-dust module
+          make:
+            chdir: /tmp/dm-dust-build
+            target: install
+          become: yes
+
+        - name: Load dm_dust module
+          modprobe:
+            name: dm_dust
+            state: present
+
+        - name: Clean up build directory
+          file:
+            path: /tmp/dm-dust-build
+            state: absent
+
+        - name: Clean up extracted kernel source
+          file:
+            path: /tmp/linux-source-5.15.0
+            state: absent
+
     - name: Load necessary kernel modules
       shell: |
         sudo modprobe overlay
         sudo modprobe br_netfilter
+        sudo modprobe dm_dust || true
       args:
         creates: /etc/modules-load.d/k8s.conf
+
+    - name: Create modules-load configuration for Kubernetes and dm_dust
+      copy:
+        content: |
+          overlay
+          br_netfilter
+          dm_dust
+        dest: /etc/modules-load.d/k8s.conf
 
     - name: Configure sysctl for Kubernetes networking
       copy:
