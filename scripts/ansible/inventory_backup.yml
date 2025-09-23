@@ -1,0 +1,18 @@
+
+all:
+  vars:
+    ansible_Ssh_cmmon_args: '-o StrictHostKeyChecking=no'
+  children:
+    control_nodes:
+      hosts:
+        control_node:
+          ansible_host: c220g1-030821.wisc.cloudlab.us
+          ansible_user: Rs2007
+    worker_nodes:
+      hosts:
+        worker_node_1:
+          ansible_host: c220g1-030825.wisc.cloudlab.us
+          ansible_user: Rs2007
+        worker_node_2:
+          ansible_host: c220g1-030830.wisc.cloudlab.us
+          ansible_user: Rs2007

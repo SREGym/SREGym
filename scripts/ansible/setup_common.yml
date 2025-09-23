@@ -74,10 +74,16 @@
         name: "{{ ansible_user_id }}"
         groups: docker
         append: yes
+    - name: Set architecture mapping
+      set_fact:
+       cri_dockerd_arch: >-
+        {{ 'arm64' if ansible_architecture == 'aarch64'
+           else 'amd64' if ansible_architecture == 'x86_64'
+           else ansible_architecture }}
 
     - name: Install cri-dockerd
       get_url:
-        url: "https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.12/cri-dockerd_0.3.12.3-0.ubuntu-jammy_amd64.deb"
+        url: "https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.12/cri-dockerd_0.3.12.3-0.ubuntu-jammy_{{ cri_dockerd_arch }}.deb"
         dest: /tmp/install-cri-dockerd.deb
       register: cri_dockerd_install
       # notify: Install CRI-Dockerd
@@ -87,6 +93,7 @@
         deb: /tmp/install-cri-dockerd.deb
         state: present
       when: cri_dockerd_install.changed
+      become: true
 
     - name: Start and enable cri-dockerd service
       systemd:
