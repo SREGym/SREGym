@@ -215,6 +215,8 @@ dependencies = [
     "zipp==3.22.0",
     "pyfiglet>=1.0.3",
     "langchain-ibm>=0.3.15",
+    "langchain-google-genai>=2.1.12",
+    "dash>=3.2.0",
 ]
 
 [tool.black]
