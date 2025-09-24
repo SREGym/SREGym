@@ -14,7 +14,6 @@ class KhaosController:
 
     def ensure_deployed(self):
         if self.kubectl.is_emulated_cluster():
-            print("BING BONG EMULATED CLUSTER")
             raise RuntimeError("Khaos cannot be deployed on emulated clusters (kind, minikube, k3d, etc.).")
 
         rc = self.kubectl.exec_command(f"kubectl get ns {KHAOS_NS} >/dev/null 2>&1 || kubectl create ns {KHAOS_NS}")
