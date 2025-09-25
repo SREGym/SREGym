@@ -6,7 +6,6 @@ all:
       - detection
       - localization
       - mitigation
-    missing_env_variable_astronomy_shop:
-      - detection
-    misconfig_app_hotel_res:
-      - localization
+    # auth_miss_mongodb:
+    #   - noop
+    #   - mitigation
