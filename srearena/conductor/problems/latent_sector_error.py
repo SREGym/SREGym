@@ -81,29 +81,35 @@ class LatentSectorError(Problem):
 
     @mark_fault_injected
     def inject_fault(self):
-        # Find node where MongoDB is running
-        node = self._discover_node_for_deploy()
-        if not node:
-            raise RuntimeError(f"Could not find a running pod for {self.deploy}")
-        self.node = node
-        print(f"[MongoDBLSE] Target node for injection: {node}")
+        print(f"[MongoDBLSE] Starting latent sector error injection for {self.deploy}")
 
-        # Discover PVC metadata (name, PV, local path)
-        pvc_name, pv_name, local_path = self._discover_pvc()
-        self.pvc_name = pvc_name
-        self.pv_name = pv_name
-        self.pvc_path = local_path
-        print(f"[MongoDBLSE] PVC {pvc_name} -> PV {pv_name} -> {local_path}")
+        # Get target node where the deployment is running
+        self.target_node = self._discover_node_for_deploy()
+        if not self.target_node:
+            raise RuntimeError(f"Could not find running node for deployment {self.deploy}")
 
-        # Scale down deploy to release PVC
-        self.kubectl.exec_command(f"kubectl -n {self.namespace} scale deploy/{self.deploy} --replicas=0")
+        print(f"[MongoDBLSE] Target node: {self.target_node}")
 
-        # Inject LSE on this node/PVC
-        self.injector.inject_lse(node=node, pvc_name=pvc_name, namespace=self.app.namespace)
+        # Since dm-dust infrastructure is already set up by Conductor,
+        # we just need to add bad blocks and enable them
+        bad_blocks = [100, 200, 300]  # Add some bad blocks to simulate LSE
 
-        # Scale back up
-        self.kubectl.exec_command(f"kubectl -n {self.namespace} scale deploy/{self.deploy} --replicas=1")
+        print(f"[MongoDBLSE] Adding bad blocks: {bad_blocks}")
+        self.injector.add_bad_blocks(self.target_node, bad_blocks)
+
+        print(f"[MongoDBLSE] Enabling bad block simulation")
+        self.injector.enable_bad_blocks(self.target_node)
+
+        print(f"[MongoDBLSE] Latent sector error injection complete")
 
     @mark_fault_injected
     def recover_fault(self):
-        self.injector.recover_lse()
+        print(f"[MongoDBLSE] Starting recovery from latent sector error injection")
+
+        if hasattr(self, "target_node") and self.target_node:
+            print(f"[MongoDBLSE] Disabling bad block simulation on {self.target_node}")
+            self.injector.disable_bad_blocks(self.target_node)
+        else:
+            print(f"[MongoDBLSE] No target node found, skipping bad block disable")
+
+        print(f"[MongoDBLSE] Recovery complete")
