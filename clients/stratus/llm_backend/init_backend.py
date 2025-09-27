@@ -40,10 +40,10 @@ except KeyError:
 
 try:
     API_KEY_TOOLS = os.environ["API_KEY_TOOLS"]
-    os.environ["OPENAI_API_KEY"] = API_KEY_TOOLS
+    # os.environ["OPENAI_API_KEY"] = API_KEY_TOOLS # should not use this fallback
 except KeyError:
-    print("Unable to find environment variable - API_KEY_TOOLS.")
-    raise
+    API_KEY_TOOLS = ""
+    print("Unable to find environment variable, leave it empty - API_KEY_TOOLS.")
 
 try:
     SEED_TOOLS = int(os.environ["SEED_TOOLS"])
@@ -146,11 +146,26 @@ def get_llm_backend_for_tools():
             thinking_tools=THINKING_TOOLS,
             thinking_budget_tools=THINKING_BUDGET_TOOLS,
         )
-    elif PROVIDER == "gemini":
+    elif PROVIDER == "litellm":
         return LiteLLMBackend(
             provider=PROVIDER,
             model_name=MODEL_TOOLS,
             url=URL_TOOLS, # not used
+            api_key=API_KEY_TOOLS,
+            api_version=API_VERSION_TOOLS,
+            seed=SEED_TOOLS,
+            top_p=TOP_P_TOOLS,
+            temperature=TEMPERATURE_TOOLS,
+            reasoning_effort=REASONING_EFFORT_TOOLS,
+            thinking_tools=THINKING_TOOLS,
+            thinking_budget_tools=THINKING_BUDGET_TOOLS,
+            max_tokens=MAX_TOKENS_TOOLS,
+        )
+    elif PROVIDER == "compatible":
+        return LiteLLMBackend(
+            provider=PROVIDER,
+            model_name=MODEL_TOOLS,
+            url=URL_TOOLS,
             api_key=API_KEY_TOOLS,
             api_version=API_VERSION_TOOLS,
             seed=SEED_TOOLS,

@@ -93,6 +93,19 @@ We evaluated Stratus with `llama-3-3-70b-instruct`, here is a quick glance of th
 
 Detailed evaluation, with token usages and step counts, will be released soon.
 
+##### Try other LLMs on "Stratus"
+Stratus is implemented to be LLM-agnostic. You can feel free to try "Stratus" on the benchmark with different LLMs. You should configure the choice of LLM in `.env`.
+
+Three kinds of LLM are supported:
+
+1. LiteLLM-supported models
+   Basically you can use the providers in [LiteLLM's list](https://docs.litellm.ai/docs/providers), including OpenAI, Anthropic and Gemini. (Note that not all of them are available due to the version issue)
+2. IBM WatsonX 
+3. other model not supported by LiteLLM (or self-deployed)
+   **You custom provider or deployment platform must have OpenAI-compatible API.**
+
+We have examples at [.env.example](https://github.com/xlab-uiuc/SREArena/blob/main/.env.example) for them respectively.
+
 #### Run your agent on SREArena
 SREArena makes it extremely easy to develop and evaluate your agents, thanks to its decoupled design. 
 There are at most 4 phases in each problem of SREArena:

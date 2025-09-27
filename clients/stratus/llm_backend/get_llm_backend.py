@@ -55,6 +55,7 @@ class LiteLLMBackend:
         self.max_tokens = max_tokens
         self.extra_headers = extra_headers
         litellm.drop_params = True
+        litellm.modify_params = True # for Anthropic
 
     def inference(
         self,
@@ -100,13 +101,7 @@ class LiteLLMBackend:
         arena_logger.info(f"[PROMPT] {messsage_content_all}")
         '''
         
-        if self.provider == "openai":
-            llm = ChatOpenAI(
-                model=self.model_name,
-                temperature=self.temperature,
-                top_p=self.top_p,
-            )
-        elif self.provider == "watsonx":
+        if self.provider == "watsonx":
             llm = ChatWatsonx(
                 model_id=self.model_name,
                 url=self.url,
@@ -114,13 +109,19 @@ class LiteLLMBackend:
                 apikey=self.api_key,
                 temperature=self.temperature,
             )
-        elif self.provider == "gemini":
-            # Requires env var GOOGLE_API_KEY to be set
-            llm = ChatGoogleGenerativeAI(
+        elif self.provider == "litellm":
+            llm = ChatLiteLLM(
                 model=self.model_name,
                 temperature=self.temperature,
                 top_p=self.top_p,
-                google_api_key=self.api_key,
+            )
+        elif self.provider == "compatible":
+            llm = ChatLiteLLM(
+                model=self.model_name,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                api_key=self.api_key,
+                api_base=self.url,
             )
         else:
             raise ValueError(f"Unsupported provider: {self.provider}")
@@ -138,7 +139,7 @@ class LiteLLMBackend:
         for attempt in range(LLM_QUERY_MAX_RETRIES):
             try:
                 completion = llm.invoke(input=prompt_messages)
-                # logger.info(f"llm response: {completion}")
+                logger.info(f">>>>>>>>>>>>>>>>>>>>>>>>>llm response: {completion}")
                 return completion
             except HTTPError as e:
                 # if e.response.status_code == 429 or e.response.status_code == 502 or e.response.status_code == 400:  # Rate-limiting error
