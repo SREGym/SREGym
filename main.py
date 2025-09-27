@@ -39,15 +39,13 @@ def driver_loop(conductor: Conductor):
 
         all_results = []
         for pid in conductor.problems.get_problem_ids():
-            if pid != "sidecar_port_conflict_hotel_reservation":
-                continue
             console.log(f"\n🔍 Starting problem: {pid}")
             
             conductor.problem_id = pid
 
             await conductor.start_problem()
 
-            await stratus_driver()
+            # await stratus_driver()
 
             # Poll until grading completes
             while conductor.submission_stage != "done":
