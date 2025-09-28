@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import subprocess
 import shlex
 import json
@@ -283,38 +282,38 @@ def find_dep_namespace(hint_name: str) -> Optional[str]:
         return None
 
 
-def annotate_fleetcast_and_rollout():
-    """
-    Ensure the fleetcast Deployment's *pod template* carries Prometheus annotations,
-    then restart it so pods are recreated with those annotations.
-    """
-    ns = FLEETCAST_NS if ns_exists(FLEETCAST_NS) else find_dep_namespace(FLEETCAST_DEP)
-    if not ns:
-        print(f"(skip) Could not find deployment '{FLEETCAST_DEP}' to annotate.")
-        return
+# def annotate_fleetcast_and_rollout():
+#     """
+#     Ensure the fleetcast Deployment's *pod template* carries Prometheus annotations,
+#     then restart it so pods are recreated with those annotations.
+#     """
+#     ns = FLEETCAST_NS if ns_exists(FLEETCAST_NS) else find_dep_namespace(FLEETCAST_DEP)
+#     if not ns:
+#         print(f"(skip) Could not find deployment '{FLEETCAST_DEP}' to annotate.")
+#         return
 
-    print(f"Patching pod template annotations in: {ns}/{FLEETCAST_DEP}")
-    patch = {
-        "spec": {
-            "template": {
-                "metadata": {
-                    "annotations": {
-                        "prometheus.io/scrape": "true",
-                        "prometheus.io/path": "/metrics",
-                        "prometheus.io/port": f"{FLEETCAST_METRICS_PORT}",
-                    }
-                }
-            }
-        }
-    }
-    run_cmd(
-        ["kubectl", "-n", ns, "patch", "deploy", FLEETCAST_DEP, "--type=merge", "-p", json.dumps(patch)],
-        check=False
-    )
-    run_cmd(f"kubectl -n {shlex.quote(ns)} rollout restart deploy/{shlex.quote(FLEETCAST_DEP)}",
-            shell=True, check=False)
-    run_cmd(f"kubectl -n {shlex.quote(ns)} rollout status  deploy/{shlex.quote(FLEETCAST_DEP)}",
-            shell=True, check=False)
+#     print(f"Patching pod template annotations in: {ns}/{FLEETCAST_DEP}")
+#     patch = {
+#         "spec": {
+#             "template": {
+#                 "metadata": {
+#                     "annotations": {
+#                         "prometheus.io/scrape": "true",
+#                         "prometheus.io/path": "/metrics",
+#                         "prometheus.io/port": f"{FLEETCAST_METRICS_PORT}",
+#                     }
+#                 }
+#             }
+#         }
+#     }
+#     run_cmd(
+#         ["kubectl", "-n", ns, "patch", "deploy", FLEETCAST_DEP, "--type=merge", "-p", json.dumps(patch)],
+#         check=False
+#     )
+#     run_cmd(f"kubectl -n {shlex.quote(ns)} rollout restart deploy/{shlex.quote(FLEETCAST_DEP)}",
+#             shell=True, check=False)
+#     run_cmd(f"kubectl -n {shlex.quote(ns)} rollout status  deploy/{shlex.quote(FLEETCAST_DEP)}",
+#             shell=True, check=False)
 
 
 def check(prom_url: str):
@@ -367,7 +366,7 @@ def main():
     prom_url = find_first_reachable_prom_url(DESIRED_NODEPORT) or "http://localhost:9090"
     print(f"[info] Using Prometheus URL: {prom_url}")
 
-    annotate_fleetcast_and_rollout()
+    #annotate_fleetcast_and_rollout()
 
     time.sleep(8)
 
