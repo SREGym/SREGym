@@ -11,7 +11,7 @@ PROM_RELEASE   = "prometheus"
 PROM_CHART     = "prometheus-community/prometheus"
 PROM_SVC_NAME  = "prometheus-server"
 
-PROM_PORT         = 9090         
+PROM_PORT         = 80         
 DESIRED_NODEPORT  = 32000         
 
 FLEETCAST_NS           = "fleetcast"
@@ -76,13 +76,12 @@ def helm_apply_values():
     """
     (Re)install/upgrade the Helm chart using your values file.
     We also explicitly set the Service to NodePort:32000 for reachability.
+    (This was the old way — now we exec inside the pod instead of NodePort.)
     """
     run_cmd([
         "helm", "upgrade", PROM_RELEASE, PROM_CHART,
         "-n", PROM_NAMESPACE, "--install", "--reset-values",
         "-f", str(PROM_VALUES_PATH), 
-        "--set", "server.service.type=NodePort",
-        "--set", f"server.service.nodePort={DESIRED_NODEPORT}",
         "--set", "kubeStateMetrics.enabled=false",
     ])
 
@@ -192,94 +191,65 @@ def wait_for_prometheus_ready(timeout_seconds=420):
     dump_prometheus_debug()
 
 
-def get_service_json(name: str) -> dict:
-    out = run_cmd(["kubectl", "-n", PROM_NAMESPACE, "get", "svc", name, "-o", "json"], capture=True)
-    return json.loads(out)
+def check():
+    out = run_cmd([
+        "kubectl", "-n", PROM_NAMESPACE,
+        "exec", f"deploy/{PROM_SVC_NAME}", "-c", "prometheus-server", "--",
+        "wget", "-qO-", "http://localhost:9090/-/ready"
+    ], capture=True)
+    print("Prometheus readiness:", out, flush=True)
 
+    out = run_cmd([
+        "kubectl", "-n", PROM_NAMESPACE,
+        "exec", f"deploy/{PROM_SVC_NAME}", "-c", "prometheus-server", "--",
+        "wget", "-qO-", "http://localhost:9090/api/v1/targets"
+    ], capture=True)
+    try:
+        j = json.loads(out)
+        for t in j.get("data", {}).get("activeTargets", []):
+            print("Target:", t["labels"].get("job"), t["health"], flush=True)
+    except Exception:
+        print(out, flush=True)
 
-def ensure_nodeport(service_name: str, target_port: int, node_port: int):
+def ensure_fleetcast_scrape_annotations():
+    """
+    Ensure the FleetCast backend Deployment has the Prometheus scrape annotations.
+    If missing, patch it and rollout restart.
+    """
+    dep_name = FLEETCAST_DEP
+    ns = FLEETCAST_NS
+
+    print(f"[debug] checking scrape annotations on {ns}/{dep_name}")
+
+    # Fetch deployment spec
+    dep = _get_json(["kubectl", "-n", ns, "get", "deploy", dep_name])
+    tmpl = dep.get("spec", {}).get("template", {}).get("metadata", {}).get("annotations", {})
+
+    expected = {
+        "prometheus.io/scrape": "true",
+        "prometheus.io/path": "/metrics",
+        "prometheus.io/port": FLEETCAST_METRICS_PORT,
+    }
+
+    missing = {k: v for k, v in expected.items() if tmpl.get(k) != v}
+
+    if not missing:
+        print(f"[ok] scrape annotations already present on {dep_name}")
+        return
+
+    print(f"[patch] adding scrape annotations: {missing}")
+    patch = {"spec": {"template": {"metadata": {"annotations": expected}}}}
     run_cmd([
-        "kubectl", "-n", PROM_NAMESPACE, "patch", "svc", service_name,
-        "--type=json",
-        "-p=[{\"op\":\"replace\",\"path\":\"/spec/type\",\"value\":\"NodePort\"}]"
+        "kubectl", "-n", ns, "patch", "deploy", dep_name,
+        "--type=merge", "-p", json.dumps(patch)
     ], check=False)
 
-    svc = get_service_json(service_name)
-    ports = svc.get("spec", {}).get("ports", [])
-    if not ports:
-        raise RuntimeError(f"Service {service_name} has no ports to patch")
+    print(f"[rollout] restarting {dep_name}…")
+    run_cmd(["kubectl", "-n", ns, "rollout", "restart", f"deploy/{dep_name}"], check=False)
+    run_cmd(["kubectl", "-n", ns, "rollout", "status", f"deploy/{dep_name}"], check=False)
 
-    target_idx = None
-    for i, p in enumerate(ports):
-        tp = p.get("targetPort", p.get("port"))
-        if (isinstance(tp, int) and tp == target_port) or (isinstance(tp, str) and str(tp) == str(target_port)) \
-           or (p.get("port") == target_port):
-            target_idx = i; break
-    if target_idx is None:
-        target_idx = 0
+    print(f"[done] scrape annotations applied and rollout complete for {dep_name}")
 
-    patch_ops = []
-    if str(ports[target_idx].get("targetPort")) != str(target_port):
-        patch_ops.append({"op":"replace","path":f"/spec/ports/{target_idx}/targetPort","value":target_port})
-
-    try:
-        run_cmd(["kubectl","-n",PROM_NAMESPACE,"patch","svc",service_name,"--type=json",
-                 "-p="+json.dumps(patch_ops+[{"op":"replace","path":f"/spec/ports/{target_idx}/nodePort","value":node_port}])])
-    except subprocess.CalledProcessError:
-        run_cmd(["kubectl","-n",PROM_NAMESPACE,"patch","svc",service_name,"--type=json",
-                 "-p="+json.dumps(patch_ops+[{"op":"add","path":f"/spec/ports/{target_idx}/nodePort","value":node_port}])])
-
-    svc2 = get_service_json(service_name)
-    np = svc2["spec"]["ports"][target_idx].get("nodePort")
-    print(f"Service {service_name} now NodePort={np} (wanted {node_port})")
-
-
-def list_ready_node_ips() -> List[str]:
-    out = run_cmd(["kubectl", "get", "nodes", "-o", "json"], capture=True)
-    data = json.loads(out)
-    ips = []
-    for n in data.get("items", []):
-        conds = n.get("status", {}).get("conditions", [])
-        if not any(c.get("type")=="Ready" and c.get("status")=="True" for c in conds):
-            continue
-        addrs = n.get("status", {}).get("addresses", [])
-        ext = [a["address"] for a in addrs if a["type"]=="ExternalIP"]
-        intr = [a["address"] for a in addrs if a["type"]=="InternalIP"]
-        ips.append(ext[0] if ext else intr[0])
-    return ips
-
-
-def find_first_reachable_prom_url(node_port: int, timeout=RETRY_SECS) -> Optional[str]:
-    ips = list_ready_node_ips()
-    print(f"Candidate node IPs: {ips}")
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        for ip in ips:
-            url = f"http://{ip}:{node_port}"
-            try:
-                run_cmd(f"curl -sS {shlex.quote(url)}/-/ready", shell=True, check=True)
-                print(f"Prometheus is reachable at {url}")
-                return url
-            except subprocess.CalledProcessError:
-                continue
-        time.sleep(SLEEP_BETWEEN)
-    return None
-
-
-def jq_exists() -> bool:
-    return subprocess.run(["bash", "-lc", "command -v jq >/dev/null 2>&1"]).returncode == 0
-
-
-def find_dep_namespace(hint_name: str) -> Optional[str]:
-    try:
-        ns = run_cmd(
-            "kubectl get deploy -A -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name}{\"\\n\"}{end}' "
-            f"| awk '$2==\"{hint_name}\"{{print $1; exit}}'",
-            shell=True, capture=True
-        )
-        return ns if ns else None
-    except subprocess.CalledProcessError:
-        return None
 
 
 # def annotate_fleetcast_and_rollout():
@@ -291,7 +261,7 @@ def find_dep_namespace(hint_name: str) -> Optional[str]:
 #     if not ns:
 #         print(f"(skip) Could not find deployment '{FLEETCAST_DEP}' to annotate.")
 #         return
-
+#
 #     print(f"Patching pod template annotations in: {ns}/{FLEETCAST_DEP}")
 #     patch = {
 #         "spec": {
@@ -315,63 +285,20 @@ def find_dep_namespace(hint_name: str) -> Optional[str]:
 #     run_cmd(f"kubectl -n {shlex.quote(ns)} rollout status  deploy/{shlex.quote(FLEETCAST_DEP)}",
 #             shell=True, check=False)
 
-
-def check(prom_url: str):
-    run_cmd(["kubectl","-n",PROM_NAMESPACE,"get","svc",PROM_SVC_NAME])
-    run_cmd(f"curl -sS {prom_url}/-/ready", shell=True)
-    if jq_exists():
-        run_cmd(
-            f"curl -sS {prom_url}/api/v1/targets | "
-            "jq -r '.data.activeTargets[] | "
-            "select(.labels.job==\"kubernetes-pods\") | "
-            "(.labels.namespace + \" \" + .labels.pod + \" \" + .health)' | sort -u",
-            shell=True
-        )
-    else:
-        run_cmd(f"curl -sS {prom_url}/api/v1/targets", shell=True)
-
-
-def verify_fleetcast(prom_url: str):
-    q1 = "count(up{job=\"kubernetes-pods\",namespace=\"%s\"}==1)" % FLEETCAST_NS
-    q2 = "sum(scrape_samples_scraped{job=\"kubernetes-pods\",namespace=\"%s\"})" % FLEETCAST_NS
-    out1 = run_cmd(f"curl -sS --get '{prom_url}/api/v1/query' --data-urlencode 'query={q1}'", shell=True, capture=True)
-    out2 = run_cmd(f"curl -sS --get '{prom_url}/api/v1/query' --data-urlencode 'query={q2}'", shell=True, capture=True)
-    try:
-        r1 = json.loads(out1); r2 = json.loads(out2)
-        up = int(float(r1.get("data",{}).get("result",[{"value":[0,"0"]}])[0]["value"][1])) if r1.get("data",{}).get("result") else 0
-        samples = int(float(r2.get("data",{}).get("result",[{"value":[0,"0"]}])[0]["value"][1])) if r2.get("data",{}).get("result") else 0
-    except Exception:
-        up = 0; samples = 0
-    print(f"fleetcast targets_up={up} samples_scraped={samples}")
-    return up, samples
-
-
+# test: kubectl -n observe exec deploy/prometheus-server -c prometheus-server -- \ wget -qO- "http://localhost:9090/api/v1/query?query=http_requests_total{namespace=\"fleetcast\"}"
 def main():
     ensure_ns(PROM_NAMESPACE)
     helm_repo_setup()
     helm_apply_values()
+    print("[debug] finished helm, moving on")
 
     check_configmap_for_duplicate_global()
+    print("[debug] boutta wait")
+
     wait_for_prometheus_ready()
 
-    try:
-        run_cmd(["kubectl", "-n", PROM_NAMESPACE, "get", "svc", PROM_SVC_NAME])
-    except subprocess.CalledProcessError:
-        print("Could not find expected Service. Available services in namespace:")
-        run_cmd(["kubectl", "-n", PROM_NAMESPACE, "get", "svc", "-o", "wide"], check=False)
-        raise
-
-    ensure_nodeport(PROM_SVC_NAME, target_port=PROM_PORT, node_port=DESIRED_NODEPORT)
-
-    prom_url = find_first_reachable_prom_url(DESIRED_NODEPORT) or "http://localhost:9090"
-    print(f"[info] Using Prometheus URL: {prom_url}")
-
-    #annotate_fleetcast_and_rollout()
-
-    time.sleep(8)
-
-    check(prom_url)
-    verify_fleetcast(prom_url)
+    check()
+    ensure_fleetcast_scrape_annotations()
 
 
 if __name__ == "__main__":
