@@ -128,9 +128,8 @@ class FleetCast(Application):
         self._print_access_hints()
         print("\n FleetCast deployment is complete and ready.")
         tidb_prometheus.main()
-        print("\n Prometheus deployment is complete and ready.")
-        JaegerTiDB().deploy()
-        print ("\n Jaeger deployment is complete and ready.")
+        print("PROMETHEUS: deployed TiDB monitoring stack.")
+        JaegerTiDB().main()
 
     def _get_ingress_svc_info(self) -> dict:
         """Return info about ingress-nginx-controller Service (type, external ip/hostname, nodePort for http/https)."""

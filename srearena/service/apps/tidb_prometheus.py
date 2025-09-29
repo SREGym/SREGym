@@ -302,6 +302,7 @@ def main():
 
     check()
     ensure_fleetcast_scrape_annotations()
+    print("[main] script completed successfully", flush=True)
 
 
 if __name__ == "__main__":
