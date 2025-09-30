@@ -1,2 +1,0 @@
-Detection.accuracy,Detection.success,Localization.accuracy,Localization.is_subset,Localization.success,Mitigation.success,NOOP Detection.accuracy,NOOP Detection.success,TTD,TTL,TTM,problem_id
-100.0,True,0.0,False,False,False,100.0,True,111.27665376663208,114.28432011604309,121.84157490730286,operator_overload_replicas
