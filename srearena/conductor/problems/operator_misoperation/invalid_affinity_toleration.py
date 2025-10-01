@@ -24,7 +24,6 @@ class K8SOperatorInvalidAffinityTolerationFault(Problem):
         self.kubectl = KubeCtl()
         self.app.create_workload()
                
-        #Oracles will be attached below
         self.localization_oracle = LocalizationOracle(problem=self, expected=["tidb-cluster"])
 
         self.mitigation_oracle = InvalidAffinityMitigationOracle(problem=self, deployment_name="basic")
@@ -43,80 +42,3 @@ class K8SOperatorInvalidAffinityTolerationFault(Problem):
         injector = K8SOperatorFaultInjector(namespace='tidb-cluster')
         injector.recover_invalid_affinity_toleration()
         print(f"[FAULT INJECTED] {self.faulty_service} invalid affinity toleration failure\n")
-
-
-#USE BELOW FOR ORACLE REFERENCE
-
-# ################## Detection Problem ##################
-# class K8SOperatorInvalidAffinityTolerationDetection(K8SOperatorInvalidAffinityTolerationBaseTask, DetectionTask):
-#     def __init__(self):
-#         K8SOperatorInvalidAffinityTolerationBaseTask.__init__(self)
-#         DetectionTask.__init__(self, self.app)
-
-#     def eval(self, soln: Any, trace: list[SessionItem], duration: float):
-#         print("== Evaluation ==")
-#         expected_solution = "Yes"
-
-#         if isinstance(soln, str):
-#             if soln.strip().lower() == expected_solution.lower():
-#                 print(f"Correct detection: {soln}")
-#                 self.add_result("Detection Accuracy", "Correct")
-#             else:
-#                 print(f"Incorrect detection: {soln}")
-#                 self.add_result("Detection Accuracy", "Incorrect")
-#         else:
-#             print("Invalid solution format")
-#             self.add_result("Detection Accuracy", "Invalid Format")
-
-#         return super().eval(soln, trace, duration)
-
-
-# ################## Localization Problem ##################
-# class K8SOperatorInvalidAffinityTolerationLocalization(K8SOperatorInvalidAffinityTolerationBaseTask, LocalizationTask):
-#     def __init__(self):
-#         K8SOperatorInvalidAffinityTolerationBaseTask.__init__(self)
-#         LocalizationTask.__init__(self, self.app)
-#         self.task_desc = """\
-#             You are an expert DevOps engineer who has been tasked with localizing faults in a deployed service.
-
-#             The service you are working with today is described below:
-#             {app_summary}
-
-#             You will begin by analyzing the service's state and telemetry, and then submit one of two possible solutions:
-#             1. list[str]: list of faulty components or custom resources (e.g., service names, CRs)
-#             2. str: `None` if no faults were detected
-#             """
-
-#     def eval(self, soln: Any, trace: list[SessionItem], duration: float):
-#         print("== Evaluation ==")
-
-#         if soln is None:
-#             print("Solution is None")
-#             self.add_result("Localization Accuracy", 0.0)
-#             self.results["success"] = False
-#             self.results["is_subset"] = False
-#             super().eval(soln, trace, duration)
-#             return self.results
-
-#         # Calculate exact match and subset
-#         is_exact = is_exact_match(soln, self.faulty_cr)
-#         is_sub = is_subset([self.faulty_cr], soln)
-
-#         # Determine accuracy
-#         if is_exact:
-#             accuracy = 100.0
-#             print(f"Exact match: {soln} | Accuracy: {accuracy}%")
-#         elif is_sub:
-#             accuracy = (len([self.faulty_cr]) / len(soln)) * 100.0
-#             print(f"Subset match: {soln} | Accuracy: {accuracy:.2f}%")
-#         else:
-#             accuracy = 0.0
-#             print(f"No match: {soln} | Accuracy: {accuracy}%")
-
-#         self.add_result("Localization Accuracy", accuracy)
-#         super().eval(soln, trace, duration)
-
-#         self.results["success"] = is_exact or (is_sub and len(soln) == 1)
-#         self.results["is_subset"] = is_sub
-
-#         return self.results
