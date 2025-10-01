@@ -71,9 +71,10 @@ class SREArenaDashboardServer:
 
         # Register graceful shutdown export hooks
         atexit.register(self._export_on_exit)
+        # Flag to track if we've already handled a Ctrl-C signal
+        self._signal_handled = False
         try:
             signal.signal(signal.SIGINT, self._handle_signal)
-            signal.signal(signal.SIGTERM, self._handle_signal)
         except Exception:
             pass
 
@@ -359,6 +360,14 @@ class SREArenaDashboardServer:
             print(f"[SREArena Dashboard] Export on exit failed: {e}")
 
     def _handle_signal(self, signum, frame):
+        if self._signal_handled:
+            # Already handled a Ctrl-C signal, ignore subsequent ones
+            print(f"[SREArena Dashboard] Ignoring subsequent Ctrl-C signal...")
+            return
+        
+        # Mark that we've handled the signal
+        self._signal_handled = True
+        
         try:
             print(f"[SREArena Dashboard] Caught signal {signum}, exporting current view...")
             self._export_on_exit()
@@ -1005,6 +1014,7 @@ class SREArenaDashboardServer:
                 host=self.host,
                 port=self.port,
                 use_reloader=False,
+                threaded=True,
                 # dev_tools_silence_routes_logging=True,
             )
 
