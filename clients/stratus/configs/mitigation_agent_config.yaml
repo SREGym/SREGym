@@ -1,6 +1,6 @@
 # each step is defined as one tool call
-max_step: 2
-max_retry_attempts: 1
+max_step: 20
+max_retry_attempts: 10
 # choose from: naive, validate, none
 retry_mode: validate
 sync_tools:
