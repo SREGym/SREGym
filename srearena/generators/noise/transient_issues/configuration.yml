@@ -1,0 +1,10 @@
+switch: True
+min_duration: 40
+max_duration: 60
+fault_types:
+  - FAIL_SLOW
+  - FAIL_STOP
+scopes:
+  - TARGET_NAMESPACE
+interval_min: 20
+interval_max: 30

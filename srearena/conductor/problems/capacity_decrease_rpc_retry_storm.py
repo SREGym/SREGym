@@ -9,7 +9,7 @@ from srearena.utils.decorators import mark_fault_injected
 
 from srearena.generators.workload.blueprint_hotel_work import BHotelWrk, BHotelWrkWorkloadManager
 
-class RPCRetryStorm(Problem):
+class CapacityDecreaseRPCRetryStorm(Problem):
     def __init__(self):
         self.app = BlueprintHotelReservation()
         self.kubectl = KubeCtl()
@@ -43,11 +43,12 @@ class RPCRetryStorm(Problem):
         if tput is None:
             tput = 3000
         if duration is None:
-            duration = "120s"
+            duration = "500s"
         if multiplier is None:
-            multiplier = 6
+            multiplier = 1
         self.wrk = BHotelWrkWorkloadManager(
             wrk=BHotelWrk(tput=tput, duration=duration, multiplier=multiplier),
+            CPU_containment=True,
         )
 
     def start_workload(self):

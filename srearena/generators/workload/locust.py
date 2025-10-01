@@ -9,7 +9,7 @@ from kubernetes import client, config, stream
 from srearena.generators.workload.base import WorkloadEntry
 from srearena.generators.workload.stream import STREAM_WORKLOAD_EPS, StreamWorkloadManager
 from srearena.paths import BASE_DIR
-
+from srearena.service.kubectl import KubeCtl
 
 class LocustWorkloadManager(StreamWorkloadManager):
     def __init__(self, namespace: str, locust_url: str):
@@ -23,6 +23,8 @@ class LocustWorkloadManager(StreamWorkloadManager):
 
         config.load_kube_config()
         self.core_v1_api = client.CoreV1Api()
+        
+        self.kubectl = KubeCtl()
 
     def remove_fetcher(self):
         try:
@@ -182,3 +184,13 @@ class LocustWorkloadManager(StreamWorkloadManager):
         print("AstronomyShop's built-in load generator is automatically managed.")
         print("Removing locust-fetcher pod if it exists...")
         self.remove_fetcher()
+        
+        
+    def change_users(self, number: int, namespace: str):
+        increase_user_cmd = f"kubectl set env deployment/load-generator LOCUST_USERS={number} -n {namespace}"
+        self.kubectl.exec_command(increase_user_cmd)
+        
+    def change_spawn_rate(self, rate: int, namespace: str):
+        increase_spawn_rate_cmd = f"kubectl set env deployment/load-generator LOCUST_SPAWN_RATE={rate} -n {namespace}"
+        self.kubectl.exec_command(increase_spawn_rate_cmd)
+        

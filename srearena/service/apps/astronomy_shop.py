@@ -56,7 +56,7 @@ class AstronomyShop(Application):
 
         if hasattr(self, "wrk"):
             # self.wrk.stop()
-            self.kubectl.delete_job(label="job=workload")
+            self.kubectl.delete_job(label="job=workload", namespace=self.namespace)
 
     def create_workload(self):
         self.wrk = LocustWorkloadManager(

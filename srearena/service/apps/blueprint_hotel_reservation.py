@@ -2,9 +2,10 @@ import time
 
 from srearena.generators.workload.blueprint_hotel_work import BHotelWrk, BHotelWrkWorkloadManager
 from srearena.observer.trace_api import TraceAPI
-from srearena.paths import FAULT_SCRIPTS, BLUEPRINT_HOTEL_RES_METADATA, TARGET_MICROSERVICES
+from srearena.paths import BLUEPRINT_HOTEL_RES_METADATA, FAULT_SCRIPTS, TARGET_MICROSERVICES
 from srearena.service.apps.base import Application
 from srearena.service.kubectl import KubeCtl
+
 
 class BlueprintHotelReservation(Application):
     def __init__(self):
@@ -45,16 +46,14 @@ class BlueprintHotelReservation(Application):
             self.trace_api.stop_port_forward()
         self.kubectl.delete_namespace(self.namespace)
         self.kubectl.wait_for_namespace_deletion(self.namespace)
-        self.kubectl.delete_job(label="job=workload")
+        self.kubectl.delete_job(label="job=workload", namespace=self.namespace)
 
     # helper methods
     def _read_script(self, file_path: str) -> str:
         with open(file_path, "r") as file:
             return file.read()
 
-    def create_workload(
-        self, tput: int = None, duration: str = None, multiplier: int = None
-    ):
+    def create_workload(self, tput: int = None, duration: str = None, multiplier: int = None):
         # The observation workload interface is in the problem class, keeping this interface empty to keep consistency in conductor
         pass
 

@@ -129,7 +129,7 @@ class RPCRetryStormMitigationOracle(Oracle):
     def run_workload(self, problem, kubectl, namespace='default'):
         problem.start_workload()
         job_name = problem.wrk.job_name
-        kubectl.wait_for_job_completion(job_name=job_name, namespace=namespace, timeout=600)
+        kubectl.wait_for_job_completion(job_name=job_name, namespace=namespace, timeout=1200)
         workentries = problem.wrk.retrievelog()
         workentry = workentries[0] if workentries else None
         print(f"Workload Entry: {workentry}")

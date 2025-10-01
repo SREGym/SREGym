@@ -75,18 +75,66 @@
         groups: docker
         append: yes
 
-    - name: Install cri-dockerd
-      get_url:
-        url: "https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.12/cri-dockerd_0.3.12.3-0.ubuntu-jammy_amd64.deb"
-        dest: /tmp/install-cri-dockerd.deb
-      register: cri_dockerd_install
-      # notify: Install CRI-Dockerd
+    - name: Get system architecture
+      command: dpkg --print-architecture
+      register: system_arch
+      changed_when: false
 
-    - name: Install CRI-Dockerd from downloaded package
+    - name: Download cri-dockerd .deb package (amd64)
+      get_url:
+        url: "https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.20/cri-dockerd_0.3.20.3-0.ubuntu-jammy_amd64.deb"
+        dest: /tmp/install-cri-dockerd.deb
+      when: system_arch.stdout == "amd64"
+
+    - name: Install CRI-Dockerd from .deb package (amd64)
       apt:
         deb: /tmp/install-cri-dockerd.deb
         state: present
-      when: cri_dockerd_install.changed
+      when: system_arch.stdout == "amd64"
+
+    - name: Download cri-dockerd .tgz archive (arm64)
+      get_url:
+        url: "https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.20/cri-dockerd-0.3.20.arm64.tgz"
+        dest: /tmp/cri-dockerd.tgz
+      when: system_arch.stdout == "arm64"
+
+    - name: Extract cri-dockerd archive (arm64)
+      unarchive:
+        src: /tmp/cri-dockerd.tgz
+        dest: /tmp/
+        remote_src: yes
+      when: system_arch.stdout == "arm64"
+
+    - name: Install cri-dockerd binaries (arm64)
+      copy:
+        src: "/tmp/cri-dockerd/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        mode: '0755'
+        remote_src: yes
+      loop:
+        - cri-dockerd
+      when: system_arch.stdout == "arm64"
+
+    - name: Download cri-dockerd systemd service files (arm64)
+      get_url:
+        url: "https://raw.githubusercontent.com/Mirantis/cri-dockerd/v0.3.20/packaging/systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+      loop:
+        - cri-docker.service
+        - cri-docker.socket
+      when: system_arch.stdout == "arm64"
+
+    - name: Fix cri-dockerd binary path in service file (arm64)
+      replace:
+        path: /etc/systemd/system/cri-docker.service
+        regexp: '/usr/bin/cri-dockerd'
+        replace: '/usr/local/bin/cri-dockerd'
+      when: system_arch.stdout == "arm64"
+
+    - name: Reload systemd daemon (arm64)
+      systemd:
+        daemon_reload: yes
+      when: system_arch.stdout == "arm64"
 
     - name: Start and enable cri-dockerd service
       systemd:

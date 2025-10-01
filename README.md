@@ -183,7 +183,7 @@ To add a new application to SREArena with Helm, you need to:
 
 Similar to applications, SREArena provides a default [list of problems](/srearena/conductor/problems/registry.py) to evaluate agents. However, as a developer you can add new problems to SREArena and design them around your applications.
 
-Each problem in SREArena has 5 components:
+Each problem in SREArena has 3 components:
 1. *Application*: The application on which the problem is based.
 2. *Fault*: The fault being injected.
 3. *Oracle*: How the problem is evaluated on the relevant tasks; detection, localization, and mitigation.

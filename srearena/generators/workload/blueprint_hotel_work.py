@@ -1,4 +1,5 @@
 import time
+import threading
 from datetime import datetime
 
 import yaml
@@ -8,6 +9,7 @@ from rich.console import Console
 from srearena.generators.workload.base import WorkloadEntry
 from srearena.generators.workload.stream import StreamWorkloadManager
 from srearena.paths import TARGET_MICROSERVICES
+from srearena.generators.noise.transient_issues.chaos_injector import ChaosInjector
 
 # Mimicked the Wrk2 class
 
@@ -127,11 +129,12 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
     Wrk2 workload generator for Kubernetes.
     """
 
-    def __init__(self, wrk: BHotelWrk, namespace:str = 'default', job_name:str="bhotelwrk-wlgen-job"):
+    def __init__(self, wrk: BHotelWrk, namespace:str = 'default', job_name:str="bhotelwrk-wlgen-job", CPU_containment: bool = False):
         super().__init__()
         self.wrk = wrk
         self.job_name = job_name
         self.namespace = namespace
+        self.CPU_containment = CPU_containment
         config.load_kube_config()
         self.core_v1_api = client.CoreV1Api()
         self.batch_v1_api = client.BatchV1Api() 
@@ -213,9 +216,82 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
         
         return []
 
+    def _schedule_cpu_containment(self):
+        """
+        Schedule CPU containment injection and recovery based on workload start time.
+        """
+        if not self.CPU_containment:
+            return
+            
+        # Initialize fault injector
+        self.cpu_containment_injector = ChaosInjector(self.namespace)
+        
+        # Schedule CPU stress injection after 60 seconds
+        self.cpu_stress_timer = threading.Timer(60.0, self._inject_cpu_stress)
+        self.cpu_stress_timer.start()
+        print("CPU stress injection scheduled for 60 seconds after workload start")
+        
+        # Schedule CPU stress recovery after 90 seconds
+        self.cpu_recovery_timer = threading.Timer(90.0, self._recover_cpu_stress)
+        self.cpu_recovery_timer.start()
+        print("CPU stress recovery scheduled for 90 seconds after workload start")
+
+    def _inject_cpu_stress(self):
+        """
+        Inject CPU stress using the symptom fault injector.
+        """
+        try:
+            print("Injecting CPU stress...")
+            # You may need to adjust deployment_name and microservice based on your setup
+            experiment_name = f"cpu-stress-all-pods"
+            chaos_experiment = {
+                "apiVersion": "chaos-mesh.org/v1alpha1",
+                "kind": "StressChaos",
+                "metadata": {
+                    "name": experiment_name,
+                    "namespace": 'chaos-mesh',
+                },
+                "spec": {
+                    "mode": "all",
+                    "selector": {
+                        "namespaces": [self.namespace],
+                    },
+                    "stressors": {
+                        "cpu": {
+                            "workers": 30,
+                            "load": 90,
+                        }
+                    },
+                },
+            }
+            self.cpu_containment_injector.create_chaos_experiment(chaos_experiment, experiment_name)
+            start_time = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+            print(f"[{start_time}] Injecting CPU stress...")
+            self.current_experiment_name = experiment_name  # Save the current experiment name
+            print("CPU stress injection completed")
+        except Exception as e:
+            print(f"Error injecting CPU stress: {e}")
+
+    def _recover_cpu_stress(self):
+        """
+        Recover from CPU stress by deleting the ChaosMesh experiment.
+        """
+        try:
+            print("Recovering from CPU stress...")
+            
+            if hasattr(self, 'current_experiment_name'):
+                self.cpu_containment_injector.delete_chaos_experiment(self.current_experiment_name)
+                print("CPU stress recovery completed for all pods")
+            else:
+                print("No active CPU stress experiment found")
+                
+        except Exception as e:
+            print(f"Error recovering from CPU stress: {e}")
+
     def start(self):
         print("== Start Workload ==")
         self.create_task()
+        self._schedule_cpu_containment()
 
     def stop(self):
         print("== Stop Workload ==")
