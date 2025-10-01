@@ -1,19 +1,20 @@
 """Interface to the FleetCast application (Ingress-enabled on first install; robust readiness checks)."""
 
-import os
 import json
-import time
+import os
 import subprocess
+import time
 from pathlib import Path
 
 from srearena.generators.workload.locust import LocustWorkloadManager
+from srearena.observer.logstash.jaeger.jaeger import JaegerTiDB
 from srearena.paths import FLEET_CAST_METADATA
+from srearena.service.apps import tidb_prometheus
 from srearena.service.apps.base import Application
+from srearena.service.apps.cluster_session import ClusterSession
+from srearena.service.apps.tidb_cluster_operator import TiDBClusterDeployer
 from srearena.service.helm import Helm
 from srearena.service.kubectl import KubeCtl
-from srearena.service.apps.tidb_cluster_operator import TiDBClusterDeployer
-from srearena.service.apps import tidb_prometheus
-from srearena.observer.logstash.jaeger.jaeger import JaegerTiDB
 
 
 class FleetCast(Application):
@@ -22,8 +23,6 @@ class FleetCast(Application):
         self.load_app_json()
         self.kubectl = KubeCtl()
         self.create_namespace()
-     
-
 
     def _sh(self, cmd: str, check: bool = True, capture: bool = False) -> str:
         """Run a shell command; supports capture."""
@@ -63,12 +62,16 @@ class FleetCast(Application):
         print("[ingress] waiting for controller to be Running…")
         for _ in range(60):
             try:
-                phase = self._sh(
-                    "kubectl -n ingress-nginx get pods "
-                    "-l app.kubernetes.io/name=ingress-nginx,app.kubernetes.io/component=controller "
-                    "-o jsonpath='{.items[0].status.phase}'",
-                    capture=True,
-                ).strip().strip("'")
+                phase = (
+                    self._sh(
+                        "kubectl -n ingress-nginx get pods "
+                        "-l app.kubernetes.io/name=ingress-nginx,app.kubernetes.io/component=controller "
+                        "-o jsonpath='{.items[0].status.phase}'",
+                        capture=True,
+                    )
+                    .strip()
+                    .strip("'")
+                )
                 if phase == "Running":
                     print("[ingress] controller Running.")
                     return
@@ -86,8 +89,7 @@ class FleetCast(Application):
         print("Deploying TiDB Cluster with Operator...")
         base_dir = Path(__file__).parent.parent
         meta_path = base_dir / "metadata" / "tidb_metadata.json"
-        deployer = TiDBClusterDeployer(str(meta_path))
-        deployer.deploy_all()
+        ClusterSession.running_cluster()
         print("---DEPLOYED TiDB CLUSTER---")
 
         Helm.add_repo("fleetcast", "https://lilygn.github.io/FleetCast")
@@ -98,21 +100,28 @@ class FleetCast(Application):
         be_svc = f"{fullname}-backend"
 
         ingress_args = [
-            "--set-string", "ingress.enabled=true",
-            "--set-string", "ingress.className=nginx",
-            "--set-string", "ingress.hosts[0].host=orbital.local",
-
-            "--set-string", "ingress.hosts[0].paths[0].path=/",
-            "--set-string", "ingress.hosts[0].paths[0].pathType=Prefix",
-            "--set-string", f"ingress.hosts[0].paths[0].backend.serviceName={fe_svc}",
-            "--set",        "ingress.hosts[0].paths[0].backend.servicePort=80",
-
-            "--set-string", "ingress.hosts[0].paths[1].path=/api",
-            "--set-string", "ingress.hosts[0].paths[1].pathType=Prefix",
-            "--set-string", f"ingress.hosts[0].paths[1].backend.serviceName={be_svc}",
-            "--set",        "ingress.hosts[0].paths[1].backend.servicePort=5000",
-
-        
+            "--set-string",
+            "ingress.enabled=true",
+            "--set-string",
+            "ingress.className=nginx",
+            "--set-string",
+            "ingress.hosts[0].host=orbital.local",
+            "--set-string",
+            "ingress.hosts[0].paths[0].path=/",
+            "--set-string",
+            "ingress.hosts[0].paths[0].pathType=Prefix",
+            "--set-string",
+            f"ingress.hosts[0].paths[0].backend.serviceName={fe_svc}",
+            "--set",
+            "ingress.hosts[0].paths[0].backend.servicePort=80",
+            "--set-string",
+            "ingress.hosts[0].paths[1].path=/api",
+            "--set-string",
+            "ingress.hosts[0].paths[1].pathType=Prefix",
+            "--set-string",
+            f"ingress.hosts[0].paths[1].backend.serviceName={be_svc}",
+            "--set",
+            "ingress.hosts[0].paths[1].backend.servicePort=5000",
         ]
 
         extra = self.helm_configs.get("extra_args", [])
@@ -147,7 +156,7 @@ class FleetCast(Application):
         }
 
         lb = data.get("status", {}).get("loadBalancer", {})
-        ing = (lb.get("ingress") or [])
+        ing = lb.get("ingress") or []
         if ing:
             info["external_ip"] = ing[0].get("ip")
             info["external_hostname"] = ing[0].get("hostname")
@@ -186,57 +195,57 @@ class FleetCast(Application):
             print("  # then use http://orbital.local/ after adding '127.0.0.1 orbital.local' to /etc/hosts")
 
     def wait_for_ingress_ready(self, ingress_name: str, timeout: int = 180):
-            """Wait for Ingress to exist with rules and for ALL backend Services referenced to have endpoints."""
-            ns = self.helm_configs.get("namespace", self.namespace)
+        """Wait for Ingress to exist with rules and for ALL backend Services referenced to have endpoints."""
+        ns = self.helm_configs.get("namespace", self.namespace)
 
-            t0 = time.time()
-            data = None
-            while time.time() - t0 < timeout:
+        t0 = time.time()
+        data = None
+        while time.time() - t0 < timeout:
+            try:
+                raw = self._sh(f"kubectl get ingress {ingress_name} -n {ns} -o json", capture=True)
+                data = json.loads(raw)
+                rules = data.get("spec", {}).get("rules", [])
+                if rules:
+                    print("[ingress] Ingress has rules.")
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+        else:
+            raise RuntimeError(f"Ingress {ingress_name} not created with rules in time.")
+
+        backend_svcs = set()
+        for rule in data.get("spec", {}).get("rules", []):
+            http = rule.get("http", {})
+            for p in http.get("paths", []):
+                svc = p.get("backend", {}).get("service", {})
+                name = svc.get("name")
+                if name:
+                    backend_svcs.add(name)
+
+        if not backend_svcs:
+            raise RuntimeError("No backend services found in Ingress spec.")
+
+        missing = []
+        for svc in sorted(backend_svcs):
+            ok = False
+            t1 = time.time()
+            while time.time() - t1 < timeout:
                 try:
-                    raw = self._sh(f"kubectl get ingress {ingress_name} -n {ns} -o json", capture=True)
-                    data = json.loads(raw)
-                    rules = data.get("spec", {}).get("rules", [])
-                    if rules:
-                        print("[ingress] Ingress has rules.")
+                    ed = json.loads(self._sh(f"kubectl get endpoints {svc} -n {ns} -o json", capture=True))
+                    if any(s.get("addresses") for s in ed.get("subsets", [])):
+                        ok = True
                         break
                 except Exception:
                     pass
                 time.sleep(2)
-            else:
-                raise RuntimeError(f"Ingress {ingress_name} not created with rules in time.")
+            if not ok:
+                missing.append(svc)
 
-            backend_svcs = set()
-            for rule in data.get("spec", {}).get("rules", []):
-                http = rule.get("http", {})
-                for p in http.get("paths", []):
-                    svc = p.get("backend", {}).get("service", {})
-                    name = svc.get("name")
-                    if name:
-                        backend_svcs.add(name)
+        if missing:
+            raise RuntimeError(f"Service endpoints missing for: {', '.join(missing)}")
 
-            if not backend_svcs:
-                raise RuntimeError("No backend services found in Ingress spec.")
-
-            missing = []
-            for svc in sorted(backend_svcs):
-                ok = False
-                t1 = time.time()
-                while time.time() - t1 < timeout:
-                    try:
-                        ed = json.loads(self._sh(f"kubectl get endpoints {svc} -n {ns} -o json", capture=True))
-                        if any(s.get("addresses") for s in ed.get("subsets", [])):
-                            ok = True
-                            break
-                    except Exception:
-                        pass
-                    time.sleep(2)
-                if not ok:
-                    missing.append(svc)
-
-            if missing:
-                raise RuntimeError(f"Service endpoints missing for: {', '.join(missing)}")
-
-            print("[ingress] All backend service endpoints are ready:", ", ".join(sorted(backend_svcs)))
+        print("[ingress] All backend service endpoints are ready:", ", ".join(sorted(backend_svcs)))
 
     def delete(self):
         """Delete the Helm configurations."""

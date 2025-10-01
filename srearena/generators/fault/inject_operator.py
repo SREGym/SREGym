@@ -234,6 +234,10 @@ class K8SOperatorFaultInjector(FaultInjector):
 
     def recover_fault(self, cr_name: str):
         self._delete_yaml(cr_name)
+        clean_url = "https://raw.githubusercontent.com/pingcap/tidb-operator/v1.6.0/examples/basic/tidb-cluster.yaml"
+        command = f"kubectl apply -f {clean_url} -n {self.namespace}"
+        result = self.kubectl.exec_command(command)
+        print(f"Restored clean TiDBCluster: {result}")
 
 
 if __name__ == "__main__":
