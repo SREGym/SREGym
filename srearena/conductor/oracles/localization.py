@@ -10,8 +10,13 @@ class LocalizationOracle(Oracle):
     def evaluate(self, solution) -> dict:
         print("== Localization Evaluation ==")
         results = {}
-
+        
+        try:
+            solution = eval(solution)
+        except Exception as e:
+            print(f"Not a string of list of strings, try to fallback to add []")
         # Normalize string input to list
+        
         if isinstance(solution, str):
             solution = [solution]
         elif not isinstance(solution, list):
