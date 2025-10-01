@@ -112,7 +112,7 @@ def get_app_class_by_name(app_name):
 
         target_app = HotelReservation()
     elif app_name == "TiDB Cluster with Operator":
-        from srearena.service.apps.fleet_cast import FleetCast 
+        from srearena.service.apps.fleet_cast import FleetCast
 
         logger.info(f"TiDB has never been tested!!")
         target_app = FleetCast()
@@ -132,7 +132,6 @@ async def diagnosis_task_main():
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
     diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path, "r"))
     app_info = get_app_info()
-    print(f"app info: {app_info}")
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
