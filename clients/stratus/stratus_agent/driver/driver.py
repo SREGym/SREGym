@@ -93,6 +93,7 @@ def get_curr_problem():
 
 
 def get_app_class_by_name(app_name):
+    target_app = ""
     if app_name == "Social Network":
         from srearena.service.apps.social_network import SocialNetwork
 
@@ -111,10 +112,10 @@ def get_app_class_by_name(app_name):
 
         target_app = HotelReservation()
     elif app_name == "TiDB Cluster with Operator":
-        from srearena.service.apps.tidb_cluster_operator import TiDBCluster
+        from srearena.service.apps.fleet_cast import FleetCast
 
         logger.info(f"TiDB has never been tested!!")
-        target_app = TiDBCluster()
+        target_app = FleetCast()
     elif app_name == "Train Ticket":
         from srearena.service.apps.train_ticket import TrainTicket
 

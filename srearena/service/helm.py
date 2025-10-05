@@ -50,7 +50,13 @@ class Helm:
         output, error = process.communicate()
 
         if error:
-            print(error.decode("utf-8"))
+            stderr = error.decode("utf-8").strip()
+            stdout = output.decode("utf-8").strip()
+            raise RuntimeError(
+                f"Helm install failed for release '{release_name}' in namespace '{namespace}'. "
+                f"Chart: {chart_path}. Error output:\n{stderr}\n"
+                f"Stdout (for context):\n{stdout}"
+            )
         else:
             print(output.decode("utf-8"))
 
@@ -75,7 +81,13 @@ class Helm:
         output, error = process.communicate()
 
         if error:
-            print(error.decode("utf-8"))
+            stderr = error.decode("utf-8").strip()
+            stdout = output.decode("utf-8").strip()
+            raise RuntimeError(
+                f"Helm uninstall failed for release '{release_name}' in namespace '{namespace}'. "
+                f"Release: {release_name}. Error output:\n{stderr}\n"
+                f"Stdout (for context):\n{stdout}"
+            )
         else:
             print(output.decode("utf-8"))
 
@@ -160,7 +172,13 @@ class Helm:
 
         if error:
             print("Error during helm upgrade:")
-            print(error.decode("utf-8"))
+            stderr = error.decode("utf-8").strip()
+            stdout = output.decode("utf-8").strip()
+            raise RuntimeError(
+                f"Helm install failed for release '{release_name}' in namespace '{namespace}'. "
+                f"Chart: {chart_path}. Error output:\n{stderr}\n"
+                f"Stdout (for context):\n{stdout}"
+            )
         else:
             print("Helm upgrade successful!")
             print(output.decode("utf-8"))
@@ -180,6 +198,13 @@ class Helm:
 
         if error:
             print(f"Error adding helm repo {name}: {error.decode('utf-8')}")
+            stderr = error.decode("utf-8").strip()
+            stdout = output.decode("utf-8").strip()
+            raise RuntimeError(
+                f"Helm upgrade failed for release '{name}' and url {url}. "
+                f"Error output:\n{stderr}\n"
+                f"Stdout (for context):\n{stdout}"
+            )
         else:
             print(f"Helm repo {name} added successfully: {output.decode('utf-8')}")
 

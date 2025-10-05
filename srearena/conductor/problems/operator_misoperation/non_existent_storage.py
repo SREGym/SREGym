@@ -6,100 +6,36 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
-from srearena.conductor.evaluators.quantitative import *
-from srearena.conductor.tasks import *
+from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_operator import K8SOperatorFaultInjector
-from srearena.service.apps.tidb_cluster_operator import TiDBCluster
-from srearena.session import SessionItem
+from srearena.paths import TARGET_MICROSERVICES
+from srearena.service.apps.fleet_cast import FleetCast
+from srearena.service.kubectl import KubeCtl
+from srearena.utils.decorators import mark_fault_injected
+from srearena.conductor.oracles.localization import LocalizationOracle
+from srearena.conductor.oracles.operator_misoperation.non_existent_storage_mitigation import NonExistentStorageClassMitigationOracle
 
 
-class K8SOperatorNonExistentStorageBaseTask:
-    def __init__(self):
-        self.injector = K8SOperatorFaultInjector("tidb-cluster")
-        self.app = TiDBCluster()
-        self.faulty_cr = "tidbclusters"
+class K8SOperatorNonExistentStorageFault(Problem):
+    def __init__(self, faulty_service="tidb-app"):
+        app = FleetCast()
+        super().__init__(app=app, namespace='tidb-cluster')
+        self.faulty_service = faulty_service
+        self.kubectl = KubeCtl()
+        self.localization_oracle = LocalizationOracle(problem=self, expected=["tidb-cluster"])
+        self.mitigation_oracle = NonExistentStorageClassMitigationOracle(problem=self, deployment_name="basic")
 
+    @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector._inject("non_existent_storage")
-        print(f"Injecting non-existent storage failure of the TiDB cluster\n")
+        injector = K8SOperatorFaultInjector(namespace='tidb-cluster')
+        injector.inject_non_existent_storage()
+        print(f"[FAULT INJECTED] {self.faulty_service} non-existent storage failure\n")
 
+    @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector._recover("non_existent_storage")
-        print(f"Recovered non-existent failure of the TiDB cluster\n")
+        injector = K8SOperatorFaultInjector(namespace='tidb-cluster')
+        injector.recover_non_existent_storage()
+        print(f"[FAULT RECOVERED] {self.faulty_service} non-existent storage failure\n")
 
-
-################## Detection Problem ##################
-class K8SOperatorNonExistentStorageDetection(K8SOperatorNonExistentStorageBaseTask, DetectionTask):
-    def __init__(self):
-        K8SOperatorNonExistentStorageBaseTask.__init__(self)
-        DetectionTask.__init__(self, self.app)
-
-    def eval(self, soln: Any, trace: list[SessionItem], duration: float):
-        print("== Evaluation ==")
-        expected_solution = "Yes"
-
-        if isinstance(soln, str):
-            if soln.strip().lower() == expected_solution.lower():
-                print(f"Correct detection: {soln}")
-                self.add_result("Detection Accuracy", "Correct")
-            else:
-                print(f"Incorrect detection: {soln}")
-                self.add_result("Detection Accuracy", "Incorrect")
-        else:
-            print("Invalid solution format")
-            self.add_result("Detection Accuracy", "Invalid Format")
-
-        return super().eval(soln, trace, duration)
-
-
-################## Localization Problem ##################
-class K8SOperatorNonExistentStorageLocalization(K8SOperatorNonExistentStorageBaseTask, LocalizationTask):
-    def __init__(self):
-        K8SOperatorNonExistentStorageBaseTask.__init__(self)
-        LocalizationTask.__init__(self, self.app)
-        self.task_desc = """\
-            You are an expert DevOps engineer who has been tasked with localizing faults in a deployed service.
-
-            The service you are working with today is described below:
-            {app_summary}
-
-            You will begin by analyzing the service's state and telemetry, and then submit one of two possible solutions:
-            1. list[str]: list of faulty components or custom resources (e.g., service names, CRs)
-            2. str: `None` if no faults were detected
-            """
-
-    def eval(self, soln: Any, trace: list[SessionItem], duration: float):
-        print("== Evaluation ==")
-
-        if soln is None:
-            print("Solution is None")
-            self.add_result("Localization Accuracy", 0.0)
-            self.results["success"] = False
-            self.results["is_subset"] = False
-            super().eval(soln, trace, duration)
-            return self.results
-
-        # Calculate exact match and subset
-        is_exact = is_exact_match(soln, self.faulty_cr)
-        is_sub = is_subset([self.faulty_cr], soln)
-
-        # Determine accuracy
-        if is_exact:
-            accuracy = 100.0
-            print(f"Exact match: {soln} | Accuracy: {accuracy}%")
-        elif is_sub:
-            accuracy = (len([self.faulty_cr]) / len(soln)) * 100.0
-            print(f"Subset match: {soln} | Accuracy: {accuracy:.2f}%")
-        else:
-            accuracy = 0.0
-            print(f"No match: {soln} | Accuracy: {accuracy}%")
-
-        self.add_result("Localization Accuracy", accuracy)
-        super().eval(soln, trace, duration)
-
-        self.results["success"] = is_exact or (is_sub and len(soln) == 1)
-        self.results["is_subset"] = is_sub
-
-        return self.results

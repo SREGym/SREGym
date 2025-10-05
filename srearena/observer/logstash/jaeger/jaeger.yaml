@@ -1,0 +1,69 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-out
+  labels:
+    app-name: jaeger
+  namespace: observe
+spec:
+  type: NodePort
+  ports:
+  - port: 16686
+  selector:
+    app-name: jaeger
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jaeger-agent
+  labels:
+    app-name: jaeger
+  namespace: observe
+spec:
+  ports:
+  - port: 5775
+    name: udp1
+    protocol: UDP
+  - port: 5778
+    name: tcp1
+  - port: 6831
+    name: udp2
+    protocol: UDP
+  - port: 6832
+    name: udp3
+    protocol: UDP
+  - port: 14250
+    name: tcp2
+  - port: 14268
+    name: tcp3
+  selector:
+    app-name: jaeger
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jaeger-agent
+  labels:
+    app-name: jaeger
+  namespace: observe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app-name: jaeger
+  template:
+    metadata:
+      labels:
+        app-name: jaeger
+      name: jaeger-agent
+    spec:
+      containers:
+      - name: jaeger-agent
+        image: jaegertracing/all-in-one:latest
+        env:
+        - name: COLLECTOR_ZIPKIN_HTTP_PORT
+          value: "9411"
+        - name: JAEGER_AGENT_PORT
+          value: "5775"
+      restartPolicy: Always

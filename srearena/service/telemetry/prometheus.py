@@ -196,3 +196,4 @@ class Prometheus:
         except subprocess.CalledProcessError:
             return False
         return False
+        

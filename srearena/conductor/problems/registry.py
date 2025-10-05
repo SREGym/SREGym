@@ -27,6 +27,13 @@ from srearena.conductor.problems.missing_service import MissingService
 from srearena.conductor.problems.multiple_failures import MultipleIndependentFailures
 from srearena.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from srearena.conductor.problems.network_policy_block import NetworkPolicyBlock
+from srearena.conductor.problems.operator_misoperation.invalid_affinity_toleration import (
+    K8SOperatorInvalidAffinityTolerationFault,
+)
+from srearena.conductor.problems.operator_misoperation.non_existent_storage import K8SOperatorNonExistentStorageFault
+from srearena.conductor.problems.operator_misoperation.overload_replicas import K8SOperatorOverloadReplicasFault
+from srearena.conductor.problems.operator_misoperation.security_context_fault import K8SOperatorSecurityContextFault
+from srearena.conductor.problems.operator_misoperation.wrong_update_strategy import K8SOperatorWrongUpdateStrategyFault
 from srearena.conductor.problems.payment_service_failure import PaymentServiceFailure
 from srearena.conductor.problems.payment_service_unreachable import PaymentServiceUnreachable
 from srearena.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
@@ -229,19 +236,12 @@ class ProblemRegistry:
             # ad hoc:
             "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
-            # ==================== K8S OPERATOR MISOPERATION (COMMENTED OUT) ==================
-            # K8S operator misoperation -> Refactor later, not sure if they're working
-            # They will also need to be updated to the new problem format.
-            # "operator_overload_replicas-detection-1": K8SOperatorOverloadReplicasDetection,
-            # "operator_overload_replicas-localization-1": K8SOperatorOverloadReplicasLocalization,
-            # "operator_non_existent_storage-detection-1": K8SOperatorNonExistentStorageDetection,
-            # "operator_non_existent_storage-localization-1": K8SOperatorNonExistentStorageLocalization,
-            # "operator_invalid_affinity_toleration-detection-1": K8SOperatorInvalidAffinityTolerationDetection,
-            # "operator_invalid_affinity_toleration-localization-1": K8SOperatorInvalidAffinityTolerationLocalization,
-            # "operator_security_context_fault-detection-1": K8SOperatorSecurityContextFaultDetection,
-            # "operator_security_context_fault-localization-1": K8SOperatorSecurityContextFaultLocalization,
-            # "operator_wrong_update_strategy-detection-1": K8SOperatorWrongUpdateStrategyDetection,
-            # "operator_wrong_update_strategy-localization-1": K8SOperatorWrongUpdateStrategyLocalization,
+            # ==================== K8S OPERATOR MISOPERATION ==================
+            "operator_overload_replicas": K8SOperatorOverloadReplicasFault,
+            "operator_non_existent_storage": K8SOperatorNonExistentStorageFault,
+            "operator_invalid_affinity_toleration": K8SOperatorInvalidAffinityTolerationFault,
+            "operator_security_context_fault": K8SOperatorSecurityContextFault,
+            "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
         }
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = []

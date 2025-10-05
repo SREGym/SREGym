@@ -1,0 +1,13 @@
+{
+    "Name": "Fleet Cast",
+    "Namespace": "fleetcast",
+    "Desc": "FleetCast is a TiDB based application for satellite orbital data",
+    "Supported Operations": [
+        "Serves satellite data from TiDB."
+    ],
+    "Helm Config": {
+        "release_name": "fleetcast",
+        "chart_path": "FleetCast/satellite-app",
+        "namespace": "fleetcast"
+    }
+}

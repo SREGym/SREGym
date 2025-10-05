@@ -753,3 +753,5 @@ agent_graph.png
 
 # Ignore tasklist 
 srearena/conductor/tasklist.yml
+
+kubeconfig.yaml
