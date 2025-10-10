@@ -44,7 +44,7 @@ class TraceAPI:
         self._is_astronomy = self.namespace == "astronomy-shop"
         self._svc_name = "frontend-proxy" if self._is_astronomy else "jaeger"
         self._remote_port = "8080" if self._is_astronomy else "16686"
-        self._url_prefix = "/jaeger" if self._is_astronomy else ""
+        self._url_prefix = "/jaeger/ui" if self._is_astronomy else ""
 
         # Choose access path: NodePort (if available) else port-forward
         node_port = None
