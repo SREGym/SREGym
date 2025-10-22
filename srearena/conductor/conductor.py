@@ -206,8 +206,8 @@ class Conductor:
         print("Deploying Prometheus…")
         self.prometheus.deploy()
 
-        # print("Setting up dm-dust infrastructure for fault injection...")
-        # self.dm_dust_manager.setup_openebs_dm_dust_infrastructure()
+        print("Setting up dm-dust infrastructure for fault injection...")
+        self.dm_dust_manager.setup_openebs_dm_dust_infrastructure()
 
         print("Deploying and starting workload")
         self.problem.app.deploy()
