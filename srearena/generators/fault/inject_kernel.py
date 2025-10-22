@@ -202,7 +202,7 @@ class KernelInjector:
     # ---------- generic exec on node (runs in the Khaos pod on that node) ----------
     def _exec_on_node(self, node: str, script: str) -> str:
         pod = self._get_khaos_pod_on_node(node)
-        cmd = ["kubectl", "-n", self.khaos_ns, "exec", pod, "--", "sh", "-lc", script]
+        cmd = ["kubectl", "-n", self.khaos_ns, "exec", pod, "--", "nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "sh", "-c", script]
         out = self.kubectl.exec_command(" ".join(shlex.quote(x) for x in cmd))
         return out[0] if isinstance(out, tuple) else (out or "")
 
@@ -273,17 +273,72 @@ dmsetup create {name_q} --table "0 $SECTORS dust {dev_q} {int(offset)} {int(blks
 
     def dm_dust_add_badblocks(self, node: str, name: str, blocks: list[int]) -> None:
         name_q = shlex.quote(name)
-        for b in blocks:
-            self._exec_on_node(node, f"dmsetup message {name_q} 0 addbadblock {int(b)} || true")
+        blocks_str = ' '.join(str(int(b)) for b in blocks)
+        
+        # Single shell command that loops through all blocks
+        script = f"""
+        DM_NAME={name_q}
+        BLOCKS="{blocks_str}"
+        SUCCESS=0
+        FAILED=0
+        for BLOCK in $BLOCKS; do
+            if dmsetup message $DM_NAME 0 addbadblock $BLOCK 2>/dev/null; then
+                SUCCESS=$((SUCCESS + 1))
+            else
+                FAILED=$((FAILED + 1))
+            fi
+        done
+        echo "Added $SUCCESS bad blocks, $FAILED already existed or failed"
+        """
+        result = self._exec_on_node(node, script)
+        print(f"[dm-dust] {result.strip()}")
 
-    def dm_dust_enable(self, node: str, name: str, enable: bool = True) -> None:
+    def dm_dust_add_badblocks_range(self, node: str, name: str, start: int, end: int, step: int) -> None:
+        """Add bad blocks using parallel execution with xargs for speed."""
         name_q = shlex.quote(name)
-        self._exec_on_node(node, f"dmsetup message {name_q} 0 {'enable' if enable else 'disable'}")
+        
+        # Use seq to generate block numbers, pipe to xargs -P for parallel execution
+        script = f"""
+        echo "Adding bad blocks from {start} to {end} with step {step} (parallel)..."
+        START_TIME=$(date +%s)
+        
+        seq {start} {step} {end} | xargs -P 32 -I {{}} sh -c 'dmsetup message {name_q} 0 addbadblock {{}} 2>/dev/null' || true
+        
+        END_TIME=$(date +%s)
+        DURATION=$((END_TIME - START_TIME))
+        COUNT=$(seq {start} {step} {end} | wc -l)
+        echo "Completed: Added approximately $COUNT bad blocks in $DURATION seconds"
+        """
+        result = self._exec_on_node(node, script)
+        print(f"[dm-dust] {result.strip()}")
+
+    def dm_dust_enable(self, node: str, name: str) -> None:
+        name_q = shlex.quote(name)
+        result = self._exec_on_node(node, f"dmsetup message {name_q} 0 enable && dmsetup status {name_q}")
+        print(f"[dm-dust] Enabled. Status: {result.strip()}")
+
+    def dm_dust_disable(self, node: str, name: str) -> None:
+        name_q = shlex.quote(name)
+        result = self._exec_on_node(node, f"dmsetup message {name_q} 0 disable && dmsetup status {name_q}")
+        print(f"[dm-dust] Disabled. Status: {result.strip()}")
+
+    def dm_dust_clear(self, node: str, name: str) -> None:
+        """Clear all bad blocks from the device."""
+        name_q = shlex.quote(name)
+        result = self._exec_on_node(node, f"dmsetup message {name_q} 0 clearbadblocks 2>&1 || true")
+        print(f"[dm-dust] Clear bad blocks: {result.strip()}")
 
     def dm_dust_list(self, node: str, name: str) -> str:
         return self._exec_on_node(node, f"dmsetup message {shlex.quote(name)} 0 listbadblocks").strip()
 
-    # ---------- “one-liner” recipes ----------
+    # ---------- "one-liner" recipes ----------
+    def add_bad_blocks(self, node: str, dm_device_name: str, blocks: list[int]) -> None:
+        self.dm_dust_add_badblocks(node, dm_device_name, blocks)
+
+    def enable_bad_blocks(self, node: str, dm_device_name: str, enable: bool = True) -> None:
+        self.dm_dust_enable(node, dm_device_name, enable=enable)
+
+    
     def inject_disk_outage(
         self,
         node: str,

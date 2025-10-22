@@ -3,6 +3,9 @@ import subprocess
 
 from srearena.service.kubectl import KubeCtl
 
+DM_DUST_DEVICE_NAME = "openebs_dust"
+DM_DUST_BACKING_FILE = "/var/tmp/openebs_dm_dust.img"
+DM_DUST_BACKING_FILE_SIZE_GB = 5
 
 class DmDustManager:
     """
@@ -55,8 +58,8 @@ class DmDustManager:
             "lsmod | grep dm_dust || { echo 'dm_dust module not found in lsmod'; exit 1; }; "
             "echo 'Checking device-mapper targets...'; "
             "dmsetup targets | grep dust || { echo 'dust target not available in dmsetup'; exit 1; }; "
-            "DM_NAME=openebs_dust; "
-            "BACKING_FILE=/var/tmp/openebs_dm_dust.img; "
+            f"DM_NAME={DM_DUST_DEVICE_NAME}; "
+            f"BACKING_FILE={DM_DUST_BACKING_FILE}; "
             "echo 'Cleaning up any existing dm-dust infrastructure...'; "
             f"if mountpoint -q {shlex.quote(openebs_path)} 2>/dev/null; then "
             f"  echo 'Unmounting {openebs_path}...'; "
@@ -87,8 +90,8 @@ class DmDustManager:
             f"echo 'Preparing OpenEBS directory at {openebs_path}...'; "
             f"rm -rf {shlex.quote(openebs_path)}/* 2>/dev/null || true; "
             f"mkdir -p {shlex.quote(openebs_path)}; "
-            "echo 'Creating 5GB backing file for OpenEBS dm-dust...'; "
-            "dd if=/dev/zero of=$BACKING_FILE bs=1M count=5120; "
+            f"echo 'Creating {DM_DUST_BACKING_FILE_SIZE_GB}GB backing file for OpenEBS dm-dust...'; "
+            f"dd if=/dev/zero of=$BACKING_FILE bs=1M count={DM_DUST_BACKING_FILE_SIZE_GB * 1024}; "
             "echo 'Setting up loop device...'; "
             "LOOP_DEV=$(losetup -f --show $BACKING_FILE); "
             'echo "Loop device: $LOOP_DEV"; '
