@@ -55,22 +55,48 @@ class DmDustManager:
             "lsmod | grep dm_dust || { echo 'dm_dust module not found in lsmod'; exit 1; }; "
             "echo 'Checking device-mapper targets...'; "
             "dmsetup targets | grep dust || { echo 'dust target not available in dmsetup'; exit 1; }; "
+            "DM_NAME=openebs_dust; "
+            "BACKING_FILE=/var/tmp/openebs_dm_dust.img; "
+            "echo 'Cleaning up any existing dm-dust infrastructure...'; "
+            f"if mountpoint -q {shlex.quote(openebs_path)} 2>/dev/null; then "
+            f"  echo 'Unmounting {openebs_path}...'; "
+            f"  umount {shlex.quote(openebs_path)} 2>/dev/null || umount -f {shlex.quote(openebs_path)} 2>/dev/null || true; "
+            "  sleep 1; "
+            "fi; "
+            "if dmsetup info $DM_NAME >/dev/null 2>&1; then "
+            "  echo 'Found existing device $DM_NAME, attempting removal...'; "
+            "  mount | grep \"/dev/mapper/$DM_NAME\" | awk '{print $3}' | xargs -r -I {} umount -l {} 2>/dev/null || true; "
+            "  sleep 1; "
+            "  if dmsetup remove $DM_NAME 2>/dev/null; then "
+            "    echo 'Device removed successfully'; "
+            "  elif dmsetup remove --force $DM_NAME 2>/dev/null; then "
+            "    echo 'Device removed with --force'; "
+            "  else "
+            "    echo 'Device is busy, renaming and marking for deferred removal...'; "
+            "    timestamp=$(date +%s); "
+            "    dmsetup rename $DM_NAME ${DM_NAME}_old_${timestamp} 2>/dev/null || true; "
+            "    dmsetup remove --deferred ${DM_NAME}_old_${timestamp} 2>/dev/null || true; "
+            "    echo 'Old device will be cleaned up automatically when kernel releases it'; "
+            "  fi; "
+            "fi; "
+            "if [ -f $BACKING_FILE ]; then "
+            "  echo 'Cleaning up old backing file and loop devices...'; "
+            "  losetup -j $BACKING_FILE 2>/dev/null | awk -F: '{print $1}' | xargs -r losetup -d 2>/dev/null || true; "
+            "  rm -f $BACKING_FILE; "
+            "fi; "
             f"echo 'Preparing OpenEBS directory at {openebs_path}...'; "
             f"rm -rf {shlex.quote(openebs_path)}/* 2>/dev/null || true; "
             f"mkdir -p {shlex.quote(openebs_path)}; "
-            "echo 'Creating 1GB backing file for OpenEBS dm-dust (smaller for testing)...'; "
-            "BACKING_FILE=/var/tmp/openebs_dm_dust.img; "
-            "dd if=/dev/zero of=$BACKING_FILE bs=1M count=1024; "
+            "echo 'Creating 5GB backing file for OpenEBS dm-dust...'; "
+            "dd if=/dev/zero of=$BACKING_FILE bs=1M count=5120; "
             "echo 'Setting up loop device...'; "
             "LOOP_DEV=$(losetup -f --show $BACKING_FILE); "
             'echo "Loop device: $LOOP_DEV"; '
             "SECTORS=$(blockdev --getsz $LOOP_DEV); "
             'echo "Sectors: $SECTORS"; '
             "echo 'Creating healthy dm-dust device for OpenEBS...'; "
-            "DM_NAME=openebs_dust; "
-            "dmsetup remove $DM_NAME 2>/dev/null || true; "
             "echo 'Running dmsetup create command...'; "
-            "dmsetup create $DM_NAME --table \"0 $SECTORS dust $LOOP_DEV 0 512\" --verbose || { echo 'dmsetup create failed'; dmsetup targets; exit 1; }; "
+            "dmsetup create $DM_NAME --table \"0 $SECTORS dust $LOOP_DEV 0 512\" || { echo 'dmsetup create failed'; dmsetup targets; exit 1; }; "
             "echo 'dmsetup create completed successfully'; "
             "echo 'Verifying dm device was created...'; "
             "ls -la /dev/mapper/$DM_NAME || { echo 'dm device not found'; exit 1; }; "
@@ -91,17 +117,26 @@ class DmDustManager:
             pod,
             "--",
             "nsenter",
-            "--mount=/proc/1/ns/mnt",
-            "bash",
-            "-lc",
+            "-t", "1",
+            "-m",
+            "-u",
+            "-i",
+            "-n",
+            "-p",
+            "sh",
+            "-c",
             inner_cmd,
         ]
 
-        rc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
-        if rc.returncode != 0:
-            raise RuntimeError(
-                f"Failed to setup dm-dust on {node}: rc={rc.returncode}, stdout={rc.stdout}, stderr={rc.stderr}"
-            )
+        print(f"[dm-dust] Setting up dm-dust on {node}...")
+        try:
+
+            rc = subprocess.run(cmd, timeout=120)
+            if rc.returncode != 0:
+                raise RuntimeError(f"Failed to setup dm-dust on {node}: return code {rc.returncode}")
+        except subprocess.TimeoutExpired:
+            print(f"[dm-dust DEBUG] Command timed out on {node} after 120 seconds")
+            raise RuntimeError(f"Timeout setting up dm-dust on {node} after 120 seconds")
 
     def _get_khaos_pod_on_node(self, node: str) -> str:
         """Find a running Khaos pod on the specified node."""
