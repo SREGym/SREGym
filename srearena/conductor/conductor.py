@@ -104,6 +104,13 @@ class Conductor:
         print(f"[Session Start] Problem ID: {self.problem_id}")
         self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
 
+        if self.problem.requires_khaos() and self.kubectl.is_emulated_cluster():
+            raise RuntimeError(
+                f"Problem '{self.problem_id}' requires Khaos for eBPF-based fault injection, "
+                "but Khaos cannot be deployed on emulated clusters (kind, minikube, k3d, etc.). "
+                "Please use a real Kubernetes cluster to run this problem."
+            )
+
         self.fix_kubernetes()
 
         self.get_tasklist()
@@ -231,8 +238,10 @@ class Conductor:
         )
         self.kubectl.wait_for_ready("kube-system")
 
-        print("Deploying Khaos DaemonSet...")
-        self.khaos.ensure_deployed()
+        # Only deploy Khaos if the problem requires it
+        if self.problem and self.problem.requires_khaos():
+            print("Deploying Khaos DaemonSet...")
+            self.khaos.ensure_deployed()
 
         print("Setting up OpenEBS…")
         self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")

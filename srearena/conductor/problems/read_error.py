@@ -28,6 +28,10 @@ class ReadError(Problem):
 
         self.app.create_workload()
 
+    def requires_khaos(self) -> bool:
+        """This problem requires Khaos for eBPF-based fault injection."""
+        return True
+
     @mark_fault_injected
     def inject_fault(self):
         print(f"== Fault Injection: read_error ==")
