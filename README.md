@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>SREGym: A Unified Framework for Benchmarking SRE Agents</h1>
+<h1>SREGym: An AI-Native Platform for Benchmarking SRE Agents</h1>
 
 [🚀Quick Start](#🚀quickstart) |
 [📦Installation](#📦installation) |
@@ -11,9 +11,9 @@
 
 <!-- TODO: Rewrite overview and add figure. -->
 
-SREGym is a unified framework to enable the design, development, and evaluation of autonomous AIOps agents and, additionally, serve the purpose of building reproducible, standardized, interoperable, and scalable benchmarks. SREGym offers a Kubernetes-based experiment environment that deploy cloud applications, inject faults, generate workloads, and export telemetry data, while orchestrating these components with programmable interfaces. 
+SREGym is a unified platform to enable the design, development, and evaluation of AI agents for Site Reliability Engineering (SRE). The core idea is to create live system environments for SRE agents to solve real-world problems.
 
-Moreover, SREGym provides a benchmark suite with a set of problems to evaluate AIOps agents in an interactive environment. The benchmark suite can be easily extended to meet user- and application-specific needs.
+SREGym also provides a comprehensive SRE benchmark suite with a wide variety of problems for evaluating SRE agents and for training next-generation AI agents.
 
 ### Problems
 See a complete problem list with descriptions [here](https://docs.google.com/spreadsheets/d/1FGIeLNcKsHjrZGQ_VJcQRGl6oTmYyzjW0_ve5tfM_eg/edit?usp=sharing).
@@ -91,10 +91,10 @@ The dashboard runs automatically when you start the benchmark with `python main.
 You can access the dashboard at `http://localhost:11451` in your web browser.
 
 <!-- TODO: Rewrite this section -->
-#### Run your agent on SREGym
+#### Evaluating agents on SREGym
 SREGym makes it extremely easy to develop and evaluate your agents, thanks to its decoupled design. 
 There are at most 4 phases in each problem of SREGym:
-1. **NOOP Detection**: The cluster has no incidents. The agent should detect no incident in the cluster. 
+1. **NOOP Detection**: The cluster has no incidents, we . The agent should detect no incident in the cluster. After agent submission for this problem, the fault is injected.
    
    **Expected submission**: "Yes" or "No" to indicate incident.
 2. **Incident Detection**: The cluster has a running incident. The agent should detect an incident in the cluster.
