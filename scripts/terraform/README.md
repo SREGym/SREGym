@@ -1,5 +1,4 @@
-
-## Setting up SREArena using Terraform
+## Setting up SREGym using Terraform
 
 This guide outlines the steps for establishing a secure connection to your Azure environment using a VPN and then provisioning resources with Terraform. This will create a two-node Kubernetes cluster with one controller and one worker node.
 
@@ -8,7 +7,7 @@ This guide outlines the steps for establishing a secure connection to your Azure
 **Prerequisites:**
 
 - **Azure VPN Connection:** Set up a secure connection to your Azure environment using a VPN client.
-- **Working directory:** SREArena/scripts/terraform/
+- **Working directory:** SREGym/scripts/terraform/
 - **Privileges:** The user should have the privileges to create resources (SSH keys, VM, network interface, network interface security group (if required), public IP, subnet, virtual network) in the selected resource group.
 - **Azure CLI:** Follow the official [Microsoft documentation](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) for installing the Azure CLI for your operating system: 
 - **Install and initialize Terraform:**
@@ -57,8 +56,8 @@ This guide outlines the steps for establishing a secure connection to your Azure
    terraform apply "main.tfplan"
    ```
    
-6. **Setup SREArena**
-    Run the below script to setup SREArena on the newly provisioned resources
+6. **Setup SREGym**
+    Run the below script to setup SREGym on the newly provisioned resources
 
     ```shell
     python deploy.py
@@ -68,8 +67,8 @@ This guide outlines the steps for establishing a secure connection to your Azure
    Please activate virtual environment before running any scripts and add the path to `wrk2` executable to PATH:
 
    ```
-   azureuser@kubeController:~/SREArena$ source .venv/bin/activate
-   (.venv) azureuser@kubeController:~/SREArena/clients$ export PATH="$PATH:/home/azureuser/SREArena/TargetMicroservices/wrk2"
+   azureuser@kubeController:~/SREGym$ source .venv/bin/activate
+   (.venv) azureuser@kubeController:~/SREGym/clients$ export PATH="$PATH:/home/azureuser/SREGym/TargetMicroservices/wrk2"
    ```
 
 **How to destroy the resources using Terraform?**

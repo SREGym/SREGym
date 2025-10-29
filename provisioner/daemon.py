@@ -10,11 +10,11 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from provisioner.cloudlab_provisioner import CloudlabProvisioner
 from provisioner.config.settings import DefaultSettings
-from provisioner.state_manager import CLUSTER_STATUS, SREARENA_STATUS, StateManager
+from provisioner.state_manager import CLUSTER_STATUS, SREGYM_STATUS, StateManager
 from provisioner.utils.email_sender import EmailSender
 from provisioner.utils.logger import logger
 from provisioner.utils.ssh import SSHManager
-from scripts.geni_lib.cluster_setup import setup_cloudlab_cluster_with_srearena
+from scripts.geni_lib.cluster_setup import setup_cloudlab_cluster_with_sregym
 
 # Global stop event for graceful shutdown
 stop_event = threading.Event()
@@ -98,7 +98,7 @@ class ProvisionerDaemon:
                             control_node_hostname=hostname,
                             login_info=experiment_info["login_info"],
                             cloudlab_expires_at=expires_at,
-                            # Status remains PROVISIONING until SRE Arena setup
+                            # Status remains PROVISIONING until SREGym setup
                         )
                         logger.info(f"Cluster {slice_name} provisioned by Cloudlab. Host: {hostname}")
 
@@ -114,8 +114,8 @@ class ProvisionerDaemon:
                             )
                             continue
 
-                        # NOTE: not setting up SRE Arena when auto provisioning rather when user claims a cluster
-                        # self._setup_sre_arena_and_finalize(experiment_info)
+                        # NOTE: not setting up SREGym when auto provisioning rather when user claims a cluster
+                        # self._setup_sregym_and_finalize(experiment_info)
 
                         self.state_manager.update_cluster_record(
                             slice_name, status=CLUSTER_STATUS.STATUS_UNCLAIMED_READY
@@ -141,9 +141,9 @@ class ProvisionerDaemon:
         except Exception as e:
             logger.error(f"Critical error in automatic provisioning check: {e}", exc_info=True)
 
-    def _setup_sre_arena_and_finalize(self, experiment_info: dict):
+    def _setup_sregym_and_finalize(self, experiment_info: dict):
         """
-        Setup SRE Arena and finalize cluster state.
+        Setup SREGym and finalize cluster state.
         """
         try:
             slice_name = experiment_info["slice_name"]
@@ -158,26 +158,26 @@ class ProvisionerDaemon:
                     "nodes": hosts,
                 },
                 "pod_network_cidr": DefaultSettings.DEFAULT_POD_NETWORK_CIDR,
-                "deploy_srearena": True,
+                "deploy_sregym": True,
                 "deploy_key": DefaultSettings.DEPLOY_KEY_PATH,
             }
 
-            setup_cloudlab_cluster_with_srearena(cfg)
+            setup_cloudlab_cluster_with_sregym(cfg)
 
-            logger.info(f"SRE Arena setup for {slice_name} completed successfully.")
+            logger.info(f"SREGym setup for {slice_name} completed successfully.")
 
             self.state_manager.update_cluster_record(
                 slice_name,
                 status=CLUSTER_STATUS.STATUS_UNCLAIMED_READY,
-                sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_SUCCESS,
+                sregym_setup_status=SREGYM_STATUS.SREGYM_SUCCESS,
             )
         except Exception as e:
-            logger.error(f"Error during SRE Arena setup for {slice_name}: {e}", exc_info=True)
+            logger.error(f"Error during SREGym setup for {slice_name}: {e}", exc_info=True)
             self.state_manager.update_cluster_record(
                 slice_name,
                 status=CLUSTER_STATUS.STATUS_ERROR,
-                sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_FAILED,
-                last_error_message="SRE Arena setup failed",
+                sregym_setup_status=SREGYM_STATUS.SREGYM_FAILED,
+                last_error_message="SREGym setup failed",
             )
             raise e
 

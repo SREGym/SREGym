@@ -97,29 +97,29 @@ def get_curr_problem():
 def get_app_class_by_name(app_name):
     target_app = ""
     if app_name == "Social Network":
-        from srearena.service.apps.social_network import SocialNetwork
+        from sregym.service.apps.social_network import SocialNetwork
 
         target_app = SocialNetwork()
     elif app_name == "OpenTelemetry Demo Astronomy Shop":
-        from srearena.service.apps.astronomy_shop import AstronomyShop
+        from sregym.service.apps.astronomy_shop import AstronomyShop
 
         target_app = AstronomyShop()
     elif app_name == "Flight Ticket":
-        from srearena.service.apps.flight_ticket import FlightTicket
+        from sregym.service.apps.flight_ticket import FlightTicket
 
         logger.info(f"Flight ticket has never been tested!!")
         target_app = FlightTicket()
     elif app_name == "Hotel Reservation":
-        from srearena.service.apps.hotel_reservation import HotelReservation
+        from sregym.service.apps.hotel_reservation import HotelReservation
 
         target_app = HotelReservation()
     elif app_name == "TiDB Cluster with Operator":
-        from srearena.service.apps.fleet_cast import FleetCast
+        from sregym.service.apps.fleet_cast import FleetCast
 
         logger.info(f"TiDB has never been tested!!")
         target_app = FleetCast()
     elif app_name == "Train Ticket":
-        from srearena.service.apps.train_ticket import TrainTicket
+        from sregym.service.apps.train_ticket import TrainTicket
 
         target_app = TrainTicket()
     return target_app

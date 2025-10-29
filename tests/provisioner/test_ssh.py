@@ -16,7 +16,7 @@ if __name__ == "__main__":
     logger.info("SSH Utils direct execution test started.")
 
     test_hostname = TEST_HOSTNAME
-    test_username = "srearena"
+    test_username = "sregym"
     test_private_key_path = os.getenv("PROVISIONER_SSH_PRIVATE_KEY_PATH")
 
     if test_hostname == "YOUR_TEST_HOSTNAME_OR_IP":

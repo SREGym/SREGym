@@ -26,7 +26,7 @@ def extract_session_id(ctx: Context):
     Use this function to get the session id of the request
     First use custom session id.
     """
-    ssid = ctx.request_context.request.headers.get("srearena_ssid")
+    ssid = ctx.request_context.request.headers.get("sregym_ssid")
     if ssid is None:
         str_url = str(ctx.request_context.request.url)
         url = URL(str_url)

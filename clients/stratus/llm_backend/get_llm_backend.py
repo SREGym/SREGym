@@ -83,7 +83,7 @@ class LiteLLMBackend:
         elif isinstance(messages, list):
             prompt_messages = messages
             if len(messages) == 0:
-                arena_logger = logging.getLogger("srearena-global")
+                arena_logger = logging.getLogger("sregym-global")
                 arena_logger.info("[ERROR] Canary died!")
             elif isinstance(messages[0], HumanMessage):
                 # logger.info("No system message provided.")
@@ -95,7 +95,7 @@ class LiteLLMBackend:
                     system_message.content = system_prompt
                 # logger.info(f"inserting [{system_message}] at the beginning of messages")
                 prompt_messages.insert(0, system_message)
-                arena_logger = logging.getLogger("srearena-global")
+                arena_logger = logging.getLogger("sregym-global")
                 arena_logger.info(f"[PROMPT] (inserted system prompt at the beginning) \n {system_message}")
         else:
             raise ValueError(f"messages must be either a string or a list of dicts, but got {type(messages)}")
@@ -160,7 +160,7 @@ class LiteLLMBackend:
             try:
                 # trim the first ten message who are AI messages and user messages
                 if trim_message:
-                    arena_logger = logging.getLogger("srearena-global")
+                    arena_logger = logging.getLogger("sregym-global")
                     new_prompt_messages, trim_sum = trim_messages_conservative(prompt_messages)
                     arena_logger.info(f"[WARNING] Trimming the {trim_sum}/{len(prompt_messages)} messages")
                     prompt_messages = new_prompt_messages
@@ -183,7 +183,7 @@ class LiteLLMBackend:
                     f"Rate-limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                 )
 
-                arena_logger = logging.getLogger("srearena-global")
+                arena_logger = logging.getLogger("sregym-global")
                 arena_logger.info(
                     f"[WARNING] HTTP error occurred: {e}. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                 )
@@ -200,13 +200,13 @@ class LiteLLMBackend:
             except litellm.RateLimitError as e:
                 provider_delay = _extract_retry_delay_seconds_from_exception(e)
                 if provider_delay is not None and provider_delay > 0:
-                    arena_logger = logging.getLogger("srearena-global")
+                    arena_logger = logging.getLogger("sregym-global")
                     arena_logger.info(
                         f"[WARNING] Rate-limited by provider. Retrying in {provider_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                     )
                     time.sleep(provider_delay)
                 else:  # actually this fallback should not happen
-                    arena_logger = logging.getLogger("srearena-global")
+                    arena_logger = logging.getLogger("sregym-global")
                     arena_logger.info(
                         f"Rate-limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                     )
@@ -215,21 +215,21 @@ class LiteLLMBackend:
 
                 trim_message = True  # reduce overhead
             except litellm.ServiceUnavailableError as e:  # 503
-                arena_logger = logging.getLogger("srearena-global")
+                arena_logger = logging.getLogger("sregym-global")
                 arena_logger.info(
                     f"[WARNING] Service unavailable (mostly 503). Retrying in 60 seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                 )
                 time.sleep(60)
                 trim_message = True  # reduce overhead
             except IndexError as e:
-                arena_logger = logging.getLogger("srearena-global")
+                arena_logger = logging.getLogger("sregym-global")
                 arena_logger.info(
                     f"[ERROR] IndexError occurred on Gemini Server Side: {e}, keep calm for a while... {attempt + 1}/{LLM_QUERY_MAX_RETRIES}"
                 )
                 trim_message = True
                 time.sleep(30)
                 if attempt == LLM_QUERY_MAX_RETRIES - 1:
-                    arena_logger = logging.getLogger("srearena-global")
+                    arena_logger = logging.getLogger("sregym-global")
                     arena_logger.info(
                         f"[WARNING] Max retries exceeded due to index error. Unable to complete the request."
                     )

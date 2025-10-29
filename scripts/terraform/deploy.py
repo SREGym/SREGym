@@ -2,7 +2,7 @@ import logging
 import os
 import subprocess
 
-REPO = "/home/azureuser/SREArena"
+REPO = "/home/azureuser/SREGym"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)  # Change to DEBUG for more detailed logs
@@ -180,7 +180,7 @@ def main():
     # Path to the shell script
     kubeadm_shell_script = f"./scripts/kubeadm.sh"
     controller_shell_script = f"./scripts/kube_controller.sh"
-    setup_aiopslab_script = f"./scripts/setup_aiopslab.sh"
+    setup_sregym_script = f"./scripts/setup_sregym.sh"
     prom_worker_setup_script = f"./scripts/prom_on_worker.sh"
 
     # Install kubeadm on all the VMs
@@ -197,8 +197,8 @@ def main():
         logger.info(f"Join command retrieved: {join_command}")
         run_kubeadm_join_on_worker(username, private_key_file_2, public_ip_2, join_command)
 
-    # Setup srearena
-    copy_and_execute_script(username, private_key_file_1, public_ip_1, setup_aiopslab_script)
+    # Setup sregym
+    copy_and_execute_script(username, private_key_file_1, public_ip_1, setup_sregym_script)
 
     # Deploy Prometheus on the worker node)
     copy_and_execute_script(username, private_key_file_2, public_ip_2, prom_worker_setup_script)

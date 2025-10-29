@@ -1,5 +1,5 @@
 """
-SREArena CLI client. Use this for debugging and platform development work—
+SREGym CLI client. Use this for debugging and platform development work—
 otherwise use main.py.
 
 This version talks directly to the in-process Conductor for both environment
@@ -21,11 +21,11 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 
-from dashboard.dashboard_app import SREArenaDashboardServer
+from dashboard.dashboard_app import SREGymDashboardServer
 from dashboard.proxy import LogProxy
 from logger import init_logger
-from srearena.conductor.conductor import Conductor
-from srearena.service.shell import Shell
+from sregym.conductor.conductor import Conductor
+from sregym.service.shell import Shell
 
 WELCOME = """
 # SREGym
@@ -121,7 +121,7 @@ class HumanAgent:
     async def _prompt(self) -> str:
         loop = asyncio.get_running_loop()
         style = Style.from_dict({"prompt": "ansigreen bold"})
-        prompt_txt = [("class:prompt", "SREArena> ")]
+        prompt_txt = [("class:prompt", "SREGym> ")]
         with patch_stdout():
             try:
                 return await loop.run_in_executor(
@@ -144,15 +144,15 @@ def run_dashboard_server():
         sys.stderr = open(os.devnull, "w")
     except Exception:
         pass
-    server = SREArenaDashboardServer(host="127.0.0.1", port=11451, debug=False)
+    server = SREGymDashboardServer(host="127.0.0.1", port=11451, debug=False)
     server.run(threaded=False)
 
 
 async def main():
     # set up the logger
     """
-    logging.getLogger("srearena-global").setLevel(logging.INFO)
-    logging.getLogger("srearena-global").addHandler(LogProxy())
+    logging.getLogger("sregym-global").setLevel(logging.INFO)
+    logging.getLogger("sregym-global").addHandler(LogProxy())
 
     try:
         set_start_method("spawn")

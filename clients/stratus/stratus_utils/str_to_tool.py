@@ -26,7 +26,7 @@ def get_client():
     session_id = str(uuid.uuid4())
     transport = SSETransport(
         url=f"{os.environ['MCP_SERVER_URL']}/kubectl_mcp_tools/sse",
-        headers={"srearena_ssid": session_id},
+        headers={"sregym_ssid": session_id},
     )
     client = Client(transport)
     return client

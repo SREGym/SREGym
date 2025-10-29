@@ -1,6 +1,6 @@
 ## Environment Setup
 
-This is the instruction to use Ansible to build a remote cluster for SREArena. We currently use [CloudLab](https://www.cloudlab.us/) but we believe this will work on any servers you have access to.
+This is the instruction to use Ansible to build a remote cluster for SREGym. We currently use [CloudLab](https://www.cloudlab.us/) but we believe this will work on any servers you have access to.
 
 
 ### 1) Modify the inventory file

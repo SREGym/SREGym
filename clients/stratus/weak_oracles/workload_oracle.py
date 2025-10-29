@@ -9,11 +9,11 @@ from pydantic import ConfigDict, Field
 from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
 
 # from aiopslab.generators.workload.wrk import Wrk
-from srearena.paths import BASE_DIR, TARGET_MICROSERVICES
-from srearena.service.apps.base import Application
-from srearena.service.kubectl import KubeCtl
+from sregym.paths import BASE_DIR, TARGET_MICROSERVICES
+from sregym.service.apps.base import Application
+from sregym.service.kubectl import KubeCtl
 
-# from srearena.generators.workload.wrk2 import Wrk2 as Wrk
+# from sregym.generators.workload.wrk2 import Wrk2 as Wrk
 
 
 class Wrk:

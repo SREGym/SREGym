@@ -339,7 +339,7 @@ trace_output/
 metrics_output/
 
 # Ignore telemetry data directories
-srearena/observer/telemetry_data_*/
+sregym/observer/telemetry_data_*/
 
 # Ignore all dataset functional directories
 dataset/functional/**/groundtruth/
@@ -349,16 +349,16 @@ dataset/functional/**/trace/
 
 # Ignore Prometheus setup file
 .DS_Store
-srearena/observer/prometheus/prometheus/charts/prometheus-pushgateway-2.4.2.tgz
-srearena/observer/prometheus/prometheus/charts/prometheus-node-exporter-4.23.2.tgz
-srearena/observer/prometheus/prometheus/charts/kube-state-metrics-5.15.3.tgz
-srearena/observer/prometheus/prometheus/Chart.lock
-srearena/observer/prometheus/prometheus/charts/alertmanager-1.7.0.tgz
-srearena/observer/prometheus/prometheus/Chart.lock
-srearena/observer/prometheus/prometheus/Chart.lock
+sregym/observer/prometheus/prometheus/charts/prometheus-pushgateway-2.4.2.tgz
+sregym/observer/prometheus/prometheus/charts/prometheus-node-exporter-4.23.2.tgz
+sregym/observer/prometheus/prometheus/charts/kube-state-metrics-5.15.3.tgz
+sregym/observer/prometheus/prometheus/Chart.lock
+sregym/observer/prometheus/prometheus/charts/alertmanager-1.7.0.tgz
+sregym/observer/prometheus/prometheus/Chart.lock
+sregym/observer/prometheus/prometheus/Chart.lock
 
 # Ignore customized config files
-srearena/config.yml
+sregym/config.yml
 scripts/ansible/inventory.yml
 
 # Ignore cloudlab credentials
@@ -711,7 +711,7 @@ trace_output/
 metrics_output/
 
 # Ignore telemetry data directories
-srearena/observer/telemetry_data_*/
+sregym/observer/telemetry_data_*/
 
 # Ignore all dataset functional directories
 dataset/functional/**/groundtruth/
@@ -721,16 +721,16 @@ dataset/functional/**/trace/
 
 # Ignore Prometheus setup file
 .DS_Store
-srearena/observer/prometheus/prometheus/charts/prometheus-pushgateway-2.4.2.tgz
-srearena/observer/prometheus/prometheus/charts/prometheus-node-exporter-4.23.2.tgz
-srearena/observer/prometheus/prometheus/charts/kube-state-metrics-5.15.3.tgz
-srearena/observer/prometheus/prometheus/Chart.lock
-srearena/observer/prometheus/prometheus/charts/alertmanager-1.7.0.tgz
-srearena/observer/prometheus/prometheus/Chart.lock
-srearena/observer/prometheus/prometheus/Chart.lock
+sregym/observer/prometheus/prometheus/charts/prometheus-pushgateway-2.4.2.tgz
+sregym/observer/prometheus/prometheus/charts/prometheus-node-exporter-4.23.2.tgz
+sregym/observer/prometheus/prometheus/charts/kube-state-metrics-5.15.3.tgz
+sregym/observer/prometheus/prometheus/Chart.lock
+sregym/observer/prometheus/prometheus/charts/alertmanager-1.7.0.tgz
+sregym/observer/prometheus/prometheus/Chart.lock
+sregym/observer/prometheus/prometheus/Chart.lock
 
 # Ignore customized config files
-srearena/config.yml
+sregym/config.yml
 scripts/ansible/inventory.yml
 
 # Ignore cloudlab credentials
@@ -752,7 +752,7 @@ provisioner_ssh_key.pub
 agent_graph.png
 
 # Ignore tasklist 
-srearena/conductor/tasklist.yml
+sregym/conductor/tasklist.yml
 
 # HTMLs
 *.html

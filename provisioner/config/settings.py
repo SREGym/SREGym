@@ -32,13 +32,13 @@ class DefaultSettings:
     LOG_PATH = "logs/"
 
     #### Provisioner Credentials ####
-    PROVISIONER_DEFAULT_SSH_USERNAME = "srearena"
+    PROVISIONER_DEFAULT_SSH_USERNAME = "sregym"
     PROVISIONER_SSH_PRIVATE_KEY_PATH = os.getenv("PROVISIONER_SSH_PRIVATE_KEY_PATH")
 
     #### Daemon Settings ####
     SCHEDULER_INTERVAL_MINUTES = 5
 
-    #### SRE Arena Settings ####
+    #### SREGym Settings ####
     DEFAULT_POD_NETWORK_CIDR = "192.168.0.0/16"
     DEPLOY_KEY_PATH = os.getenv("DEPLOY_KEY_PATH")
 
@@ -47,8 +47,8 @@ CLOUD_LAB_CONTEXT_JSON = {
     "framework": "emulab-ch2",
     "cert-path": os.getenv("CLOUDLAB_CERT_PATH"),
     "key-path": os.getenv("CLOUDLAB_KEY_PATH"),
-    "user-name": "srearena",
-    "user-urn": "urn:publicid:IDN+emulab.net+user+srearena",
+    "user-name": "sregym",
+    "user-urn": "urn:publicid:IDN+emulab.net+user+sregym",
     "user-pubkeypath": os.getenv("PROVISIONER_SSH_PUBLIC_KEY_PATH"),
     "project": os.getenv("CLOUD_PROJECT_NAME"),
 }

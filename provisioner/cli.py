@@ -9,9 +9,9 @@ import click
 
 from provisioner.cloudlab_provisioner import CloudlabProvisioner
 from provisioner.config.settings import DefaultSettings
-from provisioner.state_manager import CLUSTER_STATUS, SREARENA_STATUS, StateManager
+from provisioner.state_manager import CLUSTER_STATUS, SREGYM_STATUS, StateManager
 from provisioner.utils.ssh import SSHManager, SSHUtilError
-from scripts.geni_lib.cluster_setup import setup_cloudlab_cluster_with_srearena
+from scripts.geni_lib.cluster_setup import setup_cloudlab_cluster_with_sregym
 
 logger = logging.getLogger(__name__)
 
@@ -171,16 +171,16 @@ def _remove_user_ssh_key_from_node(ssh_mgr: SSHManager, user_public_key: str, us
         return False
 
 
-def _setup_sre_arena(cluster_info: dict) -> bool:
+def _setup_sregym(cluster_info: dict) -> bool:
     """
-    Setup SRE Arena on a newly provisioned cluster.
+    Setup SREGym on a newly provisioned cluster.
     Returns True on success, False on failure.
     """
     try:
         slice_name = cluster_info["slice_name"]
         login_info = cluster_info["login_info"]
 
-        click.echo(click.style(f"Setting up SRE Arena on cluster {slice_name}...", fg="yellow"))
+        click.echo(click.style(f"Setting up SREGym on cluster {slice_name}...", fg="yellow"))
         hosts = [info[2] for info in login_info]
 
         cfg = {
@@ -190,17 +190,17 @@ def _setup_sre_arena(cluster_info: dict) -> bool:
                 "nodes": hosts,
             },
             "pod_network_cidr": DefaultSettings.DEFAULT_POD_NETWORK_CIDR,
-            "deploy_srearena": True,
+            "deploy_sregym": True,
             "deploy_key": DefaultSettings.DEPLOY_KEY_PATH,
         }
 
-        setup_cloudlab_cluster_with_srearena(cfg)
+        setup_cloudlab_cluster_with_sregym(cfg)
 
-        click.echo(click.style(f"SRE Arena setup completed successfully for {slice_name}.", fg="green"))
+        click.echo(click.style(f"SREGym setup completed successfully for {slice_name}.", fg="green"))
         return True
     except Exception as e:
-        click.echo(click.style(f"Error setting up SRE Arena: {e}", fg="red"))
-        logger.error(f"Error setting up SRE Arena for {slice_name}: {e}", exc_info=True)
+        click.echo(click.style(f"Error setting up SREGym: {e}", fg="red"))
+        logger.error(f"Error setting up SREGym for {slice_name}: {e}", exc_info=True)
         return False
 
 
@@ -254,9 +254,9 @@ def register(email, ssh_key):
 @cli.command()
 @click.option("--email", required=True, help="Your registered email address.")
 @click.option("--eval-override", is_flag=True, help="Request evaluation override for longer inactivity timeout.")
-@click.option("--deploy-srearena", is_flag=True, help="Deploy SRE Arena on the cluster.")
+@click.option("--deploy-sregym", is_flag=True, help="Deploy SREGym on the cluster.")
 @click.pass_context
-def claim(ctx, email, eval_override, deploy_srearena):
+def claim(ctx, email, eval_override, deploy_sregym):
     """Claims an available cluster or requests a new one."""
     sm = get_state_manager()
     cp = get_cloudlab_provisioner()
@@ -355,28 +355,28 @@ def claim(ctx, email, eval_override, deploy_srearena):
                 )
             )
 
-        if deploy_srearena:
-            click.echo("Setting up SRE Arena for your cluster. This may take several minutes...")
+        if deploy_sregym:
+            click.echo("Setting up SREGym for your cluster. This may take several minutes...")
             experiment_info = {
                 "slice_name": slice_name,
                 "login_info": cluster_to_claim["login_info"],
             }
-            setup_success = _setup_sre_arena(experiment_info)
+            setup_success = _setup_sregym(experiment_info)
             if setup_success:
                 sm.update_cluster_record(
                     slice_name,
-                    sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_SUCCESS,
+                    sregym_setup_status=SREGYM_STATUS.SREGYM_SUCCESS,
                 )
-                click.echo(click.style("SRE Arena successfully set up on your cluster!", fg="green"))
+                click.echo(click.style("SREGym successfully set up on your cluster!", fg="green"))
             else:
                 sm.update_cluster_record(
                     slice_name,
-                    sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_FAILED,
-                    last_error_message="SRE Arena setup failed",
+                    sregym_setup_status=SREGYM_STATUS.SREGYM_FAILED,
+                    last_error_message="SREGym setup failed",
                 )
                 click.echo(
                     click.style(
-                        "SRE Arena setup failed. You may still use the cluster for basic operations.", fg="yellow"
+                        "SREGym setup failed. You may still use the cluster for basic operations.", fg="yellow"
                     )
                 )
 
@@ -482,24 +482,24 @@ def claim(ctx, email, eval_override, deploy_srearena):
                     sm.update_cluster_record(slice_name, status=CLUSTER_STATUS.STATUS_TERMINATING)
                 return
 
-            if deploy_srearena:
-                click.echo("Setting up SRE Arena for your cluster. This may take several minutes...")
-                setup_success = _setup_sre_arena(experiment_info)
+            if deploy_sregym:
+                click.echo("Setting up SREGym for your cluster. This may take several minutes...")
+                setup_success = _setup_sregym(experiment_info)
                 if setup_success:
                     sm.update_cluster_record(
                         slice_name,
-                        sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_SUCCESS,
+                        sregym_setup_status=SREGYM_STATUS.SREGYM_SUCCESS,
                     )
-                    click.echo(click.style("SRE Arena successfully set up on your cluster!", fg="green"))
+                    click.echo(click.style("SREGym successfully set up on your cluster!", fg="green"))
                 else:
                     sm.update_cluster_record(
                         slice_name,
-                        sre_arena_setup_status=SREARENA_STATUS.SRE_ARENA_FAILED,
-                        last_error_message="SRE Arena setup failed",
+                        sregym_setup_status=SREGYM_STATUS.SREGYM_FAILED,
+                        last_error_message="SREGym setup failed",
                     )
                     click.echo(
                         click.style(
-                            "SRE Arena setup failed. You may still use the cluster for basic operations.", fg="yellow"
+                            "SREGym setup failed. You may still use the cluster for basic operations.", fg="yellow"
                         )
                     )
 
@@ -595,7 +595,7 @@ def list_clusters(ctx, email):
             click.echo(f"    Aggregate: {cluster.get('aggregate_name')}")
             click.echo(f"    Hardware: {cluster.get('hardware_type')}")
             click.echo(f"    Claimed by: {cluster.get('claimed_by_user_id', 'N/A')}")
-            click.echo(f"    SRE Arena: {cluster.get('sre_arena_setup_status', 'N/A')}")
+            click.echo(f"    SREGym: {cluster.get('sregym_setup_status', 'N/A')}")
 
 
 @cli.command()

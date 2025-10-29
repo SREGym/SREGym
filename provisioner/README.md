@@ -143,11 +143,11 @@ python3 cli.py --help
 | `status` | Check cluster status | `python3 cli.py status --experiment exp-name` |
 
 `claim` has two additional options:
-- `--deploy-srearena`: Deploys SRE Arena on the claimed cluster
+- `--deploy-sregym`: Deploys SREGym on the claimed cluster
 - `--eval-override`: Overrides the evaluation mode for the claimed cluster so that it won't be deleted because of inactivity
 
 ## Testing
-The `tests/provisioner/test_provisioner.py` file contains a test suite that tests the core functionalities of the provisioner. Set `SET_TEST_VALUES` to `True` in `config/settings.py` to run the tests with test values. The tests provision actual CloudLab clusters for testing, so CloudLab credentials are required. Running the first 8 tests takes approximately 35-40 minutes. The last one `test_srearena_deploy` takes approximately 10-12 minutes.
+The `tests/provisioner/test_provisioner.py` file contains a test suite that tests the core functionalities of the provisioner. Set `SET_TEST_VALUES` to `True` in `config/settings.py` to run the tests with test values. The tests provision actual CloudLab clusters for testing, so CloudLab credentials are required. Running the first 8 tests takes approximately 35-40 minutes. The last one `test_sregym_deploy` takes approximately 10-12 minutes.
 
 ### Running Tests
 
@@ -174,4 +174,4 @@ The test suite includes the following tests:
 6. test_claimed_cluster_inactivity_timeout - Tests cleanup of inactive claimed clusters
 7. test_eval_override_for_inactivity - Tests evaluation mode claimed cluster protection
 8. test_claimed_cluster_extension - Tests automatic claimed cluster reservation extension
-9. test_srearena_deploy - Tests SRE Arena deployment on a claimed cluster
+9. test_sregym_deploy - Tests SREGym deployment on a claimed cluster

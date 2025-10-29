@@ -251,9 +251,9 @@ def setup_kind_cluster(cfg: dict) -> None:
     print("Kind cluster ready ")
 
 
-def deploy_srearena(ex: RemoteExecutor, deploy_key_path: str) -> None:
-    """Deploy SREArena with proper SSH key handling and host verification"""
-    print("Setting up SREArena deployment…")
+def deploy_sregym(ex: RemoteExecutor, deploy_key_path: str) -> None:
+    """Deploy SREGym with proper SSH key handling and host verification"""
+    print("Setting up SREGym deployment…")
 
     # Read the private key content from local file
     try:
@@ -267,8 +267,8 @@ def deploy_srearena(ex: RemoteExecutor, deploy_key_path: str) -> None:
         "mkdir -p ~/.ssh",
         "chmod 700 ~/.ssh",
         # Write the private key to remote server
-        f"cat > ~/.ssh/srearena_deploy << 'EOF'\n{private_key_content}\nEOF",
-        "chmod 600 ~/.ssh/srearena_deploy",
+        f"cat > ~/.ssh/sregym_deploy << 'EOF'\n{private_key_content}\nEOF",
+        "chmod 600 ~/.ssh/sregym_deploy",
         # Add GitHub to known_hosts to avoid host key verification
         "ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || true",
     ]
@@ -280,13 +280,13 @@ def deploy_srearena(ex: RemoteExecutor, deploy_key_path: str) -> None:
             print(f"      Setup failed: {stderr.strip()}")
             raise RuntimeError(f"SSH setup failed: {stderr.strip()}")
 
-    # Clone and deploy SREArena
+    # Clone and deploy SREGym
     deploy_cmds = [
         # Use the correct repository URL
-        "ssh-agent bash -c 'ssh-add ~/.ssh/srearena_deploy; git clone --recurse-submodules git@github.com:xlab-uiuc/SREArena.git /tmp/srearena'",
-        "cd /tmp/srearena",
+        "ssh-agent bash -c 'ssh-add ~/.ssh/sregym_deploy; git clone --recurse-submodules git@github.com:xlab-uiuc/SREGym.git /tmp/sregym'",
+        "cd /tmp/sregym",
         # Clean up the private key for security
-        "rm -f ~/.ssh/srearena_deploy",
+        "rm -f ~/.ssh/sregym_deploy",
     ]
 
     for cmd in deploy_cmds:
@@ -297,10 +297,10 @@ def deploy_srearena(ex: RemoteExecutor, deploy_key_path: str) -> None:
             print(f"      Error: {stderr.strip()}")
             raise RuntimeError(f"[{ex.host}] `{cmd}` failed:\n{stderr.strip()}")
 
-    print("✅ SREArena deployed successfully!")
+    print("✅ SREGym deployed successfully!")
 
 
-def setup_cloudlab_cluster_with_srearena(cfg: dict) -> None:
+def setup_cloudlab_cluster_with_sregym(cfg: dict) -> None:
     cloud, cidr = cfg["cloudlab"], cfg["pod_network_cidr"]
     deploy_key = cfg["deploy_key"]
     executors: list[RemoteExecutor] = []
@@ -320,9 +320,9 @@ def setup_cloudlab_cluster_with_srearena(cfg: dict) -> None:
             for ex in executors[1:]:
                 join_worker(ex, join_cmd)
 
-        # Deploy SREArena
-        print("\nDeploying SREArena…")
-        deploy_srearena(executors[0], deploy_key)
+        # Deploy SREGym
+        print("\nDeploying SREGym…")
+        deploy_sregym(executors[0], deploy_key)
 
         # Health check
         print("\nPerforming cluster health check…")

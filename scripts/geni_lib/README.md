@@ -147,7 +147,7 @@ The `genictl.py` script provides a CLI to manage both slices and slivers.
 10. **create-experiment**
     - Creates a quick experiment with the desired hardware type, number of nodes, OS type and duration
     ```bash
-    python3 genictl.py create-experiment [--hardware-type HARDWARE_TYPE] [--nodes NODES] [--duration DURATION] [--os-type OS_TYPE] [--ssh-user SSH_USER] [--ssh-key SSH_KEY] [--k8s] [--pod-network-cidr POD_NETWORK_CIDR] [--deploy-srearena] [--deploy-key DEPLOY_KEY]
+    python3 genictl.py create-experiment [--hardware-type HARDWARE_TYPE] [--nodes NODES] [--duration DURATION] [--os-type OS_TYPE] [--ssh-user SSH_USER] [--ssh-key SSH_KEY] [--k8s] [--pod-network-cidr POD_NETWORK_CIDR] [--deploy-sregym] [--deploy-key DEPLOY_KEY]
     ```
     Options:
     - `--hardware-type`: Hardware type (default: c220g5)
@@ -158,8 +158,8 @@ The `genictl.py` script provides a CLI to manage both slices and slivers.
     - `--ssh-key`: SSH private key file
     - `--k8s`: boolean flag to bootstrap Kubernetes after sliver is ready
     - `--pod-network-cidr`: Calico pod CIDR (default: 192.168.0.0/16)
-    - `--deploy-srearena`: boolean flag to deploy SREArena after K8s cluster is ready
-    - `--deploy-key`: Path to SSH deploy key for SREArena private repo
+    - `--deploy-sregym`: boolean flag to deploy SREGym after K8s cluster is ready
+    - `--deploy-key`: Path to SSH deploy key for SREGym private repo
 
 11. **renew-experiment**
     - Renews both slice and sliver for an experiment
