@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import socket
 import subprocess
@@ -11,7 +12,7 @@ from srearena.paths import BASE_DIR, PROMETHEUS_METADATA
 from srearena.service.helm import Helm
 from srearena.service.kubectl import KubeCtl
 
-import logging
+
 class Prometheus:
     def __init__(self):
         self.config_file = PROMETHEUS_METADATA
@@ -21,7 +22,7 @@ class Prometheus:
         self.pvc_config_file = None
         self.port = self.find_free_port()
         self.port_forward_process = None
-        
+
         self.local_logger = logging.getLogger("all.infra.prometheus")
         self.local_logger.propagate = True
         self.local_logger.setLevel(logging.DEBUG)
@@ -73,6 +74,7 @@ class Prometheus:
         """Deploy the metric collector using Helm."""
         if self._is_prometheus_running():
             self.local_logger.warning("Prometheus is already running. Skipping redeployment.")
+            self.start_port_forward()
             return
 
         self._delete_pvc()
@@ -105,7 +107,9 @@ class Prometheus:
         for attempt in range(3):
             self.local_logger.debug(f"Attempt {attempt + 1} of 3 in starting port-forwarding.")
             if self.is_port_in_use(self.port):
-                self.local_logger.debug(f"Port {self.port} is already in use. Attempt {attempt + 1} of 3. Retrying in 3 seconds...")
+                self.local_logger.debug(
+                    f"Port {self.port} is already in use. Attempt {attempt + 1} of 3. Retrying in 3 seconds..."
+                )
                 time.sleep(3)
                 continue
 
@@ -202,4 +206,3 @@ class Prometheus:
         except subprocess.CalledProcessError:
             return False
         return False
-        
