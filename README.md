@@ -118,19 +118,17 @@ The dashboard runs automatically when you start the benchmark with `python main.
 
 You can access the dashboard at `http://localhost:11451` in your web browser.
 
-<!-- TODO: Rewrite this section -->
 #### Evaluating agents on SREGym
-SREGym makes it extremely easy to develop and evaluate your agents, thanks to its decoupled design. 
 There are at most 4 phases in each problem of SREGym:
-1. **NOOP Detection**: The cluster has no incidents, we . The agent should detect no incident in the cluster. After agent submission for this problem, the fault is injected.
+1. **NOOP Detection**: We have deployed the application, but there is no incident happening. The agent should detect no incident in the cluster. After agent submission for this problem, the fault is injected.
    
    **Expected submission**: "Yes" or "No" to indicate incident.
-2. **Incident Detection**: The cluster has a running incident. The agent should detect an incident in the cluster.
+2. **Incident Detection**: We've injected a fault into the cluster, it is now experiencing an incident.
 
    **Expected submission**: "Yes" or "No" to indicate incident.
 3. **Fault Localization**: The agent should localize where the incident originates.
 
-   **Expected submission**: A list of strings representing the faulty components in the cluster.
+   **Expected submission**: The UID(s) of the resource where the incident originates.
 4. **Incident Mitigation**: The agent should try to mitigate the incident and bring the cluster back online.
 
    **Expected submission**: empty submission to indicate that the agent is satisfied with the cluster.
@@ -146,7 +144,7 @@ k8s_target_port-misconfig:
 
 To configure what tasks you want the conductor to run on a particular problem, edit its entry (identified by problem_id) in [`tasklist.yml`](./SREGym/conductor/tasklist.yml). Specify any task(s) of `detection`, `localization` or `mitigation` (in this order) to tell the conductor to run them. `noop` is automatically assumed to be the starting stage of a problem. If there is no entry for a problem, the conductor will assume that all tasks are to be run for that one. `localization` and `mitigation` may be skipped if there is corresponding oracle attached to the problem.
 
-### MCP Servers
+### MCP Tools
 
 The benchmark is driven by agent submissions. The benchmark expects the agent to submit a `POST` HTTP API call to the `http://localhost:8000/submit` HTTP endpoint.
 Each submission pushes the benchmark to the next phase.
@@ -154,15 +152,25 @@ Each submission pushes the benchmark to the next phase.
 Therefore, if you would like to test your agent on SREGym, simply run [`main.py`](https://github.com/xlab-uiuc/SREGym/blob/main/main.py) to start the benchmark,
 then instruct your agent to submit answers with HTTP API call in each phase of the benchmark problem.
 
-SREGym also provides a suite of MCP Servers that support basic cluster management needs.
+SREGym provides a suite of MCP tools that enable agents to interact with the cluster and benchmark:
 
-1. **Jaeger MCP Server**: Allows the agent to query the Jaeger tracing service in the cluster.
-2. **Prometheus MCP Server**: Allows the agent to query metrics traced by Prometheus in the cluster.
-3. **Kubernetes MCP Server**: Allows the agent to execute `kubectl` commands against the k8s cluster.
-4. **Submission MCP Server**: Allows the agent to submit answers to the benchmark.
+Observability Tools:
+- `get_services`: Retrieve the list of service names from Jaeger
+- `get_operations`: Query available operations for a specific service from Jaeger
+- `get_traces`: Get Jaeger traces for a given service in the last n minutes
+- `get_metrics`: Query real-time metrics data from Prometheus using PromQL expressions
+
+Cluster Management Tools:
+- `exec_kubectl_cmd_safely`: Execute kubectl commands against the Kubernetes cluster. Converts natural language to kubectl commands and executes them. Can get/describe/edit Kubernetes deployments, services, and other components. Takes one query at a time and requires namespace names for most queries
+- `exec_read_only_kubectl_cmd`: Execute read-only kubectl commands (e.g., get, describe, logs, top, events). A restricted version of `exec_kubectl_cmd_safely` that only allows non-destructive operations
+- `rollback_command`: Roll back the last kubectl command executed with `exec_kubectl_cmd_safely`
+- `get_previous_rollbackable_cmd`: Get a list of previously executed commands that can be rolled back. When calling `rollback_command` multiple times, commands are rolled back in the order of this list
+
+Benchmark Interaction:
+- `submit`: Submit task results to the benchmark to progress to the next phase
 
 The Stratus agent in [`clients/stratus`](https://github.com/xlab-uiuc/SREGym/tree/main/clients/stratus)
-demonstrates basic usages of these MCP servers in an agent.
+demonstrates usages of these MCP tools in an agent.
 
 ## Acknowledgements
 Thank you to [Laude Institute](https://www.laude.org/) for supporting this project.
