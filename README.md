@@ -2,14 +2,17 @@
 
 <h1>SREGym: An AI-Native Platform for Benchmarking SRE Agents</h1>
 
+[Overview](#🤖overview) | 
 [🚀Quick Start](#🚀quickstart) |
 [📦Installation](#📦installation) |
 [⚙️Usage](#⚙️usage) |
-[📂Project Structure](#📂project-structure) |
+[🤝Contributing](./CONTRIBUTING.md) |
 [![Slack](https://img.shields.io/badge/-Slack-4A154B?style=flat-square&logo=slack&logoColor=white)](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w)
 </div>
 
-<!-- TODO: add figure. -->
+<h2 id="overview">🤖 Overview</h2>
+
+![SREGym Architecture Figure](./assets/SREGymFigure.png)
 
 SREGym is a unified platform to enable the design, development, and evaluation of AI agents for Site Reliability Engineering (SRE). The core idea is to create live system environments for SRE agents to solve real-world problems.
 
