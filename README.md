@@ -21,31 +21,6 @@ SREGym also provides a comprehensive SRE benchmark suite with a wide variety of 
 ### SRE Problems
 Problems in SREGym consist of three components: an application, a fault, and an oracle. When evaluating a problem, SREGym first deploys the application specified in the problem. After deployment, the fault is injected into the system to cause the incident. Then, SREGym begins evaluating the agent and uses the oracle as the ground truth for the problem’s solution.
 
-#### Problem example
-```python
-class K8STargetPortMisconfig(Problem):
-    def __init__(self, faulty_service="user-service"):
-        app = SocialNetwork() # Select application
-        super().__init__(app=app, namespace=app.namespace)
-
-        self.faulty_service = faulty_service
-        self.kubectl = KubeCtl()
-
-        # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
-        self.mitigation_oracle = TargetPortMisconfigMitigationOracle(problem=self)
-        
-        self.app.create_workload()
-
-    @mark_fault_injected
-    def inject_fault(self): # Inject fault
-        injector = VirtualizationFaultInjector(namespace=self.namespace)
-        injector._inject(
-            fault_type="misconfig_k8s",
-            microservices=[self.faulty_service],
-        )
-```
-
 See our [registry]() for a complete list of problems.
 
 SREGym is built to be extensible, we always welcome new contributions. See [CONTRIBUTING](./CONTRIBUTING.md) to get started.
