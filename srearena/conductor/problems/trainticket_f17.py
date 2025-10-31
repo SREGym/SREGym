@@ -1,10 +1,11 @@
 import logging
+
 from srearena.conductor.oracles.compound import CompoundedOracle
-from srearena.conductor.oracles.localization import LocalizationOracle
+from srearena.conductor.oracles.localization_oracle import LocalizationOracle
 from srearena.conductor.oracles.mitigation import MitigationOracle
 from srearena.conductor.oracles.workload import WorkloadOracle
 from srearena.conductor.problems.base import Problem
-from srearena.generators.fault.inject_tt import TrainTicketFaultInjector  
+from srearena.generators.fault.inject_tt import TrainTicketFaultInjector
 from srearena.service.apps.train_ticket import TrainTicket
 from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
@@ -23,7 +24,7 @@ class TrainTicketF17(Problem):
 
         self.kubectl = KubeCtl()
         self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
-        
+
         self.app.create_workload()
         self.mitigation_oracle = CompoundedOracle(
             self,
@@ -38,7 +39,6 @@ class TrainTicketF17(Problem):
             fault_type="fault-17-nested-sql-select-clause-error",
         )
         print(f"Injected fault-17-nested-sql-select-clause-error | Namespace: {self.namespace}\n")
-
 
     @mark_fault_injected
     def recover_fault(self):

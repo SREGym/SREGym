@@ -1,13 +1,13 @@
-from srearena.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
 from srearena.conductor.oracles.detection import DetectionOracle
-from srearena.conductor.oracles.localization import LocalizationOracle
+from srearena.conductor.oracles.localization_oracle import LocalizationOracle
 from srearena.conductor.oracles.rpc_retry_storm_mitigation import RPCRetryStormMitigationOracle
 from srearena.conductor.problems.base import Problem
-from srearena.service.kubectl import KubeCtl
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
+from srearena.generators.workload.blueprint_hotel_work import BHotelWrk, BHotelWrkWorkloadManager
+from srearena.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
+from srearena.service.kubectl import KubeCtl
 from srearena.utils.decorators import mark_fault_injected
 
-from srearena.generators.workload.blueprint_hotel_work import BHotelWrk, BHotelWrkWorkloadManager
 
 class CapacityDecreaseRPCRetryStorm(Problem):
     def __init__(self):
@@ -37,9 +37,7 @@ class CapacityDecreaseRPCRetryStorm(Problem):
         injector.recover_rpc_timeout_retries_misconfiguration(configmap=self.faulty_service)
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
-    def create_workload(
-        self, tput: int = None, duration: str = None, multiplier: int = None
-    ):
+    def create_workload(self, tput: int = None, duration: str = None, multiplier: int = None):
         if tput is None:
             tput = 3000
         if duration is None:

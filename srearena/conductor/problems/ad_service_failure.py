@@ -1,6 +1,6 @@
 """Otel demo adServiceFailure feature flag fault."""
 
-from srearena.conductor.oracles.localization import LocalizationOracle
+from srearena.conductor.oracles.localization_oracle import LocalizationOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_otel import OtelFaultInjector
 from srearena.service.apps.astronomy_shop import AstronomyShop

@@ -1,6 +1,6 @@
 from kubernetes import client, config
 
-from srearena.conductor.oracles.localization import LocalizationOracle
+from srearena.conductor.oracles.localization_oracle import LocalizationOracle
 from srearena.conductor.oracles.network_policy_oracle import NetworkPolicyMitigationOracle
 from srearena.conductor.problems.base import Problem
 from srearena.paths import TARGET_MICROSERVICES

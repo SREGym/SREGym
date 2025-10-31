@@ -30,5 +30,6 @@ def ghost_logs(rate, duration, labels):
             "ts": time.time(),
             "msg": random.choice(["sim req ok", "err timeout", "latency high"]),
         }
+        # kubectl log
         print(json.dumps(msg))
         time.sleep(1.0 / rate)

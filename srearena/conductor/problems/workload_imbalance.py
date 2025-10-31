@@ -1,7 +1,7 @@
 import time
 
 from srearena.conductor.oracles.imbalance_mitigation import ImbalanceMitigationOracle
-from srearena.conductor.oracles.localization import LocalizationOracle
+from srearena.conductor.oracles.localization_oracle import LocalizationOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_virtual import VirtualizationFaultInjector
 from srearena.service.apps.astronomy_shop import AstronomyShop

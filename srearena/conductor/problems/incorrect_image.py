@@ -1,5 +1,5 @@
 from srearena.conductor.oracles.incorrect_image_mitigation import IncorrectImageMitigationOracle
-from srearena.conductor.oracles.localization import LocalizationOracle
+from srearena.conductor.oracles.localization_oracle import LocalizationOracle
 from srearena.conductor.problems.base import Problem
 from srearena.generators.fault.inject_app import ApplicationFaultInjector
 from srearena.service.apps.astronomy_shop import AstronomyShop
