@@ -1,0 +1,347 @@
+---
+- hosts: all
+  become: true
+  vars:
+    docker_key_url: https://download.docker.com/linux/ubuntu/gpg
+    docker_repo: "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+    # kube_version: "1.31.0"  # Adjust Kubernetes version as needed
+    cri_dockerd_version: "0.3.12.3-0"  # Example version for cri-dockerd, customize as needed
+
+  tasks:
+    - name: Remove old Kubernetes repository e.g., v1.29 if it exists
+      file:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        state: absent
+
+    - name: Refresh and upgrade packages
+      apt:
+        update_cache: "yes"
+        upgrade: "yes"
+
+    # - name: Install python3-apt
+    #   apt:
+    #     name: python3-apt
+    #     state: present
+    #   become: true
+
+    - name: Remove old Docker versions if any
+      apt:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - docker.io
+        - docker-doc
+        - docker-compose
+        - podman-docker
+        - containerd
+        - runc
+
+    - name: Install prerequisites for Docker and Kubernetes
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - socat
+    
+    - name: Install OpenSSL development libraries (the wrk build needs it)
+      apt:
+        name: libssl-dev
+        state: present
+
+    - name: Add Docker GPG key and repository
+      shell: |
+        sudo install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL {{ docker_key_url }} -o /etc/apt/keyrings/docker.asc
+        echo "{{ docker_repo }}" | tee /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Update apt and install Docker
+      apt:
+        update_cache: yes
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Add user to docker group to run Docker without sudo
+      user:
+        name: "{{ ansible_user_id }}"
+        groups: docker
+        append: yes
+
+    - name: Get system architecture
+      command: dpkg --print-architecture
+      register: system_arch
+      changed_when: false
+
+    - name: Download cri-dockerd .deb package (amd64)
+      get_url:
+        url: "https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.20/cri-dockerd_0.3.20.3-0.ubuntu-jammy_amd64.deb"
+        dest: /tmp/install-cri-dockerd.deb
+      when: system_arch.stdout == "amd64"
+
+    - name: Install CRI-Dockerd from .deb package (amd64)
+      apt:
+        deb: /tmp/install-cri-dockerd.deb
+        state: present
+      when: system_arch.stdout == "amd64"
+
+    - name: Download cri-dockerd .tgz archive (arm64)
+      get_url:
+        url: "https://github.com/Mirantis/cri-dockerd/releases/download/v0.3.20/cri-dockerd-0.3.20.arm64.tgz"
+        dest: /tmp/cri-dockerd.tgz
+      when: system_arch.stdout == "arm64"
+
+    - name: Extract cri-dockerd archive (arm64)
+      unarchive:
+        src: /tmp/cri-dockerd.tgz
+        dest: /tmp/
+        remote_src: yes
+      when: system_arch.stdout == "arm64"
+
+    - name: Install cri-dockerd binaries (arm64)
+      copy:
+        src: "/tmp/cri-dockerd/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        mode: '0755'
+        remote_src: yes
+      loop:
+        - cri-dockerd
+      when: system_arch.stdout == "arm64"
+
+    - name: Download cri-dockerd systemd service files (arm64)
+      get_url:
+        url: "https://raw.githubusercontent.com/Mirantis/cri-dockerd/v0.3.20/packaging/systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+      loop:
+        - cri-docker.service
+        - cri-docker.socket
+      when: system_arch.stdout == "arm64"
+
+    - name: Fix cri-dockerd binary path in service file (arm64)
+      replace:
+        path: /etc/systemd/system/cri-docker.service
+        regexp: '/usr/bin/cri-dockerd'
+        replace: '/usr/local/bin/cri-dockerd'
+      when: system_arch.stdout == "arm64"
+
+    - name: Reload systemd daemon (arm64)
+      systemd:
+        daemon_reload: yes
+      when: system_arch.stdout == "arm64"
+
+    - name: Start and enable cri-dockerd service
+      systemd:
+        name: cri-docker
+        enabled: yes
+        state: started
+
+    - name: Check if cri-dockerd socket exists
+      stat:
+        path: /var/run/cri-dockerd.sock
+      register: cri_socket
+
+    # - name: Wait for cri-dockerd socket to be available
+    #   wait_for:
+    #     path: /var/run/cri-dockerd.sock
+    #     state: present
+    #     timeout: 30
+    #   when: not cri_socket.stat.exists
+
+    - name: Install Kubernetes packages
+      apt:
+        name:
+          - apt-transport-https
+          - curl
+          - gpg
+        state: present
+
+    # - name: Add Kubernetes GPG key and repository
+    #   shell: |
+    #     echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ kube_version }}/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+    #     curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ kube_version }}/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    #   args:
+    #     creates: /etc/apt/sources.list.d/kubernetes.list
+
+    - name: Remove existing Kubernetes GPG key if it exists
+      file:
+        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        state: absent
+
+    - name: Add Kubernetes GPG key
+      shell: |
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add Kubernetes repository for v1.31
+      shell: |
+        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+      args:
+        creates: /etc/apt/sources.list.d/kubernetes.list
+
+    - name: Install kubeadm, kubelet, kubectl
+      apt:
+        update_cache: yes
+        name:
+          - kubeadm
+          - kubelet
+          - kubectl
+        state: present
+
+    # - name: Hold Kubernetes packages at installed version
+    #   apt:
+    #     name:
+    #       - kubeadm
+    #       - kubelet
+    #       - kubectl
+    #     state: present
+    #     mark: hold
+
+    - name: Hold Kubernetes packages at installed version
+      shell: |
+        sudo apt-mark hold kubeadm kubelet kubectl
+
+    - name: Disable swap
+      shell: |
+        sudo swapoff -a
+        sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+
+    - name: Load necessary kernel modules
+      shell: |
+        sudo modprobe overlay
+        sudo modprobe br_netfilter
+      args:
+        creates: /etc/modules-load.d/k8s.conf
+
+    - name: Configure sysctl for Kubernetes networking
+      copy:
+        content: |
+          net.bridge.bridge-nf-call-iptables  = 1
+          net.bridge.bridge-nf-call-ip6tables = 1
+          net.ipv4.ip_forward                 = 1
+        dest: /etc/sysctl.d/k8s.conf
+      notify: Reload sysctl
+
+    - name: Start and enable kubelet
+      systemd:
+        name: kubelet
+        enabled: yes
+        state: started
+
+  handlers:
+    - name: Install CRI-Dockerd
+      apt:
+        deb: /tmp/cri-dockerd.deb
+
+    - name: Reload sysctl
+      command: sysctl --system
+
+# Control Node Setup
+- hosts: control_node  # Control plane tasks
+  become: true
+  vars:
+    kubeconfig_path: "/users/{{ k8s_user }}/.kube/config"
+  tasks:
+    - name: Resolve control node hostname to IP
+      command: getent ahosts "{{ hostvars['control_node'].ansible_host }}"
+      register: resolved_ip_output
+    - name: Parse resolved IP from output
+      set_fact:
+        resolved_control_plane_ip: "{{ resolved_ip_output.stdout_lines[0].split(' ')[0] }}"
+    - name: Set resolved_control_plane_ip globally
+      add_host:
+        name: "global"
+        resolved_control_plane_ip: "{{ resolved_control_plane_ip }}"
+    - name: Initialize Kubernetes control plane
+      shell: |
+        kubeadm init --pod-network-cidr=10.244.0.0/16 --cri-socket /var/run/cri-dockerd.sock --apiserver-advertise-address={{ resolved_control_plane_ip }}
+      args:
+        creates: /etc/kubernetes/admin.conf
+    - name: Ensure .kube directory exists
+      file:
+        path: "/users/{{ k8s_user }}/.kube"
+        state: directory
+        mode: '0755'
+        owner: "{{ k8s_user }}"
+        # group: "{{ k8s_user }}"
+      become: true
+    - name: Temporarily set permissions to read admin.conf
+      file:
+        path: /etc/kubernetes/admin.conf
+        mode: '0644'
+      become: true
+    
+    - name: Set up kube config for kubectl on control plane
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "/users/{{ k8s_user }}/.kube/config"
+        mode: '0644'
+        remote_src: true
+      become: true
+      become_method: sudo
+    - name: Ensure ownership of kube config for kubectl
+      file:
+        path: "/users/{{ k8s_user }}/.kube/config"
+        owner: "{{ k8s_user }}"
+        # group: "{{ k8s_user }}"
+        mode: '0644'
+      become: true
+    - name: Display ansible_user_id
+      debug:
+        msg: "ansible_user_id is {{ ansible_user_id }}"
+    
+    - name: Fetch admin.conf to localhost for kubeconfig
+      fetch:
+        src: /etc/kubernetes/admin.conf
+        dest: ~/.kube/config
+        flat: yes
+      become: true
+    - name: Generate kubeadm join command
+      shell: kubeadm token create --print-join-command
+      register: kubeadm_join_command
+    - name: Extract kube_token and cert_hash from join command
+      set_fact:
+        kube_token: "{{ (kubeadm_join_command.stdout | regex_search('--token\\s+([\\w.]+)', '\\1')).0 }}"
+        cert_hash: "{{ (kubeadm_join_command.stdout | regex_search('--discovery-token-ca-cert-hash\\s+sha256:([\\w]+)', '\\1')).0 }}"
+  
+    - name: Display kube_token
+      debug:
+        msg: "kube_token is {{ kube_token }}"
+    - name: Display cert_hash
+      debug:
+        msg: "cert_hash is {{ cert_hash }}"
+    - name: Install Flannel network plugin
+      shell: |
+        kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+      args:
+        creates: /etc/kubernetes/kube-flannel.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+    - name: Untaint the control plane to host pods
+      shell: kubectl taint nodes $(hostname) node-role.kubernetes.io/control-plane:NoSchedule- || true
+# Worker Node Setup
+- hosts: worker_nodes
+  become: true
+  tasks:
+    - name: Join Kubernetes cluster
+      shell: |
+        kubeadm join {{ hostvars['global'].resolved_control_plane_ip }}:6443 --token {{ hostvars['control_node'].kube_token }} --discovery-token-ca-cert-hash sha256:{{ hostvars['control_node'].cert_hash }} --cri-socket unix:///var/run/cri-dockerd.sock --v=5
+      args:
+        creates: /var/lib/kubelet/kubeadm-flags.env
+      become: true
+    - name: Ensure .kube directory exists
+      file:
+        path: "/users/{{ ansible_user }}/.kube"
+        state: directory
+        mode: '0755'
+      become_user: "{{ ansible_user }}"  # Ensure directory is created under the correct user
+    - name: Display ansible_user
+      debug:
+        msg: "ansible_user is {{ ansible_user }}"

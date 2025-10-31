@@ -33,7 +33,7 @@ class BaseAgent:
         self.process_tool_call_node = "process_tool_call"
         self.post_round_process_node = "post_round_process"
         self.callback = UsageMetadataCallbackHandler()
-        self.arena_logger = logging.getLogger("srearena-global")
+        self.arena_logger = logging.getLogger("sregym-global")
         self.loop_count = 0
         
     def llm_inference_step(self, messages, tools):

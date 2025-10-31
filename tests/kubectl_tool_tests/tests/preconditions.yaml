@@ -20,5 +20,5 @@ custom_nginx_deploy_in_mt_exist:
 #  $1:NAME; $4: AVAILABLE
   validate_cmd: "kubectl get deployment -n mt | awk '$1 == \"nginx-deployment\" && $4 == \"2\"'"
   validator: "len(opt.strip()) > 0"
-#  cwd should be "SREArena/tests/kubectl_tool_tests/" when running tests
+#  cwd should be "SREGym/tests/kubectl_tool_tests/" when running tests
   fix: "kubectl apply -f ./tests/resources/custom_nginx_deployment.yaml -n mt"

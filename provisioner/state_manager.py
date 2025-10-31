@@ -18,11 +18,11 @@ class CLUSTER_STATUS:
     STATUS_TERMINATED = "terminated"
 
 
-class SREARENA_STATUS:
-    SRE_ARENA_PENDING = "pending"
-    SRE_ARENA_SUCCESS = "success"
-    SRE_ARENA_FAILED = "failed"
-    SRE_ARENA_NOT_ATTEMPTED = "not_attempted"
+class SREGYM_STATUS:
+    SREGYM_PENDING = "pending"
+    SREGYM_SUCCESS = "success"
+    SREGYM_FAILED = "failed"
+    SREGYM_NOT_ATTEMPTED = "not_attempted"
 
 
 class StateManager:
@@ -67,7 +67,7 @@ class StateManager:
                         control_node_hostname TEXT,
                         claimed_by_user_id TEXT,
                         user_ssh_key_installed BOOLEAN DEFAULT FALSE,
-                        sre_arena_setup_status TEXT DEFAULT 'not_attempted',
+                        sregym_setup_status TEXT DEFAULT 'not_attempted',
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         claimed_at TIMESTAMP,
                         last_extended_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -204,7 +204,7 @@ class StateManager:
             "login_info",
             "claimed_by_user_id",
             "user_ssh_key_installed",
-            "sre_arena_setup_status",
+            "sregym_setup_status",
             "claimed_at",
             "last_extended_at",
             "last_activity_at",

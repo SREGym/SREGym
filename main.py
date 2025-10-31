@@ -10,14 +10,14 @@ from datetime import datetime
 import uvicorn
 from rich.console import Console
 
-from dashboard.dashboard_app import SREArenaDashboardServer
+from dashboard.dashboard_app import SREGymDashboardServer
 from dashboard.proxy import LogProxy
 from mcp_server.configs.load_all_cfg import mcp_server_cfg
-from mcp_server.srearena_mcp_server import app as mcp_app
-from srearena.agent_launcher import AgentLauncher
-from srearena.agent_registry import get_agent
-from srearena.conductor.conductor import Conductor
-from srearena.conductor.conductor_api import request_shutdown, run_api
+from mcp_server.sregym_mcp_server import app as mcp_app
+from sregym.agent_launcher import AgentLauncher
+from sregym.agent_registry import get_agent
+from sregym.conductor.conductor import Conductor
+from sregym.conductor.conductor_api import request_shutdown, run_api
 
 LAUNCHER = AgentLauncher()
 
@@ -46,7 +46,7 @@ def driver_loop(conductor: Conductor):
             conductor.problem_id = pid
 
             await conductor.start_problem()
-            agent_to_start = os.environ.get("SREARENA_AGENT", "stratus")
+            agent_to_start = os.environ.get("SREGYM_AGENT", "stratus")
             reg = get_agent(agent_to_start)
             if reg:
                 await LAUNCHER.ensure_started(reg)
@@ -121,15 +121,15 @@ def run_dashboard_server():
         sys.stderr = open(os.devnull, "w")
     except Exception:
         pass
-    server = SREArenaDashboardServer(host="127.0.0.1", port=11451, debug=False)
+    server = SREGymDashboardServer(host="127.0.0.1", port=11451, debug=False)
     server.run(threaded=False)
     print("Dashboard server started on 127.0.0.1:11451")
 
 
 def main():
     # set up the logger
-    logging.getLogger("srearena-global").setLevel(logging.INFO)
-    logging.getLogger("srearena-global").addHandler(LogProxy())
+    logging.getLogger("sregym-global").setLevel(logging.INFO)
+    logging.getLogger("sregym-global").addHandler(LogProxy())
 
     """
     try:
@@ -145,7 +145,7 @@ def main():
     """
 
     # Get agent name from environment variable or default to "agent"
-    agent_name = os.environ.get("SREARENA_AGENT", "agent")
+    agent_name = os.environ.get("SREGYM_AGENT", "agent")
     conductor = Conductor()
     conductor.register_agent(agent_name)
 

@@ -61,7 +61,7 @@ class NL2KubectlAgent:
         session_id = str(uuid.uuid4())
         transport = SSETransport(
             url=KUBECTL_TOOLS_MCP_URL,
-            headers={"srearena_ssid": session_id},
+            headers={"sregym_ssid": session_id},
         )
         self.client = Client(transport)
 

@@ -15,19 +15,19 @@ import plotly.graph_objs as go
 from dash import Input, Output, State, callback, dcc, html
 from dash.dependencies import ClientsideFunction
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "srearena", "service"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "sregym", "service"))
 import threading
 from collections import deque
 
 import yaml
 from flask import request
-from kubectl import KubeCtl
+from sregym.service.kubectl import KubeCtl
 
 DASHBOARD_URL = "http://127.0.0.1:11451"
 
 
-class SREArenaDashboardServer:
-    """SRE Arena Dashboard Server Class"""
+class SREGymDashboardServer:
+    """SREGym Dashboard Server Class"""
 
     # CONCISE Toggle - when True, hide pods for all-green deployments
     CONCISE_TOGGLE = True
@@ -173,7 +173,7 @@ class SREArenaDashboardServer:
         return drained
 
     def _get_export_dir(self) -> Path:
-        export_dir = os.getenv("SRE_ARENA_DASH_EXPORT_DIR", ".")
+        export_dir = os.getenv("SREGYM_DASH_EXPORT_DIR", ".")
         p = Path(export_dir).expanduser().resolve()
         try:
             p.mkdir(parents=True, exist_ok=True)
@@ -322,7 +322,7 @@ class SREArenaDashboardServer:
 
                     export_dir = self._get_export_dir()
                     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    out_file = export_dir / f"srearena_dashboard_{ts}.html"
+                    out_file = export_dir / f"sregym_dashboard_{ts}.html"
 
                     rows_html: list[str] = []
                     # Build from log_history in order; use final snapshot for right side
@@ -339,37 +339,37 @@ class SREArenaDashboardServer:
                     html_doc = (
                         "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
                         "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
-                        "<title>SRE Arena Dashboard Export</title>"
+                        "<title>SREGym Dashboard Export</title>"
                         "<style>body{font-family:Arial,sans-serif;margin:0;padding:20px;background-color:#ffffff;}"
                         "</style></head><body>"
                         f"<div>{''.join(rows_html)}</div>"
                         "<footer style=\"background-color:#f8f9fa;border-top:1px solid #e9ecef;margin-top:20px;min-height:40px;display:flex;align-items:center;justify-content:center;\">"
-                        "<p style=\"text-align:center;color:#6c757d;margin:0;padding:10px\">© 2025 SREArena Dashboard - xlab, UIUC</p>"
+                        "<p style=\"text-align:center;color:#6c757d;margin:0;padding:10px\">© 2025 SREGym Dashboard - xlab, UIUC</p>"
                         "</footer>"
                         "</body></html>"
                     )
                     with open(out_file, "w", encoding="utf-8") as f:
                         f.write(html_doc)
-                    print(f"[SREArena Dashboard] Exported HTML to: {out_file}")
+                    print(f"[SREGym Dashboard] Exported HTML to: {out_file}")
                 finally:
                     try:
                         self._state_lock.release()
                     except Exception:
                         pass
         except Exception as e:
-            print(f"[SREArena Dashboard] Export on exit failed: {e}")
+            print(f"[SREGym Dashboard] Export on exit failed: {e}")
 
     def _handle_signal(self, signum, frame):
         if self._signal_handled:
             # Already handled a Ctrl-C signal, ignore subsequent ones
-            print(f"[SREArena Dashboard] Ignoring subsequent Ctrl-C signal...")
+            print(f"[SREGym Dashboard] Ignoring subsequent Ctrl-C signal...")
             return
         
         # Mark that we've handled the signal
         self._signal_handled = True
         
         try:
-            print(f"[SREArena Dashboard] Caught signal {signum}, exporting current view...")
+            print(f"[SREGym Dashboard] Caught signal {signum}, exporting current view...")
             self._export_on_exit()
         finally:
             # Exit process after exporting
@@ -800,7 +800,7 @@ class SREArenaDashboardServer:
                 html.Div(
                     [
                         html.P(
-                            "© 2025 SREArena Dashboard - xlab, UIUC",
+                            "© 2025 SREGym Dashboard - xlab, UIUC",
                             style={"text-align": "center", "color": "#6c757d", "margin": "0", "padding": "10px"},
                         )
                     ],
@@ -996,7 +996,7 @@ class SREArenaDashboardServer:
 
     def run(self, threaded=False):
         """Start the dashboard server"""
-        print(f"Starting SRE Arena Dashboard on {self.host}:{self.port}")
+        print(f"Starting SREGym Dashboard on {self.host}:{self.port}")
         in_main_thread = threading.current_thread() is threading.main_thread()
         if threaded or not in_main_thread:
             # When running in a thread, disable debug reloader and signals
@@ -1023,5 +1023,5 @@ class SREArenaDashboardServer:
 
 if __name__ == "__main__":
     # Create and run the dashboard server
-    dashboard = SREArenaDashboardServer(host="127.0.0.1", port=11451, debug=True)
+    dashboard = SREGymDashboardServer(host="127.0.0.1", port=11451, debug=True)
     dashboard.run()

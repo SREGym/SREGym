@@ -48,7 +48,7 @@ class StratusToolNode:
             )
             raise ValueError("Last message is not an AIMessage; skipping tool invocation.")
         
-        arena_logger = logging.getLogger("srearena-global")
+        arena_logger = logging.getLogger("sregym-global")
         if message.content != "":
             arena_logger.info(f"[LLM] {message.content}")
             # logger.info(f"{message.content}")

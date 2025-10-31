@@ -15,8 +15,8 @@ if __name__ == "__main__":
     sm.add_user("user1", "ssh-rsa AAA...")
 
     sample_login_info = [
-        ["control", "srearena", "c220g5-111111.wisc.cloudlab.us", 22],
-        ["compute1", "srearena", "c220g5-222222.wisc.cloudlab.us", 22],
+        ["control", "sregym", "c220g5-111111.wisc.cloudlab.us", 22],
+        ["compute1", "sregym", "c220g5-222222.wisc.cloudlab.us", 22],
     ]
 
     slice1 = sm.create_cluster_record(

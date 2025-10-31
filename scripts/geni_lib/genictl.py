@@ -9,7 +9,7 @@ import warnings
 import click
 import geni.portal as portal
 import geni.util
-from cluster_setup import setup_cloudlab_cluster, setup_cloudlab_cluster_with_srearena
+from cluster_setup import setup_cloudlab_cluster, setup_cloudlab_cluster_with_sregym
 
 from provisioner.config.settings import AGGREGATES_MAP
 from provisioner.utils.parser import collect_and_parse_hardware_info, parse_sliver_info
@@ -270,7 +270,7 @@ def create_experiment(
     ssh_user,
     ssh_key,
     pod_network_cidr,
-    deploy_srearena,
+    deploy_sregym,
     deploy_key,
 ):
     hardware_info_list = collect_and_parse_hardware_info()
@@ -328,7 +328,7 @@ def create_experiment(
                     "nodes": nodes,
                     "os_type": os_type,
                     "k8s": k8s,
-                    "deploy_srearena": deploy_srearena,
+                    "deploy_sregym": deploy_sregym,
                     "deploy_key": deploy_key,
                     "pod_network_cidr": pod_network_cidr,
                     "created_at": datetime.datetime.now().isoformat(),
@@ -377,7 +377,7 @@ def create_experiment(
             "nodes": hosts,
         },
         "pod_network_cidr": pod_network_cidr,
-        "deploy_srearena": deploy_srearena,
+        "deploy_sregym": deploy_sregym,
         "deploy_key": deploy_key,
     }
 
@@ -410,8 +410,8 @@ def create_experiment(
 
     print("🚀  Running cluster_setup …")
     try:
-        if deploy_srearena:
-            setup_cloudlab_cluster_with_srearena(cfg)
+        if deploy_sregym:
+            setup_cloudlab_cluster_with_sregym(cfg)
         else:
             setup_cloudlab_cluster(cfg)
         print("✅  Kubernetes cluster ready!")
@@ -580,10 +580,10 @@ def cmd_renew_experiment(slice_name, site, hours):
 @click.option("--ssh-key", help="SSH privatekey file")
 @click.option("--k8s", is_flag=True, help="Bootstrap Kubernetes after sliver is ready")
 @click.option("--pod-network-cidr", default="192.168.0.0/16", help="Calico pod CIDR (default 192.168.0.0/16)")
-@click.option("--deploy-srearena", is_flag=True, help="Deploy SREArena after K8s cluster is ready")
-@click.option("--deploy-key", help="Path to SSH deploy key for SREArena private repo")
+@click.option("--deploy-sregym", is_flag=True, help="Deploy SREGym after K8s cluster is ready")
+@click.option("--deploy-key", help="Path to SSH deploy key for SREGym private repo")
 def cmd_create_experiment(
-    hardware_type, nodes, duration, os_type, k8s, ssh_user, ssh_key, pod_network_cidr, deploy_srearena, deploy_key
+    hardware_type, nodes, duration, os_type, k8s, ssh_user, ssh_key, pod_network_cidr, deploy_sregym, deploy_key
 ):
     """Create slice + sliver quickly"""
     context = geni.util.loadContext()
@@ -597,7 +597,7 @@ def cmd_create_experiment(
         ssh_user,
         ssh_key,
         pod_network_cidr,
-        deploy_srearena,
+        deploy_sregym,
         deploy_key,
     )
 

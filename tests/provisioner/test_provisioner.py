@@ -183,7 +183,7 @@ def cleanup_cloudlab_clusters(state_manager: StateManager):
 # 6. test_claimed_cluster_inactivity_timeout - Tests cleanup of inactive claimed clusters
 # 7. test_eval_override_for_inactivity - Tests evaluation mode claimed cluster protection
 # 8. test_claimed_cluster_extension - Tests automatic claimed cluster reservation extension
-# 9. test_srearena_deploy - Tests SRE Arena deployment.
+# 9. test_sregym_deploy - Tests SREGym deployment.
 #
 
 
@@ -573,11 +573,11 @@ def test_claimed_cluster_extension(state_manager, daemon):
     logger.success("Test PASSED: Claimed cluster reservation was extended.")
 
 
-def test_srearena_deploy(state_manager):
+def test_sregym_deploy(state_manager):
     """
-    Tests that SRE Arena is deployed on a claimed cluster.
+    Tests that SREGym is deployed on a claimed cluster.
     """
-    logger.info("Running Test: SRE Arena Deployment when claiming a cluster")
+    logger.info("Running Test: SREGym Deployment when claiming a cluster")
 
     # 1. Register a user and claim a cluster
     stdout, stderr, exit_code = run_cli_command(
@@ -585,10 +585,10 @@ def test_srearena_deploy(state_manager):
     )
     assert exit_code == 0, f"Registration failed: {stderr}"
 
-    stdout, stderr, exit_code = run_cli_command(["claim", "--email", TEST_USER_EMAIL, "--deploy-srearena"])
+    stdout, stderr, exit_code = run_cli_command(["claim", "--email", TEST_USER_EMAIL, "--deploy-sregym"])
     assert exit_code == 0, f"Claim failed: {stderr}"
 
     claimed_clusters = state_manager.get_claimed_clusters_by_user(TEST_USER_EMAIL)
     assert len(claimed_clusters) == 1, "User could not claim a cluster"
 
-    logger.success("Test PASSED: SRE Arena was deployed on a claimed cluster.")
+    logger.success("Test PASSED: SREGym was deployed on a claimed cluster.")

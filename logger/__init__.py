@@ -13,9 +13,9 @@ def get_current_datetime_formatted():
 
 def init_logger():
     # set up the logger for dashboard
-    logging.getLogger('srearena-global').setLevel(logging.INFO)
-    logging.getLogger('srearena-global').addHandler(LogProxy())
-    logging.getLogger('srearena-global').propagate = False # do not propagate to the real root logger ('')
+    logging.getLogger('sregym-global').setLevel(logging.INFO)
+    logging.getLogger('sregym-global').addHandler(LogProxy())
+    logging.getLogger('sregym-global').propagate = False # do not propagate to the real root logger ('')
     
     # set up the logger for log file
     root_logger = logging.getLogger('all')
@@ -24,7 +24,7 @@ def init_logger():
     
     timestamp = get_current_datetime_formatted()
     # create dir and file
-    path = f'./logs/srearena_{timestamp}.log'
+    path = f'./logs/sregym_{timestamp}.log'
     os.makedirs('./logs', exist_ok=True)
     
     handler = logging.FileHandler(path)
