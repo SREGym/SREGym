@@ -154,6 +154,7 @@ SREGym provides a suite of MCP tools that enable agents to interact with the clu
 - `get_operations`: Query available operations for a specific service from Jaeger
 - `get_traces`: Get Jaeger traces for a given service in the last n minutes
 - `get_metrics`: Query real-time metrics data from Prometheus using PromQL expressions
+- `get_dependency_graph`: Get the dependency graph of the running app's microservices from Jaeger's API
 
 **Cluster Management Tools:**
 - `exec_kubectl_cmd_safely`: Execute kubectl commands against the Kubernetes cluster. Converts natural language to kubectl commands and executes them. Can get/describe/edit Kubernetes deployments, services, and other components. Takes one query at a time and requires namespace names for most queries
