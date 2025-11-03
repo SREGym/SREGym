@@ -18,6 +18,7 @@ from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent
 from sregym.conductor.conductor import Conductor
 from sregym.conductor.conductor_api import request_shutdown, run_api
+from logger import init_logger
 
 LAUNCHER = AgentLauncher()
 
@@ -130,6 +131,7 @@ def main():
     # set up the logger
     logging.getLogger("sregym-global").setLevel(logging.INFO)
     logging.getLogger("sregym-global").addHandler(LogProxy())
+    init_logger()
 
     """
     try:
