@@ -5,7 +5,6 @@ from pathlib import Path
 
 import yaml
 
-from dashboard.proxy import LogProxy
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.conductor.utils import is_ordered_subset
@@ -46,7 +45,7 @@ class Conductor:
         self.local_logger = logging.getLogger("all.sregym.conductor")
 
         self.transient_config = {
-            "switch": True,
+            "switch": False,
             "min_duration": 40,
             "max_duration": 60,
             "fault_types": [FaultType.FAIL_SLOW, FaultType.FAIL_STOP],
