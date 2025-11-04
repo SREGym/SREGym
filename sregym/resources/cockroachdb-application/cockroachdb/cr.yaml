@@ -49,6 +49,7 @@ spec:
   nodes: 3
   additionalLabels:
     crdb: is-cool
+  terminationGracePeriodSecs: 30
   # affinity is a new API field that is behind a feature gate that is
   # disabled by default.  To enable please see the operator.yaml file.
 

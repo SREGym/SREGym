@@ -11,6 +11,12 @@ local_logger.setLevel(logging.DEBUG)
 
 
 class CockroachDBApplication(Application):
+    """CockroachDB Cluster Application Class.
+
+    A CockroachDB cluster deployed via its operator in a Kubernetes environment.
+    The operator is scaled down to 0 after the cluster is up and running,
+    simulating a scenario where the operator is not actively managing the cluster.
+    """
 
     def __init__(self):
         super().__init__(COCKROACH_DB_CLUSTER_METADATA)
@@ -40,17 +46,18 @@ class CockroachDBApplication(Application):
         self.kubectl.wait_for_ready(self.namespace)
 
         # Delete operator after the cluster is up
-        # self.kubectl.delete_configs(self.namespace, self.k8s_deploy_path)
+        command = f"kubectl scale deployment cockroach-operator-manager --replica=0 -n {self.namespace}"
+        self.kubectl.exec_command(command)
+        sleep(30)
 
     def start_workload(self):
         pass
 
     def delete(self):
-        """Delete the configmap."""
+        """Delete the resources."""
         self.kubectl.delete_configs(self.namespace, self.k8s_deploy_path)
 
     def cleanup(self):
         """Delete the entire namespace for the hotel reservation application."""
         self.kubectl.delete_namespace(self.namespace)
         self.kubectl.wait_for_namespace_deletion(self.namespace)
-        self.kubectl.delete_job(label="job=workload", namespace=self.namespace)

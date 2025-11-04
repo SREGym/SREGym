@@ -3,7 +3,7 @@ import json
 from sregym.paths import *
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
-from sregym.service.apps.cockroachdb_operator import CockroachDBApplication
+from sregym.service.apps.cockroachdb_app import CockroachDBApplication
 from sregym.service.apps.fleet_cast import FleetCast
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
