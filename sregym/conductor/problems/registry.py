@@ -5,6 +5,7 @@ from sregym.conductor.problems.assign_non_existent_node import AssignNonExistent
 from sregym.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
+from sregym.conductor.problems.cockroachdb_upscale import ScalePodCockroachDB
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
@@ -240,6 +241,7 @@ class ProblemRegistry:
             "operator_invalid_affinity_toleration": K8SOperatorInvalidAffinityTolerationFault,
             "operator_security_context_fault": K8SOperatorSecurityContextFault,
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
+            "cockroachdb_upscale": ScalePodCockroachDB,
         }
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = []

@@ -2,12 +2,11 @@ import json
 
 from sregym.paths import *
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
+from sregym.service.apps.cockroachdb_operator import CockroachDBApplication
 from sregym.service.apps.fleet_cast import FleetCast
-from sregym.service.apps.flight_ticket import FlightTicket
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
-from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
-from sregym.service.helm import Helm
 
 # from sregym.service.apps.train_ticket import TrainTicket
 
@@ -21,7 +20,8 @@ class AppRegistry:
             "Social Network": SocialNetwork,
             # "Train Ticket": TrainTicket
             "Fleet Cast": FleetCast,
-            "Blueprint Hotel Reservation": BlueprintHotelReservation
+            "Blueprint Hotel Reservation": BlueprintHotelReservation,
+            "CockroachDB Cluster": CockroachDBApplication,
         }
 
         self.APP_PATH = {
@@ -31,7 +31,8 @@ class AppRegistry:
             "Social Network": SOCIAL_NETWORK_METADATA,
             # "Train Ticket": TRAIN_TICKET_METADATA
             "Fleet Cast": FLEET_CAST_METADATA,
-            "Blueprint Hotel Reservation": BLUEPRINT_HOTEL_RES_METADATA
+            "Blueprint Hotel Reservation": BLUEPRINT_HOTEL_RES_METADATA,
+            "CockroachDB Cluster": COCKROACH_DB_CLUSTER_METADATA,
         }
 
     def get_app_instance(self, app_name: str):

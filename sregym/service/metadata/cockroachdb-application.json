@@ -1,0 +1,10 @@
+{
+    "Name": "CockroachDB Cluster",
+    "Namespace": "cockroach-operator-system",
+    "Desc": "A CockroachDB cluster providing a distributed SQL database solution.",
+    "Supported Operations": [
+        "CockroachDB related operations"
+    ],
+    "K8S Deploy Path": "cockroachdb-cluster/operator",
+    "CR Path": "cockroachdb-cluster/cockroachdb/cr.yaml"
+}
