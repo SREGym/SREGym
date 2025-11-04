@@ -5,6 +5,6 @@
     "Supported Operations": [
         "CockroachDB related operations"
     ],
-    "K8S Deploy Path": "cockroachdb-cluster/operator",
-    "CR Path": "cockroachdb-cluster/cockroachdb/cr.yaml"
+    "operator_path": "sregym/resources/cockroachdb-application/operator-v2-18-2",
+    "cr_path": "sregym/resources/cockroachdb-application/cockroachdb/cr.yaml"
 }

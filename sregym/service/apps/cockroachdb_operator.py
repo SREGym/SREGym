@@ -1,7 +1,7 @@
 import logging
 from time import sleep
 
-from sregym.paths import COCKROACH_DB_CLUSTER_METADATA, FAULT_SCRIPTS, TARGET_MICROSERVICES
+from sregym.paths import COCKROACH_DB_CLUSTER_METADATA, FAULT_SCRIPTS
 from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 
@@ -25,18 +25,18 @@ class CockroachDBApplication(Application):
         metadata = self.get_app_json()
         self.app_name = metadata["Name"]
         self.description = metadata["Desc"]
-        self.k8s_deploy_path = TARGET_MICROSERVICES / metadata["K8S Deploy Path"]
-        self.cr_path = TARGET_MICROSERVICES / metadata["CR Path"]
+        self.operator_path = metadata["operator_path"]
+        self.cr_path = metadata["cr_path"]
 
     def deploy(self):
         """Deploy the Kubernetes configurations."""
         local_logger.info("Deploying Kubernetes configurations in namespace: %s", self.namespace)
         self.create_namespace()
-        self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
+        self.kubectl.apply_configs(self.namespace, self.operator_path)
         self.kubectl.wait_for_ready(self.namespace)
-        sleep(10)  # Wait for operator to be fully up
+        sleep(30)  # Wait for operator to be fully up
         self.kubectl.apply_configs(self.namespace, self.cr_path)
-        sleep(5)
+        sleep(30)
         self.kubectl.wait_for_ready(self.namespace)
 
         # Delete operator after the cluster is up
