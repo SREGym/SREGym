@@ -49,7 +49,11 @@ scripts = [
 
 
 def _read_nodes(path: str = "nodes.txt") -> list[str]:
-    with open(path) as f:
+    base = Path(__file__).resolve().parent  # directory of this script
+    full_path = (base / path).resolve()
+    if not full_path.exists():
+        raise FileNotFoundError(f"nodes.txt not found at {full_path}")
+    with open(full_path) as f:
         return [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
 
 
@@ -150,6 +154,29 @@ def _brew_exists() -> bool:
         return True
     except subprocess.CalledProcessError:
         return False
+
+
+def read_file(file_path: Path) -> list[str]:
+    with file_path.open("r", encoding="utf-8") as f:
+        return f.readlines()
+
+
+def comment_out_problems():
+    nodes = _read_nodes("nodes.txt")
+    problems = read_file("problems.txt")
+    problem_count = len(problems) / len(nodes)
+    mapping = {}
+    m = len(problems)
+    n = len(nodes)
+    for i, node in enumerate(nodes):
+        start = i * m // n
+        end = (i + 1) * m // n
+        mapping[node] = problems[start:end]
+    for node, probs in mapping.items():
+        for prob in probs:
+            print(f"On node {node}, comment out line: {prob.strip()}")
+            cmd = f'ssh -o StrictHostKeyChecking=no {node} "sed -i \'/\\"{prob}\\":/s/^/#/\' ~/SREGym/sregym/conductor/problems/registry.py"'
+            subprocess.run(cmd, shell=True, check=True)
 
 
 def run_submit(nodes_file: str = "nodes.txt"):
@@ -264,6 +291,25 @@ def clone(nodes_file: str = "nodes.txt", user: str = "lilygn", repo: str = "git@
             )
         except subprocess.CalledProcessError:
             print(f"FAILED: {host}")
+
+
+def copy_env():
+    for node in _read_nodes("nodes.txt"):
+        print(f"\n=== [SCP .env] {node} ===")
+        subprocess.run(
+            ["scp", "-o", "StrictHostKeyChecking=accept-new", str(LOCAL_ENV), f"{node}:~/SREGym/.env"], check=True
+        )
+        subprocess.run(
+            [
+                "ssh",
+                "-A",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                node,
+                "sed -i '/^API_KEY.*/d' ~/SREGym/.env || true",
+            ],
+            check=True,
+        )
 
 
 def _brew_shellenv_cmd() -> str:
@@ -392,7 +438,20 @@ def set_up_environment():
         )
     except Exception:
         pass
-    create_cluster()
+    nodes = _read_nodes("nodes.txt")
+    TMUX_SESSION = "cluster_setup"
+    for node in nodes:
+        print(f"\n=== [SET UP ENV] {node} ===")
+        cmd = [
+            "ssh",
+            "-o",
+            "StrictHostKeyChecking=no",
+            node,
+            f"tmux new-session -d -s {TMUX_SESSION} "
+            f"'cd ~/SREGym && kind create cluster --config kind/kind-config-arm.yaml; "
+            f"sleep infinity'",
+        ]
+        subprocess.run(cmd, check=True)
     cmd = " && ".join(commands)
     print(f"\n==> RUN: {cmd}")
     try:
@@ -428,10 +487,13 @@ if __name__ == "__main__" and "--setup-env" in sys.argv:
     sys.exit(0)
 
 if __name__ == "__main__":
-    # scp_scripts_to_all("nodes.txt")
+    scp_scripts_to_all("nodes.txt")
     # clone()
-    # run_installations_all("nodes.txt")
-    # run_setup_env_all("nodes.txt")
+    comment_out_problems()
+    install_kubectl()
+    run_installations_all("nodes.txt")
+    copy_env()
+    run_setup_env_all("nodes.txt")
 
     # install_kubectl()
     kill_server()
