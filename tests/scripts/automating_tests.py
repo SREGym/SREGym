@@ -181,8 +181,8 @@ def comment_out_problems():
 
 def run_submit(nodes_file: str = "nodes.txt"):
     TMUX_CMD = (
-        "tmux kill-session -t showcase_tmux2 2>/dev/null || true; "
-        "tmux new-session -d -s showcase_tmux2 -c /users/$USER/scripts "
+        "tmux kill-session -t submission 2>/dev/null || true; "
+        "tmux new-session -d -s submission -c /users/$USER/scripts "
         "'python3 auto_submit.py 2>&1 | tee -a ~/submission_log.txt; sleep infinity'"
     )
 
@@ -197,7 +197,7 @@ def run_submit(nodes_file: str = "nodes.txt"):
         "command -v kubectl; kubectl version --client --short || true; "
         "command -v helm || true; "
         "cd /users/lilygn/SREGym && "
-        "/users/lilygn/SREGym/.venv/bin/python3 main.py 2>&1 | tee -a global_benchmark_log.txt; "
+        "/users/$USER/SREGym/.venv/bin/python3 main.py 2>&1 | tee -a global_benchmark_Log_$(date +%Y-%m-%d).txt; "
         "sleep infinity\"'"
     )
 
