@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 from typing import Optional
@@ -10,15 +11,16 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from uvicorn import Config, Server
 
-import logging
+from sregym.conductor.conductor import Conductor
 
 app = FastAPI()
-_conductor = None
+_conductor: Optional[Conductor] = None
 
 _server: Optional[Server] = None
 _shutdown_event = threading.Event()
 
 local_logger = logging.getLogger("all.sregym.conductor_api")
+
 
 def request_shutdown():
     """
@@ -50,13 +52,13 @@ async def submit_solution(req: SubmitRequest):
 
     wrapped = f'```\nsubmit("{req.solution}")\n```'
     local_logger.debug(f"Wrapped submit content: {wrapped}")
-    
+
     try:
         results = await _conductor.submit(wrapped)
     except Exception as e:
         local_logger.error(f"Grading error: {e}")
         raise HTTPException(status_code=400, detail=f"Grading error: {e}")
-    
+
     local_logger.debug(f"API returns Grading results by now: {results}")
     return results
 
@@ -88,7 +90,12 @@ async def get_problem():
         raise HTTPException(status_code=400, detail="No problem has been started")
     problem_id = _conductor.problem_id
     local_logger.debug(f"API returns Problem ID: {problem_id}")
-    return {"problem_id": problem_id}
+
+    if _conductor.problem is not None and hasattr(_conductor.problem, "description"):
+        problem_description = _conductor.problem.description
+    else:
+        problem_description = ""
+    return {"problem_id": problem_id, "problem_description": str(problem_description)}
 
 
 def run_api(conductor):
