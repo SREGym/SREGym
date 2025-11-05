@@ -1,7 +1,10 @@
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from time import sleep
 
@@ -68,7 +71,6 @@ def scp_scripts_to_all(nodes_file: str = "nodes.txt"):
     if not Path(LOCAL_COPY_SRC).exists():
         raise FileNotFoundError(f"LOCAL_COPY_SRC not found: {LOCAL_COPY_SRC}")
     for host in _read_nodes(nodes_file):
-        print(f"\n=== [SCP] {host} ===")
         _run(["scp", "-r", "-o", "StrictHostKeyChecking=no", LOCAL_COPY_SRC, f"{host}:~"])
 
 
@@ -88,24 +90,28 @@ def run_installations_all(nodes_file: str = "nodes.txt"):
     tmux_cmd = (
         f"if tmux has-session -t {session}; then tmux kill-session -t {session}; fi; "
         f"tmux new-session -d -s {session} "
-        f"'bash -lc \"python3 {REMOTE_SELF_PATH} --installations; sleep infinity\"'"
+        f"'bash -ic \"python3 {REMOTE_SELF_PATH} --installations; sleep infinity\"'"
     )
     for host in _read_nodes(nodes_file):
         _run(["ssh", host, tmux_cmd])
 
 
 def run_setup_env_all(nodes_file: str = "nodes.txt"):
-    """SSH each node and run this file with --setup-env."""
+    """SSH each node and run this file with --setup-env in a detached tmux session."""
     for host in _read_nodes(nodes_file):
         print(f"\n=== [SSH setup-env] {host} ===")
-        _run(
-            [
-                "ssh",
-                host,
-                'bash -lc \'eval "$($(brew --prefix 2>/dev/null || echo /home/linuxbrew/.linuxbrew)/bin/brew shellenv)"; '
-                "cd ~ && python3 scripts/automating_tests.py --setup-env'",
-            ]
+
+        remote_tmux = (
+            "tmux kill-session -t setup_env 2>/dev/null || true; "
+            "tmux new-session -d -s setup_env "
+            "'bash -ic \""
+            "cd ~/scripts && "
+            "python3 automating_tests.py --setup-env 2>&1 | tee -a ~/setup_env_log.txt; "
+            "sleep infinity\"'"
         )
+
+        _run(["ssh", host, remote_tmux])
+        print(f"✅ Started tmux session 'setup_env' on {host} (log: ~/setup_env_log.txt)")
 
 
 def run_shell_command(path: Path):
@@ -189,6 +195,91 @@ def read_file(file_path: Path) -> list[str]:
     return res
 
 
+# def comment_out_problems():
+#     nodes = _read_nodes("nodes.txt")
+#     problems = read_file("registry.txt")
+
+#     for node in nodes:
+#         print(f"\n=== [Comment out problems on {node}] ===")
+
+#         remote_py = r"""
+# import re, pathlib, json
+
+# p = pathlib.Path('~/SREGym/sregym/conductor/problems/registry.py').expanduser()
+# backup = p.with_suffix('.py.bak')
+# backup.write_text(p.read_text())  # create a backup before modifying
+# lines = p.read_text().splitlines()
+
+# keys = set({PROBLEMS_JSON})
+# out = []
+# in_registry = False
+# brace_depth = 0
+# commenting = False
+# open_parens = 0
+
+# for line in lines:
+#     stripped = line.strip()
+
+#     # Detect start of PROBLEM_REGISTRY dict
+#     if not in_registry and stripped.startswith("self.PROBLEM_REGISTRY") and stripped.endswith("{"):
+#         in_registry = True
+#         brace_depth = 1
+#         out.append(line)
+#         continue
+
+#     if in_registry:
+#         # Update brace nesting count
+#         brace_depth += line.count("{") - line.count("}")
+
+#         # If we've closed the registry dictionary, exit
+#         if brace_depth <= 0:
+#             in_registry = False
+#             commenting = False
+#             out.append(line)
+#             continue
+
+#         # If currently commenting
+#         if commenting:
+#             out.append("#" + line)
+#             open_parens += line.count("(") - line.count(")")
+#             # stop commenting when parentheses close and line ends with comma
+#             if open_parens <= 0 and line.strip().endswith(","):
+#                 commenting = False
+#             continue
+
+#         # Check for a problem key that matches one from registry.txt
+#         for key in keys:
+#             if re.search(rf'"{re.escape(key)}"\s*:', line):
+#                 commenting = True
+#                 open_parens = line.count("(") - line.count(")")
+#                 out.append("#" + line)
+#                 break
+#         else:
+#             out.append(line)
+#     else:
+#         out.append(line)
+
+# p.write_text("\n".join(out) + "\n")
+# print("✅ Finished safely. Backup at:", backup)
+# """.replace("{PROBLEMS_JSON}", json.dumps(problems))
+
+#         quoted_py = shlex.quote(remote_py)
+
+#         cmd = [
+#             "ssh",
+#             "-o", "StrictHostKeyChecking=no",
+#             node,
+#             "python3",
+#             "-c",
+#             quoted_py,
+#         ]
+
+#         try:
+#             subprocess.run(cmd, check=True)
+#         except subprocess.CalledProcessError as e:
+#             print(f"❌ Failed on {node}: {e}")
+
+
 def comment_out_problems():
     nodes = _read_nodes("nodes.txt")
     problems = read_file("registry.txt")
@@ -270,8 +361,15 @@ def install_git():
         print(f"Error installing Git: exit {e.returncode}")
 
 
-def clone(nodes_file: str = "nodes.txt", user: str = "lilygn", repo: str = "git@github.com:xlab-uiuc/SREGym.git"):
-    REMOTE_CMD = f'GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=no" git clone --recurse-submodules {repo}'
+def clone(nodes_file: str = "nodes.txt", user: str = "lilygn", repo: str = "git@github.com:SREGym/SREGym.git"):
+    """
+    Clone the repo on all remote nodes using local SSH agent forwarding.
+    """
+    env = os.environ.copy()
+    if "SSH_AUTH_SOCK" not in env or not env["SSH_AUTH_SOCK"]:
+        raise EnvironmentError("No SSH agent detected. Run `ssh-add -l` to confirm your key is loaded.")
+
+    REMOTE_CMD = f'GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone --recurse-submodules {repo} && cd SREGym && git checkout lily-e2e-test'
 
     with open(nodes_file) as f:
         nodes = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
@@ -280,15 +378,18 @@ def clone(nodes_file: str = "nodes.txt", user: str = "lilygn", repo: str = "git@
         print(f"=== {host} ===")
         cmd = [
             "ssh",
+            "-A",  # crucial: forward your local SSH agent
             "-o",
             "StrictHostKeyChecking=no",
             host,
-            f"{REMOTE_CMD}",
+            REMOTE_CMD,
         ]
         try:
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True, env=env)
             subprocess.run(
-                ["scp", "-o", "StrictHostKeyChecking=accept-new", str(LOCAL_ENV), f"{host}:~/SREGym/.env"], check=True
+                ["scp", "-o", "StrictHostKeyChecking=accept-new", str(LOCAL_ENV), f"{host}:~/SREGym/.env"],
+                check=True,
+                env=env,
             )
             subprocess.run(
                 [
@@ -300,28 +401,10 @@ def clone(nodes_file: str = "nodes.txt", user: str = "lilygn", repo: str = "git@
                     "sed -i '/^API_KEY.*/d' ~/SREGym/.env || true",
                 ],
                 check=True,
+                env=env,
             )
-        except subprocess.CalledProcessError:
-            print(f"FAILED: {host}")
-
-
-def copy_env():
-    for node in _read_nodes("nodes.txt"):
-        print(f"\n=== [SCP .env] {node} ===")
-        subprocess.run(
-            ["scp", "-o", "StrictHostKeyChecking=accept-new", str(LOCAL_ENV), f"{node}:~/SREGym/.env"], check=True
-        )
-        subprocess.run(
-            [
-                "ssh",
-                "-A",
-                "-o",
-                "StrictHostKeyChecking=accept-new",
-                node,
-                "sed -i '/^API_KEY.*/d' ~/SREGym/.env || true",
-            ],
-            check=True,
-        )
+        except subprocess.CalledProcessError as e:
+            print(f"FAILED: {host} ({e})")
 
 
 def _brew_shellenv_cmd() -> str:
@@ -338,9 +421,10 @@ def _install_brew_if_needed():
 
         print(f"[{node}] Installing Homebrew (non-interactive)...")
         remote_cmd = (
-            "bash -lc 'NONINTERACTIVE=1 /bin/bash -c "
-            '"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"\''
+            "tmux new-session -d -s install_brew "
+            '\'bash -ic "NONINTERACTIVE=1 /bin/bash -c \\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\"; sleep infinity"\''
         )
+
         subprocess.run(
             [
                 "ssh",
@@ -362,7 +446,7 @@ def install_python():
         _install_brew_if_needed()
         shellenv = _brew_shellenv_cmd()
         subprocess.run(
-            ["bash", "-lc", f"{shellenv}; brew --version; brew install python@3.12"],
+            ["bash", "-ic", f"{shellenv}; brew --version; brew install python@3.12"],
             env=ENV,
             stdin=subprocess.DEVNULL,
             timeout=TIMEOUT,
@@ -391,6 +475,7 @@ def _resolve_kind_config() -> str | None:
     return None
 
 
+# copy .ssh folder onto the machine
 def create_cluster():
 
     for node in _read_nodes("nodes.txt"):
@@ -429,6 +514,25 @@ def create_cluster():
         #     )
 
 
+def copy_env():
+    for node in _read_nodes("nodes.txt"):
+        print(f"\n=== [SCP .env] {node} ===")
+        subprocess.run(
+            ["scp", "-o", "StrictHostKeyChecking=accept-new", str(LOCAL_ENV), f"{node}:~/SREGym/.env"], check=True
+        )
+        subprocess.run(
+            [
+                "ssh",
+                "-A",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                node,
+                "sed -i '/^API_KEY.*/d' ~/SREGym/.env || true",
+            ],
+            check=True,
+        )
+
+
 def install_kubectl():
 
     _install_brew_if_needed()
@@ -444,6 +548,12 @@ def install_kubectl():
         #     '"tmux new-session -d -s installations_kubectl '
         #     '\'bash -lc \\\"brew install kubectl helm\\\"\'"'
         # )
+        # SECOND VERSION:
+        #     cmd = (
+        # f'ssh -o StrictHostKeyChecking=no {node} '
+        # '"tmux new-session -d -s install_kubectl '
+        # '\'bash -lc \\"brew install kubectl helm\\"; sleep infinity\'"'
+        #     )
         cmd = f'ssh -o StrictHostKeyChecking=no {node} "bash -ic \\"brew install kubectl helm\\""'
         subprocess.run(
             cmd,
@@ -458,7 +568,7 @@ def set_up_environment():
     try:
         shellenv = _brew_shellenv_cmd()
         subprocess.run(
-            ["bash", "-lc", f"{shellenv}; command -v uv || brew install uv || python3 -m pip install --user uv"],
+            ["bash", "-ic", f"{shellenv}; command -v uv || brew install uv || python3 -m pip install --user uv"],
             env=ENV,
             stdin=subprocess.DEVNULL,
             timeout=TIMEOUT,
@@ -505,9 +615,9 @@ if __name__ == "__main__" and "--setup-env" in sys.argv:
 
 if __name__ == "__main__":
     scp_scripts_to_all("nodes.txt")
-    # clone()
-    # comment_out_problems()
-    # kill_server()
+    clone()
+    comment_out_problems()
+    kill_server()
 
     run_installations_all("nodes.txt")
     install_kubectl()
@@ -516,6 +626,5 @@ if __name__ == "__main__":
     copy_env()
     run_setup_env_all("nodes.txt")
 
-    # # install_kubectl()
-    # kill_server()
+    kill_server()
     run_submit()
