@@ -19,6 +19,8 @@ from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent
 from sregym.conductor.conductor import Conductor
 from sregym.conductor.conductor_api import request_shutdown, run_api
+from sregym.conductor.constants import StartProblemResult
+from logger import init_logger
 
 LAUNCHER = AgentLauncher()
 
@@ -46,7 +48,11 @@ def driver_loop(conductor: Conductor):
 
             conductor.problem_id = pid
 
-            await conductor.start_problem()
+            result = await conductor.start_problem()
+            if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
+                console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
+                continue
+
             agent_to_start = os.environ.get("SREGYM_AGENT", "stratus")
             reg = get_agent(agent_to_start)
             if reg:

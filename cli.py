@@ -25,6 +25,7 @@ from dashboard.dashboard_app import SREGymDashboardServer
 from dashboard.proxy import LogProxy
 from logger import init_logger
 from sregym.conductor.conductor import Conductor
+from sregym.conductor.constants import StartProblemResult
 from sregym.service.shell import Shell
 
 WELCOME = """
@@ -196,7 +197,14 @@ async def main():
     await agent.select_mode()
 
     # 2) Deploy environment & launch HTTP server
-    await conductor.start_problem()
+    result = await conductor.start_problem()
+    while result != StartProblemResult.SUCCESS:
+        agent.console.print(
+            "[yellow]⏭️  This problem requires Khaos but cannot run on emulated clusters. "
+            "Please select another problem.[/yellow]"
+        )
+        await agent.select_mode()
+        result = await conductor.start_problem()
 
     # 3) Interactive shell / submit loop
     await agent.interactive_loop()

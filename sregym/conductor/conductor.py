@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from dashboard.proxy import LogProxy
+from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.conductor.utils import is_ordered_subset
@@ -46,7 +47,7 @@ class Conductor:
         self.local_logger = logging.getLogger("all.sregym.conductor")
 
         self.transient_config = {
-            "switch": True,
+            "switch": False,
             "min_duration": 40,
             "max_duration": 60,
             "fault_types": [FaultType.FAIL_SLOW, FaultType.FAIL_STOP],
@@ -107,10 +108,13 @@ class Conductor:
             problem_tasklist.insert(0, "noop")
             self.tasklist = problem_tasklist
 
-    async def start_problem(self):
+    async def start_problem(self) -> StartProblemResult:
         """
         1) Provision infra & workload
         2) Flip to NO-OP grading stage
+        
+        Returns:
+            StartProblemResult: Result status indicating success or skip reason
         """
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
@@ -125,11 +129,12 @@ class Conductor:
         self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
 
         if self.problem.requires_khaos() and self.kubectl.is_emulated_cluster():
-            raise RuntimeError(
+            self.local_logger.warning(
                 f"Problem '{self.problem_id}' requires Khaos for eBPF-based fault injection, "
                 "but Khaos cannot be deployed on emulated clusters (kind, minikube, k3d, etc.). "
-                "Please use a real Kubernetes cluster to run this problem."
+                "Skipping this problem."
             )
+            return StartProblemResult.SKIPPED_KHAOS_REQUIRED
 
         self.fix_kubernetes()
 
@@ -145,6 +150,7 @@ class Conductor:
         self.submission_stage = self.tasklist[0]  # always noop
 
         self.local_logger.info(f"✅ Deployment complete. Ready for submission. Current stage is: {self.tasklist[0]}")
+        return StartProblemResult.SUCCESS
 
     async def submit(self, wrapped_cmd: str) -> dict:
         """
