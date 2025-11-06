@@ -5,6 +5,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from datetime import date
 from pathlib import Path
 from time import sleep
 
@@ -160,7 +161,7 @@ def _brew_exists(node: str) -> bool:
                 "-o",
                 "StrictHostKeyChecking=no",
                 node,
-                "bash -lc 'command -v brew >/dev/null 2>&1'",
+                "bash -ic 'command -v brew >/dev/null 2>&1'",
             ],
             env=ENV,
             stdin=subprocess.DEVNULL,
@@ -309,12 +310,12 @@ def run_submit(nodes_file: str = "nodes.txt"):
         "tmux new-session -d -s main_tmux "
         "'env -i PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/bin:/bin "
         "HOME=$HOME TERM=$TERM "
-        'bash -lc "echo PATH=\\$PATH; '
+        'bash -ic "echo PATH=\\$PATH; '
         "command -v kubectl; kubectl version --client || true; "
         "command -v helm || true; "
         "cd /users/lilygn/SREGym && "
         "source .venv/bin/activate && "
-        "python main.py 2>&1 | tee -a global_benchmark_Log_$(date +%Y-%m-%d).txt; "
+        "python main.py 2>&1 | tee -a global_benchmark_log_$(date +%Y-%m-%d).txt; "
         "sleep infinity\"'"
     )
 
@@ -379,7 +380,7 @@ def clone(nodes_file: str = "nodes.txt", user: str = "lilygn", repo: str = "git@
         print(f"=== {host} ===")
         cmd = [
             "ssh",
-            "-A",  # crucial: forward your local SSH agent
+            "-A",
             "-o",
             "StrictHostKeyChecking=no",
             host,
@@ -555,6 +556,11 @@ def install_kubectl():
         # '"tmux new-session -d -s install_kubectl '
         # '\'bash -lc \\"brew install kubectl helm\\"; sleep infinity\'"'
         #     )
+        # subprocess.run(
+        #     f'ssh -o StrictHostKeyChecking=no {host} "bash -ic \\"eval $(/home/linuxbrew/.linuxbrew/bin/brew shellenv); brew install kubectl helm\\""',
+        #     shell=True,
+        # )
+
         cmd = f'ssh -o StrictHostKeyChecking=no {node} "bash -ic \\"brew install kubectl helm\\""'
         subprocess.run(
             cmd,
@@ -599,6 +605,46 @@ def set_up_environment():
         print(f"Setup failed with return code {e.returncode}")
 
 
+def collect_logs(nodes_file: str = "nodes.txt"):
+    """
+    Copy log files from all nodes into a local folder called 'node_logs'.
+
+    Parameters:
+        nodes_file (str): Path to the file listing nodes (one per line).
+        remote_log (str): Path to the log file on the remote machine.
+    """
+    local_dir = Path("./node_logs")
+    local_dir.mkdir(exist_ok=True)
+    today = date.today().strftime("%Y-%m-%d")
+    day = "$(date +%Y-%m-%d)"
+    # remote_log = f"/users/lilygn/SREGym/global_benchmark_log_{day}.txt"
+    remote_log = f"/users/lilygn/SREGym/global_benchmark_*.txt"
+
+    nodes = _read_nodes(nodes_file)
+
+    for node in nodes:
+        node_name = node.split("@")[-1]
+
+        # local_path = local_dir / f"{node_name}.log"
+        local_path = local_dir / node_name
+        local_path.mkdir(exist_ok=True)
+
+        print(f"Copying {remote_log} from {node} -> {local_path}")
+        cmd = [
+            "scp",
+            "-o",
+            "StrictHostKeyChecking=no",
+            f"{node}:{remote_log}",
+            str(local_path),
+        ]
+
+        try:
+            subprocess.run(cmd, check=True)
+            print(f"Copied log from {node}")
+        except subprocess.CalledProcessError:
+            print(f"Failed to copy log from {node} (file may not exist)")
+
+
 def kill_server():
     TMUX_KILL_CMD = "tmux kill-server"
     for host in _read_nodes("nodes.txt"):
@@ -621,11 +667,13 @@ if __name__ == "__main__":
     kill_server()
 
     run_installations_all("nodes.txt")
+    sleep(2)
     install_kubectl()
     create_cluster()
-
+    sleep(30)
     copy_env()
     run_setup_env_all("nodes.txt")
-
-    kill_server()
+    sleep(30)
+    # kill_server()
     run_submit()
+    collect_logs()
