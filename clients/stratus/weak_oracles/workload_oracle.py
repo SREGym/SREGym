@@ -156,6 +156,7 @@ class WorkloadOracle(BaseOracle):
         config.load_kube_config()
         self.core_v1_api = client.CoreV1Api()
         self.batch_v1_api = client.BatchV1Api()
+        self.kubectl = KubeCtl()
 
     def get_job_logs(self, job_name, namespace):
         """Retrieve the logs of a specified job within a namespace."""
