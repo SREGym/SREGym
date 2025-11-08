@@ -1,4 +1,4 @@
-switch: True
+switch: False
 min_duration: 40
 max_duration: 60
 fault_types:

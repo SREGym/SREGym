@@ -31,8 +31,8 @@ class TiDBClusterDeployer:
         else:
             repo_root = Path(__file__).resolve().parents[3]
             candidates = [
-                repo_root / "aiopslab-applications/FleetCast/satellite-app/values.yaml",
-                repo_root / "aiopslab-applications/FleetCast/tidb-operator/values.yaml",
+                repo_root / "SREGym-applications/FleetCast/satellite-app/values.yaml",
+                repo_root / "SREGym-applications/FleetCast/tidb-operator/values.yaml",
             ]
             for p in candidates:
                 if p.exists():
@@ -65,7 +65,7 @@ class TiDBClusterDeployer:
 
     def apply_prometheus(self):
         ns = "observe"
-        prom_yml_path = BASE_DIR / "aiopslab-applications/FleetCast/prometheus/prometheus.yaml"
+        prom_yml_path = BASE_DIR / "SREGym-applications/FleetCast/prometheus/prometheus.yaml"
 
         prom_yml_path = str(prom_yml_path.resolve())
         if not os.path.isfile(prom_yml_path):

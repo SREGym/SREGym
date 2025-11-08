@@ -150,4 +150,4 @@ After finishing cluster creation, proceed to the next "Update config.yml" step.
 ## **Conclusion**
 This guide covers deploying **SREGym** on **both WSL2 and Ubuntu 24.04**, ensuring compatibility across different environments. By following these steps, you can successfully set up **Docker, kind, and Kubernetes** and deploy the SREGym application.
 
-For advanced configurations, refer to the [SREGym documentation](https://github.com/xlab-uiuc/SREGym). 🚀
+For advanced configurations, refer to the [SREGym documentation](https://github.com/SREGym/SREGym). 🚀

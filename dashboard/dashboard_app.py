@@ -1,11 +1,11 @@
+import atexit
 import json
 import os
 import re
+import signal
 import sys
 import time
 from datetime import datetime
-import atexit
-import signal
 from pathlib import Path
 
 import dash
@@ -21,6 +21,7 @@ from collections import deque
 
 import yaml
 from flask import request
+
 from sregym.service.kubectl import KubeCtl
 
 DASHBOARD_URL = "http://127.0.0.1:11451"
@@ -71,10 +72,12 @@ class SREGymDashboardServer:
 
         # Register graceful shutdown export hooks
         atexit.register(self._export_on_exit)
-        # Flag to track if we've already handled a Ctrl-C signal
+        # Flag to track if we've already handled a shutdown signal
         self._signal_handled = False
+        # Register signal handlers for graceful shutdown
         try:
-            signal.signal(signal.SIGINT, self._handle_signal)
+            signal.signal(signal.SIGINT, self._handle_signal)  # Ctrl-C
+            signal.signal(signal.SIGTERM, self._handle_signal)  # terminate() sends SIGTERM
         except Exception:
             pass
 
@@ -259,7 +262,11 @@ class SREGymDashboardServer:
                 dep_meta = dep_data.get("deployment_meta", ("0/0/0", "gray"))
                 pods = dep_data.get("pods", [])
                 status_text, status_color = dep_meta
-                dep_emoji = "🟢" if status_color == "green" else ("🟡" if status_color == "yellow" else ("🔴" if status_color == "red" else "⚪"))
+                dep_emoji = (
+                    "🟢"
+                    if status_color == "green"
+                    else ("🟡" if status_color == "yellow" else ("🔴" if status_color == "red" else "⚪"))
+                )
 
                 pod_lines: list[str] = []
                 all_pods_green = bool(pods) and all((p.get("status") == "Running" for p in pods))
@@ -328,7 +335,9 @@ class SREGymDashboardServer:
                     # Build from log_history in order; use final snapshot for right side
                     for log_entry in self.log_history:
                         if log_entry.get("type") == "SPLIT":
-                            rows_html.append('<div><hr style="border:none;border-top:2px solid #dee2e6;margin:10px 0;width:100%"></div>')
+                            rows_html.append(
+                                '<div><hr style="border:none;border-top:2px solid #dee2e6;margin:10px 0;width:100%"></div>'
+                            )
                         else:
                             rows_html.append(self._build_row_html(log_entry, final_snapshot))
 
@@ -337,14 +346,14 @@ class SREGymDashboardServer:
                         rows_html.append(self._build_row_html(self.latest_log or {}, final_snapshot))
 
                     html_doc = (
-                        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
-                        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+                        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+                        '<meta name="viewport" content="width=device-width, initial-scale=1">'
                         "<title>SREGym Dashboard Export</title>"
                         "<style>body{font-family:Arial,sans-serif;margin:0;padding:20px;background-color:#ffffff;}"
                         "</style></head><body>"
                         f"<div>{''.join(rows_html)}</div>"
-                        "<footer style=\"background-color:#f8f9fa;border-top:1px solid #e9ecef;margin-top:20px;min-height:40px;display:flex;align-items:center;justify-content:center;\">"
-                        "<p style=\"text-align:center;color:#6c757d;margin:0;padding:10px\">© 2025 SREGym Dashboard - xlab, UIUC</p>"
+                        '<footer style="background-color:#f8f9fa;border-top:1px solid #e9ecef;margin-top:20px;min-height:40px;display:flex;align-items:center;justify-content:center;">'
+                        '<p style="text-align:center;color:#6c757d;margin:0;padding:10px">© 2025 SREGym Dashboard - xlab, UIUC</p>'
                         "</footer>"
                         "</body></html>"
                     )
@@ -360,19 +369,35 @@ class SREGymDashboardServer:
             print(f"[SREGym Dashboard] Export on exit failed: {e}")
 
     def _handle_signal(self, signum, frame):
+        """
+        Handle shutdown signals (SIGINT, SIGTERM) gracefully.
+        Exports trace data before exiting.
+        """
         if self._signal_handled:
-            # Already handled a Ctrl-C signal, ignore subsequent ones
-            print(f"[SREGym Dashboard] Ignoring subsequent Ctrl-C signal...")
+            # Already handled a shutdown signal, ignore subsequent ones
+            signal_name = (
+                "SIGINT" if signum == signal.SIGINT else "SIGTERM" if signum == signal.SIGTERM else f"signal {signum}"
+            )
+            print(f"[SREGym Dashboard] Ignoring subsequent {signal_name} signal...")
             return
-        
+
         # Mark that we've handled the signal
         self._signal_handled = True
-        
+
+        signal_name = (
+            "SIGINT" if signum == signal.SIGINT else "SIGTERM" if signum == signal.SIGTERM else f"signal {signum}"
+        )
+        print(f"[SREGym Dashboard] Caught {signal_name}, exporting current view...")
+
         try:
-            print(f"[SREGym Dashboard] Caught signal {signum}, exporting current view...")
+            # Export trace data before exiting
             self._export_on_exit()
+            print(f"[SREGym Dashboard] Export completed, shutting down...")
+        except Exception as e:
+            print(f"[SREGym Dashboard] Error during export: {e}", file=sys.stderr)
         finally:
-            # Exit process after exporting
+            # Use os._exit() to ensure immediate termination after export
+            # This is important for daemon processes
             os._exit(0)
 
     def _parse_concise_deployment_info(self, info_str):
@@ -850,17 +875,18 @@ class SREGymDashboardServer:
             print(f"<<<<<<<<<< Try update rows: {n}, children: {len(current_children) if current_children else 0}")
 
             # Collect realtime cluster data outside of lock (can be slow)
-            
 
             # Try to enter critical section without blocking
             if not self._state_lock.acquire(blocking=False):
                 return dash.no_update, None
-            try:  
-                
+            try:
+
                 realtime_state = self._collect_cluster_data(self.namespace)
                 # Drain all pending logs under the state lock to preserve ordering
                 new_logs = self._drain_log_queue()
-                print(f"<<<<<<<<<< Entered critical section, Fetched New logs: {len(new_logs)}, children: {len(current_children) if current_children else 0}")
+                print(
+                    f"<<<<<<<<<< Entered critical section, Fetched New logs: {len(new_logs)}, children: {len(current_children) if current_children else 0}"
+                )
                 # No new logs: refresh only the live row if exists
                 if not new_logs:
                     if self.latest_log is not None:

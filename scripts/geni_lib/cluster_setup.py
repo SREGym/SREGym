@@ -283,7 +283,7 @@ def deploy_sregym(ex: RemoteExecutor, deploy_key_path: str) -> None:
     # Clone and deploy SREGym
     deploy_cmds = [
         # Use the correct repository URL
-        "ssh-agent bash -c 'ssh-add ~/.ssh/sregym_deploy; git clone --recurse-submodules git@github.com:xlab-uiuc/SREGym.git /tmp/sregym'",
+        "ssh-agent bash -c 'ssh-add ~/.ssh/sregym_deploy; git clone --recurse-submodules git@github.com:SREGym/SREGym.git /tmp/sregym'",
         "cd /tmp/sregym",
         # Clean up the private key for security
         "rm -f ~/.ssh/sregym_deploy",

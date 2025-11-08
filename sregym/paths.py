@@ -6,7 +6,7 @@ BASE_DIR = Path(__file__).resolve().parent
 BASE_PARENT_DIR = Path(__file__).resolve().parent.parent
 
 # Targe microservice and its utilities directories
-TARGET_MICROSERVICES = BASE_PARENT_DIR / "aiopslab-applications"
+TARGET_MICROSERVICES = BASE_PARENT_DIR / "SREGym-applications"
 
 # Cache directories
 CACHE_DIR = HOME_DIR / "cache_dir"

@@ -15,7 +15,7 @@ generate_ssh_key() {
 generate_ssh_key
 
 # SREGym setup
-git clone https://github.com/xlab-uiuc/SREGym
+git clone https://github.com/SREGym/SREGym
 cd SREGym
 sudo add-apt-repository -y ppa:deadsnakes/ppa
 sudo apt-get update

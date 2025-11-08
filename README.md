@@ -40,7 +40,7 @@ SREGym is built to be extensible, we always welcome new contributions. See [CONT
 - [k9s](https://k9scli.io/) to observe the cluster.
 
 ```bash
-git clone --recurse-submodules https://github.com/xlab-uiuc/SREGym
+git clone --recurse-submodules https://github.com/SREGym/SREGym
 cd SREGym
 uv sync
 uv run pre-commit install
@@ -145,7 +145,7 @@ To create a custom evaluation, edit `tasklist.yaml` and specify which problems a
 
 ### MCP Tools
 
-The benchmark is driven by agent submissions via the `submit` MCP tool. Each submission advances the benchmark to the next phase. To test your agent, run [`main.py`](https://github.com/xlab-uiuc/SREGym/blob/main/main.py) to start the benchmark, then have your agent submit answers at each phase.
+The benchmark is driven by agent submissions via the `submit` MCP tool. Each submission advances the benchmark to the next phase. To test your agent, run [`main.py`](https://github.com/SREGym/SREGym/blob/main/main.py) to start the benchmark, then have your agent submit answers at each phase.
 
 SREGym provides a suite of MCP tools that enable agents to interact with the cluster and benchmark:
 
@@ -164,7 +164,7 @@ SREGym provides a suite of MCP tools that enable agents to interact with the clu
 **Benchmark Interaction:**
 - `submit`: Submit task results to the benchmark to progress to the next phase
 
-The Stratus agent in [`clients/stratus`](https://github.com/xlab-uiuc/SREGym/tree/main/clients/stratus) demonstrates usages of these MCP tools in an agent.
+The Stratus agent in [`clients/stratus`](https://github.com/SREGym/SREGym/tree/main/clients/stratus) demonstrates usages of these MCP tools in an agent.
 
 ### Monitoring with Dashboard
 

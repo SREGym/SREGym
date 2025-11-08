@@ -35,7 +35,7 @@ Before contributing, please:
 1. Read the [README.md](README.md) to understand the project
 2. Review the [Problem List](https://docs.google.com/spreadsheets/d/1FGIeLNcKsHjrZGQ_VJcQRGl6oTmYyzjW0_ve5tfM_eg/edit?usp=sharing)
 3. Join our [Slack community](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w)
-4. Check existing [issues](https://github.com/xlab-uiuc/SREGym/issues) to avoid duplicates
+4. Check existing [issues](https://github.com/SREGym/SREGym/issues) to avoid duplicates
 
 ## Development Setup
 

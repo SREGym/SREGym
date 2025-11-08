@@ -1,9 +1,9 @@
 """Interface to K8S controller service."""
 
 import json
+import logging
 import subprocess
 import time
-import logging
 
 local_logger = logging.getLogger("all.infra.kubectl")
 local_logger.propagate = True
@@ -14,6 +14,7 @@ try:
 except ModuleNotFoundError as e:
     local_logger.error("Your Kubeconfig is missing. Please set up a cluster.")
     exit(1)
+from kubernetes import dynamic
 from kubernetes.client import api_client
 from kubernetes.client.rest import ApiException
 from rich.console import Console
@@ -45,7 +46,7 @@ class KubeCtl:
     def list_nodes(self):
         """Return a list of all running nodes."""
         return self.core_v1_api.list_node()
-    
+
     def get_concise_deployments_info(self, namespace=None):
         """Return a concise info of a deployment."""
         cmd = f"kubectl get deployment {f'-n {namespace}' if namespace else ''} -o wide"
@@ -57,7 +58,7 @@ class KubeCtl:
         cmd = f"kubectl get pod {f'-n {namespace}' if namespace else ''} -o wide"
         result = self.exec_command(cmd)
         return result
-    
+
     def list_deployments(self, namespace):
         """Return a list of all deployments within a specified namespace."""
         return self.apps_v1_api.list_namespaced_deployment(namespace)
@@ -178,35 +179,6 @@ class KubeCtl:
 
         raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
 
-    def wait_for_job_completion(self, name: str, namespace: str, sleep: int = 5, max_wait: int = 10_000):
-        """Wait for a Kubernetes Job to complete."""
-        batch_v1 = client.BatchV1Api()
-        console = Console()
-        console.log(f"[bold yellow]Waiting for Job '{name}' in namespace '{namespace}' to complete...")
-
-        with console.status("[bold yellow]Monitoring job status..."):
-            elapsed = 0
-            while elapsed < max_wait:
-                try:
-                    job = batch_v1.read_namespaced_job(name=name, namespace=namespace)
-                    status = job.status
-
-                    if status.succeeded and status.succeeded >= 1:
-                        console.log(f"[bold green]Job '{name}' completed successfully.")
-                        return
-
-                    if status.failed and status.failed > 0:
-                        raise Exception(f"[red]Job '{name}' failed.")
-
-                except ApiException as e:
-                    console.log(f"[red]Exception when checking job status: {e}")
-                    raise
-
-                time.sleep(sleep)
-                elapsed += sleep
-
-            raise TimeoutError(f"[red]Timeout: Job '{name}' did not complete within {max_wait} seconds.")
-
     def is_ready(self, pod):
         phase = pod.status.phase or ""
         container_statuses = pod.status.container_statuses or []
@@ -303,45 +275,44 @@ class KubeCtl:
                 try:
                     job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
 
-                    # Check job status
+                    # Check job status conditions first (more reliable)
                     if job.status.conditions:
                         for condition in job.status.conditions:
                             if condition.type == "Complete" and condition.status == "True":
                                 console.log(f"[bold green]Job '{job_name}' completed successfully!")
-                                return True
+                                return
                             elif condition.type == "Failed" and condition.status == "True":
-                                console.log(f"[bold red]Job '{job_name}' failed!")
-                                console.log(f"[red]Failure reason: {condition.reason}")
-                                console.log(f"[red]Failure message: {condition.message}")
-                                return False
+                                error_msg = f"Job '{job_name}' failed."
+                                if condition.reason:
+                                    error_msg += f"\nReason: {condition.reason}"
+                                if condition.message:
+                                    error_msg += f"\nMessage: {condition.message}"
+                                console.log(f"[bold red]{error_msg}")
+                                raise Exception(error_msg)
 
-                    # Check numeric status
+                    # Check numeric status as fallback
                     succeeded = job.status.succeeded or 0
                     failed = job.status.failed or 0
-                    active = job.status.active or 0
 
                     if succeeded > 0:
                         console.log(f"[bold green]Job '{job_name}' completed successfully! (succeeded: {succeeded})")
-                        return True
+                        return
                     elif failed > 0:
                         console.log(f"[bold red]Job '{job_name}' failed! (failed: {failed})")
-                        return False
+                        raise Exception(f"Job '{job_name}' failed.")
 
                     time.sleep(2)
 
                 except client.exceptions.ApiException as e:
                     if e.status == 404:
                         console.log(f"[red]Job '{job_name}' not found!")
-                        return False
+                        raise Exception(f"Job '{job_name}' not found in namespace '{namespace}'") from e
                     else:
                         console.log(f"[red]Error checking job status: {e}")
-                        time.sleep(2)
-                except Exception as e:
-                    console.log(f"[red]Unexpected error: {e}")
-                    time.sleep(2)
+                        raise
 
             console.log(f"[bold red]Timeout waiting for job '{job_name}' to complete!")
-        return False
+            raise TimeoutError(f"Timeout: Job '{job_name}' did not complete within {timeout} seconds.")
 
     def update_deployment(self, name: str, namespace: str, deployment):
         """Update the deployment configuration."""

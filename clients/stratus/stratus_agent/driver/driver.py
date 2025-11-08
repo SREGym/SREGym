@@ -12,6 +12,12 @@ import requests
 import yaml
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from logger import init_logger
+
+init_logger()
+
+import logging
+
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig
 from clients.stratus.stratus_agent.diagnosis_agent import single_run_with_predefined_prompts as diagnosis_single_run
 from clients.stratus.stratus_agent.localization_agent import (
@@ -30,7 +36,7 @@ from clients.stratus.tools.submit_tool import manual_submit_tool
 from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
 from clients.stratus.weak_oracles.cluster_state_oracle import ClusterStateOracle
 from clients.stratus.weak_oracles.workload_oracle import WorkloadOracle
-import logging
+
 logger = logging.getLogger("all.stratus.driver")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
