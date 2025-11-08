@@ -1,3 +1,4 @@
+from sregym.conductor.oracles.deployment_itself_localization_oracle import DeploymentItselfLocalizationOracle
 from sregym.conductor.oracles.incorrect_image_mitigation import IncorrectImageMitigationOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.problems.base import Problem
@@ -16,7 +17,9 @@ class IncorrectImage(Problem):
         self.injector = ApplicationFaultInjector(namespace=self.namespace)
         super().__init__(app=self.app, namespace=self.namespace)
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=self.faulty_service)
+        self.localization_oracle = DeploymentItselfLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_deployment_names=self.faulty_service
+        )
         self.mitigation_oracle = IncorrectImageMitigationOracle(
             problem=self, actual_images={"product-catalog": "app-image:latest"}
         )

@@ -1,6 +1,7 @@
 from kubernetes import client, config
 
 from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.network_policy_localization_oracle import NetworkPolicyLocalizationOracle
 from sregym.conductor.oracles.network_policy_oracle import NetworkPolicyMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.paths import TARGET_MICROSERVICES
@@ -24,7 +25,9 @@ class NetworkPolicyBlock(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
         self.networking_v1 = client.NetworkingV1Api()
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.localization_oracle = NetworkPolicyLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_networkpolicy_name=self.policy_name
+        )
         self.mitigation_oracle = NetworkPolicyMitigationOracle(problem=self)
 
     @mark_fault_injected

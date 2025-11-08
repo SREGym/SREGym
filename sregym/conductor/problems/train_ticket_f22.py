@@ -1,10 +1,12 @@
 import logging
+
 from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.conductor.oracles.pod_of_deployment_oracle import PodOfDeploymentOracle
 from sregym.conductor.oracles.workload import WorkloadOracle
 from sregym.conductor.problems.base import Problem
-from sregym.generators.fault.inject_tt import TrainTicketFaultInjector  
+from sregym.generators.fault.inject_tt import TrainTicketFaultInjector
 from sregym.service.apps.train_ticket import TrainTicket
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -22,8 +24,10 @@ class TrainTicketF22(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.kubectl = KubeCtl()
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
-        
+        self.localization_oracle = PodOfDeploymentOracle(
+            problem=self, namespace=self.namespace, expected_deployment_name=self.faulty_service
+        )
+
         self.app.create_workload()
         self.mitigation_oracle = CompoundedOracle(
             self,
@@ -38,7 +42,6 @@ class TrainTicketF22(Problem):
             fault_type="fault-22-sql-column-name-mismatch-error",
         )
         print(f"Injected fault-22-sql-column-name-mismatch-error | Namespace: {self.namespace}\n")
-
 
     @mark_fault_injected
     def recover_fault(self):

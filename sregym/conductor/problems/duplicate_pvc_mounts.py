@@ -1,6 +1,6 @@
 from sregym.conductor.oracles.compound import CompoundedOracle
-from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.conductor.oracles.pvc_itself_localization_oracle import PVCItselfLocalizationOracle
 from sregym.conductor.oracles.workload import WorkloadOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -30,7 +30,9 @@ class DuplicatePVCMounts(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.localization_oracle = PVCItselfLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_pvc_name=f"{self.faulty_service}-pvc"
+        )
         self.mitigation_oracle = MitigationOracle(problem=self)
 
         self.app.create_workload()

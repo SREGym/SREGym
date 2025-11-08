@@ -1,3 +1,4 @@
+from sregym.conductor.oracles.deployment_itself_localization_oracle import DeploymentItselfLocalizationOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -26,7 +27,9 @@ class SidecarPortConflict(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.kubectl = KubeCtl()
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.localization_oracle = DeploymentItselfLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_deployment_names=[self.faulty_service]
+        )
 
         self.app.create_workload()
         self.mitigation_oracle = MitigationOracle(problem=self)

@@ -234,7 +234,7 @@ class Conductor:
 
             self.logger.info(f"[STAGE] Done, recover fault")
 
-            if self.transient_config["switch"]:
+            if self.transient_config["switch"] and hasattr(self, "transient_issue_generator"):
                 self.transient_issue_generator.stop_continuous_injection()
 
             self.problem.recover_fault()

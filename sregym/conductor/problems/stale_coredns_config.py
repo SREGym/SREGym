@@ -1,3 +1,4 @@
+from sregym.conductor.oracles.configmap_itself_localization_oracle import ConfigMapItselfLocalizationOracle
 from sregym.conductor.oracles.dns_resolution_mitigation import DNSResolutionMitigationOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.problems.base import Problem
@@ -27,7 +28,9 @@ class StaleCoreDNSConfig(Problem):
 
         self.kubectl = KubeCtl()
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=["coredns"])
+        self.localization_oracle = ConfigMapItselfLocalizationOracle(
+            problem=self, namespace="kube-system", expected_configmap_name="coredns"
+        )
 
         self.app.create_workload()
         self.mitigation_oracle = DNSResolutionMitigationOracle(problem=self)

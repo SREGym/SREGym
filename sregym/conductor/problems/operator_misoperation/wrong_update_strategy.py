@@ -6,27 +6,30 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
+from sregym.conductor.oracles.cr_localization_oracle import CustomResourceLocalizationOracle
+from sregym.conductor.oracles.operator_misoperation.wrong_update_strategy_mitigation import (
+    WrongUpdateStrategyMitigationOracle,
+)
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_operator import K8SOperatorFaultInjector
 from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.apps.fleet_cast import FleetCast
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
-from sregym.conductor.oracles.localization import LocalizationOracle
-from sregym.conductor.oracles.operator_misoperation.wrong_update_strategy_mitigation import WrongUpdateStrategyMitigationOracle
 
 
 class K8SOperatorWrongUpdateStrategyFault(Problem):
     def __init__(self, faulty_service="tidb-app"):
         app = FleetCast()
-        super().__init__(app = app, namespace='tidb-cluster')
+        super().__init__(app=app, namespace="tidb-cluster")
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
         self.app.create_workload()
-        
-        self.localization_oracle = LocalizationOracle(problem=self, expected=["tidb-cluster"])
-        self.mitigation_oracle = WrongUpdateStrategyMitigationOracle(problem=self, deployment_name="basic")
 
+        self.localization_oracle = CustomResourceLocalizationOracle(
+            problem=self, namespace=self.namespace, resource_type="tidbcluster", expected_resource_name="basic"
+        )
+        self.mitigation_oracle = WrongUpdateStrategyMitigationOracle(problem=self, deployment_name="basic")
 
     @mark_fault_injected
     def inject_fault(self):

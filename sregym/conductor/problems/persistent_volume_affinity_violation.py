@@ -1,5 +1,8 @@
+from sregym.conductor.oracles.deployment_itself_localization_oracle import DeploymentItselfLocalizationOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.conductor.oracles.or_localization_oracle import OrLocalizationOracle
+from sregym.conductor.oracles.pv_itself_localization_oracle import PVItselfLocalizationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.app_registry import AppRegistry
@@ -18,7 +21,15 @@ class PersistentVolumeAffinityViolation(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        oracle1 = DeploymentItselfLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_deployment_names=[self.faulty_service]
+        )
+        oracle2 = PVItselfLocalizationOracle(problem=self, namespace=self.namespace, expected_pv_name=f"temp-pv")
+        # claim RC in any of it is ok
+        self.localization_oracle = OrLocalizationOracle(
+            problem=self, namespace=self.namespace, oracle1=oracle1, oracle2=oracle2
+        )
+
         self.mitigation_oracle = MitigationOracle(problem=self)
 
         self.app.create_workload()

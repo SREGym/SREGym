@@ -2,6 +2,7 @@
 
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.conductor.oracles.pod_of_deployment_oracle import PodOfDeploymentOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.paths import TARGET_MICROSERVICES
@@ -23,7 +24,9 @@ class MongoDBRevokeAuth(Problem):
         )
         super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
+        self.localization_oracle = PodOfDeploymentOracle(
+            problem=self, namespace=self.namespace, expected_deployment_name=self.faulty_service
+        )
 
         self.app.create_workload()
         self.mitigation_oracle = MitigationOracle(problem=self)

@@ -18,7 +18,7 @@ class LocalizationOracle(Oracle):
     # BEFORE the agent are ask to act, expect function will be called and checkpoint will be saved
     # AFTER the agent finish its run, the expected function will be called AGAIN to compare with agents answer.
 
-    def __init__(self, problem, namespace: str, expected):
+    def __init__(self, problem, namespace: str):
         super().__init__(problem)
         # self.expected = expected
         self.checkpoint = None
@@ -29,7 +29,17 @@ class LocalizationOracle(Oracle):
         self.checkpoint = self.expect()
 
     def compare_truth(self, expectation, reality):
-        raise NotImplementedError("This function should be implemented by the subclass.")
+        if type(expectation) == str and type(reality) == str:
+            return expectation == reality  # both string, just compare the string
+        elif type(expectation) == list and type(reality) == list:
+            if len(expectation) != len(set(reality)):
+                return False  # TODO: support fp and fn
+            return all(e in set(reality) for e in expectation)
+        else:
+            local_logger.warning(
+                f"Expectation and reality are not both string or list, can not compare. Expectation: {expectation}, Reality: {reality}"
+            )
+            return False
 
     def expect(self):
         raise NotImplementedError("This function should be implemented by the subclass.")
@@ -70,6 +80,30 @@ class LocalizationOracle(Oracle):
             elif resource_type.lower() == "persistentvolume":
                 api = client.CoreV1Api()
                 obj = api.read_persistent_volume(resource_name)
+            elif resource_type.lower() == "configmap":
+                api = client.CoreV1Api()
+                obj = api.read_namespaced_config_map(resource_name, namespace)
+            elif resource_type.lower() == "replicaset":
+                api = client.AppsV1Api()
+                obj = api.read_namespaced_replica_set(resource_name, namespace)
+            elif resource_type.lower() == "memoryquota":
+                api = client.CoreV1Api()
+                obj = api.read_namespaced_resource_quota(resource_name, namespace)
+            elif resource_type.lower() == "ingress":
+                api = client.NetworkingV1Api()
+                obj = api.read_namespaced_ingress(resource_name, namespace)
+            elif resource_type.lower() == "job":
+                api = client.BatchV1Api()
+                obj = api.read_namespaced_job(resource_name, namespace)
+            elif resource_type.lower() == "daemonset":
+                api = client.AppsV1Api()
+                obj = api.read_namespaced_daemon_set(resource_name, namespace)
+            elif resource_type.lower() == "clusterrole":
+                api = client.RbacAuthorizationV1Api()
+                obj = api.read_cluster_role(resource_name)
+            elif resource_type.lower() == "clusterrolebinding":
+                api = client.RbacAuthorizationV1Api()
+                obj = api.read_cluster_role_binding(resource_name)
             else:
                 raise ValueError(f"Unsupported resource type: {resource_type}")
 
@@ -86,10 +120,15 @@ class LocalizationOracle(Oracle):
         # Normalize solution to list of strings
         if isinstance(solution, str):
             # Check if it's a comma-separated list
+            # strip char before [
+            solution = solution.split("[")[1]
+            # strip char after ]
+            solution = solution.split("]")[0]
             if "," in solution:
-                solution = [s.strip() for s in solution.split(",")]
+                # split by comma, strip space and quote
+                solution = [s.strip().strip("\"'") for s in solution.split(",")]
             else:
-                solution = [solution]
+                solution = [solution.strip().strip("\"'")]
         elif isinstance(solution, list):
             # Ensure all items are strings
             solution = [str(item) for item in solution]
@@ -275,6 +314,97 @@ class LocalizationOracle(Oracle):
             return pods[0].metadata.uid, pods[0].metadata.name
         except Exception as e:
             raise ValueError(f"Error retrieving pod UID for deployment {deployment_name} in namespace {namespace}: {e}")
+
+    def all_pods_of_deployment_uids(self, deployment_name: str, namespace: str) -> (list[str], list[str]):
+        """Return the UIDs and names of all pods of a deployment."""
+        try:
+            pods_list = client.CoreV1Api().list_namespaced_pod(
+                namespace=namespace, label_selector=f"app={deployment_name}"
+            )
+            pods = pods_list.items
+            if len(pods) == 0:
+                pods_list = client.CoreV1Api().list_namespaced_pod(
+                    namespace=namespace, label_selector=f"io.kompose.service={deployment_name}"
+                )
+                pods = pods_list.items
+            if len(pods) == 0:
+                pods_list = client.CoreV1Api().list_namespaced_pod(
+                    namespace=namespace, label_selector=f"opentelemetry.io/name={deployment_name}"
+                )
+                pods = pods_list.items
+            return [pod.metadata.uid for pod in pods], [pod.metadata.name for pod in pods]
+        except Exception as e:
+            raise ValueError(f"Error retrieving pods for deployment {deployment_name} in namespace {namespace}: {e}")
+
+    def all_pods_of_daemonset_uids(self, daemonset_name: str, namespace: str) -> (list[str], list[str]):
+        """Return the UIDs and names of all pods of a daemonset."""
+        try:
+            pods_list = client.CoreV1Api().list_namespaced_pod(
+                namespace=namespace, label_selector=f"k8s-app={daemonset_name}"
+            )
+            pods = pods_list.items
+            if len(pods) == 0:
+                pods_list = client.CoreV1Api().list_namespaced_pod(
+                    namespace=namespace, label_selector=f"app={daemonset_name}"
+                )
+                pods = pods_list.items
+            if len(pods) == 0:
+                pods_list = client.CoreV1Api().list_namespaced_pod(
+                    namespace=namespace, label_selector=f"io.kompose.service={daemonset_name}"
+                )
+                pods = pods_list.items
+            if len(pods) == 0:
+                pods_list = client.CoreV1Api().list_namespaced_pod(
+                    namespace=namespace, label_selector=f"opentelemetry.io/name={daemonset_name}"
+                )
+                pods = pods_list.items
+            return [pod.metadata.uid for pod in pods], [pod.metadata.name for pod in pods]
+        except Exception as e:
+            raise ValueError(f"Error retrieving pods for daemonset {daemonset_name} in namespace {namespace}: {e}")
+
+    def deployment_uid(self, deployment_name: str, namespace: str) -> str:
+        """Return the UID of a deployment."""
+        return self.get_resource_uid("deployment", deployment_name, namespace)
+
+    def configmap_uid(self, configmap_name: str, namespace: str) -> str:
+        """Return the UID of a configmap."""
+        return self.get_resource_uid("configmap", configmap_name, namespace)
+
+    def pvc_uid(self, pvc_name: str, namespace: str) -> str:
+        """Return the UID of a PVC."""
+        return self.get_resource_uid("persistentvolumeclaim", pvc_name, namespace)
+
+    def service_uid(self, service_name: str, namespace: str) -> str:
+        """Return the UID of a service."""
+        return self.get_resource_uid("service", service_name, namespace)
+
+    def memoryquota_uid(self, memoryquota_name: str, namespace: str) -> str:
+        """Return the UID of a memoryquota."""
+        return self.get_resource_uid("memoryquota", memoryquota_name, namespace)
+
+    def pv_uid(self, pv_name: str, namespace: str) -> str:
+        """Return the UID of a PV."""
+        return self.get_resource_uid("persistentvolume", pv_name, namespace)
+
+    def ingress_uid(self, ingress_name: str, namespace: str) -> str:
+        """Return the UID of an ingress."""
+        return self.get_resource_uid("ingress", ingress_name, namespace)
+
+    def networkpolicy_uid(self, networkpolicy_name: str, namespace: str) -> str:
+        """Return the UID of a networkpolicy."""
+        return self.get_resource_uid("networkpolicy", networkpolicy_name, namespace)
+
+    def job_uid(self, job_name: str, namespace: str) -> str:
+        """Return the UID of a job."""
+        return self.get_resource_uid("job", job_name, namespace)
+
+    def clusterrole_uid(self, clusterrole_name: str, namespace: str) -> str:
+        """Return the UID of a clusterrole."""
+        return self.get_resource_uid("clusterrole", clusterrole_name, namespace)
+
+    def clusterrolebinding_uid(self, clusterrolebinding_name: str, namespace: str) -> str:
+        """Return the UID of a clusterrolebinding."""
+        return self.get_resource_uid("clusterrolebinding", clusterrolebinding_name, namespace)
 
     '''
     def owner_of_pod(self, pod_name: str, namespace: str) -> dict[str, Any] | None:

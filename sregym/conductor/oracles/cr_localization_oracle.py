@@ -11,13 +11,14 @@ local_logger.propagate = True
 local_logger.setLevel(logging.DEBUG)
 
 
-class OtelLocalizationOracle(LocalizationOracle):
-    # Special case of PodOfDeploymentOracle, but separate to keep room for future precise extension.
-    def __init__(self, problem, namespace: str, expected_deployment_name: str):
+class CustomResourceLocalizationOracle(LocalizationOracle):
+
+    def __init__(self, problem, namespace: str, resource_type: str, expected_resource_name: str):
         super().__init__(problem, namespace)
-        self.expected_deployment_name = expected_deployment_name
+        self.resource_type = resource_type
+        self.expected_resource_name = expected_resource_name
 
     @override
     def expect(self):
-        uid, name = self.only_pod_of_deployment_uid(self.expected_deployment_name, self.namespace)
+        uid = self.get_resource_uid(self.resource_type, self.expected_resource_name, self.namespace)
         return [uid]  # Return only the UID as expected

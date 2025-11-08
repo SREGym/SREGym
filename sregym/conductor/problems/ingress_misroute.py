@@ -1,5 +1,6 @@
 from kubernetes import client
 
+from sregym.conductor.oracles.ingress_localization_oracle import IngressLocalizationOracle
 from sregym.conductor.oracles.ingress_misroute_oracle import IngressMisrouteMitigationOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.problems.base import Problem
@@ -20,7 +21,9 @@ class IngressMisroute(Problem):
 
         self.networking_v1 = client.NetworkingV1Api()
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.correct_service])
+        self.localization_oracle = IngressLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_ingress_name=self.ingress_name
+        )
         self.mitigation_oracle = IngressMisrouteMitigationOracle(problem=self)
 
     @mark_fault_injected

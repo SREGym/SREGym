@@ -2,6 +2,7 @@ import time
 
 from sregym.conductor.oracles.imbalance_mitigation import ImbalanceMitigationOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.pod_of_daemonset_oracle import PodOfDaemonsetOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -20,7 +21,9 @@ class WorkloadImbalance(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
 
         # not so precise here by now
-        self.localization_oracle = LocalizationOracle(problem=self, expected=self.faulty_service + ["kube-proxy"])
+        self.localization_oracle = PodOfDaemonsetOracle(
+            problem=self, namespace="kube-system", expected_daemonset_name="kube-proxy"
+        )
 
         self.mitigation_oracle = ImbalanceMitigationOracle(problem=self)
 

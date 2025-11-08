@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta
 from typing import Any
 
+from sregym.conductor.oracles.cr_localization_oracle import CustomResourceLocalizationOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.oracles.operator_misoperation.non_existent_storage_mitigation import (
     NonExistentStorageClassMitigationOracle,
@@ -25,7 +26,9 @@ class K8SOperatorNonExistentStorageFault(Problem):
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
         self.problem_id = "operator_non_existent_storage"
-        self.localization_oracle = LocalizationOracle(problem=self, expected=["tidb-cluster"])
+        self.localization_oracle = CustomResourceLocalizationOracle(
+            problem=self, namespace=self.namespace, resource_type="tidbcluster", expected_resource_name="basic"
+        )
         self.mitigation_oracle = NonExistentStorageClassMitigationOracle(problem=self, deployment_name="basic")
 
     @mark_fault_injected

@@ -1,7 +1,9 @@
 """MongoDB storage user unregistered problem in the HotelReservation application."""
 
-from sregym.conductor.oracles.localization import LocalizationOracle
+from turtle import pd
+
 from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.conductor.oracles.pod_of_deployment_oracle import PodOfDeploymentOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.service.apps.hotel_reservation import HotelReservation
@@ -17,7 +19,9 @@ class MisconfigAppHotelRes(Problem):
         self.faulty_service = "geo"
         super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.localization_oracle = PodOfDeploymentOracle(
+            problem=self, namespace=self.namespace, expected_deployment_name=self.faulty_service
+        )
 
         self.app.create_workload()
         self.mitigation_oracle = MitigationOracle(problem=self)

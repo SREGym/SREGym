@@ -1,3 +1,4 @@
+from sregym.conductor.oracles.deployment_itself_localization_oracle import DeploymentItselfLocalizationOracle
 from sregym.conductor.oracles.dns_resolution_mitigation import DNSResolutionMitigationOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.problems.base import Problem
@@ -27,7 +28,7 @@ class WrongDNSPolicy(Problem):
 
         self.kubectl = KubeCtl()
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.localization_oracle = DeploymentItselfLocalizationOracle(problem=self, expected=[self.faulty_service])
 
         self.app.create_workload()
         self.mitigation_oracle = DNSResolutionMitigationOracle(problem=self)

@@ -1,6 +1,7 @@
 """K8S misconfig fault problem in the SocialNetwork application."""
 
 from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.service_itself_localization_oracle import ServiceItselfLocalizationOracle
 from sregym.conductor.oracles.target_port_mitigation import TargetPortMisconfigMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -19,7 +20,9 @@ class K8STargetPortMisconfig(Problem):
         self.kubectl = KubeCtl()
 
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
+        self.localization_oracle = ServiceItselfLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_service_name=self.faulty_service
+        )
 
         self.app.create_workload()
         self.mitigation_oracle = TargetPortMisconfigMitigationOracle(problem=self)

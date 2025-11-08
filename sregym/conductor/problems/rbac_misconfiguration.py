@@ -1,3 +1,4 @@
+from sregym.conductor.oracles.cluster_role_localization_oracle import ClusterRoleLocalizationOracle
 from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
@@ -22,10 +23,13 @@ class RBACMisconfiguration(Problem):
 
         super().__init__(app=self.app, namespace=self.app.namespace)
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.localization_oracle = ClusterRoleLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_clusterrole_name=f"{self.faulty_service}-rbac-role"
+        )
+
         self.app.create_workload()
         self.mitigation_oracle = MitigationOracle(problem=self)
-        
+
         # self.mitigation_oracle = CompoundedOracle(self, WorkloadOracle(problem=self, wrk_manager=self.app.wrk))
 
     @mark_fault_injected

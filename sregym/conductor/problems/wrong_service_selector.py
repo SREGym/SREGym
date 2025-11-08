@@ -1,5 +1,7 @@
+from sregym.conductor.oracles.deployment_itself_localization_oracle import DeploymentItselfLocalizationOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle
+from sregym.conductor.oracles.service_itself_localization_oracle import ServiceItselfLocalizationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -27,7 +29,9 @@ class WrongServiceSelector(Problem):
 
         self.kubectl = KubeCtl()
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.localization_oracle = ServiceItselfLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_service_name=self.faulty_service
+        )
 
         self.app.create_workload()
         self.mitigation_oracle = ServiceEndpointMitigationOracle(problem=self)

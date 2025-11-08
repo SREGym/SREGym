@@ -1,3 +1,4 @@
+from sregym.conductor.oracles.job_localization_oracle import JobLocalizationOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
@@ -15,7 +16,9 @@ class ValkeyMemoryDisruption(Problem):
         self.kubectl = KubeCtl()
 
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected="valkey")
+        self.localization_oracle = JobLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_job_name="valkey-memory-flood"
+        )
 
         self.app.create_workload()
 

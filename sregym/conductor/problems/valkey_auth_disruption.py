@@ -1,4 +1,5 @@
 from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.pod_of_deployment_oracle import PodOfDeploymentOracle
 from sregym.conductor.oracles.valkey_auth_mitigation import ValkeyAuthMitigation
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
@@ -17,7 +18,9 @@ class ValkeyAuthDisruption(Problem):
         self.kubectl = KubeCtl()
 
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=self.faulty_service)
+        self.localization_oracle = PodOfDeploymentOracle(
+            problem=self, namespace=self.namespace, expected_deployment_name=self.faulty_service
+        )
         self.mitigation_oracle = ValkeyAuthMitigation(problem=self)
 
         self.app.create_workload()

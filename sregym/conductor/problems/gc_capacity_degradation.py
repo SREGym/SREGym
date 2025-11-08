@@ -1,12 +1,12 @@
-from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.problems.base import Problem
-from sregym.service.kubectl import KubeCtl
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.generators.workload.blueprint_hotel_work import BHotelWrk, BHotelWrkWorkloadManager
+from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
+from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
-from sregym.generators.workload.blueprint_hotel_work import BHotelWrk, BHotelWrkWorkloadManager
 
 class GCCapacityDegradation(Problem):
     def __init__(self):
@@ -17,8 +17,7 @@ class GCCapacityDegradation(Problem):
 
         super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
-
+        # self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
 
     @mark_fault_injected
     def inject_fault(self):
@@ -35,9 +34,7 @@ class GCCapacityDegradation(Problem):
         injector.recover_gogc_env_variable_patch()
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
-    def create_workload(
-        self, tput: int = None, duration: str = None, multiplier: int = None
-    ):
+    def create_workload(self, tput: int = None, duration: str = None, multiplier: int = None):
         if tput is None:
             tput = 2000
         if duration is None:
@@ -53,7 +50,7 @@ class GCCapacityDegradation(Problem):
             self.create_workload()
         self.wrk.start()
 
-    def run_workload(self, namespace='default'):
+    def run_workload(self, namespace="default"):
         self.start_workload()
         job_name = self.wrk.job_name
         self.kubectl.wait_for_job_completion(job_name=job_name, namespace=namespace, timeout=1000)

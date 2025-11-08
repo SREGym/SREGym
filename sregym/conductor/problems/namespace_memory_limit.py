@@ -1,4 +1,5 @@
 from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.memoryquota_itself_localization_oracle import MemoryQuotaItselfLocalizationOracle
 from sregym.conductor.oracles.namespace_memory_limit_mitigation import NamespaceMemoryLimitMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -16,7 +17,9 @@ class NamespaceMemoryLimit(Problem):
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)
         super().__init__(app=self.app, namespace=self.namespace)
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.localization_oracle = MemoryQuotaItselfLocalizationOracle(
+            problem=self, namespace=self.namespace, expected_memoryquota_name=self.faulty_service
+        )
         self.mitigation_oracle = NamespaceMemoryLimitMitigationOracle(problem=self)
 
         self.app.create_workload()

@@ -78,6 +78,44 @@ async def localization(
         elif resource_type.lower() == "statefulset":
             api = client.AppsV1Api()
             obj = api.read_namespaced_stateful_set(name=resource_name, namespace=namespace)
+        elif resource_type.lower() == "persistentvolumeclaim":
+            api = client.CoreV1Api()
+            obj = api.read_namespaced_persistent_volume_claim(name=resource_name, namespace=namespace)
+        elif resource_type.lower() == "persistentvolume":
+            api = client.CoreV1Api()
+            obj = api.read_persistent_volume(name=resource_name)
+        elif resource_type.lower() == "configmap":
+            api = client.CoreV1Api()
+            obj = api.read_namespaced_config_map(name=resource_name, namespace=namespace)
+        elif resource_type.lower() == "replicaset":
+            api = client.AppsV1Api()
+            obj = api.read_namespaced_replica_set(name=resource_name, namespace=namespace)
+        elif resource_type.lower() == "memoryquota":
+            api = client.CoreV1Api()
+            obj = api.read_namespaced_resource_quota(name=resource_name, namespace=namespace)
+        elif resource_type.lower() == "ingress":
+            api = client.NetworkingV1Api()
+            obj = api.read_namespaced_ingress(name=resource_name, namespace=namespace)
+        elif resource_type.lower() == "networkpolicy":
+            api = client.NetworkingV1Api()
+            obj = api.read_namespaced_network_policy(name=resource_name, namespace=namespace)
+        elif resource_type.lower() == "tidbcluster":
+            api = client.CustomObjectsApi()
+            obj = api.read_namespaced_custom_object(
+                group="pingcap.com", version="v1alpha1", namespace=namespace, plural="tidbclusters", name=resource_name
+            )
+        elif resource_type.lower() == "job":
+            api = client.BatchV1Api()
+            obj = api.read_namespaced_job(name=resource_name, namespace=namespace)
+        elif resource_type.lower() == "daemonset":
+            api = client.AppsV1Api()
+            obj = api.read_namespaced_daemon_set(name=resource_name, namespace=namespace)
+        elif resource_type.lower() == "clusterrole":
+            api = client.RbacAuthorizationV1Api()
+            obj = api.read_cluster_role(name=resource_name)
+        elif resource_type.lower() == "clusterrolebinding":
+            api = client.RbacAuthorizationV1Api()
+            obj = api.read_cluster_role_binding(name=resource_name)
         else:
             err_msg = f"Unsupported resource type: {resource_type}"
             logger.error(f"[localization_mcp] {err_msg}")
