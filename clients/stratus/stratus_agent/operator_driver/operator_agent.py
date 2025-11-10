@@ -558,4 +558,7 @@ async def main():
 
 
 if __name__ == "__main__":
+    from logger import init_logger
+
+    init_logger()
     asyncio.run(main())

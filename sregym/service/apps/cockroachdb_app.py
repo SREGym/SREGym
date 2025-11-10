@@ -46,7 +46,7 @@ class CockroachDBApplication(Application):
         self.kubectl.wait_for_ready(self.namespace)
 
         # Delete operator after the cluster is up
-        command = f"kubectl scale deployment cockroach-operator-manager --replica=0 -n {self.namespace}"
+        command = f"kubectl scale deployment cockroach-operator-manager --replicas=0 -n {self.namespace}"
         self.kubectl.exec_command(command)
         sleep(30)
 
