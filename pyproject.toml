@@ -97,7 +97,7 @@ dependencies = [
     "langgraph>=0.4.7",
     "langsmith>=0.3.43",
     "lark==1.2.2",
-    "litellm>=1.71.1",
+    "litellm>=1.75.0",
     "llvmlite==0.43.0",
     "lm-format-enforcer==0.10.11",
     "markdown-it-py==3.0.0",
