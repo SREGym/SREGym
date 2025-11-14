@@ -47,12 +47,12 @@ class StratusToolNode:
                 f"Expected last message to be an AIMessage, but got {type(message)}.\n" f"{inputs.get('messages', [])}"
             )
             raise ValueError("Last message is not an AIMessage; skipping tool invocation.")
-        
+
         arena_logger = logging.getLogger("sregym-global")
         if message.content != "":
             arena_logger.info(f"[LLM] {message.content}")
             # logger.info(f"{message.content}")
-            
+
         if not getattr(message, "tool_calls", None):
             logger.warning("AIMessage does not contain tool_calls.")
             return {"messages": []}
@@ -91,7 +91,7 @@ class StratusToolNode:
                     )
                 else:
                     logger.info(f"agent tries to call tool that DNE: {tool_call['name']}")
-                    Command(
+                    tool_result = Command(
                         update={
                             "messages": [
                                 ToolMessage(
@@ -106,8 +106,8 @@ class StratusToolNode:
                     tool_result, Command
                 ), f"Tool {tool_call['name']} should return a Command object, but return {type(tool_result)}"
                 logger.debug(f"[STRATUS_TOOLNODE] tool_result: {tool_result}")
-                if tool_result.update['messages']:
-                    combined_content = "\n".join([message.content for message in tool_result.update['messages']])
+                if tool_result.update["messages"]:
+                    combined_content = "\n".join([message.content for message in tool_result.update["messages"]])
                     arena_logger.info(f"[ENV] Tool {tool_call['name']} returned: \n {combined_content}")
                 new_messages += tool_result.update["messages"]
                 to_update = {
