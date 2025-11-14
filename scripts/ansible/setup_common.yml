@@ -1,6 +1,6 @@
 ---
 - hosts: all
-  become: true
+  gather_facts: yes
   vars:
     docker_key_url: https://download.docker.com/linux/ubuntu/gpg
     docker_repo: "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
@@ -8,21 +8,103 @@
     cri_dockerd_version: "0.3.12.3-0"  # Example version for cri-dockerd, customize as needed
 
   tasks:
-    - name: Remove old Kubernetes repository e.g., v1.29 if it exists
-      file:
-        path: /etc/apt/sources.list.d/kubernetes.list
-        state: absent
+    - name: Kill any stuck apt processes
+      shell: |
+        pkill -9 apt-get || true
+        sleep 2
+      become: yes
+      ignore_errors: yes
+      changed_when: false
 
-    - name: Refresh and upgrade packages
+    - name: Wait for apt lock to be released
+      shell: |
+        for i in {1..30}; do
+          if ! lsof /var/lib/apt/lists/lock 2>/dev/null && ! lsof /var/cache/apt/archives/lock 2>/dev/null; then
+            echo "Lock released"
+            break
+          fi
+          sleep 1
+        done
+      become: yes
+      changed_when: false
+
+    - name: Fix interrupted dpkg state
+      shell: dpkg --configure -a
+      become: yes
+      changed_when: false
+      ignore_errors: yes
+
+    # CRITICAL: Install Ubuntu generic 6.8 kernel and headers (must match for dm_dust)
+    - name: Install Ubuntu generic 6.8 kernel and matching headers
       apt:
-        update_cache: "yes"
-        upgrade: "yes"
+        name:
+          - linux-image-generic-6.8
+          - linux-headers-generic-6.8
+        state: present
+        update_cache: yes
+      become: yes
+      timeout: 900
 
-    # - name: Install python3-apt
-    #   apt:
-    #     name: python3-apt
-    #     state: present
-    #   become: true
+    - name: Get current running kernel version
+      shell: uname -r
+      register: current_kernel_check
+      changed_when: false
+
+    - name: Get installed Ubuntu generic 6.8 kernel version
+      shell: dpkg -l | grep 'linux-image-6.8.0-.*-generic' | grep '^ii' | awk '{print $2}' | sed 's/linux-image-//' | head -1
+      register: target_kernel_check
+      changed_when: false
+
+    - name: Set kernel version facts
+      set_fact:
+        current_kernel_version: "{{ current_kernel_check.stdout }}"
+        target_kernel_version: "{{ target_kernel_check.stdout }}"
+        need_kernel_switch: "{{ current_kernel_check.stdout != target_kernel_check.stdout }}"
+
+    - name: Debug kernel versions
+      debug:
+        msg: "Current kernel: {{ current_kernel_version }}, Target kernel: {{ target_kernel_version }}, Switch needed: {{ need_kernel_switch }}"
+
+    - name: Set Ubuntu generic kernel as default in GRUB
+      shell: |
+        KERNEL_VERSION="{{ target_kernel_version }}"
+        MENU_ENTRY="Advanced options for Ubuntu>Ubuntu, with Linux $KERNEL_VERSION"
+        sed -i "s/^GRUB_DEFAULT=.*/GRUB_DEFAULT=\"$MENU_ENTRY\"/" /etc/default/grub
+        update-grub
+      become: yes
+      when: need_kernel_switch
+      register: grub_updated
+
+    - name: Reboot to switch to matching Ubuntu generic kernel
+      reboot:
+        reboot_timeout: 600
+        pre_reboot_delay: 10
+        post_reboot_delay: 60
+      become: yes
+      when: need_kernel_switch
+
+    - name: Wait for system to come back after kernel switch
+      wait_for_connection:
+        delay: 10
+        timeout: 600
+      when: need_kernel_switch
+
+    - name: Verify running kernel after switch
+      shell: uname -r
+      register: kernel_after_fix
+      changed_when: false
+
+    - name: Fix apt lock file permissions and clean up
+      shell: |
+        chmod 644 /var/lib/apt/lists/lock 2>/dev/null || true
+        chown root:root /var/lib/apt/lists/lock 2>/dev/null || true
+        rm -f /var/cache/apt/archives/lock 2>/dev/null || true
+        # Remove lock files that may cause issues
+        rm -f /var/lib/dpkg/lock-frontend 2>/dev/null || true
+        rm -f /var/lib/dpkg/lock 2>/dev/null || true
+      become: yes
+      changed_when: false
+      ignore_errors: yes
 
     - name: Remove old Docker versions if any
       apt:
@@ -35,8 +117,9 @@
         - podman-docker
         - containerd
         - runc
+      become: yes
 
-    - name: Install prerequisites for Docker and Kubernetes
+    - name: Install prerequisites for Docker and Kubernetes (batched)
       apt:
         name:
           - ca-certificates
@@ -44,20 +127,20 @@
           - gnupg
           - lsb-release
           - socat
-    
-    - name: Install OpenSSL development libraries (the wrk build needs it)
-      apt:
-        name: libssl-dev
+          - libssl-dev
         state: present
+        update_cache: no
+      become: yes
 
 
     - name: Add Docker GPG key and repository
       shell: |
-        sudo install -m 0755 -d /etc/apt/keyrings
+        install -m 0755 -d /etc/apt/keyrings
         curl -fsSL {{ docker_key_url }} -o /etc/apt/keyrings/docker.asc
         echo "{{ docker_repo }}" | tee /etc/apt/sources.list.d/docker.list
       args:
         creates: /etc/apt/sources.list.d/docker.list
+      become: yes
 
     - name: Update apt and install Docker
       apt:
@@ -69,12 +152,14 @@
           - docker-buildx-plugin
           - docker-compose-plugin
         state: present
+      become: yes
 
     - name: Add user to docker group to run Docker without sudo
       user:
         name: "{{ ansible_user_id }}"
         groups: docker
         append: yes
+      become: yes
 
     - name: Install cri-dockerd
       get_url:
@@ -126,18 +211,22 @@
       file:
         path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
         state: absent
+      become: yes
+      ignore_errors: yes
 
     - name: Add Kubernetes GPG key
       shell: |
-        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
       args:
         creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      become: yes
 
     - name: Add Kubernetes repository for v1.31
       shell: |
-        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
+        echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
       args:
         creates: /etc/apt/sources.list.d/kubernetes.list
+      become: yes
 
     - name: Install kubeadm, kubelet, kubectl
       apt:
@@ -147,6 +236,7 @@
           - kubelet
           - kubectl
         state: present
+      become: yes
 
     # - name: Hold Kubernetes packages at installed version
     #   apt:
@@ -159,102 +249,307 @@
 
     - name: Hold Kubernetes packages at installed version
       shell: |
-        sudo apt-mark hold kubeadm kubelet kubectl
+        apt-mark hold kubeadm kubelet kubectl
+      become: yes
+      changed_when: false
+      ignore_errors: yes
 
     - name: Disable swap
       shell: |
-        sudo swapoff -a
-        sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+        swapoff -a
+        sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+      become: yes
+      ignore_errors: yes
+      changed_when: false
 
-    - name: Install additional packages for dm_dust module building
+    - name: Install software-properties-common for PPA support
+      apt:
+        name: software-properties-common
+        state: present
+        update_cache: yes
+      become: yes
+
+    - name: Verify kernel matches headers (after potential reboot)
+      assert:
+        that:
+          - "'6.8.0-' in kernel_after_fix.stdout"
+          - "'-generic' in kernel_after_fix.stdout"
+        fail_msg: "Kernel doesn't match expected Ubuntu generic format. Current: {{ kernel_after_fix.stdout }}"
+        success_msg: "Kernel matches Ubuntu generic 6.8: {{ kernel_after_fix.stdout }}"
+
+    - name: Confirm kernel and headers match
+      debug:
+        msg: "Running kernel: {{ kernel_after_fix.stdout }} (should match headers)"
+
+    - name: Remove broken kernel headers if they cause dependency issues
+      shell: |
+        # Remove any broken headers that prevent package installation
+        dpkg -l | grep "linux-headers.*6\.8\." | grep -v "^ii" | awk '{print $2}' | xargs -r sudo apt-get remove --purge -y || true
+        # Also remove headers with unmet dependencies
+        if apt-get check 2>&1 | grep -q "linux-headers.*6\.8"; then
+          dpkg -l | grep "linux-headers.*6\.8\." | awk '{print $2}' | xargs -r sudo apt-get remove --purge -y || true
+        fi
+        sudo apt-get install -f -y || true
+      ignore_errors: yes
+
+    - name: Install additional packages for module building
       apt:
         name:
           - flex
           - bison
           - bc
-          - libssl-dev
           - libelf-dev
-          - linux-source-5.15.0
+          - build-essential
+          - gcc-12
         state: present
+        update_cache: no
+      become: yes
 
-    - name: Build and install dm_dust module
+    - name: Get full kernel version
+      shell: uname -r
+      register: kernel_version_full
+      changed_when: false
+
+    - name: Check if dm_dust and dm_flakey modules exist (combined)
+      shell: |
+        DUST=$(modinfo dm_dust 2>/dev/null && echo "exists" || echo "not_found")
+        FLAKEY=$(modinfo dm_flakey 2>/dev/null && echo "exists" || echo "not_found")
+        echo "dm_dust:$DUST"
+        echo "dm_flakey:$FLAKEY"
+      register: dm_modules_check
+      changed_when: false
+
+    - name: Set module facts (reusable throughout playbook)
+      set_fact:
+        dm_dust_exists: "{{ 'dm_dust:exists' in dm_modules_check.stdout }}"
+        dm_flakey_exists: "{{ 'dm_flakey:exists' in dm_modules_check.stdout }}"
+
+    - name: Check if Ubuntu kernel headers are available
+      stat:
+        path: "/usr/src/linux-headers-{{ kernel_version_full.stdout }}"
+      register: ubuntu_headers
+      changed_when: false
+
+    - name: Install generic 6.8 kernel headers (should already match running kernel)
+      apt:
+        name: linux-headers-generic-6.8
+        state: present
+        update_cache: no
+      when: >
+        (not dm_dust_exists or not dm_flakey_exists)
+        and not ubuntu_headers.stat.exists
+      become: yes
+      ignore_errors: yes
+
+    - name: Re-check headers after installation attempt
+      stat:
+        path: "/usr/src/linux-headers-{{ kernel_version_full.stdout }}"
+      register: ubuntu_headers
+      changed_when: false
+
+    - name: Fail if headers not available
+      fail:
+        msg: "Kernel headers not available for {{ kernel_version_full.stdout }}. Cannot build modules."
+      when: >
+        (not dm_dust_exists or not dm_flakey_exists)
+        and not ubuntu_headers.stat.exists
+
+    - name: Check if build symlink exists
+      stat:
+        path: "/lib/modules/{{ kernel_version_full.stdout }}/build"
+      register: build_symlink
+      changed_when: false
+      when: >
+        (not dm_dust_exists or not dm_flakey_exists)
+        and ubuntu_headers.stat.exists
+
+    - name: Create build symlink if headers exist but symlink is missing
+      file:
+        src: "/usr/src/linux-headers-{{ kernel_version_full.stdout }}"
+        dest: "/lib/modules/{{ kernel_version_full.stdout }}/build"
+        state: link
+      become: yes
+      when: >
+        (not dm_dust_exists or not dm_flakey_exists)
+        and ubuntu_headers.stat.exists
+        and (build_symlink is defined and (not build_symlink.stat.exists or not build_symlink.stat.islnk))
+
+    - name: Ensure kernel module directory exists
+      file:
+        path: "/lib/modules/{{ kernel_version_full.stdout }}/kernel/drivers/md"
+        state: directory
+        mode: '0755'
+      when: not dm_dust_exists or not dm_flakey_exists
+
+    - name: Load dm_dust module if available
+      modprobe:
+        name: dm_dust
+        state: present
+      when: dm_dust_exists
+      ignore_errors: yes
+      become: yes
+
+    - name: Build and install dm_dust module if not available
       block:
-        - name: Extract kernel source
-          unarchive:
-            src: /usr/src/linux-source-5.15.0.tar.bz2
-            dest: /tmp
-            remote_src: yes
-            creates: /tmp/linux-source-5.15.0
-
         - name: Create dm-dust build directory
           file:
             path: /tmp/dm-dust-build
             state: directory
 
-        - name: Copy dm-dust source file
-          copy:
-            src: /tmp/linux-source-5.15.0/drivers/md/dm-dust.c
-            dest: /tmp/dm-dust-build/dm-dust.c
-            remote_src: yes
+        # Download kernel source for dm-dust.c
+        - name: Extract kernel major.minor version
+          set_fact:
+            kernel_major_minor: "{{ kernel_version_full.stdout | regex_replace('^([0-9]+\\.[0-9]+).*', '\\1') }}"
 
-        - name: Create Makefile for dm-dust
+        - name: Debug kernel version for download
+          debug:
+            msg: "Full kernel: {{ kernel_version_full.stdout }}, Major.Minor: {{ kernel_major_minor }}"
+
+        - name: Check if kernel source already downloaded
+          stat:
+            path: /tmp/linux-{{ kernel_major_minor }}.tar.xz
+          register: kernel_source_exists
+
+        - name: Download kernel source for dm-dust source code
+          get_url:
+            url: "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-{{ kernel_major_minor }}.tar.xz"
+            dest: /tmp/linux-{{ kernel_major_minor }}.tar.xz
+          when: not kernel_source_exists.stat.exists
+          register: kernel_source_download
+
+        - name: Check if kernel source already extracted
+          stat:
+            path: /tmp/linux-{{ kernel_major_minor }}/drivers/md/dm-dust.c
+          register: dm_dust_source_exists
+
+        - name: Extract only the dm-dust source file from kernel tarball
+          shell: |
+            cd /tmp
+            tar -xJf linux-{{ kernel_major_minor }}.tar.xz linux-{{ kernel_major_minor }}/drivers/md/dm-dust.c
+          when: not dm_dust_source_exists.stat.exists
+          args:
+            creates: /tmp/linux-{{ kernel_major_minor }}/drivers/md/dm-dust.c
+
+        - name: Copy dm-dust source to build directory
+          shell: |
+            cp /tmp/linux-{{ kernel_major_minor }}/drivers/md/dm-dust.c /tmp/dm-dust-build/dm-dust.c
+          args:
+            creates: /tmp/dm-dust-build/dm-dust.c
+
+        - name: Create Makefile for dm-dust (use system headers)
           copy:
+            dest: /tmp/dm-dust-build/Makefile
             content: |
               obj-m := dm-dust.o
               KDIR := /lib/modules/$(shell uname -r)/build
               PWD := $(shell pwd)
+              CC := gcc-12
 
               default:
-              	$(MAKE) -C $(KDIR) M=$(PWD) modules
+              	$(MAKE) -C $(KDIR) M=$(PWD) modules CC=gcc-12
 
               clean:
               	$(MAKE) -C $(KDIR) M=$(PWD) clean
 
               install:
+              	mkdir -p /lib/modules/$(shell uname -r)/kernel/drivers/md/
               	cp dm-dust.ko /lib/modules/$(shell uname -r)/kernel/drivers/md/
               	depmod -a
-            dest: /tmp/dm-dust-build/Makefile
+            mode: '0644'
+
+        - name: Check if dm-dust module already built
+          stat:
+            path: /tmp/dm-dust-build/dm-dust.ko
+          register: dm_dust_ko_precheck
 
         - name: Build dm-dust module
           make:
             chdir: /tmp/dm-dust-build
+          environment:
+            KBUILD_MODPOST_WARN: "1"
+            CC: "gcc-12"
+          ignore_errors: yes
+          register: dm_dust_build_result
+          when: not dm_dust_ko_precheck.stat.exists
+
+        - name: Verify dm_dust module was built successfully
+          stat:
+            path: /tmp/dm-dust-build/dm-dust.ko
+          register: dm_dust_ko
+          failed_when: not dm_dust_ko.stat.exists
+          ignore_errors: yes
 
         - name: Install dm-dust module
           make:
             chdir: /tmp/dm-dust-build
             target: install
           become: yes
+          ignore_errors: yes
+          when: dm_dust_ko.stat.exists | default(false)
+
+        - name: Verify dm_dust module is installed
+          stat:
+            path: "/lib/modules/{{ kernel_version_full.stdout }}/kernel/drivers/md/dm-dust.ko"
+          register: dm_dust_installed
+          failed_when: false
+          changed_when: false
 
         - name: Load dm_dust module
           modprobe:
             name: dm_dust
             state: present
+          become: yes
+          ignore_errors: yes
+          register: dm_dust_load_result
 
-        - name: Clean up build directory
+        - name: Debug dm_dust module load result
+          debug:
+            msg: "dm_dust module load result: {{ dm_dust_load_result }}"
+
+        - name: Verify dm_dust module can be loaded
+          shell: |
+            modprobe dm_dust && modprobe -r dm_dust && modprobe dm_dust
+          become: yes
+          register: dm_dust_load_test
+          failed_when: dm_dust_load_test.rc != 0
+          changed_when: false
+          ignore_errors: yes
+
+        - name: Clean up build directory after successful install
           file:
             path: /tmp/dm-dust-build
             state: absent
+          when: dm_dust_installed.stat.exists
+      when: not dm_dust_exists
 
-        - name: Clean up extracted kernel source
-          file:
-            path: /tmp/linux-source-5.15.0
-            state: absent
+    - name: Load dm_flakey module (built into kernel 6.8.x)
+      modprobe:
+        name: dm_flakey
+        state: present
+      ignore_errors: yes
+      become: yes
+
+
 
     - name: Load necessary kernel modules
       shell: |
-        sudo modprobe overlay
-        sudo modprobe br_netfilter
-        sudo modprobe dm_dust || true
+        modprobe overlay
+        modprobe br_netfilter
+        modprobe dm_dust || true
+        modprobe dm_flakey || true
+      become: yes
       args:
         creates: /etc/modules-load.d/k8s.conf
 
-    - name: Create modules-load configuration for Kubernetes and dm_dust
+    - name: Create modules-load configuration for Kubernetes and modules
       copy:
         content: |
           overlay
           br_netfilter
           dm_dust
+          dm_flakey
         dest: /etc/modules-load.d/k8s.conf
+      become: yes
 
     - name: Configure sysctl for Kubernetes networking
       copy:
@@ -263,6 +558,7 @@
           net.bridge.bridge-nf-call-ip6tables = 1
           net.ipv4.ip_forward                 = 1
         dest: /etc/sysctl.d/k8s.conf
+      become: yes
       notify: Reload sysctl
 
     - name: Start and enable kubelet
@@ -270,11 +566,14 @@
         name: kubelet
         enabled: yes
         state: started
+      become: yes
 
   handlers:
     - name: Install CRI-Dockerd
       apt:
         deb: /tmp/cri-dockerd.deb
+      become: yes
 
     - name: Reload sysctl
       command: sysctl --system
+      become: yes
