@@ -255,6 +255,34 @@ dmsetup create {name_q} --table "0 $SECTORS flakey {dev_q} {int(offset_sectors)}
     def dm_target_remove(self, node: str, name: str) -> None:
         self._exec_on_node(node, f"dmsetup remove {shlex.quote(name)} 2>/dev/null || true")
 
+    def dm_flakey_reload(
+        self, node: str, name: str, up_interval: int, down_interval: int, features: str = "", offset_sectors: int = 0
+    ) -> None:
+
+        name_q = shlex.quote(name)
+        feat_tail = f" {len(features.split())} {features}" if features else ""
+        
+        script = rf"""
+set -e
+# Get the underlying device from current table
+UNDERLYING=$(dmsetup table {name_q} | awk '{{print $4}}')
+SECTORS=$(dmsetup table {name_q} | awk '{{print $2}}')
+
+echo "Reloading {name_q}: up={up_interval}s down={down_interval}s features='{features}'"
+echo "Underlying device: $UNDERLYING, Sectors: $SECTORS"
+
+# Reload the table with new parameters
+dmsetup reload {name_q} --table "0 $SECTORS flakey $UNDERLYING {int(offset_sectors)} {int(up_interval)} {int(down_interval)}{feat_tail}"
+
+# Activate the new table (this is atomic, no unmount needed)
+dmsetup resume {name_q}
+
+echo "dm-flakey device reloaded successfully"
+dmsetup status {name_q}
+"""
+        result = self._exec_on_node(node, script)
+        print(f"[dm-flakey] Reload result: {result.strip()}")
+
     # ---------- dm-dust ----------
     def dm_dust_create(self, node: str, name: str, dev: str, blksz: int = 512, offset: int = 0) -> None:
         """
