@@ -9,6 +9,7 @@ from srearena.conductor.problems.registry import ProblemRegistry
 from srearena.conductor.utils import is_ordered_subset
 from srearena.service.apps.app_registry import AppRegistry
 from srearena.service.dm_dust_manager import DmDustManager
+from srearena.service.dm_flakey_manager import DmFlakeyManager
 from srearena.service.khaos import KhaosController
 from srearena.service.kubectl import KubeCtl
 from srearena.service.telemetry.prometheus import Prometheus
@@ -25,6 +26,7 @@ class Conductor:
 
         self.khaos = KhaosController(self.kubectl)
         self.dm_dust_manager = DmDustManager(self.kubectl)
+        self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
 
         self.problem = None
         self.detection_oracle = None
@@ -206,8 +208,22 @@ class Conductor:
         print("Deploying Prometheus…")
         self.prometheus.deploy()
 
-        print("Setting up dm-dust infrastructure for fault injection...")
-        self.dm_dust_manager.setup_openebs_dm_dust_infrastructure()
+        # Set up fault injection infrastructure based on problem type
+        # Only one can be active at /var/openebs/local at a time
+        problem_name = self.problem.__class__.__name__
+        
+        if "LatentSectorError" in problem_name:
+            print("Setting up dm-dust infrastructure for LSE fault injection...")
+            self.dm_dust_manager.setup_openebs_dm_dust_infrastructure()
+        elif "SilentDataCorruption" in problem_name:
+            print("Setting up dm-flakey infrastructure for SDC fault injection...")
+            self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
+        else:
+            # Default: set up both (but this might cause conflicts!)
+            print("Setting up dm-dust infrastructure for fault injection...")
+            self.dm_dust_manager.setup_openebs_dm_dust_infrastructure()
+            print("Setting up dm-flakey infrastructure for fault injection...")
+            self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
 
         print("Deploying and starting workload")
         self.problem.app.deploy()

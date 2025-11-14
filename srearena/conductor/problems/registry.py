@@ -24,6 +24,7 @@ from srearena.conductor.problems.jvm_heap_stress import ChaosMeshJVMHeapStress
 from srearena.conductor.problems.jvm_return import ChaosMeshJVMReturnFault
 from srearena.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from srearena.conductor.problems.latent_sector_error import LatentSectorError
+from srearena.conductor.problems.silent_data_corruption import SilentDataCorruption
 from srearena.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from srearena.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from srearena.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
@@ -245,9 +246,10 @@ class ProblemRegistry:
                 ]
             ),
             "latent_sector_error": LatentSectorError,
+            "silent_data_corruption": SilentDataCorruption,
         }
         self.kubectl = KubeCtl()
-        self.non_emulated_cluster_problems = ["rpc_retry_storm"]
+        self.non_emulated_cluster_problems = ["rpc_retry_storm", "latent_sector_error", "silent_data_corruption"]
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
