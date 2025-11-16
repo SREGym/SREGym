@@ -1,4 +1,4 @@
-from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.conductor.oracles.cockroachdb_upscale_oracle import CockroachDBUpscaleOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.cockroachdb_app import CockroachDBApplication
 from sregym.service.kubectl import KubeCtl
@@ -13,7 +13,7 @@ class ScalePodCockroachDB(Problem):
         self.namespace = self.app.namespace
 
         super().__init__(app=self.app, namespace=self.app.namespace)
-        self.mitigation_oracle = MitigationOracle(problem=self)
+        self.mitigation_oracle = CockroachDBUpscaleOracle(problem=self)
 
     @property
     def description(self) -> str:
