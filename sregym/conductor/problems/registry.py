@@ -5,7 +5,25 @@ from sregym.conductor.problems.assign_non_existent_node import AssignNonExistent
 from sregym.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
+from sregym.conductor.problems.cockroachdb_backup_restore import CockroachDBBackupRestore
+from sregym.conductor.problems.cockroachdb_certificate_rotation import CockroachDBCertificateRotation
+from sregym.conductor.problems.cockroachdb_cluster_settings import CockroachDBClusterSettings
+from sregym.conductor.problems.cockroachdb_decommission import CockroachDBDecommission
+from sregym.conductor.problems.cockroachdb_deploy import CockroachDBDeploy
+from sregym.conductor.problems.cockroachdb_expose_ingress import CockroachDBExposeIngress
+from sregym.conductor.problems.cockroachdb_generate_cert import CockroachDBGenerateCert
+from sregym.conductor.problems.cockroachdb_health_check_recovery import CockroachDBHealthCheckRecovery
+from sregym.conductor.problems.cockroachdb_initialize import CockroachDBInitialize
+from sregym.conductor.problems.cockroachdb_major_upgrade_finalize import CockroachDBMajorUpgradeFinalize
+from sregym.conductor.problems.cockroachdb_monitoring_integration import CockroachDBMonitoringIntegration
+from sregym.conductor.problems.cockroachdb_multi_region_setup import CockroachDBMultiRegionSetup
+from sregym.conductor.problems.cockroachdb_node_drain_maintenance import CockroachDBNodeDrainMaintenance
+from sregym.conductor.problems.cockroachdb_partitioned_update import CockroachDBPartitionedUpdate
+from sregym.conductor.problems.cockroachdb_quorum_loss_recovery import CockroachDBQuorumLossRecovery
+from sregym.conductor.problems.cockroachdb_resize_pvc import CockroachDBResizePVC
 from sregym.conductor.problems.cockroachdb_upscale import ScalePodCockroachDB
+from sregym.conductor.problems.cockroachdb_version_check import CockroachDBVersionCheck
+from sregym.conductor.problems.cockroachdb_zone_config import CockroachDBZoneConfig
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
@@ -241,7 +259,26 @@ class ProblemRegistry:
             "operator_invalid_affinity_toleration": K8SOperatorInvalidAffinityTolerationFault,
             "operator_security_context_fault": K8SOperatorSecurityContextFault,
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
+            # ==================== COCKROACHDB OPERATOR BENCHMARKS ==================
+            "cockroachdb_backup_restore": CockroachDBBackupRestore,
+            "cockroachdb_certificate_rotation": CockroachDBCertificateRotation,
+            "cockroachdb_cluster_settings": CockroachDBClusterSettings,
+            "cockroachdb_decommission": CockroachDBDecommission,
+            "cockroachdb_deploy": CockroachDBDeploy,
+            "cockroachdb_expose_ingress": CockroachDBExposeIngress,
+            "cockroachdb_generate_cert": CockroachDBGenerateCert,
+            "cockroachdb_health_check_recovery": CockroachDBHealthCheckRecovery,
+            "cockroachdb_initialize": CockroachDBInitialize,
+            "cockroachdb_major_upgrade_finalize": CockroachDBMajorUpgradeFinalize,
+            "cockroachdb_monitoring_integration": CockroachDBMonitoringIntegration,
+            "cockroachdb_multi_region_setup": CockroachDBMultiRegionSetup,
+            "cockroachdb_node_drain_maintenance": CockroachDBNodeDrainMaintenance,
+            "cockroachdb_partitioned_update": CockroachDBPartitionedUpdate,
+            "cockroachdb_quorum_loss_recovery": CockroachDBQuorumLossRecovery,
+            "cockroachdb_resize_pvc": CockroachDBResizePVC,
             "cockroachdb_upscale": ScalePodCockroachDB,
+            "cockroachdb_version_check": CockroachDBVersionCheck,
+            "cockroachdb_zone_config": CockroachDBZoneConfig,
         }
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = []
