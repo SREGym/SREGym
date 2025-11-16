@@ -112,7 +112,7 @@ class Conductor:
         """
         1) Provision infra & workload
         2) Flip to NO-OP grading stage
-        
+
         Returns:
             StartProblemResult: Result status indicating success or skip reason
         """
@@ -297,7 +297,7 @@ class Conductor:
         self.local_logger.info("[DEPLOY] Deploying Prometheus…")
         self.prometheus.deploy()
 
-        self.logger.info(f"[ENV] Set up neccesary components: metrics-server, Khaos, OpenEBS, Prometheus")
+        self.logger.info(f"[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus")
 
         self.local_logger.info("[DEPLOY] Deploying and starting workload")
         self.problem.app.deploy()
