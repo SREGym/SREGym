@@ -1,7 +1,6 @@
 """LLM-as-a-Judge Oracle for evaluating agent solutions against expected root causes."""
 
 import json
-import logging
 import os
 import re
 from enum import Enum
@@ -14,15 +13,10 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from clients.stratus.llm_backend.get_llm_backend import LiteLLMBackend
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger(__name__)
-
 load_dotenv()
 
 
 class JudgmentResult(str, Enum):
-    """Possible judgment results from the LLM Judge."""
-
     TRUE = "True"  # Correct diagnosis
     FALSE = "False"  # Incorrect diagnosis
     FALSE_POSITIVE = "FalsePositive"  # Identified a problem when there isn't one
@@ -30,8 +24,6 @@ class JudgmentResult(str, Enum):
 
 
 class LLMJudge:
-    """Judge that uses LiteLLM backend to evaluate agent solutions."""
-
     def __init__(
         self,
         provider: Optional[str] = None,
@@ -41,16 +33,6 @@ class LLMJudge:
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ):
-        """Initialize the LLM Judge with LiteLLM backend.
-
-        Args:
-            provider: LLM provider (e.g., "openai", "litellm", "compatible")
-            model_name: Model name/ID to use
-            url: API endpoint URL (for compatible providers)
-            api_key: API key for authentication
-            temperature: Sampling temperature (default: 0.0 for deterministic)
-            max_tokens: Maximum tokens in response
-        """
         # Load from environment if not provided
         self.provider = provider or os.getenv("PROVIDER", "openai")
         self.model_name = model_name or os.getenv("MODEL_TOOLS", "gpt-4o")
@@ -75,19 +57,9 @@ class LLMJudge:
             max_tokens=self.max_tokens,
         )
 
-        logger.info(f"Initialized LLMJudge with provider={self.provider}, model={self.model_name}")
+        print(f"Initialized LLMJudge with provider={self.provider}, model={self.model_name}")
 
     def judge(self, solution: str, expectation: str) -> JudgmentResult:
-        """Judge whether the agent's solution matches the expected root cause.
-
-        Args:
-            solution: The agent's answer/diagnosis
-            expectation: The expected root cause (ground truth). Empty string means no fault exists.
-
-        Returns:
-            JudgmentResult: One of True, False, FalsePositive, or FalseNegative
-        """
-        # Construct the prompt for the LLM
         system_prompt = """You are an expert judge evaluating whether an agent's diagnosis of a system issue matches the expected root cause.
 
 Your task is to compare the agent's answer with the expected root cause and determine if they are semantically equivalent.
@@ -124,31 +96,19 @@ Evaluate whether the agent's answer correctly identifies the root cause. Respond
             response = self.backend.inference(messages)
             response_text = response.content.strip()
 
-            logger.info(f"LLM Response: {response_text}")
+            print(f"LLM Response: {response_text}")
 
             # Parse the response
             judgment = self._parse_judgment(response_text)
-            logger.info(f"Parsed judgment: {judgment}")
+            print(f"Parsed judgment: {judgment}")
 
             return judgment
 
         except Exception as e:
-            logger.error(f"Error during judgment: {e}")
+            print(f"Error during judgment: {e}")
             raise
 
     def _parse_judgment(self, response_text: str) -> JudgmentResult:
-        """Parse the LLM response to extract the judgment.
-
-        Args:
-            response_text: Raw response from the LLM
-
-        Returns:
-            JudgmentResult: Parsed judgment
-
-        Raises:
-            ValueError: If response cannot be parsed
-        """
-        # Try to parse as JSON first
         try:
             # Remove markdown code blocks if present
             clean_text = re.sub(r"```json\s*|\s*```", "", response_text)
@@ -158,11 +118,11 @@ Evaluate whether the agent's answer correctly identifies the root cause. Respond
             judgment_str = response_json.get("judgment", "").strip()
             reasoning = response_json.get("reasoning", "")
 
-            logger.info(f"Reasoning: {reasoning}")
+            print(f"Reasoning: {reasoning}")
 
         except json.JSONDecodeError:
             # Fallback: try to extract judgment directly from text
-            logger.warning("Failed to parse JSON, attempting direct extraction")
+            print("Failed to parse JSON, attempting direct extraction")
             judgment_str = response_text
 
         # Normalize the judgment string
@@ -182,32 +142,23 @@ Evaluate whether the agent's answer correctly identifies the root cause. Respond
 
 
 def load_test_data(yaml_path: str) -> list[dict]:
-    """Load test data from YAML file.
-
-    Args:
-        yaml_path: Path to the YAML file
-
-    Returns:
-        List of test cases with 'description', 'answer', and 'oracle' fields
-    """
     with open(yaml_path, "r") as f:
         data = yaml.safe_load(f)
     return data
 
 
 def main():
-    """Main function to test the LLM Judge with data from data.yaml."""
     # Get the directory of this script
     script_dir = Path(__file__).parent
     data_path = script_dir / "data.yaml"
 
     if not data_path.exists():
-        logger.error(f"Test data file not found: {data_path}")
+        print(f"Test data file not found: {data_path}")
         return
 
     # Load test data
     test_cases = load_test_data(str(data_path))
-    logger.info(f"Loaded {len(test_cases)} test cases from {data_path}")
+    print(f"Loaded {len(test_cases)} test cases from {data_path}")
 
     # Initialize judge
     judge = LLMJudge()
@@ -224,15 +175,15 @@ def main():
         answer = test_case.get("answer", "")
         expected_judgment = test_case.get("oracle", "")
 
-        logger.info(f"\n{'='*80}")
-        logger.info(f"Test Case {i}/{total_cases}")
-        logger.info(
+        print(f"\n{'='*80}")
+        print(f"Test Case {i}/{total_cases}")
+        print(
             f"Expected Root Cause: {description[:100]}..."
             if len(description) > 100
             else f"Expected Root Cause: {description}"
         )
-        logger.info(f"Agent Answer: {answer[:100]}..." if len(answer) > 100 else f"Agent Answer: {answer}")
-        logger.info(f"Expected Judgment: {expected_judgment}")
+        print(f"Agent Answer: {answer[:100]}..." if len(answer) > 100 else f"Agent Answer: {answer}")
+        print(f"Expected Judgment: {expected_judgment}")
 
         try:
             # Get judgment from LLM
@@ -251,8 +202,8 @@ def main():
                 incorrect += 1
                 status = " INCORRECT"
 
-            logger.info(f"Actual Judgment: {actual_judgment.value}")
-            logger.info(f"Status: {status}")
+            print(f"Actual Judgment: {actual_judgment.value}")
+            print(f"Status: {status}")
 
             results.append(
                 {
@@ -264,7 +215,7 @@ def main():
             )
 
         except Exception as e:
-            logger.error(f"Error processing test case {i}: {e}")
+            print(f"Error processing test case {i}: {e}")
             incorrect += 1
             results.append(
                 {
@@ -276,19 +227,17 @@ def main():
             )
 
     # Print summary
-    logger.info(f"\n{'='*80}")
-    logger.info("SUMMARY")
-    logger.info(f"{'='*80}")
-    logger.info(f"Total test cases: {total_cases}")
-    logger.info(f"Correct: {correct} ({correct/total_cases*100:.1f}%)")
-    logger.info(f"Incorrect: {incorrect} ({incorrect/total_cases*100:.1f}%)")
-    logger.info(f"\nDetailed Results:")
+    print(f"\n{'='*80}")
+    print("SUMMARY")
+    print(f"{'='*80}")
+    print(f"Total test cases: {total_cases}")
+    print(f"Correct: {correct} ({correct/total_cases*100:.1f}%)")
+    print(f"Incorrect: {incorrect} ({incorrect/total_cases*100:.1f}%)")
+    print(f"\nDetailed Results:")
 
     for result in results:
         status_symbol = "" if result["correct"] else ""
-        logger.info(
-            f"  {status_symbol} Case {result['test_case']}: Expected={result['expected']}, Actual={result['actual']}"
-        )
+        print(f"  {status_symbol} Case {result['test_case']}: Expected={result['expected']}, Actual={result['actual']}")
 
 
 if __name__ == "__main__":

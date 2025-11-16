@@ -8,6 +8,7 @@ import yaml
 from dashboard.proxy import LogProxy
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.detection import DetectionOracle
+from sregym.conductor.oracles.localization_oracle import LocalizationOracle
 from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
@@ -193,7 +194,11 @@ class Conductor:
         self.logger.info("[ENV] Injected fault")
 
         # Prepare localization checkpoint if available, after fault injection but before agent acts
-        if hasattr(self.problem, "localization_oracle") and self.problem.localization_oracle:
+        if (
+            hasattr(self.problem, "localization_oracle")
+            and self.problem.localization_oracle
+            and isinstance(self.problem.localization_oracle, LocalizationOracle)
+        ):
             self.problem.localization_oracle.load_localization_checkpoint()
             self.local_logger.info("Localization checkpoint loaded after fault injection.")
 
