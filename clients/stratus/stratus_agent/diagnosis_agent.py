@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 
 import yaml
@@ -14,7 +15,6 @@ from clients.stratus.stratus_utils.get_starting_prompt import get_starting_promp
 from clients.stratus.stratus_utils.str_to_tool import str_to_tool
 from clients.stratus.tools.stratus_tool_node import StratusToolNode
 
-import logging
 logger = logging.getLogger("all.stratus.diagnosis")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
@@ -39,6 +39,7 @@ class DiagnosisAgent(BaseAgent):
         self.graph_builder.add_node(self.post_round_process_node, self.post_round_process)
         self.graph_builder.add_node(self.force_submit_prompt_inject_node, self.llm_force_submit_thinking_step)
         self.graph_builder.add_node(self.force_submit_tool_call_node, self.llm_force_submit_tool_call_step)
+        self.graph_builder.add_node(self.force_submit_tool_execute_node, self.llm_force_submit_tool_execute_node)
 
         self.graph_builder.add_edge(START, self.thinking_prompt_inject_node)
         self.graph_builder.add_edge(self.thinking_prompt_inject_node, self.thinking_node)
@@ -55,7 +56,8 @@ class DiagnosisAgent(BaseAgent):
             },
         )
         self.graph_builder.add_edge(self.force_submit_prompt_inject_node, self.force_submit_tool_call_node)
-        self.graph_builder.add_edge(self.force_submit_tool_call_node, END)
+        self.graph_builder.add_edge(self.force_submit_tool_call_node, self.force_submit_tool_execute_node)
+        self.graph_builder.add_edge(self.force_submit_tool_execute_node, END)
         self.graph_builder.add_edge(self.post_round_process_node, END)
 
         self.memory_saver = MemorySaver()
@@ -76,7 +78,7 @@ class DiagnosisAgent(BaseAgent):
 
         if len(starting_prompts) == 0:
             raise ValueError("No prompts used to start the conversation!")
-        
+
         all_init_prompts = ""
         for prompt in starting_prompts:
             all_init_prompts += prompt.content + "\n"
@@ -86,7 +88,7 @@ class DiagnosisAgent(BaseAgent):
 
         while True:
             graph_config = {"configurable": {"thread_id": "1"}}
-            
+
             logger.info(f"{'-' * 20} [Loop {self.loop_count}] {'-' * 20}")
             last_state = self.graph.get_state(config=graph_config)
             # logger.info("last state: %s", last_state)
@@ -109,7 +111,6 @@ class DiagnosisAgent(BaseAgent):
                     # "ans": dict(),
                     "rollback_stack": "",
                 }
-                
 
             async for event in self.graph.astream(
                 state,
@@ -118,16 +119,16 @@ class DiagnosisAgent(BaseAgent):
                 stream_mode="values",
             ):
                 if (not graph_events) or event["messages"][-1] != graph_events[-1]["messages"][-1]:
-                    #print(f"Last message: {graph_events[-1]['messages']}")
+                    # print(f"Last message: {graph_events[-1]['messages']}")
                     event["messages"][-1].pretty_print()
                 graph_events.append(event)
             last_state = self.graph.get_state(config=graph_config)
             if last_state.values["submitted"]:
                 logger.info(f"[Loop {self.loop_count}] Agent submitted, breaking loop.")
                 break
-            
+
             self.loop_count += 1
-            
+
             # print(f"================{last_state.values['num_steps']}===============")
 
         return last_state

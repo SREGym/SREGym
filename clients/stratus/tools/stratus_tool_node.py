@@ -89,7 +89,7 @@ class StratusToolNode:
                     )
                 else:
                     logger.info(f"agent tries to call tool that DNE: {tool_call['name']}")
-                    Command(
+                    tool_result = Command(
                         update={
                             "messages": [
                                 ToolMessage(

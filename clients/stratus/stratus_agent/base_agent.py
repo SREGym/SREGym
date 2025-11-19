@@ -25,7 +25,8 @@ class BaseAgent:
         self.submit_tool = submit_tool
         self.force_submit_prompt_inject_node = "force_submit_thinking_step"
         self.force_submit_tool_call_node = "force_submit_tool_call"
-        self.llm_force_submit_tool_call_node = StratusToolNode(sync_tools=[], async_tools=[submit_tool])
+        self.force_submit_tool_execute_node = "force_submit_tool_execute"
+        self.llm_force_submit_tool_execute_node = StratusToolNode(sync_tools=[], async_tools=[submit_tool])
         self.thinking_prompt_inject_node = "pre_thinking_step"
         self.thinking_node = "thinking_step"
         self.tool_calling_prompt_inject_node = "pre_tool_calling_step"
@@ -35,7 +36,7 @@ class BaseAgent:
         self.callback = UsageMetadataCallbackHandler()
         self.arena_logger = logging.getLogger("sregym-global")
         self.loop_count = 0
-        
+
     def llm_inference_step(self, messages, tools):
         return self.llm.inference(messages=messages, tools=tools)
 
@@ -49,7 +50,9 @@ class BaseAgent:
         if self.loop_count is not None and self.loop_count == 0:
             self.local_logger.debug(f"[Loop {self.loop_count}] Inject framework prompt: \n {human_prompt.content}")
         else:
-            self.local_logger.debug(f"[Loop {self.loop_count}] Inject framework prompt \" {human_prompt.content[:20]}... \" again, as above.")
+            self.local_logger.debug(
+                f'[Loop {self.loop_count}] Inject framework prompt " {human_prompt.content[:20]}... " again, as above.'
+            )
         return {
             "messages": [human_prompt],
         }
@@ -58,7 +61,10 @@ class BaseAgent:
         # planning step, not providing tool
         ai_message = self.llm_inference_step(state["messages"], tools=None)
         self.arena_logger.info(f"[LLM] \n {ai_message.content}")
-        self.local_logger.debug(f"[Loop {self.loop_count}] Ask, and LLM responds: \n {ai_message.content}", extra={"Full Prompt": state["messages"]})
+        self.local_logger.debug(
+            f"[Loop {self.loop_count}] Ask, and LLM responds: \n {ai_message.content}",
+            extra={"Full Prompt": state["messages"]},
+        )
         if ai_message.content == "Server side error":
             return {
                 "messages": [],
@@ -73,7 +79,9 @@ class BaseAgent:
         if self.loop_count is not None and self.loop_count == 0:
             self.local_logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt: \n {human_prompt.content}")
         else:
-            self.local_logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt \" {human_prompt.content[:20]}... \" again, as above.")
+            self.local_logger.debug(
+                f'[Loop {self.loop_count}] Inject tool call prompt " {human_prompt.content[:20]}... " again, as above.'
+            )
         return {
             "messages": [human_prompt],
         }
@@ -89,7 +97,7 @@ class BaseAgent:
                 ai_message = self.llm_inference_step(state["messages"], tools=self.sync_tools)
             else:
                 ai_message = self.llm_inference_step(state["messages"], tools=[*self.sync_tools, *self.async_tools])
-        
+
         self.local_logger.debug(f"[Loop {self.loop_count}] Tool call", extra={"Full Prompt": state["messages"]})
         if ai_message.content == "Server side error":
             return {
@@ -238,7 +246,7 @@ class BaseAgent:
             if last_state.values["submitted"]:
                 logger.info(f"[Loop {self.loop_count}] Agent submitted, breaking loop from base_agent")
                 break
-            
+
             self.loop_count += 1
 
         return last_state
