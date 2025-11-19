@@ -1,13 +1,13 @@
-- description: ""
+- description: "The deployment `frontend`, `geo`, `profile`, `rate`, `recommendation`, `reservation`, `user`, and `search` are configured to use a faulty image 'jackcuii/hotel-reservation:latest'."
   answer: "The container images for the 'frontend' and 'geo' services are missing the specified executable files ('frontend' and 'geo' respectively) in their $PATH, leading to RunContainerError and preventing the pods from starting successfully. This is likely a misconfiguration in the Dockerfile or build process of the application images."
-  oracle: "True"
-- description: ""
+  oracle: "FalseNegative"
+- description: "The MongoDB deployments (mongodb-geo, mongodb-profile, mongodb-rate, and mongodb-recommendation) are updated to use an incompatible image version 'mongo:8.0.14-rc0'."
   answer: "The MongoDB deployments (mongodb-geo, mongodb-profile, mongodb-rate, and mongodb-recommendation) are configured with the '--auth' argument, enabling authentication. However, there is no indication of corresponding user creation or proper authentication mechanisms in place for the clients connecting to these MongoDB instances. This leads to authentication failures, causing the MongoDB processes to terminate and the pods to enter an 'Error' state and restart repeatedly, making the deployments unavailable."
   oracle: "False"
 - description: "The 'product-catalog' deployment is mis-configured to pull the non-existent image 'app-image:latest'."
   answer: "The 'product-catalog' deployment is failing to pull its container image 'app-image:latest' due to 'pull access denied'. This indicates that the image either does not exist or there are authentication issues preventing the pod from accessing it."
   oracle: "True"
-- description: ""
+- description: "The deployment `checkout` has the environment variable `PRODUCT_CATALOG_ADDR` configured with an incorrect port `8082` instead of `8080`."
   answer: "No faults were detected in the application. All pods and deployments are running as expected, and the service dependency graph shows no anomalies. The 'checkout' pod's termination was part of a normal rolling update, and its logs show no errors."
   oracle: "FalseNegative"
 - description: "The 'geo' deployment is configured to use a buggy container image 'yinfangchen/geo:app3', this causes the pod keep restarting and entering the 'Error' state."
@@ -19,72 +19,69 @@
 - description: "The service `mongodb-geo-db` is configured to revoke the access to the database for the service `mongodb-geo`."
   answer: "The geo service is not authorized to execute commands on the geo-db, leading to an error in the geo pod. This indicates a misconfiguration of access permissions for the geo service to the mongodb-geo database."
   oracle: "True"
-- description: "" # storage_user_unregistered-1
+- description: "The MongoDB service `mongodb-geo` has an unregistered user, causing authentication failures for the associated service."
   answer: "The 'rate', 'recommendation', and 'user' pods are in a CrashLoopBackOff state, consistently exiting with Exit Code: 2. Despite successful initialization messages in their logs and healthy dependencies (MongoDB, Consul), the applications terminate without logging any explicit errors. This indicates an issue within the application code for these specific services, likely an unhandled error or a condition that causes them to exit after initial startup, which is not being captured by the logging framework."
-  oracle: ""
-- description: "" # storage_user_unregistered-2
+  oracle: "False"
+- description: "The MongoDB service `mongodb-rate` has an unregistered user, causing authentication failures for the associated service."
   answer: "The 'rate' service is experiencing a 'CrashLoopBackOff' due to an authentication failure when attempting to connect to its MongoDB database, 'mongodb-rate'. The logs indicate 'server returned error on SASL authentication step: Authentication failed.'"
-  oracle: ""
-- description: "" # valkey_auth_disruption
-  answer: "The 'cart' pod is unable to connect to the 'valkey-cart' (Redis) service, despite the 'valkey-cart' service and pod appearing to be healthy and ready to accept connections. The 'cart' pod logs show 'Wasn\'t able to connect to redis' and an unhandled application exception, causing the pod to enter an Error state and restart. This indicates a connectivity issue originating from the 'cart' deployment's attempt to connect to its Redis backend."
-  oracle: ""
+  oracle: "True"
+- description: "The password in valkey is invalidated, therefore dependent services cannot work"
+  answer: "The 'cart' pod is unable to connect to the 'valkey-cart' (Redis) service, despite the 'valkey-cart' service and pod appearing to be healthy and ready to accept connections. The 'cart' pod logs show 'Wasn't able to connect to redis' and an unhandled application exception, causing the pod to enter an Error state and restart. This indicates a connectivity issue originating from the 'cart' deployment's attempt to connect to its Redis backend."
+  oracle: "False"
 - description: "A job is flooding the valkey-cart store with large payloads (10MB each), causing it to enter an out-of-memory (OOM) state."
   answer: "The valkey-cart pod is repeatedly OOMKilled because its memory limits are set too low (20Mi) in the valkey-cart deployment. The application is attempting to use more memory than it is allocated, leading to termination."
   oracle: "True"
-- description: "" # capacity_decrease_rpc_retry_storm
+- description: "The ConfigMap `rpc` has misconfigured RPC timeout (50ms) and retry settings (30 retries), causing an RPC retry storm that overwhelms the service. It is a metastable failure."
   answer: "The application's services are configured to output metrics to standard output using `StdoutMetricCollector` instead of exposing them via a Prometheus-compatible endpoint. This prevents Prometheus from scraping any gRPC metrics, leading to empty results in all metric queries. The `frontend-service` logs explicitly confirm this configuration."
-  oracle: ""
-- description: "" # gc_capacity_degradation
+  oracle: "False"
+- description: "All deployments have the GOGC environment variable set to 10 (instead of the default 100), causing aggressive garbage collection that degrades service capacity and performance. This is a metastable failure."
   answer: "The frontend-service deployment is failing because it is configured to use a ConfigMap named 'rpc' which does not exist in the blueprint-hotel-reservation namespace. This prevents the frontend-service pod from starting." 
-  oracle: "True"
-- description: "" # assign_non_existent_node
+  oracle: "False"
+- description: "The deployment `user-service` is configured with a nodeSelector pointing to a non-existent node (extra-node), causing pods to remain in Pending state."
   answer: "The user-service deployment is configured with a node selector (kubernetes.io/hostname=extra-node) that prevents its pods from being scheduled on any available nodes. This causes the user-service pod to remain in a Pending state."
   oracle: "True"
-- description: "" # auth_miss_mongodb
+- description: "The MongoDB service `url-shorten-mongodb` is configured to require TLS authentication, but the certificates are not properly configured, causing connection failures." # auth_miss_mongodb
   answer: "The url-shorten-mongodb deployment is crashing due to an expired SSL certificate, as indicated by the logs: \"The provided SSL certificate is expired or not yet valid.\""
-  oracle: ""
-- description: "" # configmap_drift_hotel_reservation
+  oracle: "True"
+- description: "The ConfigMap `geo-config` is missing critical configuration keys (e.g., GeoMongoAddress), causing the deployment `geo` to malfunction." # configmap_drift_hotel_reservation
   answer: "The 'geo' service is repeatedly restarting because it cannot connect to its database, 'mongodb-geo'. The logs show 'no reachable servers' and 'Read database URL: ' which indicates that the database URL is not correctly configured or is empty for the 'geo' service. This is a configuration issue within the 'geo' deployment."
-  oracle: ""
-- description: "" # duplicate_pvc_mounts_astronomy_shop
+  oracle: "True"
+- description: "Multiple replicas of the deployment `frontend` are configured to share a single ReadWriteOnce PVC, causing mount conflicts and preventing pods from starting" # duplicate_pvc_mounts_astronomy_shop
   answer: "The frontend deployment is configured to use a ReadWriteOnce (RWO) PersistentVolumeClaim (frontend-pvc) for multiple replicas. Since RWO volumes can only be mounted by a single node at a time, the Kubernetes scheduler cannot place the second frontend pod on a different node, leading to FailedScheduling events and the pod remaining in a Pending state."
-  oracle: ""
-- description: "" # duplicate_pvc_mounts_hotel_reservation
+  oracle: "True"
+- description: "Multiple replicas of the deployment `frontend` are configured to share a single ReadWriteOnce PVC, causing mount conflicts and preventing pods from starting" # duplicate_pvc_mounts_hotel_reservation
   answer: "The frontend deployment is configured to have 2 replicas, but it relies on a PersistentVolumeClaim with ReadWriteOnce access mode. This means only one pod can mount the volume at a time, leading to the second frontend pod being stuck in a Pending state due to a 'volume node affinity conflict'. The faulty component is the frontend deployment because its replica count is incompatible with the PVC's access mode."
-  oracle: ""
-- description: "" # duplicate_pvc_mounts_social_network
+  oracle: "True"
+- description: "Multiple replicas of the deployment `jaeger` are configured to share a single ReadWriteOnce PVC, causing mount conflicts and preventing pods from starting" # duplicate_pvc_mounts_social_network
   answer: "The Jaeger pod is in a Pending state because its associated PersistentVolume (PV) has node affinity to 'node1.testlocalization.aiopslab-pg0.clemson.cloudlab.us'. However, the scheduler is unable to place the Jaeger pod on 'node1' due to other scheduling constraints, such as pod anti-affinity rules and untolerated taints. The other available nodes do not satisfy the PV's node affinity, preventing the pod from being scheduled anywhere else. Therefore, the fault lies with the Jaeger deployment's inability to be scheduled due to the restrictive node affinity of its PersistentVolumeClaim and the scheduling constraints on the designated node."
-  oracle: ""
-- description: "" # env_variable_shadowing_astronomy_shop
+  oracle: "True"
+- description: "The deployment `frontend-proxy` has environment variables (e.g., FRONTEND_HOST) that shadow expected values, causing incorrect service configuration." # env_variable_shadowing_astronomy_shop
   answer: "The frontend-proxy pods are not terminating gracefully within the allocated Termination Grace Period, leading to prolonged termination times."
-  oracle: ""
-- description: "" # k8s_target_port-misconfig
+  oracle: "False"
+- description: "The deployment `user-timeline-service` is misconfigured to use the incorrect target port `8080` instead of `8081`." # k8s_target_port-misconfig
   answer: "The user-timeline-service is unable to connect to user-timeline-mongodb, leading to repeated errors in creating MongoDB indexes. This connection failure is the root cause of the observed issues."
-  oracle: ""
-- description: "" # liveness_probe_misconfiguration_astronomy_shop
+  oracle: "False"
+- description: "The deployment `frontend` has a misconfigured liveness probe pointing to a non-existent health endpoint (/healthz on port 8080), causing pods to be restarted repeatedly." # liveness_probe_misconfiguration_astronomy_shop
   answer: "The 'product-catalog' service is generating warnings about 'invalid parent span IDs' in its traces, indicating an issue with its OpenTelemetry instrumentation or configuration. This is causing issues in the distributed tracing of the application."
-  oracle: ""
-- description: "" # liveness_probe_misconfiguration_hotel_reservation
+  oracle: "False"
+- description: "The deployment `recommendation` has a misconfigured liveness probe pointing to a non-existent health endpoint (/healthz on port 8080), causing pods to be restarted repeatedly." # liveness_probe_misconfiguration_hotel_reservation
   answer: "Multiple pods (geo, profile, rate, reservation, user) are consistently restarting with Exit Code: 2. Their application logs show successful initialization, and resource usage (CPU/memory) appears normal. Jaeger traces for geo also show successful operations. This pattern strongly suggests an application-level issue that causes the services to terminate gracefully with an exit code 2, but without logging a specific error message that can be observed. This could be due to an unhandled exception, a configuration issue that manifests after initialization, or a dependency problem that isn't immediately apparent in the logs or traces. Since this behavior is observed across multiple core services, it points to a systemic fault within the application's design or its shared runtime environment."
-  oracle: ""
-- description: "" # liveness_probe_misconfiguration_social_network
+  oracle: "False"
+- description: "The deployment `user-service` has a misconfigured liveness probe pointing to a non-existent health endpoint (/healthz on port 8080), causing pods to be restarted repeatedly." # liveness_probe_misconfiguration_social_network
   answer: "The user-service deployment is continuously failing to connect to the user-mongodb service, resulting in its pods terminating. Although user-mongodb appears to be running and accepting connections, user-service is unable to establish a stable connection, leading to repeated 'connection refused' errors."
-  oracle: ""
-- description: "" # liveness_probe_too_aggressive_astronomy_shop
+  oracle: "False"
+- description: "The deployment `aux-service` has an overly aggressive liveness probe (initialDelaySeconds=0, periodSeconds=1, failureThreshold=1) with terminationGracePeriodSeconds=0, causing pods to be killed immediately if the probe fails." # liveness_probe_too_aggressive_astronomy_shop
   answer: "The aux-service deployment is failing because its pods are encountering an 'Address already in use' error. This is likely due to a previous instance of the aux-service not properly releasing the port, preventing new pods from binding to it and starting successfully."
-  oracle: ""
-- description: "" # liveness_probe_too_aggressive_hotel_reservation
+  oracle: "False"
+- description: "The deployment `aux-service` has an overly aggressive liveness probe (initialDelaySeconds=0, periodSeconds=1, failureThreshold=1) with terminationGracePeriodSeconds=0, causing pods to be killed immediately if the probe fails." # liveness_probe_too_aggressive_hotel_reservation
   answer: "The aux-service deployment is failing due to an 'Address already in use' error, as seen in the pod logs. This indicates a port conflict or an issue with previous instances not shutting down cleanly, preventing new pods from starting correctly."
-  oracle: ""
-- description: "" # liveness_probe_too_aggressive_social_network
+  oracle: "False"
+- description: "The deployment `aux-service` has an overly aggressive liveness probe (initialDelaySeconds=0, periodSeconds=1, failureThreshold=1) with terminationGracePeriodSeconds=0, causing pods to be killed immediately if the probe fails." # liveness_probe_too_aggressive_social_network
   answer: "The aux-service deployment has terminationGracePeriodSeconds: 0, which causes the old pod to not release the port before a new one tries to bind to it, leading to the 'Address already in use' error and the CrashLoopBackOff state."
-  oracle: ""
-- description: "" # missing_configmap_hotel_reservation
+  oracle: "False"
+- description: "The MongoDB service `mongodb-geo` is missing the ConfigMap `mongo-geo-script`, causing the deployment `mongodb-geo` to malfunction." # missing_configmap_hotel_reservation
   answer: "The mongodb-geo deployment is failing to start because it is trying to mount a ConfigMap named 'mongo-geo-script' which does not exist in the 'hotel-reservation' namespace. This missing ConfigMap is preventing the pod from transitioning out of the 'ContainerCreating' state."
-  oracle: ""
-- description: "" # missing_configmap_social_network
+  oracle: "True"
+- description: "The MongoDB service `media-mongodb` is missing the ConfigMap `media-mongodb`, causing the deployment `media-mongodb` to malfunction." # missing_configmap_social_network
   answer: "The user-service deployment is configured with a node selector (kubernetes.io/hostname=extra-node) that prevents its pods from being scheduled on any available nodes. This causes the user-service pod to remain in a Pending state."
-  oracle: ""
-- description: "" # 
-  answer: ""
-  oracle: ""
+  oracle: "False"

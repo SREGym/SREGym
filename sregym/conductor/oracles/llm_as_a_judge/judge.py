@@ -197,10 +197,10 @@ def main():
 
             if is_correct:
                 correct += 1
-                status = " CORRECT"
+                status = "✅ CORRECT"
             else:
                 incorrect += 1
-                status = " INCORRECT"
+                status = "❌ INCORRECT"
 
             print(f"Actual Judgment: {actual_judgment.value}")
             print(f"Status: {status}")
@@ -236,7 +236,7 @@ def main():
     print(f"\nDetailed Results:")
 
     for result in results:
-        status_symbol = "" if result["correct"] else ""
+        status_symbol = "✅" if result["correct"] else "❌"
         print(f"  {status_symbol} Case {result['test_case']}: Expected={result['expected']}, Actual={result['actual']}")
 
 
