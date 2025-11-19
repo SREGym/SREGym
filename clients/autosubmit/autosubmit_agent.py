@@ -23,7 +23,7 @@ def automatic_submit():
             capture_output=True,
             text=True,
         )
-        sleep(1)
+        sleep(60)
         ctr += 1
 
 
