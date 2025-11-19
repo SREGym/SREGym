@@ -1,7 +1,5 @@
 """MongoDB storage user unregistered problem in the HotelReservation application."""
 
-from turtle import pd
-
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.oracles.pod_of_deployment_oracle import PodOfDeploymentOracle
 from sregym.conductor.problems.base import Problem
