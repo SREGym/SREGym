@@ -36,7 +36,7 @@ class StratusToolNode:
         self.sync_tools_by_name = {t.name: t for t in sync_tools} if sync_tools is not None else None
         self.async_tools_by_name = {t.name: t for t in async_tools} if async_tools is not None else None
 
-    def __call__(self, inputs: dict):
+    async def __call__(self, inputs: dict):
         if messages := inputs.get("messages", []):
             message = messages[-1]
         else:
@@ -47,12 +47,12 @@ class StratusToolNode:
                 f"Expected last message to be an AIMessage, but got {type(message)}.\n" f"{inputs.get('messages', [])}"
             )
             raise ValueError("Last message is not an AIMessage; skipping tool invocation.")
-        
+
         arena_logger = logging.getLogger("sregym-global")
         if message.content != "":
             arena_logger.info(f"[LLM] {message.content}")
             # logger.info(f"{message.content}")
-            
+
         if not getattr(message, "tool_calls", None):
             logger.warning("AIMessage does not contain tool_calls.")
             return {"messages": []}
@@ -70,15 +70,13 @@ class StratusToolNode:
                 arena_logger.info(f"[LLM] Agent choose to call: {tool_call['name']}({', '.join(arg_list)})")
                 logger.info(f"[STRATUS_TOOLNODE] Agent choose to call: {tool_call['name']}({', '.join(arg_list)})")
                 if tool_call["name"] in self.async_tools_by_name:
-                    tool_result = asyncio.run(
-                        self.async_tools_by_name[tool_call["name"]].ainvoke(
-                            {
-                                "type": "tool_call",
-                                "name": tool_call["name"],
-                                "args": {"state": inputs, **tool_call["args"]},
-                                "id": tool_call["id"],
-                            }
-                        )
+                    tool_result = await self.async_tools_by_name[tool_call["name"]].ainvoke(
+                        {
+                            "type": "tool_call",
+                            "name": tool_call["name"],
+                            "args": {"state": inputs, **tool_call["args"]},
+                            "id": tool_call["id"],
+                        }
                     )
                 elif tool_call["name"] in self.sync_tools_by_name:
                     tool_result = self.sync_tools_by_name[tool_call["name"]].invoke(
@@ -106,8 +104,8 @@ class StratusToolNode:
                     tool_result, Command
                 ), f"Tool {tool_call['name']} should return a Command object, but return {type(tool_result)}"
                 logger.debug(f"[STRATUS_TOOLNODE] tool_result: {tool_result}")
-                if tool_result.update['messages']:
-                    combined_content = "\n".join([message.content for message in tool_result.update['messages']])
+                if tool_result.update["messages"]:
+                    combined_content = "\n".join([message.content for message in tool_result.update["messages"]])
                     arena_logger.info(f"[ENV] Tool {tool_call['name']} returned: \n {combined_content}")
                 new_messages += tool_result.update["messages"]
                 to_update = {

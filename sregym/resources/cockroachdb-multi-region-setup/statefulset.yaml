@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: crdb-cluster
+  namespace: cockroachdb
+  labels:
+    app.kubernetes.io/name: cockroachdb
+    app.kubernetes.io/instance: crdb-cluster
+spec:
+  serviceName: crdb-cluster
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cockroachdb
+      app.kubernetes.io/instance: crdb-cluster
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cockroachdb
+        app.kubernetes.io/instance: crdb-cluster
+    spec:
+      serviceAccountName: crdb-cluster-sa
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app.kubernetes.io/name
+                  operator: In
+                  values:
+                  - cockroachdb
+              topologyKey: kubernetes.io/hostname
+      containers:
+      - name: db
+        image: cockroachdb/cockroach:v24.1.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 26257
+          name: grpc
+        - containerPort: 8080
+          name: http
+        volumeMounts:
+        - name: datadir
+          mountPath: /cockroach/cockroach-data
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        command:
+        - /bin/bash
+        - -c
+        - >-
+          exec /cockroach/cockroach start
+          --logtostderr=INFO
+          --insecure
+          --advertise-host=$(POD_NAME).crdb-cluster.$(POD_NAMESPACE).svc.cluster.local
+          --http-addr=0.0.0.0:8080
+          --port=26257
+          --cache=25%
+          --max-sql-memory=25%
+          --locality=node=$(POD_NAME),zone=$(POD_NODE_NAME)
+          --join=crdb-cluster-0.crdb-cluster.cockroachdb.svc.cluster.local:26257,crdb-cluster-1.crdb-cluster.cockroachdb.svc.cluster.local:26257,crdb-cluster-2.crdb-cluster.cockroachdb.svc.cluster.local:26257
+        resources:
+          requests:
+            cpu: "1"
+            memory: "2Gi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 5
+        readinessProbe:
+          httpGet:
+            path: /health?ready=1
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          failureThreshold: 2
+      terminationGracePeriodSeconds: 60
+  volumeClaimTemplates:
+  - metadata:
+      name: datadir
+      labels:
+        app.kubernetes.io/name: cockroachdb
+        app.kubernetes.io/instance: crdb-cluster
+    spec:
+      accessModes:
+      - ReadWriteOnce
+      resources:
+        requests:
+          storage: 10Gi
+      volumeMode: Filesystem

@@ -5,7 +5,6 @@ from pathlib import Path
 
 import yaml
 
-
 from dashboard.proxy import LogProxy
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.detection import DetectionOracle
@@ -42,6 +41,8 @@ class Conductor:
         # grading flow state
         self.submission_stage = None  # "noop", "detection", "localization", "mitigation", "done"
         self.results = {}
+        self.submission_count = 0  # Track number of submissions to prevent infinite loops
+        self.max_submissions = 30  # Maximum allowed submissions per stage
 
         self.tasklist = None
         self.logger = logging.getLogger("sregym-global")  # this is for dashboard
@@ -113,7 +114,7 @@ class Conductor:
         """
         1) Provision infra & workload
         2) Flip to NO-OP grading stage
-        
+
         Returns:
             StartProblemResult: Result status indicating success or skip reason
         """
@@ -156,10 +157,31 @@ class Conductor:
     async def submit(self, wrapped_cmd: str) -> dict:
         """
         Called by CLI or HTTP /submit.  Parses & grades the `submit(...)` call,
-        advances submission_stage, records results—and when we hit “done”,
+        advances submission_stage, records results—and when we hit "done",
         triggers undeploy_app. Returns a snapshot of the results dict.
         """
         from sregym.conductor.parser import ResponseParser
+
+        # Check submission limit to prevent infinite loops
+        self.submission_count += 1
+        if self.submission_count > self.max_submissions:
+            error_msg = f"Maximum submission limit ({self.max_submissions}) exceeded. Agent may be stuck in a loop."
+            self.local_logger.error(error_msg)
+            self.logger.error(f"[ERROR] {error_msg}")
+            self.results["error"] = error_msg
+            self.submission_stage = "done"
+            # Force cleanup
+            if hasattr(self, "problem") and self.problem:
+                try:
+                    self.problem.recover_fault()
+                except Exception as e:
+                    self.local_logger.error(f"Error during forced cleanup: {e}")
+            if hasattr(self, "app") and self.app:
+                try:
+                    self.undeploy_app()
+                except Exception as e:
+                    self.local_logger.error(f"Error during forced undeploy: {e}")
+            raise RuntimeError(error_msg)
 
         parser = ResponseParser()
         parsed = parser.parse(wrapped_cmd)

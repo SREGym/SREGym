@@ -1,0 +1,30 @@
+apiVersion: crdb.cockroachlabs.com/v1alpha1
+kind: CrdbCluster
+metadata:
+  name: crdb-cluster
+  namespace: cockroachdb
+  annotations:
+    crdb.cockroachlabs.com/rotate-certs: "required"
+spec:
+  dataStore:
+    pvc:
+      spec:
+        accessModes:
+        - ReadWriteOnce
+        resources:
+          requests:
+            storage: 10Gi
+        volumeMode: Filesystem
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      cpu: 2
+      memory: 4Gi
+  tlsEnabled: true
+  image:
+    name: cockroachdb/cockroach:v24.1.0
+  nodes: 3
+status:
+  clusterStatus: Initialized

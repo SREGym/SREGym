@@ -1,0 +1,11 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: cockroachdb-expandable
+# Use local-path provisioner which supports volume expansion
+provisioner: rancher.io/local-path
+# Enable volume expansion
+allowVolumeExpansion: true
+# Retain volumes after PVC deletion for safety
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer

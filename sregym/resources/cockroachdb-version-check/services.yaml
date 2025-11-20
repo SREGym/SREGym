@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: crdb-cluster
+  namespace: cockroachdb
+  labels:
+    app.kubernetes.io/name: cockroachdb
+    app.kubernetes.io/instance: crdb-cluster
+    app.kubernetes.io/component: database
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+  - port: 26257
+    targetPort: 26257
+    name: grpc
+  - port: 8080
+    targetPort: 8080
+    name: http
+  selector:
+    app.kubernetes.io/name: cockroachdb
+    app.kubernetes.io/instance: crdb-cluster
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: crdb-cluster-public
+  namespace: cockroachdb
+  labels:
+    app.kubernetes.io/name: cockroachdb
+    app.kubernetes.io/instance: crdb-cluster
+    app.kubernetes.io/component: database
+spec:
+  type: ClusterIP
+  ports:
+  - port: 26257
+    targetPort: 26257
+    name: grpc
+  - port: 8080
+    targetPort: 8080
+    name: http
+  selector:
+    app.kubernetes.io/name: cockroachdb
+    app.kubernetes.io/instance: crdb-cluster

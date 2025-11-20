@@ -1,0 +1,41 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: crdb-cluster-sa
+  namespace: cockroachdb
+  labels:
+    app.kubernetes.io/name: cockroachdb
+    app.kubernetes.io/instance: crdb-cluster
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: crdb-cluster-role
+  namespace: cockroachdb
+  labels:
+    app.kubernetes.io/name: cockroachdb
+    app.kubernetes.io/instance: crdb-cluster
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["certificates.k8s.io"]
+  resources: ["certificatesigningrequests"]
+  verbs: ["create", "get", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: crdb-cluster-rolebinding
+  namespace: cockroachdb
+  labels:
+    app.kubernetes.io/name: cockroachdb
+    app.kubernetes.io/instance: crdb-cluster
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: crdb-cluster-role
+subjects:
+- kind: ServiceAccount
+  name: crdb-cluster-sa
+  namespace: cockroachdb

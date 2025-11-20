@@ -144,88 +144,90 @@ Read the CrdbCluster CR 'crdb-cluster' in namespace 'cockroachdb' for cluster co
 
         Does NOT initialize the cluster - that's the agent's job.
         """
-        print(f"\n[Initialize Benchmark] Setting up preconditions...")
+        local_logger.info(f"\n[Initialize Benchmark] Setting up preconditions...")
 
         # 1. Create namespace
-        print(f"  [1/6] Creating namespace '{self.namespace}'...")
+        local_logger.info(f"  [1/6] Creating namespace '{self.namespace}'...")
         try:
             result = self.kubectl.exec_command(f"kubectl create namespace {self.namespace}")
             if "AlreadyExists" in result:
-                print(f"    ℹ Namespace already exists")
+                local_logger.info(f"    ℹ Namespace already exists")
             else:
-                print(f"    ✓ Namespace created")
+                local_logger.info(f"    ✓ Namespace created")
         except Exception as e:
-            print(f"    ℹ Namespace may already exist: {e}")
+            local_logger.info(f"    ℹ Namespace may already exist: {e}")
 
         # 2. Install CockroachDB CRDs
-        print(f"  [2/6] Installing CockroachDB CRDs...")
+        local_logger.info(f"  [2/6] Installing CockroachDB CRDs...")
         crd_url = "https://raw.githubusercontent.com/cockroachdb/cockroach-operator/master/install/crds.yaml"
         result = self.kubectl.exec_command(f"kubectl apply -f {crd_url}")
-        print(f"    ✓ CRDs installed")
+        local_logger.info(f"    ✓ CRDs installed")
 
         # 2.5. Delete validating webhook (we don't have operator running)
-        print(f"  [2.5/6] Removing validating webhook (no operator in this benchmark)...")
+        local_logger.info(f"  [2.5/6] Removing validating webhook (no operator in this benchmark)...")
         try:
             result = self.kubectl.exec_command(
                 "kubectl delete validatingwebhookconfiguration cockroach-operator-validating-webhook-configuration"
             )
-            print(f"    ✓ Webhook removed")
+            local_logger.info(f"    ✓ Webhook removed")
         except Exception as e:
-            print(f"    ℹ Webhook may not exist: {e}")
+            local_logger.info(f"    ℹ Webhook may not exist: {e}")
 
         # 3. Create RBAC resources
-        print(f"  [3/6] Creating RBAC resources...")
+        local_logger.info(f"  [3/6] Creating RBAC resources...")
         rbac_path = f"{COCKROACH_DB_INITIALIZE_RESOURCES}/rbac.yaml"
         result = self.kubectl.exec_command(f"kubectl -n {self.namespace} apply -f {rbac_path}")
-        print(f"    ✓ RBAC resources created")
+        local_logger.info(f"    ✓ RBAC resources created")
 
         # 4. Create Services
-        print(f"  [4/6] Creating Services (Discovery + Public)...")
+        local_logger.info(f"  [4/6] Creating Services (Discovery + Public)...")
         services_path = f"{COCKROACH_DB_INITIALIZE_RESOURCES}/services.yaml"
         result = self.kubectl.exec_command(f"kubectl -n {self.namespace} apply -f {services_path}")
-        print(f"    ✓ Services created")
+        local_logger.info(f"    ✓ Services created")
 
         # 5. Create StatefulSet
-        print(f"  [5/6] Creating StatefulSet with 3 replicas...")
+        local_logger.info(f"  [5/6] Creating StatefulSet with 3 replicas...")
         sts_path = f"{COCKROACH_DB_INITIALIZE_RESOURCES}/statefulset.yaml"
         result = self.kubectl.exec_command(f"kubectl -n {self.namespace} apply -f {sts_path}")
-        print(f"    ✓ StatefulSet created")
+        local_logger.info(f"    ✓ StatefulSet created")
 
         # Wait for at least first pod to be running (cluster needs at least one pod to init)
-        print(f"  [5.5/6] Waiting for first pod to be ready (this may take 2-3 minutes)...")
+        local_logger.info(f"  [5.5/6] Waiting for first pod to be ready (this may take 2-3 minutes)...")
         try:
             result = self.kubectl.exec_command(
                 f"kubectl -n {self.namespace} wait --for=condition=ready pod/{self.cluster_name}-0 --timeout=300s"
             )
-            print(f"    ✓ First pod is ready")
+            local_logger.info(f"    ✓ First pod is ready")
         except Exception as e:
-            print(f"    ⚠️  Warning: First pod may not be ready yet: {e}")
-            print(f"    ℹ  Agent may need to wait for pods to be ready before initialization")
+            local_logger.info(f"    ⚠️  Warning: First pod may not be ready yet: {e}")
+            local_logger.info(f"    ℹ  Agent may need to wait for pods to be ready before initialization")
 
         # 6. Create CrdbCluster CR
-        print(f"  [6/6] Creating CrdbCluster CR with initialize annotation...")
+        local_logger.info(f"  [6/6] Creating CrdbCluster CR with initialize annotation...")
         cr_path = f"{COCKROACH_DB_INITIALIZE_RESOURCES}/crdb-cluster.yaml"
         result = self.kubectl.exec_command(f"kubectl -n {self.namespace} apply -f {cr_path}")
-        print(f"    ✓ CrdbCluster CR created")
+        local_logger.info(f"    ✓ CrdbCluster CR created")
 
         # Verify initial state - cluster should NOT be initialized yet
-        print(f"\n[Initialize Benchmark] Verifying preconditions...")
+        local_logger.info(f"\n[Initialize Benchmark] Verifying preconditions...")
         try:
             # Try to run node status - should fail if not initialized
             result = self.kubectl.exec_command(
                 f"kubectl -n {self.namespace} exec {self.cluster_name}-0 -- ./cockroach node status --insecure 2>&1 || true"
             )
             if "cluster has not yet been initialized" in result.lower() or "error" in result.lower():
-                print(f"  ✓ Cluster is deployed but NOT initialized (expected)")
+                local_logger.info(f"  ✓ Cluster is deployed but NOT initialized (expected)")
             else:
-                print(f"  ⚠️  Warning: Cluster may already be initialized")
+                local_logger.info(f"  ⚠️  Warning: Cluster may already be initialized")
         except Exception as e:
-            print(f"  ✓ Cluster not initialized yet (expected): {e}")
+            local_logger.info(f"  ✓ Cluster not initialized yet (expected): {e}")
 
-        print(f"\n[Initialize Benchmark] ✅ Preconditions complete!")
-        print(f"\n📋 Agent task: Initialize the CockroachDB cluster")
-        print(f"Expected action:")
-        print(f"  1. Execute: kubectl -n {self.namespace} exec {self.cluster_name}-0 -- ./cockroach init --insecure")
+        local_logger.info(f"\n[Initialize Benchmark] ✅ Preconditions complete!")
+        local_logger.info(f"\n📋 Agent task: Initialize the CockroachDB cluster")
+        local_logger.info(f"Expected action:")
+        local_logger.info(
+            f"  1. Execute: kubectl -n {self.namespace} exec {self.cluster_name}-0 -- ./cockroach init --insecure"
+        )
         print(
             f"  2. Verify: kubectl -n {self.namespace} exec {self.cluster_name}-0 -- ./cockroach node status --insecure"
         )
