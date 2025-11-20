@@ -181,7 +181,7 @@ class Conductor:
 
             self.logger.info(f"[ENV] Injected fault")
 
-            if hasattr(self.problem, "localization_oracle"):
+            if hasattr(self.problem, "localization_oracle") and self.problem.localization_oracle is not None:
                 self.problem.localization_oracle.load_localization_checkpoint()
 
             # FIXME: Disabled until https://github.com/xlab-uiuc/SREGym/issues/296 is complete
