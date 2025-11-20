@@ -23,6 +23,7 @@ class LatentSectorErrorStrategy(StrEnum):
 
     TEST = "test"
     EVERY_1000 = "every_1000"  # Also test strategy
+    TARGETED = "targeted"
 
 
 class LatentSectorError(Problem):
@@ -35,7 +36,7 @@ class LatentSectorError(Problem):
         self,
         target_deploy: str = DEFAULT_TARGET_DEPLOY,
         namespace: str = DEFAULT_NAMESPACE,
-        strategy: LatentSectorErrorStrategy = LatentSectorErrorStrategy.EVERY_1000,
+        strategy: LatentSectorErrorStrategy = LatentSectorErrorStrategy.TARGETED,
     ):
         self.app = HotelReservation()
         self.kubectl = KubeCtl()
@@ -53,10 +54,6 @@ class LatentSectorError(Problem):
         )
 
         self.app.create_workload()
-        self.mitigation_oracle = CompoundedOracle(
-            self,
-            WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
-        )
 
     def requires_khaos(self) -> bool:
         """This problem requires Khaos for dm-dust infrastructure setup."""
@@ -165,6 +162,50 @@ fi
         except (ValueError, IndexError) as e:
             raise RuntimeError(f"Failed to parse storage size output: {result}") from e
 
+    def _get_target_file_blocks(self, node: str) -> list[int]:
+        """
+        Identify physical blocks used by MongoDB data files (.wt) on the target node.
+        Returns a list of block numbers (in 512b sectors) to corrupt.
+        """
+        # Find mount point of the dm-dust device
+        cmd = f"lsblk -o MOUNTPOINT -n /dev/mapper/{DM_DUST_DEVICE_NAME}"
+        mount_point = self.injector._exec_on_node(node, cmd).strip()
+
+        if not mount_point:
+            print(f"[MongoDBLSE] Warning: {DM_DUST_DEVICE_NAME} is not mounted. Cannot find target files.")
+            return []
+
+        print(f"[MongoDBLSE] Found mount point: {mount_point}")
+
+        # Script to find blocks
+        script = f"""
+        set -e
+        FILES=$(find {mount_point} -name "*.wt")
+        BAD_BLOCKS=""
+        for FILE in $FILES; do
+            BS=$(stat -f -c %S "$FILE")
+            # Get start of each extent
+            # filefrag -v output format:
+            # ext: logical_offset: physical_offset: length: ...
+            # 0: 0.. 0: 34048.. 34048: 1:
+            OFFSETS=$(filefrag -v "$FILE" | awk '/^[ ]*[0-9]+:/ {{print $4}}' | cut -d. -f1)
+            for OFF in $OFFSETS; do
+                START_SECTOR=$((OFF * BS / 512))
+                # Corrupt 10 sectors (5KB) at the start of each extent to ensure we hit it
+                for I in $(seq 0 9); do
+                    BAD_BLOCKS="$BAD_BLOCKS $((START_SECTOR + I))"
+                done
+            done
+        done
+        echo $BAD_BLOCKS
+        """
+
+        result = self.injector._exec_on_node(node, script).strip()
+        try:
+            return [int(b) for b in result.split()]
+        except ValueError:
+            return []
+
     def _inject_badblocks_by_strategy(self, node: str, storage_info: Dict[str, int]) -> None:
         """Inject bad blocks according to the configured strategy."""
         if self.strategy == LatentSectorErrorStrategy.EVERY_1000:
@@ -178,6 +219,21 @@ fi
 
         elif self.strategy == LatentSectorErrorStrategy.TEST:
             self.injector.dm_dust_add_badblocks(node, DM_DUST_DEVICE_NAME, TEST_BAD_BLOCKS)
+
+        elif self.strategy == LatentSectorErrorStrategy.TARGETED:
+            print(f"[MongoDBLSE] Strategy TARGETED: Identifying MongoDB data blocks...")
+            blocks = self._get_target_file_blocks(node)
+            if not blocks:
+                print(f"[MongoDBLSE] Warning: No target blocks found. Falling back to TEST strategy.")
+                self.injector.dm_dust_add_badblocks(node, DM_DUST_DEVICE_NAME, TEST_BAD_BLOCKS)
+            else:
+                print(f"[MongoDBLSE] Injecting {len(blocks)} bad blocks targeting data files.")
+                # Inject in chunks to avoid command line length limits
+                chunk_size = 1000
+                for i in range(0, len(blocks), chunk_size):
+                    chunk = blocks[i : i + chunk_size]
+                    self.injector.dm_dust_add_badblocks(node, DM_DUST_DEVICE_NAME, chunk)
+
         else:
             raise ValueError(f"Unknown strategy: {self.strategy}")
 
@@ -217,7 +273,18 @@ fi
         print(f"[MongoDBLSE] Enabling bad block simulation (fail_read_on_bad_block mode)")
         self.injector.dm_dust_enable(self.target_node, DM_DUST_DEVICE_NAME)
 
+        # Drop caches to force disk reads
+        print(f"[MongoDBLSE] Dropping caches to force disk reads...")
+        self.injector.drop_caches(self.target_node)
+
         print(f"[MongoDBLSE] Latent sector error injection complete")
+
+    def _restart_mongodb_pod(self) -> None:
+        """Restart the MongoDB deployment to recover from CrashLoopBackOff."""
+        print(f"[MongoDBLSE] Restarting MongoDB deployment {self.deploy}...")
+        cmd = f"kubectl -n {self.namespace} rollout restart deployment {self.deploy}"
+        self.kubectl.exec_command(cmd)
+        print(f"[MongoDBLSE] ✅ Deployment restart initiated")
 
     @mark_fault_injected
     def recover_fault(self):
@@ -240,5 +307,8 @@ fi
             print(f"[MongoDBLSE] Warning: Bad blocks still present: {blocks}")
         else:
             print(f"[MongoDBLSE] ✅ All bad blocks cleared")
+
+        # Restart MongoDB pod to recover instantly
+        self._restart_mongodb_pod()
 
         print(f"[MongoDBLSE] Recovery complete")
