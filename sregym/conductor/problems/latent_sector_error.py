@@ -1,14 +1,12 @@
 from enum import StrEnum
 from typing import Dict, Optional, Tuple
 
-from sregym.conductor.oracles.compound import CompoundedOracle
-from sregym.conductor.oracles.latent_sector_error_localization_oracle import LatentSectorErrorLocalizationOracle
-from sregym.conductor.oracles.workload import WorkloadOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_kernel import KernelInjector
 from sregym.service.apps.hotel_reservation import HotelReservation
-from sregym.service.kubectl import KubeCtl
 from sregym.service.dm_dust_manager import DM_DUST_DEVICE_NAME
+from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 # Constants
@@ -49,9 +47,9 @@ class LatentSectorError(Problem):
 
         super().__init__(app=self.app, namespace=self.app.namespace)
 
-        self.localization_oracle = LatentSectorErrorLocalizationOracle(
-            problem=self, namespace=self.namespace, expected_deployment_name=self.deploy
-        )
+        self.root_cause = "There's a latent sector error on the hard drive that the mongodb-geo service's data is on."
+
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
 
