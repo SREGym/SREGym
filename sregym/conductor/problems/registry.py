@@ -51,6 +51,7 @@ from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdate
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
+from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
@@ -157,6 +158,7 @@ class ProblemRegistry:
             # ==================== HARDWARE FAULT INJECTOR ====================
             "read_error": ReadError,
             "latent_sector_error": LatentSectorError,
+            "silent_data_corruption": SilentDataCorruption,
             # ==================== DIRECT K8S API ====================
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
