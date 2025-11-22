@@ -11,7 +11,7 @@ from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 from sregym.conductor.oracles.localization import LocalizationOracle
-from sregym.service.dm_flakey_manager import DM_FLAKEY_DEVICE_NAME
+from sregym.service.dm_flakey_manager import DM_FLAKEY_DEVICE_NAME, DmFlakeyManager
 from sregym.conductor.oracles.workload import WorkloadOracle
 
 
@@ -28,7 +28,7 @@ class SilentDataCorruption(Problem):
         target_deploy: str = "mongodb-geo",
         namespace: str = "hotel-reservation",
         strategy: SilentDataCorruptionStrategy = SilentDataCorruptionStrategy.BOTH_CORRUPT,
-        probability: int = 5, # % probability 
+        probability: int = 100, # (0-100)% probability 
         up_interval: int = 0,  # Seconds device is healthy
         down_interval: int = 1,  # Seconds device corrupts data
     ):
@@ -37,6 +37,7 @@ class SilentDataCorruption(Problem):
         self.namespace = namespace
         self.deploy = target_deploy
         self.injector = KernelInjector(self.kubectl)
+        self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
         self.target_node: Optional[str] = None
         self.strategy = strategy
         self.probability = probability
@@ -81,6 +82,70 @@ class SilentDataCorruption(Problem):
                 return item["spec"]["nodeName"]
 
         return None
+
+    def _get_mongodb_pod(self) -> Optional[str]:
+        svc = self.deploy.split("-", 1)[-1]
+        cmd = f"kubectl -n {self.namespace} get pods -l app=mongodb,component={svc} -o jsonpath='{{.items[0].metadata.name}}'"
+        out = self.kubectl.exec_command(cmd)
+        if isinstance(out, tuple):
+            out = out[0]
+        pod_name = out.strip() if out else ""
+        if not pod_name or pod_name.startswith("error"):
+            cmd = f"kubectl -n {self.namespace} get pods -o json"
+            out = self.kubectl.exec_command(cmd)
+            if isinstance(out, tuple):
+                out = out[0]
+            data = json.loads(out or "{}")
+            for item in data.get("items", []):
+                name = item["metadata"]["name"]
+                if name.startswith(self.deploy) and item.get("status", {}).get("phase") == "Running":
+                    return name
+        return pod_name if pod_name else None
+
+    def _get_database_name(self) -> str:
+        svc = self.deploy.split("-", 1)[-1]
+        return f"{svc}-db"
+
+    def mongo_write(self, hotel_id: str, lat: float, lon: float) -> bool:
+        pod_name = self._get_mongodb_pod()
+        if not pod_name:
+            return False
+        db_name = self._get_database_name()
+        collection = self.deploy.split("-", 1)[-1]
+        write_cmd = (
+            f"kubectl -n {self.namespace} exec {pod_name} -- "
+            f"mongo {db_name} --eval "
+            f"'db.{collection}.insertOne({{hotelId: \"{hotel_id}\", lat: {lat}, lon: {lon}}})' "
+            f"--quiet --username admin --password admin --authenticationDatabase admin"
+        )
+        try:
+            out = self.kubectl.exec_command(write_cmd)
+            fsync_cmd = (
+                f"kubectl -n {self.namespace} exec {pod_name} -- "
+                f"mongo {db_name} --eval 'db.runCommand({{fsync: 1}})' "
+                f"--quiet --username admin --password admin --authenticationDatabase admin"
+            )
+            self.kubectl.exec_command(fsync_cmd)
+            self.kubectl.exec_command(f"kubectl -n {self.namespace} exec {pod_name} -- sync")
+            return True
+        except Exception:
+            return False
+
+    def mongo_read(self, hotel_id: str) -> Optional[dict]:
+        pod_name = self._get_mongodb_pod()
+        if not pod_name:
+            return None
+        db_name = self._get_database_name()
+        collection = self.deploy.split("-", 1)[-1]
+        read_cmd = (
+            f"kubectl -n {self.namespace} exec {pod_name} -- "
+            f"mongo {db_name} --eval 'db.{collection}.findOne({{hotelId: \"{hotel_id}\"}})' "
+            f"--quiet --username admin --password admin --authenticationDatabase admin"
+        )
+        try:
+            out = self.kubectl.exec_command(read_cmd)
+        except Exception:
+            return None
 
     def _get_corruption_features(self) -> str:
         """
@@ -128,10 +193,16 @@ class SilentDataCorruption(Problem):
             down_interval=self.down_interval,
             features=features
         )
-        
-        # Drop caches to force disk reads
-        print(f"[SDC] Dropping caches to force disk reads...")
-        self.injector.drop_caches(self.target_node)
+
+        print(f"[SDC] Triggering MongoDB write and read to exercise corruption...")
+        import random
+        for _ in range(10):
+            test_id = "SDC_TRIGGER_"+str(random.randint(0, 10000))
+            lat = 30 + random.randint(0, 10000)*0.0001
+            lon = -120 + random.randint(0, 10000)*0.0001
+            self.mongo_write(test_id, lat, lon)
+            self.injector.drop_caches(self.target_node)
+            self.mongo_read(test_id)
 
         print(f"[SDC] Silent data corruption injection complete")
         if self.up_interval == 0:
@@ -143,9 +214,9 @@ class SilentDataCorruption(Problem):
     def recover_fault(self):
         print(f"[SDC] Starting recovery from silent data corruption")
 
+        # Restore dm-flakey device to normal operation
         if hasattr(self, "target_node") and self.target_node:
             print(f"[SDC] Restoring dm-flakey device to normal operation on {self.target_node}")
-            
             self.injector.dm_flakey_reload(
                 self.target_node,
                 DM_FLAKEY_DEVICE_NAME,
@@ -153,14 +224,12 @@ class SilentDataCorruption(Problem):
                 down_interval=0,
                 features=""
             )
-            
             print(f"[SDC] ✅ dm-flakey device restored to normal operation")
-            
-            # Restart MongoDB pod to recover from any crashes
-            print(f"[SDC] Restarting MongoDB deployment {self.deploy}...")
-            cmd = f"kubectl -n {self.namespace} rollout restart deployment {self.deploy}"
-            self.kubectl.exec_command(cmd)
-        else:
-            print(f"[SDC] No target node found, skipping recovery")
-
-        print(f"[SDC] Recovery complete")
+        
+        # Clean up and redeploy the app to get rid of any corrupted data
+        self.app.cleanup()
+        self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
+        self.app.deploy()
+        self.app.start_workload()
+        
+        print(f"[SDC] ✅ Recovery complete - App restarted with clean state")
