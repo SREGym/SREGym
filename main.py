@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import csv
 import logging
@@ -31,10 +32,14 @@ def get_current_datetime_formatted():
     return formatted_datetime
 
 
-def driver_loop(conductor: Conductor):
+def driver_loop(conductor: Conductor, problem_filter: str = None):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
     Returns a list of flattened dicts with results per problem.
+
+    Args:
+        conductor: The Conductor instance
+        problem_filter: Optional problem ID to run. If specified, only this problem will be run.
     """
 
     async def driver():
@@ -47,7 +52,19 @@ def driver_loop(conductor: Conductor):
             console.log(f"Starting agent now: {agent_name}")
             conductor.register_agent(agent_name)
             all_results_for_agent = []
-            for pid in conductor.problems.get_problem_ids():
+
+            # Get all problem IDs and filter if needed
+            problem_ids = conductor.problems.get_problem_ids()
+            if problem_filter:
+                if problem_filter not in problem_ids:
+                    console.log(
+                        f"⚠️  Problem '{problem_filter}' not found in registry. Available problems: {problem_ids}"
+                    )
+                    sys.exit(1)
+                problem_ids = [problem_filter]
+                console.log(f"🎯 Running single problem: {problem_filter}")
+
+            for pid in problem_ids:
                 console.log(f"\n🔍 Starting problem: {pid}")
 
                 conductor.problem_id = pid
@@ -113,9 +130,9 @@ def start_mcp_server_after_api():
     server.run()
 
 
-def _run_driver_and_shutdown(conductor: Conductor):
+def _run_driver_and_shutdown(conductor: Conductor, problem_filter: str = None):
     """Run the benchmark driver, stash results, then tell the API to exit."""
-    results = driver_loop(conductor)
+    results = driver_loop(conductor, problem_filter=problem_filter)
     setattr(main, "results", results)
     # ⬇️ Ask the API server (running in main thread) to stop so we can write CSV
     request_shutdown()
@@ -171,6 +188,15 @@ def start_dashboard_process():
 
 
 def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(description="Run SREGym benchmark suite")
+    parser.add_argument(
+        "--problem",
+        type=str,
+        default=None,
+        help="Run only a specific problem by its ID (e.g., 'target_port')",
+    )
+    args = parser.parse_args()
 
     # set up the logger
     init_logger()
@@ -183,7 +209,7 @@ def main():
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
-        args=(conductor,),
+        args=(conductor, args.problem),
         name="driver",
         daemon=True,
     )

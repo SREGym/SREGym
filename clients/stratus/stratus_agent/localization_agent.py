@@ -1,8 +1,8 @@
 import asyncio
+import logging
 from pathlib import Path
 
 import yaml
-import logging
 
 from clients.stratus.llm_backend.init_backend import get_llm_backend_for_tools
 from clients.stratus.stratus_agent.diagnosis_agent import DiagnosisAgent
@@ -53,7 +53,7 @@ def build_default_localization_agent():
                 The tool to submit benchmark results
 
                     Args:
-                        ans (str): the answer you would like to submit to the benchmark
+                        ans (str): Use natural language to describe the root cause of the failure.
         """,
         }
     )

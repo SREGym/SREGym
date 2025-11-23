@@ -112,3 +112,28 @@ def get_traces(service: str, last_n_minutes: int) -> str:
         err_str = f"[ob_mcp] Error querying get_traces: {str(e)}"
         logger.error(err_str)
         return err_str
+
+
+@mcp.tool(name="get_dependency_graph")
+def get_dependency_graph(last_n_minutes: int = 30) -> str:
+    """
+    Get service dependency graph from Jaeger's native dependencies API.
+    Args:
+        last_n_minutes (int): The time range (in minutes) to look back from the current time.
+    Returns:
+        str: JSON object representing the dependency graph.
+    """
+    jaeger_url = os.environ.get("JAEGER_BASE_URL")
+    if not jaeger_url:
+        raise RuntimeError("JAEGER_BASE_URL environment variable is not set!")
+
+    client = ObservabilityClient(jaeger_url)
+    end_time = int(datetime.now().timestamp() * 1000)
+    start_time = int((datetime.now() - timedelta(minutes=last_n_minutes)).timestamp() * 1000)
+
+    url = f"{jaeger_url}/api/dependencies"
+    params = {"endTs": end_time, "lookback": last_n_minutes * 60 * 1000}
+
+    response = client.make_request("GET", url, params=params)
+    logger.info(f"[ob_mcp] get_dependency_graph: {response.status_code}")
+    return str(response.json())

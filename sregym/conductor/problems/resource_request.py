@@ -1,7 +1,7 @@
 import copy
 from abc import abstractmethod
 
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -29,7 +29,8 @@ class ResourceRequest(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        # Note: root_cause will be set in subclasses (ResourceRequestTooLarge/ResourceRequestTooSmall)
+        # diagnosis_oracle will be set in subclasses after root_cause is set
         self.app.create_workload()
         self.mitigation_oracle = MitigationOracle(problem=self)
 
@@ -60,6 +61,11 @@ class ResourceRequest(Problem):
 
 
 class ResourceRequestTooLarge(ResourceRequest):
+    def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "frontend"):
+        super().__init__(app_name, faulty_service)
+        self.root_cause = f"The deployment `{self.faulty_service}` has a memory request that exceeds the node's memory capacity, causing pods to be unschedulable and remain in Pending state."
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+
     def set_memory_limit(self, deployment_yaml):
         dyaml = copy.deepcopy(deployment_yaml)
         upper_limit = self.kubectl.get_node_memory_capacity()
@@ -70,6 +76,11 @@ class ResourceRequestTooLarge(ResourceRequest):
 
 
 class ResourceRequestTooSmall(ResourceRequest):
+    def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "frontend"):
+        super().__init__(app_name, faulty_service)
+        self.root_cause = f"The deployment `{self.faulty_service}` has a memory limit that is too small (10Mi), causing pods to be killed due to OOM (Out of Memory) errors."
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+
     def set_memory_limit(self, deployment_yaml):
         dyaml = copy.deepcopy(deployment_yaml)
         new_limit = "10Mi"

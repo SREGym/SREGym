@@ -27,6 +27,13 @@ async_tools:
       
           Returns:
               List[str]: A list of operation names associated with the specified service.
+  - name: get_dependency_graph
+    description: |
+      Get service dependency graph from Jaeger's native dependencies API.
+          Args:
+              last_n_minutes (int): The time range (in minutes) to look back from the current time.
+          Returns:
+              str: JSON object representing the dependency graph.
   - name: get_metrics
     description: |
       Query real-time metrics data from the Prometheus instance.

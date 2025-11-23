@@ -1,6 +1,6 @@
 """ConfigMap drift problem - removes critical keys from mounted ConfigMap."""
 
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.missing_cm_key_mitigation import MissingCmKeyMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -18,7 +18,8 @@ class ConfigMapDrift(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.kubectl = KubeCtl()
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.root_cause = f"The ConfigMap `{self.faulty_service}-config` is missing critical configuration keys (e.g., GeoMongoAddress), causing the deployment `{self.faulty_service}` to malfunction."
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.configmap_name = f"{self.faulty_service}-config"
 
         self.app.create_workload()

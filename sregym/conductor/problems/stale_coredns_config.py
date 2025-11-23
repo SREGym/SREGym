@@ -1,5 +1,5 @@
 from sregym.conductor.oracles.dns_resolution_mitigation import DNSResolutionMitigationOracle
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -26,8 +26,9 @@ class StaleCoreDNSConfig(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.kubectl = KubeCtl()
+        self.root_cause = "CoreDNS is configured with a stale NXDOMAIN template for all .svc.cluster.local domains, causing DNS resolution to fail for all cluster-internal services."
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=["coredns"])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
         self.mitigation_oracle = DNSResolutionMitigationOracle(problem=self)

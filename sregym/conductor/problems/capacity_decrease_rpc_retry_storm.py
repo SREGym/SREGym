@@ -1,13 +1,13 @@
-from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
 from sregym.conductor.oracles.detection import DetectionOracle
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.rpc_retry_storm_mitigation import RPCRetryStormMitigationOracle
 from sregym.conductor.problems.base import Problem
-from sregym.service.kubectl import KubeCtl
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.generators.workload.blueprint_hotel_work import BHotelWrk, BHotelWrkWorkloadManager
+from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
+from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
-from sregym.generators.workload.blueprint_hotel_work import BHotelWrk, BHotelWrkWorkloadManager
 
 class CapacityDecreaseRPCRetryStorm(Problem):
     def __init__(self):
@@ -15,10 +15,10 @@ class CapacityDecreaseRPCRetryStorm(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = "rpc"
-
+        self.root_cause = f"The ConfigMap `{self.faulty_service}` has misconfigured RPC timeout (50ms) and retry settings (30 retries), causing an RPC retry storm that overwhelms the service. It is a metastable failure."
         super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.mitigation_oracle = RPCRetryStormMitigationOracle(problem=self)
 
@@ -37,9 +37,7 @@ class CapacityDecreaseRPCRetryStorm(Problem):
         injector.recover_rpc_timeout_retries_misconfiguration(configmap=self.faulty_service)
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
-    def create_workload(
-        self, tput: int = None, duration: str = None, multiplier: int = None
-    ):
+    def create_workload(self, tput: int = None, duration: str = None, multiplier: int = None):
         if tput is None:
             tput = 3000
         if duration is None:

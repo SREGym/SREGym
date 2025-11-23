@@ -1,4 +1,4 @@
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.service_endpoint_mitigation import ServiceEndpointMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -26,8 +26,9 @@ class WrongServiceSelector(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.kubectl = KubeCtl()
+        self.root_cause = f"The service `{self.faulty_service}` has a misconfigured selector that includes an additional incorrect label, preventing it from matching the intended pods."
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
         self.mitigation_oracle = ServiceEndpointMitigationOracle(problem=self)

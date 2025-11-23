@@ -2,7 +2,7 @@
 
 import time
 
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -17,10 +17,11 @@ class PodAntiAffinityDeadlock(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = faulty_service
+        self.root_cause = f"The deployment `{self.faulty_service}` has strict pod anti-affinity rules (requiredDuringSchedulingIgnoredDuringExecution) that prevent multiple replicas from being scheduled on the same node, but with insufficient nodes, causing a scheduling deadlock where pods remain in Pending state."
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         # Create workload for evaluation
         self.app.create_workload()

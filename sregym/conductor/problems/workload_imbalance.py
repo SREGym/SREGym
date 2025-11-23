@@ -1,7 +1,7 @@
 import time
 
 from sregym.conductor.oracles.imbalance_mitigation import ImbalanceMitigationOracle
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -17,10 +17,11 @@ class WorkloadImbalance(Problem):
         self.faulty_service = ["frontend"]
         self.injector = VirtualizationFaultInjector(namespace="kube-system")
         self.injector_for_scale = VirtualizationFaultInjector(namespace=self.namespace)
+        self.root_cause = "The kube-proxy daemonset is using a buggy image version, and the frontend deployment is scaled to 5 replicas with a high workload surge, causing workload imbalance across pods."
         super().__init__(app=self.app, namespace=self.namespace)
 
         # not so precise here by now
-        self.localization_oracle = LocalizationOracle(problem=self, expected=self.faulty_service + ["kube-proxy"])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.mitigation_oracle = ImbalanceMitigationOracle(problem=self)
 

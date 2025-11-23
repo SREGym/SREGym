@@ -1,4 +1,4 @@
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.missing_env_variable_mitigation import MissingEnvVariableMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
@@ -16,13 +16,16 @@ class MissingEnvVariable(Problem):
             self.app = AstronomyShop()
             self.env_var = "CART_ADDR"
             self.env_var_value = "cart:8080"
+            self.root_cause = (
+                f"The deployment `{self.faulty_service}` is missing the environment variable `{self.env_var}`."
+            )
         else:
             raise ValueError(f"Unsupported app name: {app_name}")
 
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.kubectl = KubeCtl()
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
         self.mitigation_oracle = MissingEnvVariableMitigationOracle(problem=self)

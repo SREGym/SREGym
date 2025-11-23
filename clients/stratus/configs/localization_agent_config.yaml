@@ -27,6 +27,13 @@ async_tools:
       
           Returns:
               List[str]: A list of operation names associated with the specified service.
+  - name: get_dependency_graph
+    description: |
+      Get service dependency graph from Jaeger's native dependencies API.
+          Args:
+              last_n_minutes (int): The time range (in minutes) to look back from the current time.
+          Returns:
+              str: JSON object representing the dependency graph.
   - name: get_metrics
     description: |
       Query real-time metrics data from the Prometheus instance.
@@ -61,12 +68,22 @@ async_tools:
               "kubectl config get",
               INTERACTIVE COMMANDS ARE NOT SUPPORTED, e.g. "kubectl edit" 
               INTERACTIVE FLAGS ARE NOT SUPPORTED, e.g., "kubectl logs -f"
+  - name: get_resource_uid
+    description: |
+      Use this tool to retrieve the UID of a specified resource.
+      
+          Args:
+              resource_type (str): The type of the resource (e.g., 'pod', 'service', 'deployment', 'statefulset', 'persistentvolumeclaim', 'persistentvolume', 'configmap', 'replicaset', 'memoryquota', 'ingress', 'networkpolicy' etc.).
+              resource_name (str): The name of the resource.
+              namespace (str): The namespace where the resource is located.
+          Returns:
+              str: The UID of the specified resource.
   - name: submit_tool
     description: |
       The tool to submit benchmark results
           
           Args:
-              ans (str): the answer you would like to submit to the benchmark. You should submit a python-formatted list of string(s) to indicate the faulty components. And you should use the single quotes to wrap the string(s) in the list.
-prompts_path: localization_agent_prompts.yaml
+              ans (str): the answer you would like to submit to the benchmark. Use natural language to describe the root cause of the failure.
 
+prompts_path: localization_agent_prompts.yaml
 

@@ -9,16 +9,20 @@ load_dotenv()
 # FIXME: name of class is misleading for now
 class LanggraphToolConfig(BaseModel):
     prometheus_mcp_url: str = Field(
-        description="url for prometheus mcp server", default=f"{os.environ['MCP_SERVER_URL']}/prometheus/sse"
+        description="url for prometheus mcp server",
+        default=f"http://localhost:{os.getenv('MCP_SERVER_PORT', '9954')}/prometheus/sse",
     )
     jaeger_mcp_url: str = Field(
-        description="url for jaeger mcp server", default=f"{os.environ['MCP_SERVER_URL']}/jaeger/sse"
+        description="url for jaeger mcp server",
+        default=f"http://localhost:{os.getenv('MCP_SERVER_PORT', '9954')}/jaeger/sse",
     )
     kubectl_mcp_url: str = Field(
-        description="url for kubectl mcp server", default=f"{os.environ['MCP_SERVER_URL']}/kubectl_mcp_tools/sse"
+        description="url for kubectl mcp server",
+        default=f"http://localhost:{os.getenv('MCP_SERVER_PORT', '9954')}/kubectl_mcp_tools/sse",
     )
     submit_mcp_url: str = Field(
-        description="url for submit mcp server", default=f"{os.environ['MCP_SERVER_URL']}/submit/sse"
+        description="url for submit mcp server",
+        default=f"http://localhost:{os.getenv('MCP_SERVER_PORT', '9954')}/submit/sse",
     )
     benchmark_submit_url: str = Field(
         description="url for the submission result destination, default to http://localhost:8000/submit",

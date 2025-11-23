@@ -15,7 +15,7 @@ class BasicToolNode:
         self.tools_by_name = {t.name: t for t in node_tools}
         self.is_async = is_async
 
-    def __call__(self, inputs: dict):
+    async def __call__(self, inputs: dict):
         if messages := inputs.get("messages", []):
             message = messages[-1]
         else:
@@ -28,7 +28,7 @@ class BasicToolNode:
             logger.info(f"invoking tool: {tool_call["name"]}, tool_call: {tool_call}")
             if self.is_async:
                 tool_call["args"].update({"state": inputs})
-                tool_result = asyncio.run(self.tools_by_name[tool_call["name"]].ainvoke(tool_call))
+                tool_result = await self.tools_by_name[tool_call["name"]].ainvoke(tool_call)
                 tool_call["args"].pop("state", None)
             else:
                 tool_result = self.tools_by_name[tool_call["name"]].invoke(tool_call["args"])

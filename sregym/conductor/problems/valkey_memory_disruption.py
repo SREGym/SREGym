@@ -1,4 +1,4 @@
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -13,9 +13,10 @@ class ValkeyMemoryDisruption(Problem):
 
         self.faulty_service = "valkey-cart"
         self.kubectl = KubeCtl()
+        self.root_cause = "A job is flooding the valkey-cart store with large payloads (10MB each), causing it to enter an out-of-memory (OOM) state."
 
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected="valkey")
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
 

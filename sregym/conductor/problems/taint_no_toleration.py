@@ -1,4 +1,4 @@
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -16,10 +16,12 @@ class TaintNoToleration(Problem):
         # ── pick all real worker nodes dynamically ───────────────────────
         self.faulty_nodes = self._pick_worker_nodes()
         self.faulty_service = "user-service"
+        self.root_cause = f"Worker nodes are tainted with sre-fault=blocked:NoSchedule, but the deployment `{self.faulty_service}` has a toleration for a different key (dummy-key), causing pods to be unschedulable and remain in Pending state."
 
         super().__init__(app=self.app, namespace=self.namespace)
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        # TODO: support more precise diagnosis oracle: Nodes or DeploymentConfiguration
 
         self.app.create_workload()
         self.mitigation_oracle = MitigationOracle(problem=self)

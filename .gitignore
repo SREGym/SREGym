@@ -759,3 +759,7 @@ sregym/conductor/tasklist.yml
 *.csv
 kubeconfig.yaml
 
+# Ignore IDE relatedfiles/folders
+
+CLAUDE.md
+.cursor/

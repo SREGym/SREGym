@@ -1,7 +1,7 @@
 from kubernetes import client
 
 from sregym.conductor.oracles.ingress_misroute_oracle import IngressMisrouteMitigationOracle
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
@@ -16,11 +16,12 @@ class IngressMisroute(Problem):
         self.correct_service = correct_service
         self.wrong_service = wrong_service
         self.ingress_name = "hotel-reservation-ingress"
+        self.root_cause = f"The ingress `{self.ingress_name}` has a misconfigured routing rule for path `{self.path}`, routing traffic to the wrong service (`{self.wrong_service}` instead of `{self.correct_service}`)."
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.networking_v1 = client.NetworkingV1Api()
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.correct_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = IngressMisrouteMitigationOracle(problem=self)
 
     @mark_fault_injected
