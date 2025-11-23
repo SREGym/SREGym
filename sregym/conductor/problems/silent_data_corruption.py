@@ -226,9 +226,23 @@ class SilentDataCorruption(Problem):
             )
             print(f"[SDC] ✅ dm-flakey device restored to normal operation")
         
-        # Clean up and redeploy the app to get rid of any corrupted data
+        # Clean up and redeploy the app
         self.app.cleanup()
-        self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
+        
+        try:
+            cleanup_pods = self.kubectl.exec_command(
+                "kubectl get pods -n openebs --no-headers | grep 'cleanup-pvc-' | awk '{print $1}'"
+            ).strip()
+            if cleanup_pods:
+                pod_list = [p for p in cleanup_pods.splitlines() if p.strip()]
+                for pod in pod_list:
+                    # Delete failed cleanup pods
+                    self.kubectl.exec_command(f"kubectl delete pod -n openebs {pod} --ignore-not-found")
+                print(f"[SDC] Cleaned up {len(pod_list)} OpenEBS cleanup pod(s)")
+        except Exception as e:
+            print(f"[SDC] ⚠️  Warning: Failed to clean up OpenEBS cleanup pods: {e}")
+        
+        self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure() # This helps clean up any corrupted data on the affected storage directories
         self.app.deploy()
         self.app.start_workload()
         
