@@ -16,6 +16,7 @@ from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.transient_issues.transient_issues import FaultType, PodScope, TransientIssuesGenerator
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.dm_dust_manager import DmDustManager
+from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
 from sregym.service.telemetry.prometheus import Prometheus
@@ -32,6 +33,7 @@ class Conductor:
 
         self.khaos = KhaosController(self.kubectl)
         self.dm_dust_manager = DmDustManager(self.kubectl)
+        self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
 
         self.problem = None
         self.detection_oracle = None
@@ -470,6 +472,9 @@ class Conductor:
         if "LatentSectorError" in problem_name:
             print("Setting up dm-dust infrastructure for LSE fault injection...")
             self.dm_dust_manager.setup_openebs_dm_dust_infrastructure()
+        elif "SilentDataCorruption" in problem_name:
+            print("Setting up dm-flakey infrastructure for Silent Data Corruption fault injection...")
+            self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
 
         self.logger.info(f"[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus")
 

@@ -326,11 +326,25 @@ dmsetup create {name_q} --table "0 $SECTORS flakey {dev_q} {int(offset_sectors)}
         self._exec_on_node(node, f"dmsetup remove {shlex.quote(name)} 2>/dev/null || true")
 
     def dm_flakey_reload(
-        self, node: str, name: str, up_interval: int, down_interval: int, features: str = "", offset_sectors: int = 0
+        self,
+        node: str,
+        name: str,
+        up_interval: int,
+        down_interval: int,
+        features: str = "",
+        offset_sectors: int = 0,
+        num_features: Optional[int] = None,
     ) -> None:
         """Reload a flakey device with new parameters."""
         name_q = shlex.quote(name)
-        feat_tail = f" {len(features.split())} {features}" if features else ""
+        if features:
+            if num_features is None:
+                count = len(features.split())
+            else:
+                count = num_features
+            feat_tail = f" {count} {features}"
+        else:
+            feat_tail = ""
 
         script = rf"""
 set -e
@@ -748,7 +762,7 @@ spec:
         print(f"[KernelInjector] PVC {pvc_name} restored to healthy device")
         self.recovery_data = None
 
-    def drop_caches(self, node: str) -> None:
+    def drop_caches(self, node: str, show_log:bool = True) -> None:
         """
         Drop page cache, dentries, and inodes on the target node.
         This forces the application to read from the disk, hitting the bad blocks.
@@ -758,4 +772,5 @@ spec:
         # but writing to /proc is more universal.
         script = "echo 3 > /proc/sys/vm/drop_caches"
         self._exec_on_node(node, script)
-        print(f"[KernelInjector] Dropped caches on node {node}")
+        if show_log:
+            print(f"[KernelInjector] Dropped caches on node {node}")
