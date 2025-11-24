@@ -1,346 +1,260 @@
 all:
   problems:
     faulty_image_correlated:
-    - detection
     - diagnosis
     - mitigation
     update_incompatible_correlated:
-    - detection
     - diagnosis
     - mitigation
     incorrect_image:
-    - detection
     - diagnosis
     - mitigation
     incorrect_port_assignment:
-    - detection
     - diagnosis
     - mitigation
     misconfig_app_hotel_res:
-    - detection
     - diagnosis
     - mitigation
     missing_env_variable_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     revoke_auth_mongodb-1:
-    - detection
     - diagnosis
     - mitigation
     revoke_auth_mongodb-2:
-    - detection
     - diagnosis
     - mitigation
     storage_user_unregistered-1:
-    - detection
     - diagnosis
     - mitigation
     storage_user_unregistered-2:
-    - detection
     - diagnosis
     - mitigation
     valkey_auth_disruption:
-    - detection
     - diagnosis
     - mitigation
     valkey_memory_disruption:
-    - detection
     - diagnosis
     - mitigation
     capacity_decrease_rpc_retry_storm:
-    - detection
     - diagnosis
     - mitigation
     gc_capacity_degradation:
-    - detection
     - diagnosis
     - mitigation
     load_spike_rpc_retry_storm:
-    - detection
     - diagnosis
     - mitigation
     assign_to_non_existent_node:
-    - detection
     - diagnosis
     - mitigation
     auth_miss_mongodb:
-    - detection
     - diagnosis
     - mitigation
     configmap_drift_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     duplicate_pvc_mounts_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     duplicate_pvc_mounts_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     duplicate_pvc_mounts_social_network:
-    - detection
     - diagnosis
     - mitigation
     env_variable_shadowing_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     k8s_target_port-misconfig:
-    - detection
     - diagnosis
     - mitigation
     liveness_probe_misconfiguration_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     liveness_probe_misconfiguration_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     liveness_probe_misconfiguration_social_network:
-    - detection
     - diagnosis
     - mitigation
     liveness_probe_too_aggressive_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     liveness_probe_too_aggressive_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     liveness_probe_too_aggressive_social_network:
-    - detection
     - diagnosis
     - mitigation
     missing_configmap_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     missing_configmap_social_network:
-    - detection
     - diagnosis
     - mitigation
     missing_service_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     missing_service_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     missing_service_social_network:
-    - detection
     - diagnosis
     - mitigation
     namespace_memory_limit:
-    - detection
     - diagnosis
     - mitigation
     pod_anti_affinity_deadlock:
-    - detection
     - diagnosis
     - mitigation
     persistent_volume_affinity_violation:
-    - detection
     - diagnosis
     - mitigation
     pvc_claim_mismatch:
-    - detection
     - diagnosis
     - mitigation
     rbac_misconfiguration:
-    - detection
     - diagnosis
     - mitigation
     readiness_probe_misconfiguration_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     readiness_probe_misconfiguration_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     readiness_probe_misconfiguration_social_network:
-    - detection
     - diagnosis
     - mitigation
     resource_request_too_large:
-    - detection
     - diagnosis
     - mitigation
     resource_request_too_small:
-    - detection
     - diagnosis
     - mitigation
     rolling_update_misconfigured_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     rolling_update_misconfigured_social_network:
-    - detection
     - diagnosis
     - mitigation
     scale_pod_zero_social_net:
-    - detection
     - diagnosis
     - mitigation
     service_dns_resolution_failure_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     service_dns_resolution_failure_social_network:
-    - detection
     - diagnosis
     - mitigation
     sidecar_port_conflict_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     sidecar_port_conflict_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     sidecar_port_conflict_social_network:
-    - detection
     - diagnosis
     - mitigation
     stale_coredns_config_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     stale_coredns_config_social_network:
-    - detection
     - diagnosis
     - mitigation
     taint_no_toleration_social_network:
-    - detection
     - diagnosis
     - mitigation
     wrong_bin_usage:
-    - detection
     - diagnosis
     - mitigation
     wrong_dns_policy_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     wrong_dns_policy_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     wrong_dns_policy_social_network:
-    - detection
     - diagnosis
     - mitigation
     wrong_service_selector_astronomy_shop:
-    - detection
     - diagnosis
     - mitigation
     wrong_service_selector_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     wrong_service_selector_social_network:
-    - detection
     - diagnosis
     - mitigation
     astronomy_shop_ad_service_failure:
-    - detection
     - diagnosis
     - mitigation
     astronomy_shop_ad_service_high_cpu:
-    - detection
     - diagnosis
     - mitigation
     astronomy_shop_ad_service_manual_gc:
-    - detection
     - diagnosis
     - mitigation
     astronomy_shop_cart_service_failure:
-    - detection
     - diagnosis
     - mitigation
     astronomy_shop_ad_service_image_slow_load:
-    - detection
     - diagnosis
     - mitigation
     astronomy_shop_payment_service_failure:
-    - detection
     - diagnosis
     - mitigation
     astronomy_shop_payment_service_unreachable:
-    - detection
     - diagnosis
     - mitigation
     astronomy_shop_product_catalog_service_failure:
-    - detection
     - diagnosis
     - mitigation
     astronomy_shop_recommendation_service_cache_failure:
-    - detection
     - diagnosis
     - mitigation
     kafka_queue_problems_hotel_reservation:
-    - detection
     - diagnosis
     - mitigation
     loadgenerator_flood_homepage:
-    - detection
     - diagnosis
     - mitigation
     trainticket_f17_nested_sql_select_clause_error:
-    - detection
     - diagnosis
     - mitigation
     trainticket_f22_sql_column_name_mismatch_error:
-    - detection
     - diagnosis
     - mitigation
     read_error:
-    - detection
     - diagnosis
     - mitigation
     ingress_misroute:
-    - detection
     - diagnosis
     - mitigation
     network_policy_block:
-    - detection
     - diagnosis
     - mitigation
     social_net_hotel_res_astro_shop_concurrent_failures:
-    - detection
     - diagnosis
     - mitigation
     kubelet_crash:
-    - detection
     - diagnosis
     - mitigation
     workload_imbalance:
-    - detection
     - diagnosis
     - mitigation
     operator_overload_replicas:
-    - detection
     - diagnosis
     - mitigation
     operator_non_existent_storage:
-    - detection
     - diagnosis
     - mitigation
     operator_invalid_affinity_toleration:
-    - detection
     - diagnosis
     - mitigation
     operator_security_context_fault:
-    - detection
     - diagnosis
     - mitigation
     operator_wrong_update_strategy_fault:
-    - detection
     - diagnosis
     - mitigation
