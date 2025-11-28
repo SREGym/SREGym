@@ -1,0 +1,85 @@
+name: Run SRE-QL Queries
+on:
+  push:
+  pull_request:
+jobs:
+  codeql-custom:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Download CodeQL CLI v2.23.5
+      run: |
+        curl -L https://github.com/github/codeql-cli-binaries/releases/download/v2.23.5/codeql-linux64.zip -o codeql.zip
+        unzip codeql.zip
+        mv codeql /opt/codeql
+        echo "/opt/codeql" >> $GITHUB_PATH
+    
+    - name: Verify CodeQL Installation
+      run: |
+        codeql --version
+    
+    - name: Install CodeQL Packs
+      run: |
+        cd tests/sre-ql
+        codeql pack install
+        cd ../..
+    
+    - name: Create CodeQL DB
+      run: |
+        codeql database create sreql-db \
+          --language=python \
+          --source-root=. \
+          --overwrite
+    
+    - name: Run Queries (CSV, skipping problem_lifecycle.ql)
+      run: |
+        QUERIES=$(find tests/sre-ql/queries -name "*.ql" ! -name "problem_lifecycle.ql")
+        echo "Running queries:"
+        echo "$QUERIES"
+        if [ -z "$QUERIES" ]; then
+          echo "No queries found!"
+          exit 1
+        fi
+        codeql database analyze sreql-db \
+          $QUERIES \
+          --format=csv \
+          --output=results.csv \
+          --sarif-category=sre-ql \
+          --verbose
+    
+    - name: Display Results Summary
+      if: always()
+      run: |
+        if [ -f results.csv ]; then
+          echo "Query results:"
+          head -n 20 results.csv
+          echo "---"
+          wc -l results.csv
+        else
+          echo "No results file generated"
+        fi
+    
+    - name: Upload CSV
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sreql-results-csv
+        path: results.csv
+        if-no-files-found: warn
+    
+    - name: Check for Critical Issues
+      if: success()
+      run: |
+        if [ -f results.csv ]; then
+          # Count non-header lines (issues found)
+          ISSUE_COUNT=$(tail -n +2 results.csv | wc -l)
+          echo "Found $ISSUE_COUNT issues"
+          if [ "$ISSUE_COUNT" -gt 0 ]; then
+            echo "::warning::Found $ISSUE_COUNT SRE reliability issues"
+            exit 1
+          fi
+        fi
