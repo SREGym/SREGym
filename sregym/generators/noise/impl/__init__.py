@@ -15,6 +15,8 @@ def get_noise_class(name: str) -> Optional[Type[BaseNoise]]:
 
 # Import implementations to ensure they are registered
 from . import chaos_mesh
-from . import fake_logs
+from . import kubectl_noise
 from . import ghost_metrics
+from . import jaeger_noise
+
 

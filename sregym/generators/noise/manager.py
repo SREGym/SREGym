@@ -1,7 +1,7 @@
 import logging
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import yaml
 
 from sregym.generators.noise.base import BaseNoise
@@ -19,7 +19,19 @@ class NoiseManager:
             cls._instance.config = {}
             cls._instance.running = False
             cls._instance._background_thread = None
+            cls._instance.problem_context = {}
         return cls._instance
+
+    def set_problem_context(self, context: Dict[str, Any]):
+        """
+        Set the problem context (namespace, services, etc.) for noises to use.
+        """
+        self.problem_context = context
+        logger.info(f"NoiseManager context updated: {context.keys()}")
+        # Update context for all existing noises
+        for noise in self.noises:
+            if hasattr(noise, 'set_context'):
+                noise.set_context(context)
 
     def load_config(self, config_path: str):
         logger.info(f"Loading noise configuration from {config_path}")

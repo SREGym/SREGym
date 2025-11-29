@@ -21,6 +21,12 @@ class BaseNoise(ABC):
         """
         pass
 
+    def set_context(self, context: Dict[str, Any]):
+        """
+        Update the noise with problem context.
+        """
+        self.context = context
+
     def modify_result(self, context: Dict[str, Any], result: str) -> str:
         """
         Modify the result of a tool call.
