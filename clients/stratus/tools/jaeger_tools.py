@@ -204,3 +204,45 @@ async def get_operations(
             ]
         }
     )
+
+
+get_dependency_graph_docstring = """
+    Get service dependency graph from Jaeger's native dependencies API.
+    Args:
+        last_n_minutes (int): The time range (in minutes) to look back from the current time.
+    Returns:
+        str: JSON object representing the dependency graph.
+"""
+
+
+@tool(description=get_dependency_graph_docstring)
+async def get_dependency_graph(
+    last_n_minutes: str,
+    tool_call_id: Annotated[str, InjectedToolCallId],
+) -> Command:
+
+    logger.info(f"calling mcp get_dependency_graph from langchain get_dependency_graph")
+    exit_stack = AsyncExitStack()
+    logger.info("Using HTTP, connecting to server.")
+    server_url = langgraph_tool_config.jaeger_mcp_url
+    http_transport = await exit_stack.enter_async_context(sse_client(url=server_url))
+    session = await exit_stack.enter_async_context(ClientSession(*http_transport))
+
+    await session.initialize()
+
+    result = await session.call_tool(
+        "get_dependency_graph",
+        arguments={"last_n_minutes": last_n_minutes},
+    )
+    await exit_stack.aclose()
+    # operations = result.content[0].text
+    # if langgraph_tool_config.use_summaries and len(operations) >= langgraph_tool_config.min_len_to_sum:
+    #     logger.info("Using summaries for operations.")
+    #     operations = _summarize_operations(operations)
+    return Command(
+        update={
+            "messages": [
+                ToolMessage(content=result, tool_call_id=tool_call_id),
+            ]
+        }
+    )

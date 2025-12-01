@@ -1,4 +1,4 @@
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.rolling_update_misconfiguration_mitigation import RollingUpdateMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -23,7 +23,8 @@ class RollingUpdateMisconfigured(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.kubectl = KubeCtl()
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.root_cause = f"The deployment `{self.faulty_service}` has a misconfigured rolling update strategy (maxUnavailable=100%, maxSurge=0%) with an init container that hangs indefinitely, causing the deployment to be stuck during updates."
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
         self.mitigation_oracle = RollingUpdateMitigationOracle(problem=self, deployment_name=self.faulty_service)

@@ -18,7 +18,12 @@ from kubernetes import dynamic
 from kubernetes.client import api_client
 from kubernetes.client.rest import ApiException
 from rich.console import Console
+import dotenv
+import os
 
+dotenv.load_dotenv(override=True)
+
+WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
 
 class KubeCtl:
     def __init__(self):
@@ -125,7 +130,7 @@ class KubeCtl:
         """Fetch the service configuration."""
         return client.CoreV1Api().read_namespaced_service(name=name, namespace=namespace)
 
-    def wait_for_ready(self, namespace, sleep=2, max_wait=500):
+    def wait_for_ready(self, namespace, sleep=2, max_wait=WAIT_FOR_POD_READY_TIMEOUT):
         """Wait for all pods in a namespace to be in a Ready state before proceeding."""
 
         console = Console()

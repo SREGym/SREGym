@@ -25,7 +25,10 @@ class KhaosController:
             if rc not in (0, None):
                 raise RuntimeError(f"kubectl apply failed (rc={rc}).\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
 
-        self.kubectl.exec_command(f"kubectl -n {KHAOS_NS} rollout status ds/{KHAOS_DS_NAME} --timeout=3m")
+        # Wait for both DaemonSets to be ready (control-plane and worker)
+        # The YAML file contains two DaemonSets: khaos-control-plane and khaos-worker
+        self.kubectl.exec_command(f"kubectl -n {KHAOS_NS} rollout status ds/khaos-control-plane --timeout=3m")
+        self.kubectl.exec_command(f"kubectl -n {KHAOS_NS} rollout status ds/khaos-worker --timeout=3m")
 
     def teardown(self):
         self.kubectl.exec_command(f"kubectl delete ns {KHAOS_NS} --ignore-not-found")

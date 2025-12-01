@@ -45,11 +45,13 @@ class SubmitRequest(BaseModel):
 
 @app.post("/submit")
 async def submit_solution(req: SubmitRequest):
-    allowed = {"noop", "detection", "localization", "mitigation"}
+    allowed = {"noop", "detection", "diagnosis", "mitigation"}
     if _conductor is None or _conductor.submission_stage not in allowed:
         local_logger.error(f"Cannot submit at stage: {_conductor.submission_stage!r}")
         raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {_conductor.submission_stage!r}")
 
+    # replace double quotes with single quotes
+    req.solution = req.solution.replace('"', "'")
     wrapped = f'```\nsubmit("{req.solution}")\n```'
     local_logger.debug(f"Wrapped submit content: {wrapped}")
 
@@ -120,7 +122,7 @@ def run_api(conductor):
             """
 **Available Endpoints**
 - **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage  
-- **GET /status**: returns `{ "stage": "setup" | "noop" | "detection" | "localization" | "mitigation" | "done" }`
+- **GET /status**: returns `{ "stage": "setup" | "noop" | "detection" | "diagnosis" | "mitigation" | "done" }`
 """
         )
     )

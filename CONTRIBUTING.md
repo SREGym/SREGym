@@ -212,7 +212,7 @@ To add a new problem:
    ```python
    from sregym.service.apps.myapp import MyApp
    from sregym.conductor.oracles.detection import DetectionOracle
-   from sregym.conductor.oracles.localization import LocalizationOracle
+   from sregym.conductor.oracles.diagnosis import DiagnosisOracle
    from sregym.conductor.oracles.mitigation import MitigationOracle
    from sregym.conductor.problems.base import Problem
    from sregym.utils.decorators import mark_fault_injected
@@ -223,7 +223,7 @@ To add a new problem:
            self.faulty_service = ["service-name"]
 
            # Attach evaluation oracles
-           self.localization_oracle = LocalizationOracle(
+           self.diagnosis_oracle = DiagnosisOracle(
                problem=self,
                expected=self.faulty_service
            )
@@ -246,7 +246,7 @@ To add a new problem:
    ```yaml
    my-problem-id:
      - detection
-     - localization
+     - diagnosis
      - mitigation
    ```
 

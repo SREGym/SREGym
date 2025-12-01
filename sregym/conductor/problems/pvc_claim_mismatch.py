@@ -1,7 +1,6 @@
 """Redeployment of the HotelReservation application but do not handle PV."""
 
-from sregym.conductor.oracles.compound import CompoundedOracle
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -28,9 +27,10 @@ class PVCClaimMismatch(Problem):
             "mongodb-user",
         ]
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)
+        self.root_cause = "Multiple MongoDB deployments are configured with PVC claim names that do not exist (claimName-broken), causing pods to remain in Pending state."
         super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=self.faulty_service)
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
         self.mitigation_oracle = MitigationOracle(problem=self)

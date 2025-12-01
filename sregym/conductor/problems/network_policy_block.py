@@ -1,6 +1,6 @@
 from kubernetes import client, config
 
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.network_policy_oracle import NetworkPolicyMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.paths import TARGET_MICROSERVICES
@@ -22,9 +22,10 @@ class NetworkPolicyBlock(Problem):
         self.app.create_workload()
 
         super().__init__(app=self.app, namespace=self.app.namespace)
+        self.root_cause = f"A NetworkPolicy `{self.policy_name}` is configured to block all ingress and egress traffic to/from pods labeled with `app={self.faulty_service}`, causing complete network isolation and service unavailability."
         self.networking_v1 = client.NetworkingV1Api()
 
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = NetworkPolicyMitigationOracle(problem=self)
 
     @mark_fault_injected

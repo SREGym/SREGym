@@ -145,6 +145,15 @@ After finishing cluster creation, proceed to the next "Update config.yml" step.
 - **Resource Allocation:**  
   WSL2 may require additional resources. Adjust the WSL2 settings in your `.wslconfig` file on Windows if you encounter performance issues.
 
+- **Deployment Timeout Issues (Slow Network):**  
+  If you have a slow local network connection, first-time deployments may timeout while pulling container images. Increase the timeout in your `.env` file:
+  
+  ```bash
+  WAIT_FOR_POD_READY_TIMEOUT=1800  # 30 minutes (recommended for slow networks)
+  ```
+  
+  Subsequent deployments are faster since images are cached. Remote clusters typically don't need this adjustment.
+
 ---
 
 ## **Conclusion**

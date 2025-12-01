@@ -23,9 +23,12 @@ class AgentLauncher:
         if not reg or not reg.kickoff_command:
             return None
         existing = self._procs.get(reg.name)
-        if existing and existing.proc.returncode is None:
-            return existing
-
+        
+        if existing:
+            existing.proc.poll()
+            if existing.proc.returncode is None:
+                return existing
+                
         env = os.environ.copy()
         if reg.kickoff_env:
             env.update(reg.kickoff_env)

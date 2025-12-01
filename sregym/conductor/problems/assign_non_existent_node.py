@@ -3,7 +3,7 @@
 import time
 
 from sregym.conductor.oracles.assign_non_existent_node_mitigation import AssignNonExistentNodeMitigationOracle
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.social_network import SocialNetwork
@@ -17,9 +17,10 @@ class AssignNonExistentNode(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = "user-service"
+        self.root_cause = f"The deployment `{self.faulty_service}` is configured with a nodeSelector pointing to a non-existent node (extra-node), causing pods to remain in Pending state."
         super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
         self.mitigation_oracle = AssignNonExistentNodeMitigationOracle(problem=self)

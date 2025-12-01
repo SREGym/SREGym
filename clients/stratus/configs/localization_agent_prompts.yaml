@@ -45,7 +45,7 @@ system: >
     - **ServiceAccount**: Associates processes in pods with permissions for accessing the Kubernetes API.
   
     After you finished, submit the detected faulty components to the orchestrator for evaluation.
-    The submission should be list of faulty components (i.e., service names).
+    The submission should be a natural language description of the root cause of the failure.
 
 user: >
   You will be working this application:

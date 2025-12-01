@@ -27,8 +27,8 @@ def str_to_bool(s: str) -> bool:
     if not isinstance(s, str):
         raise TypeError("Input must be a string.")
 
-    true_values = {'true', '1', 'yes', 'y', 'on'}
-    false_values = {'false', '0', 'no', 'n', 'off'}
+    true_values = {"true", "1", "yes", "y", "on"}
+    false_values = {"false", "0", "no", "n", "off"}
 
     s_lower = s.strip().lower()
     if s_lower in true_values:
@@ -40,11 +40,10 @@ def str_to_bool(s: str) -> bool:
 
 
 mcp_server_cfg = McpServerCfg(
-    mcp_server_port=int(os.environ["MCP_SERVER_PORT"]),
-    expose_server=str_to_bool(os.environ["EXPOSE_SERVER"])
+    mcp_server_port=int(os.getenv("MCP_SERVER_PORT", "9954")),
+    expose_server=str_to_bool(os.getenv("EXPOSE_SERVER", "False")),
 )
 
 kubectl_session_cfg = KubectlSessionCfg(
-    session_cache_size=int(os.environ["SESSION_CACHE_SIZE"]),
-    session_ttl=int(os.environ["SESSION_TTL"])
+    session_cache_size=int(os.getenv("SESSION_CACHE_SIZE", "10000")), session_ttl=int(os.getenv("SESSION_TTL", "600"))
 )

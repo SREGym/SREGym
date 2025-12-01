@@ -1,5 +1,5 @@
 from sregym.conductor.oracles.detection import DetectionOracle
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.workload.blueprint_hotel_work import BHotelWrk, BHotelWrkWorkloadManager
@@ -14,10 +14,10 @@ class GCCapacityDegradation(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = "garbage collection"
-
+        self.root_cause = "All deployments have the GOGC environment variable set to 10 (instead of the default 100), causing aggressive garbage collection that degrades service capacity and performance. This is a metastable failure."
         super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
     @mark_fault_injected
     def inject_fault(self):

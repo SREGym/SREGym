@@ -1,22 +1,39 @@
+---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: khaos
+  name: khaos-control-plane
   namespace: khaos
 spec:
   selector:
     matchLabels:
       app: khaos
+      profile: control-plane
   template:
     metadata:
       labels:
         app: khaos
+        profile: control-plane
     spec:
       hostPID: true
       hostNetwork: true
       automountServiceAccountToken: false
-      nodeSelector:
-        kubernetes.io/arch: amd64
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: ["amd64"]
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: Exists
+              - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: ["amd64"]
+                  - key: node-role.kubernetes.io/master
+                    operator: Exists
       tolerations:
         - key: "node-role.kubernetes.io/control-plane"
           operator: "Exists"
@@ -39,6 +56,7 @@ spec:
             - { name: btf,          mountPath: /sys/kernel/btf, readOnly: true }
             - { name: run-dir,      mountPath: /run, readOnly: true }
             - { name: var-run,      mountPath: /var/run, readOnly: true }
+            - { name: host-dev,     mountPath: /dev }
       volumes:
         - { name: sys-bpf,     hostPath: { path: /sys/fs/bpf, type: Directory } }
         - { name: sys-debug,   hostPath: { path: /sys/kernel/debug, type: Directory } }
@@ -47,3 +65,64 @@ spec:
         - { name: btf,         hostPath: { path: /sys/kernel/btf, type: DirectoryOrCreate } }
         - { name: run-dir,     hostPath: { path: /run, type: Directory } }
         - { name: var-run,     hostPath: { path: /var/run, type: Directory } }
+        - { name: host-dev,    hostPath: { path: /dev, type: Directory } }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: khaos-worker
+  namespace: khaos
+spec:
+  selector:
+    matchLabels:
+      app: khaos
+      profile: worker
+  template:
+    metadata:
+      labels:
+        app: khaos
+        profile: worker
+    spec:
+      hostPID: true
+      hostNetwork: true
+      automountServiceAccountToken: false
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/arch
+                    operator: In
+                    values: ["amd64"]
+                  - key: node-role.kubernetes.io/worker
+                    operator: Exists
+      nodeSelector:
+        kubernetes.io/arch: amd64
+        node-role.kubernetes.io/worker: ""   # explicit worker targeting
+      containers:
+        - name: khaos
+          image: saad1038/khaos-x86:latest
+          imagePullPolicy: IfNotPresent
+          command: ["sleep", "infinity"]
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - { name: sys-bpf,      mountPath: /sys/fs/bpf }
+            - { name: sys-debug,    mountPath: /sys/kernel/debug }
+            - { name: host-proc,    mountPath: /host/proc, readOnly: true }
+            - { name: lib-modules,  mountPath: /lib/modules, readOnly: true }
+            - { name: btf,          mountPath: /sys/kernel/btf, readOnly: true }
+            - { name: run-dir,      mountPath: /run, readOnly: true }
+            - { name: var-run,      mountPath: /var/run, readOnly: true }
+            - { name: openebs,      mountPath: /var/openebs }
+            - { name: host-dev,     mountPath: /dev }
+      volumes:
+        - { name: sys-bpf,     hostPath: { path: /sys/fs/bpf, type: Directory } }
+        - { name: sys-debug,   hostPath: { path: /sys/kernel/debug, type: Directory } }
+        - { name: host-proc,   hostPath: { path: /proc, type: Directory } }
+        - { name: lib-modules, hostPath: { path: /lib/modules, type: Directory } }
+        - { name: btf,         hostPath: { path: /sys/kernel/btf, type: DirectoryOrCreate } }
+        - { name: run-dir,     hostPath: { path: /run, type: Directory } }
+        - { name: var-run,     hostPath: { path: /var/run, type: Directory } }
+        - { name: openebs,     hostPath: { path: /var/openebs, type: Directory } }
+        - { name: host-dev,    hostPath: { path: /dev, type: Directory } }

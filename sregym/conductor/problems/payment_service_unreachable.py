@@ -1,6 +1,6 @@
 """Otel demo paymentServiceUnreachable feature flag fault."""
 
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_otel import OtelFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -15,9 +15,10 @@ class PaymentServiceUnreachable(Problem):
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "checkout"
+        self.root_cause = f"The `{self.faulty_service}` service has a feature flag enabled that makes the payment service unreachable, causing checkout failures."
         super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
     @mark_fault_injected
     def inject_fault(self):

@@ -2,7 +2,7 @@
 
 import time
 
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.scale_pod_zero_mitigation import ScalePodZeroMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -21,9 +21,10 @@ class ScalePodSocialNet(Problem):
         # Choose a very front service to test - this will directly cause an exception
         # TODO: We should create more problems with this using different faulty services
         # self.faulty_service = "nginx-thrift"
+        self.root_cause = f"The deployment `{self.faulty_service}` is scaled down to 0 replicas, causing the service to be unavailable."
         super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[self.faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
         self.mitigation_oracle = ScalePodZeroMitigationOracle(problem=self)

@@ -1,6 +1,6 @@
 """MongoDB storage user unregistered problem in the HotelReservation application."""
 
-from sregym.conductor.oracles.localization import LocalizationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
@@ -18,12 +18,13 @@ class MongoDBUserUnregistered(Problem):
         self.faulty_service = faulty_service
         # NOTE: change the faulty service to mongodb-rate to create another scenario
         # self.faulty_service = "mongodb-rate"
+        self.root_cause = f"The MongoDB service `{self.faulty_service}` has an unregistered user, causing authentication failures for the associated service."
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
         super().__init__(app=self.app, namespace=self.app.namespace)
         # === Attach evaluation oracles ===
-        self.localization_oracle = LocalizationOracle(problem=self, expected=[faulty_service])
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
         self.mitigation_oracle = MitigationOracle(problem=self)

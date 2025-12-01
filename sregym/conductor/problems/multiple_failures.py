@@ -3,7 +3,6 @@
 import time
 
 from sregym.conductor.oracles.compound import CompoundedOracle
-from sregym.conductor.oracles.localization import LocalizationOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -22,21 +21,15 @@ class MultipleIndependentFailures(Problem):
         self.fault_injected = False
 
         # === Attaching problem's oracles ===
-        localization_oracles = [p.localization_oracle for p in self.problems]
-        if len(localization_oracles) > 0:
-            print(f"[MIF] Localization oracles: {localization_oracles}")
-            self.localization_oracle = CompoundedOracle(
-                self,
-                *localization_oracles
-            )
+        diagnosis_oracles = [p.diagnosis_oracle for p in self.problems]
+        if len(diagnosis_oracles) > 0:
+            print(f"[MIF] Diagnosis oracles: {diagnosis_oracles}")
+            self.diagnosis_oracle = CompoundedOracle(self, *diagnosis_oracles)
 
         mitigation_oracles = [p.mitigation_oracle for p in self.problems]
         if len(mitigation_oracles) > 0:
             print(f"[MIF] Mitigation oracles: {mitigation_oracles}")
-            self.mitigation_oracle = CompoundedOracle(
-                self,
-                *mitigation_oracles
-            )
+            self.mitigation_oracle = CompoundedOracle(self, *mitigation_oracles)
 
     @mark_fault_injected
     def inject_fault(self):
