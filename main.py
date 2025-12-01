@@ -49,7 +49,6 @@ def driver_loop(conductor: Conductor):
             all_results_for_agent = []
             for pid in conductor.problems.get_problem_ids():
                 console.log(f"\n🔍 Starting problem: {pid}")
-
                 conductor.problem_id = pid
 
                 result = await conductor.start_problem()

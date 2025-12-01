@@ -200,7 +200,10 @@ class WorkloadOracle(BaseOracle):
         return False
 
     async def get_workload_result(self, job_name):
-        await self.kubectl.wait_for_job_completion(job_name=job_name, namespace="default")
+        try:
+            await asyncio.to_thread(self.kubectl.wait_for_job_completion, job_name=job_name, namespace="default")
+        except Exception as e:
+            return f"Workload Generator Error: {e}"
 
         namespace = "default"
 

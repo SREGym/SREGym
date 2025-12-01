@@ -132,6 +132,7 @@ class LiteLLMBackend:
                 model=self.model_name,
                 temperature=self.temperature,
                 top_p=self.top_p,
+                api_key=self.api_key,
             )
         elif self.provider == "compatible":
             llm = ChatLiteLLM(

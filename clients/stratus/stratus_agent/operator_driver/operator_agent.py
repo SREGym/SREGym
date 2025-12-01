@@ -144,6 +144,18 @@ async def diagnosis_task_main():
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
     diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path, "r"))
     app_info = get_app_info()
+    if isinstance(app_info, str) and app_info == "error":
+        logger.error("Failed to get app info. Aborting diagnosis task.")
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "time": "0",
+            "steps": 0,
+            "num_retry_attempts": "N/A",
+            "rollback_stack": "N/A",
+            "oracle_results": "N/A",
+        }
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
@@ -188,6 +200,18 @@ async def localization_task_main():
     localization_agent_prompt_path = file_parent_dir.parent / "configs" / localization_agent_config["prompts_path"]
     localization_agent_prompts = yaml.safe_load(open(localization_agent_prompt_path, "r"))
     app_info = get_app_info()
+    if isinstance(app_info, str) and app_info == "error":
+        logger.error("Failed to get app info. Aborting localization task.")
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+            "time": "0",
+            "steps": 0,
+            "num_retry_attempts": "N/A",
+            "rollback_stack": "N/A",
+            "oracle_results": "N/A",
+        }, None
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
@@ -256,6 +280,19 @@ async def mitigation_task_main(localization_summary):
     # setting up workload oracle, need to interact with benchmark.
     logger.info("getting app info")
     app_info = get_app_info()
+    if isinstance(app_info, str) and app_info == "error":
+        logger.error("Failed to get app info. Aborting mitigation task.")
+        return {
+            "agent_name": [],
+            "input_tokens": [],
+            "output_tokens": [],
+            "total_tokens": [],
+            "time": [],
+            "steps": [],
+            "num_retry_attempts": [],
+            "rollback_stack": [],
+            "oracle_results": [],
+        }
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
