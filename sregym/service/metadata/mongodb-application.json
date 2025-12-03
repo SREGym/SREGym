@@ -1,0 +1,17 @@
+{
+    "Name": "MongoDB Cluster (Operator)",
+    "Namespace": "mongodb",
+    "Desc": "A MongoDB cluster managed by the MongoDB Kubernetes Operator.",
+    "Supported Operations": [
+        "MongoDB related operations"
+    ],
+    "Helm Config": {
+        "repo_name": "mongodb",
+        "repo_url": "https://mongodb.github.io/helm-charts",
+        "chart_name": "mongodb/mongodb-kubernetes",
+        "release_name": "mongodb-kubernetes-operator",
+        "remote_chart": true
+    },
+    "cluster_cr_path": "sregym/resources/mongodb/db/mongodb-cluster.yaml",
+    "secret_path": "sregym/resources/mongodb/db/admin-password-secret.yaml"
+}

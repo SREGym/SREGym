@@ -26,6 +26,7 @@ FLIGHT_TICKET_METADATA = BASE_DIR / "service" / "metadata" / "flight-ticket.json
 FLEET_CAST_METADATA = BASE_DIR / "service" / "metadata" / "fleet-cast.json"
 BLUEPRINT_HOTEL_RES_METADATA = BASE_DIR / "service" / "metadata" / "blueprint-hotel-reservation.json"
 COCKROACH_DB_CLUSTER_METADATA = BASE_DIR / "service" / "metadata" / "cockroachdb-application.json"
+MONGODB_CLUSTER_METADATA = BASE_DIR / "service" / "metadata" / "mongodb-application.json"
 
 # CockroachDB Deploy benchmark resources
 COCKROACH_DB_DEPLOY_RESOURCES = BASE_DIR / "resources" / "cockroachdb-deploy"

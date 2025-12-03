@@ -1,0 +1,39 @@
+apiVersion: mongodbcommunity.mongodb.com/v1
+kind: MongoDBCommunity
+metadata:
+  name: mongodb-cluster
+  namespace: mongodb
+spec:
+  members: 3
+  type: ReplicaSet
+  version: "5.0.0"
+  security:
+    authentication:
+      modes: ["SCRAM"]
+  users:
+    - name: admin-user
+      db: admin
+      passwordSecretRef:
+        name: admin-user-password
+      scramCredentialsSecretName: admin-user-scram
+      roles:
+        - name: root
+          db: admin
+  additionalMongodConfig:
+    storage.engine: wiredTiger
+  statefulSet:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: mongod
+              resources:
+                limits:
+                  cpu: "500m"
+                  memory: "512Mi"
+                requests:
+                  cpu: "250m"
+                  memory: "256Mi"
+
+
+

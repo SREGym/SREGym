@@ -8,7 +8,6 @@ import yaml
 from dashboard.proxy import LogProxy
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.detection import DetectionOracle
-from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
 from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
@@ -44,9 +43,10 @@ class Conductor:
         self.execution_start_time = None
 
         # grading flow state
-        # submission_stage reflects the current AgentAct name (e.g., "diagnosis", "mitigation") or "done"
-        self.submission_stage = None
+        self.submission_stage = None  # "noop", "detection", "localization", "mitigation", "done"
         self.results = {}
+        self.submission_count = 0  # Track number of submissions to prevent infinite loops
+        self.max_submissions = 30  # Maximum allowed submissions per stage
 
         self.tasklist = None
         self.logger = logging.getLogger("sregym-global")  # this is for dashboard
@@ -62,11 +62,6 @@ class Conductor:
             "interval_max": 30,
         }
 
-        self.act_sequence: list[dict] = []
-        self.current_act_index: int = 0
-        self.current_agent_act_index: int | None = None
-        self.waiting_for_agent: bool = False
-
     def register_agent(self, name="agent"):
         self.agent_name = name
 
@@ -80,12 +75,10 @@ class Conductor:
         file_dir = Path(__file__).resolve().parent
         tasklist_path = file_dir / "tasklist.yml"
 
-        # If tasklist file doesn't exist, default to running diagnosis + mitigation
+        # If tasklist file doesn't exist, default to running all tasks
         if not tasklist_path.exists():
-            self.local_logger.info(
-                "No tasklist.yml found. Defaulting to running diagnosis and mitigation for this problem."
-            )
-            self.tasklist = ["diagnosis", "mitigation"]
+            self.local_logger.info("No tasklist.yml found. Defaulting to running all tasks for this problem.")
+            self.tasklist = ["noop", "detection", "localization", "mitigation", "done"]
             return
 
         with open(tasklist_path, "r") as f:
@@ -98,9 +91,9 @@ class Conductor:
 
         if self.problem_id not in (problems if problems else []):
             self.local_logger.warning(
-                "problem_id not found in tasklist. Defaulting to running diagnosis and mitigation."
+                "problem_id not found in tasklist. Currently assuming that all tasks will be run."
             )
-            self.tasklist = ["diagnosis", "mitigation"]
+            self.tasklist = ["noop", "detection", "localization", "mitigation", "done"]
         else:
             problem_tasklist = problems[self.problem_id]
             if not problem_tasklist:
@@ -108,205 +101,23 @@ class Conductor:
                 self.local_logger.error(msg)
                 raise RuntimeError(msg)
 
-            if not is_ordered_subset(problem_tasklist, ["diagnosis", "mitigation"]):
-                msg = f"Task list for {self.problem_id} is either out of order or has an unknown step (allowed: diagnosis, mitigation)"
+            if not is_ordered_subset(problem_tasklist, ["detection", "localization", "mitigation"]):
+                msg = f"Task list for {self.problem_id} is either out of order or has an unknown step"
                 self.local_logger.error(msg)
                 raise RuntimeError(msg)
 
             self.local_logger.info(
-                f"Tasklist specified for {self.problem_id}. Configured AgentActs to run: {problem_tasklist}"
+                f"Tasklist specified for {self.problem_id}. Configured tasks to run: {problem_tasklist}"
             )
 
-            # Use the tasklist as-is (only AgentAct names, e.g., diagnosis, mitigation)
+            problem_tasklist.append("done")
+            problem_tasklist.insert(0, "noop")
             self.tasklist = problem_tasklist
-
-    def _build_act_sequence(self):
-        self.act_sequence = []
-        self.current_act_index = 0
-        self.current_agent_act_index = None
-        self.waiting_for_agent = False
-
-        if not self.tasklist:
-            self.local_logger.warning("Empty tasklist; no AgentActs configured for this problem.")
-            return
-
-        # Map AgentAct names to their precondition/evaluation functions
-        agent_act_definitions = {
-            "diagnosis": {
-                "precondition": self._precondition_diagnosis,
-                "evaluation": self._evaluate_diagnosis,
-            },
-            "mitigation": {
-                "precondition": self._precondition_mitigation,
-                "evaluation": self._evaluate_mitigation,
-            },
-        }
-
-        # Determine which AgentActs are actually available (oracle attached)
-        configured_agent_acts: list[dict] = []
-        for name in self.tasklist:
-            if name not in agent_act_definitions:
-                self.local_logger.warning(f"Unknown AgentAct '{name}' in tasklist; skipping.")
-                continue
-
-            if name == "diagnosis":
-                if getattr(self.problem, "diagnosis_oracle", None):
-                    configured_agent_acts.append(
-                        {
-                            "type": "AgentAct",
-                            "name": name,
-                            "precondition": agent_act_definitions[name]["precondition"],
-                            "evaluation": agent_act_definitions[name]["evaluation"],
-                        }
-                    )
-                else:
-                    self.local_logger.info("⏩ Diagnosis oracle is not attached. Skipping diagnosis.")
-
-            elif name == "mitigation":
-                if getattr(self.problem, "mitigation_oracle", None):
-                    configured_agent_acts.append(
-                        {
-                            "type": "AgentAct",
-                            "name": name,
-                            "precondition": agent_act_definitions[name]["precondition"],
-                            "evaluation": agent_act_definitions[name]["evaluation"],
-                        }
-                    )
-                else:
-                    self.local_logger.info("⏩ Mitigation oracle is not attached. Skipping mitigation.")
-
-        if not configured_agent_acts:
-            self.local_logger.warning(
-                "No AgentActs left after checking oracles. This problem will complete without agent interaction."
-            )
-            return
-
-        # Default GymAct: inject fault before the first AgentAct precondition
-        self.act_sequence.append(
-            {
-                "type": "GymAct",
-                "name": "inject_fault",
-                "op": self._gymact_inject_fault,
-            }
-        )
-
-        # Append AgentActs in order
-        self.act_sequence.extend(configured_agent_acts)
-
-    def _gymact_inject_fault(self):
-        self.problem.inject_fault()
-        self.logger.info("[ENV] Injected fault")
-
-        # Prepare diagnosis checkpoint if available, after fault injection but before agent acts
-        if (
-            hasattr(self.problem, "diagnosis_oracle")
-            and self.problem.diagnosis_oracle
-            and isinstance(self.problem.diagnosis_oracle, DiagnosisOracle)
-        ):
-            self.problem.diagnosis_oracle.load_localization_checkpoint()
-            self.local_logger.info("Diagnosis checkpoint loaded after fault injection.")
-
-        # FIXME: Disabled until https://github.com/xlab-uiuc/SREGym/issues/296 is complete
-        # self.configure_transient_issues()
-        # if self.transient_config["switch"]:
-        #     self._start_transient_issues()
-
-    # -------- AgentAct: diagnosis --------
-    def _precondition_diagnosis(self):
-        self.local_logger.info("Precondition for Diagnosis AgentAct executed. No real action.")
-
-    def _evaluate_diagnosis(self, solution):
-        """Evaluation logic for diagnosis AgentAct."""
-        self.local_logger.info("Start Eval for Diagnosis", extra={"sol": solution})
-        r = self.problem.diagnosis_oracle.evaluate(solution)
-        self.results["Diagnosis"] = r
-        self.results["TTL"] = time.time() - self.execution_start_time
-        self.logger.info(
-            f"[EVAL] Diagnosis "
-            f"{'Succeed' if self.results['Diagnosis']['success'] else 'Failed'}\n "
-            f"TTL: {self.results['TTL']}"
-        )
-        return r
-
-    # -------- AgentAct: mitigation --------
-    def _precondition_mitigation(self):
-        self.local_logger.info("Precondition for Mitigation AgentAct executed. No real action.")
-
-    def _evaluate_mitigation(self, solution):
-        """Evaluation logic for mitigation AgentAct."""
-        # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
-        self.local_logger.info("Start Eval for Mitigation", extra={"sol": solution})
-        r = self.problem.mitigation_oracle.evaluate()
-        self.results["Mitigation"] = r
-        self.results["TTM"] = time.time() - self.execution_start_time
-        self.logger.info(
-            f"[EVAL] Mitigation "
-            f"{'Succeed' if self.results['Mitigation']['success'] else 'Failed'}\n "
-            f"TTM: {self.results['TTM']}"
-        )
-        return r
-
-    def _advance_to_next_agent_act_precondition(self, start_index: int = 0):
-        """
-        Execute Acts sequentially starting from start_index until:
-          - The precondition of the next AgentAct is executed (inclusive), then wait for agent submission; or
-          - There are no more AgentActs, in which case finish the problem.
-        """
-        self.current_agent_act_index = None
-        self.waiting_for_agent = False
-        self.current_act_index = start_index
-
-        if not self.act_sequence:
-            self.local_logger.info("No Acts configured; finishing problem immediately.")
-            self._finish_problem()
-            return
-
-        i = start_index
-        while i < len(self.act_sequence):
-            act = self.act_sequence[i]
-            act_type = act.get("type")
-            act_name = act.get("name")
-
-            if act_type == "GymAct":
-                self.local_logger.debug(f"Executing GymAct '{act_name}'")
-                act["op"]()
-                i += 1
-                continue
-
-            if act_type == "AgentAct":
-                self.local_logger.debug(f"Executing precondition for AgentAct '{act_name}' and waiting for agent.")
-                act["precondition"]()
-                self.current_agent_act_index = i
-                self.waiting_for_agent = True
-                self.submission_stage = act_name
-                self.current_act_index = i
-                self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
-                return
-
-            self.local_logger.warning(f"Unknown Act type '{act_type}' for Act '{act_name}'; skipping.")
-            i += 1
-
-        # No more AgentActs; finish the problem
-        self._finish_problem()
-
-    def _finish_problem(self):
-        self.submission_stage = "done"
-
-        self.logger.info(f"[STAGE] Done, recover fault")
-
-        if self.transient_config["switch"] and hasattr(self, "transient_issue_generator"):
-            self.transient_issue_generator.stop_continuous_injection()
-
-        if self.problem:
-            self.problem.recover_fault()
-
-        self.logger.info(f"[STAGE] Undeploy app")
-        self.undeploy_app()
 
     async def start_problem(self) -> StartProblemResult:
         """
         1) Provision infra & workload
-        2) Initialize Act registry and execute initial GymActs and first AgentAct precondition
+        2) Flip to NO-OP grading stage
 
         Returns:
             StartProblemResult: Result status indicating success or skip reason
@@ -334,7 +145,6 @@ class Conductor:
         self.fix_kubernetes()
 
         self.get_tasklist()
-        self._build_act_sequence()
 
         self.local_logger.info("Undeploying app leftovers...")
         self.undeploy_app()  # Cleanup any leftovers
@@ -342,26 +152,40 @@ class Conductor:
         self.local_logger.info("Deploying app...")
         self.deploy_app()
         self.local_logger.info("App deployed.")
-        # After deployment, execute Acts until the first AgentAct precondition is reached.
-        self._advance_to_next_agent_act_precondition(start_index=0)
 
-        if self.submission_stage and self.submission_stage != "done":
-            self.local_logger.info(
-                f"✅ Deployment complete. Ready for submission. Current stage is: {self.submission_stage}"
-            )
-        else:
-            self.local_logger.info(
-                "✅ Deployment complete. No AgentAct configured; problem will complete without agent submission."
-            )
+        self.submission_stage = self.tasklist[0]  # always noop
+
+        self.local_logger.info(f"✅ Deployment complete. Ready for submission. Current stage is: {self.tasklist[0]}")
         return StartProblemResult.SUCCESS
 
     async def submit(self, wrapped_cmd: str) -> dict:
         """
         Called by CLI or HTTP /submit.  Parses & grades the `submit(...)` call,
-        advances submission_stage, records results—and when we hit “done”,
+        advances submission_stage, records results—and when we hit "done",
         triggers undeploy_app. Returns a snapshot of the results dict.
         """
         from sregym.conductor.parser import ResponseParser
+
+        # Check submission limit to prevent infinite loops
+        self.submission_count += 1
+        if self.submission_count > self.max_submissions:
+            error_msg = f"Maximum submission limit ({self.max_submissions}) exceeded. Agent may be stuck in a loop."
+            self.local_logger.error(error_msg)
+            self.logger.error(f"[ERROR] {error_msg}")
+            self.results["error"] = error_msg
+            self.submission_stage = "done"
+            # Force cleanup
+            if hasattr(self, "problem") and self.problem:
+                try:
+                    self.problem.recover_fault()
+                except Exception as e:
+                    self.local_logger.error(f"Error during forced cleanup: {e}")
+            if hasattr(self, "app") and self.app:
+                try:
+                    self.undeploy_app()
+                except Exception as e:
+                    self.local_logger.error(f"Error during forced undeploy: {e}")
+            raise RuntimeError(error_msg)
 
         parser = ResponseParser()
         parsed = parser.parse(wrapped_cmd)
@@ -369,37 +193,84 @@ class Conductor:
             raise ValueError("Only `submit(...)` is supported.")
         sol = parsed["args"][0] if parsed["args"] else None
 
-        # If all tasks are already completed, simply return the final snapshot.
-        if self.submission_stage == "done":
-            self.local_logger.info("All tasks already completed; ignoring new submission.")
-            return dict(self.results)
-
-        if not self.act_sequence:
-            self.local_logger.warning("submit() called but no Acts are configured; returning current results.")
-            return dict(self.results)
-
-        if self.current_agent_act_index is None or not self.waiting_for_agent:
-            self.local_logger.error(
-                "submit() called when conductor is not waiting for an AgentAct evaluation. "
-                f"Current submission_stage={self.submission_stage}"
+        # NO-OP
+        if self.submission_stage == "noop":
+            self.local_logger.info("Start Eval for Noop", extra={"sol": sol})
+            r = self.detection_oracle.evaluate(sol)
+            self.results["NOOP Detection"] = r
+            self.logger.info(
+                f"[EVAL] NOOP Detection {"Succeed" if self.results["NOOP Detection"]["success"] else "Failed"}\n"
             )
-            raise RuntimeError("Conductor is not currently waiting for an agent submission.")
+            if r.get("reason") == "Invalid Format":
+                return dict(self.results)
 
-        current_act = self.act_sequence[self.current_agent_act_index]
-        if current_act.get("type") != "AgentAct":
-            self.local_logger.error(
-                f"Internal error: current_act at index {self.current_agent_act_index} is not an AgentAct."
+            self.problem.inject_fault()
+
+            self.logger.info(f"[ENV] Injected fault")
+
+            # FIXME: Disabled until https://github.com/SREGym/SREGym/issues/296 is complete
+            # self.configure_transient_issues()
+            # if self.transient_config["switch"]:
+            #     self._start_transient_issues()
+
+        # DETECTION
+        if self.submission_stage == "detection":
+            self.local_logger.info("Start Eval for Detection", extra={"sol": sol})
+            r = self.detection_oracle.evaluate(sol)
+            self.results["Detection"] = r
+            self.results["TTD"] = time.time() - self.execution_start_time
+            self.logger.info(
+                f"[EVAL] Detection {"Succeed" if self.results["Detection"]["success"] else "Failed"}\n TTD: {self.results['TTD']}"
             )
-            raise RuntimeError("Invalid Act configuration.")
 
-        act_name = current_act.get("name")
-        self.local_logger.info(f"Evaluating AgentAct '{act_name}'", extra={"sol": sol})
-        # Run the evaluation function for the current AgentAct
-        current_act["evaluation"](sol)
+        # LOCALIZATION
+        if self.submission_stage == "localization":
+            self.local_logger.info("Start Eval for Localization", extra={"sol": sol})
+            r = self.problem.localization_oracle.evaluate(sol)
+            self.results["Localization"] = r
+            self.results["TTL"] = time.time() - self.execution_start_time
+            self.logger.info(
+                f"[EVAL] Localization {"Succeed" if self.results["Localization"]["success"] else "Failed"}\n TTL: {self.results['TTL']}"
+            )
 
-        # After evaluation, advance to the next AgentAct precondition (if any)
-        next_index = self.current_agent_act_index + 1
-        self._advance_to_next_agent_act_precondition(start_index=next_index)
+        # MITIGATION
+        if self.submission_stage == "mitigation":
+            self.local_logger.info("Start Eval for Mitigation", extra={"sol": sol})
+            r = self.problem.mitigation_oracle.evaluate()
+            self.results["Mitigation"] = r
+            self.results["TTM"] = time.time() - self.execution_start_time
+            self.logger.info(
+                f"[EVAL] Mitigation {"Succeed" if self.results["Mitigation"]["success"] else "Failed"}\n TTM: {self.results['TTM']}"
+            )
+
+        next_stage_idx = self.tasklist.index(self.submission_stage) + 1
+
+        if self.tasklist[next_stage_idx] == "localization" and not self.problem.localization_oracle:
+            self.local_logger.info("⏩ Localization oracle is not attached. Skipping localization.")
+            next_stage_idx += 1
+
+        if self.tasklist[next_stage_idx] == "mitigation" and not self.problem.mitigation_oracle:
+            self.local_logger.info("⏩ Mitigation oracle is not attached. Skipping mitigation.")
+            next_stage_idx += 1
+
+        self.submission_stage = self.tasklist[next_stage_idx]
+
+        if self.submission_stage != "done":
+            self.local_logger.info(f"👉 Next task: {self.submission_stage}")
+            self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+            return dict(self.results)
+        else:
+            snapshot = dict(self.results)
+
+            self.logger.info(f"[STAGE] Done, recover fault")
+
+            if self.transient_config["switch"] and hasattr(self, "transient_issue_generator"):
+                self.transient_issue_generator.stop_continuous_injection()
+
+            self.problem.recover_fault()
+            self.logger.info(f"[STAGE] Undeploy app")
+            self.undeploy_app()
+            return snapshot
 
         return dict(self.results)
 
@@ -446,21 +317,6 @@ class Conductor:
             '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
         )
         self.kubectl.wait_for_ready("openebs")
-
-        print("Setting up OpenEBS LocalPV-Device…")
-        device_sc_yaml = """
-        apiVersion: storage.k8s.io/v1
-        kind: StorageClass
-        metadata:
-        name: openebs-device
-        annotations:
-            openebs.io/cas-type: local
-        provisioner: openebs.io/local
-        parameters:
-        localpvType: "device"
-        volumeBindingMode: WaitForFirstConsumer
-        """
-        self.kubectl.exec_command("kubectl apply -f - <<EOF\n" + device_sc_yaml + "\nEOF")
 
         self.local_logger.info("[DEPLOY] Deploying Prometheus…")
         self.prometheus.deploy()
