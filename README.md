@@ -51,6 +51,7 @@ SREGym supports any kubernetes cluster that your `kubectl` context is set to, wh
 
 We have an Ansible playbook to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster.
 
+**Do not run the task on the shared machines or machines running key services, since The environment setup process will reboot the machines!**
 ### b) Emulated cluster
 SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/) on your local machine. However, not all problems are supported.
 
