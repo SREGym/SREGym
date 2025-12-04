@@ -149,20 +149,21 @@ class Conductor:
                 self.local_logger.warning(f"Unknown AgentAct '{name}' in tasklist; skipping.")
                 continue
 
-            if name == "diagnosis":
-                if getattr(self.problem, "diagnosis_oracle", None):
-                    configured_agent_acts.append(
-                        {
-                            "type": "AgentAct",
-                            "name": name,
-                            "precondition": agent_act_definitions[name]["precondition"],
-                            "evaluation": agent_act_definitions[name]["evaluation"],
-                        }
-                    )
-                else:
-                    self.local_logger.info("⏩ Diagnosis oracle is not attached. Skipping diagnosis.")
+            # COMMENTED OUT: Diagnosis stage
+            # if name == "diagnosis":
+            #     if getattr(self.problem, "diagnosis_oracle", None):
+            #         configured_agent_acts.append(
+            #             {
+            #                 "type": "AgentAct",
+            #                 "name": name,
+            #                 "precondition": agent_act_definitions[name]["precondition"],
+            #                 "evaluation": agent_act_definitions[name]["evaluation"],
+            #             }
+            #         )
+            #     else:
+            #         self.local_logger.info("⏩ Diagnosis oracle is not attached. Skipping diagnosis.")
 
-            elif name == "mitigation":
+            if name == "mitigation":
                 if getattr(self.problem, "mitigation_oracle", None):
                     configured_agent_acts.append(
                         {
