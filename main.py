@@ -80,7 +80,7 @@ def driver_loop(conductor: Conductor, problem_filter: str = None, use_external_h
                     console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
                     return []
 
-                if not use_external_harness:
+                else:
                     reg = get_agent(agent_name)
                     if reg:
                         await LAUNCHER.ensure_started(reg)
@@ -222,6 +222,7 @@ def main():
     if args.noise_config:
         try:
             from sregym.generators.noise.manager import get_noise_manager
+
             nm = get_noise_manager()
             nm.load_config(args.noise_config)
             # nm.start_background_noises()  <-- Moved to Conductor.start_problem
