@@ -102,7 +102,7 @@ def driver_loop(conductor: Conductor, problem_filter: str = None, use_external_h
 
                 fieldnames = sorted({key for row in all_results_for_agent for key in row.keys()})
                 current_date_time = get_current_datetime_formatted()
-                csv_path = f"{agent_name}_{current_date_time}_arena_{pid}_results.csv"
+                csv_path = f"{agent_name}_{current_date_time}_{pid}_results.csv"
                 with open(csv_path, "w", newline="") as csvfile:
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writeheader()
