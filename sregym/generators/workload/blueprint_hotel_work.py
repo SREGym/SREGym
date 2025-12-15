@@ -10,7 +10,7 @@ import logging
 from sregym.generators.workload.base import WorkloadEntry
 from sregym.generators.workload.stream import StreamWorkloadManager
 from sregym.paths import TARGET_MICROSERVICES
-from sregym.generators.noise.transient_issues.chaos_injector import ChaosInjector
+from sregym.generators.noise.impl.stress_injector import ChaosInjector
 
 # Mimicked the Wrk2 class
 

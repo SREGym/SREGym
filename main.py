@@ -12,6 +12,7 @@ from pathlib import Path
 
 import uvicorn
 from rich.console import Console
+
 from logger import init_logger
 from mcp_server.configs.load_all_cfg import mcp_server_cfg
 from mcp_server.sregym_mcp_server import app as mcp_app
@@ -22,6 +23,7 @@ from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 
 LAUNCHER = AgentLauncher()
+logger = logging.getLogger(__name__)
 
 
 def get_current_datetime_formatted():
@@ -115,7 +117,7 @@ def driver_loop(
                     writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writeheader()
                     writer.writerows(all_results_for_agent)
-                print(f"✅ Problem {pid} for agent {agent_name} complete! Results written to {csv_path}")
+                logger.info(f"✅ Problem {pid} for agent {agent_name} complete! Results written to {csv_path}")
             entry_for_agent = {agent_name: all_results_for_agent}
             all_results.append(entry_for_agent)
 
@@ -161,6 +163,25 @@ def main(args):
     # set up the logger
     init_logger()
 
+    # Initialize Noise Manager if config is provided or default config exists
+    nm = None
+    noise_config_path = args.noise_config
+    default_noise_config = "sregym/generators/noise/noise_config.yaml"
+
+    # Use default path if no argument provided but default file exists
+    if not noise_config_path and os.path.exists(default_noise_config):
+        noise_config_path = default_noise_config
+
+    if noise_config_path:
+        try:
+            from sregym.generators.noise.manager import get_noise_manager
+
+            nm = get_noise_manager()
+            nm.load_config(noise_config_path)
+            logger.info(f"✅ Noise manager initialized with config: {noise_config_path}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
+
     os.environ["MODEL_ID"] = args.model
 
     conductor = Conductor()
@@ -190,6 +211,14 @@ def main(args):
         # If interrupted, still try to shut down cleanly
         request_shutdown()
     finally:
+        # Stop noise manager if it was initialized
+        if nm:
+            try:
+                logger.info("Stopping noise manager...")
+                nm.stop()
+            except Exception as e:
+                logger.error(f"⚠️ Error stopping noise manager: {e}")
+
         # Give driver a moment to finish setting results
         driver_thread.join(timeout=5)
 
@@ -210,9 +239,9 @@ def main(args):
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(agent_results)
-            print(f"✅ Benchmark complete! Results for {agent_name} written to {csv_path}")
+            logger.info(f"✅ Benchmark complete! Results for {agent_name} written to {csv_path}")
     else:
-        print("⚠️ No results to write.")
+        logger.warning("⚠️ No results to write.")
 
     if __name__ == "__main__":
         # separate run, use exit
@@ -245,6 +274,12 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
+    )
+    parser.add_argument(
+        "--noise-config",
+        type=str,
+        default=None,
+        help="Path to noise configuration YAML file",
     )
     args = parser.parse_args()
 

@@ -7,6 +7,7 @@ from clients.stratus.stratus_utils.get_logger import get_logger
 from mcp_server.configs.load_all_cfg import kubectl_session_cfg
 from mcp_server.kubectl_server_helper.kubectl_tool_set import KubectlToolSet
 from mcp_server.kubectl_server_helper.sliding_lru_session_cache import SlidingLRUSessionCache
+from sregym.generators.noise.manager import get_noise_manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("all.mcp.kubectl_mcp_tools")
@@ -64,8 +65,17 @@ def exec_kubectl_cmd_safely(cmd: str, ctx: Context) -> str:
     ssid = extract_session_id(ctx)
     kubctl_tool = get_tools(ssid)
     logger.debug(f'session {ssid} is using tool "exec_kubectl_cmd_safely"; Command: {cmd}.')
+    
+    # Noise Injection Hook (Pre-execution)
+    noise_manager = get_noise_manager()
+    noise_manager.on_tool_call("kubectl", cmd, ssid)
+    
     result = kubctl_tool.cmd_runner.exec_kubectl_cmd_safely(cmd)
     assert isinstance(result, str)
+    
+    # Noise Injection Hook (Post-execution)
+    result = noise_manager.on_tool_result("kubectl", cmd, result, ssid)
+    
     return result
 
 

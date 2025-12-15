@@ -1,0 +1,115 @@
+# SREGym Noise Configuration Example
+# This file documents all available noise generators and their configuration options.
+# Rename this file to 'noise_config.yaml' to use it.
+
+noises:
+  # ==================================================================================
+  # 1. Chaos Mesh Noise
+  # Injects real faults (Pod Failure, Network Delay) using Chaos Mesh.
+  # ==================================================================================
+  - type: chaos_mesh
+    enabled: true
+    # stages: ["diagnosis", "mitigation"] # Optional: Specify which stages to run in. Default: all stages.
+    config:
+      # Namespace where Chaos Mesh is installed
+      namespace: "chaos-mesh"
+      # Duration of each chaos experiment in seconds
+      duration: 180
+      # Cooldown period between experiments in seconds
+      cooldown: 300
+      # Prefix for experiment names
+      experiment_name: "noise-experiment"
+      
+      # Trigger Configuration (Optional)
+      # Controls when the noise is injected.
+      # Options:
+      #   - type: "background" (Default) - Runs periodically based on cooldown.
+      #   - type: "tool_call" - Runs only when a specific tool command is executed (Passive Trigger).
+      # Note: You cannot enable both modes simultaneously.
+      # trigger:
+      #   type: "tool_call"
+      #   tool: "kubectl"
+      #   command_pattern: "get pods" # Trigger when 'kubectl get pods' is called
+
+      # Optional: Custom Chaos Mesh spec (if omitted, defaults to random PodFailure/NetworkDelay)
+      # spec:
+      #   kind: "PodChaos"
+      #   spec:
+      #     action: "pod-failure"
+      #     mode: "one"
+      #     selector:
+      #       namespaces: ["{target_namespace}"]
+      #     duration: "{duration}"
+
+  # ==================================================================================
+  # 2. Kubectl Noise
+  # Intercepts 'kubectl' commands and injects fake output (e.g., fake Pod status).
+  # ==================================================================================
+  - type: kubectl_noise
+    enabled: false
+    config:
+      # Probability of tampering with the output (0.0 - 1.0)
+      probability: 0.5
+
+  # ==================================================================================
+  # 3. Ghost Metrics Noise
+  # Intercepts Prometheus queries and injects fake metric data points.
+  # ==================================================================================
+  - type: ghost_metrics
+    enabled: false
+    config:
+      # The metric name to inject
+      metric_name: "http_requests_total"
+      # Labels for the fake metric series
+      labels:
+        service: "ghost-service"
+        status: "500"
+      # Range of random values to generate [min, max]
+      value_range: [100, 500]
+
+  # ==================================================================================
+  # 4. Jaeger Noise
+  # Intercepts Jaeger queries and injects fake traces or spans with errors.
+  # ==================================================================================
+  - type: jaeger_noise
+    enabled: false
+    config:
+      # Probability of tampering with traces (0.0 - 1.0)
+      probability: 0.5
+
+  # ==================================================================================
+  # 5. Zombie Resources Noise
+  # Creates a CronJob that periodically spawns failing Pods to simulate resource leaks.
+  # ==================================================================================
+  - type: zombie_resources
+    enabled: false
+    config:
+      # Cron schedule for spawning jobs
+      schedule: "*/1 * * * *" # Every minute
+      # Name of the CronJob (disguised as a system task)
+      job_name: "system-cache-cleaner"
+
+  # ==================================================================================
+  # 6. CI/CD Noise
+  # Simulates frequent rolling updates (deployments) in the background.
+  # ==================================================================================
+  - type: cicd_noise
+    enabled: false
+    config:
+      # Minimum interval between updates in seconds
+      interval: 60
+      # List of specific deployments to target (empty list = random deployment in target namespace)
+      deployments: [] 
+
+  # ==================================================================================
+  # 7. Node Maintenance Noise
+  # Simulates node maintenance (Cordon -> Drain -> Wait -> Uncordon).
+  # Skips if cluster has < 2 nodes.
+  # ==================================================================================
+  - type: node_maintenance
+    enabled: false
+    config:
+      # Interval between maintenance events in seconds
+      interval: 240 # 4 minutes
+      # Duration to keep the node in maintenance mode (cordoned) in seconds
+      duration: 120 # 2 minutes

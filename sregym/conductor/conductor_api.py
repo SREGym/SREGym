@@ -43,7 +43,7 @@ class SubmitRequest(BaseModel):
 
 @app.post("/submit")
 async def submit_solution(req: SubmitRequest):
-    allowed = {"noop", "detection", "diagnosis", "mitigation"}
+    allowed = {"diagnosis", "mitigation"}
     if _conductor is None or _conductor.submission_stage not in allowed:
         local_logger.error(f"Cannot submit at stage: {_conductor.submission_stage!r}")
         raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {_conductor.submission_stage!r}")
@@ -115,7 +115,7 @@ def run_api(conductor):
             """
 **Available Endpoints**
 - **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage  
-- **GET /status**: returns `{ "stage": "setup" | "noop" | "detection" | "diagnosis" | "mitigation" | "done" }`
+- **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "done" }`
 """
         )
     )

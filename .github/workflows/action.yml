@@ -1,6 +1,5 @@
 name: Run SRE-QL Queries
 on:
-  push:
   pull_request:
 jobs:
   codeql-custom:

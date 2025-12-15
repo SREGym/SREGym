@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 import yaml
+
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
@@ -11,7 +12,7 @@ from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
-from sregym.generators.noise.transient_issues.transient_issues import FaultType, PodScope, TransientIssuesGenerator
+from sregym.generators.noise.manager import get_noise_manager
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.dm_dust_manager import DmDustManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
@@ -49,16 +50,6 @@ class Conductor:
         self.tasklist = None
         self.logger = logging.getLogger("sregym-global")  # this is for dashboard
         self.local_logger = logging.getLogger("all.sregym.conductor")
-
-        self.transient_config = {
-            "switch": False,
-            "min_duration": 40,
-            "max_duration": 60,
-            "fault_types": [FaultType.FAIL_SLOW, FaultType.FAIL_STOP],
-            "scopes": [PodScope.TARGET_NAMESPACE],
-            "interval_min": 20,
-            "interval_max": 30,
-        }
 
         self.act_sequence: list[dict] = []
         self.current_act_index: int = 0
@@ -204,11 +195,6 @@ class Conductor:
             self.problem.diagnosis_oracle.load_localization_checkpoint()
             self.local_logger.info("Diagnosis checkpoint loaded after fault injection.")
 
-        # FIXME: Disabled until https://github.com/xlab-uiuc/SREGym/issues/296 is complete
-        # self.configure_transient_issues()
-        # if self.transient_config["switch"]:
-        #     self._start_transient_issues()
-
     # -------- AgentAct: diagnosis --------
     def _precondition_diagnosis(self):
         self.local_logger.info("Precondition for Diagnosis AgentAct executed. No real action.")
@@ -279,6 +265,14 @@ class Conductor:
                 self.submission_stage = act_name
                 self.current_act_index = i
                 self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+
+                # Update NoiseManager stage
+                try:
+                    nm = get_noise_manager()
+                    nm.set_stage(self.submission_stage)
+                except Exception as e:
+                    self.local_logger.warning(f"Failed to set NoiseManager stage: {e}")
+
                 return
 
             self.local_logger.warning(f"Unknown Act type '{act_type}' for Act '{act_name}'; skipping.")
@@ -292,8 +286,12 @@ class Conductor:
 
         self.logger.info(f"[STAGE] Done, recover fault")
 
-        if self.transient_config["switch"] and hasattr(self, "transient_issue_generator"):
-            self.transient_issue_generator.stop_continuous_injection()
+        # Stop noises
+        try:
+            nm = get_noise_manager()
+            nm.stop()
+        except Exception as e:
+            self.local_logger.warning(f"Failed to stop NoiseManager: {e}")
 
         if self.problem:
             self.problem.recover_fault()
@@ -340,6 +338,20 @@ class Conductor:
         self.local_logger.info("Deploying app...")
         self.deploy_app()
         self.local_logger.info("App deployed.")
+
+        # Update NoiseManager with problem context
+        try:
+            nm = get_noise_manager()
+            context = {
+                "namespace": self.app.namespace,
+                "app_name": self.app.name,
+                # We can add more info here if needed, e.g. service list
+            }
+            nm.set_problem_context(context)
+            nm.start_background_noises()
+        except Exception as e:
+            self.local_logger.warning(f"Failed to update NoiseManager context: {e}")
+
         # After deployment, execute Acts until the first AgentAct precondition is reached.
         self._advance_to_next_agent_act_precondition(start_index=0)
 
@@ -392,12 +404,30 @@ class Conductor:
 
         act_name = current_act.get("name")
         self.local_logger.info(f"Evaluating AgentAct '{act_name}'", extra={"sol": sol})
+
+        # Stop noise before evaluation to ensure clean environment
+        try:
+            nm = get_noise_manager()
+            self.local_logger.info("Stopping noise manager before evaluation...")
+            nm.stop()
+        except Exception as e:
+            self.local_logger.warning(f"Failed to stop noise manager: {e}")
+
         # Run the evaluation function for the current AgentAct
         current_act["evaluation"](sol)
 
         # After evaluation, advance to the next AgentAct precondition (if any)
         next_index = self.current_agent_act_index + 1
         self._advance_to_next_agent_act_precondition(start_index=next_index)
+
+        # Restart noise if there are more stages
+        if self.submission_stage != "done":
+            try:
+                nm = get_noise_manager()
+                self.local_logger.info("Restarting noise manager for next stage...")
+                nm.start_background_noises()
+            except Exception as e:
+                self.local_logger.warning(f"Failed to restart noise manager: {e}")
 
         return dict(self.results)
 
@@ -496,65 +526,3 @@ class Conductor:
                 deployed_apps.append(app_name)
 
         return deployed_apps
-
-    def configure_transient_issues(self):
-        """
-        Read transient issues configuration from sregym/generators/noise/transient_issues/configuration.yml file.
-        """
-        import os
-
-        import yaml
-
-        from sregym.generators.noise.transient_issues.transient_issues import FaultType, PodScope
-
-        config_path = os.path.join(os.path.dirname(__file__), "../generators/noise/transient_issues/configuration.yml")
-        config_path = os.path.abspath(config_path)
-
-        try:
-            with open(config_path, "r") as f:
-                config = yaml.safe_load(f)
-        except Exception as e:
-            self.local_logger.error(f"[❌] Failed to load configuration: {e}")
-            return
-
-        # Parse configuration and convert to required types
-        def parse_fault_types(types):
-            if not types:
-                return []
-            return [getattr(FaultType, t) if isinstance(t, str) else t for t in types]
-
-        def parse_scopes(scopes):
-            if not scopes:
-                return []
-            return [getattr(PodScope, s) if isinstance(s, str) else s for s in scopes]
-
-        self.transient_config["switch"] = config.get("switch", True)
-        self.transient_config["min_duration"] = config.get("min_duration", 40)
-        self.transient_config["max_duration"] = config.get("max_duration", 60)
-        self.transient_config["fault_types"] = parse_fault_types(config.get("fault_types", ["FAIL_SLOW", "FAIL_STOP"]))
-        self.transient_config["scopes"] = parse_scopes(config.get("scopes", ["TARGET_NAMESPACE"]))
-        self.transient_config["interval_min"] = config.get("interval_min", 20)
-        self.transient_config["interval_max"] = config.get("interval_max", 30)
-
-        print(f"✅ Transient issues configuration loaded from {config_path}: {self.transient_config}")
-
-    def _start_transient_issues(self):
-        """Start transient issues with current configuration"""
-        if self.problem:
-            faulty_service = (
-                self.problem.faulty_service
-                if isinstance(self.problem.faulty_service, (list, tuple))
-                else [self.problem.faulty_service]
-            )
-            self.transient_issue_generator = TransientIssuesGenerator(
-                namespace=self.problem.app.namespace,
-                target_services=faulty_service,
-                min_duration=self.transient_config["min_duration"],
-                max_duration=self.transient_config["max_duration"],
-            )
-            self.transient_issue_generator.start_continuous_injection(
-                fault_types=self.transient_config["fault_types"],
-                scopes=self.transient_config["scopes"],
-                interval_min=self.transient_config["interval_min"],
-                interval_max=self.transient_config["interval_max"],
-            )
