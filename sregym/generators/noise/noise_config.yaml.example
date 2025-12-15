@@ -46,7 +46,7 @@ noises:
   # Intercepts 'kubectl' commands and injects fake output (e.g., fake Pod status).
   # ==================================================================================
   - type: kubectl_noise
-    enabled: true
+    enabled: false
     config:
       # Probability of tampering with the output (0.0 - 1.0)
       probability: 0.5
@@ -56,7 +56,7 @@ noises:
   # Intercepts Prometheus queries and injects fake metric data points.
   # ==================================================================================
   - type: ghost_metrics
-    enabled: true
+    enabled: false
     config:
       # The metric name to inject
       metric_name: "http_requests_total"
@@ -72,7 +72,7 @@ noises:
   # Intercepts Jaeger queries and injects fake traces or spans with errors.
   # ==================================================================================
   - type: jaeger_noise
-    enabled: true
+    enabled: false
     config:
       # Probability of tampering with traces (0.0 - 1.0)
       probability: 0.5
@@ -82,7 +82,7 @@ noises:
   # Creates a CronJob that periodically spawns failing Pods to simulate resource leaks.
   # ==================================================================================
   - type: zombie_resources
-    enabled: true
+    enabled: false
     config:
       # Cron schedule for spawning jobs
       schedule: "*/1 * * * *" # Every minute
@@ -94,7 +94,7 @@ noises:
   # Simulates frequent rolling updates (deployments) in the background.
   # ==================================================================================
   - type: cicd_noise
-    enabled: true
+    enabled: false
     config:
       # Minimum interval between updates in seconds
       interval: 60
@@ -107,7 +107,7 @@ noises:
   # Skips if cluster has < 2 nodes.
   # ==================================================================================
   - type: node_maintenance
-    enabled: true
+    enabled: false
     config:
       # Interval between maintenance events in seconds
       interval: 240 # 4 minutes
