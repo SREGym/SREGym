@@ -128,7 +128,7 @@ class MitigationAgent(BaseAgent):
 
             self.loop_count += 1
 
-        return last_state
+        return last_state, graph_events
 
 
 def build_default_mitigation_agent():
@@ -187,7 +187,6 @@ def build_default_mitigation_agent():
         tool_descs=mitigation_agent_tool_descriptions,
     )
     mitigation_agent.build_agent()
-    mitigation_agent.save_agent_graph_to_png()
     return mitigation_agent, mitigation_agent_prompt_path, mitigation_agent_max_step
 
 
@@ -218,18 +217,18 @@ def generate_run_summary(last_state: StateSnapshot, summary_system_prompt) -> st
 
 async def single_run_with_predefined_prompts(init_prompts):
     agent, prompt_path, max_step = build_default_mitigation_agent()
-    res = await agent.arun(init_prompts)
+    last_state, graph_events = await agent.arun(init_prompts)
     logger.info("Clearing agent's memory")
     agent.clear_memory()
-    return agent, res
+    return agent, last_state, graph_events
 
 
 async def retry_run_with_feedback(feedback_prompts):
     agent, prompt_path, max_step = build_default_mitigation_agent()
-    res = await agent.arun(feedback_prompts)
+    last_state, graph_events = await agent.arun(feedback_prompts)
     logger.info("Clearing agent's memory")
     agent.clear_memory()
-    return agent, res
+    return agent, last_state, graph_events
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ if str(sregym_core_path) not in sys.path:
     sys.path.insert(0, str(sregym_core_path))
 
 import asyncio
+import json
 import time
 
 # for parsing return values from benchmark app info as python dict
@@ -56,10 +57,115 @@ def get_current_datetime_formatted():
     return formatted_datetime
 
 
-def get_current_datetime_formatted():
-    now = datetime.now()
-    formatted_datetime = now.strftime("%m-%d_%H-%M")
-    return formatted_datetime
+def save_combined_trajectory(all_trajectories, problem_id, output_dir="."):
+    """
+    Save combined trajectory from all agent stages to a single JSONL file.
+
+    Args:
+        all_trajectories: List of dicts with 'stage' and 'events' keys
+        problem_id: Problem identifier for filename
+        output_dir: Directory to save the file
+    """
+    from pathlib import Path
+
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    trajectory_file = output_dir / f"stratus_agent_trajectory_{problem_id}_{timestamp}.jsonl"
+
+    def serialize_message(message):
+        """Convert a LangChain message to a serializable dict"""
+        msg_dict = {
+            "type": message.__class__.__name__,
+            "content": message.content,
+        }
+        # Properly serialize tool calls
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            serialized_tool_calls = []
+            for tc in message.tool_calls:
+                if isinstance(tc, dict):
+                    serialized_tool_calls.append(tc)
+                else:
+                    # Convert object to dict
+                    serialized_tool_calls.append({
+                        "name": getattr(tc, "name", None),
+                        "args": getattr(tc, "args", None),
+                        "id": getattr(tc, "id", None),
+                    })
+            msg_dict["tool_calls"] = serialized_tool_calls
+
+        # Properly serialize additional_kwargs
+        if hasattr(message, "additional_kwargs") and message.additional_kwargs:
+            # Convert to dict and handle non-serializable objects
+            try:
+                msg_dict["additional_kwargs"] = json.loads(json.dumps(message.additional_kwargs, default=str))
+            except:
+                msg_dict["additional_kwargs"] = str(message.additional_kwargs)
+
+        return msg_dict
+
+    try:
+        with open(trajectory_file, "w", encoding="utf-8") as f:
+            # Write metadata
+            total_events = sum(len(traj.get("events", [])) for traj in all_trajectories)
+            metadata = {
+                "type": "metadata",
+                "problem_id": problem_id,
+                "timestamp": timestamp,
+                "timestamp_readable": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "total_stages": len(all_trajectories),
+                "total_events": total_events,
+            }
+            f.write(json.dumps(metadata) + "\n")
+
+            # Write each stage
+            for stage_idx, stage_data in enumerate(all_trajectories):
+                stage_name = stage_data.get("stage", "unknown")
+                events = stage_data.get("events", [])
+
+                # Write stage marker
+                stage_marker = {
+                    "type": "stage_start",
+                    "stage": stage_name,
+                    "num_events": len(events),
+                }
+                f.write(json.dumps(stage_marker) + "\n")
+
+                # Write events for this stage
+                for idx, event in enumerate(events):
+                    try:
+                        event_data = {
+                            "type": "event",
+                            "stage": stage_name,
+                            "event_index": idx,
+                            "num_steps": event.get("num_steps", 0),
+                            "submitted": event.get("submitted", False),
+                            "rollback_stack": event.get("rollback_stack", ""),
+                        }
+
+                        # Serialize messages
+                        if "messages" in event and event["messages"]:
+                            event_data["messages"] = [serialize_message(msg) for msg in event["messages"]]
+                            event_data["last_message"] = serialize_message(event["messages"][-1])
+
+                        f.write(json.dumps(event_data) + "\n")
+                    except Exception as e:
+                        logger.error(f"[Driver] Failed to serialize event {idx} in stage {stage_name}: {e}")
+                        # Write a placeholder event to maintain continuity
+                        error_event = {
+                            "type": "event",
+                            "stage": stage_name,
+                            "event_index": idx,
+                            "error": f"Failed to serialize: {str(e)}",
+                        }
+                        f.write(json.dumps(error_event) + "\n")
+
+        logger.info(f"[Driver] Saved trajectory to {trajectory_file}")
+        return trajectory_file
+    except Exception as e:
+        logger.error(f"[Driver] Failed to save trajectory: {e}", exc_info=True)
+        return None
 
 
 async def validate_oracles(oracles: List[BaseOracle]) -> List[bool | List[OracleResult]]:
@@ -207,7 +313,7 @@ async def localization_task_main():
         ),
     ]
     start_time = time.perf_counter()
-    agent, last_state = await localization_single_run(first_run_initial_messages)
+    agent, last_state, graph_events = await localization_single_run(first_run_initial_messages)
     agent_time = time.perf_counter() - start_time
     agent_exec_stats = dict()
     usage_metadata = next(iter(agent.callback.usage_metadata.items()))[1]
@@ -222,7 +328,7 @@ async def localization_task_main():
     agent_exec_stats["oracle_results"] = "N/A"
     # agent_exec_stats["last_state"] = last_state
     logger.info(f"Finished localization agent run, output dict: {agent_exec_stats}")
-    return agent_exec_stats, last_state
+    return agent_exec_stats, last_state, graph_events
 
 
 async def mitigation_task_main(localization_summary):
@@ -287,9 +393,13 @@ async def mitigation_task_main(localization_summary):
     start_time = time.perf_counter()
     logger.info(f"running in retry mode: [{mitigation_agent_retry_mode}]")
     # mitigation task in plain English:
+    # Collect all graph events from all agents in this mitigation run
+    all_graph_events = []
+
     if mitigation_agent_retry_mode == "none":
         # if the retry mode is none, just run mitigation agent once.
-        agent, last_state = await mitigation_agent_single_run(first_run_initial_messages)
+        agent, last_state, graph_events = await mitigation_agent_single_run(first_run_initial_messages)
+        all_graph_events.extend([{"stage": "mitigation", "events": graph_events}])
         agent_time = time.perf_counter() - start_time
         agent_exec_stats = dict()
         agent_exec_stats["agent_name"] = "mitigation_agent_none"
@@ -305,7 +415,7 @@ async def mitigation_task_main(localization_summary):
         agent_exec_stats["oracle_results"] = "N/A"
         # agent_exec_stats["last_state"] = last_state
         logger.info(f"Finished localization agent run, output dict: {agent_exec_stats}")
-        return agent_exec_stats
+        return agent_exec_stats, all_graph_events
 
     elif mitigation_agent_retry_mode == "naive":
         # if the retry mode is naive, run mitigation agent with retry but no rollback agent.
@@ -326,7 +436,8 @@ async def mitigation_task_main(localization_summary):
         oracle_results_lst = []
         while curr_attempt < mitigation_agent_max_retry_attempts:
             logger.info(f"current attempt: {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
-            agent, last_state = await mitigation_agent_single_run(first_run_initial_messages)
+            agent, last_state, graph_events = await mitigation_agent_single_run(first_run_initial_messages)
+            all_graph_events.append({"stage": f"mitigation_attempt_{curr_attempt}", "events": graph_events})
 
             # recording post-run data
             agent_time = time.perf_counter() - start_time
@@ -360,7 +471,7 @@ async def mitigation_task_main(localization_summary):
         agent_exec_stats["num_retry_attempts"] = num_retry_attempts_lst
         agent_exec_stats["rollback_stack"] = rollback_stack_lst
         agent_exec_stats["oracle_results"] = oracle_results_lst
-        return agent_exec_stats
+        return agent_exec_stats, all_graph_events
     elif mitigation_agent_retry_mode == "validate":
         logger.info(f"retry mode: [{mitigation_agent_retry_mode}]")
         # if the retry mode is validation, run mitigation agent with rollback and weak oracle.
@@ -388,7 +499,8 @@ async def mitigation_task_main(localization_summary):
         while curr_attempt < mitigation_agent_max_retry_attempts:
             if curr_attempt == 0:
                 logger.info(f"running first try")
-                agent, mitigation_agent_last_state = await mitigation_agent_single_run(first_run_initial_messages)
+                agent, mitigation_agent_last_state, graph_events = await mitigation_agent_single_run(first_run_initial_messages)
+                all_graph_events.append({"stage": f"mitigation_attempt_{curr_attempt}", "events": graph_events})
             else:
                 logger.info(
                     f"running retries. current attempt: {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}"
@@ -413,7 +525,8 @@ async def mitigation_task_main(localization_summary):
                     ),
                 ]
                 logger.info(f"composed retry prompts: {retry_run_initial_messages}")
-                agent, mitigation_agent_last_state = await mitigation_agent_retry_run(retry_run_initial_messages)
+                agent, mitigation_agent_last_state, graph_events = await mitigation_agent_retry_run(retry_run_initial_messages)
+                all_graph_events.append({"stage": f"mitigation_attempt_{curr_attempt}", "events": graph_events})
 
             # recording post-run data
             agent_time = time.perf_counter() - start_time
@@ -453,7 +566,8 @@ async def mitigation_task_main(localization_summary):
                     logger.info(f"agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
                     logger.info(f"running rollback agent to reverse progress")
                     rollback_start_time = time.perf_counter()
-                    rollback_agent, rollback_agent_last_state = await rollback_agent_main()
+                    rollback_agent, rollback_agent_last_state, rollback_graph_events = await rollback_agent_main()
+                    all_graph_events.append({"stage": f"rollback_attempt_{curr_attempt}", "events": rollback_graph_events})
                     rollback_end_time = time.perf_counter() - rollback_start_time
                     agent_names_lst.append("rollback_agent")
                     usage_metadata = next(iter(rollback_agent.callback.usage_metadata.items()))[1]
@@ -482,7 +596,7 @@ async def mitigation_task_main(localization_summary):
         agent_exec_stats["num_retry_attempts"] = num_retry_attempts_lst
         agent_exec_stats["rollback_stack"] = rollback_stack_lst
         agent_exec_stats["oracle_results"] = oracle_results_lst
-        return agent_exec_stats
+        return agent_exec_stats, all_graph_events
 
 
 async def main():
@@ -533,11 +647,15 @@ async def main():
     # agent_oracle_results.append(diagnosis_agent_exec_stats["oracle_results"])
     # logger.info("*" * 25 + " Finished [diagnosis agent] " + "*" * 25)
 
+    # Collect all trajectories from this run
+    all_trajectories = []
+
     # run localization agent 1 time for localization
     # (BTS it's just diagnosis agent with different prompts)
     # here, running the file's main function should suffice
     logger.info("*" * 25 + " Starting [localization agent] for [localization] " + "*" * 25)
-    localization_agent_exec_stats, localization_agent_last_state = await localization_task_main()
+    localization_agent_exec_stats, localization_agent_last_state, localization_graph_events = await localization_task_main()
+    all_trajectories.append({"stage": "localization", "events": localization_graph_events})
     agent_names.append("localization_agent")
     agent_in_tokens.append(localization_agent_exec_stats["input_tokens"])
     agent_out_tokens.append(localization_agent_exec_stats["output_tokens"])
@@ -561,7 +679,8 @@ async def main():
     # run mitigation task 1 time for mitigation
     # it includes retry logics
     logger.info("*" * 25 + " Starting [mitigation agent] for [mitigation] " + "*" * 25)
-    mitigation_agent_exec_stats = await mitigation_task_main(localization_fault_summary)
+    mitigation_agent_exec_stats, mitigation_graph_events = await mitigation_task_main(localization_fault_summary)
+    all_trajectories.extend(mitigation_graph_events)
     agent_names.extend(mitigation_agent_exec_stats["agent_name"])
     agent_in_tokens.extend(mitigation_agent_exec_stats["input_tokens"])
     agent_out_tokens.extend(mitigation_agent_exec_stats["output_tokens"])
@@ -597,6 +716,9 @@ async def main():
     agent_output_df["oracle_results"] = agent_oracle_results
     current_datetime = get_current_datetime_formatted()
     agent_output_df.to_csv(f"./{current_datetime}_{current_problem}_stratus_output.csv", index=False, header=True)
+
+    save_combined_trajectory(all_trajectories, current_problem)
+
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)

@@ -4,8 +4,6 @@ import time
 from pathlib import Path
 
 import yaml
-
-from dashboard.proxy import LogProxy
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle

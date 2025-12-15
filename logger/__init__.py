@@ -3,8 +3,6 @@ import os
 from datetime import datetime
 from logging import Formatter
 
-from dashboard.proxy import LogProxy
-
 from .handler import ColorFormatter, ExhaustInfoFormatter
 
 
@@ -15,9 +13,7 @@ def get_current_datetime_formatted():
 
 
 def init_logger():
-    # set up the logger for dashboard
     logging.getLogger("sregym-global").setLevel(logging.INFO)
-    logging.getLogger("sregym-global").addHandler(LogProxy())
     logging.getLogger("sregym-global").propagate = False  # do not propagate to the real root logger ('')
 
     # set up the logger for log file

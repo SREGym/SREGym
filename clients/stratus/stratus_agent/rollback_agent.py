@@ -114,11 +114,10 @@ async def main():
         tool_descs=tool_descriptions,
     )
     agent.build_agent()
-    agent.save_agent_graph_to_png()
 
-    res = await agent.arun(get_starting_prompts(prompt_path, max_step=max_step))
+    last_state, graph_events = await agent.arun(get_starting_prompts(prompt_path, max_step=max_step))
     agent.clear_memory()
-    return agent, res
+    return agent, last_state, graph_events
 
 
 if __name__ == "__main__":

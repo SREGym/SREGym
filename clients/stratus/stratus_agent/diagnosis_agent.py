@@ -131,7 +131,7 @@ class DiagnosisAgent(BaseAgent):
 
             # print(f"================{last_state.values['num_steps']}===============")
 
-        return last_state
+        return last_state, graph_events
 
 
 def build_default_diagnosis_agent():
@@ -187,13 +187,12 @@ def build_default_diagnosis_agent():
         tool_descs=tool_descriptions,
     )
     agent.build_agent()
-    agent.save_agent_graph_to_png()
     return agent, prompt_path, max_step
 
 
 async def single_run_with_predefined_prompts(init_prompts):
     agent, prompt_path, max_step = build_default_diagnosis_agent()
-    res = await agent.arun(init_prompts)
+    last_state, graph_events = await agent.arun(init_prompts)
     logger.info("Clearing agent's memory")
     agent.clear_memory()
-    return agent, res
+    return agent, last_state, graph_events

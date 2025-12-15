@@ -1,4 +1,7 @@
+import json
 import logging
+from datetime import datetime
+from pathlib import Path
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -136,13 +139,6 @@ class BaseAgent:
         # self.local_logger.info(f"[Loop {self.loop_count}] Force submit, and LLM responds: \n {result.content}")
         return {"messages": result}
 
-    def save_agent_graph_to_png(self):
-        try:  # in case the service times out
-            with open("./agent_graph.png", "wb") as png:
-                png.write(self.graph.get_graph().draw_mermaid_png())
-        except Exception as e:
-            logger.error(f"Error saving agent graph to PNG: {e}")
-
     def clear_memory(self):
         if not hasattr(self, "memory_saver"):
             raise RuntimeError("Should not be called on uninitialized agent. Did you call build_agent()?")
@@ -160,6 +156,73 @@ class BaseAgent:
                 return
         except Exception as e:
             logger.error(f"Error clearing InMemorySaver storage for thread_id {thread_id}: {e}")
+
+    def _serialize_message(self, message):
+        """Convert a LangChain message to a serializable dict"""
+        msg_dict = {
+            "type": message.__class__.__name__,
+            "content": message.content,
+        }
+        # Add tool calls if present (for AIMessage)
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            msg_dict["tool_calls"] = message.tool_calls
+        # Add additional kwargs if present
+        if hasattr(message, "additional_kwargs") and message.additional_kwargs:
+            msg_dict["additional_kwargs"] = message.additional_kwargs
+        return msg_dict
+
+    def save_trajectory(self, graph_events, agent_name, output_dir=None):
+        """
+        Save agent trajectory to JSONL file.
+
+        Args:
+            graph_events: List of graph state events from astream
+            agent_name: Name of the agent (e.g., "diagnosis", "mitigation")
+            output_dir: Directory to save trajectory (defaults to current directory)
+        """
+        if output_dir is None:
+            output_dir = Path(".")
+        else:
+            output_dir = Path(output_dir)
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        trajectory_file = output_dir / f"{agent_name}_trajectory_{timestamp}.jsonl"
+
+        with open(trajectory_file, "w", encoding="utf-8") as f:
+            # Write metadata
+            metadata = {
+                "type": "metadata",
+                "agent_name": agent_name,
+                "timestamp": timestamp,
+                "timestamp_readable": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "total_events": len(graph_events),
+            }
+            f.write(json.dumps(metadata) + "\n")
+
+            # Write each graph event
+            for idx, event in enumerate(graph_events):
+                event_data = {
+                    "type": "event",
+                    "event_index": idx,
+                    "num_steps": event.get("num_steps", 0),
+                    "submitted": event.get("submitted", False),
+                    "rollback_stack": event.get("rollback_stack", ""),
+                }
+
+                # Serialize messages
+                if "messages" in event and event["messages"]:
+                    event_data["messages"] = [
+                        self._serialize_message(msg) for msg in event["messages"]
+                    ]
+                    # Also include just the last message for easier inspection
+                    event_data["last_message"] = self._serialize_message(event["messages"][-1])
+
+                f.write(json.dumps(event_data) + "\n")
+
+        logger.info(f"Saved trajectory to {trajectory_file}")
+        return trajectory_file
 
     def run(self, starting_prompts):
         """Running an agent
@@ -249,4 +312,4 @@ class BaseAgent:
 
             self.loop_count += 1
 
-        return last_state
+        return last_state, graph_events

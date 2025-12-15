@@ -20,9 +20,6 @@ from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-
-from dashboard.dashboard_app import SREGymDashboardServer
-from dashboard.proxy import LogProxy
 from logger import init_logger
 from sregym.conductor.conductor import Conductor
 from sregym.conductor.constants import StartProblemResult
@@ -132,61 +129,8 @@ class HumanAgent:
             except (KeyboardInterrupt, EOFError):
                 sys.exit(0)
 
-
-def run_dashboard_server():
-    """Entry point for multiprocessing child: construct Dash in child process."""
-    # Silence child process stdout/stderr and noisy loggers
-    import logging
-    import os
-    import sys
-
-    try:
-        sys.stdout = open(os.devnull, "w")
-        sys.stderr = open(os.devnull, "w")
-    except Exception:
-        pass
-    server = SREGymDashboardServer(host="127.0.0.1", port=11451, debug=False)
-    server.run(threaded=False)
-
-
 async def main():
-    # set up the logger
-    """
-    logging.getLogger("sregym-global").setLevel(logging.INFO)
-    logging.getLogger("sregym-global").addHandler(LogProxy())
-
-    try:
-        set_start_method("spawn")
-    except RuntimeError:
-        pass
-
-    # Start dashboard in a separate process; construct server inside the child
-    p = Process(target=run_dashboard_server, daemon=True)
-    p.start()
-    """
-
     init_logger()
-
-    """
-    import os, subprocess
-    
-    dash_path = os.path.join(os.path.dirname(__file__), "dashboard", "dashboard_app.py")
-    dash_cmd = ["python3", dash_path]
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"} 
-
-    proc = subprocess.Popen(
-        dash_cmd,
-        stdout=subprocess.DEVNULL,  #
-        stderr=subprocess.DEVNULL,
-        env=env,
-    )
-
-    proc.terminate()  
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    """
 
     conductor = Conductor()
     agent = HumanAgent(conductor)
