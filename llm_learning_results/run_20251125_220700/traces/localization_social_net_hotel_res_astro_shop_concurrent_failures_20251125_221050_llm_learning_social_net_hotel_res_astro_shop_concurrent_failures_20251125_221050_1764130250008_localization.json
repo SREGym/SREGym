@@ -1,0 +1,26 @@
+{
+  "trace_id": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_221050_1764130250008_localization",
+  "agent_type": "AgentType.LOCALIZATION",
+  "problem_context": {
+    "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+    "app_name": "SREGym Test Application",
+    "app_namespace": "test-namespace",
+    "app_description": "Concurrent failures across multiple services: social network, hotel reservation, and astronomy shop",
+    "fault_type": "social_net_hotel_res_astro_shop_concurrent_failures",
+    "initial_state": null
+  },
+  "start_time": 1764130250.0085552,
+  "end_time": 1764130758.874999,
+  "success": false,
+  "final_submission": null,
+  "tool_calls": [],
+  "thinking_steps": [],
+  "performance_metrics": {
+    "total_duration": 508.8664438724518,
+    "tool_call_count": 0,
+    "thinking_step_count": 0,
+    "success_rate": 0.0
+  },
+  "ground_truth": null,
+  "oracle_results_enhanced": null
+}

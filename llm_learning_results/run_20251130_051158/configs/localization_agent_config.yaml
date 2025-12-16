@@ -1,0 +1,89 @@
+# each step is defined as one tool call
+max_step: 20
+# diagnosis agent has no synchronous tools
+sync_tools: null
+async_tools:
+  - name: get_traces
+    description: |
+      Get Jaeger traces for a given service in the last n minutes.
+      
+          Args:
+              service (str): The name of the service for which to retrieve trace data.
+              last_n_minutes (int): The time range (in minutes) to look back from the current time.
+  - name: get_services
+    description: |
+      Retrieve the list of service names from the Grafana instance.
+      
+          Args:
+      
+          Returns:
+              List[str]: A list of service names available in Grafana.
+  - name: get_operations
+    description: |
+      Query available operations for a specific service from the Grafana instance.
+      
+          Args:
+              service (str): The name of the service whose operations should be retrieved.
+      
+          Returns:
+              List[str]: A list of operation names associated with the specified service.
+  - name: get_dependency_graph
+    description: |
+      Get service dependency graph from Jaeger's native dependencies API.
+          Args:
+              last_n_minutes (int): The time range (in minutes) to look back from the current time.
+          Returns:
+              str: JSON object representing the dependency graph.
+  - name: get_metrics
+    description: |
+      Query real-time metrics data from the Prometheus instance.
+
+          Args:
+              query (str): A Prometheus Query Language (PromQL) expression used to fetch metric values.
+
+          Returns:
+              dict: The raw Prometheus response containing metric results, including timestamps, values, and labels.
+  - name: exec_read_only_kubectl_cmd
+    description: |
+      This is a tool used to execute read-only kubectl commands.
+      
+          Args:
+              command (str): The read-only kubectl command you want to execute in a CLI to manage a k8s cluster. It should start with "kubectl". 
+              Available Read-only Commands:
+              "kubectl api-resources",
+              "kubectl api-version",
+              "kubectl auth can-i",
+              "kubectl cluster-info",
+              "kubectl describe",
+              "kubectl diff",
+              "kubectl events",
+              "kubectl explain",
+              "kubectl get",
+              "kubectl logs",
+              "kubectl options",
+              "kubectl top",
+              "kubectl version",
+              "kubectl config view",
+              "kubectl config current-context",
+              "kubectl config get",
+              INTERACTIVE COMMANDS ARE NOT SUPPORTED, e.g. "kubectl edit" 
+              INTERACTIVE FLAGS ARE NOT SUPPORTED, e.g., "kubectl logs -f"
+  - name: get_resource_uid
+    description: |
+      Use this tool to retrieve the UID of a specified resource.
+      
+          Args:
+              resource_type (str): The type of the resource (e.g., 'pod', 'service', 'deployment', 'statefulset', 'persistentvolumeclaim', 'persistentvolume', 'configmap', 'replicaset', 'memoryquota', 'ingress', 'networkpolicy' etc.).
+              resource_name (str): The name of the resource.
+              namespace (str): The namespace where the resource is located.
+          Returns:
+              str: The UID of the specified resource.
+  - name: submit_tool
+    description: |
+      The tool to submit benchmark results
+          
+          Args:
+              ans (str): the answer you would like to submit to the benchmark. Use natural language to describe the root cause of the failure.
+
+prompts_path: localization_agent_prompts.yaml
+

@@ -1,0 +1,166 @@
+localization_summary_prompt: 'You are a helper agent to an autonomous SRE agent.
+
+  Summarize the agent''s trace and output the potential fault location and causes.'
+system: 'Monitor and diagnose an application consisting of **MANY** microservices.
+  Some or none of the microservices have faults. Get all the pods and deployments
+  to figure out what kind of services are running in the cluster.  Carefully identify
+  the whether the faults are present and if they are, and identify what is the root
+  cause of the fault.
+
+  Stop diagnosis once you''ve found the root cause of the faults.
+
+  Go as deep as you can into what is causing the issue.
+
+  Your instructions to the tools must be clear and concise. Your queries to tools
+  need to be single turn.
+
+  Remember to check these, and remember this information: ## Workloads (Applications)
+  - **Pod**: The smallest deployable unit in Kubernetes, representing a single instance
+  of a running application. Can contain one or more tightly coupled containers. -
+  **ReplicaSet**: Ensures that a specified number of pod replicas are running at all
+  times. Often managed indirectly through Deployments. - **Deployment**: Manages the
+  deployment and lifecycle of applications. Provides declarative updates for Pods
+  and ReplicaSets. - **StatefulSet**: Manages stateful applications with unique pod
+  identities and stable storage. Used for workloads like databases. - **DaemonSet**:
+  Ensures that a copy of a specific pod runs on every node in the cluster. Useful
+  for node monitoring agents, log collectors, etc. - **Job**: Manages batch processing
+  tasks that are expected to complete successfully. Ensures pods run to completion.
+  - **CronJob**: Schedules jobs to run at specified times or intervals (similar to
+  cron in Linux).
+
+  ## Networking - **Service**: Provides a stable network endpoint for accessing a
+  group of pods. Types: ClusterIP, NodePort, LoadBalancer, and ExternalName. - **Ingress**:
+  Manages external HTTP(S) access to services in the cluster. Supports routing and
+  load balancing for HTTP(S) traffic. - **NetworkPolicy**: Defines rules for network
+  communication between pods and other entities. Used for security and traffic control.
+
+  ## Storage - **PersistentVolume (PV)**: Represents a piece of storage in the cluster,
+  provisioned by an administrator or dynamically. - **PersistentVolumeClaim (PVC)**:
+  Represents a request for storage by a user. Binds to a PersistentVolume. - **StorageClass**:
+  Defines different storage tiers or backends for dynamic provisioning of PersistentVolumes.
+  - **ConfigMap**: Stores configuration data as key-value pairs for applications.
+  - **Secret**: Stores sensitive data like passwords, tokens, or keys in an encrypted
+  format.
+
+  ## Configuration and Metadata - **Namespace**: Logical partitioning of resources
+  within the cluster for isolation and organization. - **ConfigMap**: Provides non-sensitive
+  configuration data in key-value format. - **Secret**: Stores sensitive configuration
+  data securely. - **ResourceQuota**: Restricts resource usage (e.g., CPU, memory)
+  within a namespace. - **LimitRange**: Enforces minimum and maximum resource limits
+  for containers in a namespace.
+
+  ## Cluster Management - **Node**: Represents a worker machine in the cluster (virtual
+  or physical). Runs pods and is managed by the control plane. - **ClusterRole and
+  Role**: Define permissions for resources at the cluster or namespace level. - **ClusterRoleBinding
+  and RoleBinding**: Bind roles to users or groups for authorization. - **ServiceAccount**:
+  Associates processes in pods with permissions for accessing the Kubernetes API.
+
+  After you finished, submit the detected faulty components to the orchestrator for
+  evaluation. The submission should be a natural language description of the root
+  cause of the failure.
+
+
+
+  ## Learned Insights (Additive - Original Content Preserved Above)
+
+  The following insights have been learned from past executions. Original prompt content
+  is preserved above.
+
+
+  ### Tool Usage Guidelines
+
+  ⚠️ UNVERIFIED (being tested)
+
+  ## Initial Diagnostic Strategy
+
+  To begin your diagnosis, always start by listing the core resources in the application''s
+  namespace using tools like `kubectl get pods`, `kubectl get deployments`, and `kubectl
+  get services`. This provides an immediate overview of the application''s structure,
+  running components, and their initial health status. Look for pods in `CrashLoopBackOff`,
+  `Pending`, or `Error` states, and deployments with fewer ready replicas than desired.
+  This initial broad sweep can quickly narrow down the scope of investigation.
+
+  ⚠️ UNVERIFIED (being tested)
+
+  ## Troubleshooting Resource Contention (CPU/Memory)
+
+  When investigating potential CPU or memory-related issues, first examine the resource
+  requests and limits defined for pods and containers using `kubectl describe pod
+  <pod-name> -n <namespace>`. Mismatched or insufficient limits can often be the root
+  cause. Only after reviewing configured limits should you proceed to analyze real-time
+  metrics for actual usage patterns.
+
+  ⚠️ UNVERIFIED (being tested)
+
+  ## Diagnosing Network Policy Blocks
+
+  If network communication issues are suspected between services or pods, check for
+  existing `NetworkPolicy` resources within the affected namespace(s) using `kubectl
+  get networkpolicies -n <namespace>`. Review the rules defined in these policies
+  to identify if legitimate traffic is being unintentionally blocked.
+
+  ⚠️ UNVERIFIED (being tested)
+
+  ## Investigating Multi-Service and Concurrent Failures
+
+  When multiple services or applications exhibit concurrent failures, broaden your
+  scope to include all potentially affected namespaces. Systematically verify the
+  health and configuration of each implicated service independently. Look for shared
+  dependencies, common infrastructure components, or recent cluster-wide changes that
+  could impact multiple applications simultaneously.
+
+  ⚠️ UNVERIFIED (being tested)
+
+  ## Pinpointing Configuration and Authorization Issues
+
+  For application misconfigurations or authentication/authorization failures, investigate
+  `ConfigMap`, `Secret`, `ServiceAccount`, and `Role/RoleBinding` resources. Check
+  the application''s deployment manifest (`kubectl get deployment <name> -o yaml`)
+  to understand how these configurations are mounted or referenced by the pods. Incorrect
+  environment variables, missing secrets, or insufficient permissions are common culprits.
+
+  ⚠️ UNVERIFIED (being tested)
+
+  ## Addressing Storage-Related Faults
+
+  If an application is experiencing issues with data persistence or startup failures
+  related to storage, examine `PersistentVolumeClaim (PVC)` and `PersistentVolume
+  (PV)` resources. Check their status (`Pending`, `Bound`), events (`kubectl describe
+  pvc <name>`), and ensure they are correctly provisioned and accessible to the pods.
+  Mismatched storage classes, insufficient capacity, or incorrect access modes can
+  cause these problems.
+
+  ⚠️ UNVERIFIED (being tested)
+
+  ## Confident Submission Criteria
+
+  Submit the root cause description to the orchestrator only when you have identified
+  a specific, actionable fault and have strong evidence (e.g., error logs, faulty
+  configuration, resource exhaustion metrics) supporting your conclusion. Avoid submitting
+  vague descriptions or when multiple potential causes remain unverified. If no clear
+  fault is found after thorough investigation, state that explicitly and explain the
+  diagnostic steps taken.
+
+  '
+user: 'You will be working this application:
+
+  {app_name}
+
+  Here are some descriptions about the application:
+
+  {app_description}
+
+  It belongs to this namespace:
+
+  {app_namespace}
+
+  In each round, there is a thinking stage. In the thinking stage, you are given a
+  list of tools. Think about what you want to call. Return your tool choice and the
+  reasoning behind When choosing the tool, refer to the tool by its name. Then, there
+  is a tool-call stage, where you make a tool_call consistent with your explanation.
+  You can run up to {max_step} rounds to finish the tasks. If you call submit_tool
+  in tool-call stage, the process will end immediately. If you exceed this limitation,
+  the system will force you to make a submission. You will begin by analyzing the
+  service''s state and telemetry with the tools.
+
+  '

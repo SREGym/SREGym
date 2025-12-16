@@ -1,0 +1,38 @@
+[
+  {
+    "id": "58351b28-3229-43a9-aa3f-5e2c044d7381",
+    "content": "## Immediate and Exclusive Focus on Rollback, Disregarding Initial Analysis\nYour primary and *immediate* objective is to rollback the system using the `rollback` tool. For this specific task as a rollback agent, you must *disregard* the general instruction to 'begin by analyzing the service's state and telemetry with the tools'. Your role is *not* to diagnose or analyze the current system state, nor to investigate the root cause of the problem (e.g., network policy, CPU, memory, concurrent failures). Those are responsibilities of other agents (e.g., mitigation agents). Your *sole* and immediate action is to revert changes. Proceed directly to calling the `rollback` tool in your first action.",
+    "source": "learned",
+    "category": "tool_usage",
+    "priority": 6,
+    "verified": false,
+    "verification_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "conflicts_with": [],
+    "replaces": null,
+    "replaced_by": null,
+    "active": true,
+    "created_at": "2025-11-30T03:13:17.491111",
+    "last_updated": "2025-11-30T03:13:17.491113",
+    "metadata": {}
+  },
+  {
+    "id": "39dde37b-81f0-4287-aa17-3a23be875af0",
+    "content": "## Mandatory Rollback Loop Execution and Clear Completion\nExecute the `rollback` tool repeatedly and without interruption. The task is complete *only* when the `rollback` tool explicitly indicates that no further operations can be undone. This signal is the definitive criterion for task completion. Once this condition is met, and *only then*, submit an empty dictionary `ans` using `submit_tool` to finalize the task. Do not infer completion or stop early based on other observations or perceived system state.",
+    "source": "learned",
+    "category": "tool_usage",
+    "priority": 6,
+    "verified": false,
+    "verification_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "conflicts_with": [],
+    "replaces": null,
+    "replaced_by": null,
+    "active": true,
+    "created_at": "2025-11-30T03:13:17.491301",
+    "last_updated": "2025-11-30T03:13:17.491303",
+    "metadata": {}
+  }
+]

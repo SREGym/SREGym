@@ -23,9 +23,12 @@ logger.setLevel(logging.DEBUG)
 
 class MitigationAgent(BaseAgent):
     def __init__(self, **kwargs):
+        # Extract max_loop_count before passing to BaseAgent (which doesn't accept it)
+        max_loop_count = kwargs.pop("max_loop_count", 50)
         super().__init__(**kwargs)
         self.tool_node = None
         self.max_step = kwargs.get("max_step", 20)
+        self.max_loop_count = max_loop_count  # Prevent infinite loops
         self.loop_count = 0
         self.local_logger = logging.getLogger("all.stratus.mitigation")
 
@@ -89,6 +92,25 @@ class MitigationAgent(BaseAgent):
 
         graph_events = []
         while True:
+            # Check maximum loop count to prevent infinite loops
+            if self.loop_count >= self.max_loop_count:
+                logger.warning(
+                    f"[Loop {self.loop_count}] Maximum loop count ({self.max_loop_count}) reached. "
+                    f"Agent has not submitted after {self.max_loop_count} loops. "
+                    f"Breaking loop to prevent infinite execution."
+                )
+                # Get the current state before breaking
+                graph_config = {"configurable": {"thread_id": "1"}}
+                last_state = self.graph.get_state(config=graph_config)
+                # Force submission to break the loop
+                if "submitted" in last_state.values:
+                    last_state.values["submitted"] = True
+                logger.error(
+                    f"[Loop {self.loop_count}] Agent failed to submit within {self.max_loop_count} loops. "
+                    f"This may indicate the agent is stuck or unable to complete the task."
+                )
+                break
+            
             graph_config = {"configurable": {"thread_id": "1"}}
             logger.info(f"{'-' * 20} [Loop {self.loop_count}] {'-' * 20}")
             last_state = self.graph.get_state(config=graph_config)
@@ -137,6 +159,7 @@ def build_default_mitigation_agent():
     mitigation_agent_config_path = file_parent_dir.parent / "configs" / "mitigation_agent_config.yaml"
     mitigation_agent_config = yaml.safe_load(open(mitigation_agent_config_path, "r"))
     mitigation_agent_max_step = mitigation_agent_config["max_step"]
+    mitigation_agent_max_loop_count = mitigation_agent_config.get("max_loop_count", 50)
     mitigation_agent_prompt_path = file_parent_dir.parent / "configs" / mitigation_agent_config["prompts_path"]
 
     mitigation_agent_sync_tools = []
@@ -181,6 +204,7 @@ def build_default_mitigation_agent():
     mitigation_agent = MitigationAgent(
         llm=get_llm_backend_for_tools(),
         max_step=mitigation_agent_max_step,
+        max_loop_count=mitigation_agent_max_loop_count,
         sync_tools=mitigation_agent_sync_tools,
         async_tools=mitigation_agent_async_tools,
         submit_tool=submit_tool,

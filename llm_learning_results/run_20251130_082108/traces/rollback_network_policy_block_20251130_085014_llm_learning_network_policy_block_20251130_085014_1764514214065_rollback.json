@@ -1,0 +1,26 @@
+{
+  "trace_id": "llm_learning_network_policy_block_20251130_085014_1764514214065_rollback",
+  "agent_type": "AgentType.ROLLBACK",
+  "problem_context": {
+    "problem_id": "network_policy_block",
+    "app_name": "SREGym Test Application",
+    "app_namespace": "test-namespace",
+    "app_description": "Network policy blocking service communication between pods",
+    "fault_type": "network_policy_block",
+    "initial_state": null
+  },
+  "start_time": 1764514214.065824,
+  "end_time": 1764514246.799715,
+  "success": false,
+  "final_submission": "Error: Max retries exceeded. Unable to complete the request.",
+  "tool_calls": [],
+  "thinking_steps": [],
+  "performance_metrics": {
+    "total_duration": 32.733891010284424,
+    "tool_call_count": 0,
+    "thinking_step_count": 0,
+    "success_rate": 0.0
+  },
+  "ground_truth": null,
+  "oracle_results_enhanced": null
+}

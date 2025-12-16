@@ -1,0 +1,106 @@
+{
+  "run_id": "050352",
+  "start_time": "2025-11-25T05:03:57.869233",
+  "total_duration": 796.9791052341461,
+  "problem_count": 7,
+  "completed_problems": 7,
+  "results": [
+    {
+      "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+      "problem_name": "Concurrent Failures - Social Network, Hotel Reservation, Astronomy Shop",
+      "success": false,
+      "duration": 273.28017377853394,
+      "trace_ids": {
+        "diagnosis": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_050828_1764068908231_diagnosis",
+        "localization": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_050828_1764068908231_localization",
+        "mitigation": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_050828_1764068908231_mitigation",
+        "rollback": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_050828_1764068908231_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    },
+    {
+      "problem_id": "misconfig_app_hotel_res",
+      "problem_name": "Misconfiguration - Hotel Reservation App Mitigation",
+      "success": false,
+      "duration": 81.26443076133728,
+      "trace_ids": {
+        "diagnosis": "llm_learning_misconfig_app_hotel_res_20251125_050954_1764068994924_diagnosis",
+        "localization": "llm_learning_misconfig_app_hotel_res_20251125_050954_1764068994924_localization",
+        "mitigation": "llm_learning_misconfig_app_hotel_res_20251125_050954_1764068994924_mitigation",
+        "rollback": "llm_learning_misconfig_app_hotel_res_20251125_050954_1764068994924_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    },
+    {
+      "problem_id": "revoke_auth_mongodb-1",
+      "problem_name": "MongoDB Authentication Revocation",
+      "success": false,
+      "duration": 76.02349042892456,
+      "trace_ids": {
+        "diagnosis": "llm_learning_revoke_auth_mongodb-1_20251125_051115_1764069075607_diagnosis",
+        "localization": "llm_learning_revoke_auth_mongodb-1_20251125_051115_1764069075607_localization",
+        "mitigation": "llm_learning_revoke_auth_mongodb-1_20251125_051115_1764069075607_mitigation",
+        "rollback": "llm_learning_revoke_auth_mongodb-1_20251125_051115_1764069075607_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    },
+    {
+      "problem_id": "astronomy_shop_ad_service_high_cpu",
+      "problem_name": "High CPU Usage - Ad Service",
+      "success": false,
+      "duration": 98.61485075950623,
+      "trace_ids": {
+        "diagnosis": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_051259_1764069179690_diagnosis",
+        "localization": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_051259_1764069179690_localization",
+        "mitigation": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_051259_1764069179690_mitigation",
+        "rollback": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_051259_1764069179690_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    },
+    {
+      "problem_id": "valkey_memory_disruption",
+      "problem_name": "Memory Disruption - Valkey",
+      "success": false,
+      "duration": 100.43074321746826,
+      "trace_ids": {
+        "diagnosis": "llm_learning_valkey_memory_disruption_20251125_051444_1764069284806_diagnosis",
+        "localization": "llm_learning_valkey_memory_disruption_20251125_051444_1764069284806_localization",
+        "mitigation": "llm_learning_valkey_memory_disruption_20251125_051444_1764069284806_mitigation",
+        "rollback": "llm_learning_valkey_memory_disruption_20251125_051444_1764069284806_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    },
+    {
+      "problem_id": "network_policy_block",
+      "problem_name": "Network Policy Block",
+      "success": false,
+      "duration": 65.55654215812683,
+      "trace_ids": {
+        "diagnosis": "llm_learning_network_policy_block_20251125_051555_1764069355454_diagnosis",
+        "localization": "llm_learning_network_policy_block_20251125_051555_1764069355454_localization",
+        "mitigation": "llm_learning_network_policy_block_20251125_051555_1764069355454_mitigation",
+        "rollback": "llm_learning_network_policy_block_20251125_051555_1764069355454_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    },
+    {
+      "problem_id": "duplicate_pvc_mounts_hotel_reservation",
+      "problem_name": "Storage Mount Issues - Hotel Reservation",
+      "success": false,
+      "duration": 71.78195762634277,
+      "trace_ids": {
+        "diagnosis": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251125_051712_1764069432209_diagnosis",
+        "localization": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251125_051712_1764069432209_localization",
+        "mitigation": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251125_051712_1764069432209_mitigation",
+        "rollback": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251125_051712_1764069432209_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    }
+  ],
+  "reward_spec": {
+    "success_weight": 1.0,
+    "latency_weight": -0.5,
+    "attempts_weight": -0.3
+  },
+  "learning_result": null
+}

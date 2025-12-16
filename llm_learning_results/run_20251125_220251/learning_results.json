@@ -1,0 +1,28 @@
+{
+  "run_id": "220251",
+  "start_time": "2025-11-25T22:02:56.277792",
+  "total_duration": 235.4027144908905,
+  "problem_count": 7,
+  "completed_problems": 1,
+  "results": [
+    {
+      "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+      "problem_name": "Concurrent Failures - Social Network, Hotel Reservation, Astronomy Shop",
+      "success": false,
+      "duration": 235.40147948265076,
+      "trace_ids": {
+        "diagnosis": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_220522_1764129922682_diagnosis",
+        "localization": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_220522_1764129922682_localization",
+        "mitigation": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_220522_1764129922682_mitigation",
+        "rollback": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_220522_1764129922682_rollback"
+      },
+      "error": "Client failed to connect: "
+    }
+  ],
+  "reward_spec": {
+    "success_weight": 1.0,
+    "latency_weight": -0.5,
+    "attempts_weight": -0.3
+  },
+  "learning_result": null
+}

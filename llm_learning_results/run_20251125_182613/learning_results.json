@@ -1,0 +1,204 @@
+{
+  "run_id": "182613",
+  "start_time": "2025-11-25T18:26:18.540312",
+  "total_duration": 4159.1077353954315,
+  "problem_count": 7,
+  "completed_problems": 7,
+  "results": [
+    {
+      "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+      "problem_name": "Concurrent Failures - Social Network, Hotel Reservation, Astronomy Shop",
+      "success": false,
+      "duration": 827.7155272960663,
+      "trace_ids": {
+        "diagnosis": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_183010_1764117010143_diagnosis",
+        "localization": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_183010_1764117010143_localization",
+        "mitigation": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_183010_1764117010143_mitigation",
+        "rollback": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_183010_1764117010143_rollback"
+      },
+      "stratus_result": null,
+      "conductor_results": {
+        "Diagnosis": {
+          "success": false,
+          "oracles": [
+            {
+              "judgment": "False",
+              "success": false,
+              "accuracy": 0.0,
+              "name": "0-LLMAsAJudgeOracle"
+            },
+            {
+              "judgment": "FalsePositive",
+              "success": false,
+              "accuracy": 0.0,
+              "name": "1-LLMAsAJudgeOracle"
+            },
+            {
+              "judgment": "False",
+              "success": false,
+              "accuracy": 0.0,
+              "name": "2-LLMAsAJudgeOracle"
+            }
+          ],
+          "accuracy": 0.0
+        },
+        "TTL": 242.71683073043823,
+        "Mitigation": {
+          "success": false,
+          "oracles": [
+            {
+              "success": false,
+              "name": "0-TargetPortMisconfigMitigationOracle"
+            },
+            {
+              "success": true,
+              "name": "1-MitigationOracle"
+            },
+            {
+              "success": false,
+              "name": "2-ServiceEndpointMitigationOracle"
+            }
+          ],
+          "accuracy": 33.33333333333333
+        },
+        "TTM": 694.7694458961487
+      }
+    },
+    {
+      "problem_id": "misconfig_app_hotel_res",
+      "problem_name": "Misconfiguration - Hotel Reservation App Mitigation",
+      "success": false,
+      "duration": 317.621333360672,
+      "trace_ids": {
+        "diagnosis": "llm_learning_misconfig_app_hotel_res_20251125_184052_1764117652537_diagnosis",
+        "localization": "llm_learning_misconfig_app_hotel_res_20251125_184052_1764117652537_localization",
+        "mitigation": "llm_learning_misconfig_app_hotel_res_20251125_184052_1764117652537_mitigation",
+        "rollback": "llm_learning_misconfig_app_hotel_res_20251125_184052_1764117652537_rollback"
+      },
+      "stratus_result": null,
+      "conductor_results": {
+        "Diagnosis": {
+          "judgment": "FalsePositive",
+          "success": false,
+          "accuracy": 0.0
+        },
+        "TTL": 50.880045652389526,
+        "Mitigation": {
+          "success": true
+        },
+        "TTM": 274.38483476638794
+      }
+    },
+    {
+      "problem_id": "revoke_auth_mongodb-1",
+      "problem_name": "MongoDB Authentication Revocation",
+      "success": false,
+      "duration": 1794.2406890392303,
+      "trace_ids": {
+        "diagnosis": "llm_learning_revoke_auth_mongodb-1_20251125_184610_1764117970348_diagnosis",
+        "localization": "llm_learning_revoke_auth_mongodb-1_20251125_184610_1764117970348_localization",
+        "mitigation": "llm_learning_revoke_auth_mongodb-1_20251125_184610_1764117970348_mitigation",
+        "rollback": "llm_learning_revoke_auth_mongodb-1_20251125_184610_1764117970348_rollback"
+      },
+      "error": "Max retries exceeded. Unable to complete the request."
+    },
+    {
+      "problem_id": "astronomy_shop_ad_service_high_cpu",
+      "problem_name": "High CPU Usage - Ad Service",
+      "success": false,
+      "duration": 333.86177587509155,
+      "trace_ids": {
+        "diagnosis": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_191636_1764119796323_diagnosis",
+        "localization": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_191636_1764119796323_localization",
+        "mitigation": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_191636_1764119796323_mitigation",
+        "rollback": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_191636_1764119796323_rollback"
+      },
+      "stratus_result": null,
+      "conductor_results": {
+        "Diagnosis": {
+          "judgment": "FalsePositive",
+          "success": false,
+          "accuracy": 0.0
+        },
+        "TTL": 102.27902603149414
+      }
+    },
+    {
+      "problem_id": "valkey_memory_disruption",
+      "problem_name": "Memory Disruption - Valkey",
+      "success": false,
+      "duration": 167.2728362083435,
+      "trace_ids": {
+        "diagnosis": "llm_learning_valkey_memory_disruption_20251125_192223_1764120143519_diagnosis",
+        "localization": "llm_learning_valkey_memory_disruption_20251125_192223_1764120143519_localization",
+        "mitigation": "llm_learning_valkey_memory_disruption_20251125_192223_1764120143519_mitigation",
+        "rollback": "llm_learning_valkey_memory_disruption_20251125_192223_1764120143519_rollback"
+      },
+      "stratus_result": null,
+      "conductor_results": {
+        "Diagnosis": {
+          "judgment": "False",
+          "success": false,
+          "accuracy": 0.0
+        },
+        "TTL": 85.73347306251526
+      }
+    },
+    {
+      "problem_id": "network_policy_block",
+      "problem_name": "Network Policy Block",
+      "success": false,
+      "duration": 240.3609697818756,
+      "trace_ids": {
+        "diagnosis": "llm_learning_network_policy_block_20251125_192509_1764120309107_diagnosis",
+        "localization": "llm_learning_network_policy_block_20251125_192509_1764120309107_localization",
+        "mitigation": "llm_learning_network_policy_block_20251125_192509_1764120309107_mitigation",
+        "rollback": "llm_learning_network_policy_block_20251125_192509_1764120309107_rollback"
+      },
+      "stratus_result": null,
+      "conductor_results": {
+        "Diagnosis": {
+          "judgment": "False",
+          "success": false,
+          "accuracy": 0.0
+        },
+        "TTL": 91.0468418598175,
+        "Mitigation": {
+          "success": false
+        },
+        "TTM": 197.1317720413208
+      }
+    },
+    {
+      "problem_id": "duplicate_pvc_mounts_hotel_reservation",
+      "problem_name": "Storage Mount Issues - Hotel Reservation",
+      "success": false,
+      "duration": 444.9936192035675,
+      "trace_ids": {
+        "diagnosis": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251125_192841_1764120521400_diagnosis",
+        "localization": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251125_192841_1764120521400_localization",
+        "mitigation": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251125_192841_1764120521400_mitigation",
+        "rollback": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251125_192841_1764120521400_rollback"
+      },
+      "stratus_result": null,
+      "conductor_results": {
+        "Diagnosis": {
+          "judgment": "False",
+          "success": false,
+          "accuracy": 0.0
+        },
+        "TTL": 55.60882759094238,
+        "Mitigation": {
+          "success": false
+        },
+        "TTM": 392.6015045642853
+      }
+    }
+  ],
+  "reward_spec": {
+    "success_weight": 1.0,
+    "latency_weight": -0.5,
+    "attempts_weight": -0.3
+  },
+  "learning_result": null
+}

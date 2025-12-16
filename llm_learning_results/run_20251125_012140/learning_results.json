@@ -1,0 +1,23 @@
+{
+  "run_id": "012140",
+  "start_time": "2025-11-25T01:21:45.735405",
+  "total_duration": 697.9214608669281,
+  "problem_count": 7,
+  "completed_problems": 1,
+  "results": [
+    {
+      "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+      "problem_name": "Concurrent Failures - Social Network, Hotel Reservation, Astronomy Shop",
+      "success": false,
+      "duration": 697.9203126430511,
+      "trace_ids": {},
+      "error": "[red]Timeout: Not all pods in namespace 'hotel-reservation' reached the Ready state within 600 seconds."
+    }
+  ],
+  "reward_spec": {
+    "success_weight": 1.0,
+    "latency_weight": -0.5,
+    "attempts_weight": -0.3
+  },
+  "learning_result": null
+}

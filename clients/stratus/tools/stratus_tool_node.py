@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import BaseTool
@@ -9,6 +10,14 @@ from pydantic_core import ValidationError
 logger = logging.getLogger("all.stratus.tool_node")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
+
+# Import for trace collection
+try:
+    from mcp_tool_interceptor import global_interceptor
+    TRACE_COLLECTION_AVAILABLE = True
+except ImportError:
+    TRACE_COLLECTION_AVAILABLE = False
+    logger.warning("Trace collection not available - mcp_tool_interceptor not found")
 
 
 def reschedule_tool_calls(tool_calls):
@@ -64,11 +73,19 @@ class StratusToolNode:
         to_update = dict()
         new_messages = []
         for i, tool_call in enumerate(message.tool_calls):
+            tool_start_time = time.time()
+            tool_success = False
+            tool_response = ""
+            
             try:
                 # logger.info(f"[STRATUS_TOOLNODE] invoking tool: {tool_call['name']}, tool_call: {tool_call}")
                 arg_list = [f"{key} = {value}" for key, value in tool_call["args"].items()]
                 arena_logger.info(f"[LLM] Agent choose to call: {tool_call['name']}({', '.join(arg_list)})")
                 logger.info(f"[STRATUS_TOOLNODE] Agent choose to call: {tool_call['name']}({', '.join(arg_list)})")
+                
+                # Extract tool arguments (excluding internal 'state' parameter)
+                tool_args = {k: v for k, v in tool_call["args"].items() if k != "state"}
+                
                 if tool_call["name"] in self.async_tools_by_name:
                     tool_result = await self.async_tools_by_name[tool_call["name"]].ainvoke(
                         {
@@ -99,22 +116,32 @@ class StratusToolNode:
                             ]
                         }
                     )
+                    tool_success = False
+                    tool_response = f"Tool {tool_call['name']} does not exist!"
 
                 assert isinstance(
                     tool_result, Command
                 ), f"Tool {tool_call['name']} should return a Command object, but return {type(tool_result)}"
                 logger.debug(f"[STRATUS_TOOLNODE] tool_result: {tool_result}")
-                if tool_result.update["messages"]:
-                    combined_content = "\n".join([message.content for message in tool_result.update["messages"]])
+                
+                # Extract response content
+                if tool_result.update.get("messages"):
+                    combined_content = "\n".join([msg.content for msg in tool_result.update["messages"] if hasattr(msg, "content")])
+                    tool_response = combined_content[:500]  # Limit response size
+                    tool_success = True
                     arena_logger.info(f"[ENV] Tool {tool_call['name']} returned: \n {combined_content}")
+                
                 new_messages += tool_result.update["messages"]
                 to_update = {
                     **to_update,
                     **tool_result.update,  # this is the key part
                 }
+                
             except ValidationError as e:
                 logger.error(f"tool_call: {tool_call}\nError: {e}")
                 arena_logger.error(f"[ENV] Tool Call {tool_call['name']} failed: \n {e}")
+                tool_success = False
+                tool_response = str(e)
                 new_messages += [
                     ToolMessage(
                         content=f"Error: {e}; This happens usually because you are "
@@ -122,6 +149,37 @@ class StratusToolNode:
                         tool_call_id=tool_call["id"],
                     )
                 ]
+            except Exception as e:
+                logger.error(f"tool_call: {tool_call}\nError: {e}")
+                arena_logger.error(f"[ENV] Tool Call {tool_call['name']} failed: \n {e}")
+                tool_success = False
+                tool_response = str(e)
+                new_messages += [
+                    ToolMessage(
+                        content=f"Error: {e}",
+                        tool_call_id=tool_call["id"],
+                    )
+                ]
+            finally:
+                # Record tool call to trace (if trace collection is enabled)
+                tool_duration = time.time() - tool_start_time
+                if TRACE_COLLECTION_AVAILABLE and global_interceptor.enabled:
+                    try:
+                        trace_id = global_interceptor.get_current_trace_id()
+                        if trace_id and global_interceptor.meta_agent:
+                            # Extract tool arguments (excluding internal 'state' parameter)
+                            tool_args_clean = {k: v for k, v in tool_call.get("args", {}).items() if k != "state"}
+                            global_interceptor.meta_agent.add_tool_call(
+                                trace_id,
+                                tool_call["name"],
+                                tool_args_clean,
+                                tool_success,
+                                tool_response,
+                                tool_duration
+                            )
+                            logger.info(f"🔧 Recorded tool call to trace {trace_id}: {tool_call['name']} ({'success' if tool_success else 'failed'})")
+                    except Exception as trace_error:
+                        logger.warning(f"Failed to record tool call to trace: {trace_error}")
 
         to_update["messages"] = new_messages
         return to_update

@@ -19,6 +19,7 @@ def build_default_localization_agent():
     localization_agent_config_path = file_parent_dir.parent / "configs" / "localization_agent_config.yaml"
     localization_agent_config = yaml.safe_load(open(localization_agent_config_path, "r"))
     max_step = localization_agent_config["max_step"]
+    max_loop_count = localization_agent_config.get("max_loop_count", 50)
     prompt_path = file_parent_dir.parent / "configs" / localization_agent_config["prompts_path"]
     sync_tools = []
     async_tools = []
@@ -61,6 +62,7 @@ def build_default_localization_agent():
     agent = DiagnosisAgent(
         llm=get_llm_backend_for_tools(),
         max_step=max_step,
+        max_loop_count=max_loop_count,
         sync_tools=sync_tools,
         async_tools=async_tools,
         submit_tool=submit_tool,

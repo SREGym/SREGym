@@ -53,7 +53,14 @@ class ExecKubectlCmdSafely(BaseTool):
         try:
             await exit_stack.enter_async_context(self._client)
             result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
-            text_result = "\n".join([part.text for part in result])
+            # Handle CallToolResult - it has a .content attribute with a list of parts
+            if hasattr(result, 'content') and result.content:
+                text_result = "\n".join([part.text for part in result.content])
+            elif hasattr(result, 'text'):
+                text_result = result.text
+            else:
+                # Fallback: try to convert to string
+                text_result = str(result)
         finally:
             await exit_stack.aclose()
         return Command(
@@ -144,7 +151,14 @@ class ExecReadOnlyKubectlCmd(BaseTool):
             try:
                 await exit_stack.enter_async_context(self._client)
                 result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
-                text_result = "\n".join([part.text for part in result])
+                # Handle CallToolResult - it has a .content attribute with a list of parts
+                if hasattr(result, 'content') and result.content:
+                    text_result = "\n".join([part.text for part in result.content])
+                elif hasattr(result, 'text'):
+                    text_result = result.text
+                else:
+                    # Fallback: try to convert to string
+                    text_result = str(result)
             finally:
                 await exit_stack.aclose()
         return Command(
@@ -188,7 +202,14 @@ class RollbackCommand(BaseTool):
         try:
             await exit_stack.enter_async_context(self._client)
             result = await self._client.call_tool("rollback_command")
-            text_result = "\n".join([part.text for part in result])
+            # Handle CallToolResult - it has a .content attribute with a list of parts
+            if hasattr(result, 'content') and result.content:
+                text_result = "\n".join([part.text for part in result.content])
+            elif hasattr(result, 'text'):
+                text_result = result.text
+            else:
+                # Fallback: try to convert to string
+                text_result = str(result)
         finally:
             await exit_stack.aclose()
         return Command(
@@ -236,10 +257,19 @@ class GetPreviousRollbackableCmd(BaseTool):
         try:
             await exit_stack.enter_async_context(self._client)
             result = await self._client.call_tool("get_previous_rollbackable_cmd")
-            if len(result) == 0:
+            # Handle CallToolResult - it has a .content attribute with a list of parts
+            if hasattr(result, 'content'):
+                if len(result.content) == 0:
+                    text_result = "There is no previous rollbackable command."
+                else:
+                    text_result = "\n".join([part.text for part in result.content])
+            elif hasattr(result, '__len__') and len(result) == 0:
                 text_result = "There is no previous rollbackable command."
+            elif hasattr(result, 'text'):
+                text_result = result.text
             else:
-                text_result = "\n".join([part.text for part in result])
+                # Fallback: try to convert to string
+                text_result = str(result)
         finally:
             await exit_stack.aclose()
         return Command(

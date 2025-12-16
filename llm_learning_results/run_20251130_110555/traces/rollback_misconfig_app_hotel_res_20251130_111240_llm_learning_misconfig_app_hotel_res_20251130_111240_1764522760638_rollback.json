@@ -1,0 +1,26 @@
+{
+  "trace_id": "llm_learning_misconfig_app_hotel_res_20251130_111240_1764522760638_rollback",
+  "agent_type": "AgentType.ROLLBACK",
+  "problem_context": {
+    "problem_id": "misconfig_app_hotel_res",
+    "app_name": "SREGym Test Application",
+    "app_namespace": "test-namespace",
+    "app_description": "Application misconfiguration in hotel reservation service requiring mitigation",
+    "fault_type": "misconfig_app_hotel_res",
+    "initial_state": null
+  },
+  "start_time": 1764522760.6385481,
+  "end_time": 1764522793.8064551,
+  "success": false,
+  "final_submission": "Error: Max retries exceeded. Unable to complete the request.",
+  "tool_calls": [],
+  "thinking_steps": [],
+  "performance_metrics": {
+    "total_duration": 33.16790699958801,
+    "tool_call_count": 0,
+    "thinking_step_count": 0,
+    "success_rate": 0.0
+  },
+  "ground_truth": null,
+  "oracle_results_enhanced": null
+}

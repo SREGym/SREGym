@@ -1,0 +1,41 @@
+{
+  "trace_id": "llm_learning_astronomy_shop_ad_service_high_cpu_20251130_063057_1764505857239_rollback",
+  "agent_type": "AgentType.ROLLBACK",
+  "problem_context": {
+    "problem_id": "astronomy_shop_ad_service_high_cpu",
+    "app_name": "SREGym Test Application",
+    "app_namespace": "test-namespace",
+    "app_description": "Astronomy shop ad service experiencing high CPU usage causing performance degradation",
+    "fault_type": "astronomy_shop_ad_service_high_cpu",
+    "initial_state": null
+  },
+  "start_time": 1764505857.239818,
+  "end_time": 1764505931.6558375,
+  "success": false,
+  "final_submission": null,
+  "tool_calls": [],
+  "thinking_steps": [],
+  "performance_metrics": {
+    "total_duration": 74.41601943969727,
+    "tool_call_count": 0,
+    "thinking_step_count": 0,
+    "success_rate": 0.0
+  },
+  "ground_truth": {
+    "detection": {
+      "expected": "Yes",
+      "description": "Detection should be \"Yes\" when fault is injected"
+    },
+    "localization": {
+      "expected": [
+        "ad"
+      ],
+      "description": "List of faulty service names that must be identified"
+    },
+    "mitigation": {
+      "oracle_type": "None",
+      "description": "No mitigation oracle attached"
+    }
+  },
+  "oracle_results_enhanced": {}
+}

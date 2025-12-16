@@ -1,0 +1,26 @@
+{
+  "trace_id": "llm_learning_network_policy_block_20251125_225201_1764132721823_localization",
+  "agent_type": "AgentType.LOCALIZATION",
+  "problem_context": {
+    "problem_id": "network_policy_block",
+    "app_name": "SREGym Test Application",
+    "app_namespace": "test-namespace",
+    "app_description": "Network policy blocking service communication between pods",
+    "fault_type": "network_policy_block",
+    "initial_state": null
+  },
+  "start_time": 1764132721.8236175,
+  "end_time": 1764132995.322648,
+  "success": false,
+  "final_submission": "Error: [Errno 32] Broken pipe",
+  "tool_calls": [],
+  "thinking_steps": [],
+  "performance_metrics": {
+    "total_duration": 273.4990305900574,
+    "tool_call_count": 0,
+    "thinking_step_count": 0,
+    "success_rate": 0.0
+  },
+  "ground_truth": null,
+  "oracle_results_enhanced": null
+}

@@ -1,0 +1,26 @@
+{
+  "trace_id": "llm_learning_revoke_auth_mongodb-1_20251125_184610_1764117970348_localization",
+  "agent_type": "AgentType.LOCALIZATION",
+  "problem_context": {
+    "problem_id": "revoke_auth_mongodb-1",
+    "app_name": "SREGym Test Application",
+    "app_namespace": "test-namespace",
+    "app_description": "MongoDB authentication permissions revoked, causing connection failures",
+    "fault_type": "revoke_auth_mongodb-1",
+    "initial_state": null
+  },
+  "start_time": 1764117970.3481703,
+  "end_time": 1764119729.1342704,
+  "success": false,
+  "final_submission": "Error: Max retries exceeded. Unable to complete the request.",
+  "tool_calls": [],
+  "thinking_steps": [],
+  "performance_metrics": {
+    "total_duration": 1758.7861001491547,
+    "tool_call_count": 0,
+    "thinking_step_count": 0,
+    "success_rate": 0.0
+  },
+  "ground_truth": null,
+  "oracle_results_enhanced": null
+}

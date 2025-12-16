@@ -1,0 +1,374 @@
+[
+  {
+    "trace_id": "simple_enhanced_test_problem_2_2_1761485689941",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='test_problem_2', app_name='Test Application', app_namespace='test-namespace', app_description='Test problem for enhanced trace collection', fault_type='test_problem_2', initial_state=None)",
+    "start_time": 1761485689.941497,
+    "end_time": 1761485690.3422353,
+    "success": true,
+    "final_submission": "Simple enhanced execution completed for test_problem_2",
+    "tool_calls": [
+      "ToolCall(tool_name='kubectl_get_pods', arguments={'namespace': 'test-namespace'}, timestamp=1761485689.9415662, success=True, response='Found 3 pods running: app-1, app-2, app-3', duration=1.2)",
+      "ToolCall(tool_name='kubectl_logs', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485690.041698, success=True, response='Application logs show normal operation', duration=2.1)",
+      "ToolCall(tool_name='kubectl_describe', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485690.1419077, success=True, response='Pod description shows healthy status', duration=1.8)",
+      "ToolCall(tool_name='prometheus_query', arguments={'query': 'up', 'namespace': 'test-namespace'}, timestamp=1761485690.2420857, success=False, response='', duration=0.5)"
+    ],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting simple enhanced trace collection for test_problem_2 in iteration 2', tool_choice='simple_tracer', justification='Problem: test_problem_2. Enhanced tool call tracing enabled.', timestamp=1761485689.941554)",
+      "ThinkingStep(reasoning=\"Used kubectl_get_pods with args: {'namespace': 'test-namespace'} - Success: Found 3 pods running: app-1, app-2, app-3\", tool_choice='kubectl_get_pods', justification='Tool call #1, duration: 1.20s', timestamp=1761485689.9415817)",
+      "ThinkingStep(reasoning=\"Used kubectl_logs with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success: Application logs show normal operation\", tool_choice='kubectl_logs', justification='Tool call #2, duration: 2.10s', timestamp=1761485690.041715)",
+      "ThinkingStep(reasoning=\"Used kubectl_describe with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success: Pod description shows healthy status\", tool_choice='kubectl_describe', justification='Tool call #3, duration: 1.80s', timestamp=1761485690.1419246)",
+      "ThinkingStep(reasoning=\"Used prometheus_query with args: {'query': 'up', 'namespace': 'test-namespace'} - Failed: Prometheus server not available\", tool_choice='prometheus_query', justification='Tool call #4, duration: 0.50s', timestamp=1761485690.2420948)",
+      "ThinkingStep(reasoning='Completed simple enhanced trace collection for test_problem_2', tool_choice='simple_tracer', justification='Captured 4 tool calls, success: True', timestamp=1761485690.3422272)"
+    ],
+    "performance_metrics": {
+      "total_duration": 0.4007382392883301,
+      "tool_call_count": 4,
+      "thinking_step_count": 6,
+      "success_rate": 0.75
+    }
+  },
+  {
+    "trace_id": "simple_enhanced_test_problem_1_1_1761485684511",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='test_problem_1', app_name='Test Application', app_namespace='test-namespace', app_description='Test problem for enhanced trace collection', fault_type='test_problem_1', initial_state=None)",
+    "start_time": 1761485684.511113,
+    "end_time": 1761485684.911757,
+    "success": true,
+    "final_submission": "Simple enhanced execution completed for test_problem_1",
+    "tool_calls": [
+      "ToolCall(tool_name='kubectl_get_pods', arguments={'namespace': 'test-namespace'}, timestamp=1761485684.5111496, success=True, response='Found 3 pods running: app-1, app-2, app-3', duration=1.2)",
+      "ToolCall(tool_name='kubectl_logs', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485684.6112494, success=True, response='Application logs show normal operation', duration=2.1)",
+      "ToolCall(tool_name='kubectl_describe', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485684.7113824, success=True, response='Pod description shows healthy status', duration=1.8)",
+      "ToolCall(tool_name='prometheus_query', arguments={'query': 'up', 'namespace': 'test-namespace'}, timestamp=1761485684.8115122, success=False, response='', duration=0.5)"
+    ],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting simple enhanced trace collection for test_problem_1 in iteration 1', tool_choice='simple_tracer', justification='Problem: test_problem_1. Enhanced tool call tracing enabled.', timestamp=1761485684.5111427)",
+      "ThinkingStep(reasoning=\"Used kubectl_get_pods with args: {'namespace': 'test-namespace'} - Success: Found 3 pods running: app-1, app-2, app-3\", tool_choice='kubectl_get_pods', justification='Tool call #1, duration: 1.20s', timestamp=1761485684.5111582)",
+      "ThinkingStep(reasoning=\"Used kubectl_logs with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success: Application logs show normal operation\", tool_choice='kubectl_logs', justification='Tool call #2, duration: 2.10s', timestamp=1761485684.611263)",
+      "ThinkingStep(reasoning=\"Used kubectl_describe with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success: Pod description shows healthy status\", tool_choice='kubectl_describe', justification='Tool call #3, duration: 1.80s', timestamp=1761485684.711391)",
+      "ThinkingStep(reasoning=\"Used prometheus_query with args: {'query': 'up', 'namespace': 'test-namespace'} - Failed: Prometheus server not available\", tool_choice='prometheus_query', justification='Tool call #4, duration: 0.50s', timestamp=1761485684.811541)",
+      "ThinkingStep(reasoning='Completed simple enhanced trace collection for test_problem_1', tool_choice='simple_tracer', justification='Captured 4 tool calls, success: True', timestamp=1761485684.91175)"
+    ],
+    "performance_metrics": {
+      "total_duration": 0.40064406394958496,
+      "tool_call_count": 4,
+      "thinking_step_count": 6,
+      "success_rate": 0.75
+    }
+  },
+  {
+    "trace_id": "clean_test_test_problem_4_2_1761485219062",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='test_problem_4', app_name='Test Application', app_namespace='test-namespace', app_description='Test problem for clean guidelines demonstration', fault_type='test_problem_4', initial_state=None)",
+    "start_time": 1761485219.0620956,
+    "end_time": 1761485219.4626005,
+    "success": true,
+    "final_submission": "Clean guidelines test completed for test_problem_4",
+    "tool_calls": [
+      "ToolCall(tool_name='kubectl_get_pods', arguments={'namespace': 'test-namespace'}, timestamp=1761485219.062159, success=True, response='Found 3 pods running: app-1, app-2, app-3', duration=1.2)",
+      "ToolCall(tool_name='kubectl_logs', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485219.1622696, success=True, response='Application logs show normal operation', duration=2.1)",
+      "ToolCall(tool_name='kubectl_describe', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485219.262374, success=True, response='Pod description shows healthy status', duration=1.8)",
+      "ToolCall(tool_name='prometheus_query', arguments={'query': 'up', 'namespace': 'test-namespace'}, timestamp=1761485219.3624778, success=False, response='None', duration=0.5)"
+    ],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting clean guidelines test for test_problem_4 in iteration 2', tool_choice='clean_test_tracer', justification='Problem: test_problem_4. Testing clean guidelines functionality.', timestamp=1761485219.0621474)",
+      "ThinkingStep(reasoning=\"Used kubectl_get_pods with args: {'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_get_pods', justification='Tool call #1, duration: 1.20s', timestamp=1761485219.0621736)",
+      "ThinkingStep(reasoning=\"Used kubectl_logs with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_logs', justification='Tool call #2, duration: 2.10s', timestamp=1761485219.1622858)",
+      "ThinkingStep(reasoning=\"Used kubectl_describe with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_describe', justification='Tool call #3, duration: 1.80s', timestamp=1761485219.26239)",
+      "ThinkingStep(reasoning=\"Used prometheus_query with args: {'query': 'up', 'namespace': 'test-namespace'} - Failed\", tool_choice='prometheus_query', justification='Tool call #4, duration: 0.50s', timestamp=1761485219.3624935)",
+      "ThinkingStep(reasoning='Completed clean guidelines test for test_problem_4', tool_choice='clean_test_tracer', justification='Captured 4 tool calls, success: True', timestamp=1761485219.462595)"
+    ],
+    "performance_metrics": {
+      "total_duration": 0.40050482749938965,
+      "tool_call_count": 4,
+      "thinking_step_count": 6,
+      "success_rate": 0.75
+    }
+  },
+  {
+    "trace_id": "clean_test_test_problem_3_1_1761485216632",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='test_problem_3', app_name='Test Application', app_namespace='test-namespace', app_description='Test problem for clean guidelines demonstration', fault_type='test_problem_3', initial_state=None)",
+    "start_time": 1761485216.6329112,
+    "end_time": 1761485217.0332792,
+    "success": true,
+    "final_submission": "Clean guidelines test completed for test_problem_3",
+    "tool_calls": [
+      "ToolCall(tool_name='kubectl_get_pods', arguments={'namespace': 'test-namespace'}, timestamp=1761485216.6329372, success=True, response='Found 3 pods running: app-1, app-2, app-3', duration=1.2)",
+      "ToolCall(tool_name='kubectl_logs', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485216.733002, success=True, response='Application logs show normal operation', duration=2.1)",
+      "ToolCall(tool_name='kubectl_describe', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485216.8330653, success=True, response='Pod description shows healthy status', duration=1.8)",
+      "ToolCall(tool_name='prometheus_query', arguments={'query': 'up', 'namespace': 'test-namespace'}, timestamp=1761485216.9331572, success=False, response='None', duration=0.5)"
+    ],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting clean guidelines test for test_problem_3 in iteration 1', tool_choice='clean_test_tracer', justification='Problem: test_problem_3. Testing clean guidelines functionality.', timestamp=1761485216.6329327)",
+      "ThinkingStep(reasoning=\"Used kubectl_get_pods with args: {'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_get_pods', justification='Tool call #1, duration: 1.20s', timestamp=1761485216.6329427)",
+      "ThinkingStep(reasoning=\"Used kubectl_logs with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_logs', justification='Tool call #2, duration: 2.10s', timestamp=1761485216.7330077)",
+      "ThinkingStep(reasoning=\"Used kubectl_describe with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_describe', justification='Tool call #3, duration: 1.80s', timestamp=1761485216.8330688)",
+      "ThinkingStep(reasoning=\"Used prometheus_query with args: {'query': 'up', 'namespace': 'test-namespace'} - Failed\", tool_choice='prometheus_query', justification='Tool call #4, duration: 0.50s', timestamp=1761485216.9331727)",
+      "ThinkingStep(reasoning='Completed clean guidelines test for test_problem_3', tool_choice='clean_test_tracer', justification='Captured 4 tool calls, success: True', timestamp=1761485217.0332737)"
+    ],
+    "performance_metrics": {
+      "total_duration": 0.40036797523498535,
+      "tool_call_count": 4,
+      "thinking_step_count": 6,
+      "success_rate": 0.75
+    }
+  },
+  {
+    "trace_id": "clean_test_test_problem_2_2_1761485216144",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='test_problem_2', app_name='Test Application', app_namespace='test-namespace', app_description='Test problem for clean guidelines demonstration', fault_type='test_problem_2', initial_state=None)",
+    "start_time": 1761485216.1443186,
+    "end_time": 1761485216.5448263,
+    "success": true,
+    "final_submission": "Clean guidelines test completed for test_problem_2",
+    "tool_calls": [
+      "ToolCall(tool_name='kubectl_get_pods', arguments={'namespace': 'test-namespace'}, timestamp=1761485216.1443832, success=True, response='Found 3 pods running: app-1, app-2, app-3', duration=1.2)",
+      "ToolCall(tool_name='kubectl_logs', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485216.244489, success=True, response='Application logs show normal operation', duration=2.1)",
+      "ToolCall(tool_name='kubectl_describe', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485216.344594, success=True, response='Pod description shows healthy status', duration=1.8)",
+      "ToolCall(tool_name='prometheus_query', arguments={'query': 'up', 'namespace': 'test-namespace'}, timestamp=1761485216.4447021, success=False, response='None', duration=0.5)"
+    ],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting clean guidelines test for test_problem_2 in iteration 2', tool_choice='clean_test_tracer', justification='Problem: test_problem_2. Testing clean guidelines functionality.', timestamp=1761485216.1443717)",
+      "ThinkingStep(reasoning=\"Used kubectl_get_pods with args: {'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_get_pods', justification='Tool call #1, duration: 1.20s', timestamp=1761485216.144398)",
+      "ThinkingStep(reasoning=\"Used kubectl_logs with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_logs', justification='Tool call #2, duration: 2.10s', timestamp=1761485216.2445047)",
+      "ThinkingStep(reasoning=\"Used kubectl_describe with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_describe', justification='Tool call #3, duration: 1.80s', timestamp=1761485216.34461)",
+      "ThinkingStep(reasoning=\"Used prometheus_query with args: {'query': 'up', 'namespace': 'test-namespace'} - Failed\", tool_choice='prometheus_query', justification='Tool call #4, duration: 0.50s', timestamp=1761485216.444718)",
+      "ThinkingStep(reasoning='Completed clean guidelines test for test_problem_2', tool_choice='clean_test_tracer', justification='Captured 4 tool calls, success: True', timestamp=1761485216.5448184)"
+    ],
+    "performance_metrics": {
+      "total_duration": 0.40050768852233887,
+      "tool_call_count": 4,
+      "thinking_step_count": 6,
+      "success_rate": 0.75
+    }
+  },
+  {
+    "trace_id": "clean_test_test_problem_1_1_1761485213673",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='test_problem_1', app_name='Test Application', app_namespace='test-namespace', app_description='Test problem for clean guidelines demonstration', fault_type='test_problem_1', initial_state=None)",
+    "start_time": 1761485213.6738787,
+    "end_time": 1761485214.0742533,
+    "success": true,
+    "final_submission": "Clean guidelines test completed for test_problem_1",
+    "tool_calls": [
+      "ToolCall(tool_name='kubectl_get_pods', arguments={'namespace': 'test-namespace'}, timestamp=1761485213.6739128, success=True, response='Found 3 pods running: app-1, app-2, app-3', duration=1.2)",
+      "ToolCall(tool_name='kubectl_logs', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485213.7739837, success=True, response='Application logs show normal operation', duration=2.1)",
+      "ToolCall(tool_name='kubectl_describe', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761485213.8740516, success=True, response='Pod description shows healthy status', duration=1.8)",
+      "ToolCall(tool_name='prometheus_query', arguments={'query': 'up', 'namespace': 'test-namespace'}, timestamp=1761485213.9741476, success=False, response='None', duration=0.5)"
+    ],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting clean guidelines test for test_problem_1 in iteration 1', tool_choice='clean_test_tracer', justification='Problem: test_problem_1. Testing clean guidelines functionality.', timestamp=1761485213.6739073)",
+      "ThinkingStep(reasoning=\"Used kubectl_get_pods with args: {'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_get_pods', justification='Tool call #1, duration: 1.20s', timestamp=1761485213.6739209)",
+      "ThinkingStep(reasoning=\"Used kubectl_logs with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_logs', justification='Tool call #2, duration: 2.10s', timestamp=1761485213.773991)",
+      "ThinkingStep(reasoning=\"Used kubectl_describe with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success\", tool_choice='kubectl_describe', justification='Tool call #3, duration: 1.80s', timestamp=1761485213.8740585)",
+      "ThinkingStep(reasoning=\"Used prometheus_query with args: {'query': 'up', 'namespace': 'test-namespace'} - Failed\", tool_choice='prometheus_query', justification='Tool call #4, duration: 0.50s', timestamp=1761485213.9741633)",
+      "ThinkingStep(reasoning='Completed clean guidelines test for test_problem_1', tool_choice='clean_test_tracer', justification='Captured 4 tool calls, success: True', timestamp=1761485214.0742476)"
+    ],
+    "performance_metrics": {
+      "total_duration": 0.4003746509552002,
+      "tool_call_count": 4,
+      "thinking_step_count": 6,
+      "success_rate": 0.75
+    }
+  },
+  {
+    "trace_id": "simple_enhanced_test_problem_2_2_1761484604064",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='test_problem_2', app_name='Test Application', app_namespace='test-namespace', app_description='Test problem for enhanced trace collection', fault_type='test_problem_2', initial_state=None)",
+    "start_time": 1761484604.0649648,
+    "end_time": 1761484604.466025,
+    "success": true,
+    "final_submission": "Simple enhanced execution completed for test_problem_2",
+    "tool_calls": [
+      "ToolCall(tool_name='kubectl_get_pods', arguments={'namespace': 'test-namespace'}, timestamp=1761484604.0650096, success=True, response='Found 3 pods running: app-1, app-2, app-3', duration=1.2)",
+      "ToolCall(tool_name='kubectl_logs', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761484604.1654885, success=True, response='Application logs show normal operation', duration=2.1)",
+      "ToolCall(tool_name='kubectl_describe', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761484604.265666, success=True, response='Pod description shows healthy status', duration=1.8)",
+      "ToolCall(tool_name='prometheus_query', arguments={'query': 'up', 'namespace': 'test-namespace'}, timestamp=1761484604.3658092, success=False, response='', duration=0.5)"
+    ],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting simple enhanced trace collection for test_problem_2 in iteration 2', tool_choice='simple_tracer', justification='Problem: test_problem_2. Enhanced tool call tracing enabled.', timestamp=1761484604.065001)",
+      "ThinkingStep(reasoning=\"Used kubectl_get_pods with args: {'namespace': 'test-namespace'} - Success: Found 3 pods running: app-1, app-2, app-3\", tool_choice='kubectl_get_pods', justification='Tool call #1, duration: 1.20s', timestamp=1761484604.0650203)",
+      "ThinkingStep(reasoning=\"Used kubectl_logs with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success: Application logs show normal operation\", tool_choice='kubectl_logs', justification='Tool call #2, duration: 2.10s', timestamp=1761484604.165505)",
+      "ThinkingStep(reasoning=\"Used kubectl_describe with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success: Pod description shows healthy status\", tool_choice='kubectl_describe', justification='Tool call #3, duration: 1.80s', timestamp=1761484604.265675)",
+      "ThinkingStep(reasoning=\"Used prometheus_query with args: {'query': 'up', 'namespace': 'test-namespace'} - Failed: Prometheus server not available\", tool_choice='prometheus_query', justification='Tool call #4, duration: 0.50s', timestamp=1761484604.3658268)",
+      "ThinkingStep(reasoning='Completed simple enhanced trace collection for test_problem_2', tool_choice='simple_tracer', justification='Captured 4 tool calls, success: True', timestamp=1761484604.466018)"
+    ],
+    "performance_metrics": {
+      "total_duration": 0.4010603427886963,
+      "tool_call_count": 4,
+      "thinking_step_count": 6,
+      "success_rate": 0.75
+    }
+  },
+  {
+    "trace_id": "simple_enhanced_test_problem_1_1_1761484598656",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='test_problem_1', app_name='Test Application', app_namespace='test-namespace', app_description='Test problem for enhanced trace collection', fault_type='test_problem_1', initial_state=None)",
+    "start_time": 1761484598.6569533,
+    "end_time": 1761484599.0575066,
+    "success": true,
+    "final_submission": "Simple enhanced execution completed for test_problem_1",
+    "tool_calls": [
+      "ToolCall(tool_name='kubectl_get_pods', arguments={'namespace': 'test-namespace'}, timestamp=1761484598.656992, success=True, response='Found 3 pods running: app-1, app-2, app-3', duration=1.2)",
+      "ToolCall(tool_name='kubectl_logs', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761484598.7570875, success=True, response='Application logs show normal operation', duration=2.1)",
+      "ToolCall(tool_name='kubectl_describe', arguments={'pod': 'app-1', 'namespace': 'test-namespace'}, timestamp=1761484598.8571818, success=True, response='Pod description shows healthy status', duration=1.8)",
+      "ToolCall(tool_name='prometheus_query', arguments={'query': 'up', 'namespace': 'test-namespace'}, timestamp=1761484598.9572992, success=False, response='', duration=0.5)"
+    ],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting simple enhanced trace collection for test_problem_1 in iteration 1', tool_choice='simple_tracer', justification='Problem: test_problem_1. Enhanced tool call tracing enabled.', timestamp=1761484598.6569836)",
+      "ThinkingStep(reasoning=\"Used kubectl_get_pods with args: {'namespace': 'test-namespace'} - Success: Found 3 pods running: app-1, app-2, app-3\", tool_choice='kubectl_get_pods', justification='Tool call #1, duration: 1.20s', timestamp=1761484598.6570022)",
+      "ThinkingStep(reasoning=\"Used kubectl_logs with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success: Application logs show normal operation\", tool_choice='kubectl_logs', justification='Tool call #2, duration: 2.10s', timestamp=1761484598.7570946)",
+      "ThinkingStep(reasoning=\"Used kubectl_describe with args: {'pod': 'app-1', 'namespace': 'test-namespace'} - Success: Pod description shows healthy status\", tool_choice='kubectl_describe', justification='Tool call #3, duration: 1.80s', timestamp=1761484598.8571858)",
+      "ThinkingStep(reasoning=\"Used prometheus_query with args: {'query': 'up', 'namespace': 'test-namespace'} - Failed: Prometheus server not available\", tool_choice='prometheus_query', justification='Tool call #4, duration: 0.50s', timestamp=1761484598.9573162)",
+      "ThinkingStep(reasoning='Completed simple enhanced trace collection for test_problem_1', tool_choice='simple_tracer', justification='Captured 4 tool calls, success: True', timestamp=1761484599.0574992)"
+    ],
+    "performance_metrics": {
+      "total_duration": 0.40055322647094727,
+      "tool_call_count": 4,
+      "thinking_step_count": 6,
+      "success_rate": 0.75
+    }
+  },
+  {
+    "trace_id": "rate_friendly_revoke_auth_mongodb-1_1_1761480180478",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='revoke_auth_mongodb-1', app_name='SREArena Test Application', app_namespace='test-namespace', app_description='MongoDB authentication permissions revoked, causing connection failures', fault_type='revoke_auth_mongodb-1', initial_state=None)",
+    "start_time": 1761480180.4787655,
+    "end_time": 1761480956.6689165,
+    "success": true,
+    "final_submission": "Problem revoke_auth_mongodb-1 execution completed in 801.09s",
+    "tool_calls": [],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting rate-friendly diagnosis for MongoDB Authentication Revocation (revoke_auth_mongodb-1) in iteration 1', tool_choice='stratus_driver', justification='Problem: MongoDB authentication permissions revoked, causing connection failures', timestamp=1761480180.4788098)",
+      "ThinkingStep(reasoning='Completed rate-friendly diagnosis for MongoDB Authentication Revocation', tool_choice='stratus_driver', justification='Execution took 776.19 seconds, success: True', timestamp=1761480956.668909)"
+    ],
+    "performance_metrics": {
+      "total_duration": 776.190150976181,
+      "tool_call_count": 0,
+      "thinking_step_count": 2,
+      "success_rate": 0.0
+    }
+  },
+  {
+    "trace_id": "complete_stratus_2_1761460852610",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='revoke_auth_mongodb-1', app_name='Hotel Reservation', app_namespace='hotel-reservation', app_description='A hotel reservation application built with Go and gRPC, providing backend in-memory and persistent databases, a recommender system for hotel recommendations, and a functionality to place reservations.', fault_type='revoke_auth_mongodb-1', initial_state=None)",
+    "start_time": 1761460852.6105957,
+    "end_time": 1761461610.9762836,
+    "success": false,
+    "final_submission": "Execution failed: litellm.BadRequestError: VertexAIException BadRequestError - {\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/usage?tab=rate-limit.\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count, limit: 1000000\\nPlease retry in 29.090604039s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.QuotaFailure\",\n        \"violations\": [\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_paid_tier_input_token_count\",\n            \"quotaId\": \"GenerateContentPaidTierInputTokensPerModelPerMinute\",\n            \"quotaDimensions\": {\n              \"model\": \"gemini-2.5-flash\",\n              \"location\": \"global\"\n            },\n            \"quotaValue\": \"1000000\"\n          }\n        ]\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.Help\",\n        \"links\": [\n          {\n            \"description\": \"Learn more about Gemini API quotas\",\n            \"url\": \"https://ai.google.dev/gemini-api/docs/rate-limits\"\n          }\n        ]\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.RetryInfo\",\n        \"retryDelay\": \"29s\"\n      }\n    ]\n  }\n}\n",
+    "tool_calls": [],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting complete Stratus diagnosis for revoke_auth_mongodb-1 problem in iteration 2', tool_choice='stratus_driver', justification='This is the beginning of complete Stratus execution with both API and MCP servers', timestamp=1761460852.6106498)",
+      "ThinkingStep(reasoning='Completed complete Stratus execution for revoke_auth_mongodb-1', tool_choice='stratus_driver', justification='Execution took 758.37 seconds, success: False', timestamp=1761461610.9762716)"
+    ],
+    "performance_metrics": {
+      "total_duration": 758.3656878471375,
+      "tool_call_count": 0,
+      "thinking_step_count": 2,
+      "success_rate": 0.0
+    }
+  },
+  {
+    "trace_id": "complete_stratus_1_1761457641258",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='revoke_auth_mongodb-1', app_name='Hotel Reservation', app_namespace='hotel-reservation', app_description='A hotel reservation application built with Go and gRPC, providing backend in-memory and persistent databases, a recommender system for hotel recommendations, and a functionality to place reservations.', fault_type='revoke_auth_mongodb-1', initial_state=None)",
+    "start_time": 1761457641.2586875,
+    "end_time": 1761460842.5988634,
+    "success": true,
+    "final_submission": "Complete Stratus execution completed in 3201.34s",
+    "tool_calls": [],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting complete Stratus diagnosis for revoke_auth_mongodb-1 problem in iteration 1', tool_choice='stratus_driver', justification='This is the beginning of complete Stratus execution with both API and MCP servers', timestamp=1761457641.2587245)",
+      "ThinkingStep(reasoning='Completed complete Stratus execution for revoke_auth_mongodb-1', tool_choice='stratus_driver', justification='Execution took 3201.34 seconds, success: True', timestamp=1761460842.598855)"
+    ],
+    "performance_metrics": {
+      "total_duration": 3201.3401758670807,
+      "tool_call_count": 0,
+      "thinking_step_count": 2,
+      "success_rate": 0.0
+    }
+  },
+  {
+    "trace_id": "real_stratus_2_1761457447405",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='revoke_auth_mongodb-1', app_name='Hotel Reservation', app_namespace='hotel-reservation', app_description='A hotel reservation application built with Go and gRPC, providing backend in-memory and persistent databases, a recommender system for hotel recommendations, and a functionality to place reservations.', fault_type='revoke_auth_mongodb-1', initial_state=None)",
+    "start_time": 1761457447.405458,
+    "end_time": 1761457449.7718575,
+    "success": false,
+    "final_submission": "Execution failed: Client failed to connect: All connection attempts failed",
+    "tool_calls": [],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting real Stratus diagnosis for revoke_auth_mongodb-1 problem in iteration 2', tool_choice='stratus_driver', justification='This is the beginning of real Stratus execution with meta-agent tracing', timestamp=1761457447.4055119)",
+      "ThinkingStep(reasoning='Completed real Stratus execution for revoke_auth_mongodb-1', tool_choice='stratus_driver', justification='Execution took 2.37 seconds, success: False', timestamp=1761457449.771849)"
+    ],
+    "performance_metrics": {
+      "total_duration": 2.3663995265960693,
+      "tool_call_count": 0,
+      "thinking_step_count": 2,
+      "success_rate": 0.0
+    }
+  },
+  {
+    "trace_id": "real_stratus_1_1761457434896",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='revoke_auth_mongodb-1', app_name='Hotel Reservation', app_namespace='hotel-reservation', app_description='A hotel reservation application built with Go and gRPC, providing backend in-memory and persistent databases, a recommender system for hotel recommendations, and a functionality to place reservations.', fault_type='revoke_auth_mongodb-1', initial_state=None)",
+    "start_time": 1761457434.8960366,
+    "end_time": 1761457437.3939276,
+    "success": false,
+    "final_submission": "Execution failed: Client failed to connect: All connection attempts failed",
+    "tool_calls": [],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting real Stratus diagnosis for revoke_auth_mongodb-1 problem in iteration 1', tool_choice='stratus_driver', justification='This is the beginning of real Stratus execution with meta-agent tracing', timestamp=1761457434.8960724)",
+      "ThinkingStep(reasoning='Completed real Stratus execution for revoke_auth_mongodb-1', tool_choice='stratus_driver', justification='Execution took 2.50 seconds, success: False', timestamp=1761457437.3939214)"
+    ],
+    "performance_metrics": {
+      "total_duration": 2.4978909492492676,
+      "tool_call_count": 0,
+      "thinking_step_count": 2,
+      "success_rate": 0.0
+    }
+  },
+  {
+    "trace_id": "real_stratus_2_1761457341181",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='revoke_auth_mongodb-1', app_name='Hotel Reservation', app_namespace='hotel-reservation', app_description='A hotel reservation application built with Go and gRPC, providing backend in-memory and persistent databases, a recommender system for hotel recommendations, and a functionality to place reservations.', fault_type='revoke_auth_mongodb-1', initial_state=None)",
+    "start_time": 1761457341.1815538,
+    "end_time": 1761457341.1914856,
+    "success": false,
+    "final_submission": "Execution failed: string indices must be integers, not 'str'",
+    "tool_calls": [],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting real Stratus diagnosis for revoke_auth_mongodb-1 problem in iteration 2', tool_choice='stratus_driver', justification='This is the beginning of real Stratus execution with meta-agent tracing', timestamp=1761457341.1816068)",
+      "ThinkingStep(reasoning='Completed real Stratus execution for revoke_auth_mongodb-1', tool_choice='stratus_driver', justification='Execution took 0.01 seconds, success: False', timestamp=1761457341.1914818)"
+    ],
+    "performance_metrics": {
+      "total_duration": 0.009931802749633789,
+      "tool_call_count": 0,
+      "thinking_step_count": 2,
+      "success_rate": 0.0
+    }
+  },
+  {
+    "trace_id": "real_stratus_1_1761457331159",
+    "agent_type": "AgentType.DIAGNOSIS",
+    "problem_context": "ProblemContext(problem_id='revoke_auth_mongodb-1', app_name='Hotel Reservation', app_namespace='hotel-reservation', app_description='A hotel reservation application built with Go and gRPC, providing backend in-memory and persistent databases, a recommender system for hotel recommendations, and a functionality to place reservations.', fault_type='revoke_auth_mongodb-1', initial_state=None)",
+    "start_time": 1761457331.159609,
+    "end_time": 1761457331.1702585,
+    "success": false,
+    "final_submission": "Execution failed: string indices must be integers, not 'str'",
+    "tool_calls": [],
+    "thinking_steps": [
+      "ThinkingStep(reasoning='Starting real Stratus diagnosis for revoke_auth_mongodb-1 problem in iteration 1', tool_choice='stratus_driver', justification='This is the beginning of real Stratus execution with meta-agent tracing', timestamp=1761457331.159646)",
+      "ThinkingStep(reasoning='Completed real Stratus execution for revoke_auth_mongodb-1', tool_choice='stratus_driver', justification='Execution took 0.01 seconds, success: False', timestamp=1761457331.1702514)"
+    ],
+    "performance_metrics": {
+      "total_duration": 0.010649442672729492,
+      "tool_call_count": 0,
+      "thinking_step_count": 2,
+      "success_rate": 0.0
+    }
+  }
+]

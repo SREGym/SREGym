@@ -1,0 +1,20 @@
+[
+  {
+    "id": "13d8b32b-4e47-4a86-bed0-291f7b218fe1",
+    "content": "## Confirm Root Cause and Submit Promptly\nOnce you have identified the definitive root cause of *all* observed faults, immediately submit your findings. Do not continue to explore unrelated components or gather additional information if the root cause is established. Your goal is to find the root cause and then conclude the diagnosis efficiently.",
+    "source": "learned",
+    "category": "tool_usage",
+    "priority": 6,
+    "verified": false,
+    "verification_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "conflicts_with": [],
+    "replaces": null,
+    "replaced_by": null,
+    "active": true,
+    "created_at": "2025-12-01T04:04:47.680768",
+    "last_updated": "2025-12-01T04:04:47.680772",
+    "metadata": {}
+  }
+]

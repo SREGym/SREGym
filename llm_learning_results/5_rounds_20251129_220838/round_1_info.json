@@ -1,0 +1,15 @@
+{
+  "round_number": 1,
+  "run_id": "20251129_220838",
+  "run_folder": "llm_learning_results/run_20251129_220838",
+  "start_time": "2025-11-29T22:08:38.752584",
+  "end_time": "2025-11-30T00:54:29.006650",
+  "duration": 9950.280371189117,
+  "status": "completed",
+  "results_file": "llm_learning_results/run_20251129_220838/learning_results.json",
+  "results": {
+    "completed_problems": 7,
+    "successful_problems": 0,
+    "total_duration": 4010.643565416336
+  }
+}

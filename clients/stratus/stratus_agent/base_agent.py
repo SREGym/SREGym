@@ -15,6 +15,13 @@ logger = logging.getLogger("all.stratus.base")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
 
+# Import for trace collection
+try:
+    from mcp_tool_interceptor import global_interceptor
+    TRACE_COLLECTION_AVAILABLE = True
+except ImportError:
+    TRACE_COLLECTION_AVAILABLE = False
+
 
 class BaseAgent:
     def __init__(self, llm, max_step, sync_tools, async_tools, submit_tool, tool_descs):
@@ -68,6 +75,33 @@ class BaseAgent:
             f"[Loop {self.loop_count}] Ask, and LLM responds: \n {ai_message.content}",
             extra={"Full Prompt": state["messages"]},
         )
+
+        # Record thinking step to trace (if trace collection is enabled)
+        if TRACE_COLLECTION_AVAILABLE and global_interceptor.enabled:
+            try:
+                trace_id = global_interceptor.get_current_trace_id()
+                if trace_id and global_interceptor.meta_agent:
+                    reasoning = ai_message.content if ai_message.content else ""
+                    # Extract tool choice from reasoning if available (look for tool mentions)
+                    tool_choice = ""
+                    if hasattr(ai_message, "tool_calls") and ai_message.tool_calls:
+                        tool_choice = ai_message.tool_calls[0].get("name", "") if ai_message.tool_calls else ""
+                    else:
+                        # Try to extract tool name from reasoning text
+                        reasoning_lower = reasoning.lower()
+                        tool_names = ["kubectl", "get_metrics", "get_traces", "submit", "wait"]
+                        for tool_name in tool_names:
+                            if tool_name in reasoning_lower:
+                                tool_choice = tool_name
+                                break
+
+                    justification = f"Thinking step in loop {self.loop_count}"
+                    global_interceptor.meta_agent.add_thinking_step(
+                        trace_id, reasoning, tool_choice, justification
+                    )
+                    logger.info(f"🧠 Recorded thinking step to trace {trace_id}")
+            except Exception as trace_error:
+                logger.warning(f"Failed to record thinking step to trace: {trace_error}")
         if ai_message.content == "Server side error":
             return {
                 "messages": [],

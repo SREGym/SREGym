@@ -1,0 +1,74 @@
+# each step is defined as one tool call
+max_step: 20
+max_retry_attempts: 10
+# choose from: naive, validate, none
+retry_mode: validate
+sync_tools:
+  - name: wait_tool
+    description: |
+      Use this tool to wait for you action to take effect. The upper limit is 120 seconds. 
+          Any value above 120 seconds will be truncated to 120 seconds. If you call this tool
+          along with other tools in your tool_calls list, this tool will be scheduled to the 
+          last for execution.
+
+          Args:
+              seconds (int): Number of seconds to wait.
+async_tools:
+  - name: get_traces
+    description: |
+      Get Jaeger traces for a given service in the last n minutes.
+      
+          Args:
+              service (str): The name of the service for which to retrieve trace data.
+              last_n_minutes (int): The time range (in minutes) to look back from the current time.
+  - name: get_services
+    description: |
+      Retrieve the list of service names from the Grafana instance.
+      
+          Args:
+      
+          Returns:
+              List[str]: A list of service names available in Grafana.
+  - name: get_operations
+    description: |
+      Query available operations for a specific service from the Grafana instance.
+      
+          Args:
+              service (str): The name of the service whose operations should be retrieved.
+      
+          Returns:
+              List[str]: A list of operation names associated with the specified service.
+  - name: get_dependency_graph
+    description: |
+      Get service dependency graph from Jaeger's native dependencies API.
+          Args:
+              last_n_minutes (int): The time range (in minutes) to look back from the current time.
+          Returns:
+              str: JSON object representing the dependency graph.
+  - name: get_metrics
+    description: |
+      Query real-time metrics data from the Prometheus instance.
+
+          Args:
+              query (str): A Prometheus Query Language (PromQL) expression used to fetch metric values.
+
+          Returns:
+              dict: The raw Prometheus response containing metric results, including timestamps, values, and labels.
+  - name: exec_kubectl_cmd_safely
+    description: |
+      This is a tool used to safely execute kubectl commands. Whatever commands you executed will be stored in a rollback 
+      mechanism which later is used to roll back the cluster state in case your current attempt fails.
+      
+          Args:
+              command (str): The kubectl command you would like to execute, must start with "kubectl"
+              INTERACTIVE COMMANDS ARE NOT SUPPORTED, e.g. "kubectl edit" 
+              INTERACTIVE FLAGS ARE NOT SUPPORTED, e.g., "kubectl logs -f"
+  - name: f_submit_tool
+    description: |
+      The tool to submit benchmark results
+          
+          Args:
+              ans (str): the answer you would like to submit to the benchmark
+prompts_path: mitigation_agent_prompts.yaml
+
+

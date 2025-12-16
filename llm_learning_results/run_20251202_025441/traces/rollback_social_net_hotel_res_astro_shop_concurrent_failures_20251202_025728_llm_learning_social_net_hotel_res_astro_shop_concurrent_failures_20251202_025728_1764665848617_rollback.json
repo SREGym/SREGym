@@ -1,0 +1,102 @@
+{
+  "trace_id": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251202_025728_1764665848617_rollback",
+  "agent_type": "AgentType.ROLLBACK",
+  "problem_context": {
+    "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+    "app_name": "SREGym Test Application",
+    "app_namespace": "test-namespace",
+    "app_description": "Concurrent failures across multiple services: social network, hotel reservation, and astronomy shop",
+    "fault_type": "social_net_hotel_res_astro_shop_concurrent_failures",
+    "initial_state": null
+  },
+  "start_time": 1764665848.6174233,
+  "end_time": 1764666262.5416372,
+  "success": false,
+  "final_submission": null,
+  "tool_calls": [],
+  "thinking_steps": [],
+  "performance_metrics": {
+    "total_duration": 413.924213886261,
+    "tool_call_count": 0,
+    "thinking_step_count": 0,
+    "success_rate": 0.0
+  },
+  "ground_truth": {
+    "detection": {
+      "expected": "Yes",
+      "description": "Detection should be \"Yes\" when fault is injected"
+    },
+    "localization": {
+      "expected": [
+        "user-service",
+        "mongodb-geo",
+        "frontend"
+      ],
+      "description": "List of faulty service names that must be identified"
+    },
+    "mitigation": {
+      "oracle_type": "CompoundedOracle",
+      "description": "Multiple oracles must all pass",
+      "sub_oracles": [
+        {
+          "name": "0-TargetPortMisconfigMitigationOracle",
+          "type": "TargetPortMisconfigMitigationOracle",
+          "description": "Service targetPort must be reset to 9090 and all pods must be Running"
+        },
+        {
+          "name": "1-MitigationOracle",
+          "type": "MitigationOracle",
+          "description": "All pods must be Running and all containers must be Ready"
+        },
+        {
+          "name": "2-ServiceEndpointMitigationOracle",
+          "type": "ServiceEndpointMitigationOracle",
+          "description": "Service endpoint selector must be corrected"
+        }
+      ]
+    }
+  },
+  "oracle_results_enhanced": {
+    "mitigation": {
+      "expected_checks": "Multiple oracles must all pass",
+      "oracle_type": "CompoundedOracle",
+      "oracle_results": {
+        "success": false,
+        "oracles": [
+          {
+            "success": false,
+            "name": "0-TargetPortMisconfigMitigationOracle"
+          },
+          {
+            "success": true,
+            "name": "1-MitigationOracle"
+          },
+          {
+            "success": false,
+            "name": "2-ServiceEndpointMitigationOracle"
+          }
+        ],
+        "accuracy": 33.33333333333333
+      },
+      "accuracy": 33.33333333333333,
+      "success": false,
+      "expected_sub_oracles": [
+        {
+          "name": "0-TargetPortMisconfigMitigationOracle",
+          "type": "TargetPortMisconfigMitigationOracle",
+          "description": "Service targetPort must be reset to 9090 and all pods must be Running"
+        },
+        {
+          "name": "1-MitigationOracle",
+          "type": "MitigationOracle",
+          "description": "All pods must be Running and all containers must be Ready"
+        },
+        {
+          "name": "2-ServiceEndpointMitigationOracle",
+          "type": "ServiceEndpointMitigationOracle",
+          "description": "Service endpoint selector must be corrected"
+        }
+      ]
+    }
+  }
+}

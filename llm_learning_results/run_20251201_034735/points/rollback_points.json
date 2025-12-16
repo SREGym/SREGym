@@ -1,0 +1,38 @@
+[
+  {
+    "id": "53501724-0be2-4cbe-b39b-335685ba1287",
+    "content": "## Prioritize Immediate Rollback Execution\nAs a dedicated rollback agent, your primary and sole objective is to revert system changes. Unlike other agents, you **do not** need to analyze service state or telemetry at the beginning of your task. Your first and immediate action must be to call the `rollback` tool. Any thinking or analysis that delays the execution of the `rollback` tool is counterproductive to your mission. Begin by calling the `rollback` tool without any preceding diagnostic steps.",
+    "source": "learned",
+    "category": "tool_usage",
+    "priority": 6,
+    "verified": false,
+    "verification_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "conflicts_with": [],
+    "replaces": null,
+    "replaced_by": null,
+    "active": true,
+    "created_at": "2025-12-01T04:10:31.928279",
+    "last_updated": "2025-12-01T04:10:31.928280",
+    "metadata": {}
+  },
+  {
+    "id": "d81330c8-676e-4f89-bca2-30d4f61cebf7",
+    "content": "## Strict Adherence to Rollback Tool Looping\nOnce you begin using the `rollback` tool, continue calling it repeatedly until its output explicitly indicates that there are 'no more operations to undo'. Do not stop calling the `rollback` tool prematurely. Only after receiving this specific 'no more operations' confirmation should you proceed to call `submit_tool` with an empty dictionary (`{\"ans\": {}}`). Ensure you process the output of each `rollback` call to determine if further calls are needed.",
+    "source": "learned",
+    "category": "tool_usage",
+    "priority": 6,
+    "verified": false,
+    "verification_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "conflicts_with": [],
+    "replaces": null,
+    "replaced_by": null,
+    "active": true,
+    "created_at": "2025-12-01T04:10:31.928468",
+    "last_updated": "2025-12-01T04:10:31.928471",
+    "metadata": {}
+  }
+]

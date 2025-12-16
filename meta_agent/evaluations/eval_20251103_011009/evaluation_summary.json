@@ -1,0 +1,43 @@
+{
+  "evaluation_id": "20251103_011009",
+  "evaluation_folder": "meta_agent/evaluations/eval_20251103_011009",
+  "start_time": "2025-11-03T03:28:01.286018",
+  "total_duration": 8266.573834180832,
+  "problem_count": 7,
+  "successful_problems": 0,
+  "failed_problems": 7,
+  "overall_success_rate": 0.0,
+  "stage_statistics": {
+    "Detection": {
+      "success": 0,
+      "total": 0,
+      "success_rate": 0.0
+    },
+    "Localization": {
+      "success": 0,
+      "total": 0,
+      "success_rate": 0.0
+    },
+    "Mitigation": {
+      "success": 0,
+      "total": 0,
+      "success_rate": 0.0
+    },
+    "NOOP Detection": {
+      "success": 0,
+      "total": 0,
+      "success_rate": 0.0
+    }
+  },
+  "traces_collected": 0,
+  "learned_prompts_used": true,
+  "learning_cycle_disabled": true,
+  "problem_results": [
+    {
+      "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+      "problem_name": "Concurrent Failures - Social Network, Hotel Reservation, Astronomy Shop",
+      "success": false,
+      "duration": 569.3505122661591,
+      "error": "'dict' object has no attribute 'problem_id'",
+      "trace_ids": {
+        

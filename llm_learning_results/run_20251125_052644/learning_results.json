@@ -1,0 +1,67 @@
+{
+  "run_id": "052644",
+  "start_time": "2025-11-25T05:26:49.572646",
+  "total_duration": 543.5222177505493,
+  "problem_count": 7,
+  "completed_problems": 4,
+  "results": [
+    {
+      "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+      "problem_name": "Concurrent Failures - Social Network, Hotel Reservation, Astronomy Shop",
+      "success": false,
+      "duration": 273.2683675289154,
+      "trace_ids": {
+        "diagnosis": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_053120_1764070280351_diagnosis",
+        "localization": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_053120_1764070280351_localization",
+        "mitigation": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_053120_1764070280351_mitigation",
+        "rollback": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251125_053120_1764070280351_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    },
+    {
+      "problem_id": "misconfig_app_hotel_res",
+      "problem_name": "Misconfiguration - Hotel Reservation App Mitigation",
+      "success": false,
+      "duration": 81.39177775382996,
+      "trace_ids": {
+        "diagnosis": "llm_learning_misconfig_app_hotel_res_20251125_053246_1764070366569_diagnosis",
+        "localization": "llm_learning_misconfig_app_hotel_res_20251125_053246_1764070366569_localization",
+        "mitigation": "llm_learning_misconfig_app_hotel_res_20251125_053246_1764070366569_mitigation",
+        "rollback": "llm_learning_misconfig_app_hotel_res_20251125_053246_1764070366569_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    },
+    {
+      "problem_id": "revoke_auth_mongodb-1",
+      "problem_name": "MongoDB Authentication Revocation",
+      "success": false,
+      "duration": 77.35712671279907,
+      "trace_ids": {
+        "diagnosis": "llm_learning_revoke_auth_mongodb-1_20251125_053409_1764070449225_diagnosis",
+        "localization": "llm_learning_revoke_auth_mongodb-1_20251125_053409_1764070449225_localization",
+        "mitigation": "llm_learning_revoke_auth_mongodb-1_20251125_053409_1764070449225_mitigation",
+        "rollback": "llm_learning_revoke_auth_mongodb-1_20251125_053409_1764070449225_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    },
+    {
+      "problem_id": "astronomy_shop_ad_service_high_cpu",
+      "problem_name": "High CPU Usage - Ad Service",
+      "success": false,
+      "duration": 96.48658680915833,
+      "trace_ids": {
+        "diagnosis": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_053550_1764070550688_diagnosis",
+        "localization": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_053550_1764070550688_localization",
+        "mitigation": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_053550_1764070550688_mitigation",
+        "rollback": "llm_learning_astronomy_shop_ad_service_high_cpu_20251125_053550_1764070550688_rollback"
+      },
+      "error": "'CallToolResult' object is not iterable"
+    }
+  ],
+  "reward_spec": {
+    "success_weight": 1.0,
+    "latency_weight": -0.5,
+    "attempts_weight": -0.3
+  },
+  "learning_result": null
+}

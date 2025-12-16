@@ -1,0 +1,42 @@
+{
+  "trace_id": "test_trace",
+  "agent_type": "AgentType.DIAGNOSIS",
+  "problem_context": {
+    "problem_id": "test_problem",
+    "app_name": "test_app",
+    "app_namespace": "test_namespace",
+    "app_description": "Test application",
+    "fault_type": null,
+    "initial_state": null
+  },
+  "start_time": 1760811867.9857008,
+  "end_time": 1760811867.9857297,
+  "success": true,
+  "final_submission": "Test completed",
+  "tool_calls": [
+    {
+      "tool_name": "test_tool",
+      "arguments": {
+        "param": "value"
+      },
+      "timestamp": 1760811867.985724,
+      "success": true,
+      "response": "Success",
+      "duration": 1.0
+    }
+  ],
+  "thinking_steps": [
+    {
+      "reasoning": "Test reasoning",
+      "tool_choice": "test_tool",
+      "justification": "Test justification",
+      "timestamp": 1760811867.9857275
+    }
+  ],
+  "performance_metrics": {
+    "total_duration": 2.8848648071289062e-05,
+    "tool_call_count": 1,
+    "thinking_step_count": 1,
+    "success_rate": 1.0
+  }
+}

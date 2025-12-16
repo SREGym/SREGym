@@ -1,0 +1,20 @@
+[
+  {
+    "id": "3a315bb5-e590-449f-abee-236200c70376",
+    "content": "## Namespace Context Awareness\nUnless explicitly investigating a cluster-wide or cross-namespace issue (as in concurrent failures), always scope your Kubernetes commands to the provided `app_namespace`. This ensures you are querying the correct resources and prevents wasted tool calls in irrelevant parts of the cluster.\n**Action:** Always include `-n {app_namespace}` in your `kubectl` commands unless intentionally looking elsewhere.",
+    "source": "learned",
+    "category": "tool_usage",
+    "priority": 6,
+    "verified": false,
+    "verification_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "conflicts_with": [],
+    "replaces": null,
+    "replaced_by": null,
+    "active": true,
+    "created_at": "2025-11-30T05:05:48.986091",
+    "last_updated": "2025-11-30T05:05:48.986094",
+    "metadata": {}
+  }
+]

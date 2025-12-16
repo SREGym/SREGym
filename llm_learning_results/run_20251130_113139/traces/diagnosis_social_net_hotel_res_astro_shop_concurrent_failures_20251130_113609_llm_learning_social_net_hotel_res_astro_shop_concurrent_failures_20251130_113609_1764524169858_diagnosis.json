@@ -1,0 +1,26 @@
+{
+  "trace_id": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251130_113609_1764524169858_diagnosis",
+  "agent_type": "AgentType.DIAGNOSIS",
+  "problem_context": {
+    "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+    "app_name": "SREGym Test Application",
+    "app_namespace": "test-namespace",
+    "app_description": "Concurrent failures across multiple services: social network, hotel reservation, and astronomy shop",
+    "fault_type": "social_net_hotel_res_astro_shop_concurrent_failures",
+    "initial_state": null
+  },
+  "start_time": 1764524169.858412,
+  "end_time": 1764524201.6173272,
+  "success": false,
+  "final_submission": "Error: Max retries exceeded. Unable to complete the request.",
+  "tool_calls": [],
+  "thinking_steps": [],
+  "performance_metrics": {
+    "total_duration": 31.758915185928345,
+    "tool_call_count": 0,
+    "thinking_step_count": 0,
+    "success_rate": 0.0
+  },
+  "ground_truth": null,
+  "oracle_results_enhanced": null
+}

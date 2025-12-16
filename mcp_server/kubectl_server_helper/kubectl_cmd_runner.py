@@ -93,6 +93,11 @@ class KubectlCmdRunner:
             if node.kind not in ["command", "heredoc", "redirect", "tilde", "word"]:
                 if "pipe" in node.kind:
                     raise ValueError("Pipe commands are forbidden")
+                if node.kind == "commandsubstitution":
+                    raise ValueError(
+                        f"Command substitution (e.g., $(command) or `command`) is not supported. "
+                        f"Please execute the command separately and use its output directly, or use kubectl's built-in features like -o jsonpath or -o name."
+                    )
                 raise ValueError(f"Unsupported operator kind: {node.kind}")
 
             if node.kind == "redirect":

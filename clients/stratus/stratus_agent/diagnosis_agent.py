@@ -22,9 +22,12 @@ logger.setLevel(logging.DEBUG)
 
 class DiagnosisAgent(BaseAgent):
     def __init__(self, **kwargs):
+        # Extract max_loop_count before passing to BaseAgent (which doesn't accept it)
+        max_loop_count = kwargs.pop("max_loop_count", 50)
         super().__init__(**kwargs)
         self.tool_node = None
         self.max_step = kwargs.get("max_step", 20)
+        self.max_loop_count = max_loop_count  # Prevent infinite loops
         self.loop_count = 0
         self.local_logger = logging.getLogger("all.stratus.diagnosis")
 
@@ -87,8 +90,26 @@ class DiagnosisAgent(BaseAgent):
         graph_events = []
 
         while True:
-            graph_config = {"configurable": {"thread_id": "1"}}
+            # Check maximum loop count to prevent infinite loops
+            if self.loop_count >= self.max_loop_count:
+                logger.warning(
+                    f"[Loop {self.loop_count}] Maximum loop count ({self.max_loop_count}) reached. "
+                    f"Agent has not submitted after {self.max_loop_count} loops. "
+                    f"Breaking loop to prevent infinite execution."
+                )
+                # Get the current state before breaking
+                graph_config = {"configurable": {"thread_id": "1"}}
+                last_state = self.graph.get_state(config=graph_config)
+                # Force submission to break the loop
+                if "submitted" in last_state.values:
+                    last_state.values["submitted"] = True
+                logger.error(
+                    f"[Loop {self.loop_count}] Agent failed to submit within {self.max_loop_count} loops. "
+                    f"This may indicate the agent is stuck or unable to complete the task."
+                )
+                break
 
+            graph_config = {"configurable": {"thread_id": "1"}}
             logger.info(f"{'-' * 20} [Loop {self.loop_count}] {'-' * 20}")
             last_state = self.graph.get_state(config=graph_config)
             # logger.info("last state: %s", last_state)
@@ -139,6 +160,7 @@ def build_default_diagnosis_agent():
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
     diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path, "r"))
     max_step = diagnosis_agent_config["max_step"]
+    max_loop_count = diagnosis_agent_config.get("max_loop_count", 50)
     prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
     sync_tools = []
     async_tools = []
@@ -181,6 +203,7 @@ def build_default_diagnosis_agent():
     agent = DiagnosisAgent(
         llm=get_llm_backend_for_tools(),
         max_step=max_step,
+        max_loop_count=max_loop_count,
         sync_tools=sync_tools,
         async_tools=async_tools,
         submit_tool=submit_tool,

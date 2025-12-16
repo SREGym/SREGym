@@ -1,0 +1,55 @@
+{
+  "experiment_info": {
+    "start_time": "2025-12-01T03:47:35.126093",
+    "end_time": "2025-12-01T04:44:31.863440",
+    "total_duration": 3416.7373411655426,
+    "total_duration_minutes": 56.945622352759045,
+    "llm_model": "gemini/gemini-2.5-flash",
+    "delay_between_problems": 5,
+    "delay_between_rounds": 10
+  },
+  "reward_spec": {
+    "success_weight": 1.0,
+    "latency_weight": -0.5,
+    "attempts_weight": -0.3
+  },
+  "rounds": [
+    {
+      "round_number": 1,
+      "run_id": "20251201_034735",
+      "run_folder": "llm_learning_results/run_20251201_034735",
+      "start_time": "2025-12-01T03:47:35.150450",
+      "end_time": "2025-12-01T04:10:47.118082",
+      "duration": 1391.9919471740723,
+      "status": "completed",
+      "results_file": "llm_learning_results/run_20251201_034735/learning_results.json",
+      "results": {
+        "completed_problems": 7,
+        "successful_problems": 0,
+        "total_duration": 892.7487154006958
+      }
+    },
+    {
+      "round_number": 2,
+      "run_id": "20251201_041057",
+      "run_folder": "llm_learning_results/run_20251201_041057",
+      "start_time": "2025-12-01T04:10:57.169422",
+      "end_time": "2025-12-01T04:44:31.862747",
+      "duration": 2014.7429370880127,
+      "status": "completed",
+      "results_file": "llm_learning_results/run_20251201_041057/learning_results.json",
+      "results": {
+        "completed_problems": 7,
+        "successful_problems": 0,
+        "total_duration": 973.9386923313141
+      }
+    }
+  ],
+  "summary_statistics": {
+    "total_rounds": 2,
+    "completed_rounds": 2,
+    "failed_rounds": 0,
+    "total_duration": 3416.7373411655426,
+    "average_round_duration": 1703.3674421310425
+  }
+}

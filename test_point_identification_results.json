@@ -1,0 +1,62 @@
+{
+  "heuristic_first": {
+    "total_identified": 0,
+    "per_trace": [
+      {
+        "trace": "diagnosis_misconfig_app_hotel_res_20251202_011637_llm_learning_misconfig_app_hotel_res_20251202_011637_1764659797556_diagnosis.json",
+        "count": 0,
+        "points": []
+      },
+      {
+        "trace": "localization_misconfig_app_hotel_res_20251202_011637_llm_learning_misconfig_app_hotel_res_20251202_011637_1764659797556_localization.json",
+        "count": 0,
+        "points": []
+      },
+      {
+        "trace": "diagnosis_astronomy_shop_ad_service_high_cpu_20251202_013757_llm_learning_astronomy_shop_ad_service_high_cpu_20251202_013757_1764661077729_diagnosis.json",
+        "count": 0,
+        "points": []
+      },
+      {
+        "trace": "rollback_valkey_memory_disruption_20251202_014028_llm_learning_valkey_memory_disruption_20251202_014028_1764661228467_rollback.json",
+        "count": 0,
+        "points": []
+      },
+      {
+        "trace": "mitigation_duplicate_pvc_mounts_hotel_reservation_20251202_015018_llm_learning_duplicate_pvc_mounts_hotel_reservation_20251202_015018_1764661818717_mitigation.json",
+        "count": 0,
+        "points": []
+      }
+    ]
+  },
+  "llm_primary": {
+    "total_identified": 0,
+    "per_trace": [
+      {
+        "trace": "diagnosis_misconfig_app_hotel_res_20251202_011637_llm_learning_misconfig_app_hotel_res_20251202_011637_1764659797556_diagnosis.json",
+        "count": 0,
+        "points": []
+      },
+      {
+        "trace": "localization_misconfig_app_hotel_res_20251202_011637_llm_learning_misconfig_app_hotel_res_20251202_011637_1764659797556_localization.json",
+        "count": 0,
+        "points": []
+      },
+      {
+        "trace": "diagnosis_astronomy_shop_ad_service_high_cpu_20251202_013757_llm_learning_astronomy_shop_ad_service_high_cpu_20251202_013757_1764661077729_diagnosis.json",
+        "count": 0,
+        "points": []
+      },
+      {
+        "trace": "rollback_valkey_memory_disruption_20251202_014028_llm_learning_valkey_memory_disruption_20251202_014028_1764661228467_rollback.json",
+        "count": 0,
+        "points": []
+      },
+      {
+        "trace": "mitigation_duplicate_pvc_mounts_hotel_reservation_20251202_015018_llm_learning_duplicate_pvc_mounts_hotel_reservation_20251202_015018_1764661818717_mitigation.json",
+        "count": 0,
+        "points": []
+      }
+    ]
+  }
+}

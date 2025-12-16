@@ -43,8 +43,18 @@ class SubmitRequest(BaseModel):
 
 @app.post("/submit")
 async def submit_solution(req: SubmitRequest):
-    allowed = {"diagnosis", "mitigation"}
-    if _conductor is None or _conductor.submission_stage not in allowed:
+    if _conductor is None:
+        local_logger.error("Conductor is not initialized")
+        raise HTTPException(status_code=400, detail="Conductor is not initialized")
+
+    # If all tasks are already completed, return the final results gracefully
+    # This matches the behavior of conductor.submit() method
+    if _conductor.submission_stage == "done":
+        local_logger.info("All tasks already completed; returning final results.")
+        return dict(_conductor.results)
+
+    allowed = {"noop", "detection", "diagnosis", "mitigation"}
+    if _conductor.submission_stage not in allowed:
         local_logger.error(f"Cannot submit at stage: {_conductor.submission_stage!r}")
         raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {_conductor.submission_stage!r}")
 

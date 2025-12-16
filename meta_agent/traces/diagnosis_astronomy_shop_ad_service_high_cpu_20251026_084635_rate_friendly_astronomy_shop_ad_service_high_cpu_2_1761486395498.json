@@ -1,0 +1,37 @@
+{
+  "trace_id": "rate_friendly_astronomy_shop_ad_service_high_cpu_2_1761486395498",
+  "agent_type": "AgentType.DIAGNOSIS",
+  "problem_context": {
+    "problem_id": "astronomy_shop_ad_service_high_cpu",
+    "app_name": "SREArena Test Application",
+    "app_namespace": "test-namespace",
+    "app_description": "Astronomy shop ad service experiencing high CPU usage causing performance degradation",
+    "fault_type": "astronomy_shop_ad_service_high_cpu",
+    "initial_state": null
+  },
+  "start_time": 1761486395.4988158,
+  "end_time": 1761486395.5131414,
+  "success": false,
+  "final_submission": "Problem astronomy_shop_ad_service_high_cpu execution failed: 'user'",
+  "tool_calls": [],
+  "thinking_steps": [
+    {
+      "reasoning": "Starting rate-friendly diagnosis for High CPU Usage - Ad Service (astronomy_shop_ad_service_high_cpu) in iteration 2",
+      "tool_choice": "stratus_driver",
+      "justification": "Problem: Astronomy shop ad service experiencing high CPU usage causing performance degradation",
+      "timestamp": 1761486395.4988668
+    },
+    {
+      "reasoning": "Completed rate-friendly diagnosis for High CPU Usage - Ad Service",
+      "tool_choice": "stratus_driver",
+      "justification": "Execution took 0.01 seconds, success: False",
+      "timestamp": 1761486395.5131323
+    }
+  ],
+  "performance_metrics": {
+    "total_duration": 0.014325618743896484,
+    "tool_call_count": 0,
+    "thinking_step_count": 2,
+    "success_rate": 0.0
+  }
+}

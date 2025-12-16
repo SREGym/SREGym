@@ -1,0 +1,37 @@
+{
+  "trace_id": "complete_stratus_1_1761457641258",
+  "agent_type": "AgentType.DIAGNOSIS",
+  "problem_context": {
+    "problem_id": "revoke_auth_mongodb-1",
+    "app_name": "Hotel Reservation",
+    "app_namespace": "hotel-reservation",
+    "app_description": "A hotel reservation application built with Go and gRPC, providing backend in-memory and persistent databases, a recommender system for hotel recommendations, and a functionality to place reservations.",
+    "fault_type": "revoke_auth_mongodb-1",
+    "initial_state": null
+  },
+  "start_time": 1761457641.2586875,
+  "end_time": 1761460842.5988634,
+  "success": true,
+  "final_submission": "Complete Stratus execution completed in 3201.34s",
+  "tool_calls": [],
+  "thinking_steps": [
+    {
+      "reasoning": "Starting complete Stratus diagnosis for revoke_auth_mongodb-1 problem in iteration 1",
+      "tool_choice": "stratus_driver",
+      "justification": "This is the beginning of complete Stratus execution with both API and MCP servers",
+      "timestamp": 1761457641.2587245
+    },
+    {
+      "reasoning": "Completed complete Stratus execution for revoke_auth_mongodb-1",
+      "tool_choice": "stratus_driver",
+      "justification": "Execution took 3201.34 seconds, success: True",
+      "timestamp": 1761460842.598855
+    }
+  ],
+  "performance_metrics": {
+    "total_duration": 3201.3401758670807,
+    "tool_call_count": 0,
+    "thinking_step_count": 2,
+    "success_rate": 0.0
+  }
+}

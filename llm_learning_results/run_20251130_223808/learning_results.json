@@ -1,0 +1,137 @@
+{
+  "run_id": "223808",
+  "start_time": "2025-11-30T22:38:13.411202",
+  "total_duration": 4316.819911956787,
+  "problem_count": 7,
+  "completed_problems": 4,
+  "results": [
+    {
+      "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+      "problem_name": "Concurrent Failures - Social Network, Hotel Reservation, Astronomy Shop",
+      "success": false,
+      "duration": 758.4327974319458,
+      "trace_ids": {
+        "diagnosis": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251130_224046_1764564046401_diagnosis",
+        "localization": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251130_224046_1764564046401_localization",
+        "mitigation": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251130_224046_1764564046401_mitigation",
+        "rollback": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251130_224046_1764564046401_rollback"
+      },
+      "stratus_result": null,
+      "conductor_results": {
+        "Diagnosis": {
+          "success": false,
+          "oracles": [
+            {
+              "judgment": "False",
+              "success": false,
+              "accuracy": 0.0,
+              "name": "0-LLMAsAJudgeOracle"
+            },
+            {
+              "judgment": "FalsePositive",
+              "success": false,
+              "accuracy": 0.0,
+              "name": "1-LLMAsAJudgeOracle"
+            },
+            {
+              "judgment": "False",
+              "success": false,
+              "accuracy": 0.0,
+              "name": "2-LLMAsAJudgeOracle"
+            }
+          ],
+          "accuracy": 0.0
+        },
+        "TTL": 166.29902338981628,
+        "Mitigation": {
+          "success": false,
+          "oracles": [
+            {
+              "success": false,
+              "name": "0-TargetPortMisconfigMitigationOracle"
+            },
+            {
+              "success": false,
+              "name": "1-MitigationOracle"
+            },
+            {
+              "success": false,
+              "name": "2-ServiceEndpointMitigationOracle"
+            }
+          ],
+          "accuracy": 0.0
+        },
+        "TTM": 633.5360820293427
+      }
+    },
+    {
+      "problem_id": "misconfig_app_hotel_res",
+      "problem_name": "Misconfiguration - Hotel Reservation App Mitigation",
+      "success": false,
+      "duration": 477.6540193557739,
+      "trace_ids": {
+        "diagnosis": "llm_learning_misconfig_app_hotel_res_20251130_225138_1764564698108_diagnosis",
+        "localization": "llm_learning_misconfig_app_hotel_res_20251130_225138_1764564698108_localization",
+        "mitigation": "llm_learning_misconfig_app_hotel_res_20251130_225138_1764564698108_mitigation",
+        "rollback": "llm_learning_misconfig_app_hotel_res_20251130_225138_1764564698108_rollback"
+      },
+      "stratus_result": null,
+      "conductor_results": {
+        "Diagnosis": {
+          "judgment": "FalsePositive",
+          "success": false,
+          "accuracy": 0.0
+        },
+        "TTL": 53.78191804885864,
+        "Mitigation": {
+          "success": true
+        },
+        "TTM": 432.41596579551697
+      }
+    },
+    {
+      "problem_id": "revoke_auth_mongodb-1",
+      "problem_name": "MongoDB Authentication Revocation",
+      "success": false,
+      "duration": 908.2240352630615,
+      "trace_ids": {
+        "diagnosis": "llm_learning_revoke_auth_mongodb-1_20251130_225935_1764565175509_diagnosis",
+        "localization": "llm_learning_revoke_auth_mongodb-1_20251130_225935_1764565175509_localization",
+        "mitigation": "llm_learning_revoke_auth_mongodb-1_20251130_225935_1764565175509_mitigation",
+        "rollback": "llm_learning_revoke_auth_mongodb-1_20251130_225935_1764565175509_rollback"
+      },
+      "stratus_result": null,
+      "conductor_results": {
+        "Diagnosis": {
+          "judgment": "FalsePositive",
+          "success": false,
+          "accuracy": 0.0
+        },
+        "TTL": 43.66451144218445,
+        "Mitigation": {
+          "success": true
+        },
+        "TTM": 862.7220170497894
+      }
+    },
+    {
+      "problem_id": "astronomy_shop_ad_service_high_cpu",
+      "problem_name": "High CPU Usage - Ad Service",
+      "success": false,
+      "duration": 2155.978403568268,
+      "trace_ids": {
+        "diagnosis": "llm_learning_astronomy_shop_ad_service_high_cpu_20251130_231515_1764566115618_diagnosis",
+        "localization": "llm_learning_astronomy_shop_ad_service_high_cpu_20251130_231515_1764566115618_localization",
+        "mitigation": "llm_learning_astronomy_shop_ad_service_high_cpu_20251130_231515_1764566115618_mitigation",
+        "rollback": "llm_learning_astronomy_shop_ad_service_high_cpu_20251130_231515_1764566115618_rollback"
+      },
+      "error": "[Errno 32] Broken pipe"
+    }
+  ],
+  "reward_spec": {
+    "success_weight": 1.0,
+    "latency_weight": -0.5,
+    "attempts_weight": -0.3
+  },
+  "learning_result": null
+}

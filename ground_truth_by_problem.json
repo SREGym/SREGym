@@ -1,0 +1,133 @@
+{
+  "social_net_hotel_res_astro_shop_concurrent_failures": {
+    "detection": {
+      "expected": "Yes",
+      "description": "Detection should be \"Yes\" when fault is injected"
+    },
+    "localization": {
+      "expected": [
+        "user-service",
+        "mongodb-geo",
+        "frontend"
+      ],
+      "description": "List of faulty service names that must be identified"
+    },
+    "mitigation": {
+      "oracle_type": "CompoundedOracle",
+      "description": "Multiple oracles must all pass",
+      "sub_oracles": [
+        {
+          "name": "0-TargetPortMisconfigMitigationOracle",
+          "type": "TargetPortMisconfigMitigationOracle",
+          "description": "Service targetPort must be reset to 9090 and all pods must be Running"
+        },
+        {
+          "name": "1-MitigationOracle",
+          "type": "MitigationOracle",
+          "description": "All pods must be Running and all containers must be Ready"
+        },
+        {
+          "name": "2-ServiceEndpointMitigationOracle",
+          "type": "ServiceEndpointMitigationOracle",
+          "description": "Service endpoint selector must be corrected"
+        }
+      ]
+    }
+  },
+  "misconfig_app_hotel_res": {
+    "detection": {
+      "expected": "Yes",
+      "description": "Detection should be \"Yes\" when fault is injected"
+    },
+    "localization": {
+      "expected": [
+        "geo"
+      ],
+      "description": "List of faulty service names that must be identified"
+    },
+    "mitigation": {
+      "oracle_type": "MitigationOracle",
+      "description": "All pods must be Running and all containers must be Ready"
+    }
+  },
+  "revoke_auth_mongodb-1": {
+    "detection": {
+      "expected": "Yes",
+      "description": "Detection should be \"Yes\" when fault is injected"
+    },
+    "localization": {
+      "expected": [
+        "mongodb-geo"
+      ],
+      "description": "List of faulty service names that must be identified"
+    },
+    "mitigation": {
+      "oracle_type": "MitigationOracle",
+      "description": "All pods must be Running and all containers must be Ready"
+    }
+  },
+  "astronomy_shop_ad_service_high_cpu": {
+    "detection": {
+      "expected": "Yes",
+      "description": "Detection should be \"Yes\" when fault is injected"
+    },
+    "localization": {
+      "expected": [
+        "ad"
+      ],
+      "description": "List of faulty service names that must be identified"
+    },
+    "mitigation": {
+      "oracle_type": "None",
+      "description": "No mitigation oracle attached"
+    }
+  },
+  "valkey_memory_disruption": {
+    "detection": {
+      "expected": "Yes",
+      "description": "Detection should be \"Yes\" when fault is injected"
+    },
+    "localization": {
+      "expected": [
+        "valkey-cart"
+      ],
+      "description": "List of faulty service names that must be identified"
+    },
+    "mitigation": {
+      "oracle_type": "None",
+      "description": "No mitigation oracle attached"
+    }
+  },
+  "network_policy_block": {
+    "detection": {
+      "expected": "Yes",
+      "description": "Detection should be \"Yes\" when fault is injected"
+    },
+    "localization": {
+      "expected": [
+        "payment-service"
+      ],
+      "description": "List of faulty service names that must be identified"
+    },
+    "mitigation": {
+      "oracle_type": "NetworkPolicyMitigationOracle",
+      "description": "NetworkPolicy \"deny-all-payment-service\" must be deleted"
+    }
+  },
+  "duplicate_pvc_mounts_hotel_reservation": {
+    "detection": {
+      "expected": "Yes",
+      "description": "Detection should be \"Yes\" when fault is injected"
+    },
+    "localization": {
+      "expected": [
+        "frontend"
+      ],
+      "description": "List of faulty service names that must be identified"
+    },
+    "mitigation": {
+      "oracle_type": "MitigationOracle",
+      "description": "All pods must be Running and all containers must be Ready"
+    }
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "run_id": "041057",
+  "start_time": "2025-12-01T04:11:02.172187",
+  "total_duration": 2009.690174818039,
+  "problem_count": 7,
+  "completed_problems": 7,
+  "results": [
+    {
+      "problem_id": "social_net_hotel_res_astro_shop_concurrent_failures",
+      "problem_name": "Concurrent Failures - Social Network, Hotel Reservation, Astronomy Shop",
+      "success": false,
+      "duration": 258.97256731987,
+      "trace_ids": {
+        "diagnosis": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251201_041454_1764584094210_diagnosis",
+        "localization": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251201_041454_1764584094210_localization",
+        "mitigation": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251201_041454_1764584094210_mitigation",
+        "rollback": "llm_learning_social_net_hotel_res_astro_shop_concurrent_failures_20251201_041454_1764584094210_rollback"
+      },
+      "error": "BaseAgent.__init__() got an unexpected keyword argument 'max_loop_count'"
+    },
+    {
+      "problem_id": "misconfig_app_hotel_res",
+      "problem_name": "Misconfiguration - Hotel Reservation App Mitigation",
+      "success": false,
+      "duration": 99.096355676651,
+      "trace_ids": {
+        "diagnosis": "llm_learning_misconfig_app_hotel_res_20251201_041644_1764584204876_diagnosis",
+        "localization": "llm_learning_misconfig_app_hotel_res_20251201_041644_1764584204876_localization",
+        "mitigation": "llm_learning_misconfig_app_hotel_res_20251201_041644_1764584204876_mitigation",
+        "rollback": "llm_learning_misconfig_app_hotel_res_20251201_041644_1764584204876_rollback"
+      },
+      "error": "BaseAgent.__init__() got an unexpected keyword argument 'max_loop_count'"
+    },
+    {
+      "problem_id": "revoke_auth_mongodb-1",
+      "problem_name": "MongoDB Authentication Revocation",
+      "success": false,
+      "duration": 87.50125527381897,
+      "trace_ids": {
+        "diagnosis": "llm_learning_revoke_auth_mongodb-1_20251201_041823_1764584303527_diagnosis",
+        "localization": "llm_learning_revoke_auth_mongodb-1_20251201_041823_1764584303527_localization",
+        "mitigation": "llm_learning_revoke_auth_mongodb-1_20251201_041823_1764584303527_mitigation",
+        "rollback": "llm_learning_revoke_auth_mongodb-1_20251201_041823_1764584303527_rollback"
+      },
+      "error": "BaseAgent.__init__() got an unexpected keyword argument 'max_loop_count'"
+    },
+    {
+      "problem_id": "astronomy_shop_ad_service_high_cpu",
+      "problem_name": "High CPU Usage - Ad Service",
+      "success": false,
+      "duration": 149.91763854026794,
+      "trace_ids": {
+        "diagnosis": "llm_learning_astronomy_shop_ad_service_high_cpu_20251201_042014_1764584414507_diagnosis",
+        "localization": "llm_learning_astronomy_shop_ad_service_high_cpu_20251201_042014_1764584414507_localization",
+        "mitigation": "llm_learning_astronomy_shop_ad_service_high_cpu_20251201_042014_1764584414507_mitigation",
+        "rollback": "llm_learning_astronomy_shop_ad_service_high_cpu_20251201_042014_1764584414507_rollback"
+      },
+      "error": "BaseAgent.__init__() got an unexpected keyword argument 'max_loop_count'"
+    },
+    {
+      "problem_id": "valkey_memory_disruption",
+      "problem_name": "Memory Disruption - Valkey",
+      "success": false,
+      "duration": 132.21802735328674,
+      "trace_ids": {
+        "diagnosis": "llm_learning_valkey_memory_disruption_20251201_042224_1764584544452_diagnosis",
+        "localization": "llm_learning_valkey_memory_disruption_20251201_042224_1764584544452_localization",
+        "mitigation": "llm_learning_valkey_memory_disruption_20251201_042224_1764584544452_mitigation",
+        "rollback": "llm_learning_valkey_memory_disruption_20251201_042224_1764584544452_rollback"
+      },
+      "error": "BaseAgent.__init__() got an unexpected keyword argument 'max_loop_count'"
+    },
+    {
+      "problem_id": "network_policy_block",
+      "problem_name": "Network Policy Block",
+      "success": false,
+      "duration": 105.37858867645264,
+      "trace_ids": {
+        "diagnosis": "llm_learning_network_policy_block_20251201_042440_1764584680018_diagnosis",
+        "localization": "llm_learning_network_policy_block_20251201_042440_1764584680018_localization",
+        "mitigation": "llm_learning_network_policy_block_20251201_042440_1764584680018_mitigation",
+        "rollback": "llm_learning_network_policy_block_20251201_042440_1764584680018_rollback"
+      },
+      "error": "BaseAgent.__init__() got an unexpected keyword argument 'max_loop_count'"
+    },
+    {
+      "problem_id": "duplicate_pvc_mounts_hotel_reservation",
+      "problem_name": "Storage Mount Issues - Hotel Reservation",
+      "success": false,
+      "duration": 110.82956123352051,
+      "trace_ids": {
+        "diagnosis": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251201_042636_1764584796388_diagnosis",
+        "localization": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251201_042636_1764584796388_localization",
+        "mitigation": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251201_042636_1764584796388_mitigation",
+        "rollback": "llm_learning_duplicate_pvc_mounts_hotel_reservation_20251201_042636_1764584796388_rollback"
+      },
+      "error": "BaseAgent.__init__() got an unexpected keyword argument 'max_loop_count'"
+    }
+  ],
+  "reward_spec": {
+    "success_weight": 1.0,
+    "latency_weight": -0.5,
+    "attempts_weight": -0.3
+  },
+  "learning_result": {
+    "status": "success",
+    "cycle": 1,
+    "traces_analyzed": 28,
+    "patterns_identified": 0,
+    "llm_optimizations": 4,
+    "updates_applied": 4,
+    "applied_updates": [
+      {
+        "agent_type": "diagnosis",
+        "type": "llm_prompt_optimization",
+        "source": "llm"
+      },
+      {
+        "agent_type": "localization",
+        "type": "llm_prompt_optimization",
+        "source": "llm"
+      },
+      {
+        "agent_type": "mitigation",
+        "type": "llm_prompt_optimization",
+        "source": "llm"
+      },
+      {
+        "agent_type": "rollback",
+        "type": "llm_prompt_optimization",
+        "source": "llm"
+      }
+    ]
+  }
+}

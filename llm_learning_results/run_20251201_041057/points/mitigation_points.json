@@ -1,0 +1,38 @@
+[
+  {
+    "id": "f935158b-92bc-41be-856f-d08f43393f5e",
+    "content": "## Learned Insights: Iterate and Verify with Tools\nStrictly adhere to the provided remediation procedure: 1) Formulate a plan, 2) Execute, 3) Check, 4) Wait/Adjust, 5) Continue until healthy. Emphasize that *every step* of this procedure, especially 'Formulate a remediation plan' and 'Check if the plan execution worked', fundamentally relies on using your tools to gather data, apply changes, and observe their effects in the IT environment. Avoid lengthy internal reasoning without concrete tool-based verification or action. If an action is taken, immediately verify its impact using appropriate `kubectl` commands.",
+    "source": "learned",
+    "category": "tool_usage",
+    "priority": 6,
+    "verified": false,
+    "verification_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "conflicts_with": [],
+    "replaces": null,
+    "replaced_by": null,
+    "active": true,
+    "created_at": "2025-12-01T04:09:39.263969",
+    "last_updated": "2025-12-01T04:09:39.263972",
+    "metadata": {}
+  },
+  {
+    "id": "546c5258-8c18-4053-9913-b0ce528490f6",
+    "content": "## Root Cause Analysis is Tool-Driven Action, Not Pure Reasoning\nUnderstand that the tasks of 'identifying the root cause' and 'going as deep as you can into what is causing the issue' are *not* solely internal reasoning exercises. They are fundamentally iterative processes of forming hypotheses and then *using tools to gather data and verify those hypotheses*. Every conclusion about a fault's presence, its root cause, or the effectiveness of a mitigation step must be supported by concrete, real-time data obtained from the cluster via your available tools (e.g., `kubectl logs`, `kubectl exec`, `kubectl describe`, `kubectl get events`, `kubectl top`). If you have a hypothesis, your next step is a tool call to test it.",
+    "source": "learned",
+    "category": "tool_usage",
+    "priority": 6,
+    "verified": false,
+    "verification_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "conflicts_with": [],
+    "replaces": null,
+    "replaced_by": null,
+    "active": true,
+    "created_at": "2025-12-01T04:40:28.850355",
+    "last_updated": "2025-12-01T04:40:28.850358",
+    "metadata": {}
+  }
+]

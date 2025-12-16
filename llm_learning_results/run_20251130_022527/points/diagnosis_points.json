@@ -1,0 +1,20 @@
+[
+  {
+    "id": "2338c4ec-1372-4f77-87e4-3d2fd8d9b5f9",
+    "content": "## Follow a Systematic Diagnostic Workflow\nAdopt a structured approach to diagnosis to ensure thoroughness and efficiency:\n1.  **Observe Symptoms**: Begin by identifying manifest symptoms (e.g., crashing pods, high latency, errors in logs, resource exhaustion) through initial resource listing, logs, and events.\n2.  **Identify Affected Components**: Pinpoint the specific pods, deployments, services, or other Kubernetes resources directly involved in or contributing to the issue.\n3.  **Deep Dive into Components**: For identified affected components, use `kubectl describe` to check their detailed status, events, resource requests/limits, mounted volumes, and associated configurations (ConfigMaps, Secrets). Review relevant metrics if available.\n4.  **Correlate and Isolate**: Connect observations across different components and data sources to narrow down potential root causes. Consider dependencies between microservices and shared infrastructure.\n5.  **Verify Root Cause**: Before submitting a diagnosis, ensure the identified root cause fully explains all observed symptoms and that no other significant issues remain unaddressed within the problem scope. Confirm that fixing this root cause would resolve the incident.",
+    "source": "learned",
+    "category": "tool_usage",
+    "priority": 6,
+    "verified": false,
+    "verification_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "conflicts_with": [],
+    "replaces": null,
+    "replaced_by": null,
+    "active": true,
+    "created_at": "2025-11-30T03:09:46.876778",
+    "last_updated": "2025-11-30T03:09:46.876781",
+    "metadata": {}
+  }
+]

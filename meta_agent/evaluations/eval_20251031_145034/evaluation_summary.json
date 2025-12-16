@@ -1,0 +1,43 @@
+{
+  "evaluation_id": "20251031_145034",
+  "evaluation_folder": "meta_agent/evaluations/eval_20251031_145034",
+  "start_time": "2025-10-31T17:28:36.688937",
+  "total_duration": 9477.021840572357,
+  "problem_count": 5,
+  "successful_problems": 0,
+  "failed_problems": 5,
+  "overall_success_rate": 0.0,
+  "stage_statistics": {
+    "Detection": {
+      "success": 0,
+      "total": 0,
+      "success_rate": 0.0
+    },
+    "Localization": {
+      "success": 0,
+      "total": 0,
+      "success_rate": 0.0
+    },
+    "Mitigation": {
+      "success": 0,
+      "total": 0,
+      "success_rate": 0.0
+    },
+    "NOOP Detection": {
+      "success": 0,
+      "total": 0,
+      "success_rate": 0.0
+    }
+  },
+  "traces_collected": 0,
+  "learned_prompts_used": true,
+  "learning_cycle_disabled": true,
+  "problem_results": [
+    {
+      "problem_id": "revoke_auth_mongodb-1",
+      "problem_name": "MongoDB Authentication Revocation",
+      "success": false,
+      "duration": 417.00567531585693,
+      "error": "'dict' object has no attribute 'problem_id'",
+      "trace_ids": {
+        
