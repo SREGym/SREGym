@@ -255,7 +255,7 @@ def clone(nodes_file: str = "nodes.txt", repo: str = "https://github.com/SREGym/
     if "SSH_AUTH_SOCK" not in env or not env["SSH_AUTH_SOCK"]:
         raise EnvironmentError("No SSH agent detected. Run `ssh-add -l` to confirm your key is loaded.")
 
-    remote_cmd = f'GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone --recurse-submodules {repo} && cd SREGym && git checkout lily-e2e-test'
+    remote_cmd = f'GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone --recurse-submodules {repo} && cd SREGym'
 
     with open(nodes_file) as f:
         nodes = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
