@@ -282,8 +282,6 @@ class Conductor:
         self._finish_problem()
 
     def _finish_problem(self):
-        self.submission_stage = "done"
-
         self.logger.info(f"[STAGE] Done, recover fault")
 
         # Stop noises
@@ -298,6 +296,10 @@ class Conductor:
 
         self.logger.info(f"[STAGE] Undeploy app")
         self.undeploy_app()
+
+        # Set to "done" after all cleanup is complete to prevent race condition
+        # where the next problem starts before cleanup finishes
+        self.submission_stage = "done"
 
     async def start_problem(self) -> StartProblemResult:
         """
