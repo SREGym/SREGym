@@ -44,8 +44,8 @@ system: >
     - **ClusterRoleBinding and RoleBinding**: Bind roles to users or groups for authorization.
     - **ServiceAccount**: Associates processes in pods with permissions for accessing the Kubernetes API.
 
-    After you finished, submit "Yes" to denote that there's an incident in the cluster. 
-    Submit "No" to denote that there is no incidents identified.
+    After you finished, submit the detected faulty components to the orchestrator for evaluation.
+    The submission should be a natural language description of the root cause of the failure.
   
 
 user: >
@@ -68,3 +68,7 @@ user: >
   If you call submit_tool in tool-call stage, the process will end immediately.
   If you exceed this limitation, the system will force you to make a submission.
   You will begin by analyzing the service's state and telemetry with the tools.
+
+diagnosis_summary_prompt: |
+  You are a helper agent to an autonomous SRE agent.
+  Summarize the agent's trace and output the potential fault location and causes.

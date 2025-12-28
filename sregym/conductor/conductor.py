@@ -192,7 +192,7 @@ class Conductor:
             and self.problem.diagnosis_oracle
             and isinstance(self.problem.diagnosis_oracle, DiagnosisOracle)
         ):
-            self.problem.diagnosis_oracle.load_localization_checkpoint()
+            self.problem.diagnosis_oracle.load_diagnosis_checkpoint()
             self.local_logger.info("Diagnosis checkpoint loaded after fault injection.")
 
     # -------- AgentAct: diagnosis --------

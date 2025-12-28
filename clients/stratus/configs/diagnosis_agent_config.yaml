@@ -46,9 +46,9 @@ async_tools:
   - name: exec_read_only_kubectl_cmd
     description: |
       This is a tool used to execute read-only kubectl commands.
-      
+
           Args:
-              command (str): The read-only kubectl command you want to execute in a CLI to manage a k8s cluster. It should start with "kubectl". 
+              command (str): The read-only kubectl command you want to execute in a CLI to manage a k8s cluster. It should start with "kubectl".
               Available Read-only Commands:
               "kubectl api-resources",
               "kubectl api-version",
@@ -66,14 +66,24 @@ async_tools:
               "kubectl config view",
               "kubectl config current-context",
               "kubectl config get",
-              INTERACTIVE COMMANDS ARE NOT SUPPORTED, e.g. "kubectl edit" 
+              INTERACTIVE COMMANDS ARE NOT SUPPORTED, e.g. "kubectl edit"
               INTERACTIVE FLAGS ARE NOT SUPPORTED, e.g., "kubectl logs -f"
+  - name: get_resource_uid
+    description: |
+      Use this tool to retrieve the UID of a specified resource.
+
+          Args:
+              resource_type (str): The type of the resource (e.g., 'pod', 'service', 'deployment', 'statefulset', 'persistentvolumeclaim', 'persistentvolume', 'configmap', 'replicaset', 'memoryquota', 'ingress', 'networkpolicy' etc.).
+              resource_name (str): The name of the resource.
+              namespace (str): The namespace where the resource is located.
+          Returns:
+              str: The UID of the specified resource.
   - name: submit_tool
     description: |
       The tool to submit benchmark results
-          
+
           Args:
-              ans (str): the answer you would like to submit to the benchmark. You should only use string "Yes" or "No" with quotes to indicate whether there are anomalies detected.
+              ans (str): the answer you would like to submit to the benchmark. Use natural language to describe the root cause of the failure.
 prompts_path: diagnosis_agent_prompts.yaml
 
 

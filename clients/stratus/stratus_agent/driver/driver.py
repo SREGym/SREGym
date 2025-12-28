@@ -31,9 +31,6 @@ import mlflow
 
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig
 from clients.stratus.stratus_agent.diagnosis_agent import single_run_with_predefined_prompts as diagnosis_single_run
-from clients.stratus.stratus_agent.localization_agent import (
-    single_run_with_predefined_prompts as localization_single_run,
-)
 from clients.stratus.stratus_agent.mitigation_agent import (
     generate_run_summary,
 )
@@ -293,23 +290,24 @@ async def diagnosis_task_main():
     return agent_exec_stats
 
 
-async def localization_task_main():
+async def diagnosis_with_localization_task_main():
+    """Run diagnosis task (formerly called localization)."""
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
-    localization_agent_config_path = file_parent_dir.parent / "configs" / "localization_agent_config.yaml"
-    localization_agent_config = yaml.safe_load(open(localization_agent_config_path, "r"))
-    localization_agent_max_step = localization_agent_config["max_step"]
-    localization_agent_prompt_path = file_parent_dir.parent / "configs" / localization_agent_config["prompts_path"]
-    localization_agent_prompts = yaml.safe_load(open(localization_agent_prompt_path, "r"))
+    diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
+    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path, "r"))
+    diagnosis_agent_max_step = diagnosis_agent_config["max_step"]
+    diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
+    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path, "r"))
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
     first_run_initial_messages = [
-        SystemMessage(localization_agent_prompts["system"]),
+        SystemMessage(diagnosis_agent_prompts["system"]),
         HumanMessage(
-            localization_agent_prompts["user"].format(
-                max_step=localization_agent_max_step,
+            diagnosis_agent_prompts["user"].format(
+                max_step=diagnosis_agent_max_step,
                 app_name=app_name,
                 app_description=app_description,
                 app_namespace=app_namespace,
@@ -317,7 +315,7 @@ async def localization_task_main():
         ),
     ]
     start_time = time.perf_counter()
-    agent, last_state, graph_events = await localization_single_run(first_run_initial_messages)
+    agent, last_state, graph_events = await diagnosis_single_run(first_run_initial_messages)
     agent_time = time.perf_counter() - start_time
     agent_exec_stats = dict()
     usage_metadata = next(iter(agent.callback.usage_metadata.items()))[1]
@@ -331,11 +329,11 @@ async def localization_task_main():
     agent_exec_stats["rollback_stack"] = "N/A"
     agent_exec_stats["oracle_results"] = "N/A"
     # agent_exec_stats["last_state"] = last_state
-    logger.info(f"Finished localization agent run, output dict: {agent_exec_stats}")
+    logger.info(f"Finished diagnosis agent run, output dict: {agent_exec_stats}")
     return agent_exec_stats, last_state, graph_events
 
 
-async def mitigation_task_main(localization_summary):
+async def mitigation_task_main(diagnosis_summary):
     # run rollback, reflect, and retry for mitigation and rollback agent
     # note: not implementing a `mitigation_task_main()` like other agents above for rollback, reflect, and retry is due to these considerations
     #   1. keep each agent's main() method only about running that specific agent's loop until agent's submission
@@ -387,7 +385,7 @@ async def mitigation_task_main(localization_summary):
         HumanMessage(
             mitigation_agent_prompts["user"].format(
                 max_step=mitigation_agent_max_step,
-                faults_info=localization_summary,
+                faults_info=diagnosis_summary,
                 app_name=app_name,
                 app_description=app_description,
                 app_namespace=app_namespace,
@@ -518,7 +516,7 @@ async def mitigation_task_main(localization_summary):
                     HumanMessage(
                         mitigation_agent_prompts["user"].format(
                             max_step=mitigation_agent_max_step,
-                            faults_info=localization_summary,
+                            faults_info=diagnosis_summary,
                             app_name=app_name,
                             app_description=app_description,
                             app_namespace=app_namespace,
@@ -664,38 +662,40 @@ async def main():
     # Collect all trajectories from this run
     all_trajectories = []
 
-    # run localization agent 1 time for localization
-    # (BTS it's just diagnosis agent with different prompts)
+    # run diagnosis agent 1 time for diagnosis (formerly called localization)
     # here, running the file's main function should suffice
-    logger.info("*" * 25 + " Starting [localization agent] for [localization] " + "*" * 25)
-    localization_agent_exec_stats, localization_agent_last_state, localization_graph_events = (
-        await localization_task_main()
+    logger.info("*" * 25 + " Starting [diagnosis agent] for [diagnosis] " + "*" * 25)
+    diagnosis_agent_exec_stats, diagnosis_agent_last_state, diagnosis_graph_events = (
+        await diagnosis_with_localization_task_main()
     )
-    all_trajectories.append({"stage": "localization", "events": localization_graph_events})
-    agent_names.append("localization_agent")
-    agent_in_tokens.append(localization_agent_exec_stats["input_tokens"])
-    agent_out_tokens.append(localization_agent_exec_stats["output_tokens"])
-    agent_total_tokens.append(localization_agent_exec_stats["total_tokens"])
-    agent_times.append(localization_agent_exec_stats["time"])
-    agent_steps.append(localization_agent_exec_stats["steps"])
-    agent_retry_attempts.append(localization_agent_exec_stats["num_retry_attempts"])
-    agent_rollback_stack.append(localization_agent_exec_stats["rollback_stack"])
-    agent_oracle_results.append(localization_agent_exec_stats["oracle_results"])
-    logger.info("*" * 25 + " Finished [localization agent] " + "*" * 25)
+    all_trajectories.append({"stage": "diagnosis", "events": diagnosis_graph_events})
+    agent_names.append("diagnosis_agent")
+    agent_in_tokens.append(diagnosis_agent_exec_stats["input_tokens"])
+    agent_out_tokens.append(diagnosis_agent_exec_stats["output_tokens"])
+    agent_total_tokens.append(diagnosis_agent_exec_stats["total_tokens"])
+    agent_times.append(diagnosis_agent_exec_stats["time"])
+    agent_steps.append(diagnosis_agent_exec_stats["steps"])
+    agent_retry_attempts.append(diagnosis_agent_exec_stats["num_retry_attempts"])
+    agent_rollback_stack.append(diagnosis_agent_exec_stats["rollback_stack"])
+    agent_oracle_results.append(diagnosis_agent_exec_stats["oracle_results"])
+    logger.info("*" * 25 + " Finished [diagnosis agent] " + "*" * 25)
 
     file_parent_dir = Path(__file__).resolve().parent.parent
-    localization_agent_config_path = file_parent_dir.parent / "configs" / "localization_agent_config.yaml"
-    localization_agent_config = yaml.safe_load(open(localization_agent_config_path, "r"))
-    localization_agent_prompt_path = file_parent_dir.parent / "configs" / localization_agent_config["prompts_path"]
-    localization_agent_prompts = yaml.safe_load(open(localization_agent_prompt_path, "r"))
-    localization_fault_summary = generate_run_summary(
-        localization_agent_last_state, localization_agent_prompts["localization_summary_prompt"]
+    diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
+    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path, "r"))
+    diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
+    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path, "r"))
+
+    # Check if diagnosis prompts have the summary prompt, otherwise use a default key
+    summary_prompt_key = "diagnosis_summary_prompt" if "diagnosis_summary_prompt" in diagnosis_agent_prompts else "localization_summary_prompt"
+    diagnosis_fault_summary = generate_run_summary(
+        diagnosis_agent_last_state, diagnosis_agent_prompts[summary_prompt_key]
     )
 
     # run mitigation task 1 time for mitigation
     # it includes retry logics
     logger.info("*" * 25 + " Starting [mitigation agent] for [mitigation] " + "*" * 25)
-    mitigation_agent_exec_stats, mitigation_graph_events = await mitigation_task_main(localization_fault_summary)
+    mitigation_agent_exec_stats, mitigation_graph_events = await mitigation_task_main(diagnosis_fault_summary)
     all_trajectories.extend(mitigation_graph_events)
     agent_names.extend(mitigation_agent_exec_stats["agent_name"])
     agent_in_tokens.extend(mitigation_agent_exec_stats["input_tokens"])

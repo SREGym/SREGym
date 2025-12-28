@@ -7,13 +7,13 @@ from kubernetes.config.config_exception import ConfigException
 
 from sregym.conductor.oracles.base import Oracle
 
-local_logger = getLogger("all.sregym.localization_oracle")
+local_logger = getLogger("all.sregym.diagnosis_oracle")
 local_logger.propagate = True
 local_logger.setLevel(logging.DEBUG)
 
 
 class DiagnosisOracle(Oracle):
-    """Logic of Localization Oracle"""
+    """Logic of Diagnosis Oracle"""
 
     # BEFORE the agent are ask to act, expect function will be called and checkpoint will be saved
     # AFTER the agent finish its run, the expected function will be called AGAIN to compare with agents answer.
@@ -24,7 +24,7 @@ class DiagnosisOracle(Oracle):
         self.checkpoint = None
         self.namespace = namespace
 
-    def load_localization_checkpoint(self):
+    def load_diagnosis_checkpoint(self):
         # load the checkpoint for future comparison
         self.checkpoint = self.expect()
 
