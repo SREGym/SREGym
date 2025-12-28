@@ -90,10 +90,10 @@ def driver_loop(
                     console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
                     return []
 
-                if not use_external_harness:
-                    reg = get_agent(agent_name, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
-                    if reg:
-                        await LAUNCHER.ensure_started(reg)
+                # Only run agent logic if not using external harness
+                reg = get_agent(agent_name, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+                if reg:
+                    await LAUNCHER.ensure_started(reg)
 
                 # Poll until grading completes
                 while conductor.submission_stage != "done":
