@@ -13,3 +13,7 @@ agents:
     kickoff_command: python -m clients.codex.driver
     kickoff_workdir: .
     kickoff_env: null
+  - name: claudecode
+    kickoff_command: python -m clients.claudecode.driver
+    kickoff_workdir: .
+    kickoff_env: null

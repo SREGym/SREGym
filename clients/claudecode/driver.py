@@ -1,6 +1,6 @@
 """
-Codex agent driver for SREGym.
-Entry point for running Codex agent on SREGym tasks.
+Claude Code agent driver for SREGym.
+Entry point for running Claude Code agent on SREGym tasks.
 """
 
 import argparse
@@ -22,9 +22,9 @@ from logger import init_logger
 
 init_logger()
 
-from clients.codex.codex_agent import CodexAgent
+from clients.claudecode.claudecode_agent import ClaudeCodeAgent
 
-logger = logging.getLogger("all.codex.driver")
+logger = logging.getLogger("all.claudecode.driver")
 
 
 def get_api_base_url() -> str:
@@ -111,14 +111,14 @@ def wait_for_ready_stage(timeout: int = 300) -> str:
 
 def build_instruction(app_info: dict, problem_id: str) -> str:
     """
-    Build the instruction string for Codex.
+    Build the instruction string for Claude Code.
 
     Args:
         app_info: Application information from conductor
         problem_id: Problem identifier
 
     Returns:
-        Instruction string to pass to Codex
+        Instruction string to pass to Claude Code
     """
     app_name = app_info.get("app_name", "unknown")
     namespace = app_info.get("namespace", "default")
@@ -179,11 +179,11 @@ def save_results(
     Args:
         logs_dir: Directory containing logs
         problem_id: Problem identifier
-        return_code: Codex return code
+        return_code: Claude Code return code
         usage_metrics: Token usage metrics
     """
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = logs_dir / f"codex_results_{problem_id}_{timestamp}.json"
+    results_file = logs_dir / f"claudecode_results_{problem_id}_{timestamp}.json"
 
     results = {
         "problem_id": problem_id,
@@ -200,31 +200,31 @@ def save_results(
 
 
 def main():
-    """Main entry point for Codex agent driver."""
-    parser = argparse.ArgumentParser(description="Run Codex agent on SREGym tasks")
+    """Main entry point for Claude Code agent driver."""
+    parser = argparse.ArgumentParser(description="Run Claude Code agent on SREGym tasks")
     parser.add_argument(
         "--model",
         type=str,
         default=os.getenv("MODEL_ID", "claude-sonnet-4-5"),
-        help="Model to use for Codex (default: from MODEL_ID env var or claude-sonnet-4-5)",
+        help="Model to use for Claude Code (default: from MODEL_ID env var or claude-sonnet-4-5)",
     )
     parser.add_argument(
         "--logs-dir",
         type=str,
-        default="./logs/codex",
-        help="Directory to store logs (default: ./logs/codex)",
+        default="./logs/claudecode",
+        help="Directory to store logs (default: ./logs/claudecode)",
     )
     parser.add_argument(
-        "--codex-home",
+        "--sessions-dir",
         type=str,
         default=None,
-        help="Codex home directory (default: same as logs-dir)",
+        help="Claude Code sessions directory (default: logs-dir/sessions)",
     )
 
     args = parser.parse_args()
 
     logger.info("=" * 80)
-    logger.info("Starting Codex agent for SREGym")
+    logger.info("Starting Claude Code agent for SREGym")
     logger.info(f"Model: {args.model}")
     logger.info(f"Logs directory: {args.logs_dir}")
     logger.info("=" * 80)
@@ -248,18 +248,18 @@ def main():
     # Build instruction
     instruction = build_instruction(app_info, problem_id)
 
-    # Initialize Codex agent
+    # Initialize Claude Code agent
     logs_dir = Path(args.logs_dir)
-    codex_home = Path(args.codex_home) if args.codex_home else None
+    sessions_dir = Path(args.sessions_dir) if args.sessions_dir else None
 
-    agent = CodexAgent(
+    agent = ClaudeCodeAgent(
         logs_dir=logs_dir,
         model_name=args.model,
-        codex_home=codex_home,
+        sessions_dir=sessions_dir,
     )
 
-    # Run Codex
-    logger.info("Starting Codex execution...")
+    # Run Claude Code
+    logger.info("Starting Claude Code execution...")
     return_code = agent.run(instruction)
 
     # Get usage metrics
@@ -270,7 +270,7 @@ def main():
 
     # Log summary
     logger.info("=" * 80)
-    logger.info("Codex execution completed")
+    logger.info("Claude Code execution completed")
     logger.info(f"Return code: {return_code}")
     logger.info(f"Usage metrics: {usage_metrics}")
     logger.info("=" * 80)
