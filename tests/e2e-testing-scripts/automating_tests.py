@@ -199,7 +199,7 @@ def run_submit(user, nodes_file: str = "nodes.txt"):
         "command -v kubectl; kubectl version --client || true; "
         "command -v helm || true; "
         f"cd /users/{user}/SREGym && "
-        "~/SREGym/.venv/bin/python3 main.py 2>&1 | tee -a global_benchmark_log_$(date +%Y-%m-%d).txt; "
+        "~/SREGym/.venv/bin/python3 main.py --agent autosubmit 2>&1 | tee -a global_benchmark_log_$(date +%Y-%m-%d).txt; "
         "sleep infinity\"'"
     )
 

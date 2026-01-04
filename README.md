@@ -79,7 +79,12 @@ mv .env.example .env
 
 3. Run the benchmark:
 ```bash
-python main.py --model <model-id>
+python main.py --agent <agent-name> --model <model-id>
+```
+
+For example, to run the Stratus agent:
+```bash
+python main.py --agent stratus --model gpt-4o
 ```
 
 ### Model Selection
@@ -87,7 +92,7 @@ python main.py --model <model-id>
 SREGym supports multiple LLM providers. Specify your model using the `--model` flag:
 
 ```bash
-python main.py --model <model-id>
+python main.py --agent <agent-name> --model <model-id>
 ```
 
 #### Available Models
@@ -113,7 +118,7 @@ python main.py --model <model-id>
 OPENAI_API_KEY="sk-proj-..."
 
 # Run with GPT-4o
-python main.py --model gpt-4o
+python main.py --agent stratus --model gpt-4o
 ```
 
 **Anthropic:**
@@ -122,7 +127,7 @@ python main.py --model gpt-4o
 ANTHROPIC_API_KEY="sk-ant-api03-..."
 
 # Run with Claude Sonnet 4
-python main.py --model claude-sonnet-4
+python main.py --agent stratus --model claude-sonnet-4
 ```
 
 **AWS Bedrock:**
@@ -132,7 +137,7 @@ AWS_PROFILE="bedrock"
 AWS_DEFAULT_REGION=us-east-2
 
 # Run with Claude Sonnet 4.5 on Bedrock
-python main.py --model bedrock-claude-sonnet-4.5
+python main.py --agent stratus --model bedrock-claude-sonnet-4.5
 ```
 
 **Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.
