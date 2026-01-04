@@ -67,6 +67,48 @@ def get_problem_id() -> str:
         raise
 
 
+def wait_for_ready_stage(timeout: int = 300) -> str:
+    """
+    Wait for conductor to reach a submission-ready stage (diagnosis or mitigation).
+
+    Args:
+        timeout: Maximum seconds to wait
+
+    Returns:
+        Current stage name
+
+    Raises:
+        TimeoutError: If timeout is reached before ready
+    """
+    import time
+
+    api_url = f"{get_api_base_url()}/status"
+    allowed_stages = {"diagnosis", "mitigation"}
+    start_time = time.time()
+
+    logger.info(f"Waiting for conductor to reach submission-ready stage...")
+
+    while time.time() - start_time < timeout:
+        try:
+            response = requests.get(api_url)
+            response.raise_for_status()
+            status_data = response.json()
+            stage = status_data.get("stage")
+
+            if stage in allowed_stages:
+                logger.info(f"Conductor ready at stage: {stage}")
+                return stage
+            else:
+                logger.debug(f"Current stage: {stage}, waiting for {allowed_stages}...")
+                time.sleep(1)
+
+        except Exception as e:
+            logger.debug(f"Error checking status: {e}, retrying...")
+            time.sleep(1)
+
+    raise TimeoutError(f"Conductor did not reach ready stage within {timeout} seconds")
+
+
 def build_instruction(app_info: dict, problem_id: str) -> str:
     """
     Build the instruction string for Claude Code.
@@ -91,17 +133,29 @@ Problem ID: {problem_id}
 
 {descriptions}
 
-Your task is to mitigate the issue in the application:
-1. Diagnose the issue in the application
-2. Identify the root cause
-3. Implement a fix to resolve the problem
-4. When you have successfully fixed the issue, submit by calling the conductor API at {get_api_base_url()}/submit
+WORKFLOW: You will perform TWO tasks in sequence:
 
-The submission endpoint expects a POST request with JSON body:
-{{"solution": ""}}
+TASK 1: DIAGNOSIS
+- Investigate the application to detect any anomalies or issues
+- Analyze metrics, logs, and traces
+- When ready, submit a natural language description of the issue you found
 
-For mitigation, you should submit with an empty solution string once you have applied the fix.
-The submission will trigger an oracle that validates whether the issue has been resolved.
+TASK 2: MITIGATION
+- Identify the root cause of the issue
+- Implement a fix to resolve the problem
+- When the fix is applied, submit to trigger validation
+
+HOW TO SUBMIT:
+
+The submission endpoint is: {get_api_base_url()}/submit
+
+For DIAGNOSIS stage:
+- Submit with a natural language description of the issue
+- Example: POST {get_api_base_url()}/submit with JSON: {{"solution": "The frontend service is crashing due to missing environment variable"}}
+
+For MITIGATION stage:
+- Submit with an EMPTY STRING after you have applied the fix
+- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
 
 Important:
 - You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'
@@ -174,6 +228,14 @@ def main():
     logger.info(f"Model: {args.model}")
     logger.info(f"Logs directory: {args.logs_dir}")
     logger.info("=" * 80)
+
+    # Wait for conductor to be ready
+    try:
+        stage = wait_for_ready_stage(timeout=300)
+        logger.info(f"Conductor is ready at stage: {stage}")
+    except TimeoutError as e:
+        logger.error(f"Timeout waiting for conductor: {e}")
+        sys.exit(1)
 
     # Get problem information
     try:
