@@ -9,3 +9,7 @@ agents:
     kickoff_command: python -m clients.autosubmit.autosubmit_agent http://localhost:8000
     kickoff_workdir: .
     kickoff_env: null
+  - name: codex
+    kickoff_command: python -m clients.codex.driver
+    kickoff_workdir: .
+    kickoff_env: null
