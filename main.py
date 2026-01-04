@@ -33,7 +33,7 @@ def get_current_datetime_formatted():
 
 
 def driver_loop(
-    conductor: Conductor, problem_filter: str = None, agent_to_run: str = "stratus", use_external_harness: bool = False
+    conductor: Conductor, problem_filter: str = None, agent_to_run: str = None, use_external_harness: bool = False
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -148,7 +148,7 @@ def start_mcp_server_after_api():
 
 
 def _run_driver_and_shutdown(
-    conductor: Conductor, problem_filter: str = None, agent_to_run: str = "stratus", use_external_harness: bool = False
+    conductor: Conductor, problem_filter: str = None, agent_to_run: str = None, use_external_harness: bool = False
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     results = driver_loop(
