@@ -42,6 +42,20 @@
   top_p: 0.95
   temperature: 0.0
 
+"gpt-5-nano":
+  provider: "openai"
+  model_name: "gpt-5-nano"
+  api_key: "$OPENAI_API_KEY"
+  top_p: 0.95
+  temperature: 0.0
+
+"gpt-5-mini":
+  provider: "openai"
+  model_name: "gpt-5-mini"
+  api_key: "$OPENAI_API_KEY"
+  top_p: 0.95
+  temperature: 0.0
+
 "gemini-2.5-pro":
   provider: "litellm"
   model_name: "gemini/gemini-2.5-pro"
