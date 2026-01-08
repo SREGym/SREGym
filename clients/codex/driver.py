@@ -224,6 +224,11 @@ def main():
         default=None,
         help="Codex home directory (default: same as logs-dir)",
     )
+    parser.add_argument(
+        "--no-auto-install",
+        action="store_true",
+        help="Disable auto-installation of Codex CLI if not found",
+    )
 
     args = parser.parse_args()
 
@@ -232,6 +237,13 @@ def main():
     logger.info(f"Model: {args.model}")
     logger.info(f"Logs directory: {args.logs_dir}")
     logger.info("=" * 80)
+
+    # Check if Codex CLI is installed
+    try:
+        CodexAgent.ensure_installed(auto_install=not args.no_auto_install)
+    except RuntimeError as e:
+        logger.error(f"Codex CLI installation check failed: {e}")
+        sys.exit(1)
 
     # Wait for conductor to be ready
     try:
