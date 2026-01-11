@@ -504,7 +504,19 @@ def collect_logs(user, nodes_file: str = "nodes.txt"):
         except subprocess.CalledProcessError:
             print(f"Failed to copy log from {node} (file may not exist)")
 
+def delete_cluster():
+    for node in _read_nodes("nodes.txt"):
+        print(f"\n=== [Delete Kind Cluster] {node} ===")
+        TMUX_SESSION = "cluster_setup"
 
+        cmd = f'ssh -o StrictHostKeyChecking=no {node} "bash -ic \\"kind delete cluster\\""'
+
+        subprocess.run(
+            cmd,
+            check=True,
+            shell=True,
+            executable="/bin/zsh",
+        )
 def kill_server():
     TMUX_KILL_CMD = "tmux kill-server"
     for host in _read_nodes("nodes.txt"):
@@ -527,13 +539,14 @@ if __name__ == "__main__":
 
     # kills any existing tmux servers
     kill_server()
-
+    # delete any existing kind clusters
+    delete_cluster()
     # copying all scripts
     scp_scripts_to_all(user, "nodes.txt")
     # clone repo
-    clone(nodes_file="nodes.txt")
+    #clone(nodes_file="nodes.txt")
     # comment out problems that we don't test
-    comment_out_problems()
+    #comment_out_problems()
 
     # installs prereqs
     run_installations_all(user, "nodes.txt")
