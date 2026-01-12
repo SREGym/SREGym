@@ -49,7 +49,13 @@ class LLMJudge:
             self._backend = get_llm_backend_for_tools()
         return self._backend
 
-    def judge(self, solution: str, expectation: str) -> JudgmentResult:
+    def judge(self, solution: str, expectation: str) -> tuple[JudgmentResult, str]:
+        """
+        Judge whether a solution matches the expectation.
+
+        Returns:
+            tuple[JudgmentResult, str]: A tuple of (judgment, reasoning)
+        """
         system_prompt = """You are an expert judge evaluating whether an agent's diagnosis of a system issue matches the expected root cause.
 
 Your task is to compare the agent's answer with the expected root cause and determine if they are semantically equivalent.
@@ -87,16 +93,23 @@ Evaluate whether the agent's answer correctly identifies the root cause. Respond
             print(f"LLM Response: {response_text}")
 
             # Parse the response
-            judgment = self._parse_judgment(response_text)
+            judgment, reasoning = self._parse_judgment(response_text)
             print(f"Parsed judgment: {judgment}")
 
-            return judgment
+            return judgment, reasoning
 
         except Exception as e:
             print(f"Error during judgment: {e}")
             raise
 
-    def _parse_judgment(self, response_text: str) -> JudgmentResult:
+    def _parse_judgment(self, response_text: str) -> tuple[JudgmentResult, str]:
+        """
+        Parse the judgment response from the LLM.
+
+        Returns:
+            tuple[JudgmentResult, str]: A tuple of (judgment, reasoning)
+        """
+        reasoning = ""
         try:
             # Remove markdown code blocks if present
             clean_text = re.sub(r"```json\s*|\s*```", "", response_text)
@@ -112,15 +125,16 @@ Evaluate whether the agent's answer correctly identifies the root cause. Respond
             # Fallback: try to extract judgment directly from text
             print("Failed to parse JSON, attempting direct extraction")
             judgment_str = response_text
+            reasoning = "Failed to parse structured response"
 
         # Normalize the judgment string
         judgment_str = judgment_str.strip().lower()
 
         # Map to JudgmentResult
         if judgment_str == "true":
-            return JudgmentResult.TRUE
+            return JudgmentResult.TRUE, reasoning
         elif judgment_str == "false":
-            return JudgmentResult.FALSE
+            return JudgmentResult.FALSE, reasoning
         else:
             raise ValueError(f"Could not parse judgment from response: {response_text}")
 
@@ -171,7 +185,7 @@ def main():
 
         try:
             # Get judgment from LLM
-            actual_judgment = judge.judge(solution=answer, expectation=description)
+            actual_judgment, reasoning = judge.judge(solution=answer, expectation=description)
 
             # Normalize expected judgment for comparison
             expected_normalized = expected_judgment.strip().lower().replace(" ", "")
@@ -195,6 +209,7 @@ def main():
                     "expected": expected_judgment,
                     "actual": actual_judgment.value,
                     "correct": is_correct,
+                    "reasoning": reasoning,
                 }
             )
 

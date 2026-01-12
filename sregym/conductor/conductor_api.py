@@ -48,9 +48,8 @@ async def submit_solution(req: SubmitRequest):
         local_logger.error(f"Cannot submit at stage: {_conductor.submission_stage!r}")
         raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {_conductor.submission_stage!r}")
 
-    # replace double quotes with single quotes
-    req.solution = req.solution.replace('"', "'")
-    wrapped = f'```\nsubmit("{req.solution}")\n```'
+    # Use repr() to properly escape special characters in the solution string
+    wrapped = f"```\nsubmit({repr(req.solution)})\n```"
     local_logger.debug(f"Wrapped submit content: {wrapped}")
 
     try:

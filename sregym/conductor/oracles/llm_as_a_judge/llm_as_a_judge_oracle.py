@@ -43,7 +43,7 @@ class LLMAsAJudgeOracle(Oracle):
 
         try:
             # Get judgment from LLM judge
-            judgment = self.judge.judge(solution=solution, expectation=self.expected)
+            judgment, reasoning = self.judge.judge(solution=solution, expectation=self.expected)
 
             # Determine success based on judgment
             is_correct = judgment == JudgmentResult.TRUE
@@ -62,12 +62,14 @@ class LLMAsAJudgeOracle(Oracle):
                 print(f"   Got: {solution[:100]}..." if len(solution) > 100 else f"   Got: {solution}")
 
             results["judgment"] = judgment.value
+            results["reasoning"] = reasoning
             results["success"] = is_correct
             results["accuracy"] = acc
 
         except Exception as e:
             print(f"❌ Error during LLM judgment: {e}")
             results["judgment"] = "Error"
+            results["reasoning"] = f"Error: {str(e)}"
             results["success"] = False
             results["accuracy"] = 0.0
             results["error"] = str(e)
