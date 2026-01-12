@@ -105,6 +105,24 @@ def driver_loop(
 
             console.log(f"✅ Completed {pid}: results={conductor.results}")
 
+            # Wait for agent process to complete naturally before cleanup
+            # This allows the agent to finish saving trajectories and other cleanup tasks
+            if not use_external_harness:
+                agent_proc = LAUNCHER._procs.get(agent_to_run)
+                if agent_proc:
+                    console.log(f"⏳ Waiting for agent process to complete...")
+                    timeout = 30  # seconds
+                    elapsed = 0
+                    while elapsed < timeout:
+                        agent_proc.proc.poll()
+                        if agent_proc.proc.returncode is not None:
+                            console.log(f"✅ Agent process completed with return code {agent_proc.proc.returncode}")
+                            break
+                        await asyncio.sleep(1)
+                        elapsed += 1
+                    else:
+                        console.log(f"⚠️  Agent process did not complete within {timeout}s, will force cleanup")
+
             snapshot = {"problem_id": pid}
             for stage, outcome in conductor.results.items():
                 if isinstance(outcome, dict):
