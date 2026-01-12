@@ -124,6 +124,9 @@ class MitigationAgent(BaseAgent):
             last_state = self.graph.get_state(config=graph_config)
             if last_state.values["submitted"]:
                 logger.info(f"[Loop {self.loop_count}] Agent submitted, breaking loop.")
+                # Ensure the final state is included in graph_events
+                if not graph_events or last_state.values["messages"] != graph_events[-1]["messages"]:
+                    graph_events.append(last_state.values)
                 break
 
             self.loop_count += 1
