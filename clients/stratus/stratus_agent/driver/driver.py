@@ -454,10 +454,17 @@ async def mitigation_task_main(diagnosis_summary):
             rollback_stack_lst.append("N/A, naive retry")
 
             # getting oracle result
-            oracle_results = await validate_oracles(oracles)
-            oracle_results_lst.append(str(oracle_results))
-            logger.info(f"oracle results: {oracle_results}")
-            if oracle_results[0] is True:
+            try:
+                oracle_results = await validate_oracles(oracles)
+                oracle_results_lst.append(str(oracle_results))
+                logger.info(f"oracle results: {oracle_results}")
+                has_succeeded = oracle_results[0] is True
+            except Exception as e:
+                logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
+                oracle_results = [False, []]
+                oracle_results_lst.append(f"Oracle error: {str(e)}")
+                has_succeeded = False
+            if has_succeeded:
                 # agent succeeds, let's finish here.
                 logger.info("agent succeeds, breaking!")
                 break
@@ -547,9 +554,15 @@ async def mitigation_task_main(diagnosis_summary):
             rollback_stack_lst.append("N/A, mitigation agent")
 
             # getting oracle result
-            oracle_results = await validate_oracles(oracles)
-            oracle_results_lst.append(str(oracle_results))
-            has_succeeded = oracle_results[0]
+            try:
+                oracle_results = await validate_oracles(oracles)
+                oracle_results_lst.append(str(oracle_results))
+                has_succeeded = oracle_results[0]
+            except Exception as e:
+                logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
+                oracle_results = [False, []]
+                oracle_results_lst.append(f"Oracle error: {str(e)}")
+                has_succeeded = False
             if has_succeeded:
                 # agent succeeds, let's finish here.
                 logger.info("agent succeeds! manually submitting for the agent")
@@ -687,7 +700,11 @@ async def main():
     diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path, "r"))
 
     # Check if diagnosis prompts have the summary prompt, otherwise use a default key
-    summary_prompt_key = "diagnosis_summary_prompt" if "diagnosis_summary_prompt" in diagnosis_agent_prompts else "localization_summary_prompt"
+    summary_prompt_key = (
+        "diagnosis_summary_prompt"
+        if "diagnosis_summary_prompt" in diagnosis_agent_prompts
+        else "localization_summary_prompt"
+    )
     diagnosis_fault_summary = generate_run_summary(
         diagnosis_agent_last_state, diagnosis_agent_prompts[summary_prompt_key]
     )
