@@ -65,7 +65,7 @@ class Conductor:
                 self.local_logger.error(f"Required dependency '{b}' not found.")
                 raise RuntimeError(f"[❌] Required dependency '{b}' not found.")
 
-    def get_tasklist(self):
+    def get_problem_stages(self):
         file_dir = Path(__file__).resolve().parent
         tasklist_path = file_dir / "tasklist.yml"
 
@@ -288,7 +288,7 @@ class Conductor:
 
         self.fix_kubernetes()
 
-        self.get_tasklist()
+        self.get_problem_stages()
         self._build_stage_sequence()
 
         self.local_logger.info("Undeploying app leftovers...")

@@ -65,12 +65,22 @@ def driver_loop(
 
         # Get all problem IDs and filter if needed
         problem_ids = conductor.problems.get_problem_ids()
+        all_problem_ids = conductor.problems.get_problem_ids(all=True)
         if problem_filter:
-            if problem_filter not in problem_ids:
+            if problem_filter not in all_problem_ids:
                 console.log(f"⚠️  Problem '{problem_filter}' not found in registry. Available problems: {problem_ids}")
                 sys.exit(1)
             problem_ids = [problem_filter]
             console.log(f"🎯 Running single problem: {problem_filter}")
+
+        # sanity check: are there any specified problem ids that do not exist in the registry?
+        unknown_problem_ids = set(problem_ids) - set(all_problem_ids)
+        if unknown_problem_ids:
+            console.log(
+                f"⚠️  These problem ids do not exist in the registry and they will be skipped: {unknown_problem_ids}"
+            )
+        for unknown_problem_id in unknown_problem_ids:
+            problem_ids.remove(unknown_problem_id)
 
         for pid in problem_ids:
             console.log(f"\n🔍 Starting problem: {pid}")
