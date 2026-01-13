@@ -8,6 +8,10 @@ from html import escape
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Keep ONLY the single highest-event_index "event" record per stage (per file),
+# but render the FULL event using your existing HTML logic.
+TARGET_STAGES_ORDER = ["localization", "mitigation_attempt_0"]
+
 HOT_KEYS = {
     "type",
     "problem_id",
@@ -25,29 +29,16 @@ HOT_KEYS = {
 }
 
 
-
 def safe_filename(name: str) -> str:
     name = re.sub(r"[^\w\-.]+", "_", name.strip())
     return name[:180] if name else "report"
 
 
-def read_jsonl(path: Path) -> Tuple[List[Dict[str, Any]], List[str]]:
-    records: List[Dict[str, Any]] = []
-    errors: List[str] = []
-    with path.open("r", encoding="utf-8") as f:
-        for i, line in enumerate(f, start=1):
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                obj = json.loads(line)
-                if isinstance(obj, dict):
-                    records.append(obj)
-                else:
-                    records.append({"_value": obj})
-            except Exception as e:
-                errors.append(f"{path.name}:{i}: {e}")
-    return records, errors
+def _to_int(x: Any) -> Optional[int]:
+    try:
+        return int(x)
+    except Exception:
+        return None
 
 
 def get_first(d: Dict[str, Any], keys: List[str]) -> Optional[Any]:
@@ -100,14 +91,14 @@ def detect_messages(rec: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """
     msgs = nested_get(rec, [["messages"], ["input", "messages"], ["output", "messages"]])
     if isinstance(msgs, list) and msgs and all(isinstance(m, dict) for m in msgs):
-        return msgs 
+        return msgs
     return None
 
 
 def detect_steps(rec: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     steps = get_first(rec, ["steps", "events", "trace", "spans"])
     if isinstance(steps, list) and steps and all(isinstance(s, dict) for s in steps):
-        return steps 
+        return steps
     return None
 
 
@@ -142,6 +133,82 @@ def last_message_preview(rec: Dict[str, Any], max_len: int = 160) -> str:
     return ""
 
 
+# ---------- streaming selector (no full-file load) ----------
+
+def stream_pick_highest_event_index_per_stage(
+    path: Path,
+    stages_order: List[str],
+) -> Tuple[List[Dict[str, Any]], List[str], int]:
+    """
+    Stream the JSONL file; do NOT store all records.
+    Keep ONLY the highest event_index event per target stage.
+
+    Selection:
+      - Only considers dict records where type=="event" and stage in stages_order.
+      - Highest numeric event_index wins.
+      - If event_index is missing/non-numeric for some records, they are kept only
+        if we never saw a numeric event_index for that stage (fallback to latest seen).
+    """
+    errors: List[str] = []
+    total_lines = 0
+
+    # best_num[stage] = (event_index_int, line_no, record)
+    best_num: Dict[str, Tuple[int, int, Dict[str, Any]]] = {}
+    # best_fallback[stage] = (line_no, record)  # used only if no numeric seen
+    best_fallback: Dict[str, Tuple[int, Dict[str, Any]]] = {}
+
+    with path.open("r", encoding="utf-8") as f:
+        for line_no, line in enumerate(f, start=1):
+            total_lines += 1
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception as e:
+                errors.append(f"{path.name}:{line_no}: {e}")
+                continue
+
+            if not isinstance(obj, dict):
+                continue
+            if not is_event_record(obj):
+                continue
+
+            stage = obj.get("stage")
+            if stage not in stages_order:
+                continue
+
+            ei_int = _to_int(obj.get("event_index"))
+
+            if ei_int is None:
+                # only used as fallback if we never see numeric for that stage
+                prev = best_fallback.get(stage)
+                if prev is None or line_no > prev[0]:
+                    best_fallback[stage] = (line_no, obj)
+                continue
+
+            prev = best_num.get(stage)
+            if prev is None:
+                best_num[stage] = (ei_int, line_no, obj)
+            else:
+                cur_ei, cur_ln, _ = prev
+                # strictly higher event_index wins; tie-break by later line
+                if (ei_int > cur_ei) or (ei_int == cur_ei and line_no > cur_ln):
+                    best_num[stage] = (ei_int, line_no, obj)
+
+    out: List[Dict[str, Any]] = []
+    for s in stages_order:
+        if s in best_num:
+            out.append(best_num[s][2])
+        elif s in best_fallback:
+            out.append(best_fallback[s][1])
+
+    return out, errors, total_lines
+
+
+# ----------------------------
+# Summary dataclass
+# ----------------------------
 
 @dataclass
 class SummaryRow:
@@ -243,6 +310,7 @@ hr { border: 0; border-top: 1px solid var(--border); margin: 18px 0; }
 </style>
 """
 
+
 def html_page(title: str, body: str) -> str:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     return f"""<!doctype html>
@@ -257,7 +325,7 @@ def html_page(title: str, body: str) -> str:
 <body>
 <header>
   <h1>{escape(title)}</h1>
-  <small>Generated {escape(now)} • Investigation log (traces / metrics / logs)</small>
+  <small>Generated {escape(now)} • Rendering ONLY highest event_index for stages: {escape(", ".join(TARGET_STAGES_ORDER))}</small>
 </header>
 <main>
 {body}
@@ -351,18 +419,22 @@ def render_kv(rec: Dict[str, Any], exclude_keys: set) -> str:
     return "\n".join(html)
 
 
-def render_file_report(file_name: str, records: List[Dict[str, Any]], parse_errors: List[str]) -> str:
+def render_file_report(file_name: str, records: List[Dict[str, Any]], parse_errors: List[str], total_lines_scanned: int) -> str:
+    # records will be only the selected events now (<=2)
     rows = [summarize_record(r, i + 1) for i, r in enumerate(records)]
 
     event_mode = False
     if records:
         event_hits = sum(1 for r in records if is_event_record(r))
-        event_mode = event_hits >= max(1, int(0.6 * len(records)))  
+        event_mode = event_hits >= max(1, int(0.6 * len(records)))
 
+    # Timeline table (still useful even with only 1–2 records)
     if event_mode:
         table = [
             "<div class='card'>",
             "<h3 style='margin:0 0 10px 0;'>Investigation Timeline</h3>",
+            f"<small>Source: <span class='mono'>{escape(file_name)}</span> • Scanned {total_lines_scanned} lines • Rendered {len(records)} event(s)</small>",
+            "<div style='height:10px'></div>",
             "<table class='table'>",
             "<thead><tr>"
             "<th>#</th><th>Stage</th><th>Event #</th><th>Submitted</th><th>Steps</th><th>Last message</th><th>Problem</th><th>Timestamp</th>"
@@ -388,6 +460,8 @@ def render_file_report(file_name: str, records: List[Dict[str, Any]], parse_erro
         table = [
             "<div class='card'>",
             "<h3 style='margin:0 0 10px 0;'>Investigation Entries</h3>",
+            f"<small>Source: <span class='mono'>{escape(file_name)}</span> • Scanned {total_lines_scanned} lines • Rendered {len(records)} entry(ies)</small>",
+            "<div style='height:10px'></div>",
             "<table class='table'>",
             "<thead><tr>"
             "<th>#</th><th>Type</th><th>Stage</th><th>Event #</th><th>Submitted</th><th>Steps</th><th>Problem</th><th>Timestamp</th>"
@@ -418,6 +492,7 @@ def render_file_report(file_name: str, records: List[Dict[str, Any]], parse_erro
             + "</pre></div>"
         )
 
+    # Full per-record rendering (your original logic)
     for i, rec in enumerate(records, start=1):
         s = summarize_record(rec, i)
         msgs = detect_messages(rec)
@@ -484,10 +559,8 @@ def render_file_report(file_name: str, records: List[Dict[str, Any]], parse_erro
     return "\n".join(parts)
 
 
-
-
 def main():
-    ap = argparse.ArgumentParser(description="Convert JSONL files to readable HTML reports.")
+    ap = argparse.ArgumentParser(description="Convert JSONL files to readable HTML reports (only highest event_index for target stages).")
     ap.add_argument("inputs", nargs="+", help="Input .jsonl file(s) or directories containing .jsonl")
     ap.add_argument("-o", "--out", default="html_reports", help="Output directory")
     args = ap.parse_args()
@@ -508,29 +581,39 @@ def main():
     if not jsonl_files:
         raise SystemExit("No .jsonl files found.")
 
-    index_rows = []
+    # index rows: (src, link, lines_scanned, rendered_events, parse_errors)
+    index_rows: List[Tuple[str, str, int, int, int]] = []
     all_parse_errors: List[str] = []
 
     for fpath in jsonl_files:
-        records, errors = read_jsonl(fpath)
+        records, errors, total_lines = stream_pick_highest_event_index_per_stage(fpath, TARGET_STAGES_ORDER)
         all_parse_errors.extend(errors)
 
         base = safe_filename(fpath.stem)
         out_file = out_dir / f"{base}.html"
 
-        body = render_file_report(fpath.name, records, errors)
+        body = render_file_report(fpath.name, records, errors, total_lines)
         html = html_page(f"{fpath.name} — Investigation Report", body)
         out_file.write_text(html, encoding="utf-8")
 
-        index_rows.append((fpath.name, out_file.name, len(records), len(errors)))
+        index_rows.append((fpath.name, out_file.name, total_lines, len(records), len(errors)))
 
     # index.html
     idx = [
         "<div class='card'><h3 style='margin:0 0 10px 0;'>Reports</h3>",
-        "<table class='table'><thead><tr><th>Source file</th><th>Entries</th><th>Parse errors</th></tr></thead><tbody>",
+        "<table class='table'><thead><tr>"
+        "<th>Source file</th><th>Lines scanned</th><th>Rendered events</th><th>Parse errors</th>"
+        "</tr></thead><tbody>",
     ]
-    for src, link, n, e in index_rows:
-        idx.append(f"<tr><td><a href='{escape(link)}'>{escape(src)}</a></td><td>{n}</td><td>{e}</td></tr>")
+    for src, link, lines_scanned, rendered, errc in index_rows:
+        idx.append(
+            "<tr>"
+            f"<td><a href='{escape(link)}'>{escape(src)}</a></td>"
+            f"<td>{lines_scanned}</td>"
+            f"<td>{rendered}</td>"
+            f"<td>{errc}</td>"
+            "</tr>"
+        )
     idx.append("</tbody></table></div>")
 
     if all_parse_errors:
@@ -541,7 +624,7 @@ def main():
         )
 
     (out_dir / "index.html").write_text(
-        html_page("Investigation Reports", "\n".join(idx)),
+        html_page("Investigation Reports (Highest event_index only)", "\n".join(idx)),
         encoding="utf-8",
     )
 
