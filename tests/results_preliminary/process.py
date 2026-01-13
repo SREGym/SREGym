@@ -270,9 +270,37 @@ main { padding: 18px 22px; max-width: 1200px; margin: 0 auto; }
 a { color: #0b5fff; text-decoration: none; }
 a:hover { text-decoration: underline; }
 details > summary { cursor: pointer; color: var(--muted); }
-pre { overflow: auto; padding: 12px; border-radius: 10px; border: 1px solid var(--border); background: #fff; }
+/* --- code blocks: wrap instead of horizontal scroll --- */
+pre {
+  overflow-x: auto;          /* keep as a fallback */
+  white-space: pre-wrap;     /* wrap long lines */
+  word-break: break-word;    /* break long tokens */
+  overflow-wrap: anywhere;   /* allow breaks anywhere if needed */
+}
+
+pre code {
+  white-space: pre-wrap;     /* wrap inside highlight.js code blocks */
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* --- message content: wrap long strings/JSON nicely --- */
+.msg .content {
+  white-space: pre-wrap;     /* preserve newlines, wrap long lines */
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
 .grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
-@media (min-width: 900px) { .grid { grid-template-columns: 1fr 1fr; } }
+
+/* was: 1fr 1fr */
+@media (min-width: 900px) {
+  .grid {
+    grid-template-columns: minmax(260px, 360px) 1fr;
+    align-items: start;
+  }
+}
+
 
 .msg { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; background: #fff; margin-bottom: 10px; }
 .msg .role { font-size: 12px; color: var(--muted); margin-bottom: 4px; text-transform: uppercase; letter-spacing: .04em; }
