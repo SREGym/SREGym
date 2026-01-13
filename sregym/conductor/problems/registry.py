@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import yaml
+
 from sregym.conductor.problems.ad_service_failure import AdServiceFailure
 from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
@@ -237,10 +241,24 @@ class ProblemRegistry:
     def get_problem(self, problem_id: str):
         return self.PROBLEM_REGISTRY.get(problem_id)
 
-    def get_problem_ids(self, task_type: str = None):
+    def get_problem_ids(self, task_type: str = None, all: bool = False):
         if task_type:
             return [k for k in self.PROBLEM_REGISTRY.keys() if task_type in k]
-        return list(self.PROBLEM_REGISTRY.keys())
+        if all:
+            return list(self.PROBLEM_REGISTRY.keys())
+
+        # by default, only run problems defined in tasklist.yml
+        file_dir = Path(__file__).parent.parent
+        tasklist_path = file_dir / "tasklist.yml"
+
+        if not tasklist_path.exists():
+            # if tasklist.yml does not exist, run all the problems
+            return list(self.PROBLEM_REGISTRY.keys())
+
+        with open(tasklist_path, "r") as f:
+            tasklist = yaml.safe_load(f)
+        return list(tasklist["all"]["problems"].keys())
+
 
     def get_problem_count(self, task_type: str = None):
         if task_type:
