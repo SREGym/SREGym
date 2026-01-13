@@ -215,6 +215,30 @@ def get_curr_problem():
         return "error"
 
 
+def get_benchmark_status():
+    """
+    Check the current status of the benchmark.
+    Returns the status string (e.g., "diagnosis", "mitigation", "done") or "error" on failure.
+    """
+    ltc = LanggraphToolConfig()
+    try:
+        # Construct the status URL from the submit URL
+        submit_url = ltc.submit_mcp_url
+        base_url = submit_url.rsplit("/", 1)[0]
+        status_url = f"{base_url}/status"
+
+        response = requests.get(status_url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("stage", "error")
+        else:
+            logger.warning(f"Failed to get benchmark status: {response.status_code}")
+            return "error"
+    except Exception as e:
+        logger.warning(f"Exception while getting benchmark status: {e}")
+        return "error"
+
+
 def get_app_class_by_name(app_name):
     target_app = ""
     if app_name == "Social Network":
@@ -709,21 +733,38 @@ async def main():
         diagnosis_agent_last_state, diagnosis_agent_prompts[summary_prompt_key]
     )
 
-    # run mitigation task 1 time for mitigation
-    # it includes retry logics
-    logger.info("*" * 25 + " Starting [mitigation agent] for [mitigation] " + "*" * 25)
-    mitigation_agent_exec_stats, mitigation_graph_events = await mitigation_task_main(diagnosis_fault_summary)
-    all_trajectories.extend(mitigation_graph_events)
-    agent_names.extend(mitigation_agent_exec_stats["agent_name"])
-    agent_in_tokens.extend(mitigation_agent_exec_stats["input_tokens"])
-    agent_out_tokens.extend(mitigation_agent_exec_stats["output_tokens"])
-    agent_total_tokens.extend(mitigation_agent_exec_stats["total_tokens"])
-    agent_times.extend(mitigation_agent_exec_stats["time"])
-    agent_steps.extend(mitigation_agent_exec_stats["steps"])
-    agent_retry_attempts.extend(mitigation_agent_exec_stats["num_retry_attempts"])
-    agent_rollback_stack.extend(mitigation_agent_exec_stats["rollback_stack"])
-    agent_oracle_results.extend(mitigation_agent_exec_stats["oracle_results"])
-    logger.info("*" * 25 + " Finished [mitigation agent] " + "*" * 25)
+    # Check benchmark status before attempting to run mitigation
+    # If the benchmark is already done (e.g., no mitigation oracle configured),
+    # we should skip mitigation to avoid the race condition
+    benchmark_status = get_benchmark_status()
+    logger.info(f"Benchmark status after diagnosis: {benchmark_status}")
+
+    if benchmark_status == "done":
+        logger.info(
+            "Benchmark is already in 'done' status. Skipping mitigation agent. "
+            "This typically means the problem does not have a mitigation oracle configured."
+        )
+    elif benchmark_status == "mitigation":
+        # run mitigation task 1 time for mitigation
+        # it includes retry logics
+        logger.info("*" * 25 + " Starting [mitigation agent] for [mitigation] " + "*" * 25)
+        mitigation_agent_exec_stats, mitigation_graph_events = await mitigation_task_main(diagnosis_fault_summary)
+        all_trajectories.extend(mitigation_graph_events)
+        agent_names.extend(mitigation_agent_exec_stats["agent_name"])
+        agent_in_tokens.extend(mitigation_agent_exec_stats["input_tokens"])
+        agent_out_tokens.extend(mitigation_agent_exec_stats["output_tokens"])
+        agent_total_tokens.extend(mitigation_agent_exec_stats["total_tokens"])
+        agent_times.extend(mitigation_agent_exec_stats["time"])
+        agent_steps.extend(mitigation_agent_exec_stats["steps"])
+        agent_retry_attempts.extend(mitigation_agent_exec_stats["num_retry_attempts"])
+        agent_rollback_stack.extend(mitigation_agent_exec_stats["rollback_stack"])
+        agent_oracle_results.extend(mitigation_agent_exec_stats["oracle_results"])
+        logger.info("*" * 25 + " Finished [mitigation agent] " + "*" * 25)
+    else:
+        logger.warning(
+            f"Unexpected benchmark status: {benchmark_status}. Expected 'mitigation' or 'done'. "
+            "Skipping mitigation agent to be safe."
+        )
 
     for lst in [
         agent_names,
