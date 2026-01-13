@@ -142,10 +142,6 @@ python main.py --agent stratus --model bedrock-claude-sonnet-4.5
 
 **Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.
 
-### Monitoring with Dashboard
-
-SREGym provides a dashboard to monitor the status of your evaluation. The dashboard runs automatically when you start the benchmark with `python main.py` and can be accessed at `http://localhost:11451` in your web browser.
-
 ### Viewing Agent Traces with MLflow
 
 SREGym uses MLflow to automatically capture detailed traces of agent execution. To view traces:
