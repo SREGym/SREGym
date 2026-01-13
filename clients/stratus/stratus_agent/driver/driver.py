@@ -70,8 +70,8 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir="."):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    trajectory_file = output_dir / f"stratus_agent_trajectory_{problem_id}_{timestamp}.jsonl"
+    timestamp = datetime.now().strftime("%m-%d_%H-%M")
+    trajectory_file = output_dir / f"{timestamp}_{problem_id}_stratus_agent_trajectory.jsonl"
 
     def serialize_message(message):
         """Convert a LangChain message to a serializable dict"""
