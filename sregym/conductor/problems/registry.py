@@ -157,8 +157,8 @@ class ProblemRegistry:
             "kafka_queue_problems": KafkaQueueProblems,
             "loadgenerator_flood_homepage": LoadGeneratorFloodHomepage,
             # ==================== TRAIN TICKET FAULT INJECTOR ====================
-            # "trainticket_f17_nested_sql_select_clause_error": TrainTicketF17,
-            # "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
+            "trainticket_f17_nested_sql_select_clause_error": TrainTicketF17,
+            "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
             # ==================== HARDWARE FAULT INJECTOR ====================
             "latent_sector_error": LatentSectorError,
             "silent_data_corruption": SilentDataCorruption,
