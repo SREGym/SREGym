@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 # Keep ONLY the single highest-event_index "event" record per stage (per file),
 # but render the FULL event using your existing HTML logic.
-TARGET_STAGES_ORDER = ["localization", "mitigation_attempt_0"]
+TARGET_STAGES_ORDER = ["diagnosis", "mitigation_attempt_0"]
 
 HOT_KEYS = {
     "type",
@@ -135,6 +135,7 @@ def last_message_preview(rec: Dict[str, Any], max_len: int = 160) -> str:
 
 # ---------- streaming selector (no full-file load) ----------
 
+
 def stream_pick_highest_event_index_per_stage(
     path: Path,
     stages_order: List[str],
@@ -209,6 +210,7 @@ def stream_pick_highest_event_index_per_stage(
 # ----------------------------
 # Summary dataclass
 # ----------------------------
+
 
 @dataclass
 class SummaryRow:
@@ -406,16 +408,15 @@ def render_messages(msgs: List[Dict[str, Any]]) -> str:
 
         if content_str.strip():
             content_div_cls = "content mono" if cls == "tool" else "content"
-            body_parts.append(f"<div class='{content_div_cls}' style='white-space:pre-wrap'>{escape(content_str)}</div>")
+            body_parts.append(
+                f"<div class='{content_div_cls}' style='white-space:pre-wrap'>{escape(content_str)}</div>"
+            )
 
         if not body_parts:
             body_parts.append("<div class='content'><small>(empty)</small></div>")
 
         out.append(
-            f"<div class='msg {cls}'>"
-            f"<div class='role'>{escape(mtype)}</div>"
-            + "\n".join(body_parts) +
-            "</div>"
+            f"<div class='msg {cls}'>" f"<div class='role'>{escape(mtype)}</div>" + "\n".join(body_parts) + "</div>"
         )
 
     out.append("</div>")
@@ -447,7 +448,9 @@ def render_kv(rec: Dict[str, Any], exclude_keys: set) -> str:
     return "\n".join(html)
 
 
-def render_file_report(file_name: str, records: List[Dict[str, Any]], parse_errors: List[str], total_lines_scanned: int) -> str:
+def render_file_report(
+    file_name: str, records: List[Dict[str, Any]], parse_errors: List[str], total_lines_scanned: int
+) -> str:
     # records will be only the selected events now (<=2)
     rows = [summarize_record(r, i + 1) for i, r in enumerate(records)]
 
@@ -570,9 +573,7 @@ def render_file_report(file_name: str, records: List[Dict[str, Any]], parse_erro
         elif steps is not None:
             parts.append(
                 "<div class='card'><h3 style='margin:0 0 10px 0;'>Steps / Events (preview)</h3>"
-                "<pre><code class='language-json'>"
-                + escape(pretty_json(steps[:50]))
-                + "</code></pre>"
+                "<pre><code class='language-json'>" + escape(pretty_json(steps[:50])) + "</code></pre>"
                 "<small>Showing up to first 50 items.</small></div>"
             )
 
@@ -588,7 +589,9 @@ def render_file_report(file_name: str, records: List[Dict[str, Any]], parse_erro
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Convert JSONL files to readable HTML reports (only highest event_index for target stages).")
+    ap = argparse.ArgumentParser(
+        description="Convert JSONL files to readable HTML reports (only highest event_index for target stages)."
+    )
     ap.add_argument("inputs", nargs="+", help="Input .jsonl file(s) or directories containing .jsonl")
     ap.add_argument("-o", "--out", default="html_reports", help="Output directory")
     args = ap.parse_args()
