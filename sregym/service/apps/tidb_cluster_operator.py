@@ -7,6 +7,7 @@ from textwrap import dedent
 
 from sregym.observer import tidb_prometheus
 from sregym.paths import BASE_DIR
+from sregym.service.helm import Helm
 
 
 class TiDBClusterDeployer:
@@ -87,10 +88,20 @@ class TiDBClusterDeployer:
     def install_operator_with_values(self):
         print(f"Installing/upgrading TiDB Operator via Helm in namespace '{self.operator_namespace}'...")
         self.create_namespace(self.operator_namespace)
-        self.run_cmd("helm repo add pingcap https://charts.pingcap.org || true")
-        # Use || true to ignore repo update failures - charts are already cached
-        # and transient DNS issues shouldn't block deployment
-        self.run_cmd("helm repo update || true")
+
+        # Add pingcap repo with retry logic to handle transient DNS/network issues
+        try:
+            Helm.add_repo("pingcap", "https://charts.pingcap.org")
+        except RuntimeError as e:
+            print(f"[warn] Failed to add pingcap repo after retries: {e}")
+            print("[info] Continuing with cached charts if available")
+
+        # Update repos with retry logic
+        try:
+            Helm.repo_update()
+        except RuntimeError as e:
+            print(f"[warn] Failed to update helm repos after retries: {e}")
+            print("[info] Continuing with cached charts if available")
 
         values_arg = ""
         if self.operator_values_path:

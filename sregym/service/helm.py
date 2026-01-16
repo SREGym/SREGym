@@ -194,29 +194,100 @@ class Helm:
             local_logger.debug(output.decode("utf-8"))
 
     @staticmethod
-    def add_repo(name: str, url: str):
-        """Add a Helm repository
+    def add_repo(name: str, url: str, max_retries: int = 3, backoff_factor: float = 2.0):
+        """Add a Helm repository with retry logic
 
         Args:
             name (str): Name of the repository
             url (str): URL of the repository
+            max_retries (int): Maximum number of retry attempts
+            backoff_factor (float): Multiplier for exponential backoff (seconds)
+
+        Raises:
+            RuntimeError: If all retry attempts fail
         """
         local_logger.info(f"Helm Repo Add: {name} with url {url}")
-        command = f"helm repo add {name} {url}"
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        output, error = process.communicate()
+        command = f"helm repo add {name} {url} || true"
 
-        if error:
-            local_logger.error(f"Error adding helm repo {name}: {error.decode('utf-8')}")
-            stderr = error.decode("utf-8").strip()
-            stdout = output.decode("utf-8").strip()
-            raise RuntimeError(
-                f"Helm upgrade failed for release '{name}' and url {url}. "
-                f"Error output:\n{stderr}\n"
-                f"Stdout (for context):\n{stdout}"
-            )
-        else:
-            local_logger.info(f"Helm repo {name} added successfully: {output.decode('utf-8')}")
+        for attempt in range(max_retries):
+            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output, error = process.communicate()
+
+            # Check if the repo add was successful (return code 0) or repo already exists
+            stdout = output.decode("utf-8").strip() if output else ""
+            stderr = error.decode("utf-8").strip() if error else ""
+
+            # Success if returncode is 0 or if "already exists" in output
+            if process.returncode == 0 or "already exists" in stderr or "already exists" in stdout:
+                local_logger.info(f"Helm repo {name} added successfully: {stdout}")
+                return
+
+            if attempt < max_retries - 1:
+                wait_time = backoff_factor ** attempt
+                local_logger.warning(
+                    f"Helm repo add failed on attempt {attempt + 1}/{max_retries}. "
+                    f"Retrying in {wait_time}s... Error: {stderr}"
+                )
+                time.sleep(wait_time)
+            else:
+                # Final attempt failed
+                local_logger.error(
+                    f"Helm repo add failed after {max_retries} attempts. "
+                    f"Error output:\n{stderr}\n"
+                    f"Stdout (for context):\n{stdout}"
+                )
+                raise RuntimeError(
+                    f"Helm repo add failed for '{name}' at {url} after {max_retries} attempts. "
+                    f"Error output:\n{stderr}\n"
+                    f"Stdout (for context):\n{stdout}"
+                )
+
+    @staticmethod
+    def repo_update(max_retries: int = 3, backoff_factor: float = 2.0):
+        """Update Helm repositories with retry logic
+
+        Args:
+            max_retries (int): Maximum number of retry attempts
+            backoff_factor (float): Multiplier for exponential backoff (seconds)
+
+        Raises:
+            RuntimeError: If all retry attempts fail
+        """
+        local_logger.info("Helm Repo Update with retry logic")
+        command = "helm repo update"
+
+        for attempt in range(max_retries):
+            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output, error = process.communicate()
+
+            if process.returncode == 0:
+                local_logger.info(f"Helm repo update successful on attempt {attempt + 1}")
+                local_logger.debug(output.decode("utf-8"))
+                return
+
+            # Log the error but continue retrying
+            stderr = error.decode("utf-8").strip() if error else ""
+            stdout = output.decode("utf-8").strip() if output else ""
+
+            if attempt < max_retries - 1:
+                wait_time = backoff_factor ** attempt
+                local_logger.warning(
+                    f"Helm repo update failed on attempt {attempt + 1}/{max_retries}. "
+                    f"Retrying in {wait_time}s... Error: {stderr}"
+                )
+                time.sleep(wait_time)
+            else:
+                # Final attempt failed
+                local_logger.error(
+                    f"Helm repo update failed after {max_retries} attempts. "
+                    f"Error output:\n{stderr}\n"
+                    f"Stdout (for context):\n{stdout}"
+                )
+                raise RuntimeError(
+                    f"Helm repo update failed after {max_retries} attempts. "
+                    f"Error output:\n{stderr}\n"
+                    f"Stdout (for context):\n{stdout}"
+                )
 
 
 # Example usage

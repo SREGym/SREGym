@@ -51,8 +51,20 @@ class FleetCast(Application):
                 raise RuntimeError("ingress-nginx empty")
             print("[ingress] ingress-nginx already present.")
         except Exception:
-            self._sh("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx || true")
-            self._sh("helm repo update")
+            # Add ingress-nginx repo with retry logic
+            try:
+                Helm.add_repo("ingress-nginx", "https://kubernetes.github.io/ingress-nginx")
+            except RuntimeError as e:
+                print(f"[warn] Failed to add ingress-nginx repo after retries: {e}")
+                print("[info] Continuing with cached charts if available")
+
+            # Update repos with retry logic
+            try:
+                Helm.repo_update()
+            except RuntimeError as e:
+                print(f"[warn] Failed to update helm repos after retries: {e}")
+                print("[info] Continuing with cached charts if available")
+
             self._sh(
                 "helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx "
                 "-n ingress-nginx --create-namespace "
