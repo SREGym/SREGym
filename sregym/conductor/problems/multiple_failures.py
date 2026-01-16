@@ -18,13 +18,7 @@ class MultipleIndependentFailures(Problem):
         self.fault_injected = False
 
         # === Attaching problem's oracles ===
-        diagnosis_oracles = [p.diagnosis_oracle for p in self.problems]
-
         # diagnosis oracles can be statically defined.
-        # if len(diagnosis_oracles) > 0:
-        #     print(f"[MIF] Diagnosis oracles: {diagnosis_oracles}")
-        #     self.diagnosis_oracle = CompoundedOracle(self, *diagnosis_oracles)
-
         # concat all root causes together.
         self.root_cause: str = "This problem contains multiple faults.\n"
         for p in self.problems:
