@@ -38,7 +38,7 @@ class TrainTicket(Application):
             self.kubectl.create_namespace_if_not_exist(self.namespace)
 
         Helm.install(**self.helm_configs)
-        self.kubectl.wait_for_job_completion(job_name="train-ticket-deploy", namespace="train-ticket", timeout=1200)
+        self.kubectl.wait_for_job_completion(job_name="train-ticket-deploy", namespace="train-ticket", timeout=1800)
 
         self._deploy_flagd_infrastructure()
         self._deploy_load_generator()

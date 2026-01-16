@@ -54,6 +54,7 @@ from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
+from sregym.conductor.problems.service_port_conflict import ServicePortConflict
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
@@ -134,6 +135,9 @@ class ProblemRegistry:
             "sidecar_port_conflict_astronomy_shop": lambda: SidecarPortConflict(app_name="astronomy_shop", faulty_service="frontend"),
             "sidecar_port_conflict_hotel_reservation": lambda: SidecarPortConflict(app_name="hotel_reservation", faulty_service="frontend"),
             "sidecar_port_conflict_social_network": lambda: SidecarPortConflict(app_name="social_network", faulty_service="user-service"),
+            "service_port_conflict_astronomy_shop": lambda: ServicePortConflict(app_name="astronomy_shop", faulty_service="ad"),
+            "service_port_conflict_hotel_reservation": lambda: ServicePortConflict(app_name="hotel_reservation", faulty_service="recommendation"),
+            "service_port_conflict_social_network": lambda: ServicePortConflict(app_name="social_network", faulty_service="media-service"),
             "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
             "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
