@@ -213,7 +213,8 @@ class ProblemRegistry:
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
-            "social_net_hotel_res_astro_shop_concurrent_failures": lambda: MultipleIndependentFailures(problems=[K8STargetPortMisconfig(faulty_service="user-service"),MongoDBRevokeAuth(faulty_service="mongodb-geo"),WrongServiceSelector(),]),
+            "k8s_target_port-misconfig_user-service_and_revoke_auth_mongodb-geo_and_wrong_service_selector_astro_shop_frontend": lambda: MultipleIndependentFailures(problems=[K8STargetPortMisconfig(faulty_service="user-service"),MongoDBRevokeAuth(faulty_service="mongodb-geo"),WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend")]),
+
             # ad hoc:
             "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
