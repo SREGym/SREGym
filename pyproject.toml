@@ -164,6 +164,10 @@ dependencies = [
 line-length = 120
 target-version = ["py312"]
 
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
 [tool.isort]
 profile = "black"
 line_length = 120
@@ -182,9 +186,3 @@ packages = ["sregym", "clients", "provisioner", "scripts"]
 
 [tool.uv.sources]
 geni-lib-xlab = { path = "scripts/geni_lib/mod/geni_lib_xlab-1.0.0.tar.gz" }
-
-[tool.ruff]
-line-length = 120
-
-[tool.ruff.lint]
-ignore = ["E401", "F405", "E712", "F401"]
