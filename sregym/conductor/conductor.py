@@ -59,7 +59,6 @@ class Conductor:
         self.results = {}
 
         self.tasklist = None
-        self.logger = logging.getLogger("sregym-global")  # this is for dashboard
         self.local_logger = logging.getLogger("all.sregym.conductor")
 
         self.stage_sequence: list[dict] = []
@@ -196,7 +195,7 @@ class Conductor:
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         self.problem.inject_fault()
-        self.logger.info("[ENV] Injected fault")
+        self.local_logger.info("[ENV] Injected fault")
         self.fault_injected = True
 
         # Prepare diagnosis checkpoint if available, after fault injection but before agent stages
@@ -214,7 +213,7 @@ class Conductor:
         r = self.problem.diagnosis_oracle.evaluate(solution)
         self.results["Diagnosis"] = r
         self.results["TTL"] = time.time() - self.execution_start_time
-        self.logger.info(
+        self.local_logger.info(
             f"[EVAL] Diagnosis "
             f"{'Succeed' if self.results['Diagnosis']['success'] else 'Failed'}\n "
             f"TTL: {self.results['TTL']}"
@@ -228,7 +227,7 @@ class Conductor:
         r = self.problem.mitigation_oracle.evaluate()
         self.results["Mitigation"] = r
         self.results["TTM"] = time.time() - self.execution_start_time
-        self.logger.info(
+        self.local_logger.info(
             f"[EVAL] Mitigation "
             f"{'Succeed' if self.results['Mitigation']['success'] else 'Failed'}\n "
             f"TTM: {self.results['TTM']}"
@@ -260,7 +259,7 @@ class Conductor:
             self.local_logger.debug(f"Advancing to stage '{stage_name}' and waiting for agent.")
             self.waiting_for_agent = True
             self.submission_stage = stage_name
-            self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+            self.local_logger.info(f"[STAGE] Go to stage {self.submission_stage}")
 
             # Update NoiseManager stage
             try:
@@ -273,7 +272,7 @@ class Conductor:
             self._finish_problem()
 
     def _finish_problem(self):
-        self.logger.info(f"[STAGE] Done, recover fault")
+        self.local_logger.info("[STAGE] Done, recover fault")
 
         # Stop noises
         try:
@@ -285,12 +284,12 @@ class Conductor:
         if self.problem:
             self.problem.recover_fault()
 
-        self.logger.info(f"[STAGE] Undeploy app")
+        self.local_logger.info("[STAGE] Undeploy app")
         self.undeploy_app()
 
         # Reconcile cluster state to baseline to clean up any changes made by the agent
         if self._baseline_captured:
-            self.logger.info(f"[STAGE] Reconciling cluster state to baseline")
+            self.local_logger.info("[STAGE] Reconciling cluster state to baseline")
             try:
                 changes = self.cluster_state.reconcile_to_baseline()
                 if any(v for v in changes.values() if v):
@@ -317,10 +316,10 @@ class Conductor:
         self.results = {}
 
         self.dependency_check(["kubectl", "helm"])
-        self.local_logger.debug(f"Dependency check passed: kubectl, helm")
+        self.local_logger.debug("Dependency check passed: kubectl, helm")
 
         self.local_logger.info(f"[Session Start] Problem ID: {self.problem_id}")
-        self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
+        self.local_logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
 
         if self.problem.requires_khaos() and self.kubectl.is_emulated_cluster():
             self.local_logger.warning(
@@ -501,7 +500,7 @@ class Conductor:
             print("Setting up dm-flakey infrastructure for Silent Data Corruption fault injection...")
             self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
 
-        self.logger.info(f"[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus")
+        self.local_logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus")
 
         # Capture cluster baseline state after infrastructure is deployed but before app deployment
         # This allows us to reset the cluster to a clean state after each problem
@@ -512,10 +511,10 @@ class Conductor:
 
         self.local_logger.info("[DEPLOY] Deploying and starting workload")
         self.problem.app.deploy()
-        self.logger.info(f"[ENV] Deploy application: {self.problem.app.name}")
+        self.local_logger.info(f"[ENV] Deploy application: {self.problem.app.name}")
 
         self.problem.app.start_workload()
-        self.logger.info(f"[ENV] Start workload")
+        self.local_logger.info("[ENV] Start workload")
 
     def undeploy_app(self):
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""

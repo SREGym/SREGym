@@ -1,8 +1,9 @@
 """Parser for various APIs that an Agent may invoke."""
 
 import ast
-import re
 import logging
+import re
+
 
 class ResponseParsingError(Exception):
     def __init__(self, message):
@@ -12,7 +13,6 @@ class ResponseParsingError(Exception):
 
 class ResponseParser:
     def __init__(self):
-        self.logger = logging.getLogger("sregym-global")
         self.local_logger = logging.getLogger("all.sregym.conductor")
 
     def parse(self, response: str) -> dict:
@@ -152,13 +152,13 @@ class ResponseParser:
 
                 return args, kwargs
             except Exception as e:
-                self.logger.info(f"[ERROR] Error parsing response: {str(e)}")
-                
+                self.local_logger.error(f"Error parsing response: {str(e)}")
+
                 if args_str:
                     self.local_logger.error(f"Error parsing response: {str(e)} content to be parsed: func({args_str})")
                 else:
                     self.local_logger.error(f"Error parsing response: {str(e)} content to be parsed: func()")
-                
+
                 raise ResponseParsingError(f"Error parsing response: {str(e)}")
 
         self.local_logger.error("No API call found!")
