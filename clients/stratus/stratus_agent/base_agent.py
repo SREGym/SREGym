@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -37,7 +37,6 @@ class BaseAgent:
         self.process_tool_call_node = "process_tool_call"
         self.post_round_process_node = "post_round_process"
         self.callback = UsageMetadataCallbackHandler()
-        self.arena_logger = logging.getLogger("sregym-global")
         self.loop_count = 0
 
     def llm_inference_step(self, messages, tools):
@@ -51,15 +50,14 @@ class BaseAgent:
                 + self.tool_descs
                 + "Choose a tool from the list and output the tool name. Justify your tool choice. In the next step, you will generate a tool call for this tool"
             )
-            self.local_logger.debug(f"[Loop {self.loop_count}] Inject framework prompt: \n {content}")
+            self.logger.debug(f"[Loop {self.loop_count}] Inject framework prompt: \n {content}")
         else:
             content = (
                 "You are now in the thinking stage. Choose a tool from the available tools and justify your choice."
             )
-            self.local_logger.debug(f"[Loop {self.loop_count}] Inject short thinking prompt to save context")
+            self.logger.debug(f"[Loop {self.loop_count}] Inject short thinking prompt to save context")
 
         human_prompt = HumanMessage(content=content)
-        self.arena_logger.info(f"[PROMPT] Framework prompt: \n {human_prompt.content}")
         return {
             "messages": [human_prompt],
         }
@@ -67,8 +65,7 @@ class BaseAgent:
     def llm_thinking_step(self, state: State):
         # planning step, not providing tool
         ai_message = self.llm_inference_step(state["messages"], tools=None)
-        self.arena_logger.info(f"[LLM] \n {ai_message.content}")
-        self.local_logger.debug(
+        self.logger.debug(
             f"[Loop {self.loop_count}] Ask, and LLM responds: \n {ai_message.content}",
             extra={"Full Prompt": state["messages"]},
         )
@@ -82,11 +79,10 @@ class BaseAgent:
 
     def llm_tool_call_prompt_inject_step(self, state: State):
         human_prompt = HumanMessage(content="Now generate a tool call according to your last chosen tool.")
-        self.arena_logger.info(f"[PROMPT] \n {human_prompt.content}")
         if self.loop_count == 0:
-            self.local_logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt: \n {human_prompt.content}")
+            self.logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt: \n {human_prompt.content}")
         else:
-            self.local_logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt (repeated)")
+            self.logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt (repeated)")
         return {
             "messages": [human_prompt],
         }
@@ -103,7 +99,10 @@ class BaseAgent:
             else:
                 ai_message = self.llm_inference_step(state["messages"], tools=[*self.sync_tools, *self.async_tools])
 
-        self.local_logger.debug(f"[Loop {self.loop_count}] Tool call", extra={"Full Prompt": state["messages"]})
+        self.logger.debug(
+            f"[Loop {self.loop_count}] Tool call",
+            extra={"Full Prompt": state["messages"]},
+        )
         if ai_message.content == "Server side error":
             return {
                 "messages": [],
@@ -114,14 +113,13 @@ class BaseAgent:
 
     def should_submit_router(self, state: State):
         should_submit = state["num_steps"] == self.max_step and state["submitted"] == False
-        self.local_logger.info(f"Should we force the agent submit? {"Yes!" if should_submit else "No!"}")
+        self.logger.info(f"Should we force the agent submit? {'Yes!' if should_submit else 'No!'}")
         return self.force_submit_prompt_inject_node if should_submit else self.post_round_process_node
 
     def post_round_process(self, state: State):
-        self.local_logger.debug("agent finished a round")
-        self.local_logger.debug("currently only incrementing step")
-        self.local_logger.info(f"{'^' * 20} [Loop {self.loop_count}] {'^' * 20}")
-        self.arena_logger.info("[SPLIT]")
+        self.logger.debug("agent finished a round")
+        self.logger.debug("currently only incrementing step")
+        self.logger.info(f"{'^' * 20} [Loop {self.loop_count}] {'^' * 20}")
         return {
             "num_steps": state["num_steps"] + 1,
         }
@@ -130,15 +128,12 @@ class BaseAgent:
         human_prompt = HumanMessage(
             content="You have reached your step limit, please submit your results by generating a `submit` tool's tool call."
         )
-        self.arena_logger.info("[WARNING] Agent has not solved the problem until the step limit, force submission.")
-        self.arena_logger.info(f"[PROMPT] \n {human_prompt.content}")
-        # self.local_logger.info(f"[Loop {self.loop_count}] Inject force submit prompt: \n {human_prompt.content}")
+        self.logger.warning("Agent has not solved the problem until the step limit, force submission.")
         return {"messages": [human_prompt]}
 
     def llm_force_submit_tool_call_step(self, state: State):
         result = self.llm_inference_step(state["messages"], tools=[self.submit_tool])
-        self.arena_logger.info(f"[LLM] \n {result.content}")
-        # self.local_logger.info(f"[Loop {self.loop_count}] Force submit, and LLM responds: \n {result.content}")
+        # self.logger.info(f"[Loop {self.loop_count}] Force submit, and LLM responds: \n {result.content}")
         return {"messages": result}
 
     def clear_memory(self):

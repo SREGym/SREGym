@@ -13,8 +13,6 @@ def get_current_datetime_formatted():
 
 
 def init_logger():
-    logging.getLogger("sregym-global").setLevel(logging.INFO)
-    logging.getLogger("sregym-global").propagate = False  # do not propagate to the real root logger ('')
 
     # set up the logger for log file
     root_logger = logging.getLogger("all")

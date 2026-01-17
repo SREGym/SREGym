@@ -11,9 +11,9 @@ from kubernetes.client.rest import ApiException
 
 from sregym.service.kubectl import KubeCtl
 
-local_logger = logging.getLogger("all.infra.cluster_state")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("all.infra.cluster_state")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
 
 # Namespaces that should never be deleted during reconciliation
@@ -80,7 +80,7 @@ class ClusterStateManager:
         Capture current cluster state as the baseline.
         Should be called after infrastructure is deployed but before any problems run.
         """
-        local_logger.info("Capturing cluster baseline state...")
+        logger.info("Capturing cluster baseline state...")
 
         self.baseline = ClusterBaseline(
             namespaces=self._get_namespaces(),
@@ -94,7 +94,7 @@ class ClusterStateManager:
             coredns_configmap_data=self._get_coredns_configmap_data(),
         )
 
-        local_logger.info(f"Baseline captured: {self.baseline.to_dict()}")
+        logger.info(f"Baseline captured: {self.baseline.to_dict()}")
         return self.baseline
 
     def reconcile_to_baseline(self) -> dict:
@@ -103,10 +103,10 @@ class ClusterStateManager:
         Returns a summary of changes made.
         """
         if self.baseline is None:
-            local_logger.warning("No baseline captured. Skipping reconciliation.")
+            logger.warning("No baseline captured. Skipping reconciliation.")
             return {"skipped": True, "reason": "no_baseline"}
 
-        local_logger.info("Reconciling cluster to baseline state...")
+        logger.info("Reconciling cluster to baseline state...")
         changes = {
             "namespaces_deleted": [],
             "cluster_roles_deleted": [],
@@ -123,12 +123,12 @@ class ClusterStateManager:
         current_namespaces = self._get_namespaces()
         unexpected_namespaces = current_namespaces - self.baseline.namespaces - PROTECTED_NAMESPACES
         for ns in unexpected_namespaces:
-            local_logger.info(f"Deleting unexpected namespace: {ns}")
+            logger.info(f"Deleting unexpected namespace: {ns}")
             try:
                 self.kubectl.delete_namespace(ns)
                 changes["namespaces_deleted"].append(ns)
             except Exception as e:
-                local_logger.warning(f"Failed to delete namespace {ns}: {e}")
+                logger.warning(f"Failed to delete namespace {ns}: {e}")
 
         # 2. Delete unexpected ClusterRoles
         current_cluster_roles = self._get_cluster_roles()
@@ -137,13 +137,13 @@ class ClusterStateManager:
             # Skip system roles that may have been auto-created
             if role.startswith("system:") or role.startswith("kubeadm:"):
                 continue
-            local_logger.info(f"Deleting unexpected ClusterRole: {role}")
+            logger.info(f"Deleting unexpected ClusterRole: {role}")
             try:
                 self.rbac_v1.delete_cluster_role(name=role)
                 changes["cluster_roles_deleted"].append(role)
             except ApiException as e:
                 if e.status != 404:
-                    local_logger.warning(f"Failed to delete ClusterRole {role}: {e}")
+                    logger.warning(f"Failed to delete ClusterRole {role}: {e}")
 
         # 3. Delete unexpected ClusterRoleBindings
         current_bindings = self._get_cluster_role_bindings()
@@ -151,49 +151,49 @@ class ClusterStateManager:
         for binding in unexpected_bindings:
             if binding.startswith("system:") or binding.startswith("kubeadm:"):
                 continue
-            local_logger.info(f"Deleting unexpected ClusterRoleBinding: {binding}")
+            logger.info(f"Deleting unexpected ClusterRoleBinding: {binding}")
             try:
                 self.rbac_v1.delete_cluster_role_binding(name=binding)
                 changes["cluster_role_bindings_deleted"].append(binding)
             except ApiException as e:
                 if e.status != 404:
-                    local_logger.warning(f"Failed to delete ClusterRoleBinding {binding}: {e}")
+                    logger.warning(f"Failed to delete ClusterRoleBinding {binding}: {e}")
 
         # 4. Delete unexpected PersistentVolumes
         current_pvs = self._get_persistent_volumes()
         unexpected_pvs = current_pvs - self.baseline.persistent_volumes
         for pv in unexpected_pvs:
-            local_logger.info(f"Deleting unexpected PersistentVolume: {pv}")
+            logger.info(f"Deleting unexpected PersistentVolume: {pv}")
             try:
                 self.core_v1.delete_persistent_volume(name=pv)
                 changes["persistent_volumes_deleted"].append(pv)
             except ApiException as e:
                 if e.status != 404:
-                    local_logger.warning(f"Failed to delete PersistentVolume {pv}: {e}")
+                    logger.warning(f"Failed to delete PersistentVolume {pv}: {e}")
 
         # 5. Delete unexpected StorageClasses
         current_scs = self._get_storage_classes()
         unexpected_scs = current_scs - self.baseline.storage_classes
         for sc in unexpected_scs:
-            local_logger.info(f"Deleting unexpected StorageClass: {sc}")
+            logger.info(f"Deleting unexpected StorageClass: {sc}")
             try:
                 self.storage_v1.delete_storage_class(name=sc)
                 changes["storage_classes_deleted"].append(sc)
             except ApiException as e:
                 if e.status != 404:
-                    local_logger.warning(f"Failed to delete StorageClass {sc}: {e}")
+                    logger.warning(f"Failed to delete StorageClass {sc}: {e}")
 
         # 6. Delete unexpected CRDs
         current_crds = self._get_crds()
         unexpected_crds = current_crds - self.baseline.crds
         for crd in unexpected_crds:
-            local_logger.info(f"Deleting unexpected CRD: {crd}")
+            logger.info(f"Deleting unexpected CRD: {crd}")
             try:
                 self.apiextensions_v1.delete_custom_resource_definition(name=crd)
                 changes["crds_deleted"].append(crd)
             except ApiException as e:
                 if e.status != 404:
-                    local_logger.warning(f"Failed to delete CRD {crd}: {e}")
+                    logger.warning(f"Failed to delete CRD {crd}: {e}")
 
         # 7. Reset node labels
         changes["nodes_labels_reset"] = self._reconcile_node_labels()
@@ -203,11 +203,11 @@ class ClusterStateManager:
 
         # 9. Reset CoreDNS ConfigMap if modified
         if self._is_coredns_modified():
-            local_logger.info("Resetting CoreDNS ConfigMap to baseline")
+            logger.info("Resetting CoreDNS ConfigMap to baseline")
             self._restore_coredns_configmap()
             changes["coredns_reset"] = True
 
-        local_logger.info(f"Reconciliation complete: {changes}")
+        logger.info(f"Reconciliation complete: {changes}")
         return changes
 
     def _get_namespaces(self) -> Set[str]:
@@ -216,7 +216,7 @@ class ClusterStateManager:
             ns_list = self.core_v1.list_namespace()
             return {ns.metadata.name for ns in ns_list.items}
         except ApiException as e:
-            local_logger.error(f"Failed to list namespaces: {e}")
+            logger.error(f"Failed to list namespaces: {e}")
             return set()
 
     def _get_cluster_roles(self) -> Set[str]:
@@ -225,7 +225,7 @@ class ClusterStateManager:
             roles = self.rbac_v1.list_cluster_role()
             return {role.metadata.name for role in roles.items}
         except ApiException as e:
-            local_logger.error(f"Failed to list ClusterRoles: {e}")
+            logger.error(f"Failed to list ClusterRoles: {e}")
             return set()
 
     def _get_cluster_role_bindings(self) -> Set[str]:
@@ -234,7 +234,7 @@ class ClusterStateManager:
             bindings = self.rbac_v1.list_cluster_role_binding()
             return {binding.metadata.name for binding in bindings.items}
         except ApiException as e:
-            local_logger.error(f"Failed to list ClusterRoleBindings: {e}")
+            logger.error(f"Failed to list ClusterRoleBindings: {e}")
             return set()
 
     def _get_persistent_volumes(self) -> Set[str]:
@@ -243,7 +243,7 @@ class ClusterStateManager:
             pvs = self.core_v1.list_persistent_volume()
             return {pv.metadata.name for pv in pvs.items}
         except ApiException as e:
-            local_logger.error(f"Failed to list PersistentVolumes: {e}")
+            logger.error(f"Failed to list PersistentVolumes: {e}")
             return set()
 
     def _get_storage_classes(self) -> Set[str]:
@@ -252,7 +252,7 @@ class ClusterStateManager:
             scs = self.storage_v1.list_storage_class()
             return {sc.metadata.name for sc in scs.items}
         except ApiException as e:
-            local_logger.error(f"Failed to list StorageClasses: {e}")
+            logger.error(f"Failed to list StorageClasses: {e}")
             return set()
 
     def _get_crds(self) -> Set[str]:
@@ -261,7 +261,7 @@ class ClusterStateManager:
             crds = self.apiextensions_v1.list_custom_resource_definition()
             return {crd.metadata.name for crd in crds.items}
         except ApiException as e:
-            local_logger.error(f"Failed to list CRDs: {e}")
+            logger.error(f"Failed to list CRDs: {e}")
             return set()
 
     def _get_node_labels(self) -> Dict[str, Dict[str, str]]:
@@ -270,7 +270,7 @@ class ClusterStateManager:
             nodes = self.core_v1.list_node()
             return {node.metadata.name: dict(node.metadata.labels or {}) for node in nodes.items}
         except ApiException as e:
-            local_logger.error(f"Failed to get node labels: {e}")
+            logger.error(f"Failed to get node labels: {e}")
             return {}
 
     def _get_node_taints(self) -> Dict[str, list]:
@@ -284,7 +284,7 @@ class ClusterStateManager:
                 result[node.metadata.name] = [{"key": t.key, "value": t.value, "effect": t.effect} for t in taints]
             return result
         except ApiException as e:
-            local_logger.error(f"Failed to get node taints: {e}")
+            logger.error(f"Failed to get node taints: {e}")
             return {}
 
     def _get_coredns_configmap_data(self) -> Dict[str, str]:
@@ -294,9 +294,9 @@ class ClusterStateManager:
             return dict(cm.data or {})  # type: ignore[union-attr]
         except ApiException as e:
             if e.status == 404:
-                local_logger.warning("CoreDNS ConfigMap not found")
+                logger.warning("CoreDNS ConfigMap not found")
                 return {}
-            local_logger.error(f"Failed to get CoreDNS ConfigMap: {e}")
+            logger.error(f"Failed to get CoreDNS ConfigMap: {e}")
             return {}
 
     def _is_coredns_modified(self) -> bool:
@@ -309,7 +309,7 @@ class ClusterStateManager:
     def _restore_coredns_configmap(self):
         """Restore CoreDNS ConfigMap to baseline state."""
         if not self.baseline or not self.baseline.coredns_configmap_data:
-            local_logger.warning("No baseline CoreDNS data to restore")
+            logger.warning("No baseline CoreDNS data to restore")
             return
 
         try:
@@ -321,9 +321,9 @@ class ClusterStateManager:
                 "kubectl rollout restart deployment coredns -n kube-system 2>/dev/null || "
                 "kubectl rollout restart daemonset coredns -n kube-system 2>/dev/null || true"
             )
-            local_logger.info("CoreDNS ConfigMap restored to baseline")
+            logger.info("CoreDNS ConfigMap restored to baseline")
         except ApiException as e:
-            local_logger.error(f"Failed to restore CoreDNS ConfigMap: {e}")
+            logger.error(f"Failed to restore CoreDNS ConfigMap: {e}")
 
     def _reconcile_node_labels(self) -> list:
         """
@@ -367,12 +367,12 @@ class ClusterStateManager:
                     body = {"metadata": {"labels": patch_labels}}
                     self.core_v1.patch_node(name=node_name, body=body)
                     modified_nodes.append(node_name)
-                    local_logger.info(
+                    logger.info(
                         f"Reset labels on node {node_name}: "
                         f"removed={labels_to_remove}, restored={list(labels_to_restore.keys())}"
                     )
                 except ApiException as e:
-                    local_logger.warning(f"Failed to reconcile labels for node {node_name}: {e}")
+                    logger.warning(f"Failed to reconcile labels for node {node_name}: {e}")
 
         return modified_nodes
 
@@ -406,8 +406,8 @@ class ClusterStateManager:
                     body = {"spec": {"taints": taints if taints else None}}
                     self.core_v1.patch_node(name=node_name, body=body)
                     modified_nodes.append(node_name)
-                    local_logger.info(f"Reset taints on node {node_name}")
+                    logger.info(f"Reset taints on node {node_name}")
                 except ApiException as e:
-                    local_logger.warning(f"Failed to reconcile taints for node {node_name}: {e}")
+                    logger.warning(f"Failed to reconcile taints for node {node_name}: {e}")
 
         return modified_nodes

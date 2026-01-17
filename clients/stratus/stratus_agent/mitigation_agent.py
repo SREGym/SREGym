@@ -1,17 +1,13 @@
-import asyncio
 import logging
 from pathlib import Path
-from typing import List
 
 import yaml
-from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import END, START
 from langgraph.types import StateSnapshot
 
 from clients.stratus.stratus_agent.base_agent import BaseAgent
-from clients.stratus.stratus_agent.state import State
 from clients.stratus.stratus_utils.str_to_tool import str_to_tool
 from clients.stratus.tools.stratus_tool_node import StratusToolNode
 from llm_backend.init_backend import get_llm_backend_for_tools
@@ -27,7 +23,7 @@ class MitigationAgent(BaseAgent):
         self.tool_node = None
         self.max_step = kwargs.get("max_step", 20)
         self.loop_count = 0
-        self.local_logger = logging.getLogger("all.stratus.mitigation")
+        self.logger = logging.getLogger("all.stratus.mitigation")
 
     def build_agent(self):
         self.tool_node = StratusToolNode(async_tools=self.async_tools, sync_tools=self.sync_tools)
@@ -81,11 +77,10 @@ class MitigationAgent(BaseAgent):
         if len(starting_prompts) == 0:
             raise ValueError("No prompts used to start the conversation!")
 
-        # Log starting prompts in full to arena logger
+        # Log starting prompts
         all_init_prompts = ""
         for prompt in starting_prompts:
             all_init_prompts += prompt.content + "\n"
-        self.arena_logger.info(f"[PROMPT] \n {all_init_prompts}")
 
         graph_events = []
         while True:

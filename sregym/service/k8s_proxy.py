@@ -26,9 +26,9 @@ from urllib.parse import urlparse
 import urllib3
 from kubernetes import config
 
-local_logger = logging.getLogger("all.infra.k8s_proxy")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("all.infra.k8s_proxy")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
 # Namespaces to hide from agents
 HIDDEN_NAMESPACES: Set[str] = {"chaos-mesh", "khaos"}
@@ -158,7 +158,7 @@ class KubernetesAPIProxy:
             """HTTP request handler that proxies and filters Kubernetes API responses."""
 
             def log_message(self, format, *args):
-                local_logger.debug(f"Proxy: {format % args}")
+                logger.debug(f"Proxy: {format % args}")
 
             def _get_upstream_connection(self):
                 """Create HTTPS connection to upstream Kubernetes API."""
@@ -315,7 +315,7 @@ class KubernetesAPIProxy:
                     conn.close()
 
                 except Exception as e:
-                    local_logger.error(f"Proxy error: {e}")
+                    logger.error(f"Proxy error: {e}")
                     self.send_error(502, f"Bad Gateway: {str(e)}")
 
             def do_GET(self):
@@ -343,8 +343,8 @@ class KubernetesAPIProxy:
         self.server = HTTPServer(("127.0.0.1", self.listen_port), FilteringProxyHandler)
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.server_thread.start()
-        local_logger.info(f"Kubernetes API filtering proxy started on port {self.listen_port}")
-        local_logger.info(f"Hidden namespaces: {self.hidden_namespaces}")
+        logger.info(f"Kubernetes API filtering proxy started on port {self.listen_port}")
+        logger.info(f"Hidden namespaces: {self.hidden_namespaces}")
 
     def stop(self):
         """Stop the proxy server."""
@@ -352,7 +352,7 @@ class KubernetesAPIProxy:
             self.server.shutdown()
             self.server = None
             self.server_thread = None
-            local_logger.info("Kubernetes API filtering proxy stopped")
+            logger.info("Kubernetes API filtering proxy stopped")
 
         # Cleanup temp files
         for temp_file in self._temp_files:
@@ -413,7 +413,7 @@ class KubernetesAPIProxy:
         with open(output_path, "w") as f:
             yaml.dump(kubeconfig, f)
 
-        local_logger.info(f"Generated agent kubeconfig at {output_path}")
+        logger.info(f"Generated agent kubeconfig at {output_path}")
         return output_path
 
     def get_proxy_url(self) -> str:

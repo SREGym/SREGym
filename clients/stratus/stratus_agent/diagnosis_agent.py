@@ -1,16 +1,11 @@
-import asyncio
 import logging
 from pathlib import Path
 
 import yaml
-from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import END, START
 
 from clients.stratus.stratus_agent.base_agent import BaseAgent
-from clients.stratus.stratus_agent.mitigation_agent import generate_run_summary
-from clients.stratus.stratus_utils.get_logger import get_logger
-from clients.stratus.stratus_utils.get_starting_prompt import get_starting_prompts
 from clients.stratus.stratus_utils.str_to_tool import str_to_tool
 from clients.stratus.tools.stratus_tool_node import StratusToolNode
 from llm_backend.init_backend import get_llm_backend_for_tools
@@ -26,7 +21,7 @@ class DiagnosisAgent(BaseAgent):
         self.tool_node = None
         self.max_step = kwargs.get("max_step", 20)
         self.loop_count = 0
-        self.local_logger = logging.getLogger("all.stratus.diagnosis")
+        self.logger = logging.getLogger("all.stratus.diagnosis")
 
     def build_agent(self):
         self.tool_node = StratusToolNode(async_tools=self.async_tools, sync_tools=self.sync_tools)
@@ -82,7 +77,6 @@ class DiagnosisAgent(BaseAgent):
         all_init_prompts = ""
         for prompt in starting_prompts:
             all_init_prompts += prompt.content + "\n"
-        self.arena_logger.info(f"[PROMPT] \n {all_init_prompts}")
 
         graph_events = []
 

@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -48,11 +47,6 @@ class StratusToolNode:
             )
             raise ValueError("Last message is not an AIMessage; skipping tool invocation.")
 
-        arena_logger = logging.getLogger("sregym-global")
-        if message.content != "":
-            arena_logger.info(f"[LLM] {message.content}")
-            # logger.info(f"{message.content}")
-
         if not getattr(message, "tool_calls", None):
             logger.warning("AIMessage does not contain tool_calls.")
             return {"messages": []}
@@ -67,7 +61,6 @@ class StratusToolNode:
             try:
                 # logger.info(f"[STRATUS_TOOLNODE] invoking tool: {tool_call['name']}, tool_call: {tool_call}")
                 arg_list = [f"{key} = {value}" for key, value in tool_call["args"].items()]
-                arena_logger.info(f"[LLM] Agent choose to call: {tool_call['name']}({', '.join(arg_list)})")
                 logger.info(f"[STRATUS_TOOLNODE] Agent choose to call: {tool_call['name']}({', '.join(arg_list)})")
                 if tool_call["name"] in self.async_tools_by_name:
                     tool_result = await self.async_tools_by_name[tool_call["name"]].ainvoke(
@@ -106,7 +99,6 @@ class StratusToolNode:
                 logger.debug(f"[STRATUS_TOOLNODE] tool_result: {tool_result}")
                 if tool_result.update["messages"]:
                     combined_content = "\n".join([message.content for message in tool_result.update["messages"]])
-                    arena_logger.info(f"[ENV] Tool {tool_call['name']} returned: \n {combined_content}")
                 new_messages += tool_result.update["messages"]
                 to_update = {
                     **to_update,
@@ -114,7 +106,6 @@ class StratusToolNode:
                 }
             except ValidationError as e:
                 logger.error(f"tool_call: {tool_call}\nError: {e}")
-                arena_logger.error(f"[ENV] Tool Call {tool_call['name']} failed: \n {e}")
                 new_messages += [
                     ToolMessage(
                         content=f"Error: {e}; This happens usually because you are "

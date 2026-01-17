@@ -5,25 +5,27 @@ import logging
 import subprocess
 import time
 
-local_logger = logging.getLogger("all.infra.kubectl")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("all.infra.kubectl")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
 try:
     from kubernetes import client, config
 except ModuleNotFoundError as e:
-    local_logger.error("Your Kubeconfig is missing. Please set up a cluster.")
+    logger.error("Your Kubeconfig is missing. Please set up a cluster.")
     exit(1)
+import os
+
+import dotenv
 from kubernetes import dynamic
 from kubernetes.client import api_client
 from kubernetes.client.rest import ApiException
 from rich.console import Console
-import dotenv
-import os
 
 dotenv.load_dotenv(override=True)
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
+
 
 class KubeCtl:
     def __init__(self):
@@ -31,7 +33,7 @@ class KubeCtl:
         try:
             config.load_kube_config()
         except Exception as e:
-            local_logger.error("Missing kubeconfig. Please set up a cluster.")
+            logger.error("Missing kubeconfig. Please set up a cluster.")
             exit(1)
         self.core_v1_api = client.CoreV1Api()
         self.apps_v1_api = client.AppsV1Api()
@@ -110,7 +112,7 @@ class KubeCtl:
             return len(deployed_services.items) > 0
         except ApiException as e:
             if e.status == 404:
-                local_logger.warning(f"Namespace {namespace} doesn't exist.")
+                logger.warning(f"Namespace {namespace} doesn't exist.")
                 return False
             else:
                 raise e
@@ -332,7 +334,7 @@ class KubeCtl:
             api_response = self.core_v1_api.patch_namespaced_service(name, namespace, body)
             return api_response
         except ApiException as e:
-            local_logger.error(f"Exception when patching service: {e}\n")
+            logger.error(f"Exception when patching service: {e}\n")
             return None
 
     def patch_custom_object(self, group, version, namespace, plural, name, body):
@@ -350,8 +352,8 @@ class KubeCtl:
             if e.status == 404:
                 return self.create_new_configmap(name, namespace, data)
             else:
-                local_logger.error(f"Exception when updating configmap: {e}\n")
-                local_logger.error(f"Exception status code: {e.status}\n")
+                logger.error(f"Exception when updating configmap: {e}\n")
+                logger.error(f"Exception status code: {e.status}\n")
                 return None
 
     def create_new_configmap(self, name, namespace, data):
@@ -365,7 +367,7 @@ class KubeCtl:
         try:
             return self.core_v1_api.create_namespaced_config_map(namespace, config_map)
         except ApiException as e:
-            local_logger.error(f"Exception when creating configmap: {e}\n")
+            logger.error(f"Exception when creating configmap: {e}\n")
             return None
 
     def create_or_update_configmap(self, name: str, namespace: str, data: dict):
@@ -375,15 +377,15 @@ class KubeCtl:
             # ConfigMap exists, update it
             existing_configmap.data = data
             self.core_v1_api.replace_namespaced_config_map(name, namespace, existing_configmap)
-            local_logger.info(f"ConfigMap '{name}' updated in namespace '{namespace}'")
+            logger.info(f"ConfigMap '{name}' updated in namespace '{namespace}'")
         except ApiException as e:
             if e.status == 404:
                 # ConfigMap doesn't exist, create it
                 body = client.V1ConfigMap(metadata=client.V1ObjectMeta(name=name), data=data)
                 self.core_v1_api.create_namespaced_config_map(namespace, body)
-                local_logger.info(f"ConfigMap '{name}' created in namespace '{namespace}'")
+                logger.info(f"ConfigMap '{name}' created in namespace '{namespace}'")
             else:
-                local_logger.error(f"Error creating/updating ConfigMap '{name}': {e}")
+                logger.error(f"Error creating/updating ConfigMap '{name}': {e}")
 
     def update_configmap(self, name, namespace, data):
         """Update existing configmap with the provided data."""
@@ -396,7 +398,7 @@ class KubeCtl:
         try:
             return self.core_v1_api.replace_namespaced_config_map(name, namespace, config_map)
         except ApiException as e:
-            local_logger.error(f"Exception when updating configmap: {e}\n")
+            logger.error(f"Exception when updating configmap: {e}\n")
             return
 
     def apply_configs(self, namespace: str, config_path: str):
@@ -409,40 +411,40 @@ class KubeCtl:
         try:
             exists_resource = self.exec_command(f"kubectl get all -n {namespace} -o name")
             if exists_resource:
-                local_logger.info(f"Deleting K8S configs in namespace: {namespace}")
+                logger.info(f"Deleting K8S configs in namespace: {namespace}")
                 command = f"kubectl delete -Rf {config_path} -n {namespace} --timeout=10s"
                 self.exec_command(command)
             else:
-                local_logger.warning(f"No resources found in: {namespace}. Skipping deletion.")
+                logger.warning(f"No resources found in: {namespace}. Skipping deletion.")
         except subprocess.CalledProcessError as e:
-            local_logger.error(f"Error deleting K8S configs: {e}")
-            local_logger.error(f"Command output: {e.output}")
+            logger.error(f"Error deleting K8S configs: {e}")
+            logger.error(f"Command output: {e.output}")
 
     def delete_namespace(self, namespace: str):
         """Delete a specified namespace."""
         try:
             self.core_v1_api.delete_namespace(name=namespace)
             self.wait_for_namespace_deletion(namespace)
-            local_logger.info(f"Namespace '{namespace}' deleted successfully.")
+            logger.info(f"Namespace '{namespace}' deleted successfully.")
         except ApiException as e:
             if e.status == 404:
-                local_logger.warning(f"Namespace '{namespace}' not found.")
+                logger.warning(f"Namespace '{namespace}' not found.")
             else:
-                local_logger.error(f"Error deleting namespace '{namespace}': {e}")
+                logger.error(f"Error deleting namespace '{namespace}': {e}")
 
     def create_namespace_if_not_exist(self, namespace: str):
         """Create a namespace if it doesn't exist."""
         try:
             self.core_v1_api.read_namespace(name=namespace)
-            local_logger.info(f"Namespace '{namespace}' already exists when you want to create.")
+            logger.info(f"Namespace '{namespace}' already exists when you want to create.")
         except ApiException as e:
             if e.status == 404:
-                local_logger.info(f"Namespace '{namespace}' not found. Creating namespace.")
+                logger.info(f"Namespace '{namespace}' not found. Creating namespace.")
                 body = client.V1Namespace(metadata=client.V1ObjectMeta(name=namespace))
                 self.core_v1_api.create_namespace(body=body)
-                local_logger.info(f"Namespace '{namespace}' created successfully.")
+                logger.info(f"Namespace '{namespace}' created successfully.")
             else:
-                local_logger.error(f"Error checking/creating namespace '{namespace}': {e}")
+                logger.error(f"Error checking/creating namespace '{namespace}': {e}")
 
     def exec_command(self, command: str, input_data=None):
         """Execute an arbitrary kubectl command."""
@@ -468,7 +470,7 @@ class KubeCtl:
                 arch = node.status.node_info.architecture
                 architectures.add(arch)
         except ApiException as e:
-            local_logger.error(f"Exception when retrieving node architectures: {e}\n")
+            logger.error(f"Exception when retrieving node architectures: {e}\n")
         return architectures
 
     def get_node_memory_capacity(self):
@@ -481,7 +483,7 @@ class KubeCtl:
                 max_capacity = max(max_capacity, capacity)
             return max_capacity
         except ApiException as e:
-            local_logger.error(f"Exception when retrieving node memory capacity: {e}\n")
+            logger.error(f"Exception when retrieving node memory capacity: {e}\n")
             return {}
 
     def parse_k8s_quantity(self, mem_str):
@@ -541,7 +543,7 @@ class KubeCtl:
 
             return False
         except Exception as e:
-            local_logger.error(f"Error detecting cluster type: {e}")
+            logger.error(f"Error detecting cluster type: {e}")
             return False
 
     def get_matching_replicasets(self, namespace: str, deployment_name: str) -> list[client.V1ReplicaSet]:
@@ -567,7 +569,7 @@ class KubeCtl:
                 namespace=namespace,
                 body=body,
             )
-            local_logger.info(f"✅ Deleted ReplicaSet '{name}' in namespace '{namespace}'")
+            logger.info(f"✅ Deleted ReplicaSet '{name}' in namespace '{namespace}'")
         except client.exceptions.ApiException as e:
             raise RuntimeError(f"Failed to delete ReplicaSet {name} in {namespace}: {e}")
 
@@ -591,10 +593,10 @@ class KubeCtl:
             existing = resource.get(name=manifest["metadata"]["name"], namespace=namespace)
             # If exists, patch it
             resource.patch(body=manifest, name=manifest["metadata"]["name"], namespace=namespace)
-            local_logger.info(f"✅ Patched existing {manifest['kind']} '{manifest['metadata']['name']}'")
+            logger.info(f"✅ Patched existing {manifest['kind']} '{manifest['metadata']['name']}'")
         except dynamic.exceptions.NotFoundError:
             resource.create(body=manifest, namespace=namespace)
-            local_logger.info(f"✅ Created new {manifest['kind']} '{manifest['metadata']['name']}'")
+            logger.info(f"✅ Created new {manifest['kind']} '{manifest['metadata']['name']}'")
 
     def get_resource_quotas(self, namespace: str) -> list:
         try:
@@ -608,7 +610,7 @@ class KubeCtl:
             self.core_v1_api.delete_namespaced_resource_quota(
                 name=name, namespace=namespace, body=client.V1DeleteOptions(propagation_policy="Foreground")
             )
-            local_logger.info(f"✅ Deleted resource quota '{name}' in namespace '{namespace}'")
+            logger.info(f"✅ Deleted resource quota '{name}' in namespace '{namespace}'")
         except client.exceptions.ApiException as e:
             raise RuntimeError(f"❌ Failed to delete resource quota '{name}' in namespace '{namespace}': {e}")
 
@@ -616,7 +618,7 @@ class KubeCtl:
         try:
             body = {"spec": {"replicas": replicas}}
             self.apps_v1_api.patch_namespaced_deployment(name=name, namespace=namespace, body=body)
-            local_logger.info(f"✅ Scaled deployment '{name}' in namespace '{namespace}' to {replicas} replicas.")
+            logger.info(f"✅ Scaled deployment '{name}' in namespace '{namespace}' to {replicas} replicas.")
         except client.exceptions.ApiException as e:
             raise RuntimeError(f"❌ Failed to scale deployment '{name}' in namespace '{namespace}': {e}")
 

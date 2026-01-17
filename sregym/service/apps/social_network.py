@@ -11,9 +11,9 @@ from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
-local_logger = logging.getLogger("all.sregym.social_network")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("all.sregym.social_network")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
 
 class SocialNetwork(Application):
@@ -45,9 +45,9 @@ class SocialNetwork(Application):
                 f"-n {self.namespace}"
             )
             create_result = self.kubectl.exec_command(create_sec_command)
-            local_logger.debug(f"TLS secret created: {create_result.strip()}")
+            logger.debug(f"TLS secret created: {create_result.strip()}")
         else:
-            local_logger.debug("TLS secret already exists. Skipping creation.")
+            logger.debug("TLS secret already exists. Skipping creation.")
 
     def deploy(self):
         """Deploy the Helm configurations with architecture-aware image selection."""

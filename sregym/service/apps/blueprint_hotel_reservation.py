@@ -7,9 +7,9 @@ from sregym.paths import BLUEPRINT_HOTEL_RES_METADATA, FAULT_SCRIPTS, TARGET_MIC
 from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 
-local_logger = logging.getLogger("all.application")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("all.application")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
 
 class BlueprintHotelReservation(Application):
@@ -32,7 +32,7 @@ class BlueprintHotelReservation(Application):
 
     def deploy(self):
         """Deploy the Kubernetes configurations."""
-        local_logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
+        logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.create_namespace()
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         self.kubectl.wait_for_ready(self.namespace)
