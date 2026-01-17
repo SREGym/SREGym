@@ -174,24 +174,21 @@ def comment_out_problems():
     # comment out agent run too
     agent_run_lines = ["reg = get_agent(agent_name)", "if reg:", "await LAUNCHER.ensure_started(reg)"]
     for node, probs in mapping.items():
+        # print(f"starting node {node}")
         for prob in problems:
             if prob not in mapping[node]:
                 print(f"On node {node}, comment out line: {prob.strip()}")
                 cmd = f'ssh -o StrictHostKeyChecking=no {node} "sed -i \'/\\"{prob}\\":/s/^/#/\' ~/SREGym/sregym/conductor/problems/registry.py"'
                 subprocess.run(cmd, shell=True, check=True)
+                # sleep(60)
         for l in agent_run_lines:
             cmd = f"ssh -o StrictHostKeyChecking=no {node} \"sed -i '/{l}/ s/^/#/' ~/SREGym/main.py\""
             subprocess.run(cmd, shell=True, check=True)
 
 
-def run_submit(user, nodes_file: str = "nodes.txt"):
-    TMUX_CMD = (
-        "tmux kill-session -t submission 2>/dev/null || true; "
-        f"tmux new-session -d -s submission -c /users/{user}/e2e-testing-scripts"
-        "'python3 auto_submit.py 2>&1 | tee -a ~/submission_log.txt; sleep infinity'"
-    )
+def run_agent(user, nodes_file: str = "nodes.txt"):
     # TMUX_CMD2 = "tmux new-session -d -s main_tmux 'echo $PATH; sleep infinity;'"
-    TMUX_CMD2 = (
+    TMUX_CMD = (
         "tmux new-session -d -s main_tmux "
         "'env -i PATH=/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/local/bin:/usr/bin:/bin "
         "HOME=$HOME TERM=$TERM "
@@ -199,7 +196,7 @@ def run_submit(user, nodes_file: str = "nodes.txt"):
         "command -v kubectl; kubectl version --client || true; "
         "command -v helm || true; "
         f"cd /users/{user}/SREGym && "
-        "~/SREGym/.venv/bin/python3 main.py --agent autosubmit 2>&1 | tee -a global_benchmark_log_$(date +%Y-%m-%d).txt; "
+        "~/SREGym/.venv/bin/python3 main.py --model bedrock-claude-sonnet-4.5 2>&1 | tee -a global_benchmark_log_$(date +%Y-%m-%d).txt; "
         "sleep infinity\"'"
     )
 
@@ -208,22 +205,16 @@ def run_submit(user, nodes_file: str = "nodes.txt"):
 
     for host in nodes:
         print(f"=== {host} ===")
-        cmd = [
-            "ssh",
-            host,
-            f"{TMUX_CMD}",
-        ]
         cmd2 = [
             "ssh",
             host,
-            f"{TMUX_CMD2}",
+            f"{TMUX_CMD}",
         ]
         try:
             subprocess.run(cmd2, check=True)
             print(f"Main script started successfully on {host}.")
             sleep(20)
-            subprocess.run(cmd, check=True)
-            print(f"Submission script started successfully on {host}.")
+
 
         except subprocess.CalledProcessError as e:
             print(f"Setup failed with return code {e.returncode}")
@@ -406,7 +397,17 @@ def copy_env():
             ],
             check=True,
         )
-
+        subprocess.run(
+            [
+                "scp",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+                "~/.aws/credentials",
+                f"{node}:~/.aws",
+            ],
+            check=True,
+        )
+        
 
 def install_kubectl():
     _install_brew_if_needed()
@@ -423,6 +424,7 @@ def install_kubectl():
             executable="/bin/zsh",
         )
     print("Kubectl installed successfully on all nodes.")
+
 
 
 def set_up_environment():
@@ -502,7 +504,19 @@ def collect_logs(user, nodes_file: str = "nodes.txt"):
         except subprocess.CalledProcessError:
             print(f"Failed to copy log from {node} (file may not exist)")
 
+def delete_cluster():
+    for node in _read_nodes("nodes.txt"):
+        print(f"\n=== [Delete Kind Cluster] {node} ===")
+        TMUX_SESSION = "cluster_setup"
 
+        cmd = f'ssh -o StrictHostKeyChecking=no {node} "bash -ic \\"kind delete cluster\\""'
+
+        subprocess.run(
+            cmd,
+            check=True,
+            shell=True,
+            executable="/bin/zsh",
+        )
 def kill_server():
     TMUX_KILL_CMD = "tmux kill-server"
     for host in _read_nodes("nodes.txt"):
@@ -525,13 +539,14 @@ if __name__ == "__main__":
 
     # kills any existing tmux servers
     kill_server()
-
+    # delete any existing kind clusters
+    delete_cluster()
     # copying all scripts
     scp_scripts_to_all(user, "nodes.txt")
     # clone repo
-    clone(nodes_file="nodes.txt")
+    #clone(nodes_file="nodes.txt")
     # comment out problems that we don't test
-    comment_out_problems()
+    #comment_out_problems()
 
     # installs prereqs
     run_installations_all(user, "nodes.txt")
@@ -544,6 +559,6 @@ if __name__ == "__main__":
     run_setup_env_all(user, "nodes.txt")
     sleep(120)
     # runs auto submitting script to keep benchmark going
-    run_submit(user, "nodes.txt")
+    run_agent(user, "nodes.txt")
     # collects any logs
     collect_logs(user, "nodes.txt")
