@@ -7,7 +7,9 @@ import json
 import logging
 import os
 import shlex
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -22,6 +24,62 @@ class CodexAgent:
     """
 
     _OUTPUT_FILENAME = "codex.txt"
+
+    @staticmethod
+    def check_installation() -> bool:
+        """
+        Check if Codex CLI is installed.
+
+        Returns:
+            True if codex is available, False otherwise
+        """
+        return shutil.which("codex") is not None
+
+    @staticmethod
+    def ensure_installed(auto_install: bool = True) -> None:
+        """
+        Ensure Codex CLI is installed, optionally attempting installation.
+
+        Args:
+            auto_install: If True, attempt to install codex if not found
+
+        Raises:
+            RuntimeError: If codex is not installed and auto_install fails
+        """
+        if CodexAgent.check_installation():
+            logger.info("Codex CLI is already installed")
+            return
+
+        logger.warning("Codex CLI not found in PATH")
+
+        if not auto_install:
+            raise RuntimeError(
+                "Codex CLI is not installed. Please install it using:\n"
+                "  pip install codex-cli\n"
+                "Or visit: https://github.com/anthropics/codex"
+            )
+
+        # Attempt auto-installation
+        logger.info("Attempting to install Codex CLI via pip...")
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "codex-cli"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            logger.info("Successfully installed Codex CLI")
+
+            # Verify installation
+            if not CodexAgent.check_installation():
+                raise RuntimeError("Codex CLI installation appeared to succeed but command is still not available")
+
+        except subprocess.CalledProcessError as e:
+            raise RuntimeError(
+                f"Failed to auto-install Codex CLI: {e}\n"
+                "Please install it manually using:\n"
+                "  pip install codex-cli\n"
+                "Or visit: https://github.com/anthropics/codex"
+            )
 
     def __init__(
         self,

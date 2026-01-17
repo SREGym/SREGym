@@ -14,8 +14,10 @@ from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.service.apps.app_registry import AppRegistry
+from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_dust_manager import DmDustManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
+from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
 from sregym.service.telemetry.prometheus import Prometheus
@@ -33,6 +35,15 @@ class Conductor:
         self.khaos = KhaosController(self.kubectl)
         self.dm_dust_manager = DmDustManager(self.kubectl)
         self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
+        self.cluster_state = ClusterStateManager(self.kubectl)
+        self._baseline_captured = False
+
+        # Kubernetes API proxy to hide chaos engineering namespaces from agents
+        self.k8s_proxy = KubernetesAPIProxy(
+            hidden_namespaces={"chaos-mesh", "khaos"},
+            listen_port=16443,
+        )
+        self._agent_kubeconfig_path: str | None = None
 
         self.problem = None
         self.detection_oracle = None
@@ -58,6 +69,29 @@ class Conductor:
 
     def register_agent(self, name="agent"):
         self.agent_name = name
+
+    def start_k8s_proxy(self):
+        """
+        Start the Kubernetes API proxy that hides chaos engineering namespaces.
+        Should be called before launching agents.
+        """
+        self.local_logger.info("Starting Kubernetes API filtering proxy...")
+        self.k8s_proxy.start()
+        self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig()
+        self.local_logger.info(f"Agent kubeconfig generated at: {self._agent_kubeconfig_path}")
+
+    def stop_k8s_proxy(self):
+        """Stop the Kubernetes API proxy."""
+        self.local_logger.info("Stopping Kubernetes API filtering proxy...")
+        self.k8s_proxy.stop()
+        self._agent_kubeconfig_path = None
+
+    def get_agent_kubeconfig_path(self) -> str | None:
+        """
+        Get the path to the kubeconfig file that agents should use.
+        This kubeconfig points to the filtering proxy that hides chaos namespaces.
+        """
+        return self._agent_kubeconfig_path
 
     def dependency_check(self, binaries: list[str]):
         for b in binaries:
@@ -253,6 +287,16 @@ class Conductor:
 
         self.logger.info(f"[STAGE] Undeploy app")
         self.undeploy_app()
+
+        # Reconcile cluster state to baseline to clean up any changes made by the agent
+        if self._baseline_captured:
+            self.logger.info(f"[STAGE] Reconciling cluster state to baseline")
+            try:
+                changes = self.cluster_state.reconcile_to_baseline()
+                if any(v for v in changes.values() if v):
+                    self.local_logger.info(f"Cluster state reconciliation changes: {changes}")
+            except Exception as e:
+                self.local_logger.warning(f"Failed to reconcile cluster state: {e}")
 
         # Set to "done" after all cleanup is complete to prevent race condition
         # where the next problem starts before cleanup finishes
@@ -458,6 +502,13 @@ class Conductor:
             self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
 
         self.logger.info(f"[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus")
+
+        # Capture cluster baseline state after infrastructure is deployed but before app deployment
+        # This allows us to reset the cluster to a clean state after each problem
+        if not self._baseline_captured:
+            self.local_logger.info("[DEPLOY] Capturing cluster baseline state...")
+            self.cluster_state.capture_baseline()
+            self._baseline_captured = True
 
         self.local_logger.info("[DEPLOY] Deploying and starting workload")
         self.problem.app.deploy()

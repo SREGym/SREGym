@@ -61,6 +61,11 @@ def driver_loop(
             console.log(f"Starting agent now: {agent_to_run}")
             conductor.register_agent(agent_to_run)
 
+            # Start K8s API proxy to hide chaos engineering namespaces from the agent
+            console.log("🔒 Starting Kubernetes API proxy to hide chaos namespaces...")
+            conductor.start_k8s_proxy()
+            LAUNCHER.set_agent_kubeconfig(conductor.get_agent_kubeconfig_path())
+
         all_results_for_agent = []
 
         # Get all problem IDs and filter if needed
@@ -155,6 +160,11 @@ def driver_loop(
             if not use_external_harness:
                 LAUNCHER.cleanup_agent(agent_to_run)
                 console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
+
+        # Stop K8s API proxy when all problems are done
+        if not use_external_harness:
+            console.log("🔓 Stopping Kubernetes API proxy...")
+            conductor.stop_k8s_proxy()
 
         return [{agent_to_run: all_results_for_agent}]
 

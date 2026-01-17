@@ -190,12 +190,12 @@ class LiteLLMBackend:
                 time.sleep(retry_delay)
                 retry_delay *= 2  # Exponential backoff
             except openai.APIError as e:
-                # Other OpenAI API errors
-                logger.error(f"OpenAI API error occurred: {e}")
-                raise
-                # else:
-                #     logger.error(f"HTTP error occurred: {e}")
-                #     raise
+                # OpenAI API errors (including 500s) - retry with exponential backoff
+                logger.warning(
+                    f"OpenAI API error occurred: {e}. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
+                )
+                time.sleep(retry_delay)
+                retry_delay *= 2
 
             except litellm.RateLimitError as e:
                 provider_delay = _extract_retry_delay_seconds_from_exception(e)

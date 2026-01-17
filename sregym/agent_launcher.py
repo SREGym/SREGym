@@ -18,6 +18,14 @@ class AgentProcess:
 class AgentLauncher:
     def __init__(self):
         self._procs: Dict[str, AgentProcess] = {}
+        self._agent_kubeconfig_path: Optional[str] = None
+
+    def set_agent_kubeconfig(self, kubeconfig_path: Optional[str]):
+        """
+        Set the kubeconfig path that agents should use.
+        This is typically the filtered kubeconfig from the K8s proxy.
+        """
+        self._agent_kubeconfig_path = kubeconfig_path
 
     async def ensure_started(self, reg: AgentRegistration) -> Optional[AgentProcess]:
         if not reg or not reg.kickoff_command:
@@ -32,6 +40,10 @@ class AgentLauncher:
         env = os.environ.copy()
         if reg.kickoff_env:
             env.update(reg.kickoff_env)
+
+        # Use filtered kubeconfig if set (hides chaos engineering namespaces)
+        if self._agent_kubeconfig_path:
+            env["KUBECONFIG"] = self._agent_kubeconfig_path
 
         proc = subprocess.Popen(
             reg.kickoff_command,

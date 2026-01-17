@@ -6,7 +6,9 @@ Based on Harbor's Claude Code agent implementation for parity experiments.
 import json
 import logging
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -21,6 +23,65 @@ class ClaudeCodeAgent:
     """
 
     _OUTPUT_FILENAME = "claude-code.txt"
+
+    @staticmethod
+    def check_installation() -> bool:
+        """
+        Check if Claude Code CLI is installed.
+
+        Returns:
+            True if claude is available, False otherwise
+        """
+        return shutil.which("claude") is not None
+
+    @staticmethod
+    def ensure_installed(auto_install: bool = True) -> None:
+        """
+        Ensure Claude Code CLI is installed, optionally attempting installation.
+
+        Args:
+            auto_install: If True, attempt to install claude if not found
+
+        Raises:
+            RuntimeError: If claude is not installed and auto_install fails
+        """
+        if ClaudeCodeAgent.check_installation():
+            logger.info("Claude Code CLI is already installed")
+            return
+
+        logger.warning("Claude Code CLI not found in PATH")
+
+        if not auto_install:
+            raise RuntimeError(
+                "Claude Code CLI is not installed. Please install it using:\n"
+                "  npm install -g @anthropic-ai/claude-code\n"
+                "Or visit: https://docs.claude.ai/claude-code"
+            )
+
+        # Attempt auto-installation
+        logger.info("Attempting to install Claude Code CLI via npm...")
+        try:
+            subprocess.check_call(
+                ["npm", "install", "-g", "@anthropic-ai/claude-code"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            logger.info("Successfully installed Claude Code CLI")
+
+            # Verify installation
+            if not ClaudeCodeAgent.check_installation():
+                raise RuntimeError("Claude Code CLI installation appeared to succeed but command is still not available")
+
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            error_msg = f"Failed to auto-install Claude Code CLI: {e}\n"
+            if isinstance(e, FileNotFoundError):
+                error_msg += "npm is not installed. Please install Node.js and npm first.\n"
+            error_msg += (
+                "Please install Claude Code manually using:\n"
+                "  npm install -g @anthropic-ai/claude-code\n"
+                "Or visit: https://docs.claude.ai/claude-code"
+            )
+            raise RuntimeError(error_msg)
 
     ALLOWED_TOOLS = [
         "Bash",

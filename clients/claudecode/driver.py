@@ -220,6 +220,11 @@ def main():
         default=None,
         help="Claude Code sessions directory (default: logs-dir/sessions)",
     )
+    parser.add_argument(
+        "--no-auto-install",
+        action="store_true",
+        help="Disable auto-installation of Claude Code CLI if not found",
+    )
 
     args = parser.parse_args()
 
@@ -228,6 +233,13 @@ def main():
     logger.info(f"Model: {args.model}")
     logger.info(f"Logs directory: {args.logs_dir}")
     logger.info("=" * 80)
+
+    # Check if Claude Code CLI is installed
+    try:
+        ClaudeCodeAgent.ensure_installed(auto_install=not args.no_auto_install)
+    except RuntimeError as e:
+        logger.error(f"Claude Code CLI installation check failed: {e}")
+        sys.exit(1)
 
     # Wait for conductor to be ready
     try:
