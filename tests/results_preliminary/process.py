@@ -22,10 +22,37 @@ class Tags:
     mitigation_success: bool
     overall_success: bool
 
+def pick_results_csv_with_most_rows(root: Path) -> Path:
+    """
+    Pick the *results.csv file with the most data rows* (excluding header).
+    Searches under `root` (including subfolders).
+    """
+    candidates = list(root.rglob("*results.csv"))
+    if not candidates:
+        raise FileNotFoundError(f"No '*results.csv' found under {root}")
 
-all_results_csv_path = (
-    Path(__file__).parent / "stratus_12-29_09-34_resource_request_too_large_results.csv"
-)
+    best_path = None
+    best_rows = -1
+
+    for p in candidates:
+        try:
+            with p.open("r", encoding="utf-8", errors="ignore") as f:
+                n_lines = sum(1 for _ in f)
+            n_rows = max(0, n_lines - 1)
+        except Exception:
+            continue
+
+        if n_rows > best_rows:
+            best_rows = n_rows
+            best_path = p
+
+    if best_path is None:
+        raise FileNotFoundError(f"Found '*results.csv' under {root}, but none were readable.")
+
+    print(f"[results.csv] Using: {best_path}  (rows={best_rows})")
+    return best_path
+HERE = Path(__file__).parent.resolve()
+all_results_csv_path = pick_results_csv_with_most_rows(HERE)
 all_results_csv = pd.read_csv(all_results_csv_path)
 pd.set_option("display.max_columns", None)
 
