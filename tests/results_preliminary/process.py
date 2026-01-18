@@ -11,7 +11,7 @@ import pandas as pd
 import shutil
 # Keep ONLY the single highest-event_index "event" record per stage (per file),
 # but render the FULL event using your existing HTML logic.
-TARGET_STAGES_ORDER = ["localization", "mitigation_attempt_0"]
+TARGET_STAGES_ORDER = ["diagnosis", "mitigation_attempt_0"]
 
 
 @dataclass(frozen=True)
@@ -177,6 +177,7 @@ def generate_analysis_report():
     directory = Path(__file__).resolve().parent
     path = directory / "queries.py"
     subprocess.run(["python3", str(path)], check=True)
+
 
 def stream_pick_highest_event_index_per_stage(
     path: Path,
@@ -583,6 +584,7 @@ document.addEventListener("DOMContentLoaded", function() {
 });
 </script>
 """
+
 
 
 
@@ -1232,9 +1234,7 @@ def render_file_report(
         elif steps is not None:
             parts.append(
                 "<div class='card'><h3 style='margin:0 0 10px 0;'>Steps / Events (preview)</h3>"
-                "<pre><code class='language-json'>"
-                + escape(pretty_json(steps[:50]))
-                + "</code></pre>"
+                "<pre><code class='language-json'>" + escape(pretty_json(steps[:50])) + "</code></pre>"
                 "<small>Showing up to first 50 items.</small></div>"
             )
 

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'darwin'",
@@ -4516,6 +4516,7 @@ dependencies = [
     { name = "locust" },
     { name = "markdown-it-py" },
     { name = "markupsafe" },
+    { name = "matplotlib" },
     { name = "mcp", extra = ["cli"] },
     { name = "mlflow" },
     { name = "msal" },
@@ -4680,6 +4681,7 @@ requires-dist = [
     { name = "locust", specifier = ">=2.42.3" },
     { name = "markdown-it-py", specifier = "==3.0.0" },
     { name = "markupsafe", specifier = "==3.0.2" },
+    { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "mcp", extras = ["cli"], specifier = ">=1.9.1" },
     { name = "mlflow", specifier = ">=3.8.0" },
     { name = "msal", specifier = "==1.32.3" },
