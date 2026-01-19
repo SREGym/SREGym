@@ -1991,6 +1991,56 @@ class VirtualizationFaultInjector(FaultInjector):
 
         print("All deployments with GOGC environment variables have been recovered to default value (100)")
 
+    # Inject a hostPort conflict that clashes with another service
+    def inject_service_port_conflict(self, microservices: list[str], conflicting_port: int):
+
+        for service in microservices:
+            original_deployment_yaml = self._get_deployment_yaml(service)
+            deployment_yaml = copy.deepcopy(original_deployment_yaml)
+
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            main_container = containers[0] if containers else {}
+
+            # Add hostPort to the first container port (or add port if none exists)
+            ports_list = main_container.get("ports", [])
+            if ports_list:
+                # Add hostPort to existing port
+                ports_list[0]["hostPort"] = conflicting_port
+            else:
+                # Create a new port entry with hostPort
+                main_container["ports"] = [{"containerPort": 8080, "hostPort": conflicting_port}]
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            delete_cmd = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_cmd = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_cmd)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_cmd)
+            print(f"Apply result for {service}: {apply_result}")
+
+            # Save the *original* deployment YAML for recovery
+            self._write_yaml_to_file(service, original_deployment_yaml)
+
+            print(f"Injected hostPort {conflicting_port} conflict for service: {service}")
+
+    def recover_service_port_conflict(self, microservices: list[str]):
+        for service in microservices:
+            delete_cmd = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_cmd = f"kubectl apply -f /tmp/{service}_modified.yaml -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_cmd)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_cmd)
+            print(f"Apply result for {service}: {apply_result}")
+
+            self.kubectl.wait_for_ready(self.namespace)
+
+            print(f"Recovered from hostPort conflict for service: {service}")
+
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
