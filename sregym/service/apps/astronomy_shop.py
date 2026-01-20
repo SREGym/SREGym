@@ -1,7 +1,5 @@
 """Interface to the OpenTelemetry Astronomy Shop application"""
 
-import time
-
 from sregym.generators.workload.locust import LocustWorkloadManager
 from sregym.observer.trace_api import TraceAPI
 from sregym.paths import ASTRONOMY_SHOP_METADATA
@@ -31,6 +29,10 @@ class AstronomyShop(Application):
         self.kubectl.create_namespace_if_not_exist(self.namespace)
 
         self.helm_configs["extra_args"] = [
+            # Disable bundled Prometheus to avoid ClusterRole conflict with central
+            # Prometheus in the observe namespace (ClusterRoles are cluster-wide)
+            "--set",
+            "prometheus.enabled=false",
             "--set-string",
             "components.load-generator.envOverrides[0].name=LOCUST_BROWSER_TRAFFIC_ENABLED",
             "--set-string",
