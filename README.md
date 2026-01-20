@@ -161,6 +161,36 @@ mlflow ui
 
 The traces include LLM calls, tool executions, state transitions, and performance metrics for all agents.
 
+## Viewing Agent Traces with SREGym Tooling
+
+SREGym includes a small utility that compiles raw agent trace outputs into an HTML report for easier reading, debugging, and quick analysis.
+
+### What you get
+- **Filterable trace explorer**, including filters for:
+  - `application`
+  - `namespace`
+  - success status (**True/False**) for **localization**, **diagnosis**, **mitigation**, or **overall**
+- **Preliminary results analysis** that computes aggregate stats across multiple slices of the data:
+  - **Problem with the maximum number of agent steps**
+  - **Problem with the minimum number of agent steps**
+  - **Average steps across problems**
+  - **Most used tool**
+  - **Least used tool**
+  - Computed across:
+    - **stage filters**: localization-only, diagnosis-only, and localization+diagnosis combined
+    - **outcome modes**: `all`, `fail`, `success`
+      - `all`: does not consider success/failure
+      - `fail`: includes only problems where the agent did **not** succeed
+      - `success`: includes only problems where the agent succeeded in **both diagnosis and mitigation**
+
+### Usage
+
+From the `results_preliminary/` directory, run:
+
+```bash
+python3 process.py -o reports_html
+```
+
 ## Acknowledgements
 This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org/).
 
