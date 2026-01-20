@@ -146,7 +146,6 @@ python main.py --agent stratus --model bedrock-claude-sonnet-4.5
 
 SREGym provides a dashboard to monitor the status of your evaluation. The dashboard runs automatically when you start the benchmark with `python main.py` and can be accessed at `http://localhost:11451` in your web browser.
 
-
 ## Viewing Agent Traces with SREGym Tooling
 
 SREGym includes a small utility that compiles raw agent trace outputs into an HTML report for easier reading, debugging, and quick analysis.
@@ -171,10 +170,10 @@ SREGym includes a small utility that compiles raw agent trace outputs into an HT
 
 ### Usage
 
-From the `results_preliminary/` directory, run:
+Run the script and specify the path to your traces:
 
 ```bash
-python3 process.py -o reports_html
+python process.py /path/to/your/traces -o reports_html
 ```
 
 ## Acknowledgements
