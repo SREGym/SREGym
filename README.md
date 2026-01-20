@@ -146,20 +146,6 @@ python main.py --agent stratus --model bedrock-claude-sonnet-4.5
 
 SREGym provides a dashboard to monitor the status of your evaluation. The dashboard runs automatically when you start the benchmark with `python main.py` and can be accessed at `http://localhost:11451` in your web browser.
 
-### Viewing Agent Traces with MLflow
-
-SREGym uses MLflow to automatically capture detailed traces of agent execution. To view traces:
-
-1. Start the MLflow UI:
-```bash
-mlflow ui
-```
-
-2. Open your browser and navigate to `http://localhost:5000`
-
-3. Click on the **Experiments** tab to view all agent traces
-
-The traces include LLM calls, tool executions, state transitions, and performance metrics for all agents.
 
 ## Viewing Agent Traces with SREGym Tooling
 
