@@ -11,9 +11,6 @@ import pandas as pd
 import shutil
 # Keep ONLY the single highest-event_index "event" record per stage (per file),
 # but render the FULL event using your existing HTML logic.
-TARGET_STAGES_ORDER = ["diagnosis", "mitigation_attempt_0"]
-
-
 @dataclass(frozen=True)
 class Tags:
     namespace: str
@@ -21,6 +18,11 @@ class Tags:
     diagnosis_success: bool
     mitigation_success: bool
     overall_success: bool
+
+TARGET_STAGES_ORDER = ["diagnosis", "mitigation_attempt_0"]
+all_results_csv: Optional[pd.DataFrame] = None
+ATTR_INDEX: Dict[str, Dict[str, Any]] = {}
+tags_by_problem_id = {}
 
 def pick_results_csv_with_most_rows(root: Path) -> Path:
     """
@@ -51,10 +53,7 @@ def pick_results_csv_with_most_rows(root: Path) -> Path:
 
     print(f"[results.csv] Using: {best_path}  (rows={best_rows})")
     return best_path
-HERE = Path(__file__).parent.resolve()
-all_results_csv_path = pick_results_csv_with_most_rows(HERE)
-all_results_csv = pd.read_csv(all_results_csv_path)
-pd.set_option("display.max_columns", None)
+
 
 HOT_KEYS = {
     "type",
@@ -71,20 +70,28 @@ HOT_KEYS = {
     "last_message",
     "messages",
 }
-
-
-def _csv_row(problem_id: str):
+def _csv_row(problem_id: str) -> pd.Series:
+    if all_results_csv is None:
+        raise RuntimeError("all_results_csv not initialized. Did you call main() correctly?")
     return all_results_csv.loc[all_results_csv["problem_id"] == problem_id].iloc[0]
 
+def _as_bool(x: Any) -> bool:
+    if isinstance(x, bool):
+        return x
+    if isinstance(x, str):
+        return x.strip().lower() in {"1", "true", "yes"}
+    if isinstance(x, (int, float)):
+        return x != 0
+    return False
 
 def diagnosis_success(problem_id: str) -> bool:
     row = _csv_row(problem_id)
-    return bool(row["Diagnosis.success"])
+    return _as_bool(row.get("Diagnosis.success"))
 
 
 def mitigation_success(problem_id: str) -> bool:
     row = _csv_row(problem_id)
-    return bool(row["Mitigation.success"])
+    return _as_bool(row.get("Mitigation.success"))
 
 
 def overall_success(problem_id: str) -> bool:
@@ -199,11 +206,16 @@ def last_message_preview(rec: Dict[str, Any], max_len: int = 160) -> str:
     return ""
 
 
-
-def generate_analysis_report():
+def generate_analysis_report(root: Path) -> None:
+    """
+    Run queries.py *as if root were the working directory*.
+    This lets queries.py use relative paths under that root without editing it.
+    """
     directory = Path(__file__).resolve().parent
     path = directory / "queries.py"
-    subprocess.run(["python3", str(path)], check=True)
+    import os
+    cwd = os.getcwd()
+    subprocess.run(["python3", str(path), root, "-o analysis_report.html"], check=True, cwd=cwd)
 
 
 def stream_pick_highest_event_index_per_stage(
@@ -294,8 +306,8 @@ def find_problem_id(path: Path) -> str:
     return ""
 
 
-def load_problem_index(jsonl_path: str):
-    index = {}
+def load_problem_index(jsonl_path: str) -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
     with open(jsonl_path, "r", encoding="utf-8") as f:
         for line in f:
             try:
@@ -308,17 +320,22 @@ def load_problem_index(jsonl_path: str):
     return index
 
 
-
-
-ATTR_JSONL_PATH = Path(__file__).parent / "attributes.jsonl"
-
-try:
-    ATTR_INDEX: Dict[str, Dict[str, Any]] = load_problem_index(str(ATTR_JSONL_PATH))
-except FileNotFoundError:
-    ATTR_INDEX = {}
-
-# Store tags by problem_id
-tags_by_problem_id: Dict[str, Tags] = {}
+def load_attributes_index(root: Path) -> Dict[str, Dict[str, Any]]:
+    """
+    Prefer attributes.jsonl under the provided root.
+    Fallback to the script directory if not found.
+    """
+    candidates = [
+        root / "attributes.jsonl",
+        Path(__file__).resolve().parent / "attributes.jsonl",
+    ]
+    for p in candidates:
+        if p.exists():
+            try:
+                return load_problem_index(str(p))
+            except Exception:
+                return {}
+    return {}
 
 
 FILTER_UI = """
@@ -613,9 +630,6 @@ document.addEventListener("DOMContentLoaded", function() {
 """
 
 
-
-
-
 @dataclass
 class SummaryRow:
     idx: int
@@ -627,7 +641,7 @@ class SummaryRow:
     problem_id: str
     timestamp: str
 
-    # from attributes.jsonl 
+    # from attributes.jsonl
     failure_type: str
     origin: str
     fault_level: str
@@ -662,8 +676,6 @@ class IndexRow:
     diagnosis_ok: str
     mitigation_ok: str
     overall_ok: str
-
-
 
 
 _NS_RE = re.compile(
@@ -811,8 +823,6 @@ def summarize_index_row(
     )
 
 
-
-
 HIGHLIGHT = """
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -869,7 +879,7 @@ a:hover { text-decoration: underline; }
   cursor:pointer;
 }
 .btn:hover{
-  border-color:#0b5fff55;
+  border-color: #0b5fff55;
   background:#0b5fff0a;
   text-decoration:none;
 }
@@ -1249,7 +1259,6 @@ def render_file_report(
             f"<div class='k'>Diagnosis</div><div>{escape(s.diagnosis_ok)}</div>"
             f"<div class='k'>Mitigation</div><div>{escape(s.mitigation_ok)}</div>"
             f"<div class='k'>Overall</div><div>{escape(s.overall_ok)}</div>"
-            f"<div class='k'>Overall</div><div>{escape(s.overall_ok)}</div>"
             "</div></div>"
         )
 
@@ -1286,18 +1295,36 @@ def main():
     ap.add_argument("-o", "--out", default="html_reports", help="Output directory")
     args = ap.parse_args()
 
-    out_dir = Path(args.out)
+    # Root selection: use the first input as the root if it's a directory,
+    # otherwise use its parent directory.
+    first = Path(args.inputs[0]).expanduser().resolve()
+    root = first if first.is_dir() else first.parent
+
+    # Load results.csv from the provided root (NOT the script directory)
+    global all_results_csv
+    results_csv_path = pick_results_csv_with_most_rows(root)
+    all_results_csv = pd.read_csv(results_csv_path)
+    pd.set_option("display.max_columns", None)
+
+    # Load attributes.jsonl from the provided root (fallback to script dir)
+    global ATTR_INDEX
+    ATTR_INDEX = load_attributes_index(root)
+
+    out_dir = Path(args.out).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    HERE = Path(__file__).parent.resolve()
-    print(HERE)
-    src = HERE / "analysis_report.html"
+
+    # Run analysis report generation in the provided root so relative paths work
+    generate_analysis_report(root)
+
+    # Copy analysis_report.html from root into the output dir (if present)
+    src = root / "analysis_report.html"
     destination = out_dir / "analysis_report.html"
     if src.exists():
         shutil.copy2(src, destination)
 
     jsonl_files: List[Path] = []
     for inp in args.inputs:
-        p = Path(inp)
+        p = Path(inp).expanduser().resolve()
         if p.is_dir():
             jsonl_files.extend(sorted(p.rglob("*.jsonl")))
         elif p.is_file() and p.suffix.lower() == ".jsonl":
@@ -1411,5 +1438,4 @@ def main():
 
 
 if __name__ == "__main__":
-    generate_analysis_report()
     main()
