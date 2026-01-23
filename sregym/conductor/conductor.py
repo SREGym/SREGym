@@ -20,6 +20,7 @@ from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
+from sregym.service.telemetry.loki import Loki
 from sregym.service.telemetry.prometheus import Prometheus
 
 
@@ -29,6 +30,7 @@ class Conductor:
         self.problems = ProblemRegistry()
         self.kubectl = KubeCtl()
         self.prometheus = Prometheus()
+        self.loki = Loki()
         self.apps = AppRegistry()
         self.agent_name = None
 
@@ -108,7 +110,7 @@ class Conductor:
             self.tasklist = ["diagnosis", "mitigation"]
             return
 
-        with open(tasklist_path, "r") as f:
+        with open(tasklist_path) as f:
             tasklist = yaml.safe_load(f)
             if not tasklist:
                 msg = "Badly formatted tasklist.yml"
@@ -481,6 +483,9 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying Prometheus…")
         self.prometheus.deploy()
 
+        self.logger.info("[DEPLOY] Deploying Loki…")
+        self.loki.deploy()
+
         # Set up fault injection infrastructure based on problem type
         # Only one can be active at /var/openebs/local at a time
         problem_name = self.problem.__class__.__name__
@@ -492,7 +497,7 @@ class Conductor:
             print("Setting up dm-flakey infrastructure for Silent Data Corruption fault injection...")
             self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
 
-        self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus")
+        self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Loki")
 
         # Capture cluster baseline state after infrastructure is deployed but before app deployment
         # This allows us to reset the cluster to a clean state after each problem
