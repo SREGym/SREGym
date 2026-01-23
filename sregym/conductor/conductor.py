@@ -433,6 +433,13 @@ class Conductor:
         self.logger.info("[FIX] KubeletCrash leftover if any")
         injector = RemoteOSFaultInjector()
         injector.recover_kubelet_crash()
+
+        self.logger.info("[FIX] Stale CoreDNS NXDOMAIN templates if any")
+        injector = VirtualizationFaultInjector(namespace="kube-system")
+        try:
+            injector.recover_all_nxdomain_templates()
+        except Exception as e:
+            self.logger.error(f"Failed to recover CoreDNS NXDOMAIN templates: {e}")
         self.logger.info("Fix Kubernetes completed.")
 
     def deploy_app(self):
