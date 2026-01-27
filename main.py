@@ -37,6 +37,7 @@ def driver_loop(
     problem_filter: str | None = None,
     agent_to_run: str | None = None,
     use_external_harness: bool = False,
+    n_attempts: int = 1,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -47,6 +48,7 @@ def driver_loop(
         problem_filter: Optional problem ID to run. If specified, only this problem will be run.
         agent_to_run: Agent name to run (required unless use_external_harness is True).
         use_external_harness: If True, inject fault and exit without running evaluation logic.
+        n_attempts: Number of end-to-end attempts to run each problem.
     """
 
     async def driver():
@@ -91,80 +93,96 @@ def driver_loop(
             problem_ids.remove(unknown_problem_id)
 
         for pid in problem_ids:
-            console.log(f"\n🔍 Starting problem: {pid}")
-
             conductor.problem_id = pid
 
-            result = await conductor.start_problem()
-            if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
-                console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
-                continue
+            # Keep a record of results for this problem in a temp file in case an attempt fails
+            tmp_path = f"_running_{pid}_{agent_to_run}_results.csv"
 
-            # If using external harness, fault is injected - exit now
-            if use_external_harness:
-                console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
-                return []
+            for attempt in range(1, n_attempts + 1):
+                console.log(f"\n🔍 Starting problem: {pid} (Attempt {attempt} of {n_attempts})")
 
-            # Agent is required when not using external harness
-            assert agent_to_run is not None
+                result = await conductor.start_problem()
+                if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
+                    console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
+                    break  # Skip to next problem
 
-            reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
-            if reg:
-                await LAUNCHER.ensure_started(reg)
+                # If using external harness, fault is injected - exit now
+                if use_external_harness:
+                    console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
+                    return []
 
-            # Poll until grading completes or agent exits
-            while conductor.submission_stage != "done":
-                # Check if agent process has exited
-                agent_proc = LAUNCHER._procs.get(agent_to_run)
-                if agent_proc:
-                    agent_proc.proc.poll()
-                    if agent_proc.proc.returncode is not None:
-                        console.log(f"⚠️  Agent process exited with return code {agent_proc.proc.returncode}")
-                        break
-                await asyncio.sleep(1)
+                assert agent_to_run is not None
 
-            console.log(f"✅ Completed {pid}: results={conductor.results}")
+                reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+                if reg:
+                    await LAUNCHER.ensure_started(reg)
 
-            # Wait for agent process to complete naturally before cleanup
-            # This allows the agent to finish saving trajectories and other cleanup tasks
-            if not use_external_harness:
-                agent_proc = LAUNCHER._procs.get(agent_to_run)
-                if agent_proc:
-                    console.log("⏳ Waiting for agent process to complete...")
-                    timeout = 30  # seconds
-                    elapsed = 0
-                    while elapsed < timeout:
+                # Poll until grading completes or agent exits
+                while conductor.submission_stage != "done":
+                    # Check if agent process has exited
+                    agent_proc = LAUNCHER._procs.get(agent_to_run)
+                    if agent_proc:
                         agent_proc.proc.poll()
                         if agent_proc.proc.returncode is not None:
-                            console.log(f"✅ Agent process completed with return code {agent_proc.proc.returncode}")
+                            console.log(f"⚠️  Agent process exited with return code {agent_proc.proc.returncode}")
                             break
-                        await asyncio.sleep(1)
-                        elapsed += 1
+                    await asyncio.sleep(1)
+
+                console.log(f"✅ Completed {pid}: results={conductor.results}")
+
+                # Wait for agent process to complete naturally before cleanup
+                # This allows the agent to finish saving trajectories and other cleanup tasks
+                if not use_external_harness:
+                    agent_proc = LAUNCHER._procs.get(agent_to_run)
+                    if agent_proc:
+                        console.log("⏳ Waiting for agent process to complete...")
+                        timeout = 30  # seconds
+                        elapsed = 0
+                        while elapsed < timeout:
+                            agent_proc.proc.poll()
+                            if agent_proc.proc.returncode is not None:
+                                console.log(f"✅ Agent process completed with return code {agent_proc.proc.returncode}")
+                                break
+                            await asyncio.sleep(1)
+                            elapsed += 1
+                        else:
+                            console.log(f"⚠️  Agent process did not complete within {timeout}s, will force cleanup")
+
+                snapshot = {
+                    "problem_id": pid,
+                    "attempt": attempt,
+                }
+
+                for stage, outcome in conductor.results.items():
+                    if isinstance(outcome, dict):
+                        for k, v in outcome.items():
+                            snapshot[f"{stage}.{k}"] = v
                     else:
-                        console.log(f"⚠️  Agent process did not complete within {timeout}s, will force cleanup")
+                        snapshot[stage] = outcome
 
-            snapshot = {"problem_id": pid}
-            for stage, outcome in conductor.results.items():
-                if isinstance(outcome, dict):
-                    for k, v in outcome.items():
-                        snapshot[f"{stage}.{k}"] = v
-                else:
-                    snapshot[stage] = outcome
-            all_results_for_agent.append(snapshot)
+                all_results_for_agent.append(snapshot)
 
-            fieldnames = sorted({key for row in all_results_for_agent for key in row})
-            current_date_time = get_current_datetime_formatted()
-            csv_path = f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
-            with open(csv_path, "w", newline="") as csvfile:
-                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(all_results_for_agent)
-            logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
+                fieldnames = sorted({key for row in all_results_for_agent for key in row})
 
-            # Cleanup agent process so a fresh one can be started for the next problem
-            if not use_external_harness:
-                LAUNCHER.cleanup_agent(agent_to_run)
-                console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
+                with open(tmp_path, "w", newline="") as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(all_results_for_agent)
+
+                logger.info(
+                    f"⏳ Attempt {attempt} of {n_attempts} for problem {pid} complete - Intermediate results written to {tmp_path}"
+                )
+
+                if attempt == n_attempts:
+                    current_date_time = get_current_datetime_formatted()
+                    csv_path = f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
+                    os.replace(tmp_path, csv_path)
+                    logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
+
+                # Cleanup agent process so a fresh one can be started for the next problem
+                if not use_external_harness:
+                    LAUNCHER.cleanup_agent(agent_to_run)
+                    console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
 
         # Stop K8s API proxy when all problems are done
         if not use_external_harness:
