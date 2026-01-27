@@ -48,8 +48,6 @@ class Conductor:
         )
         self._agent_kubeconfig_path: str | None = None
 
-        self.problem = None
-        self.detection_oracle = None
         self.problem_id = None
         self.problem = None
         self.app = None
