@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -112,16 +112,85 @@ class BaseAgent:
         }
 
     def should_submit_router(self, state: State):
-        should_submit = state["num_steps"] == self.max_step and state["submitted"] == False
+        should_submit = state["num_steps"] == self.max_step and not state["submitted"]
         self.logger.info(f"Should we force the agent submit? {'Yes!' if should_submit else 'No!'}")
         return self.force_submit_prompt_inject_node if should_submit else self.post_round_process_node
+
+    def _filter_rejected_command_errors(self, messages: list) -> list:
+        """
+        Remove 'Command Rejected' error messages from context if a successful command was executed.
+
+        This prevents wasted context window from keeping rejection error messages after
+        Stratus successfully generates a correct command.
+
+        Args:
+            messages: List of messages in the conversation history
+
+        Returns:
+            Filtered list of messages with rejected command errors removed if appropriate
+        """
+        if len(messages) < 2:
+            return messages
+
+        # Check if the last message is a successful ToolMessage (not a rejection)
+        last_message = messages[-1]
+        if not isinstance(last_message, ToolMessage):
+            return messages
+
+        # If the last tool message contains "Command Rejected", keep all messages
+        # (the error is still relevant)
+        if "Command Rejected" in last_message.content:
+            return messages
+
+        # Last tool call was successful - now remove previous "Command Rejected" messages
+        # We'll look backwards through messages and remove ToolMessages with rejections
+        filtered_messages = []
+        removed_count = 0
+
+        for i, msg in enumerate(messages):
+            # Keep the last message (successful tool result)
+            if i == len(messages) - 1:
+                filtered_messages.append(msg)
+                continue
+
+            # Remove ToolMessages containing "Command Rejected"
+            if isinstance(msg, ToolMessage) and "Command Rejected" in msg.content:
+                removed_count += 1
+                self.logger.debug(f"Removing rejected command error message: {msg.content[:100]}...")
+                continue
+
+            # Also remove the AIMessage that triggered the rejected command
+            # (it contains the tool_call that was rejected)
+            if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
+                # Check if the next message is a rejection we're filtering out
+                if i + 1 < len(messages) and isinstance(messages[i + 1], ToolMessage):
+                    if "Command Rejected" in messages[i + 1].content:
+                        removed_count += 1
+                        self.logger.debug("Removing AIMessage with rejected tool call")
+                        continue
+
+            filtered_messages.append(msg)
+
+        if removed_count > 0:
+            self.logger.info(
+                f"Filtered {removed_count} rejected command error messages from context "
+                f"(reduced from {len(messages)} to {len(filtered_messages)} messages)"
+            )
+
+        return filtered_messages
 
     def post_round_process(self, state: State):
         self.logger.debug("agent finished a round")
         self.logger.debug("currently only incrementing step")
         self.logger.info(f"{'^' * 20} [Loop {self.loop_count}] {'^' * 20}")
+        self.logger.info("[SPLIT]")
+
+        # Filter out rejected command errors if a successful command was executed
+        filtered_messages = self._filter_rejected_command_errors(state["messages"])
+
         return {
             "num_steps": state["num_steps"] + 1,
+            "messages": filtered_messages,
         }
 
     def llm_force_submit_thinking_step(self, state: State):
@@ -145,7 +214,7 @@ class BaseAgent:
             if hasattr(self.memory_saver, "storage") and hasattr(self.memory_saver, "writes"):
                 self.memory_saver.storage.pop(thread_id, None)
 
-                keys_to_remove = [key for key in self.memory_saver.writes.keys() if key[0] == thread_id]
+                keys_to_remove = [key for key in self.memory_saver.writes if key[0] == thread_id]
                 for key in keys_to_remove:
                     self.memory_saver.writes.pop(key, None)
 
@@ -177,11 +246,7 @@ class BaseAgent:
             agent_name: Name of the agent (e.g., "diagnosis", "mitigation")
             output_dir: Directory to save trajectory (defaults to current directory)
         """
-        if output_dir is None:
-            output_dir = Path(".")
-        else:
-            output_dir = Path(output_dir)
-
+        output_dir = Path(".") if output_dir is None else Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
