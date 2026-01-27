@@ -17,7 +17,7 @@ from mcp_server.configs.load_all_cfg import mcp_server_cfg
 from mcp_server.sregym_mcp_server import app as mcp_app
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
-from sregym.conductor.conductor import Conductor
+from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 
@@ -105,13 +105,12 @@ def driver_loop(
                 console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
                 return []
 
-            # If no external harness, agent is required
+            # Agent is required when not using external harness
             assert agent_to_run is not None
 
-            if not use_external_harness:
-                reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
-                if reg:
-                    await LAUNCHER.ensure_started(reg)
+            reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+            if reg:
+                await LAUNCHER.ensure_started(reg)
 
             # Poll until grading completes or agent exits
             while conductor.submission_stage != "done":
@@ -239,7 +238,8 @@ def main(args):
 
     os.environ["MODEL_ID"] = args.model
 
-    conductor = Conductor(skip_loki=args.use_external_harness)
+    config = ConductorConfig(deploy_loki=not args.use_external_harness)
+    conductor = Conductor(config=config)
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(

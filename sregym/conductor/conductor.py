@@ -1,6 +1,7 @@
 import logging
 import shutil
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -24,14 +25,22 @@ from sregym.service.telemetry.loki import Loki
 from sregym.service.telemetry.prometheus import Prometheus
 
 
+@dataclass
+class ConductorConfig:
+    """Configuration for Conductor deployment options."""
+
+    deploy_loki: bool = True
+
+
 class Conductor:
-    def __init__(self, skip_loki: bool = False):
+    def __init__(self, config: ConductorConfig | None = None):
+        self.config = config or ConductorConfig()
+
         # core services
         self.problems = ProblemRegistry()
         self.kubectl = KubeCtl()
         self.prometheus = Prometheus()
         self.loki = Loki()
-        self.skip_loki = skip_loki
         self.apps = AppRegistry()
         self.agent_name = None
 
@@ -48,7 +57,7 @@ class Conductor:
         )
         self._agent_kubeconfig_path: str | None = None
 
-        self.problem_id = None
+        self.problem_id: str | None = None
         self.problem = None
         self.app = None
         self.detection_oracle = None
@@ -67,7 +76,8 @@ class Conductor:
         self.waiting_for_agent: bool = False
         self.fault_injected: bool = False
 
-    def _require_problem(self):
+    @property
+    def current_problem(self):
         """Return the current problem, raising if none is loaded."""
         if self.problem is None:
             raise RuntimeError("No problem is loaded")
@@ -195,7 +205,7 @@ class Conductor:
 
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
-        problem = self._require_problem()
+        problem = self.current_problem
         problem.inject_fault()
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
@@ -211,7 +221,7 @@ class Conductor:
 
     def _evaluate_diagnosis(self, solution):
         """Evaluation logic for diagnosis stage."""
-        problem = self._require_problem()
+        problem = self.current_problem
 
         self.logger.info("Start Eval for Diagnosis", extra={"sol": solution})
         r = problem.diagnosis_oracle.evaluate(solution)
@@ -226,7 +236,7 @@ class Conductor:
 
     def _evaluate_mitigation(self, solution):
         """Evaluation logic for mitigation stage."""
-        problem = self._require_problem()
+        problem = self.current_problem
         # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
         self.logger.info("Start Eval for Mitigation", extra={"sol": solution})
         r = problem.mitigation_oracle.evaluate()
@@ -403,7 +413,7 @@ class Conductor:
             raise RuntimeError("Conductor is not currently waiting for an agent submission.")
 
         current_stage = self.stage_sequence[self.current_stage_index]
-        stage_name = current_stage.get("name")
+        stage_name: str = current_stage["name"]
         self.logger.info(f"Evaluating stage '{stage_name}'", extra={"sol": sol})
 
         # Stop noise before evaluation to ensure clean environment
@@ -455,7 +465,7 @@ class Conductor:
 
     def deploy_app(self):
         """Kubectl + Prometheus + problem.app deployment."""
-        problem = self._require_problem()
+        problem = self.current_problem
         self.submission_stage = "setup"
         self.logger.info("[DEPLOY] Setting up metrics-server…")
         self.kubectl.exec_command(
@@ -502,7 +512,7 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying Prometheus…")
         self.prometheus.deploy()
 
-        if not self.skip_loki:
+        if self.config.deploy_loki:
             self.logger.info("[DEPLOY] Deploying Loki…")
             self.loki.deploy()
         else:
