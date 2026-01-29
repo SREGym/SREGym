@@ -1489,7 +1489,7 @@ class VirtualizationFaultInjector(FaultInjector):
             tmp_path = tmp.name
 
         self.kubectl.exec_command(f"kubectl apply -f {tmp_path}")
-        self.kubectl.wait_for_ready(namespace=self.namespace)
+        self.kubectl.wait_for_service_ready(service_name=service_name, namespace=self.namespace)
 
         print(f"Deployed {service_name} Service...................................")
 

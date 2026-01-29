@@ -11,7 +11,7 @@ logger.setLevel(logging.DEBUG)
 
 try:
     from kubernetes import client, config
-except ModuleNotFoundError as e:
+except ModuleNotFoundError:
     logger.error("Your Kubeconfig is missing. Please set up a cluster.")
     exit(1)
 import os
@@ -32,7 +32,7 @@ class KubeCtl:
         """Initialize the KubeCtl object and load the Kubernetes configuration."""
         try:
             config.load_kube_config()
-        except Exception as e:
+        except Exception:
             logger.error("Missing kubeconfig. Please set up a cluster.")
             exit(1)
         self.core_v1_api = client.CoreV1Api()
@@ -132,6 +132,45 @@ class KubeCtl:
         """Fetch the service configuration."""
         return client.CoreV1Api().read_namespaced_service(name=name, namespace=namespace)
 
+    def wait_for_service_ready(
+        self, service_name: str, namespace: str, sleep: int = 2, max_wait: int = WAIT_FOR_POD_READY_TIMEOUT
+    ):
+        """Wait for pods belonging to a specific service to be ready."""
+        console = Console()
+        console.log(f"[bold yellow]Waiting for service '{service_name}' in namespace '{namespace}' to be ready...")
+
+        # Get the service's selector
+        svc = self.get_service(service_name, namespace)
+        selector_dict = svc.spec.selector or {}
+        if not selector_dict:
+            raise ValueError(f"Service '{service_name}' has no selector defined")
+        label_selector = ",".join(f"{k}={v}" for k, v in selector_dict.items())
+
+        with console.status(f"[bold green]Waiting for {service_name} pods to be ready...") as status:
+            wait = 0
+
+            while wait < max_wait:
+                try:
+                    pod_list = self.core_v1_api.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
+                    if pod_list.items:
+                        ready_pods = [
+                            pod
+                            for pod in pod_list.items
+                            if pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses)
+                        ]
+
+                        if len(ready_pods) == len(pod_list.items):
+                            console.log(f"[bold green]Service '{service_name}' is ready ({len(ready_pods)} pod(s)).")
+                            return
+
+                except Exception as e:
+                    console.log(f"[red]Error checking pod statuses for {service_name}: {e}")
+
+                time.sleep(sleep)
+                wait += sleep
+
+            raise Exception(f"[red]Timeout: Service '{service_name}' did not become ready within {max_wait} seconds.")
+
     def wait_for_ready(self, namespace, sleep=2, max_wait=WAIT_FOR_POD_READY_TIMEOUT):
         """Wait for all pods in a namespace to be in a Ready state before proceeding."""
 
@@ -177,7 +216,7 @@ class KubeCtl:
         while wait < max_wait:
             try:
                 self.core_v1_api.read_namespace(name=namespace)
-            except Exception as e:
+            except Exception:
                 console.log(f"[bold green]Namespace '{namespace}' has been deleted.")
                 return
 
