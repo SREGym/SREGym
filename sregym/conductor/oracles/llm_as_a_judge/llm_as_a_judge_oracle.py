@@ -45,6 +45,15 @@ class LLMAsAJudgeOracle(Oracle):
             # Get judgment from LLM judge
             judgment, reasoning = self.judge.judge(solution=solution, expectation=self.expected)
 
+            # Check if judge is not initialized
+            if judgment is None:
+                print("⚠️  LLM judge is not initialized - returning null result")
+                results["judgment"] = None
+                results["reasoning"] = reasoning
+                results["success"] = None
+                results["accuracy"] = None
+                return results
+
             # Determine success based on judgment
             is_correct = judgment == JudgmentResult.TRUE
 
