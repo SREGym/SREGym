@@ -37,8 +37,9 @@ def set_param(params, config, field, default_value, required=False):
         params[field] = value_to_set
     else:
         if required:
-            print(f"Unable to find value for required field - {field}. Exiting...")
-            exit(1)
+            error_msg = f"Unable to find value for required field - {field}"
+            print(f"{error_msg}. Exiting...")
+            raise ValueError(error_msg)
         # else do nothing
 
 
@@ -49,10 +50,9 @@ def get_llm_backend_for_tools():
     print("Found MODEL_ID: ", MODEL_ID)
 
     if MODEL_ID not in llm_config:
-        print(
-            f"Unable to find model configuration - {MODEL_ID}. Available models: {[key for key in llm_config.keys()]}"
-        )
-        exit(1)
+        error_msg = f"Unable to find model configuration - {MODEL_ID}. Available models: {[key for key in llm_config.keys()]}"
+        print(error_msg)
+        raise ValueError(error_msg)
     model_config = llm_config[MODEL_ID]
 
     if model_config["provider"] == "litellm":
