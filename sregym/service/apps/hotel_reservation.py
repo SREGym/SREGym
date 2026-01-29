@@ -8,9 +8,9 @@ from sregym.service.apps.base import Application
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.kubectl import KubeCtl
 
-local_logger = logging.getLogger("all.application")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("all.application")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
 
 class HotelReservation(Application):
@@ -78,7 +78,7 @@ class HotelReservation(Application):
 
     def deploy(self):
         """Deploy the Kubernetes configurations."""
-        self.local_logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
+        self.logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.create_namespace()
         self.create_configmaps()
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
@@ -107,7 +107,7 @@ class HotelReservation(Application):
             self._remove_pv_finalizers(pv)
             delete_command = f"kubectl delete pv {pv}"
             delete_result = self.kubectl.exec_command(delete_command)
-            local_logger.info(f"Deleted PersistentVolume {pv}: {delete_result.strip()}")
+            logger.info(f"Deleted PersistentVolume {pv}: {delete_result.strip()}")
         time.sleep(5)
 
         if hasattr(self, "wrk"):

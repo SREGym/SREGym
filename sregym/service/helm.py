@@ -6,9 +6,9 @@ import time
 
 from sregym.service.kubectl import KubeCtl
 
-local_logger = logging.getLogger("all.infra.helm")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("all.infra.helm")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
 
 class Helm:
@@ -32,7 +32,7 @@ class Helm:
         extra_args = args.get("extra_args")
         remote_chart = args.get("remote_chart", False)
 
-        local_logger.info(f"Helm Install: {release_name} in namespace {namespace}")
+        logger.info(f"Helm Install: {release_name} in namespace {namespace}")
 
         if not remote_chart:
             # Install dependencies for chart before installation
@@ -65,7 +65,7 @@ class Helm:
                 f"Stdout (for context):\n{stdout}"
             )
         else:
-            local_logger.debug(output.decode("utf-8"))
+            logger.debug(output.decode("utf-8"))
 
     @staticmethod
     def uninstall(**args):
@@ -78,10 +78,10 @@ class Helm:
         release_name = args.get("release_name")
         namespace = args.get("namespace")
 
-        local_logger.info(f"Helm Uninstall: {release_name} in namespace {namespace}")
+        logger.info(f"Helm Uninstall: {release_name} in namespace {namespace}")
 
         if not Helm.exists_release(release_name, namespace):
-            local_logger.warning(f"Release {release_name} does not exist. Skipping uninstall.")
+            logger.warning(f"Release {release_name} does not exist. Skipping uninstall.")
             return
 
         command = f"helm uninstall {release_name} -n {namespace}"
@@ -97,7 +97,7 @@ class Helm:
                 f"Stdout (for context):\n{stdout}"
             )
         else:
-            local_logger.debug(output.decode("utf-8"))
+            logger.debug(output.decode("utf-8"))
 
     @staticmethod
     def exists_release(release_name: str, namespace: str) -> bool:
@@ -115,7 +115,7 @@ class Helm:
         output, error = process.communicate()
 
         if error:
-            local_logger.error(error.decode("utf-8"))
+            logger.error(error.decode("utf-8"))
             return False
         else:
             return release_name in output.decode("utf-8")
@@ -159,7 +159,7 @@ class Helm:
         values_file = args.get("values_file")
         set_values = args.get("set_values", {})
 
-        local_logger.info(f"Helm Upgrade: {release_name} in namespace {namespace}")
+        logger.info(f"Helm Upgrade: {release_name} in namespace {namespace}")
 
         command = [
             "helm",
@@ -181,7 +181,7 @@ class Helm:
         output, error = process.communicate()
 
         if error:
-            local_logger.error("Error during helm upgrade:")
+            logger.error("Error during helm upgrade:")
             stderr = error.decode("utf-8").strip()
             stdout = output.decode("utf-8").strip()
             raise RuntimeError(
@@ -190,33 +190,104 @@ class Helm:
                 f"Stdout (for context):\n{stdout}"
             )
         else:
-            local_logger.info("Helm upgrade successful!")
-            local_logger.debug(output.decode("utf-8"))
+            logger.info("Helm upgrade successful!")
+            logger.debug(output.decode("utf-8"))
 
     @staticmethod
-    def add_repo(name: str, url: str):
-        """Add a Helm repository
+    def add_repo(name: str, url: str, max_retries: int = 3, backoff_factor: float = 2.0):
+        """Add a Helm repository with retry logic
 
         Args:
             name (str): Name of the repository
             url (str): URL of the repository
-        """
-        local_logger.info(f"Helm Repo Add: {name} with url {url}")
-        command = f"helm repo add {name} {url}"
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        output, error = process.communicate()
+            max_retries (int): Maximum number of retry attempts
+            backoff_factor (float): Multiplier for exponential backoff (seconds)
 
-        if error:
-            local_logger.error(f"Error adding helm repo {name}: {error.decode('utf-8')}")
-            stderr = error.decode("utf-8").strip()
-            stdout = output.decode("utf-8").strip()
-            raise RuntimeError(
-                f"Helm upgrade failed for release '{name}' and url {url}. "
-                f"Error output:\n{stderr}\n"
-                f"Stdout (for context):\n{stdout}"
-            )
-        else:
-            local_logger.info(f"Helm repo {name} added successfully: {output.decode('utf-8')}")
+        Raises:
+            RuntimeError: If all retry attempts fail
+        """
+        logger.info(f"Helm Repo Add: {name} with url {url}")
+        command = f"helm repo add {name} {url}"
+
+        for attempt in range(max_retries):
+            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output, error = process.communicate()
+
+            # Check if the repo add was successful (return code 0) or repo already exists
+            stdout = output.decode("utf-8").strip() if output else ""
+            stderr = error.decode("utf-8").strip() if error else ""
+
+            # Success if returncode is 0 or if "already exists" in output
+            if process.returncode == 0 or "already exists" in stderr or "already exists" in stdout:
+                logger.info(f"Helm repo {name} added successfully: {stdout}")
+                return
+
+            if attempt < max_retries - 1:
+                wait_time = backoff_factor**attempt
+                logger.warning(
+                    f"Helm repo add failed on attempt {attempt + 1}/{max_retries}. "
+                    f"Retrying in {wait_time}s... Error: {stderr}"
+                )
+                time.sleep(wait_time)
+            else:
+                # Final attempt failed
+                logger.error(
+                    f"Helm repo add failed after {max_retries} attempts. "
+                    f"Error output:\n{stderr}\n"
+                    f"Stdout (for context):\n{stdout}"
+                )
+                raise RuntimeError(
+                    f"Helm repo add failed for '{name}' at {url} after {max_retries} attempts. "
+                    f"Error output:\n{stderr}\n"
+                    f"Stdout (for context):\n{stdout}"
+                )
+
+    @staticmethod
+    def repo_update(max_retries: int = 3, backoff_factor: float = 2.0):
+        """Update Helm repositories with retry logic
+
+        Args:
+            max_retries (int): Maximum number of retry attempts
+            backoff_factor (float): Multiplier for exponential backoff (seconds)
+
+        Raises:
+            RuntimeError: If all retry attempts fail
+        """
+        logger.info("Helm Repo Update with retry logic")
+        command = "helm repo update"
+
+        for attempt in range(max_retries):
+            process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            output, error = process.communicate()
+
+            if process.returncode == 0:
+                logger.info(f"Helm repo update successful on attempt {attempt + 1}")
+                logger.debug(output.decode("utf-8"))
+                return
+
+            # Log the error but continue retrying
+            stderr = error.decode("utf-8").strip() if error else ""
+            stdout = output.decode("utf-8").strip() if output else ""
+
+            if attempt < max_retries - 1:
+                wait_time = backoff_factor**attempt
+                logger.warning(
+                    f"Helm repo update failed on attempt {attempt + 1}/{max_retries}. "
+                    f"Retrying in {wait_time}s... Error: {stderr}"
+                )
+                time.sleep(wait_time)
+            else:
+                # Final attempt failed
+                logger.error(
+                    f"Helm repo update failed after {max_retries} attempts. "
+                    f"Error output:\n{stderr}\n"
+                    f"Stdout (for context):\n{stdout}"
+                )
+                raise RuntimeError(
+                    f"Helm repo update failed after {max_retries} attempts. "
+                    f"Error output:\n{stderr}\n"
+                    f"Stdout (for context):\n{stdout}"
+                )
 
 
 # Example usage

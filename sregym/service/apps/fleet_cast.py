@@ -8,8 +8,8 @@ from pathlib import Path
 
 from sregym.generators.workload.locust import LocustWorkloadManager
 from sregym.observer import tidb_prometheus
-from sregym.observer.tidb_cluster_deploy_helper import TiDBClusterDeployHelper
 from sregym.observer.logstash.jaeger.jaeger import Jaeger
+from sregym.observer.tidb_cluster_deploy_helper import TiDBClusterDeployHelper
 from sregym.paths import FLEET_CAST_METADATA
 from sregym.service.apps.base import Application
 from sregym.service.apps.tidb_cluster_operator import TiDBClusterDeployer
@@ -51,8 +51,20 @@ class FleetCast(Application):
                 raise RuntimeError("ingress-nginx empty")
             print("[ingress] ingress-nginx already present.")
         except Exception:
-            self._sh("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx || true")
-            self._sh("helm repo update")
+            # Add ingress-nginx repo with retry logic
+            try:
+                Helm.add_repo("ingress-nginx", "https://kubernetes.github.io/ingress-nginx")
+            except RuntimeError as e:
+                print(f"[warn] Failed to add ingress-nginx repo after retries: {e}")
+                print("[info] Continuing with cached charts if available")
+
+            # Update repos with retry logic
+            try:
+                Helm.repo_update()
+            except RuntimeError as e:
+                print(f"[warn] Failed to update helm repos after retries: {e}")
+                print("[info] Continuing with cached charts if available")
+
             self._sh(
                 "helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx "
                 "-n ingress-nginx --create-namespace "
@@ -74,11 +86,29 @@ class FleetCast(Application):
                 )
                 if phase == "Running":
                     print("[ingress] controller Running.")
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+        else:
+            raise RuntimeError("ingress-nginx controller did not become Ready in time.")
+
+        print("[ingress] waiting for admission webhook to be ready…")
+        for _ in range(60):
+            try:
+                endpoints_json = self._sh(
+                    "kubectl -n ingress-nginx get endpoints ingress-nginx-controller-admission -o json",
+                    capture=True,
+                )
+                endpoints = json.loads(endpoints_json)
+                subsets = endpoints.get("subsets", [])
+                if any(s.get("addresses") for s in subsets):
+                    print("[ingress] admission webhook ready.")
                     return
             except Exception:
                 pass
             time.sleep(2)
-        raise RuntimeError("ingress-nginx controller did not become Ready in time.")
+        raise RuntimeError("ingress-nginx admission webhook did not become Ready in time.")
 
     def deploy(self):
         """Deploy TiDB, then install FleetCast chart from repo with Ingress enabled on the first install."""

@@ -5,13 +5,13 @@ import time
 from pathlib import Path
 from textwrap import dedent
 
-from sregym.observer import tidb_prometheus
 from sregym.paths import BASE_DIR
+from sregym.service.helm import Helm
 
 
 class TiDBClusterDeployer:
     def __init__(self, metadata_path):
-        with open(metadata_path, "r") as f:
+        with open(metadata_path) as f:
             self.metadata = json.load(f)
 
         self.name = self.metadata["Name"]
@@ -54,15 +54,6 @@ class TiDBClusterDeployer:
         print(f"Installing CRDs from {self.operator_crd_url} ...")
         self.run_cmd(f"kubectl create -f {self.operator_crd_url} || kubectl replace -f {self.operator_crd_url}")
 
-    def install_local_path_provisioner(self):
-        print("Installing local-path provisioner for dynamic volume provisioning...")
-        self.run_cmd(
-            "kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml"
-        )
-        self.run_cmd(
-            'kubectl patch storageclass local-path -p \'{"metadata": {"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
-        )
-
     def apply_prometheus(self):
         ns = "observe"
         prom_yml_path = BASE_DIR / "SREGym-applications/FleetCast/prometheus/prometheus.yaml"
@@ -87,10 +78,20 @@ class TiDBClusterDeployer:
     def install_operator_with_values(self):
         print(f"Installing/upgrading TiDB Operator via Helm in namespace '{self.operator_namespace}'...")
         self.create_namespace(self.operator_namespace)
-        self.run_cmd("helm repo add pingcap https://charts.pingcap.org || true")
-        # Use || true to ignore repo update failures - charts are already cached
-        # and transient DNS issues shouldn't block deployment
-        self.run_cmd("helm repo update || true")
+
+        # Add pingcap repo with retry logic to handle transient DNS/network issues
+        try:
+            Helm.add_repo("pingcap", "https://charts.pingcap.org")
+        except RuntimeError as e:
+            print(f"[warn] Failed to add pingcap repo after retries: {e}")
+            print("[info] Continuing with cached charts if available")
+
+        # Update repos with retry logic
+        try:
+            Helm.repo_update()
+        except RuntimeError as e:
+            print(f"[warn] Failed to update helm repos after retries: {e}")
+            print("[info] Continuing with cached charts if available")
 
         values_arg = ""
         if self.operator_values_path:
@@ -155,7 +156,6 @@ SQL"
         self.run_cmd(f"kubectl -n {ns} delete pod/mysql-client --wait=false || true")
 
     def init_schema_and_seed(self):
-
         print("Initializing schema and seeding data in satellite_sim ...")
         sql = """
         CREATE DATABASE IF NOT EXISTS satellite_sim;
@@ -283,7 +283,6 @@ SQL"
     def deploy_all(self):
         print(f"----------Starting deployment: {self.name}")
         self.create_namespace(self.namespace_tidb_cluster)
-        self.install_local_path_provisioner()
         self.install_crds()
         self.install_operator_with_values()
         self.wait_for_operator_ready()

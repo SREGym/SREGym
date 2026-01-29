@@ -1,7 +1,6 @@
 """Interface to the social network application from DeathStarBench"""
 
 import logging
-import time
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.observer.trace_api import TraceAPI
@@ -11,9 +10,9 @@ from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
-local_logger = logging.getLogger("all.sregym.social_network")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("all.sregym.social_network")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
 
 class SocialNetwork(Application):
@@ -35,19 +34,31 @@ class SocialNetwork(Application):
         self.frontend_port = metadata.get("frontend_port", 8080)
 
     def create_tls_secret(self):
+        """Create TLS secret for MongoDB if it doesn't exist."""
         check_sec = f"kubectl get secret mongodb-tls -n {self.namespace}"
         result = self.kubectl.exec_command(check_sec)
-        if "notfound" in result.lower():
-            create_sec_command = (
-                f"kubectl create secret generic mongodb-tls "
-                f"--from-file=tls.pem={self.local_tls_path}/tls.pem "
-                f"--from-file=ca.crt={self.local_tls_path}/ca.crt "
-                f"-n {self.namespace}"
-            )
-            create_result = self.kubectl.exec_command(create_sec_command)
-            local_logger.debug(f"TLS secret created: {create_result.strip()}")
+        result_lower = result.lower()
+
+        # Secret exists if we got a successful response (contains secret name without error)
+        if "mongodb-tls" in result and "error" not in result_lower:
+            logger.debug("TLS secret already exists. Skipping creation.")
+            return
+
+        create_sec_command = (
+            f"kubectl create secret generic mongodb-tls "
+            f"--from-file=tls.pem={self.local_tls_path}/tls.pem "
+            f"--from-file=ca.crt={self.local_tls_path}/ca.crt "
+            f"-n {self.namespace}"
+        )
+        create_result = self.kubectl.exec_command(create_sec_command)
+        create_result_lower = create_result.lower()
+
+        if "created" in create_result_lower:
+            logger.debug(f"TLS secret created: {create_result.strip()}")
+        elif "already exists" in create_result_lower:
+            logger.debug("TLS secret already exists (confirmed during creation attempt).")
         else:
-            local_logger.debug("TLS secret already exists. Skipping creation.")
+            logger.warning(f"TLS secret creation unexpected result: {create_result.strip()}")
 
     def deploy(self):
         """Deploy the Helm configurations with architecture-aware image selection."""
@@ -99,7 +110,7 @@ class SocialNetwork(Application):
                 namespace=self.namespace,
             ),
             payload_script=self.payload_script,
-            url=f"{{placeholder}}/wrk2-api/post/compose",
+            url="{placeholder}/wrk2-api/post/compose",
             namespace=self.namespace,
         )
 

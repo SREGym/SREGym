@@ -57,25 +57,23 @@ def exec_kubectl_cmd_safely(cmd: str, ctx: Context) -> str:
     Args:
         cmd: The command you want to execute in a CLI to
         manage a k8s cluster. It should start with "kubectl".
-        ctx: If you are an agent, you can safely ignore this
-        argument.
     Returns:
         The result of trying to execute cmd.
     """
     ssid = extract_session_id(ctx)
     kubctl_tool = get_tools(ssid)
     logger.debug(f'session {ssid} is using tool "exec_kubectl_cmd_safely"; Command: {cmd}.')
-    
+
     # Noise Injection Hook (Pre-execution)
     noise_manager = get_noise_manager()
     noise_manager.on_tool_call("kubectl", cmd, ssid)
-    
+
     result = kubctl_tool.cmd_runner.exec_kubectl_cmd_safely(cmd)
     assert isinstance(result, str)
-    
+
     # Noise Injection Hook (Post-execution)
     result = noise_manager.on_tool_result("kubectl", cmd, result, ssid)
-    
+
     return result
 
 
@@ -85,8 +83,6 @@ def rollback_command(ctx: Context) -> str:
     Use this function to roll back the last kubectl command
     you successfully executed with the "exec_kubectl_cmd_safely" tool.
     Args:
-        ctx: If you are an agent, you can safely ignore this
-        argument.
     Returns:
         The result of trying to roll back the last kubectl command.
     """

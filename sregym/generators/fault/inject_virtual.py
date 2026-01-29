@@ -6,11 +6,9 @@ import time
 from pathlib import Path
 
 import yaml
-from kubernetes import config
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.paths import TARGET_MICROSERVICES
-from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
@@ -585,7 +583,6 @@ class VirtualizationFaultInjector(FaultInjector):
         print("Injected stale CoreDNS config for all .svc.cluster.local domains")
 
     def recover_stale_coredns_config(self, microservices: list[str] = None):
-
         # Get configmap as structured data
         cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
         cm_data = yaml.safe_load(cm_yaml)
@@ -632,20 +629,100 @@ class VirtualizationFaultInjector(FaultInjector):
 
         cm_data["data"]["Corefile"] = new_corefile
 
+        def _exec_or_raise(command: str, action: str):
+            result = self.kubectl.exec_command(command)
+            if result and "error" in result.lower():
+                msg = f"{action} failed: {result.strip()}"
+                print(msg)
+                raise RuntimeError(msg)
+            return result
+
         # Apply using temporary file
         tmp_file_path = self._write_yaml_to_file("coredns", cm_data)
-        self.kubectl.exec_command(f"kubectl apply -f {tmp_file_path}")
+        _exec_or_raise(f"kubectl apply -f {tmp_file_path}", "Applying CoreDNS configmap")
 
         # Restart CoreDNS
-        self.kubectl.exec_command("kubectl -n kube-system rollout restart deployment coredns")
-        self.kubectl.exec_command("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+        _exec_or_raise("kubectl -n kube-system rollout restart deployment coredns", "Restarting CoreDNS")
+        _exec_or_raise(
+            "kubectl -n kube-system rollout status deployment coredns --timeout=30s",
+            "Waiting for CoreDNS rollout",
+        )
+
+        # Verify stale template is gone after apply/restart
+        cm_yaml_after = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+        cm_data_after = yaml.safe_load(cm_yaml_after)
+        corefile_after = cm_data_after["data"]["Corefile"]
+        if template_id in corefile_after:
+            msg = "CoreDNS config still contains stale NXDOMAIN template after recovery"
+            print(msg)
+            raise RuntimeError(msg)
 
         print("Recovered from stale CoreDNS config for all .svc.cluster.local domains")
+
+    def recover_all_nxdomain_templates(self):
+        """
+        Remove ALL NXDOMAIN template blocks from CoreDNS config.
+        This handles both:
+        - stale_coredns_config: `template ANY ANY svc.cluster.local`
+        - service_dns_resolution_failure: `template ANY ANY {service}.{namespace}.svc.cluster.local`
+        """
+        import re
+
+        cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+        cm_data = yaml.safe_load(cm_yaml)
+        corefile = cm_data["data"]["Corefile"]
+
+        # Pattern to match any NXDOMAIN template block
+        # Matches: template ANY ANY <anything> { ... rcode NXDOMAIN ... }
+        nxdomain_pattern = re.compile(
+            r"^\s*template\s+ANY\s+ANY\s+[^\n]+\{[^}]*rcode\s+NXDOMAIN[^}]*\}\s*\n?",
+            re.MULTILINE | re.DOTALL,
+        )
+
+        if not nxdomain_pattern.search(corefile):
+            print("No NXDOMAIN templates found in CoreDNS config; nothing to do")
+            return
+
+        new_corefile = nxdomain_pattern.sub("", corefile)
+
+        # Remove any resulting double blank lines
+        new_corefile = re.sub(r"\n{3,}", "\n\n", new_corefile)
+
+        cm_data["data"]["Corefile"] = new_corefile
+
+        def _exec_or_raise(command: str, action: str):
+            result = self.kubectl.exec_command(command)
+            if result and "error" in result.lower():
+                msg = f"{action} failed: {result.strip()}"
+                print(msg)
+                raise RuntimeError(msg)
+            return result
+
+        # Apply using temporary file
+        tmp_file_path = self._write_yaml_to_file("coredns", cm_data)
+        _exec_or_raise(f"kubectl apply -f {tmp_file_path}", "Applying CoreDNS configmap")
+
+        # Restart CoreDNS
+        _exec_or_raise("kubectl -n kube-system rollout restart deployment coredns", "Restarting CoreDNS")
+        _exec_or_raise(
+            "kubectl -n kube-system rollout status deployment coredns --timeout=30s",
+            "Waiting for CoreDNS rollout",
+        )
+
+        # Verify all NXDOMAIN templates are gone
+        cm_yaml_after = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+        cm_data_after = yaml.safe_load(cm_yaml_after)
+        corefile_after = cm_data_after["data"]["Corefile"]
+        if nxdomain_pattern.search(corefile_after):
+            msg = "CoreDNS config still contains NXDOMAIN templates after recovery"
+            print(msg)
+            raise RuntimeError(msg)
+
+        print("Recovered all NXDOMAIN templates from CoreDNS config")
 
     # V.13 - Inject a sidecar container that binds to the same port as the main container (port conflict)
     def inject_sidecar_port_conflict(self, microservices: list[str]):
         for service in microservices:
-
             original_deployment_yaml = self._get_deployment_yaml(service)
             deployment_yaml = copy.deepcopy(original_deployment_yaml)
 
@@ -711,8 +788,7 @@ class VirtualizationFaultInjector(FaultInjector):
     # Inject a liveness probe too aggressive fault
     def inject_liveness_probe_too_aggressive(self, microservices: list[str]):
         for service in microservices:
-
-            script_path = Path(__file__).parent / "custom" / f"slow_service.py"
+            script_path = Path(__file__).parent / "custom" / "slow_service.py"
             self.deploy_custom_service(service, script_path)
 
             deployment_yaml = self._get_deployment_yaml(service)
@@ -787,7 +863,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             restart_cmd = f"kubectl rollout restart deployment {microservice} -n {self.namespace}"
             self.kubectl.exec_command(restart_cmd)
-            print(f"Restarted pods to apply ConfigMap fault")
+            print("Restarted pods to apply ConfigMap fault")
 
     def recover_missing_configmap(self, microservices: list[str]):
         for microservice in microservices:
@@ -804,9 +880,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     # Inject ConfigMap drift by removing critical keys
     def inject_configmap_drift(self, microservices: list[str]):
-
         for service in microservices:
-
             # Read the actual config.json from the running pod
             read_config_cmd = f"kubectl exec deployment/{service} -n {self.namespace} -- cat /go/src/github.com/harlow/go-micro-services/config.json"
             config_json_str = self.kubectl.exec_command(read_config_cmd)
@@ -885,14 +959,13 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Injected ConfigMap drift fault for service: {service} - removed {key_to_remove}")
 
     def recover_configmap_drift(self, microservices: list[str]):
-
         for service in microservices:
             # Use the same ConfigMap name as in injection
             configmap_name = f"{service}-config"
 
             # Read the saved original config instead of trying to read from the pod
             original_config_path = f"/tmp/{service}-original-config.json"
-            with open(original_config_path, "r") as f:
+            with open(original_config_path) as f:
                 original_config = json.load(f)
             print(f"Read original config from saved file: {original_config_path}")
 
@@ -909,7 +982,6 @@ class VirtualizationFaultInjector(FaultInjector):
     # V.14 - Inject a readiness probe misconfiguration fault
     def inject_readiness_probe_misconfiguration(self, microservices: list[str]):
         for service in microservices:
-
             deployment_yaml = self._get_deployment_yaml(service)
             original_deployment_yaml = copy.deepcopy(deployment_yaml)
 
@@ -919,7 +991,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             for container in containers:
                 container["readinessProbe"] = {
-                    "httpGet": {"path": f"/healthz", "port": 8080},
+                    "httpGet": {"path": "/healthz", "port": 8080},
                     "initialDelaySeconds": initial_delay,
                     "periodSeconds": 10,
                     "failureThreshold": 1,
@@ -943,7 +1015,6 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_readiness_probe_misconfiguration(self, microservices: list[str]):
         for service in microservices:
-
             original_yaml_path = f"/tmp/{service}_modified.yaml"
 
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
@@ -962,7 +1033,6 @@ class VirtualizationFaultInjector(FaultInjector):
     # V.15 - Inject a liveness probe misconfiguration fault
     def inject_liveness_probe_misconfiguration(self, microservices: list[str]):
         for service in microservices:
-
             deployment_yaml = self._get_deployment_yaml(service)
             original_deployment_yaml = copy.deepcopy(deployment_yaml)
 
@@ -971,7 +1041,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             for container in containers:
                 container["livenessProbe"] = {
-                    "httpGet": {"path": f"/healthz", "port": 8080},
+                    "httpGet": {"path": "/healthz", "port": 8080},
                     "initialDelaySeconds": initial_delay,
                     "periodSeconds": 10,
                     "failureThreshold": 1,
@@ -1016,7 +1086,6 @@ class VirtualizationFaultInjector(FaultInjector):
     # Duplicate PVC mounts multiple replicas share ReadWriteOnce PVC causing mount conflict
     def inject_duplicate_pvc_mounts(self, microservices: list[str]):
         for service in microservices:
-
             deployment_yaml = self._get_deployment_yaml(service)
             # original_yaml = copy.deepcopy(deployment_yaml)
 
@@ -1090,7 +1159,6 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_duplicate_pvc_mounts(self, microservices: list[str]):
         for service in microservices:
-
             deployment_yaml = self._get_deployment_yaml(service)
 
             delete_result = self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
@@ -1109,7 +1177,6 @@ class VirtualizationFaultInjector(FaultInjector):
             if pod_spec.get("containers"):
                 containers = pod_spec["containers"]
                 if containers:
-
                     existing_mounts = containers[0].get("volumeMounts", [])
                     config_mounts = [mount for mount in existing_mounts if mount.get("name") != f"{service}-volume"]
 
@@ -1331,7 +1398,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
         import yaml
 
-        with open(script_path, "r") as sf:
+        with open(script_path) as sf:
             script_body = sf.read()
 
         script_filename = "service.py"
@@ -1434,7 +1501,6 @@ class VirtualizationFaultInjector(FaultInjector):
         taint_value: str = "blocked",
         effect: str = "NoSchedule",
     ):
-
         self.kubectl.exec_command(f"kubectl taint node {node_name} {taint_key}={taint_value}:{effect} --overwrite")
         print(f"Tainted node {node_name} with {taint_key}={taint_value}:{effect}")
 
@@ -1450,7 +1516,6 @@ class VirtualizationFaultInjector(FaultInjector):
         taint_value: str = "blocked",
         effect: str = "NoSchedule",
     ):
-
         self.kubectl.exec_command(f"kubectl taint node {node_name} {taint_key}={taint_value}:{effect}-")
         print(f"Removed taint from node {node_name}")
 
@@ -1485,7 +1550,7 @@ class VirtualizationFaultInjector(FaultInjector):
                     "accessModes": ["ReadWriteOnce"],
                     "persistentVolumeReclaimPolicy": "Delete",
                     "storageClassName": "",
-                    "hostPath": {"path": f"/tmp/data/volumes/temp-pv"},
+                    "hostPath": {"path": "/tmp/data/volumes/temp-pv"},
                     "nodeAffinity": {
                         "required": {
                             "nodeSelectorTerms": [
@@ -1507,7 +1572,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             pv_json = json.dumps(pv_manifest)
             self.kubectl.exec_command(f"kubectl apply -f - <<EOF\n{pv_json}\nEOF")
-            print(f"Created PV temp-pv for fault injection")
+            print("Created PV temp-pv for fault injection")
 
             # Create a PVC bound to the PV above
             pvc_manifest = {
@@ -1524,7 +1589,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             pvc_json = json.dumps(pvc_manifest)
             self.kubectl.exec_command(f"kubectl apply -f - <<EOF\n{pvc_json}\nEOF")
-            print(f"Created PVC temp-pvc for fault injection")
+            print("Created PVC temp-pvc for fault injection")
 
             pod_spec = deployment_yaml.get("spec", {}).get("template", {}).get("spec", {})
 
@@ -1567,7 +1632,7 @@ class VirtualizationFaultInjector(FaultInjector):
             original_yaml_path = f"/tmp/{service}_modified.yaml"
 
             delete_command = f"kubectl delete --ignore-not-found=true deployment {service} -n {self.namespace}"
-            delete_pv_command = f"kubectl delete --ignore-not-found=true pv temp-pv"
+            delete_pv_command = "kubectl delete --ignore-not-found=true pv temp-pv"
             delete_pvc_command = f"kubectl delete --ignore-not-found=true pvc temp-pvc -n {self.namespace}"
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
 
@@ -1631,7 +1696,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Injected pod anti-affinity deadlock for service: {service}")
             print(f"  - Set replicas to {deployment_yaml['spec']['replicas']}")
-            print(f"  - Added strict anti-affinity rules")
+            print("  - Added strict anti-affinity rules")
 
     def recover_pod_anti_affinity_deadlock(self, microservices: list[str]):
         """
@@ -1663,8 +1728,8 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(apply_command)
 
             print(f"Recovered pod anti-affinity deadlock for service: {service}")
-            print(f"  - Removed anti-affinity rules")
-            print(f"  - Reset replicas to 1")
+            print("  - Removed anti-affinity rules")
+            print("  - Reset replicas to 1")
 
     def inject_rpc_timeout_retries_misconfiguration(self, configmap: str):
         GRPC_CLIENT_TIMEOUT = "50ms"
@@ -1831,7 +1896,7 @@ class VirtualizationFaultInjector(FaultInjector):
             containers_cmd = f"kubectl get deployment {deployment_name} -n {self.namespace} -o jsonpath='{{.spec.template.spec.containers[*].name}}'"
             container_names = self.kubectl.exec_command(containers_cmd).split()
 
-            for i, container_name in enumerate(container_names):
+            for i, _container_name in enumerate(container_names):
                 # Check if env array exists
                 env_check_cmd = f"kubectl get deployment {deployment_name} -n {self.namespace} -o jsonpath='{{.spec.template.spec.containers[{i}].env}}'"
                 existing_env = self.kubectl.exec_command(env_check_cmd).strip()
@@ -1894,7 +1959,7 @@ class VirtualizationFaultInjector(FaultInjector):
                     )
 
                 except Exception as e:
-                    raise RuntimeError(f"Failed to patch {deployment_name}: {e}")
+                    raise RuntimeError(f"Failed to patch {deployment_name}: {e}") from e
 
         # Wait for all deployments to be ready
         print("Waiting for all deployments to be ready...")
@@ -1974,7 +2039,7 @@ class VirtualizationFaultInjector(FaultInjector):
                     )
 
                 except Exception as e:
-                    raise RuntimeError(f"Failed to patch {deployment_name}: {e}")
+                    raise RuntimeError(f"Failed to patch {deployment_name}: {e}") from e
             else:
                 print(f"No GOGC environment variables to recover in deployment: {deployment_name}")
 
@@ -1990,6 +2055,55 @@ class VirtualizationFaultInjector(FaultInjector):
                     print(f"Warning: Failed to wait for deployment {deployment_name}: {e}")
 
         print("All deployments with GOGC environment variables have been recovered to default value (100)")
+
+    # Inject a hostPort conflict that clashes with another service
+    def inject_service_port_conflict(self, microservices: list[str], conflicting_port: int):
+        for service in microservices:
+            original_deployment_yaml = self._get_deployment_yaml(service)
+            deployment_yaml = copy.deepcopy(original_deployment_yaml)
+
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            main_container = containers[0] if containers else {}
+
+            # Add hostPort to the first container port (or add port if none exists)
+            ports_list = main_container.get("ports", [])
+            if ports_list:
+                # Add hostPort to existing port
+                ports_list[0]["hostPort"] = conflicting_port
+            else:
+                # Create a new port entry with hostPort
+                main_container["ports"] = [{"containerPort": 8080, "hostPort": conflicting_port}]
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            delete_cmd = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_cmd = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_cmd)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_cmd)
+            print(f"Apply result for {service}: {apply_result}")
+
+            # Save the *original* deployment YAML for recovery
+            self._write_yaml_to_file(service, original_deployment_yaml)
+
+            print(f"Injected hostPort {conflicting_port} conflict for service: {service}")
+
+    def recover_service_port_conflict(self, microservices: list[str]):
+        for service in microservices:
+            delete_cmd = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_cmd = f"kubectl apply -f /tmp/{service}_modified.yaml -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_cmd)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_cmd)
+            print(f"Apply result for {service}: {apply_result}")
+
+            self.kubectl.wait_for_ready(self.namespace)
+
+            print(f"Recovered from hostPort conflict for service: {service}")
 
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
@@ -2070,10 +2184,8 @@ class VirtualizationFaultInjector(FaultInjector):
     def _wait_for_dns_policy_propagation(
         self, service: str, external_ns: str, expect_external: bool, sleep: int = 2, max_wait: int = 120
     ):
-
         waited = 0
         while waited < max_wait:
-
             try:
                 deploy = self.kubectl.apps_v1_api.read_namespaced_deployment(service, self.namespace)
                 selector_dict = deploy.spec.selector.match_labels or {}

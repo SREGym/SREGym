@@ -17,7 +17,7 @@ class ProblemSubclass extends Class {
 class MitigationOracleAssignment extends AssignStmt {
   MitigationOracleAssignment() {
     exists(Attribute attr |
-      attr = this.getATarget() and 
+      attr = this.getATarget() and
       attr.getObject().(Name).getId() = "self" and
       attr.getName() = "mitigation_oracle"
     )
@@ -46,7 +46,11 @@ predicate shouldIgnore(ProblemSubclass c) {
         filename = "read_error.py" or
         filename = "recommendation_service_cache_failure.py" or
         filename = "silent_data_corruption.py" or
-        filename = "valkey_memory_disruption.py"
+        filename = "valkey_memory_disruption.py" or
+        filename = "email_memory_leak.py" or
+        filename = "khaos_faults.py" or
+        filename = "llm_inaccurate_response.py" or
+        filename = "llm_rate_limit_error.py"
       )
     )
   )
@@ -72,7 +76,7 @@ string getMessage(ProblemSubclass c) {
 }
 
 from ProblemSubclass c, string msg
-where 
+where
   msg = getMessage(c) and
   not shouldIgnore(c)
 select c, msg

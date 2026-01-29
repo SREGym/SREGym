@@ -1,3 +1,4 @@
+import logging
 import os
 import select
 import socket
@@ -9,7 +10,8 @@ from typing import List, Optional
 
 import pandas as pd
 import requests
-import logging
+
+
 class TraceAPI:
     """
     Jaeger HTTP API helper.
@@ -45,9 +47,9 @@ class TraceAPI:
         self._remote_port = "8080" if self._is_astronomy else "16686"
         self._url_prefix = "/jaeger/ui" if self._is_astronomy else ""
 
-        self.local_logger = logging.getLogger("all.infra.trace_api")
-        self.local_logger.propagate = True
-        self.local_logger.setLevel(logging.DEBUG)
+        self.logger = logging.getLogger("all.infra.trace_api")
+        self.logger.propagate = True
+        self.logger.setLevel(logging.DEBUG)
 
         # Choose access path: NodePort (if available) else port-forward
         node_port = None
@@ -85,13 +87,13 @@ class TraceAPI:
                 text=True,
             ).strip()
             if result:
-                self.local_logger.info(f"NodePort for service {service_name}: {result}")
+                self.logger.info(f"NodePort for service {service_name}: {result}")
                 return result
             return None
         except subprocess.CalledProcessError as e:
             msg = (e.output or "").strip()
             if msg:
-                self.local_logger.error(f"Error getting NodePort: {msg}")
+                self.logger.error(f"Error getting NodePort: {msg}")
             return None
 
     def get_jaeger_pod_name(self) -> str:
@@ -157,7 +159,7 @@ class TraceAPI:
             if ready:
                 line = stream.readline()
                 if line:
-                    self.local_logger.info(line.rstrip())
+                    self.logger.info(line.rstrip())
                 else:
                     break
 
@@ -171,7 +173,7 @@ class TraceAPI:
             cmd = self._build_pf_cmd(self.local_port)
 
             msg = "Starting port-forward with command:" + " ".join(cmd)
-            self.local_logger.info(msg)
+            self.logger.info(msg)
             self.port_forward_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -196,7 +198,7 @@ class TraceAPI:
         time.sleep(self.pf_ready_sleep)
 
         if self.port_forward_process and self.port_forward_process.poll() is None:
-            self.local_logger.info(f"Port forwarding established successfully on")
+            self.logger.info(f"Port forwarding established successfully on")
             self.base_url = f"http://127.0.0.1:{self.local_port}{self._url_prefix}"
             self._export_env(port=self.local_port)  # <<< ensure env set for PF case (incl. astronomy-shop)
         else:
@@ -213,7 +215,7 @@ class TraceAPI:
                 self.port_forward_process.terminate()
                 self.port_forward_process.wait(timeout=5)
             except Exception as e:
-                self.local_logger.error(f"Error terminating port-forward process:", e)
+                self.logger.error(f"Error terminating port-forward process:", e)
                 try:
                     self.port_forward_process.kill()
                 except Exception:
@@ -225,7 +227,7 @@ class TraceAPI:
                 if self.port_forward_process.stderr:
                     self.port_forward_process.stderr.close()
             except Exception as e:
-                self.local_logger.error(f"Error closing process streams:", e)
+                self.logger.error(f"Error closing process streams:", e)
 
             self.port_forward_process = None
             self.local_port = None
@@ -233,13 +235,13 @@ class TraceAPI:
         for t in self.output_threads:
             t.join(timeout=2)
         self.output_threads.clear()
-        self.local_logger.info("Port-forward stopped.")
+        self.logger.info("Port-forward stopped.")
 
     def cleanup(self):
         """Public cleanup (safe to call multiple times)."""
         if self.using_port_forward:
             self.stop_port_forward()
-        self.local_logger.info("Cleanup completed.")
+        self.logger.info("Cleanup completed.")
 
     # ------------------------
     # Environment export
@@ -272,7 +274,7 @@ class TraceAPI:
             data = resp.json()
             return data.get("data", []) or []
         except Exception as e:
-            self.local_logger.error(f"Failed to get services: {e}")
+            self.logger.error(f"Failed to get services: {e}")
             return []
 
     def get_traces(
@@ -292,7 +294,7 @@ class TraceAPI:
             resp.raise_for_status()
             return resp.json().get("data", []) or []
         except Exception as e:
-            self.local_logger.error(f"Failed to get traces for {service_name}: {e}")
+            self.logger.error(f"Failed to get traces for {service_name}: {e}")
             return []
 
     def extract_traces(self, start_time: datetime, end_time: datetime, limit: Optional[int] = None) -> list:
@@ -302,10 +304,10 @@ class TraceAPI:
         """
         try:
             services = self.get_services()
-            self.local_logger.info(f"services: {services}")
+            self.logger.info(f"services: {services}")
             all_traces = []
             if not services:
-                self.local_logger.error("No services found.")
+                self.logger.error("No services found.")
                 return all_traces
 
             for svc in services:

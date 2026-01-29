@@ -1,0 +1,19 @@
+{
+    "Name": "Loki",
+    "Namespace": "observe",
+    "Desc": "Loki is a log aggregation system designed for storing and querying logs from all cluster applications.",
+    "Supported Operations": [
+        "Collect logs from Kubernetes pods via Promtail",
+        "Query logs using LogQL",
+        "List available labels",
+        "Get label values for filtering"
+    ],
+    "Helm Config": {
+        "release_name": "loki",
+        "chart_path": "grafana/loki",
+        "namespace": "observe",
+        "remote_chart": true,
+        "extra_args": ["-f", "observer/loki/loki-values.yaml"]
+    },
+    "PersistentVolumeClaimConfig": "observer/loki/loki-pvc.yml"
+}

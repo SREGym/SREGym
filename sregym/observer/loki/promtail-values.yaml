@@ -1,0 +1,4 @@
+# Promtail Helm chart values for SREGym
+config:
+  clients:
+    - url: http://loki-gateway/loki/api/v1/push

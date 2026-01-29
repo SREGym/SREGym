@@ -11,6 +11,7 @@ from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import Capacity
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
+from sregym.conductor.problems.email_memory_leak import EmailMemoryLeak
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
@@ -24,6 +25,8 @@ from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.latent_sector_error import LatentSectorError
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
+from sregym.conductor.problems.llm_inaccurate_response import LlmInaccurateResponse
+from sregym.conductor.problems.llm_rate_limit_error import LlmRateLimitError
 from sregym.conductor.problems.load_spike_rpc_retry_storm import LoadSpikeRPCRetryStorm
 from sregym.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
 from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
@@ -54,6 +57,7 @@ from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
+from sregym.conductor.problems.service_port_conflict import ServicePortConflict
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
@@ -134,6 +138,9 @@ class ProblemRegistry:
             "sidecar_port_conflict_astronomy_shop": lambda: SidecarPortConflict(app_name="astronomy_shop", faulty_service="frontend"),
             "sidecar_port_conflict_hotel_reservation": lambda: SidecarPortConflict(app_name="hotel_reservation", faulty_service="frontend"),
             "sidecar_port_conflict_social_network": lambda: SidecarPortConflict(app_name="social_network", faulty_service="user-service"),
+            "service_port_conflict_astronomy_shop": lambda: ServicePortConflict(app_name="astronomy_shop", faulty_service="ad"),
+            "service_port_conflict_hotel_reservation": lambda: ServicePortConflict(app_name="hotel_reservation", faulty_service="recommendation"),
+            "service_port_conflict_social_network": lambda: ServicePortConflict(app_name="social_network", faulty_service="media-service"),
             "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
             "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
@@ -147,9 +154,12 @@ class ProblemRegistry:
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
+            "astronomy_shop_ad_service_image_slow_load": ImageSlowLoad,
             "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,
             "astronomy_shop_cart_service_failure": CartServiceFailure,
-            "astronomy_shop_ad_service_image_slow_load": ImageSlowLoad,
+            "astronomy_shop_email_memory_leak": EmailMemoryLeak,
+            "astronomy_shop_llm_inaccurate_response": LlmInaccurateResponse,
+            "astronomy_shop_llm_rate_limit_error": LlmRateLimitError,
             "astronomy_shop_payment_service_failure": PaymentServiceFailure,
             "astronomy_shop_payment_service_unreachable": PaymentServiceUnreachable,
             "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
