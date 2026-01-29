@@ -33,7 +33,6 @@ from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
 from sregym.conductor.problems.missing_service import MissingService
-from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from sregym.conductor.problems.network_policy_block import NetworkPolicyBlock
 from sregym.conductor.problems.operator_misoperation.invalid_affinity_toleration import (
@@ -223,7 +222,39 @@ class ProblemRegistry:
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
-            "social_net_hotel_res_astro_shop_concurrent_failures": lambda: MultipleIndependentFailures(problems=[K8STargetPortMisconfig(faulty_service="user-service"),MongoDBRevokeAuth(faulty_service="mongodb-geo"),WrongServiceSelector(),]),
+            # "port_misconfig_revoke_auth_wrong_svc_selector": \
+            #     lambda: MultipleIndependentFailures(problems=[
+            #         K8STargetPortMisconfig(faulty_service="user-service"),
+            #         MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+            #         WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend")
+            # ]),
+            # another concurrent fault problem that deploys all three apps
+            # "port_misconfig_misconfig_hotelres_missing_env_var": \
+            #     lambda: MultipleIndependentFailures(problems=[
+            #         K8STargetPortMisconfig(faulty_service="user-service"),
+            #         MisconfigAppHotelRes(),
+            #         MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend")
+            # ]),
+            # three concurrent fault problems, each only focuses on one app
+            # astro shop
+            # "valkey_memory_disruption_missing_env_var_incorrect_port": \
+            #     lambda: MultipleIndependentFailures(problems=[
+            #         ValkeyAuthDisruption(),
+            #         MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend"),
+            #         IncorrectPortAssignment()
+            #     ]),
+            # hotel res
+            # "hotel_res_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
+            #     MisconfigAppHotelRes(),
+            #     MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+            #     MongoDBUserUnregistered(faulty_service="mongodb-rate")
+            # ]),
+            # social net
+            # "social_net_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
+            #     AssignNonExistentNode(),
+            #     MongoDBAuthMissing(),
+            #     LivenessProbeTooAggressive(app_name="social_network"),
+            # ]),
             # ad hoc:
             "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
@@ -253,9 +284,9 @@ class ProblemRegistry:
 
     def get_problem_ids(self, task_type: str = None, all: bool = False):
         if task_type:
-            return [k for k in self.PROBLEM_REGISTRY.keys() if task_type in k]
+            return [k for k in self.PROBLEM_REGISTRY if task_type in k]
         if all:
-            return list(self.PROBLEM_REGISTRY.keys())
+            return list(self.PROBLEM_REGISTRY)
 
         # by default, only run problems defined in tasklist.yml
         file_dir = Path(__file__).parent.parent
@@ -263,14 +294,14 @@ class ProblemRegistry:
 
         if not tasklist_path.exists():
             # if tasklist.yml does not exist, run all the problems
-            return list(self.PROBLEM_REGISTRY.keys())
+            return list(self.PROBLEM_REGISTRY)
 
-        with open(tasklist_path, "r") as f:
+        with open(tasklist_path) as f:
             tasklist = yaml.safe_load(f)
-        return list(tasklist["all"]["problems"].keys())
+        return list(tasklist["all"]["problems"])
 
 
     def get_problem_count(self, task_type: str = None):
         if task_type:
-            return len([k for k in self.PROBLEM_REGISTRY.keys() if task_type in k])
+            return len([k for k in self.PROBLEM_REGISTRY if task_type in k])
         return len(self.PROBLEM_REGISTRY)

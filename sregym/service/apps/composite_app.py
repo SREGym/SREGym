@@ -1,8 +1,7 @@
 """A class representing a composite of mulitple applications"""
 
-import json
+from concurrent.futures import ThreadPoolExecutor
 
-from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
 
 
@@ -11,7 +10,7 @@ class CompositeApp:
         self.namespace = "Multiple namespaces"
         self.apps = {}
         for app in apps:
-            if app.name in self.apps.keys():
+            if app.name in self.apps:
                 print(f"[CompositeApp] same app name: {app.name}, continue.")
                 continue
             self.apps[app.name] = app
@@ -21,19 +20,25 @@ class CompositeApp:
         self.description = f"Composite application containing {len(self.apps)} apps: {', '.join(self.apps.keys())}"
 
     def deploy(self):
-        # FIXME: this can be optimized to parallel deploy later
-        for app in self.apps.values():
+        def deploy_app(app):
             print(f"[CompositeApp] Deploying {app.name}...")
             app.deploy()
 
+        with ThreadPoolExecutor() as executor:
+            executor.map(deploy_app, self.apps.values())
+
     def start_workload(self):
-        # FIXME: this can be optimized to parallel start later
-        for app in self.apps.values():
+        def start_workload_app(app):
             print(f"[CompositeApp] Starting workload for {app.name}...")
             app.start_workload()
 
+        with ThreadPoolExecutor() as executor:
+            executor.map(start_workload_app, self.apps.values())
+
     def cleanup(self):
-        # FIXME: this can be optimized to parallel cleanup later
-        for app in self.apps.values():
+        def cleanup_app(app):
             print(f"[CompositeApp] Cleaning up {app.name}...")
             app.cleanup()
+
+        with ThreadPoolExecutor() as executor:
+            executor.map(cleanup_app, self.apps.values())
