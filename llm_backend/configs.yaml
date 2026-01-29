@@ -115,3 +115,59 @@
 "bedrock-claude-sonnet-4.5":
   provider: "litellm"
   model_name: "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+"openrouter-claude-sonnet-4":
+  provider: "litellm"
+  model_name: "openrouter/anthropic/claude-sonnet-4"
+  api_key: "$OPENROUTER_API_KEY"
+  temperature: 0.0
+  top_p: 0.95
+
+"openrouter-gpt-4o":
+  provider: "litellm"
+  model_name: "openrouter/openai/gpt-4o"
+  api_key: "$OPENROUTER_API_KEY"
+  temperature: 0.0
+  top_p: 0.95
+
+"openrouter-gemini-2.5-pro":
+  provider: "litellm"
+  model_name: "openrouter/google/gemini-2.5-pro"
+  api_key: "$OPENROUTER_API_KEY"
+  temperature: 0.0
+  top_p: 0.95
+
+"openrouter-llama-3.3-70b":
+  provider: "litellm"
+  model_name: "openrouter/meta-llama/llama-3.3-70b-instruct"
+  api_key: "$OPENROUTER_API_KEY"
+  temperature: 0.0
+  top_p: 0.95
+
+"openrouter-mistral-large":
+  provider: "litellm"
+  model_name: "openrouter/mistralai/mistral-large"
+  api_key: "$OPENROUTER_API_KEY"
+  temperature: 0.0
+  top_p: 0.95
+
+"openrouter-deepseek-chat":
+  provider: "litellm"
+  model_name: "openrouter/deepseek/deepseek-chat"
+  api_key: "$OPENROUTER_API_KEY"
+  temperature: 0.0
+  top_p: 0.95
+
+"openrouter-qwen-2.5-72b":
+  provider: "litellm"
+  model_name: "openrouter/qwen/qwen-2.5-72b-instruct"
+  api_key: "$OPENROUTER_API_KEY"
+  temperature: 0.0
+  top_p: 0.95
+
+"openrouter-deepseek-r1":
+  provider: "litellm"
+  model_name: "openrouter/deepseek/deepseek-r1-0528:free"
+  api_key: "$OPENROUTER_API_KEY"
+  temperature: 0.0
+  top_p: 0.95

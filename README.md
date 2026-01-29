@@ -107,6 +107,14 @@ python main.py --agent <agent-name> --model <model-id>
 | `watsonx-llama` | IBM watsonx | Llama 3.3 70B | `WATSONX_API_KEY`, `WX_PROJECT_ID` |
 | `glm-4` | GLM | GLM-4 | `GLM_API_KEY` |
 | `azure-openai-gpt-4o` | Azure OpenAI | GPT-4o | `AZURE_API_KEY`, `AZURE_API_BASE` |
+| `openrouter-claude-sonnet-4` | OpenRouter | Claude Sonnet 4 | `OPENROUTER_API_KEY` |
+| `openrouter-gpt-4o` | OpenRouter | GPT-4o | `OPENROUTER_API_KEY` |
+| `openrouter-gemini-2.5-pro` | OpenRouter | Gemini 2.5 Pro | `OPENROUTER_API_KEY` |
+| `openrouter-llama-3.3-70b` | OpenRouter | Llama 3.3 70B Instruct | `OPENROUTER_API_KEY` |
+| `openrouter-mistral-large` | OpenRouter | Mistral Large | `OPENROUTER_API_KEY` |
+| `openrouter-deepseek-chat` | OpenRouter | DeepSeek Chat | `OPENROUTER_API_KEY` |
+| `openrouter-qwen-2.5-72b` | OpenRouter | Qwen 2.5 72B Instruct | `OPENROUTER_API_KEY` |
+| `openrouter-deepseek-r1` | OpenRouter | DeepSeek R1 (Free) | `OPENROUTER_API_KEY` |
 
 **Default:** If no model is specified, `gpt-4o` is used by default.
 
@@ -141,6 +149,18 @@ python main.py --agent stratus --model bedrock-claude-sonnet-4.5
 ```
 
 **Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.
+
+**OpenRouter:**
+```bash
+# In .env file
+OPENROUTER_API_KEY="sk-or-v1-..."
+
+# Run with any OpenRouter model
+python main.py --agent stratus --model openrouter-llama-3.3-70b
+python main.py --agent stratus --model openrouter-deepseek-r1
+```
+
+**Note:** OpenRouter provides access to multiple LLM models with a single API key, including several free tier options. Get your API key at [openrouter.ai](https://openrouter.ai).
 
 ## Acknowledgements
 This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org/).
