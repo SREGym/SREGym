@@ -132,67 +132,73 @@ class KubeCtl:
         """Fetch the service configuration."""
         return client.CoreV1Api().read_namespaced_service(name=name, namespace=namespace)
 
-    def wait_for_service_ready(
-        self, service_name: str, namespace: str, sleep: int = 2, max_wait: int = WAIT_FOR_POD_READY_TIMEOUT
+    def wait_for_ready(
+        self,
+        namespace: str,
+        service_names: str | list[str] | None = None,
+        sleep: int = 2,
+        max_wait: int = WAIT_FOR_POD_READY_TIMEOUT,
     ):
-        """Wait for pods belonging to a specific service to be ready."""
+        """Wait for pods to be in a Ready state.
+
+        Args:
+            namespace: The namespace to check
+            service_names: If provided (str or list), only wait for pods belonging to these services.
+                           If None, wait for all pods in the namespace.
+            sleep: Seconds between checks
+            max_wait: Maximum seconds to wait
+        """
         console = Console()
-        console.log(f"[bold yellow]Waiting for service '{service_name}' in namespace '{namespace}' to be ready...")
 
-        # Get the service's selector
-        svc = self.get_service(service_name, namespace)
-        selector_dict = svc.spec.selector or {}
-        if not selector_dict:
-            raise ValueError(f"Service '{service_name}' has no selector defined")
-        label_selector = ",".join(f"{k}={v}" for k, v in selector_dict.items())
+        # Normalize to list
+        if service_names is None:
+            services = []
+        elif isinstance(service_names, str):
+            services = [service_names]
+        else:
+            services = service_names
 
-        with console.status(f"[bold green]Waiting for {service_name} pods to be ready...") as status:
-            wait = 0
+        # Build label selectors from services
+        label_selectors = []
+        for svc_name in services:
+            svc = self.get_service(svc_name, namespace)
+            selector_dict = svc.spec.selector or {}
+            if not selector_dict:
+                raise ValueError(f"Service '{svc_name}' has no selector defined")
+            label_selectors.append(",".join(f"{k}={v}" for k, v in selector_dict.items()))
 
-            while wait < max_wait:
-                try:
-                    pod_list = self.core_v1_api.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
-                    if pod_list.items:
-                        ready_pods = [
-                            pod
-                            for pod in pod_list.items
-                            if pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses)
-                        ]
+        if services:
+            display_name = f"services {services}" if len(services) > 1 else f"service '{services[0]}'"
+        else:
+            display_name = f"namespace '{namespace}'"
 
-                        if len(ready_pods) == len(pod_list.items):
-                            console.log(f"[bold green]Service '{service_name}' is ready ({len(ready_pods)} pod(s)).")
-                            return
-
-                except Exception as e:
-                    console.log(f"[red]Error checking pod statuses for {service_name}: {e}")
-
-                time.sleep(sleep)
-                wait += sleep
-
-            raise Exception(f"[red]Timeout: Service '{service_name}' did not become ready within {max_wait} seconds.")
-
-    def wait_for_ready(self, namespace, sleep=2, max_wait=WAIT_FOR_POD_READY_TIMEOUT):
-        """Wait for all pods in a namespace to be in a Ready state before proceeding."""
-
-        console = Console()
-        console.log(f"[bold yellow]Waiting for all pods in namespace '{namespace}' to be ready...")
+        console.log(f"[bold yellow]Waiting for all pods in {display_name} to be ready...")
 
         with console.status("[bold green]Waiting for pods to be ready...") as status:
             wait = 0
 
             while wait < max_wait:
                 try:
-                    pod_list = self.list_pods(namespace)
+                    if label_selectors:
+                        # Collect pods from all services
+                        all_pods = []
+                        for selector in label_selectors:
+                            pod_list = self.core_v1_api.list_namespaced_pod(
+                                namespace=namespace, label_selector=selector
+                            )
+                            all_pods.extend(pod_list.items)
+                    else:
+                        all_pods = self.list_pods(namespace).items or []
 
-                    if pod_list.items:
+                    if all_pods:
                         ready_pods = [
                             pod
-                            for pod in pod_list.items
+                            for pod in all_pods
                             if pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses)
                         ]
 
-                        if len(ready_pods) == len(pod_list.items):
-                            console.log(f"[bold green]All pods in namespace '{namespace}' are ready.")
+                        if len(ready_pods) == len(all_pods):
+                            console.log(f"[bold green]All pods in {display_name} are ready.")
                             return
 
                 except Exception as e:
@@ -202,7 +208,7 @@ class KubeCtl:
                 wait += sleep
 
             raise Exception(
-                f"[red]Timeout: Not all pods in namespace '{namespace}' reached the Ready state within {max_wait} seconds."
+                f"[red]Timeout: Not all pods in {display_name} reached the Ready state within {max_wait} seconds."
             )
 
     def wait_for_namespace_deletion(self, namespace, sleep=2, max_wait=300):
