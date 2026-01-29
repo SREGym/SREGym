@@ -259,7 +259,21 @@ def main(args):
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
 
-    os.environ["MODEL_ID"] = args.model
+    # Set model configuration in environment
+    os.environ["MODEL_NAME"] = args.model
+    os.environ["MODEL_PROVIDER"] = args.model_provider
+    if args.model_api_key:
+        os.environ["MODEL_API_KEY"] = args.model_api_key
+    if args.model_url:
+        os.environ["MODEL_URL"] = args.model_url
+    os.environ["MODEL_TEMPERATURE"] = str(args.model_temperature)
+    os.environ["MODEL_TOP_P"] = str(args.model_top_p)
+    if args.model_max_tokens:
+        os.environ["MODEL_MAX_TOKENS"] = str(args.model_max_tokens)
+    if args.model_seed:
+        os.environ["MODEL_SEED"] = str(args.model_seed)
+    if args.model_wx_project_id:
+        os.environ["MODEL_WX_PROJECT_ID"] = args.model_wx_project_id
 
     config = ConductorConfig(deploy_loki=not args.use_external_harness)
     conductor = Conductor(config=config)
@@ -348,7 +362,55 @@ if __name__ == "__main__":
         "--model",
         type=str,
         default="gpt-4o",
-        help="Run only a specific model backend (e.g., 'gpt-4o', 'gemini-2.5-pro', 'claude-sonnet-4', 'moonshot')",
+        help="Model name in LiteLLM format (e.g., 'openai/gpt-4o', 'anthropic/claude-sonnet-4', 'gemini/gemini-2.5-pro')",
+    )
+    parser.add_argument(
+        "--model-provider",
+        type=str,
+        default="openai",
+        help="Model provider (openai, litellm, or watsonx). Default: openai",
+    )
+    parser.add_argument(
+        "--model-api-key",
+        type=str,
+        default=None,
+        help="API key for the model provider. If not provided, will use environment variables.",
+    )
+    parser.add_argument(
+        "--model-url",
+        type=str,
+        default=None,
+        help="Base URL for the model API (optional, for custom endpoints)",
+    )
+    parser.add_argument(
+        "--model-temperature",
+        type=float,
+        default=0.0,
+        help="Temperature for model inference. Default: 0.0",
+    )
+    parser.add_argument(
+        "--model-top-p",
+        type=float,
+        default=0.95,
+        help="Top-p sampling parameter. Default: 0.95",
+    )
+    parser.add_argument(
+        "--model-max-tokens",
+        type=int,
+        default=None,
+        help="Maximum tokens for model output (optional)",
+    )
+    parser.add_argument(
+        "--model-seed",
+        type=int,
+        default=None,
+        help="Random seed for model inference (optional)",
+    )
+    parser.add_argument(
+        "--model-wx-project-id",
+        type=str,
+        default=None,
+        help="WatsonX project ID (required for watsonx provider)",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."

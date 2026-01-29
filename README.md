@@ -89,26 +89,17 @@ python main.py --agent stratus --model gpt-4o
 
 ### Model Selection
 
-SREGym supports multiple LLM providers. Specify your model using the `--model` flag:
+SREGym supports any LLM model via [LiteLLM](https://litellm.ai/). Specify your model using the `--model` flag with LiteLLM format:
 
 ```bash
-python main.py --agent <agent-name> --model <model-id>
+python main.py --agent <agent-name> --model <model-name> [--model-provider <provider>]
 ```
 
-#### Available Models
+#### Basic Usage
 
-| Model ID | Provider | Model Name | Required Environment Variables |
-|----------|----------|------------|-------------------------------|
-| `gpt-4o` | OpenAI | GPT-4o | `OPENAI_API_KEY` |
-| `gemini-2.5-pro` | Google | Gemini 2.5 Pro | `GEMINI_API_KEY` |
-| `claude-sonnet-4` | Anthropic | Claude Sonnet 4 | `ANTHROPIC_API_KEY` |
-| `bedrock-claude-sonnet-4.5` | AWS Bedrock | Claude Sonnet 4.5 | `AWS_PROFILE`, `AWS_DEFAULT_REGION` |
-| `moonshot` | Moonshot | Moonshot | `MOONSHOT_API_KEY` |
-| `watsonx-llama` | IBM watsonx | Llama 3.3 70B | `WATSONX_API_KEY`, `WX_PROJECT_ID` |
-| `glm-4` | GLM | GLM-4 | `GLM_API_KEY` |
-| `azure-openai-gpt-4o` | Azure OpenAI | GPT-4o | `AZURE_API_KEY`, `AZURE_API_BASE` |
+The `--model` argument accepts model names in LiteLLM format (e.g., `openai/gpt-4o`, `anthropic/claude-sonnet-4`). SREGym will automatically detect API keys from your environment variables.
 
-**Default:** If no model is specified, `gpt-4o` is used by default.
+**Default:** If no model is specified, `gpt-4o` with OpenAI provider is used by default.
 
 #### Examples
 
@@ -117,8 +108,11 @@ python main.py --agent <agent-name> --model <model-id>
 # In .env file
 OPENAI_API_KEY="sk-proj-..."
 
-# Run with GPT-4o
+# Run with GPT-4o (default provider: openai)
 python main.py --agent stratus --model gpt-4o
+
+# Or explicitly specify with LiteLLM format
+python main.py --agent stratus --model openai/gpt-4o --model-provider litellm
 ```
 
 **Anthropic:**
@@ -127,7 +121,16 @@ python main.py --agent stratus --model gpt-4o
 ANTHROPIC_API_KEY="sk-ant-api03-..."
 
 # Run with Claude Sonnet 4
-python main.py --agent stratus --model claude-sonnet-4
+python main.py --agent stratus --model anthropic/claude-sonnet-4-20250514 --model-provider litellm
+```
+
+**Google Gemini:**
+```bash
+# In .env file
+GEMINI_API_KEY="..."
+
+# Run with Gemini 2.5 Pro
+python main.py --agent stratus --model gemini/gemini-2.5-pro --model-provider litellm
 ```
 
 **AWS Bedrock:**
@@ -137,10 +140,43 @@ AWS_PROFILE="bedrock"
 AWS_DEFAULT_REGION=us-east-2
 
 # Run with Claude Sonnet 4.5 on Bedrock
-python main.py --agent stratus --model bedrock-claude-sonnet-4.5
+python main.py --agent stratus --model bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0 --model-provider litellm
 ```
 
-**Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.
+**Custom Endpoints:**
+```bash
+# For custom API endpoints (e.g., Azure, self-hosted)
+python main.py --agent stratus \
+  --model azure/gpt-4o \
+  --model-provider litellm \
+  --model-url "https://your-endpoint.openai.azure.com" \
+  --model-api-key "your-api-key"
+```
+
+#### Advanced Configuration
+
+For fine-tuned control, you can specify additional model parameters:
+
+```bash
+python main.py --agent stratus \
+  --model anthropic/claude-sonnet-4 \
+  --model-provider litellm \
+  --model-temperature 0.7 \
+  --model-top-p 0.95 \
+  --model-max-tokens 4096
+```
+
+**Available Options:**
+- `--model-provider`: Provider type (openai, litellm, watsonx). Default: openai
+- `--model-api-key`: API key (falls back to provider-specific env vars)
+- `--model-url`: Custom API endpoint URL
+- `--model-temperature`: Temperature for sampling (default: 0.0)
+- `--model-top-p`: Top-p sampling parameter (default: 0.95)
+- `--model-max-tokens`: Maximum output tokens
+- `--model-seed`: Random seed for reproducibility
+- `--model-wx-project-id`: WatsonX project ID (required for watsonx provider)
+
+See [LiteLLM's provider documentation](https://docs.litellm.ai/docs/providers) for all supported models and formats.
 
 ## Acknowledgements
 This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org/).
