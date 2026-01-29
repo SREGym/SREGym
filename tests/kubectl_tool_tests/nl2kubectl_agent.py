@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import uuid
 
 import yaml
@@ -22,7 +23,7 @@ from clients.stratus.tools.stateful_async_tool_node import StatefulAsyncToolNode
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-KUBECTL_TOOLS_MCP_URL = f"http://127.0.0.1:{os.getenv("MCP_SERVER_PORT", "8001")}/kubectl_mcp_tools/sse"
+KUBECTL_TOOLS_MCP_URL = f"http://127.0.0.1:{os.getenv('MCP_SERVER_PORT', '8001')}/kubectl/sse"
 
 
 def route_tools(state: State):
@@ -92,11 +93,11 @@ class NL2KubectlAgent:
         logger.info("invoking mock llm inference, custom state: %s", state)
         logger.info(f"[mock llm] msg branch: {self.test_tool_or_ai_response}")
         if self.test_tool_or_ai_response == "tool":
-            test_campaign = yaml.safe_load(open(self.test_campaign_file, "r"))
+            with open(self.test_campaign_file) as f:
+                test_campaign = yaml.safe_load(f)
             cur_test = test_campaign["test"][self.test_tool_call_idx]
             logger.info(
-                f"\n[mock llm] test campaign tool call: {cur_test['tool_call']}"
-                f"\nargs: {cur_test.get('args', dict())}"
+                f"\n[mock llm] test campaign tool call: {cur_test['tool_call']}\nargs: {cur_test.get('args', dict())}"
             )
 
             function_name = cur_test["tool_call"]
@@ -198,7 +199,7 @@ class NL2KubectlAgent:
             msgs = last_state.values["messages"] + [{"role": "user", "content": user_input}]
             state = dict(last_state.values)
             state["messages"] = msgs
-            logger.info(f"last state values: %s", state)
+            logger.info("last state values: %s", state)
         else:
             state = {
                 "messages": [{"role": "user", "content": user_input}],

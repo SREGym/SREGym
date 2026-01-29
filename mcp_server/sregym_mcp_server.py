@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 app = Starlette(
     routes=[
-        Mount("/kubectl_mcp_tools", app=create_sse_app(kubectl_mcp, "/messages/", "/sse")),
+        Mount("/kubectl", app=create_sse_app(kubectl_mcp, "/messages/", "/sse")),
         Mount("/jaeger", app=create_sse_app(observability_mcp, "/messages/", "/sse")),
         Mount("/loki", app=create_sse_app(loki_mcp, "/messages/", "/sse")),
         Mount("/prometheus", app=create_sse_app(prometheus_mcp, "/messages/", "/sse")),
