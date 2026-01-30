@@ -100,7 +100,6 @@ class ClusterStateManager:
             coredns_configmap_data=self._get_coredns_configmap_data(),
         )
 
-        logger.info(f"Baseline captured: {self.baseline.to_dict()}")
         return self.baseline
 
     def reconcile_to_baseline(self) -> dict:
