@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: sregym
+
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - clusterrole.yaml
+  - clusterrolebinding.yaml
+  - deployment.yaml
+  - service.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: sregym
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+  - name: sregym
+    newName: ghcr.io/sregym/sregym-mcp
+    newTag: latest

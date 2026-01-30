@@ -1,6 +1,5 @@
 import contextlib
 import logging
-import os
 from datetime import datetime, timedelta
 
 from fastmcp import Context, FastMCP
@@ -30,11 +29,7 @@ def get_services(ctx: Context) -> str:
         ssid = ctx.request_context.request.headers.get("sregym_ssid")
     noise_manager.on_tool_call("jaeger", "get_services", ssid)
 
-    jaeger_url = os.environ.get("JAEGER_BASE_URL", None)
-    if jaeger_url is None:
-        err_msg = "JAEGER_BASE_URL environment variable is not set!"
-        logger.error(err_msg)
-        raise RuntimeError(err_msg)
+    jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
     jaeger_client = ObservabilityClient(jaeger_url)
     try:
         url = f"{jaeger_url}/api/services"
@@ -75,11 +70,7 @@ def get_operations(service: str, ctx: Context) -> str:
         ssid = ctx.request_context.request.headers.get("sregym_ssid")
     noise_manager.on_tool_call("jaeger", f"get_operations {service}", ssid)
 
-    jaeger_url = os.environ.get("JAEGER_BASE_URL", None)
-    if jaeger_url is None:
-        err_msg = "JAEGER_BASE_URL environment variable is not set!"
-        logger.error(err_msg)
-        raise RuntimeError(err_msg)
+    jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
     jaeger_client = ObservabilityClient(jaeger_url)
     try:
         url = f"{jaeger_url}/api/operations"
@@ -120,11 +111,7 @@ def get_traces(service: str, last_n_minutes: int, ctx: Context) -> str:
         ssid = ctx.request_context.request.headers.get("sregym_ssid")
     noise_manager.on_tool_call("jaeger", f"get_traces {service}", ssid)
 
-    jaeger_url = os.environ.get("JAEGER_BASE_URL", None)
-    if jaeger_url is None:
-        err_msg = "JAEGER_BASE_URL environment variable is not set!"
-        logger.error(err_msg)
-        raise RuntimeError(err_msg)
+    jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
     jaeger_client = ObservabilityClient(jaeger_url)
     try:
         url = f"{jaeger_url}/api/traces"
@@ -170,10 +157,7 @@ def get_dependency_graph(ctx: Context, last_n_minutes: int = 30) -> str:
         ssid = ctx.request_context.request.headers.get("sregym_ssid")
     noise_manager.on_tool_call("jaeger", "get_dependency_graph", ssid)
 
-    jaeger_url = os.environ.get("JAEGER_BASE_URL")
-    if not jaeger_url:
-        raise RuntimeError("JAEGER_BASE_URL environment variable is not set!")
-
+    jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
     client = ObservabilityClient(jaeger_url)
     end_time = int(datetime.now().timestamp() * 1000)
 

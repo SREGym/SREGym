@@ -1,5 +1,4 @@
 import contextlib
-import os
 
 from fastmcp import Context, FastMCP
 
@@ -35,9 +34,7 @@ def get_logs(query: str, last_n_minutes: int = 15, ctx: Context = None) -> str:
 
     noise_manager.on_tool_call("loki", query, ssid)
 
-    # Use default port 3100 if LOKI_PORT is not set
-    loki_port = os.environ.get("LOKI_PORT", "3100")
-    loki_url = f"http://localhost:{loki_port}"
+    loki_url = "http://loki.observe.svc.cluster.local:3100"
     observability_client = ObservabilityClient(loki_url)
 
     try:
@@ -107,8 +104,7 @@ def get_labels(ctx: Context = None) -> str:
 
     noise_manager.on_tool_call("loki", "get_labels", ssid)
 
-    loki_port = os.environ.get("LOKI_PORT", "3100")
-    loki_url = f"http://localhost:{loki_port}"
+    loki_url = "http://loki.observe.svc.cluster.local:3100"
     observability_client = ObservabilityClient(loki_url)
 
     try:
@@ -154,8 +150,7 @@ def get_label_values(label: str, ctx: Context = None) -> str:
 
     noise_manager.on_tool_call("loki", f"get_label_values:{label}", ssid)
 
-    loki_port = os.environ.get("LOKI_PORT", "3100")
-    loki_url = f"http://localhost:{loki_port}"
+    loki_url = "http://loki.observe.svc.cluster.local:3100"
     observability_client = ObservabilityClient(loki_url)
 
     try:

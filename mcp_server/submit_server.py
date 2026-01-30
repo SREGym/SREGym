@@ -1,5 +1,3 @@
-import asyncio
-import logging
 import traceback
 
 import requests
@@ -8,7 +6,6 @@ from kubernetes import client, config
 
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig
 from clients.stratus.stratus_utils.get_logger import get_logger
-from clients.stratus.tools.localization import get_resource_uid
 
 logger = get_logger()
 logger.info("Starting Submission MCP Server")
@@ -53,7 +50,10 @@ async def localization(
     namespace: str,
 ) -> dict[str, str]:
     """Retrieve the UID of a specified Kubernetes resource."""
-    config.load_kube_config()
+    try:
+        config.load_incluster_config()
+    except config.ConfigException:
+        config.load_kube_config()
     try:
         cmd = [
             "kubectl",
