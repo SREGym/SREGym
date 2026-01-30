@@ -33,6 +33,7 @@ from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
 from sregym.conductor.problems.missing_service import MissingService
+from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from sregym.conductor.problems.network_policy_block import NetworkPolicyBlock
 from sregym.conductor.problems.operator_misoperation.invalid_affinity_toleration import (
