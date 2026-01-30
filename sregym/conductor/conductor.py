@@ -14,6 +14,7 @@ from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
+from sregym.observer.jaeger import Jaeger
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_dust_manager import DmDustManager
@@ -40,6 +41,7 @@ class Conductor:
         self.problems = ProblemRegistry()
         self.kubectl = KubeCtl()
         self.prometheus = Prometheus()
+        self.jaeger = Jaeger()
         self.loki = Loki()
         self.apps = AppRegistry()
         self.agent_name = None
@@ -512,6 +514,9 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying Prometheus…")
         self.prometheus.deploy()
 
+        self.logger.info("[DEPLOY] Deploying Jaeger…")
+        self.jaeger.deploy()
+
         if self.config.deploy_loki:
             self.logger.info("[DEPLOY] Deploying Loki…")
             self.loki.deploy()
@@ -529,7 +534,7 @@ class Conductor:
             print("Setting up dm-flakey infrastructure for Silent Data Corruption fault injection...")
             self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
 
-        self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Loki")
+        self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki")
 
         # Capture cluster baseline state after infrastructure is deployed but before app deployment
         # This allows us to reset the cluster to a clean state after each problem
