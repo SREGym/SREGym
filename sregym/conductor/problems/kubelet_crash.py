@@ -18,6 +18,8 @@ class KubeletCrash(Problem):
 
         self.root_cause = "The kubelet daemon on a node has crashed, preventing pod scheduling, updates, and management on that node, causing services to become unavailable or stuck."
 
+        # FIXME: include diagnosis and mitigation oracles
+
         # note from JC after talking to Bohan:
         # We could consider adding an oracle later, but it's not trivial where diagnosis should go
         # Same with mitigation, this is done with a script to kill the kubelet daemon.
