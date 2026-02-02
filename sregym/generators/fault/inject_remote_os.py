@@ -34,7 +34,8 @@ done
 class RemoteOSFaultInjector(FaultInjector):
     def __init__(self):
         self.kubectl = KubeCtl()
-    
+
+    # FIXME: this checking is too brittle.
     def check_remote_host(self):
         # kubectl get nodes -o json, if  (kind-worker) is in the nodes, return False
         cmd = "kubectl get nodes"
