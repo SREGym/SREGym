@@ -453,7 +453,12 @@ class Conductor:
 
         self.logger.info("[FIX] KubeletCrash leftover if any")
         injector = RemoteOSFaultInjector()
-        injector.recover_kubelet_crash()
+        # Only attempt SSH recovery if we detect NotReady nodes
+        if injector.check_kubelet_fault_active():
+            self.logger.info("Detected NotReady nodes - attempting kubelet recovery")
+            injector.recover_kubelet_crash()
+        else:
+            self.logger.info("All nodes are Ready - skipping kubelet recovery")
 
         self.logger.info("[FIX] Stale CoreDNS NXDOMAIN templates if any")
         injector = VirtualizationFaultInjector(namespace="kube-system")

@@ -120,6 +120,47 @@ class RemoteOSFaultInjector(FaultInjector):
                 return
         return
     
+    def check_kubelet_fault_active(self) -> bool:
+        """
+        Check if kubelet fault is likely active by examining node conditions.
+        Returns True if we detect signs of kubelet crash (nodes NotReady).
+
+        This avoids SSH connections by using only the Kubernetes API.
+        """
+        if not self.check_remote_host():
+            # Kind cluster - no kubelet crash possible
+            return False
+
+        try:
+            nodes = self.kubectl.core_v1_api.list_node()
+
+            # Check if any worker nodes are NotReady
+            for node in nodes.items:
+                # Skip master/control-plane nodes
+                if "node-role.kubernetes.io/control-plane" in node.metadata.labels:
+                    continue
+                if "node-role.kubernetes.io/master" in node.metadata.labels:
+                    continue
+
+                # Check node conditions
+                for condition in node.status.conditions:
+                    if condition.type == "Ready":
+                        if condition.status != "True":
+                            # Node is not ready - likely kubelet issue
+                            print(
+                                f"Node {node.metadata.name} is NotReady - "
+                                f"reason: {condition.reason}, message: {condition.message}"
+                            )
+                            return True
+
+            # All nodes are Ready - no kubelet crash detected
+            return False
+
+        except Exception as e:
+            print(f"Failed to check node conditions: {e}")
+            # If we can't check, assume no fault (safer than attempting SSH)
+            return False
+
     def recover_kubelet_crash(self):
         if not self.check_remote_host():
             print("No need to clean up.")
