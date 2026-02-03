@@ -1,11 +1,9 @@
 """Interface to the OpenTelemetry Astronomy Shop application"""
 
 import json
-import time
-from typing import Any, Dict
+from typing import Any
 
 from sregym.generators.workload.locust import LocustWorkloadManager
-from sregym.observer.trace_api import TraceAPI
 from sregym.paths import ASTRONOMY_SHOP_METADATA
 from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
@@ -23,7 +21,6 @@ class AstronomyShop(Application):
         super().__init__(ASTRONOMY_SHOP_METADATA)
         self.load_app_json()
         self.kubectl = KubeCtl()
-        self.trace_api = None
         self.create_namespace()
 
     def load_app_json(self):
@@ -55,30 +52,22 @@ class AstronomyShop(Application):
 
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
-        self.trace_api = TraceAPI(self.namespace)
-        self.trace_api.start_port_forward()
 
-    def _read_flagd_config(self) -> Dict[str, Any]:
+    def _read_flagd_config(self) -> dict[str, Any]:
         """
         Returns contents of demo.flagd.json from the flagd config map.
         """
-        raw = self.kubectl.exec_command(
-            f"kubectl get configmap {self._FLAGD_CONFIGMAP} -n {self.namespace} -o json"
-        )
+        raw = self.kubectl.exec_command(f"kubectl get configmap {self._FLAGD_CONFIGMAP} -n {self.namespace} -o json")
         configmap = json.loads(raw)
         return json.loads(configmap["data"][self._FLAGD_CONFIG_KEY])
 
-    def _write_flagd_config(self, config: Dict[str, Any]) -> None:
+    def _write_flagd_config(self, config: dict[str, Any]) -> None:
         """
         Writes demo.flagd.json to the flagd config map and restarts flagd.
         """
         updated_data = {self._FLAGD_CONFIG_KEY: json.dumps(config, indent=2)}
-        self.kubectl.create_or_update_configmap(
-            self._FLAGD_CONFIGMAP, self.namespace, updated_data
-        )
-        self.kubectl.exec_command(
-            f"kubectl rollout restart deployment/{self._FLAGD_DEPLOYMENT} -n {self.namespace}"
-        )
+        self.kubectl.create_or_update_configmap(self._FLAGD_CONFIGMAP, self.namespace, updated_data)
+        self.kubectl.exec_command(f"kubectl rollout restart deployment/{self._FLAGD_DEPLOYMENT} -n {self.namespace}")
         # Avoid racy executions where ConfigMap is updated but the flagd pod is reloading
         self.kubectl.exec_command(
             f"kubectl rollout status deployment/{self._FLAGD_DEPLOYMENT} -n {self.namespace} --timeout=60s"
@@ -93,9 +82,7 @@ class AstronomyShop(Application):
         try:
             flag = config["flags"][flag_name]
         except KeyError as e:
-            raise ValueError(
-                f"Feature flag '{flag_name}' not found in flagd config."
-            ) from e
+            raise ValueError(f"Feature flag '{flag_name}' not found in flagd config.") from e
 
         desired = self._VARIANT_ON if enabled else self._VARIANT_OFF
         if flag.get("defaultVariant") == desired:
@@ -114,9 +101,7 @@ class AstronomyShop(Application):
             flag = config["flags"][flag_name]
             return flag.get("defaultVariant") == self._VARIANT_ON
         except KeyError as e:
-            raise ValueError(
-                f"Feature flag '{flag_name}' not found in flagd config."
-            ) from e
+            raise ValueError(f"Feature flag '{flag_name}' not found in flagd config.") from e
 
     def delete(self):
         """Delete the Helm configurations."""
@@ -125,8 +110,6 @@ class AstronomyShop(Application):
         self.kubectl.wait_for_namespace_deletion(self.namespace)
 
     def cleanup(self):
-        if self.trace_api:
-            self.trace_api.stop_port_forward()
         Helm.uninstall(**self.helm_configs)
         self.kubectl.delete_namespace(self.helm_configs["namespace"])
 
