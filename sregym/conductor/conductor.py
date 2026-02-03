@@ -15,6 +15,7 @@ from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
+from sregym.paths import MCP_SERVER_K8S
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_dust_manager import DmDustManager
@@ -522,6 +523,10 @@ class Conductor:
             self.loki.deploy()
         else:
             self.logger.info("[DEPLOY] Skipping Loki deployment (external harness mode)")
+
+        self.logger.info("[DEPLOY] Deploying MCP server…")
+        self.kubectl.exec_command(f"kubectl apply -k {MCP_SERVER_K8S}")
+        self.kubectl.wait_for_ready("sregym")
 
         # Set up fault injection infrastructure based on problem type
         # Only one can be active at /var/openebs/local at a time

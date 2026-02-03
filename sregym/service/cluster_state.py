@@ -25,6 +25,7 @@ PROTECTED_NAMESPACES = frozenset(
         # Infrastructure namespaces managed by the benchmark
         "openebs",
         "observe",  # Prometheus namespace
+        "sregym",  # MCP server namespace
         "khaos",
     }
 )
