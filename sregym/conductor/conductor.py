@@ -547,6 +547,9 @@ class Conductor:
         problem.app.deploy()
         self.logger.info(f"[ENV] Deploy application: {problem.app.name}")
 
+        self.logger.info("[DEPLOY] Redirecting app Jaeger to observe namespace…")
+        self.jaeger.create_external_name_service(problem.app.namespace)
+
         problem.app.start_workload()
         self.logger.info("[ENV] Start workload")
 
