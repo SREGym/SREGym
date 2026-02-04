@@ -109,13 +109,12 @@ def wait_for_ready_stage(timeout: int = 300) -> str:
     raise TimeoutError(f"Conductor did not reach ready stage within {timeout} seconds")
 
 
-def build_instruction(app_info: dict, problem_id: str) -> str:
+def build_instruction(app_info: dict) -> str:
     """
     Build the instruction string for OpenCode.
 
     Args:
         app_info: Application information from conductor
-        problem_id: Problem identifier
 
     Returns:
         Instruction string to pass to OpenCode
@@ -128,7 +127,6 @@ def build_instruction(app_info: dict, problem_id: str) -> str:
 
 Application: {app_name}
 Namespace: {namespace}
-Problem ID: {problem_id}
 
 {descriptions}
 
@@ -247,7 +245,7 @@ def main():
         sys.exit(1)
 
     # Build instruction
-    instruction = build_instruction(app_info, problem_id)
+    instruction = build_instruction(app_info)
 
     # Initialize OpenCode agent
     logs_dir = Path(args.logs_dir)

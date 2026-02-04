@@ -86,7 +86,7 @@ def wait_for_ready_stage(timeout: int = 300) -> str:
     allowed_stages = {"diagnosis", "mitigation"}
     start_time = time.time()
 
-    logger.info(f"Waiting for conductor to reach submission-ready stage...")
+    logger.info("Waiting for conductor to reach submission-ready stage...")
 
     while time.time() - start_time < timeout:
         try:
@@ -109,13 +109,12 @@ def wait_for_ready_stage(timeout: int = 300) -> str:
     raise TimeoutError(f"Conductor did not reach ready stage within {timeout} seconds")
 
 
-def build_instruction(app_info: dict, problem_id: str) -> str:
+def build_instruction(app_info: dict) -> str:
     """
     Build the instruction string for Codex.
 
     Args:
         app_info: Application information from conductor
-        problem_id: Problem identifier
 
     Returns:
         Instruction string to pass to Codex
@@ -129,7 +128,6 @@ def build_instruction(app_info: dict, problem_id: str) -> str:
 
 Application: {app_name}
 Namespace: {namespace}
-Problem ID: {problem_id}
 
 {descriptions}
 
@@ -262,7 +260,7 @@ def main():
         sys.exit(1)
 
     # Build instruction
-    instruction = build_instruction(app_info, problem_id)
+    instruction = build_instruction(app_info)
 
     # Initialize Codex agent
     logs_dir = Path(args.logs_dir)
