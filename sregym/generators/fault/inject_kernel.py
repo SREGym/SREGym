@@ -1,7 +1,7 @@
 import json
 import shlex
 import subprocess
-from typing import Dict, Iterable, Optional, Tuple
+from collections.abc import Iterable
 
 from sregym.service.kubectl import KubeCtl
 
@@ -48,14 +48,12 @@ class KernelInjector:
         kf.set_fail_nth(node, pid=1234, nth=10)  # the task's 10th faultable call fails
     """
 
-    def __init__(
-        self, kubectl: KubeCtl, khaos_ns: str = DEFAULT_KHAOS_NS, khaos_label: str = DEFAULT_KHAOS_LABEL
-    ):
+    def __init__(self, kubectl: KubeCtl, khaos_ns: str = DEFAULT_KHAOS_NS, khaos_label: str = DEFAULT_KHAOS_LABEL):
         self.kubectl = kubectl
         self.khaos_ns = khaos_ns
         self.khaos_label = khaos_label
-        self._pod_cache: Dict[str, str] = {}  # Cache pod names by node
-        self.recovery_data: Optional[Dict[str, str]] = None
+        self._pod_cache: dict[str, str] = {}  # Cache pod names by node
+        self.recovery_data: dict[str, str] | None = None
 
     # ---------- Public API ----------
 
@@ -69,7 +67,7 @@ class KernelInjector:
         times: int = -1,
         space: int = 0,
         verbose: int = 1,
-        extra: Optional[Dict[str, str]] = None,
+        extra: dict[str, str] | None = None,
     ) -> None:
         """Enable a fault capability (e.g., fail_page_alloc) with the given knobs."""
         pod = self._get_khaos_pod_on_node(node)
@@ -161,7 +159,7 @@ class KernelInjector:
         cmd = f"kubectl -n {shlex.quote(self.khaos_ns)} get pods -l {shlex.quote(self.khaos_label)} -o json"
         out = self.kubectl.exec_command(cmd)
         if not out:
-            raise RuntimeError(f"Failed to get pods: empty response")
+            raise RuntimeError("Failed to get pods: empty response")
 
         data = json.loads(out)
         for item in data.get("items", []):
@@ -179,8 +177,7 @@ class KernelInjector:
         path = FAULT_CAPS[cap]
         if not self._exists(pod, path):
             raise RuntimeError(
-                f"Capability path not found in pod {pod}: {path}. "
-                f"Is debugfs mounted and the kernel built with {cap}?"
+                f"Capability path not found in pod {pod}: {path}. Is debugfs mounted and the kernel built with {cap}?"
             )
         return path
 
@@ -215,7 +212,7 @@ class KernelInjector:
             "-lc",
             f"printf %s {shlex.quote(value)} > {shlex.quote(path)} 2>/dev/null || true",
         ]
-        rc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        rc = subprocess.run(cmd, capture_output=True, text=True)
         if must_exist and rc.returncode != 0:
             raise RuntimeError(f"Failed to write '{value}' to {path} in {pod}: rc={rc.returncode}, err={rc.stderr}")
 
@@ -250,7 +247,7 @@ class KernelInjector:
         out = self.kubectl.exec_command(" ".join(shlex.quote(x) for x in cmd))
         return out or ""
 
-    def _exec_with_nsenter_mount(self, node: str, script: str, check: bool = True) -> Tuple[int, str, str]:
+    def _exec_with_nsenter_mount(self, node: str, script: str, check: bool = True) -> tuple[int, str, str]:
         """Execute a script using nsenter with mount namespace, returns (returncode, stdout, stderr)."""
         pod = self._get_khaos_pod_on_node(node)
         cmd = [
@@ -266,7 +263,7 @@ class KernelInjector:
             "-lc",
             script,
         ]
-        rc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        rc = subprocess.run(cmd, capture_output=True, text=True)
         if check and rc.returncode != 0:
             raise RuntimeError(
                 f"Command failed on node {node}: rc={rc.returncode}, stdout={rc.stdout}, stderr={rc.stderr}"
@@ -333,15 +330,12 @@ dmsetup create {name_q} --table "0 $SECTORS flakey {dev_q} {int(offset_sectors)}
         down_interval: int,
         features: str = "",
         offset_sectors: int = 0,
-        num_features: Optional[int] = None,
+        num_features: int | None = None,
     ) -> None:
         """Reload a flakey device with new parameters."""
         name_q = shlex.quote(name)
         if features:
-            if num_features is None:
-                count = len(features.split())
-            else:
-                count = num_features
+            count = len(features.split()) if num_features is None else num_features
             feat_tail = f" {count} {features}"
         else:
             feat_tail = ""
@@ -488,7 +482,7 @@ dmsetup remove {shlex.quote(dm_name)} 2>/dev/null || true
         up_s: int = 10,
         down_s: int = 5,
         features: str = "",
-        dev: Optional[str] = None,
+        dev: str | None = None,
         name: str = DEFAULT_DM_FLAKEY_NAME,
         size_gb: int = DEFAULT_SIZE_GB,
     ) -> str:
@@ -516,8 +510,8 @@ dmsetup remove {shlex.quote(dm_name)} 2>/dev/null || true
     def inject_badblocks(
         self,
         node: str,
-        blocks: Optional[list[int]] = None,
-        dev: Optional[str] = None,
+        blocks: list[int] | None = None,
+        dev: str | None = None,
         name: str = DEFAULT_DM_DUST_NAME,
         blksz: int = DEFAULT_BLOCK_SIZE,
         size_gb: int = DEFAULT_SIZE_GB,
@@ -550,7 +544,7 @@ dmsetup remove {shlex.quote(dm_name)} 2>/dev/null || true
 
     # ---------- LSE (Latent Sector Error) injection ----------
 
-    def _get_pvc_info(self, pvc_name: str, namespace: str) -> Dict[str, str]:
+    def _get_pvc_info(self, pvc_name: str, namespace: str) -> dict[str, str]:
         """Get PVC information including PV details."""
         out = self.kubectl.exec_command(f"kubectl -n {namespace} get pvc {pvc_name} -o json")
         if not out:
@@ -617,13 +611,10 @@ echo 'dm-dust device created successfully'
 dmsetup info {DEFAULT_DM_LSE_NAME}
 """
         rc, stdout, stderr = self._exec_with_nsenter_mount(node, script, check=True)
-        print(f"[DEBUG] Command output: {stdout}")
         if stderr:
             print(f"[DEBUG] Command stderr: {stderr}")
 
-    def _generate_pv_yaml(
-        self, pv_name: str, capacity: str, storage_class: str, local_path: str, node: str
-    ) -> str:
+    def _generate_pv_yaml(self, pv_name: str, capacity: str, storage_class: str, local_path: str, node: str) -> str:
         """Generate PersistentVolume YAML."""
         return f"""apiVersion: v1
 kind: PersistentVolume
@@ -680,7 +671,7 @@ spec:
             "--for=condition=Bound",
             f"--timeout={PVC_BOUND_TIMEOUT}",
         ]
-        rc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        rc = subprocess.run(cmd, capture_output=True, text=True)
         if rc.returncode != 0:
             raise RuntimeError(f"PVC {pvc_name} did not become Bound: rc={rc.returncode}, err={rc.stderr}")
 
@@ -762,7 +753,7 @@ spec:
         print(f"[KernelInjector] PVC {pvc_name} restored to healthy device")
         self.recovery_data = None
 
-    def drop_caches(self, node: str, show_log:bool = True) -> None:
+    def drop_caches(self, node: str, show_log: bool = True) -> None:
         """
         Drop page cache, dentries, and inodes on the target node.
         This forces the application to read from the disk, hitting the bad blocks.
