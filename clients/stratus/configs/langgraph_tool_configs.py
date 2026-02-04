@@ -22,7 +22,7 @@ class LanggraphToolConfig(BaseModel):
     )
     submit_mcp_url: str = Field(
         description="url for submit mcp server",
-        default=f"http://localhost:{os.getenv('MCP_SERVER_PORT', '9954')}/submit/sse",
+        default=f"http://localhost:{os.getenv('API_PORT', '8000')}/submit_mcp/sse",
     )
     benchmark_submit_url: str = Field(
         description="url for the submission result destination, default to http://localhost:8000/submit",

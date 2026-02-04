@@ -10,7 +10,6 @@ from mcp_server.jaeger_server import mcp as observability_mcp
 from mcp_server.kubectl_mcp_tools import kubectl_mcp
 from mcp_server.loki_server import mcp as loki_mcp
 from mcp_server.prometheus_server import mcp as prometheus_mcp
-from mcp_server.submit_server import mcp as submit_mcp
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -21,7 +20,6 @@ app = Starlette(
         Mount("/jaeger", app=create_sse_app(observability_mcp, "/messages/", "/sse")),
         Mount("/loki", app=create_sse_app(loki_mcp, "/messages/", "/sse")),
         Mount("/prometheus", app=create_sse_app(prometheus_mcp, "/messages/", "/sse")),
-        Mount("/submit", app=create_sse_app(submit_mcp, "/messages/", "/sse")),
     ]
 )
 
