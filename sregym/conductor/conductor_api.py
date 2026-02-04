@@ -151,7 +151,13 @@ def run_api(conductor):
         )
     )
 
-    config = Config(app=app, host=host, port=port, log_level="info")
+    config = Config(
+        app=app,
+        host=host,
+        port=port,
+        log_level="info",
+        timeout_graceful_shutdown=5,
+    )
     config.install_signal_handlers = False
     server = Server(config)
     _server = server  # expose to request_shutdown()
