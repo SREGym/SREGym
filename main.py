@@ -313,8 +313,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o",
-        help="Run only a specific model backend (e.g., 'gpt-4o', 'gemini-2.5-pro', 'claude-sonnet-4', 'moonshot')",
+        default="gpt-5-nano",
+        help="Run only a specific model backend (e.g., 'gpt-5', 'gemini-2.5-pro', 'claude-sonnet-4', 'moonshot')",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
