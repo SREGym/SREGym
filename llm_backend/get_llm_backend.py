@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import litellm
 import openai
@@ -32,15 +32,15 @@ class LiteLLMBackend:
         self,
         provider: str,
         model_name: str,
-        api_key: Optional[str] = None,
-        url: Optional[str] = None,
-        top_p: Optional[float] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        seed: Optional[int] = None,
-        wx_project_id: Optional[str] = None,
-        azure_version: Optional[str] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
+        api_key: str | None = None,
+        url: str | None = None,
+        top_p: float | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        seed: int | None = None,
+        wx_project_id: str | None = None,
+        azure_version: str | None = None,
+        extra_headers: dict[str, str] | None = None,
     ):
         self.provider = provider
         self.model_name = model_name
@@ -59,8 +59,8 @@ class LiteLLMBackend:
     def inference(
         self,
         messages: str | list[SystemMessage | HumanMessage | AIMessage],
-        system_prompt: Optional[str] = None,
-        tools: Optional[list[any]] = None,
+        system_prompt: str | None = None,
+        tools: list[any] | None = None,
     ):
         if isinstance(messages, str):
             # logger.info(f"NL input as str received: {messages}")
@@ -173,7 +173,7 @@ class LiteLLMBackend:
                     f"Last few messages: {prompt_messages[-3:] if len(prompt_messages) >= 3 else prompt_messages}"
                 )
                 raise
-            except (openai.RateLimitError, HTTPError) as e:
+            except (openai.RateLimitError, HTTPError):
                 # Rate-limiting errors - retry with exponential backoff
                 logger.warning(
                     f"Rate-limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
@@ -226,7 +226,7 @@ class LiteLLMBackend:
         raise RuntimeError("Max retries exceeded. Unable to complete the request.")
 
 
-def _parse_duration_to_seconds(duration: Any) -> Optional[float]:
+def _parse_duration_to_seconds(duration: Any) -> float | None:
     """Convert duration to seconds.
 
     Supports:
@@ -254,7 +254,7 @@ def _parse_duration_to_seconds(duration: Any) -> Optional[float]:
     return None
 
 
-def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> Optional[float]:
+def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> float | None:
     """Extract retry delay seconds from JSON details RetryInfo only.
 
     Returns 60.0 if no RetryInfo found in error details.
@@ -302,7 +302,7 @@ def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> Optional[
     except Exception:
         pass
 
-    def find_retry_delay(data: Any) -> Optional[float]:
+    def find_retry_delay(data: Any) -> float | None:
         if data is None:
             return None
         if isinstance(data, dict):

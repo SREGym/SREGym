@@ -46,14 +46,16 @@ def set_param(params, config, field, default_value, required=False):
 def get_llm_backend_for_tools():
     llm_config = load_model_config()
 
-    MODEL_ID = os.environ.get("MODEL_ID", "gpt-4o")
-    print("Found MODEL_ID: ", MODEL_ID)
+    JUDGE_MODEL_ID = os.environ.get("JUDGE_MODEL_ID", "gpt-5")
+    print("Found MODEL_ID for judge: ", JUDGE_MODEL_ID)
 
-    if MODEL_ID not in llm_config:
-        error_msg = f"Unable to find model configuration - {MODEL_ID}. Available models: {[key for key in llm_config.keys()]}"
+    if JUDGE_MODEL_ID not in llm_config:
+        error_msg = (
+            f"Unable to find model configuration - {JUDGE_MODEL_ID}. Available models: {list(llm_config.keys())}"
+        )
         print(error_msg)
         raise ValueError(error_msg)
-    model_config = llm_config[MODEL_ID]
+    model_config = llm_config[JUDGE_MODEL_ID]
 
     if model_config["provider"] == "litellm":
         config_params = {
