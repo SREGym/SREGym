@@ -17,3 +17,7 @@ agents:
     kickoff_command: python -m clients.claudecode.driver
     kickoff_workdir: .
     kickoff_env: null
+  - name: "debug"
+    kickoff_command: "python -c \"import signal; signal.pause()\""
+    kickoff_workdir: .
+    kickoff_env: null
