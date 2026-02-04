@@ -59,7 +59,7 @@ rules:
       - networkpolicies
     verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
 
-  # RBAC (read-only for localization tool)
+  # RBAC (read-only)
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources:
       - clusterroles

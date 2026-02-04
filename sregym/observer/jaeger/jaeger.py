@@ -26,12 +26,10 @@ class Jaeger:
 
     def wait_for_service(self, service: str, timeout: int = 60):
         """Wait until the Jaeger service exists in Kubernetes."""
-        print(f"[debug] waiting for service {service} in ns={self.namespace}")
         t0 = time.time()
         while time.time() - t0 < timeout:
             try:
                 self.run_cmd(f"kubectl -n {self.namespace} get svc {service}")
-                print(f"[debug] found service {service}")
                 return
             except Exception:
                 time.sleep(3)
