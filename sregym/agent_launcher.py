@@ -2,8 +2,7 @@ import os
 import subprocess
 import sys
 import threading
-from datetime import datetime
-from typing import Dict, Optional
+from datetime import UTC, datetime
 
 from .agent_registry import AgentRegistration
 
@@ -12,22 +11,22 @@ class AgentProcess:
     def __init__(self, name: str, proc: subprocess.Popen):
         self.name = name
         self.proc = proc
-        self.started_at = datetime.utcnow()
+        self.started_at = datetime.now(UTC)
 
 
 class AgentLauncher:
     def __init__(self):
-        self._procs: Dict[str, AgentProcess] = {}
-        self._agent_kubeconfig_path: Optional[str] = None
+        self._procs: dict[str, AgentProcess] = {}
+        self._agent_kubeconfig_path: str | None = None
 
-    def set_agent_kubeconfig(self, kubeconfig_path: Optional[str]):
+    def set_agent_kubeconfig(self, kubeconfig_path: str | None):
         """
         Set the kubeconfig path that agents should use.
         This is typically the filtered kubeconfig from the K8s proxy.
         """
         self._agent_kubeconfig_path = kubeconfig_path
 
-    async def ensure_started(self, reg: AgentRegistration) -> Optional[AgentProcess]:
+    async def ensure_started(self, reg: AgentRegistration) -> AgentProcess | None:
         if not reg or not reg.kickoff_command:
             return None
         existing = self._procs.get(reg.name)

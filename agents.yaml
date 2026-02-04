@@ -17,3 +17,11 @@ agents:
     kickoff_command: python -m clients.claudecode.driver
     kickoff_workdir: .
     kickoff_env: null
+  - name: gemini
+    kickoff_command: python -m clients.geminicli.driver
+    kickoff_workdir: .
+    kickoff_env: null
+  - name: opencode
+    kickoff_command: python -m clients.opencode.driver
+    kickoff_workdir: .
+    kickoff_env: null
