@@ -116,9 +116,9 @@ server:
   # If releaseNamespace and namespaces are both set a merged list will be monitored.
   releaseNamespace: false
 
-  ## namespaces to monitor (instead of monitoring all - clusterwide). Needed if you want to run without Cluster-admin privileges.
+  # namespaces to monitor (instead of monitoring all - clusterwide). Needed if you want to run without Cluster-admin privileges.
   # namespaces:
-  #   - yournamespace
+  #   - astronomy-shop
 
   # sidecarContainers - add more containers to prometheus server
   # Key/Value where Key is the sidecar `- name: <Key>`
@@ -709,7 +709,19 @@ scrapeConfigFiles: []
 serverFiles:
   ## Alerts configuration
   ## Ref: https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
-  alerting_rules.yml: {}
+  alerting_rules.yml:
+      groups:
+        - name: opentelemetrydemo.workloads
+          rules:
+            - alert: PodStatusError
+              expr: |
+                sum by (namespace, pod, reason) (kube_pod_container_status_waiting_reason > 0)
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Pod startup failure: {{ $labels.pod }}"
+                description: "The pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is stuck in {{ $labels.reason }}. Current failed container count: {{ $value }}."
   # groups:
   #   - name: Instances
   #     rules:
@@ -739,11 +751,20 @@ serverFiles:
       - /etc/config/alerts
 
     scrape_configs:
+      - job_name: 'kube-state-metrics'
+        kubernetes_sd_configs:
+          - role: endpoints
+        relabel_configs:
+          # Only scrape the service named 'prometheus-kube-state-metrics'
+          # (Note: Check your actual service name; it might just be 'kube-state-metrics')
+          - source_labels: [__meta_kubernetes_endpoints_name]
+            action: keep
+            regex: .*kube-state-metrics.*
       - job_name: prometheus
         static_configs:
           - targets:
             - localhost:9090
-      
+
       - job_name: 'kubernetes-cadvisor'
 
         # Default to scraping over https. If required, just disable this or change to
@@ -847,7 +868,7 @@ extraManifests: []
 alertmanager:
   ## If false, alertmanager will not be installed
   ##
-  enabled: false
+  enabled: true
 
   persistence:
     size: 2Gi

@@ -46,7 +46,13 @@ class LLMJudge:
     def backend(self):
         """Lazily initialize the LLM backend only when needed."""
         if self._backend is None:
-            self._backend = get_llm_backend_for_tools()
+            try:
+                self._backend = get_llm_backend_for_tools()
+            except (SystemExit, Exception) as e:
+                # Catch both SystemExit (from exit(1) calls) and other exceptions
+                print(f"Warning: Failed to initialize LLM backend for judge: {e}")
+                print("Returning None - evaluation will be skipped")
+                return None
         return self._backend
 
     def judge(self, solution: str, expectation: str) -> tuple[JudgmentResult, str]:
@@ -55,7 +61,14 @@ class LLMJudge:
 
         Returns:
             tuple[JudgmentResult, str]: A tuple of (judgment, reasoning)
+            Returns (None, error_message) if backend is not initialized
         """
+        # Check if backend is initialized
+        if self.backend is None:
+            error_msg = "LLM judge backend is not initialized - skipping evaluation"
+            print(f"Warning: {error_msg}")
+            return None, error_msg
+
         system_prompt = """You are an expert judge evaluating whether an agent's diagnosis of a system issue matches the expected root cause.
 
 Your task is to compare the agent's answer with the expected root cause and determine if they are semantically equivalent.

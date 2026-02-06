@@ -239,6 +239,10 @@ def main(args):
     config = ConductorConfig(deploy_loki=not args.use_external_harness)
     conductor = Conductor(config=config)
 
+    # If ran with 3rd party agent, check if they are installed
+    if args.agent and args.agent not in ["stratus", "autosubmit"]:
+        conductor.dependency_check([args.agent])
+
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,

@@ -1,6 +1,6 @@
 """
-Codex agent driver for SREGym.
-Entry point for running Codex agent on SREGym tasks.
+OpenCode agent driver for SREGym.
+Entry point for running OpenCode agent on SREGym tasks.
 """
 
 import argparse
@@ -22,9 +22,9 @@ from logger import init_logger
 
 init_logger()
 
-from clients.codex.codex_agent import CodexAgent
+from clients.opencode.opencode_agent import OpenCodeAgent
 
-logger = logging.getLogger("all.codex.driver")
+logger = logging.getLogger("all.opencode.driver")
 
 
 def get_api_base_url() -> str:
@@ -111,19 +111,18 @@ def wait_for_ready_stage(timeout: int = 300) -> str:
 
 def build_instruction(app_info: dict) -> str:
     """
-    Build the instruction string for Codex.
+    Build the instruction string for OpenCode.
 
     Args:
         app_info: Application information from conductor
 
     Returns:
-        Instruction string to pass to Codex
+        Instruction string to pass to OpenCode
     """
     app_name = app_info.get("app_name", "unknown")
     namespace = app_info.get("namespace", "default")
     descriptions = app_info.get("descriptions", "")
 
-    # Build instruction similar to how it would be done in Harbor
     instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
 
 Application: {app_name}
@@ -175,17 +174,9 @@ def save_results(
     return_code: int,
     usage_metrics: dict,
 ) -> None:
-    """
-    Save run results to JSON file.
-
-    Args:
-        logs_dir: Directory containing logs
-        problem_id: Problem identifier
-        return_code: Codex return code
-        usage_metrics: Token usage metrics
-    """
+    """Save run results to JSON file."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = logs_dir / f"codex_results_{problem_id}_{timestamp}.json"
+    results_file = logs_dir / f"opencode_results_{problem_id}_{timestamp}.json"
 
     results = {
         "problem_id": problem_id,
@@ -202,45 +193,39 @@ def save_results(
 
 
 def main():
-    """Main entry point for Codex agent driver."""
-    parser = argparse.ArgumentParser(description="Run Codex agent on SREGym tasks")
+    """Main entry point for OpenCode agent driver."""
+    parser = argparse.ArgumentParser(description="Run OpenCode agent on SREGym tasks")
     parser.add_argument(
         "--model",
         type=str,
-        default=os.getenv("MODEL_ID", "claude-sonnet-4-5"),
-        help="Model to use for Codex (default: from MODEL_ID env var or claude-sonnet-4-5)",
+        default=os.getenv("MODEL_ID", "anthropic/claude-sonnet-4-5"),
+        help="Model to use in format 'provider/model' (default: from MODEL_ID env var or anthropic/claude-sonnet-4-5)",
     )
     parser.add_argument(
         "--logs-dir",
         type=str,
-        default="./logs/codex",
-        help="Directory to store logs (default: ./logs/codex)",
-    )
-    parser.add_argument(
-        "--codex-home",
-        type=str,
-        default=None,
-        help="Codex home directory (default: same as logs-dir)",
+        default="./logs/opencode",
+        help="Directory to store logs (default: ./logs/opencode)",
     )
     parser.add_argument(
         "--no-auto-install",
         action="store_true",
-        help="Disable auto-installation of Codex CLI if not found",
+        help="Disable auto-installation of OpenCode CLI if not found",
     )
 
     args = parser.parse_args()
 
     logger.info("=" * 80)
-    logger.info("Starting Codex agent for SREGym")
+    logger.info("Starting OpenCode agent for SREGym")
     logger.info(f"Model: {args.model}")
     logger.info(f"Logs directory: {args.logs_dir}")
     logger.info("=" * 80)
 
-    # Check if Codex CLI is installed
+    # Check if OpenCode CLI is installed
     try:
-        CodexAgent.ensure_installed(auto_install=not args.no_auto_install)
+        OpenCodeAgent.ensure_installed(auto_install=not args.no_auto_install)
     except RuntimeError as e:
-        logger.error(f"Codex CLI installation check failed: {e}")
+        logger.error(f"OpenCode CLI installation check failed: {e}")
         sys.exit(1)
 
     # Wait for conductor to be ready
@@ -262,18 +247,16 @@ def main():
     # Build instruction
     instruction = build_instruction(app_info)
 
-    # Initialize Codex agent
+    # Initialize OpenCode agent
     logs_dir = Path(args.logs_dir)
-    codex_home = Path(args.codex_home) if args.codex_home else None
 
-    agent = CodexAgent(
+    agent = OpenCodeAgent(
         logs_dir=logs_dir,
         model_name=args.model,
-        codex_home=codex_home,
     )
 
-    # Run Codex
-    logger.info("Starting Codex execution...")
+    # Run OpenCode
+    logger.info("Starting OpenCode execution...")
     return_code = agent.run(instruction)
 
     # Get usage metrics
@@ -284,7 +267,7 @@ def main():
 
     # Log summary
     logger.info("=" * 80)
-    logger.info("Codex execution completed")
+    logger.info("OpenCode execution completed")
     logger.info(f"Return code: {return_code}")
     logger.info(f"Usage metrics: {usage_metrics}")
     logger.info("=" * 80)
