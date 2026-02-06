@@ -1,0 +1,31 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: InitConfiguration
+localAPIEndpoint:
+  advertiseAddress: "{{ resolved_control_plane_ip }}"
+nodeRegistration:
+  criSocket: "unix:///var/run/cri-dockerd.sock"
+---
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: v1.31.14
+networking:
+  podSubnet: "10.244.0.0/16"
+apiServer:
+  extraArgs:
+    - name: "audit-policy-file"
+      value: "/etc/kubernetes/audit-policy.yaml"
+    - name: "audit-log-path"
+      value: "/var/log/kubernetes/audit.log"
+    - name: "audit-log-maxsize"
+      value: "100"
+  extraVolumes:
+    - name: audit-policy
+      hostPath: /etc/kubernetes/audit-policy.yaml
+      mountPath: /etc/kubernetes/audit-policy.yaml
+      readOnly: true
+      pathType: File
+    - name: audit-log-dir
+      hostPath: /var/log/kubernetes
+      mountPath: /var/log/kubernetes
+      readOnly: false
+      pathType: DirectoryOrCreate
