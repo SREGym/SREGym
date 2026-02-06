@@ -230,6 +230,7 @@ kubeconfig.yaml
 
 CLAUDE.md
 .cursor/
+.kiro/
 
 # Ignore CodeQL database
 python-database

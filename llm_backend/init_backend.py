@@ -43,19 +43,20 @@ def set_param(params, config, field, default_value, required=False):
         # else do nothing
 
 
-def get_llm_backend_for_tools():
+def _get_llm_backend(model_id_env_var: str):
+    """Shared helper to initialize an LLM backend from env var."""
     llm_config = load_model_config()
 
-    JUDGE_MODEL_ID = os.environ.get("JUDGE_MODEL_ID", "gpt-5")
-    print("Found MODEL_ID for judge: ", JUDGE_MODEL_ID)
+    model_id = os.environ.get(model_id_env_var)
+    if not model_id:
+        raise ValueError(f"Environment variable {model_id_env_var} is not set.")
+    print(f"Found {model_id_env_var}: {model_id}")
 
-    if JUDGE_MODEL_ID not in llm_config:
-        error_msg = (
-            f"Unable to find model configuration - {JUDGE_MODEL_ID}. Available models: {list(llm_config.keys())}"
-        )
+    if model_id not in llm_config:
+        error_msg = f"Unable to find model configuration - {model_id}. Available models: {list(llm_config.keys())}"
         print(error_msg)
         raise ValueError(error_msg)
-    model_config = llm_config[JUDGE_MODEL_ID]
+    model_config = llm_config[model_id]
 
     if model_config["provider"] == "litellm":
         config_params = {
@@ -106,3 +107,18 @@ def get_llm_backend_for_tools():
 
     else:
         raise ValueError(f"Unsupported provider - {model_config['provider']}. Exiting...")
+
+
+def get_llm_backend_for_agent():
+    """Get LLM backend for agent tasks (diagnosis, mitigation, etc.)."""
+    return _get_llm_backend("AGENT_MODEL_ID")
+
+
+def get_llm_backend_for_judge():
+    """Get LLM backend for the LLM-as-a-judge evaluator."""
+    return _get_llm_backend("JUDGE_MODEL_ID")
+
+
+def get_llm_backend_for_tools():
+    """Deprecated: use get_llm_backend_for_agent() or get_llm_backend_for_judge()."""
+    return get_llm_backend_for_agent()

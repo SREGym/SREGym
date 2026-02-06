@@ -1,17 +1,15 @@
 """Official example mcp client from anthropic, source: https://gist.github.com/zckly/f3f28ea731e096e53b39b47bf0a2d4b1"""
 
 import asyncio
-import json
 import sys
 from contextlib import AsyncExitStack
-from typing import Optional
 
 from anthropic import Anthropic
 from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-from llm_backend.init_backend import get_llm_backend_for_tools
+from llm_backend.init_backend import get_llm_backend_for_agent
 
 load_dotenv()  # load environment variables from .env
 
@@ -19,7 +17,7 @@ load_dotenv()  # load environment variables from .env
 class MCPClient:
     def __init__(self):
         # Initialize session and client objects
-        self.session: Optional[ClientSession] = None
+        self.session: ClientSession | None = None
         self.exit_stack = AsyncExitStack()
         self.anthropic = Anthropic()
 
@@ -75,7 +73,7 @@ class MCPClient:
                 }
             )
 
-        llm = get_llm_backend_for_tools()
+        llm = get_llm_backend_for_agent()
         finish_reason, response_message = llm.inference(
             system_prompt="You are a helpful assistant",
             input=messages,

@@ -1,13 +1,11 @@
-import asyncio
 import logging
 from pathlib import Path
 
 import yaml
 
 from clients.stratus.stratus_agent.diagnosis_agent import DiagnosisAgent
-from clients.stratus.stratus_utils.get_starting_prompt import get_starting_prompts
 from clients.stratus.stratus_utils.str_to_tool import str_to_tool
-from llm_backend.init_backend import get_llm_backend_for_tools
+from llm_backend.init_backend import get_llm_backend_for_agent
 
 logger = logging.getLogger("all.stratus.localization")
 logger.propagate = True
@@ -17,7 +15,7 @@ logger.setLevel(logging.DEBUG)
 def build_default_localization_agent():
     file_parent_dir = Path(__file__).resolve().parent
     localization_agent_config_path = file_parent_dir.parent / "configs" / "localization_agent_config.yaml"
-    localization_agent_config = yaml.safe_load(open(localization_agent_config_path, "r"))
+    localization_agent_config = yaml.safe_load(open(localization_agent_config_path))
     max_step = localization_agent_config["max_step"]
     prompt_path = file_parent_dir.parent / "configs" / localization_agent_config["prompts_path"]
     sync_tools = []
@@ -59,7 +57,7 @@ def build_default_localization_agent():
     )
 
     agent = DiagnosisAgent(
-        llm=get_llm_backend_for_tools(),
+        llm=get_llm_backend_for_agent(),
         max_step=max_step,
         sync_tools=sync_tools,
         async_tools=async_tools,

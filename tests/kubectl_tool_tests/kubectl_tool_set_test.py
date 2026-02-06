@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 KUBECTL_TOOL_TEST_DIR = Path(__file__).resolve().parent
 PRECONDITIONS_FILE = KUBECTL_TOOL_TEST_DIR / "tests" / "preconditions.yaml"
-PRECONDITION_SETTINGS = yaml.safe_load(open(PRECONDITIONS_FILE, "r"))
+PRECONDITION_SETTINGS = yaml.safe_load(open(PRECONDITIONS_FILE))
 
 TEST_SETTINGS = [
     KUBECTL_TOOL_TEST_DIR / "tests" / "create_del_test.yaml",
@@ -41,9 +41,9 @@ def get_agent(is_mock):
     if is_mock:
         llm = None
     else:
-        from llm_backend.init_backend import get_llm_backend_for_tools
+        from llm_backend.init_backend import get_llm_backend_for_agent
 
-        llm = get_llm_backend_for_tools()
+        llm = get_llm_backend_for_agent()
 
     agent = NL2KubectlAgent(llm)
     agent.build_agent(mock=is_mock)
@@ -107,7 +107,7 @@ class TestKubectlTools:
         agent = get_agent(is_mock=True)
         logger.info(f"agent msg switch branch: {agent.test_tool_or_ai_response}")
         agent.test_campaign_setter(test_campaign_file)
-        test_campaign = yaml.safe_load(open(test_campaign_file, "r"))
+        test_campaign = yaml.safe_load(open(test_campaign_file))
 
         set_up_preconditions(test_campaign["preconditions"])
         running_test(test_campaign["test"], agent)

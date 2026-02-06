@@ -10,13 +10,7 @@ from mcp.client.sse import sse_client
 
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig
 from clients.stratus.stratus_utils.truncate_by_token import truncate_to_tokens
-from clients.stratus.tools.text_editing.flake8_utils import flake8, format_flake8_output  # type: ignore
-from clients.stratus.tools.text_editing.windowed_file import (  # type: ignore
-    FileNotOpened,
-    TextNotFound,
-    WindowedFile,
-)
-from llm_backend.init_backend import get_llm_backend_for_tools
+from llm_backend.init_backend import get_llm_backend_for_agent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -114,7 +108,7 @@ If you do not have enough data to determine root cause, state 'Insufficient data
 """
 
     # logger.info(f"raw metrics received: {metrics}")
-    llm = get_llm_backend_for_tools()
+    llm = get_llm_backend_for_agent()
     # then use this `llm` for inference
     messages = [
         SystemMessage(content=system_prompt),

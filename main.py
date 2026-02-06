@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 import uvicorn
+from dotenv import load_dotenv
 from rich.console import Console
 
 from logger import init_logger
@@ -21,6 +22,7 @@ from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 
+load_dotenv()
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
@@ -37,7 +39,7 @@ def driver_loop(
     problem_filter: str | None = None,
     agent_to_run: str | None = None,
     use_external_harness: bool = False,
-    n_attempts: int = 1
+    n_attempts: int = 1,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -220,7 +222,7 @@ def _run_driver_and_shutdown(
     problem_filter: str | None = None,
     agent_to_run: str | None = None,
     use_external_harness: bool = False,
-    n_attempts: int = 1
+    n_attempts: int = 1,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     results = driver_loop(
@@ -259,7 +261,14 @@ def main(args):
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
 
-    os.environ["MODEL_ID"] = args.model
+    # Resolve config: CLI arg > .env > hardcoded default
+    args.agent = args.agent or os.getenv("AGENT")
+    args.agent_model = args.agent_model or os.getenv("AGENT_MODEL_ID") or "gpt-4o"
+    args.judge_model = args.judge_model or os.getenv("JUDGE_MODEL_ID") or "gpt-5"
+
+    # Push resolved values to env so downstream code picks them up
+    os.environ["AGENT_MODEL_ID"] = args.agent_model
+    os.environ["JUDGE_MODEL_ID"] = args.judge_model
 
     config = ConductorConfig(deploy_loki=not args.use_external_harness)
     conductor = Conductor(config=config)
@@ -346,13 +355,21 @@ if __name__ == "__main__":
         "--agent",
         type=str,
         default=None,
-        help="Agent to run by its name (e.g., 'stratus')",
+        help="Agent to run (e.g., 'stratus'). Falls back to AGENT env var.",
     )
     parser.add_argument(
-        "--model",
+        "--agent-model",
         type=str,
-        default="gpt-4o",
-        help="Run only a specific model backend (e.g., 'gpt-4o', 'gemini-2.5-pro', 'claude-sonnet-4', 'moonshot')",
+        default=None,
+        dest="agent_model",
+        help="Model for the agent (e.g., 'gpt-4o'). Falls back to AGENT_MODEL_ID env var.",
+    )
+    parser.add_argument(
+        "--judge-model",
+        type=str,
+        default=None,
+        dest="judge_model",
+        help="Model for the LLM judge (e.g., 'gpt-5'). Falls back to JUDGE_MODEL_ID env var.",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
@@ -373,7 +390,7 @@ if __name__ == "__main__":
 
     # Validate that --agent is provided when not using external harness
     if not args.use_external_harness and args.agent is None:
-        parser.error("--agent is required when --use-external-harness is not set")
+        parser.error("--agent is required when --use-external-harness is not set. Set via CLI or AGENT env var.")
 
     # Validate that n_attempts is positive
     if args.n_attempts < 1:
