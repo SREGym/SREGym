@@ -548,12 +548,15 @@ class Conductor:
             self.cluster_state.capture_baseline()
             self._baseline_captured = True
 
+        # Create Jaeger ExternalName services BEFORE deploying the app.
+        self.kubectl.exec_command(
+            f"kubectl create namespace {problem.app.namespace} --dry-run=client -o yaml | kubectl apply -f -"
+        )
+        self.jaeger.create_external_name_service(problem.app.namespace)
+
         self.logger.info("[DEPLOY] Deploying and starting workload")
         problem.app.deploy()
         self.logger.info(f"[ENV] Deploy application: {problem.app.name}")
-
-        self.logger.info("[DEPLOY] Redirecting app Jaeger to observe namespace…")
-        self.jaeger.create_external_name_service(problem.app.namespace)
 
         problem.app.start_workload()
         self.logger.info("[ENV] Start workload")
