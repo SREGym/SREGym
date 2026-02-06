@@ -37,6 +37,10 @@ spec:
     name: tcp2
   - port: 14268
     name: tcp3
+  - port: 4317
+    name: otlp-grpc
+  - port: 4318
+    name: otlp-http
   selector:
     app-name: jaeger
 ---

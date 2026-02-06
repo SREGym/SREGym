@@ -35,25 +35,24 @@ class Jaeger:
                 time.sleep(3)
         raise RuntimeError(f"Service {service} not found within {timeout}s")
 
-    def create_external_name_service(self, namespace: str, service_name: str = "jaeger"):
-        """Create an ExternalName service in the app namespace that redirects
-        Jaeger traffic to the centralized Jaeger in the observe namespace.
+    def create_external_name_service(self, namespace: str):
+        """Replace all app-local Jaeger deployments and services with ExternalName
+        services that redirect traffic to the centralized Jaeger in the observe namespace.
 
-        This replaces any app-local Jaeger deployment/service so traces flow
-        to the shared observability stack.
+        This ensures traces flow to the shared observability stack regardless of
+        whether the app uses the Jaeger agent protocol (port 6831) or OTLP (port 4317).
         """
-        # Delete any app-local Jaeger deployment
+        # Delete any app-local Jaeger deployments/statefulsets
         for resource in ["deployment", "statefulset"]:
             self.run_cmd(f"kubectl delete {resource} -n {namespace} -l app-name=jaeger --ignore-not-found")
-            self.run_cmd(f"kubectl delete {resource} -n {namespace} {service_name} --ignore-not-found")
 
-        # Delete existing Jaeger service in the app namespace
-        self.run_cmd(f"kubectl delete svc -n {namespace} {service_name} --ignore-not-found")
-
-        # Create ExternalName service pointing to observe namespace
+        # All jaeger service names that apps might reference
+        jaeger_service_names = ["jaeger", "jaeger-agent", "jaeger-collector", "jaeger-query"]
         external_name = f"jaeger-agent.{self.namespace}.svc.cluster.local"
-        self.run_cmd(
-            f"kubectl create service externalname {service_name} -n {namespace} --external-name {external_name}"
-        )
 
-        logger.info(f"Created ExternalName service '{service_name}' in namespace '{namespace}' -> {external_name}")
+        for svc_name in jaeger_service_names:
+            self.run_cmd(f"kubectl delete svc -n {namespace} {svc_name} --ignore-not-found")
+            self.run_cmd(
+                f"kubectl create service externalname {svc_name} -n {namespace} --external-name {external_name}"
+            )
+            logger.info(f"Created ExternalName service '{svc_name}' in namespace '{namespace}' -> {external_name}")
