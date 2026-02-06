@@ -50,7 +50,8 @@ def _get_llm_backend(model_id_env_var: str):
     model_id = os.environ.get(model_id_env_var)
     if not model_id:
         raise ValueError(f"Environment variable {model_id_env_var} is not set.")
-    print(f"Found {model_id_env_var}: {model_id}")
+
+    print(f"🔧 Initializing LLM backend — {model_id_env_var}: {model_id}")
 
     if model_id not in llm_config:
         error_msg = f"Unable to find model configuration - {model_id}. Available models: {list(llm_config.keys())}"

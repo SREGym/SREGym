@@ -91,10 +91,10 @@ python main.py --agent stratus --agent-model gpt-4o --judge-model gpt-5
 
 SREGym uses two models: an agent model for diagnosis/mitigation and a judge model for evaluating results.
 
-| Flag | Env Var | Default | Purpose |
-|------|---------|---------|---------|
-| `--agent-model` | `AGENT_MODEL_ID` | `gpt-4o` | The SRE agent's LLM |
-| `--judge-model` | `JUDGE_MODEL_ID` | `gpt-5` | LLM-as-a-judge evaluator |
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--agent-model` | `gpt-4o` | The SRE agent's LLM |
+| `--judge-model` | `gpt-5` | LLM-as-a-judge evaluator |
 
 #### Available Models
 

@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 
 import uvicorn
-from dotenv import load_dotenv
 from rich.console import Console
 
 from logger import init_logger
@@ -22,7 +21,6 @@ from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 
-load_dotenv()
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
@@ -261,10 +259,13 @@ def main(args):
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
 
-    # Resolve config: CLI arg > .env > hardcoded default
-    args.agent = args.agent or os.getenv("AGENT")
-    args.agent_model = args.agent_model or os.getenv("AGENT_MODEL_ID") or "gpt-4o"
-    args.judge_model = args.judge_model or os.getenv("JUDGE_MODEL_ID") or "gpt-5"
+    # Resolve config
+    args.agent_model = args.agent_model or "gpt-4o"
+    args.judge_model = args.judge_model or "gpt-5"
+
+    logger.info(
+        f"🔧 Config — agent: {args.agent}, agent_model: {args.agent_model}, judge_model: {args.judge_model}"
+    )
 
     # Push resolved values to env so downstream code picks them up
     os.environ["AGENT_MODEL_ID"] = args.agent_model
@@ -355,21 +356,21 @@ if __name__ == "__main__":
         "--agent",
         type=str,
         default=None,
-        help="Agent to run (e.g., 'stratus'). Falls back to AGENT env var.",
+        help="Agent to run (e.g., 'stratus').",
     )
     parser.add_argument(
         "--agent-model",
         type=str,
         default=None,
         dest="agent_model",
-        help="Model for the agent (e.g., 'gpt-4o'). Falls back to AGENT_MODEL_ID env var.",
+        help="Model for the agent (default: gpt-4o).",
     )
     parser.add_argument(
         "--judge-model",
         type=str,
         default=None,
         dest="judge_model",
-        help="Model for the LLM judge (e.g., 'gpt-5'). Falls back to JUDGE_MODEL_ID env var.",
+        help="Model for the LLM judge (default: gpt-5).",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
@@ -390,7 +391,7 @@ if __name__ == "__main__":
 
     # Validate that --agent is provided when not using external harness
     if not args.use_external_harness and args.agent is None:
-        parser.error("--agent is required when --use-external-harness is not set. Set via CLI or AGENT env var.")
+        parser.error("--agent is required when --use-external-harness is not set.")
 
     # Validate that n_attempts is positive
     if args.n_attempts < 1:
