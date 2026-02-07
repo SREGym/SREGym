@@ -548,15 +548,22 @@ class Conductor:
             self.cluster_state.capture_baseline()
             self._baseline_captured = True
 
-        # Create Jaeger ExternalName services BEFORE deploying the app.
-        self.kubectl.exec_command(
-            f"kubectl create namespace {problem.app.namespace} --dry-run=client -o yaml | kubectl apply -f -"
-        )
-        self.jaeger.create_external_name_service(problem.app.namespace)
+        # train-ticket pods need jaeger at startup; create ExternalName before deploy.
+        # Other apps get it after deploy to avoid Helm ownership conflicts.
+        is_train_ticket = problem.app.__class__.__name__ == "TrainTicket"
+
+        if is_train_ticket:
+            self.kubectl.exec_command(
+                f"kubectl create namespace {problem.app.namespace} --dry-run=client -o yaml | kubectl apply -f -"
+            )
+            self.jaeger.create_external_name_service(problem.app.namespace)
 
         self.logger.info("[DEPLOY] Deploying and starting workload")
         problem.app.deploy()
         self.logger.info(f"[ENV] Deploy application: {problem.app.name}")
+
+        if not is_train_ticket:
+            self.jaeger.create_external_name_service(problem.app.namespace)
 
         problem.app.start_workload()
         self.logger.info("[ENV] Start workload")
