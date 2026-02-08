@@ -18,7 +18,6 @@ class TrainTicket(Application):
         self.load_app_json()
         self.kubectl = KubeCtl()
         self.workload_manager = None
-        self.create_namespace()
 
     def load_app_json(self):
         super().load_app_json()
@@ -39,7 +38,7 @@ class TrainTicket(Application):
             self.kubectl.create_namespace_if_not_exist(self.namespace)
 
         Helm.install(**self.helm_configs)
-        self.kubectl.wait_for_job_completion(job_name="train-ticket-deploy", namespace="train-ticket", timeout=1200)
+        self.kubectl.wait_for_job_completion(job_name="train-ticket-deploy", namespace="train-ticket", timeout=1800)
 
         self._deploy_flagd_infrastructure()
         self._deploy_load_generator()
@@ -47,12 +46,6 @@ class TrainTicket(Application):
     def delete(self):
         """Delete the Helm configurations."""
         # Helm.uninstall(**self.helm_configs) # Don't helm uninstall until cleanup job is fixed on train-ticket
-        if self._is_train_ticket_deployed():
-            print(
-                f"[TrainTicket] Skipping deletion: train-ticket app is currently deployed in namespace {self.namespace}"
-            )
-            return
-
         if self.namespace:
             self.kubectl.delete_namespace(self.namespace)
         self.kubectl.wait_for_namespace_deletion(self.namespace)
@@ -77,13 +70,7 @@ class TrainTicket(Application):
             return False
 
     def cleanup(self):
-        """Cleanup the train-ticket application if it's not currently deployed."""
-        if self._is_train_ticket_deployed():
-            print(
-                f"[TrainTicket] Skipping cleanup: train-ticket app is currently deployed in namespace {self.namespace}"
-            )
-            return
-
+        """Cleanup the train-ticket application."""
         # Helm.uninstall(**self.helm_configs)
         if self.namespace:
             self.kubectl.delete_namespace(self.namespace)

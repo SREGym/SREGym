@@ -63,6 +63,20 @@
   temperature: 0.0
   top_p: 0.95
 
+"gemini-3-flash-preview":
+  provider: "litellm"
+  model_name: "gemini/gemini-3-flash-preview"
+  api_key: "$GEMINI_API_KEY"
+  temperature: 1
+  top_p: 0.95
+
+"gemini-3-pro-preview":
+  provider: "litellm"
+  model_name: "gemini/gemini-3-pro-preview"
+  api_key: "$GEMINI_API_KEY"
+  temperature: 1
+  top_p: 0.95
+
 "claude-sonnet-4":
   provider: "litellm"
   model_name: "anthropic/claude-sonnet-4-20250514"

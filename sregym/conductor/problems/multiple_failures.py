@@ -3,12 +3,9 @@
 import time
 
 from sregym.conductor.oracles.compound import CompoundedOracle
-from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
-from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.composite_app import CompositeApp
-from sregym.service.apps.social_network import SocialNetwork
-from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -21,14 +18,17 @@ class MultipleIndependentFailures(Problem):
         self.fault_injected = False
 
         # === Attaching problem's oracles ===
-        diagnosis_oracles = [p.diagnosis_oracle for p in self.problems]
-        if len(diagnosis_oracles) > 0:
-            print(f"[MIF] Diagnosis oracles: {diagnosis_oracles}")
-            self.diagnosis_oracle = CompoundedOracle(self, *diagnosis_oracles)
+        # diagnosis oracles can be statically defined.
+        # concat all root causes together.
+        self.root_cause: str = "This problem contains multiple faults.\n"
+        for p in self.problems:
+            root_cause = "" if p.root_cause is None else p.root_cause
+            self.root_cause += root_cause
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
+        # mitigation oracle can and should be dynamic
         mitigation_oracles = [p.mitigation_oracle for p in self.problems]
         if len(mitigation_oracles) > 0:
-            print(f"[MIF] Mitigation oracles: {mitigation_oracles}")
             self.mitigation_oracle = CompoundedOracle(self, *mitigation_oracles)
 
     @mark_fault_injected

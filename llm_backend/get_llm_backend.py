@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import litellm
 import openai
@@ -32,15 +32,15 @@ class LiteLLMBackend:
         self,
         provider: str,
         model_name: str,
-        api_key: Optional[str] = None,
-        url: Optional[str] = None,
-        top_p: Optional[float] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
-        seed: Optional[int] = None,
-        wx_project_id: Optional[str] = None,
-        azure_version: Optional[str] = None,
-        extra_headers: Optional[Dict[str, str]] = None,
+        api_key: str | None = None,
+        url: str | None = None,
+        top_p: float | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        seed: int | None = None,
+        wx_project_id: str | None = None,
+        azure_version: str | None = None,
+        extra_headers: dict[str, str] | None = None,
     ):
         self.provider = provider
         self.model_name = model_name
@@ -59,8 +59,8 @@ class LiteLLMBackend:
     def inference(
         self,
         messages: str | list[SystemMessage | HumanMessage | AIMessage],
-        system_prompt: Optional[str] = None,
-        tools: Optional[list[any]] = None,
+        system_prompt: str | None = None,
+        tools: list[any] | None = None,
     ):
         if isinstance(messages, str):
             # logger.info(f"NL input as str received: {messages}")
@@ -77,10 +77,9 @@ class LiteLLMBackend:
         elif isinstance(messages, list):
             prompt_messages = messages
             if len(messages) == 0:
-                arena_logger = logging.getLogger("sregym-global")
-                arena_logger.info("[ERROR] Canary died!")
+                logger.error("Empty messages list.")
             elif isinstance(messages[0], HumanMessage):
-                # logger.info("No system message provided.")
+                logger.info("No system message provided.")
                 system_message = SystemMessage(content="You are a helpful assistant.")
                 if system_prompt is None:
                     logger.warning("No system prompt provided. Using default system prompt.")
@@ -89,8 +88,6 @@ class LiteLLMBackend:
                     system_message.content = system_prompt
                 # logger.info(f"inserting [{system_message}] at the beginning of messages")
                 prompt_messages.insert(0, system_message)
-                arena_logger = logging.getLogger("sregym-global")
-                arena_logger.info(f"[PROMPT] (inserted system prompt at the beginning) \n {system_message}")
         else:
             raise ValueError(f"messages must be either a string or a list of dicts, but got {type(messages)}")
 
@@ -160,9 +157,8 @@ class LiteLLMBackend:
             try:
                 # trim the first ten message who are AI messages and user messages
                 if trim_message:
-                    arena_logger = logging.getLogger("sregym-global")
                     new_prompt_messages, trim_sum = trim_messages_conservative(prompt_messages)
-                    arena_logger.info(f"[WARNING] Trimming the {trim_sum}/{len(prompt_messages)} messages")
+                    logger.info(f"Trimming the {trim_sum}/{len(prompt_messages)} messages")
                     prompt_messages = new_prompt_messages
                 completion = llm.invoke(input=prompt_messages)
                 # logger.info(f">>> llm response: {completion}")
@@ -177,62 +173,50 @@ class LiteLLMBackend:
                     f"Last few messages: {prompt_messages[-3:] if len(prompt_messages) >= 3 else prompt_messages}"
                 )
                 raise
-            except (openai.RateLimitError, HTTPError) as e:
+            except (openai.RateLimitError, HTTPError):
                 # Rate-limiting errors - retry with exponential backoff
                 logger.warning(
                     f"Rate-limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                 )
-
-                arena_logger = logging.getLogger("sregym-global")
-                arena_logger.info(
-                    f"[WARNING] HTTP error occurred: {e}. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
-                )
                 time.sleep(retry_delay)
                 retry_delay *= 2  # Exponential backoff
             except openai.APIError as e:
-                # Other OpenAI API errors
-                logger.error(f"OpenAI API error occurred: {e}")
-                raise
-                # else:
-                #     logger.error(f"HTTP error occurred: {e}")
-                #     raise
+                # OpenAI API errors (including 500s) - retry with exponential backoff
+                logger.warning(
+                    f"OpenAI API error occurred: {e}. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
+                )
+                time.sleep(retry_delay)
+                retry_delay *= 2
 
             except litellm.RateLimitError as e:
                 provider_delay = _extract_retry_delay_seconds_from_exception(e)
                 if provider_delay is not None and provider_delay > 0:
-                    arena_logger = logging.getLogger("sregym-global")
-                    arena_logger.info(
-                        f"[WARNING] Rate-limited by provider. Retrying in {provider_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
+                    logger.warning(
+                        f"Rate-limited by provider. Retrying in {provider_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                     )
                     time.sleep(provider_delay)
                 else:  # actually this fallback should not happen
-                    arena_logger = logging.getLogger("sregym-global")
-                    arena_logger.info(
+                    logger.warning(
                         f"Rate-limited. Retrying in {retry_delay} seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                     )
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
 
                 trim_message = True  # reduce overhead
-            except litellm.ServiceUnavailableError as e:  # 503
-                arena_logger = logging.getLogger("sregym-global")
-                arena_logger.info(
-                    f"[WARNING] Service unavailable (mostly 503). Retrying in 60 seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
+            except litellm.ServiceUnavailableError:  # 503
+                logger.warning(
+                    f"Service unavailable (mostly 503). Retrying in 60 seconds... (Attempt {attempt + 1}/{LLM_QUERY_MAX_RETRIES})"
                 )
                 time.sleep(60)
                 trim_message = True  # reduce overhead
             except IndexError as e:
-                arena_logger = logging.getLogger("sregym-global")
-                arena_logger.info(
-                    f"[ERROR] IndexError occurred on Gemini Server Side: {e}, keep calm for a while... {attempt + 1}/{LLM_QUERY_MAX_RETRIES}"
+                logger.warning(
+                    f"IndexError occurred on Gemini Server Side: {e}, keep calm for a while... {attempt + 1}/{LLM_QUERY_MAX_RETRIES}"
                 )
                 trim_message = True
                 time.sleep(30)
                 if attempt == LLM_QUERY_MAX_RETRIES - 1:
-                    arena_logger = logging.getLogger("sregym-global")
-                    arena_logger.info(
-                        f"[WARNING] Max retries exceeded due to index error. Unable to complete the request."
-                    )
+                    logger.error("Max retries exceeded due to index error. Unable to complete the request.")
                     # return an error
                     return AIMessage(content="Server side error")
             except Exception as e:
@@ -242,7 +226,7 @@ class LiteLLMBackend:
         raise RuntimeError("Max retries exceeded. Unable to complete the request.")
 
 
-def _parse_duration_to_seconds(duration: Any) -> Optional[float]:
+def _parse_duration_to_seconds(duration: Any) -> float | None:
     """Convert duration to seconds.
 
     Supports:
@@ -270,7 +254,7 @@ def _parse_duration_to_seconds(duration: Any) -> Optional[float]:
     return None
 
 
-def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> Optional[float]:
+def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> float | None:
     """Extract retry delay seconds from JSON details RetryInfo only.
 
     Returns 60.0 if no RetryInfo found in error details.
@@ -318,7 +302,7 @@ def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> Optional[
     except Exception:
         pass
 
-    def find_retry_delay(data: Any) -> Optional[float]:
+    def find_retry_delay(data: Any) -> float | None:
         if data is None:
             return None
         if isinstance(data, dict):

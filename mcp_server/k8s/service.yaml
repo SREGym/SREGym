@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-server
+  namespace: sregym
+  labels:
+    app.kubernetes.io/name: mcp-server
+    app.kubernetes.io/component: mcp-server
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9954
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: mcp-server

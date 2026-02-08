@@ -1,8 +1,10 @@
 import ast
 import logging
+import os
 from contextlib import AsyncExitStack
 from typing import Annotated
 
+import requests
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
@@ -28,6 +30,27 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 langgraph_tool_config = LanggraphToolConfig()
+
+
+def get_benchmark_status() -> str:
+    """
+    Check the current status of the benchmark.
+    Returns the status string (e.g., "diagnosis", "mitigation", "done") or "error" on failure.
+    """
+    try:
+        api_port = os.getenv("API_PORT", "8000")
+        status_url = f"http://localhost:{api_port}/status"
+
+        response = requests.get(status_url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("stage", "error")
+        else:
+            logger.warning(f"Failed to get benchmark status: {response.status_code}")
+            return "error"
+    except Exception as e:
+        logger.warning(f"Exception while getting benchmark status: {e}")
+        return "error"
 
 
 @tool(description=submit_tool_docstring)
@@ -57,6 +80,28 @@ async def submit_tool(
     await exit_stack.aclose()
     if result["status"] != "200":
         logger.info(f"HTTP submission failed: {result}")
+
+        # Check if the benchmark is in "done" status, which means we can't submit anymore
+        benchmark_status = get_benchmark_status()
+        logger.info(f"Benchmark status: {benchmark_status}")
+
+        if benchmark_status == "done":
+            logger.warning(
+                "Benchmark is in 'done' status. Cannot submit anymore. "
+                "Setting submitted=True to exit agent gracefully."
+            )
+            return Command(
+                update={
+                    "submitted": True,
+                    "messages": [
+                        ToolMessage(
+                            content=f"Submission failed because benchmark is already done. Agent exiting gracefully. Details: {result}",
+                            tool_call_id=tool_call_id,
+                        ),
+                    ],
+                }
+            )
+
         logger.info("we don't set submitted to True, to force agent retry submission. \n")
         logger.info("giving agent another change by decrementing step count")
         return Command(

@@ -1,3 +1,4 @@
+import logging
 import math
 import textwrap
 import time
@@ -12,11 +13,10 @@ from sregym.generators.workload.base import WorkloadEntry
 from sregym.generators.workload.stream import STREAM_WORKLOAD_EPS, StreamWorkloadManager
 from sregym.paths import BASE_DIR
 
+logger = logging.getLogger("all.infra.workload")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
-import logging
-local_logger = logging.getLogger("all.infra.workload")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
 
 class Wrk2:
     """
@@ -69,20 +69,20 @@ class Wrk2:
 
         api_instance = client.CoreV1Api()
         try:
-            local_logger.info(f"Checking for existing ConfigMap '{name}'...")
+            logger.info(f"Checking for existing ConfigMap '{name}'...")
             api_instance.delete_namespaced_config_map(name=name, namespace=self.namespace)
-            local_logger.info(f"ConfigMap '{name}' deleted.")
+            logger.info(f"ConfigMap '{name}' deleted.")
         except client.exceptions.ApiException as e:
             if e.status != 404:
-                local_logger.error(f"Error deleting ConfigMap '{name}': {e}")
+                logger.error(f"Error deleting ConfigMap '{name}': {e}")
                 return
 
         try:
-            local_logger.info(f"Creating ConfigMap '{name}'...")
+            logger.info(f"Creating ConfigMap '{name}'...")
             api_instance.create_namespaced_config_map(namespace=self.namespace, body=configmap_body)
-            local_logger.info(f"ConfigMap '{name}' created successfully.")
+            logger.info(f"ConfigMap '{name}' created successfully.")
         except client.exceptions.ApiException as e:
-            local_logger.error(f"Error creating ConfigMap '{name}': {e}")
+            logger.error(f"Error creating ConfigMap '{name}': {e}")
 
     def create_wrk_job(self, job_name, namespace, payload_script):
         wrk_job_yaml = BASE_DIR / "generators" / "workload" / "wrk-job-template.yaml"
@@ -116,7 +116,7 @@ class Wrk2:
         try:
             existing_job = api_instance.read_namespaced_job(name=job_name, namespace=self.namespace)
             if existing_job:
-                local_logger.info(f"Job '{job_name}' already exists. Deleting it...")
+                logger.info(f"Job '{job_name}' already exists. Deleting it...")
                 api_instance.delete_namespaced_job(
                     name=job_name,
                     namespace=self.namespace,
@@ -125,19 +125,21 @@ class Wrk2:
                 self.wait_for_job_deletion(job_name, self.namespace)
         except client.exceptions.ApiException as e:
             if e.status != 404:
-                local_logger.error(f"Error checking for existing job: {e}")
+                logger.error(f"Error checking for existing job: {e}")
                 return
 
         try:
             response = api_instance.create_namespaced_job(namespace=self.namespace, body=job_template)
-            local_logger.info(f"Job created: {response.metadata.name}")
+            logger.info(f"Job created: {response.metadata.name}")
         except client.exceptions.ApiException as e:
-            local_logger.error(f"Error creating job: {e}")
+            logger.error(f"Error creating job: {e}")
 
     def start_workload(self, payload_script, url):
         configmap_name = "wrk2-payload-script"
 
-        self.create_configmap(name=configmap_name, namespace=self.namespace, payload_script_path=payload_script, url=url)
+        self.create_configmap(
+            name=configmap_name, namespace=self.namespace, payload_script_path=payload_script, url=url
+        )
 
         self.create_wrk_job(job_name="wrk2-job", namespace=self.namespace, payload_script=payload_script.name)
 
@@ -146,13 +148,15 @@ class Wrk2:
         try:
             existing_job = api_instance.read_namespaced_job(name=job_name, namespace=self.namespace)
             if existing_job:
-                local_logger.info(f"Stopping job '{job_name}'...")
+                logger.info(f"Stopping job '{job_name}'...")
                 # @daklqw: I think there might be a better way
-                api_instance.patch_namespaced_job(name=job_name, namespace=self.namespace, body={"spec": {"suspend": True}})
+                api_instance.patch_namespaced_job(
+                    name=job_name, namespace=self.namespace, body={"spec": {"suspend": True}}
+                )
                 time.sleep(5)
         except client.exceptions.ApiException as e:
             if e.status != 404:
-                local_logger.error(f"Error checking for existing job: {e}")
+                logger.error(f"Error checking for existing job: {e}")
                 return
 
     def wait_for_job_deletion(self, job_name, namespace, sleep=2, max_wait=60):
@@ -241,7 +245,7 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
 
             number = int(number)
         except Exception as e:
-            local_logger.error(f"Error parsing log: {e}")
+            logger.error(f"Error parsing log: {e}")
             number = 0
             start_time = -1
 
@@ -283,7 +287,7 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
             logs = self.core_v1_api.read_namespaced_pod_log(pods.items[0].metadata.name, self.namespace, **kwargs)
             logs = logs.split("\n")
         except Exception as e:
-            local_logger.error(f"Error retrieving logs from {self.job_name} : {e}")
+            logger.error(f"Error retrieving logs from {self.job_name} : {e}")
             return []
 
         for log in logs:
@@ -315,9 +319,9 @@ class Wrk2WorkloadManager(StreamWorkloadManager):
         return grouped_logs
 
     def start(self):
-        local_logger.info("Start Workload with Wrk2")
+        logger.info("Start Workload with Wrk2")
         self.create_task()
 
     def stop(self):
-        local_logger.info("Stop Workload of Wrk2")
+        logger.info("Stop Workload of Wrk2")
         self.wrk.stop_workload(job_name=self.job_name)

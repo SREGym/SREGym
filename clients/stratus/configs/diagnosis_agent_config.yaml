@@ -6,25 +6,25 @@ async_tools:
   - name: get_traces
     description: |
       Get Jaeger traces for a given service in the last n minutes.
-      
+
           Args:
               service (str): The name of the service for which to retrieve trace data.
               last_n_minutes (int): The time range (in minutes) to look back from the current time.
   - name: get_services
     description: |
       Retrieve the list of service names from the Grafana instance.
-      
+
           Args:
-      
+
           Returns:
               List[str]: A list of service names available in Grafana.
   - name: get_operations
     description: |
       Query available operations for a specific service from the Grafana instance.
-      
+
           Args:
               service (str): The name of the service whose operations should be retrieved.
-      
+
           Returns:
               List[str]: A list of operation names associated with the specified service.
   - name: get_dependency_graph
@@ -68,16 +68,6 @@ async_tools:
               "kubectl config get",
               INTERACTIVE COMMANDS ARE NOT SUPPORTED, e.g. "kubectl edit"
               INTERACTIVE FLAGS ARE NOT SUPPORTED, e.g., "kubectl logs -f"
-  - name: get_resource_uid
-    description: |
-      Use this tool to retrieve the UID of a specified resource.
-
-          Args:
-              resource_type (str): The type of the resource (e.g., 'pod', 'service', 'deployment', 'statefulset', 'persistentvolumeclaim', 'persistentvolume', 'configmap', 'replicaset', 'memoryquota', 'ingress', 'networkpolicy' etc.).
-              resource_name (str): The name of the resource.
-              namespace (str): The namespace where the resource is located.
-          Returns:
-              str: The UID of the specified resource.
   - name: submit_tool
     description: |
       The tool to submit benchmark results
@@ -85,5 +75,3 @@ async_tools:
           Args:
               ans (str): the answer you would like to submit to the benchmark. Use natural language to describe the root cause of the failure.
 prompts_path: diagnosis_agent_prompts.yaml
-
-

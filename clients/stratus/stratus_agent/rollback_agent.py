@@ -3,7 +3,6 @@ import logging
 from pathlib import Path
 
 import yaml
-from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import END
 from langgraph.graph import START
@@ -24,7 +23,7 @@ class RollbackAgent(BaseAgent):
         super().__init__(**kwargs)
         self.tool_node = None
         self.loop_count = 0
-        self.local_logger = logging.getLogger("all.stratus.rollback")
+        self.logger = logging.getLogger("all.stratus.rollback")
 
     def build_agent(self):
         self.tool_node = StratusToolNode(

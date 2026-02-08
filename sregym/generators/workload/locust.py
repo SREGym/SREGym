@@ -1,4 +1,5 @@
 import json
+import logging
 import math
 import time
 from datetime import datetime
@@ -11,11 +12,10 @@ from sregym.generators.workload.stream import STREAM_WORKLOAD_EPS, StreamWorkloa
 from sregym.paths import BASE_DIR
 from sregym.service.kubectl import KubeCtl
 
+logger = logging.getLogger("all.infra.workload")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
-import logging
-local_logger = logging.getLogger("all.infra.workload")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
 
 class LocustWorkloadManager(StreamWorkloadManager):
     def __init__(self, namespace: str, locust_url: str):
@@ -29,7 +29,7 @@ class LocustWorkloadManager(StreamWorkloadManager):
 
         config.load_kube_config()
         self.core_v1_api = client.CoreV1Api()
-        
+
         self.kubectl = KubeCtl()
 
     def remove_fetcher(self):
@@ -180,25 +180,23 @@ class LocustWorkloadManager(StreamWorkloadManager):
         return grouped_logs
 
     def start(self):
-        local_logger.info("Start Workload with Locust")
-        local_logger.info("AstronomyShop has a built-in load generator.")
-        local_logger.info("Creating locust-fetcher pod...")
+        logger.info("Start Workload with Locust")
+        logger.info("AstronomyShop has a built-in load generator.")
+        logger.info("Creating locust-fetcher pod...")
         self.create_fetcher()
-        local_logger.debug("Workload started")
+        logger.debug("Workload started")
 
     def stop(self):
-        local_logger.info("Stop Workload with Locust")
-        local_logger.info("AstronomyShop's built-in load generator is automatically managed.")
-        local_logger.info("Removing locust-fetcher pod if it exists...")
+        logger.info("Stop Workload with Locust")
+        logger.info("AstronomyShop's built-in load generator is automatically managed.")
+        logger.info("Removing locust-fetcher pod if it exists...")
         self.remove_fetcher()
-        local_logger.debug("Workload stopped")
-        
-        
+        logger.debug("Workload stopped")
+
     def change_users(self, number: int, namespace: str):
         increase_user_cmd = f"kubectl set env deployment/load-generator LOCUST_USERS={number} -n {namespace}"
         self.kubectl.exec_command(increase_user_cmd)
-        
+
     def change_spawn_rate(self, rate: int, namespace: str):
         increase_spawn_rate_cmd = f"kubectl set env deployment/load-generator LOCUST_SPAWN_RATE={rate} -n {namespace}"
         self.kubectl.exec_command(increase_spawn_rate_cmd)
-        

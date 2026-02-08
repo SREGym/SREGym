@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -37,7 +37,6 @@ class BaseAgent:
         self.process_tool_call_node = "process_tool_call"
         self.post_round_process_node = "post_round_process"
         self.callback = UsageMetadataCallbackHandler()
-        self.arena_logger = logging.getLogger("sregym-global")
         self.loop_count = 0
 
     def llm_inference_step(self, messages, tools):
@@ -51,15 +50,14 @@ class BaseAgent:
                 + self.tool_descs
                 + "Choose a tool from the list and output the tool name. Justify your tool choice. In the next step, you will generate a tool call for this tool"
             )
-            self.local_logger.debug(f"[Loop {self.loop_count}] Inject framework prompt: \n {content}")
+            self.logger.debug(f"[Loop {self.loop_count}] Inject framework prompt: \n {content}")
         else:
             content = (
                 "You are now in the thinking stage. Choose a tool from the available tools and justify your choice."
             )
-            self.local_logger.debug(f"[Loop {self.loop_count}] Inject short thinking prompt to save context")
+            self.logger.debug(f"[Loop {self.loop_count}] Inject short thinking prompt to save context")
 
         human_prompt = HumanMessage(content=content)
-        self.arena_logger.info(f"[PROMPT] Framework prompt: \n {human_prompt.content}")
         return {
             "messages": [human_prompt],
         }
@@ -67,8 +65,7 @@ class BaseAgent:
     def llm_thinking_step(self, state: State):
         # planning step, not providing tool
         ai_message = self.llm_inference_step(state["messages"], tools=None)
-        self.arena_logger.info(f"[LLM] \n {ai_message.content}")
-        self.local_logger.debug(
+        self.logger.debug(
             f"[Loop {self.loop_count}] Ask, and LLM responds: \n {ai_message.content}",
             extra={"Full Prompt": state["messages"]},
         )
@@ -82,11 +79,10 @@ class BaseAgent:
 
     def llm_tool_call_prompt_inject_step(self, state: State):
         human_prompt = HumanMessage(content="Now generate a tool call according to your last chosen tool.")
-        self.arena_logger.info(f"[PROMPT] \n {human_prompt.content}")
         if self.loop_count == 0:
-            self.local_logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt: \n {human_prompt.content}")
+            self.logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt: \n {human_prompt.content}")
         else:
-            self.local_logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt (repeated)")
+            self.logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt (repeated)")
         return {
             "messages": [human_prompt],
         }
@@ -103,7 +99,10 @@ class BaseAgent:
             else:
                 ai_message = self.llm_inference_step(state["messages"], tools=[*self.sync_tools, *self.async_tools])
 
-        self.local_logger.debug(f"[Loop {self.loop_count}] Tool call", extra={"Full Prompt": state["messages"]})
+        self.logger.debug(
+            f"[Loop {self.loop_count}] Tool call",
+            extra={"Full Prompt": state["messages"]},
+        )
         if ai_message.content == "Server side error":
             return {
                 "messages": [],
@@ -113,32 +112,97 @@ class BaseAgent:
         }
 
     def should_submit_router(self, state: State):
-        should_submit = state["num_steps"] == self.max_step and state["submitted"] == False
-        self.local_logger.info(f"Should we force the agent submit? {"Yes!" if should_submit else "No!"}")
+        should_submit = state["num_steps"] == self.max_step and not state["submitted"]
+        self.logger.info(f"Should we force the agent submit? {'Yes!' if should_submit else 'No!'}")
         return self.force_submit_prompt_inject_node if should_submit else self.post_round_process_node
 
+    def _filter_rejected_command_errors(self, messages: list) -> list:
+        """
+        Remove 'Command Rejected' error messages from context if a successful command was executed.
+
+        This prevents wasted context window from keeping rejection error messages after
+        Stratus successfully generates a correct command.
+
+        Args:
+            messages: List of messages in the conversation history
+
+        Returns:
+            Filtered list of messages with rejected command errors removed if appropriate
+        """
+        if len(messages) < 2:
+            return messages
+
+        # Check if the last message is a successful ToolMessage (not a rejection)
+        last_message = messages[-1]
+        if not isinstance(last_message, ToolMessage):
+            return messages
+
+        # If the last tool message contains "Command Rejected", keep all messages
+        # (the error is still relevant)
+        if "Command Rejected" in last_message.content:
+            return messages
+
+        # Last tool call was successful - now remove previous "Command Rejected" messages
+        # We'll look backwards through messages and remove ToolMessages with rejections
+        filtered_messages = []
+        removed_count = 0
+
+        for i, msg in enumerate(messages):
+            # Keep the last message (successful tool result)
+            if i == len(messages) - 1:
+                filtered_messages.append(msg)
+                continue
+
+            # Remove ToolMessages containing "Command Rejected"
+            if isinstance(msg, ToolMessage) and "Command Rejected" in msg.content:
+                removed_count += 1
+                self.logger.debug(f"Removing rejected command error message: {msg.content[:100]}...")
+                continue
+
+            # Also remove the AIMessage that triggered the rejected command
+            # (it contains the tool_call that was rejected)
+            if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
+                # Check if the next message is a rejection we're filtering out
+                if i + 1 < len(messages) and isinstance(messages[i + 1], ToolMessage):
+                    if "Command Rejected" in messages[i + 1].content:
+                        removed_count += 1
+                        self.logger.debug("Removing AIMessage with rejected tool call")
+                        continue
+
+            filtered_messages.append(msg)
+
+        if removed_count > 0:
+            self.logger.info(
+                f"Filtered {removed_count} rejected command error messages from context "
+                f"(reduced from {len(messages)} to {len(filtered_messages)} messages)"
+            )
+
+        return filtered_messages
+
     def post_round_process(self, state: State):
-        self.local_logger.debug("agent finished a round")
-        self.local_logger.debug("currently only incrementing step")
-        self.local_logger.info(f"{'^' * 20} [Loop {self.loop_count}] {'^' * 20}")
-        self.arena_logger.info("[SPLIT]")
+        self.logger.debug("agent finished a round")
+        self.logger.debug("currently only incrementing step")
+        self.logger.info(f"{'^' * 20} [Loop {self.loop_count}] {'^' * 20}")
+        self.logger.info("[SPLIT]")
+
+        # Filter out rejected command errors if a successful command was executed
+        filtered_messages = self._filter_rejected_command_errors(state["messages"])
+
         return {
             "num_steps": state["num_steps"] + 1,
+            "messages": filtered_messages,
         }
 
     def llm_force_submit_thinking_step(self, state: State):
         human_prompt = HumanMessage(
             content="You have reached your step limit, please submit your results by generating a `submit` tool's tool call."
         )
-        self.arena_logger.info("[WARNING] Agent has not solved the problem until the step limit, force submission.")
-        self.arena_logger.info(f"[PROMPT] \n {human_prompt.content}")
-        # self.local_logger.info(f"[Loop {self.loop_count}] Inject force submit prompt: \n {human_prompt.content}")
+        self.logger.warning("Agent has not solved the problem until the step limit, force submission.")
         return {"messages": [human_prompt]}
 
     def llm_force_submit_tool_call_step(self, state: State):
         result = self.llm_inference_step(state["messages"], tools=[self.submit_tool])
-        self.arena_logger.info(f"[LLM] \n {result.content}")
-        # self.local_logger.info(f"[Loop {self.loop_count}] Force submit, and LLM responds: \n {result.content}")
+        # self.logger.info(f"[Loop {self.loop_count}] Force submit, and LLM responds: \n {result.content}")
         return {"messages": result}
 
     def clear_memory(self):
@@ -150,7 +214,7 @@ class BaseAgent:
             if hasattr(self.memory_saver, "storage") and hasattr(self.memory_saver, "writes"):
                 self.memory_saver.storage.pop(thread_id, None)
 
-                keys_to_remove = [key for key in self.memory_saver.writes.keys() if key[0] == thread_id]
+                keys_to_remove = [key for key in self.memory_saver.writes if key[0] == thread_id]
                 for key in keys_to_remove:
                     self.memory_saver.writes.pop(key, None)
 
@@ -182,11 +246,7 @@ class BaseAgent:
             agent_name: Name of the agent (e.g., "diagnosis", "mitigation")
             output_dir: Directory to save trajectory (defaults to current directory)
         """
-        if output_dir is None:
-            output_dir = Path(".")
-        else:
-            output_dir = Path(output_dir)
-
+        output_dir = Path(".") if output_dir is None else Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -308,6 +368,9 @@ class BaseAgent:
             last_state = self.graph.get_state(config=graph_config)
             if last_state.values["submitted"]:
                 logger.info(f"[Loop {self.loop_count}] Agent submitted, breaking loop from base_agent")
+                # Ensure the final state is included in graph_events
+                if not graph_events or last_state.values["messages"] != graph_events[-1]["messages"]:
+                    graph_events.append(last_state.values)
                 break
 
             self.loop_count += 1

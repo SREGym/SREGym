@@ -2,23 +2,20 @@ import logging
 import time
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
-from sregym.observer.trace_api import TraceAPI
 from sregym.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA, TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
 from sregym.service.apps.helpers import get_frontend_url
 from sregym.service.kubectl import KubeCtl
 
-local_logger = logging.getLogger("all.application")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
+logger = logging.getLogger("all.application")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
 
 class HotelReservation(Application):
     def __init__(self):
         super().__init__(HOTEL_RES_METADATA)
         self.kubectl = KubeCtl()
-        self.trace_api = None
-        self.trace_api = None
         self.script_dir = FAULT_SCRIPTS
         self.helm_deploy = False
 
@@ -78,13 +75,11 @@ class HotelReservation(Application):
 
     def deploy(self):
         """Deploy the Kubernetes configurations."""
-        self.local_logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
+        self.logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.create_namespace()
         self.create_configmaps()
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
         self.kubectl.wait_for_ready(self.namespace)
-        self.trace_api = TraceAPI(self.namespace)
-        self.trace_api.start_port_forward()
 
     def delete(self):
         """Delete the configmap."""
@@ -92,9 +87,6 @@ class HotelReservation(Application):
 
     def cleanup(self):
         """Delete the entire namespace for the hotel reservation application."""
-        if self.trace_api:
-            self.trace_api.stop_port_forward()
-
         self.kubectl.delete_namespace(self.namespace)
 
         self.kubectl.wait_for_namespace_deletion(self.namespace)
@@ -107,7 +99,7 @@ class HotelReservation(Application):
             self._remove_pv_finalizers(pv)
             delete_command = f"kubectl delete pv {pv}"
             delete_result = self.kubectl.exec_command(delete_command)
-            local_logger.info(f"Deleted PersistentVolume {pv}: {delete_result.strip()}")
+            logger.info(f"Deleted PersistentVolume {pv}: {delete_result.strip()}")
         time.sleep(5)
 
         if hasattr(self, "wrk"):
@@ -128,7 +120,7 @@ class HotelReservation(Application):
         return data
 
     def _read_script(self, file_path: str) -> str:
-        with open(file_path, "r") as file:
+        with open(file_path) as file:
             return file.read()
 
     def create_workload(
@@ -144,7 +136,7 @@ class HotelReservation(Application):
                 namespace=self.namespace,
             ),
             payload_script=self.payload_script,
-            url=f"{{placeholder}}",
+            url="{placeholder}",
             namespace=self.namespace,
         )
 

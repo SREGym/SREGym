@@ -1,5 +1,6 @@
 import time
 
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -17,6 +18,9 @@ class KubeletCrash(Problem):
         self.injector = RemoteOSFaultInjector()
 
         self.root_cause = "The kubelet daemon on a node has crashed, preventing pod scheduling, updates, and management on that node, causing services to become unavailable or stuck."
+
+        # === Attach evaluation oracles ===
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         # note from JC after talking to Bohan:
         # We could consider adding an oracle later, but it's not trivial where diagnosis should go

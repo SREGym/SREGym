@@ -1,0 +1,76 @@
+# Loki Helm chart values for SREGym
+# Using SingleBinary deployment mode for simplicity
+
+loki:
+  # Use filesystem storage for single-node deployment
+  commonConfig:
+    replication_factor: 1
+
+  storage:
+    type: filesystem
+
+  # Disable authentication for internal cluster use
+  auth_enabled: false
+
+  # Schema configuration for log storage
+  schemaConfig:
+    configs:
+      - from: "2024-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+# Deploy as single binary (all-in-one)
+deploymentMode: SingleBinary
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    storageClass: openebs-hostpath
+    size: 10Gi
+
+# Disable components not needed in SingleBinary mode
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
+
+# Gateway configuration
+gateway:
+  enabled: true
+  replicas: 1
+
+# Enable Promtail for log collection
+promtail:
+  enabled: true
+  config:
+    clients:
+      - url: http://loki-gateway/loki/api/v1/push
+
+# Disable monitoring components for simplicity
+monitoring:
+  selfMonitoring:
+    enabled: false
+    grafanaAgent:
+      installOperator: false
+  lokiCanary:
+    enabled: false
+
+# Disable test pod
+test:
+  enabled: false
+
+# Resource limits
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi

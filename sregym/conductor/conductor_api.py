@@ -1,23 +1,55 @@
 import logging
 import os
 import threading
-from typing import Optional
 
 import pyfiglet
 from fastapi import FastAPI, HTTPException
+from fastmcp import FastMCP
+from fastmcp.server.http import create_sse_app
 from pydantic import BaseModel
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from starlette.routing import Mount
 from uvicorn import Config, Server
 
-app = FastAPI()
 _conductor = None
 
-_server: Optional[Server] = None
+submit_mcp = FastMCP("Submit MCP Server")
+
+
+@submit_mcp.tool(name="submit")
+async def submit_via_conductor(ans: str) -> dict[str, str]:
+    """Submit task result to benchmark
+
+    Args:
+        ans (str): task result that the agent submits
+
+    Returns:
+        dict[str]: grading results from the conductor
+    """
+    if _conductor is None or _conductor.submission_stage not in {"diagnosis", "mitigation"}:
+        stage = _conductor.submission_stage if _conductor else None
+        return {"status": "error", "text": f"Cannot submit at stage: {stage!r}"}
+
+    wrapped = f"```\nsubmit({repr(ans)})\n```"
+    try:
+        results = await _conductor.submit(wrapped)
+        return {"status": "ok", "text": str(results)}
+    except Exception as e:
+        return {"status": "error", "text": f"Grading error: {e}"}
+
+
+app = FastAPI(
+    routes=[
+        Mount("/submit_mcp", app=create_sse_app(submit_mcp, "/messages/", "/sse")),
+    ]
+)
+
+_server: Server | None = None
 _shutdown_event = threading.Event()
 
-local_logger = logging.getLogger("all.sregym.conductor_api")
+logger = logging.getLogger("all.sregym.conductor_api")
 
 
 def request_shutdown():
@@ -25,7 +57,7 @@ def request_shutdown():
     Signal the API server to shut down.
     Safe to call from any thread and idempotent.
     """
-    local_logger.warning("Shutting down API server...")
+    logger.warning("Shutting down API server...")
     _shutdown_event.set()
     if _server is not None:
         _server.should_exit = True
@@ -45,51 +77,50 @@ class SubmitRequest(BaseModel):
 async def submit_solution(req: SubmitRequest):
     allowed = {"diagnosis", "mitigation"}
     if _conductor is None or _conductor.submission_stage not in allowed:
-        local_logger.error(f"Cannot submit at stage: {_conductor.submission_stage!r}")
+        logger.error(f"Cannot submit at stage: {_conductor.submission_stage!r}")
         raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {_conductor.submission_stage!r}")
 
-    # replace double quotes with single quotes
-    req.solution = req.solution.replace('"', "'")
-    wrapped = f'```\nsubmit("{req.solution}")\n```'
-    local_logger.debug(f"Wrapped submit content: {wrapped}")
+    # Use repr() to properly escape special characters in the solution string
+    wrapped = f"```\nsubmit({repr(req.solution)})\n```"
+    logger.debug(f"Wrapped submit content: {wrapped}")
 
     try:
         results = await _conductor.submit(wrapped)
     except Exception as e:
-        local_logger.error(f"Grading error: {e}")
-        raise HTTPException(status_code=400, detail=f"Grading error: {e}")
+        logger.error(f"Grading error: {e}")
+        raise HTTPException(status_code=400, detail=f"Grading error: {e}") from e
 
-    local_logger.debug(f"API returns Grading results by now: {results}")
+    logger.debug(f"API returns Grading results by now: {results}")
     return results
 
 
 @app.get("/status")
 async def get_status():
     if _conductor is None:
-        local_logger.error("No problem has been started")
+        logger.error("No problem has been started")
         raise HTTPException(status_code=400, detail="No problem has been started")
     stage = _conductor.submission_stage
-    local_logger.debug(f"API returns Current stage: {stage}")
+    logger.debug(f"API returns Current stage: {stage}")
     return {"stage": stage}
 
 
 @app.get("/get_app")
 async def get_app():
     if _conductor is None:
-        local_logger.error("No problem has been started")
+        logger.error("No problem has been started")
         raise HTTPException(status_code=400, detail="No problem has been started")
     app_inst = _conductor.app
-    local_logger.debug(f"API returns App instance: {app_inst}")
+    logger.debug(f"API returns App instance: {app_inst}")
     return {"app_name": app_inst.app_name, "namespace": app_inst.namespace, "descriptions": str(app_inst.description)}
 
 
 @app.get("/get_problem")
 async def get_problem():
     if _conductor is None:
-        local_logger.error("No problem has been started")
+        logger.error("No problem has been started")
         raise HTTPException(status_code=400, detail="No problem has been started")
     problem_id = _conductor.problem_id
-    local_logger.debug(f"API returns Problem ID: {problem_id}")
+    logger.debug(f"API returns Problem ID: {problem_id}")
     return {"problem_id": problem_id}
 
 
@@ -99,13 +130,13 @@ def run_api(conductor):
     """
     global _server
     set_conductor(conductor)
-    local_logger.debug(f"API server is binded to the conductor {conductor}")
+    logger.debug(f"API server is binded to the conductor {conductor}")
 
     # Load from .env with defaults
     host = os.getenv("API_HOSTNAME", "0.0.0.0")
     port = int(os.getenv("API_PORT", "8000"))
 
-    local_logger.debug(f"API server starting on http://{host}:{port}")
+    logger.debug(f"API server starting on http://{host}:{port}")
 
     console = Console()
     art = pyfiglet.figlet_format("SREGym")
@@ -114,13 +145,19 @@ def run_api(conductor):
         Markdown(
             """
 **Available Endpoints**
-- **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage  
+- **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage
 - **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "done" }`
 """
         )
     )
 
-    config = Config(app=app, host=host, port=port, log_level="info")
+    config = Config(
+        app=app,
+        host=host,
+        port=port,
+        log_level="info",
+        timeout_graceful_shutdown=5,
+    )
     config.install_signal_handlers = False
     server = Server(config)
     _server = server  # expose to request_shutdown()
@@ -128,13 +165,13 @@ def run_api(conductor):
     # watcher thread: when _shutdown_event is set, flip server.should_exit
     def _watch():
         _shutdown_event.wait()
-        local_logger.debug("API server shutdown event received")
+        logger.debug("API server shutdown event received")
         server.should_exit = True
 
     threading.Thread(target=_watch, name="api-shutdown-watcher", daemon=True).start()
 
     try:
-        local_logger.debug("API server is running")
+        logger.debug("API server is running")
         server.run()  # blocks until should_exit becomes True
     finally:
         # cleanup for potential reuse

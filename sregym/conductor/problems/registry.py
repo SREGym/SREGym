@@ -1,3 +1,7 @@
+from pathlib import Path
+
+import yaml
+
 from sregym.conductor.problems.ad_service_failure import AdServiceFailure
 from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
@@ -7,6 +11,7 @@ from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import Capacity
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
+from sregym.conductor.problems.email_memory_leak import EmailMemoryLeak
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
@@ -20,13 +25,15 @@ from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.latent_sector_error import LatentSectorError
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
+from sregym.conductor.problems.llm_inaccurate_response import LlmInaccurateResponse
+from sregym.conductor.problems.llm_rate_limit_error import LlmRateLimitError
 from sregym.conductor.problems.load_spike_rpc_retry_storm import LoadSpikeRPCRetryStorm
 from sregym.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
 from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
 from sregym.conductor.problems.missing_service import MissingService
-from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures
+from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from sregym.conductor.problems.network_policy_block import NetworkPolicyBlock
 from sregym.conductor.problems.operator_misoperation.invalid_affinity_toleration import (
@@ -50,6 +57,7 @@ from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
+from sregym.conductor.problems.service_port_conflict import ServicePortConflict
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
@@ -130,6 +138,9 @@ class ProblemRegistry:
             "sidecar_port_conflict_astronomy_shop": lambda: SidecarPortConflict(app_name="astronomy_shop", faulty_service="frontend"),
             "sidecar_port_conflict_hotel_reservation": lambda: SidecarPortConflict(app_name="hotel_reservation", faulty_service="frontend"),
             "sidecar_port_conflict_social_network": lambda: SidecarPortConflict(app_name="social_network", faulty_service="user-service"),
+            "service_port_conflict_astronomy_shop": lambda: ServicePortConflict(app_name="astronomy_shop", faulty_service="ad"),
+            "service_port_conflict_hotel_reservation": lambda: ServicePortConflict(app_name="hotel_reservation", faulty_service="recommendation"),
+            "service_port_conflict_social_network": lambda: ServicePortConflict(app_name="social_network", faulty_service="media-service"),
             "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
             "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
@@ -143,9 +154,12 @@ class ProblemRegistry:
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
+            "astronomy_shop_ad_service_image_slow_load": ImageSlowLoad,
             "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,
             "astronomy_shop_cart_service_failure": CartServiceFailure,
-            "astronomy_shop_ad_service_image_slow_load": ImageSlowLoad,
+            "astronomy_shop_email_memory_leak": EmailMemoryLeak,
+            "astronomy_shop_llm_inaccurate_response": LlmInaccurateResponse,
+            "astronomy_shop_llm_rate_limit_error": LlmRateLimitError,
             "astronomy_shop_payment_service_failure": PaymentServiceFailure,
             "astronomy_shop_payment_service_unreachable": PaymentServiceUnreachable,
             "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
@@ -153,8 +167,8 @@ class ProblemRegistry:
             "kafka_queue_problems": KafkaQueueProblems,
             "loadgenerator_flood_homepage": LoadGeneratorFloodHomepage,
             # ==================== TRAIN TICKET FAULT INJECTOR ====================
-            # "trainticket_f17_nested_sql_select_clause_error": TrainTicketF17,
-            # "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
+            "trainticket_f17_nested_sql_select_clause_error": TrainTicketF17,
+            "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
             # ==================== HARDWARE FAULT INJECTOR ====================
             "latent_sector_error": LatentSectorError,
             "silent_data_corruption": SilentDataCorruption,
@@ -209,7 +223,39 @@ class ProblemRegistry:
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
-            "social_net_hotel_res_astro_shop_concurrent_failures": lambda: MultipleIndependentFailures(problems=[K8STargetPortMisconfig(faulty_service="user-service"),MongoDBRevokeAuth(faulty_service="mongodb-geo"),WrongServiceSelector(),]),
+            # "port_misconfig_revoke_auth_wrong_svc_selector": \
+            #     lambda: MultipleIndependentFailures(problems=[
+            #         K8STargetPortMisconfig(faulty_service="user-service"),
+            #         MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+            #         WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend")
+            # ]),
+            # another concurrent fault problem that deploys all three apps
+            # "port_misconfig_misconfig_hotelres_missing_env_var": \
+            #     lambda: MultipleIndependentFailures(problems=[
+            #         K8STargetPortMisconfig(faulty_service="user-service"),
+            #         MisconfigAppHotelRes(),
+            #         MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend")
+            # ]),
+            # three concurrent fault problems, each only focuses on one app
+            # astro shop
+            # "valkey_memory_disruption_missing_env_var_incorrect_port": \
+            #     lambda: MultipleIndependentFailures(problems=[
+            #         ValkeyAuthDisruption(),
+            #         MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend"),
+            #         IncorrectPortAssignment()
+            #     ]),
+            # hotel res
+            # "hotel_res_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
+            #     MisconfigAppHotelRes(),
+            #     MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+            #     MongoDBUserUnregistered(faulty_service="mongodb-rate")
+            # ]),
+            # social net
+            # "social_net_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
+            #     AssignNonExistentNode(),
+            #     MongoDBAuthMissing(),
+            #     LivenessProbeTooAggressive(app_name="social_network"),
+            # ]),
             # ad hoc:
             "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
@@ -237,12 +283,26 @@ class ProblemRegistry:
     def get_problem(self, problem_id: str):
         return self.PROBLEM_REGISTRY.get(problem_id)
 
-    def get_problem_ids(self, task_type: str = None):
+    def get_problem_ids(self, task_type: str = None, all: bool = False):
         if task_type:
-            return [k for k in self.PROBLEM_REGISTRY.keys() if task_type in k]
-        return list(self.PROBLEM_REGISTRY.keys())
+            return [k for k in self.PROBLEM_REGISTRY if task_type in k]
+        if all:
+            return list(self.PROBLEM_REGISTRY)
+
+        # by default, only run problems defined in tasklist.yml
+        file_dir = Path(__file__).parent.parent
+        tasklist_path = file_dir / "tasklist.yml"
+
+        if not tasklist_path.exists():
+            # if tasklist.yml does not exist, run all the problems
+            return list(self.PROBLEM_REGISTRY)
+
+        with open(tasklist_path) as f:
+            tasklist = yaml.safe_load(f)
+        return list(tasklist["all"]["problems"])
+
 
     def get_problem_count(self, task_type: str = None):
         if task_type:
-            return len([k for k in self.PROBLEM_REGISTRY.keys() if task_type in k])
+            return len([k for k in self.PROBLEM_REGISTRY if task_type in k])
         return len(self.PROBLEM_REGISTRY)

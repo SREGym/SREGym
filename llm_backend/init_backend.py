@@ -11,7 +11,7 @@ load_dotenv()
 
 
 def load_model_config():
-    with open(os.path.join(os.path.dirname(__file__), "configs.yaml"), "r") as f:
+    with open(os.path.join(os.path.dirname(__file__), "configs.yaml")) as f:
         configs = yaml.load(f, Loader=yaml.FullLoader)
     return configs
 
@@ -25,7 +25,7 @@ def set_param(params, config, field, default_value, required=False):
     elif default_value is not None:
         value_or_env = default_value
 
-    if value_or_env is not None and type(value_or_env) == str and value_or_env.startswith("$"):
+    if value_or_env is not None and isinstance(value_or_env, str) and value_or_env.startswith("$"):
         key = value_or_env[1:]
         if key in os.environ:
             value_to_set = os.environ[key]
@@ -37,23 +37,25 @@ def set_param(params, config, field, default_value, required=False):
         params[field] = value_to_set
     else:
         if required:
-            print(f"Unable to find value for required field - {field}. Exiting...")
-            exit(1)
+            error_msg = f"Unable to find value for required field - {field}"
+            print(f"{error_msg}. Exiting...")
+            raise ValueError(error_msg)
         # else do nothing
 
 
 def get_llm_backend_for_tools():
     llm_config = load_model_config()
 
-    MODEL_ID = os.environ.get("MODEL_ID", "gpt-4o")
-    print("Found MODEL_ID: ", MODEL_ID)
+    JUDGE_MODEL_ID = os.environ.get("JUDGE_MODEL_ID", "gpt-5")
+    print("Found MODEL_ID for judge: ", JUDGE_MODEL_ID)
 
-    if MODEL_ID not in llm_config:
-        print(
-            f"Unable to find model configuration - {MODEL_ID}. Available models: {[key for key in llm_config.keys()]}"
+    if JUDGE_MODEL_ID not in llm_config:
+        error_msg = (
+            f"Unable to find model configuration - {JUDGE_MODEL_ID}. Available models: {list(llm_config.keys())}"
         )
-        exit(1)
-    model_config = llm_config[MODEL_ID]
+        print(error_msg)
+        raise ValueError(error_msg)
+    model_config = llm_config[JUDGE_MODEL_ID]
 
     if model_config["provider"] == "litellm":
         config_params = {
@@ -72,8 +74,6 @@ def get_llm_backend_for_tools():
                 print(f"Setting Azure API version env from config - {model_config['azure_version']}")
                 os.environ["AZURE_API_VERSION"] = model_config["azure_version"]
 
-        print("Making LiteLLMBackend with config_params: ", config_params)
-
         return LiteLLMBackend(**config_params)
 
     elif model_config["provider"] == "openai":
@@ -86,8 +86,6 @@ def get_llm_backend_for_tools():
         set_param(config_params, model_config, "top_p", 0.95)
         set_param(config_params, model_config, "temperature", 0.0)
         set_param(config_params, model_config, "max_tokens", None)
-
-        print("Making LiteLLMBackend with config_params: ", config_params)
 
         return LiteLLMBackend(**config_params)
 
@@ -103,8 +101,6 @@ def get_llm_backend_for_tools():
         set_param(config_params, model_config, "temperature", 0.0)
         set_param(config_params, model_config, "max_tokens", None)
         set_param(config_params, model_config, "wx_project_id", "$WX_PROJECT_ID", required=True)
-
-        print("Making LiteLLMBackend with config_params: ", config_params)
 
         return LiteLLMBackend(**config_params)
 

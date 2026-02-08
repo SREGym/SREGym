@@ -1,7 +1,8 @@
 import json
+import logging
 
 from sregym.paths import TARGET_MICROSERVICES
-import logging
+
 
 class Application:
     """Base class for all microservice applications."""
@@ -13,9 +14,9 @@ class Application:
         self.helm_deploy = True
         self.helm_configs = {}
         self.k8s_deploy_path = None
-        self.local_logger = logging.getLogger("all.application")
-        self.local_logger.propagate = True
-        self.local_logger.setLevel(logging.DEBUG)
+        self.logger = logging.getLogger("all.application")
+        self.logger.propagate = True
+        self.logger.setLevel(logging.DEBUG)
 
     def load_app_json(self):
         """Load (basic) application metadata into attributes.
@@ -69,12 +70,12 @@ class Application:
         """Create the namespace for the application if it doesn't exist."""
         result = self.kubectl.exec_command(f"kubectl get namespace {self.namespace}")
         if "notfound" in result.lower():
-            self.local_logger.info(f"Namespace {self.namespace} not found. Creating namespace.")
+            self.logger.info(f"Namespace {self.namespace} not found. Creating namespace.")
             create_namespace_command = f"kubectl create namespace {self.namespace}"
             create_result = self.kubectl.exec_command(create_namespace_command)
-            self.local_logger.info(f"Namespace {self.namespace} created successfully: {create_result}")
+            self.logger.info(f"Namespace {self.namespace} created successfully: {create_result}")
         else:
-            self.local_logger.info(f"Namespace {self.namespace} already exists.")
+            self.logger.info(f"Namespace {self.namespace} already exists.")
 
     def cleanup(self):
         """Delete the entire namespace for the application."""

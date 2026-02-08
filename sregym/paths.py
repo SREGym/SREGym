@@ -19,6 +19,7 @@ FAULT_SCRIPTS = BASE_DIR / "generators" / "fault" / "script"
 SOCIAL_NETWORK_METADATA = BASE_DIR / "service" / "metadata" / "social-network.json"
 HOTEL_RES_METADATA = BASE_DIR / "service" / "metadata" / "hotel-reservation.json"
 PROMETHEUS_METADATA = BASE_DIR / "service" / "metadata" / "prometheus.json"
+LOKI_METADATA = BASE_DIR / "service" / "metadata" / "loki.json"
 TRAIN_TICKET_METADATA = BASE_DIR / "service" / "metadata" / "train-ticket.json"
 ASTRONOMY_SHOP_METADATA = BASE_DIR / "service" / "metadata" / "astronomy-shop.json"
 TIDB_METADATA = BASE_DIR / "service" / "metadata" / "tidb-with-operator.json"
@@ -28,3 +29,6 @@ BLUEPRINT_HOTEL_RES_METADATA = BASE_DIR / "service" / "metadata" / "blueprint-ho
 
 # Khaos DaemonSet
 KHAOS_DS = BASE_DIR / "service" / "khaos.yaml"
+
+# MCP Server
+MCP_SERVER_K8S = BASE_PARENT_DIR / "mcp_server" / "k8s"

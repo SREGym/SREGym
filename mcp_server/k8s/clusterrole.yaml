@@ -1,0 +1,75 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mcp-server
+  labels:
+    app.kubernetes.io/name: mcp-server
+    app.kubernetes.io/component: mcp-server
+rules:
+  # Core resources - full access for kubectl operations
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - pods/exec
+      - services
+      - endpoints
+      - configmaps
+      - secrets
+      - persistentvolumeclaims
+      - events
+      - resourcequotas
+      - limitranges
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+
+  # Core resources - read-only
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - nodes
+      - persistentvolumes
+    verbs: ["get", "list", "watch"]
+
+  # Apps API group
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+      - replicasets
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+
+  # Batch API group
+  - apiGroups: ["batch"]
+    resources:
+      - jobs
+      - cronjobs
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+
+  # Autoscaling API group
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+
+  # Networking API group
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - networkpolicies
+    verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
+
+  # RBAC (read-only)
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - clusterroles
+      - clusterrolebindings
+      - roles
+      - rolebindings
+    verbs: ["get", "list", "watch"]
+
+  # Custom resources (TiDB)
+  - apiGroups: ["pingcap.com"]
+    resources:
+      - tidbclusters
+    verbs: ["get", "list", "watch"]

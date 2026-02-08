@@ -7,9 +7,9 @@ from kubernetes.config.config_exception import ConfigException
 
 from sregym.conductor.oracles.base import Oracle
 
-local_logger = getLogger("all.sregym.diagnosis_oracle")
-local_logger.propagate = True
-local_logger.setLevel(logging.DEBUG)
+logger = getLogger("all.sregym.diagnosis_oracle")
+logger.propagate = True
+logger.setLevel(logging.DEBUG)
 
 
 class DiagnosisOracle(Oracle):
@@ -36,7 +36,7 @@ class DiagnosisOracle(Oracle):
                 return False  # TODO: support fp and fn
             return all(e in set(reality) for e in expectation)
         else:
-            local_logger.warning(
+            logger.warning(
                 f"Expectation and reality are not both string or list, can not compare. Expectation: {expectation}, Reality: {reality}"
             )
             return False
@@ -49,7 +49,7 @@ class DiagnosisOracle(Oracle):
 
         if not consistent:
             # just warn, do not panic
-            local_logger.warning(
+            logger.warning(
                 f"Checkpoints are not consistent, old: {self.checkpoint}, new: {new_expectation}. Possibly the environment is unstable."
             )
 
@@ -147,7 +147,7 @@ class DiagnosisOracle(Oracle):
         # load the solution
         solution = self.safe_parse_solution(solution)
         if solution is None:
-            local_logger.warning(f"Invalid format: expected string or list of strings. Solution: {solution}")
+            logger.warning(f"Invalid format: expected string or list of strings. Solution: {solution}")
             return {
                 "success": False,
                 "accuracy": 0.0,
@@ -157,7 +157,7 @@ class DiagnosisOracle(Oracle):
         # get compare the new expectation with the checkpoint
         correctness = self.compare_truth(new_expectation, solution)
 
-        local_logger.info(
+        logger.info(
             f"Eval Diagnosis: new_expectation: {new_expectation}, solution: {solution} | {"✅" if correctness else "❌"}"
         )
 
@@ -182,7 +182,7 @@ class DiagnosisOracle(Oracle):
 
             # fallback, use io.kompose.service label
             if len(pods) == 0:
-                local_logger.debug("fallback to io.kompose.service label")
+                logger.debug("fallback to io.kompose.service label")
                 pods_list = client.CoreV1Api().list_namespaced_pod(
                     namespace=namespace, label_selector=f"io.kompose.service={deployment_name}"
                 )
@@ -191,7 +191,7 @@ class DiagnosisOracle(Oracle):
 
             # fallback 2, use opentelemetry label to select the pod
             if len(pods) == 0:
-                local_logger.debug("fallback to opentelemetry label")
+                logger.debug("fallback to opentelemetry label")
                 pods_list = client.CoreV1Api().list_namespaced_pod(
                     namespace=namespace, label_selector=f"opentelemetry.io/name={deployment_name}"
                 )

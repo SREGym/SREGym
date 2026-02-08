@@ -8,13 +8,11 @@ from .handler import ColorFormatter, ExhaustInfoFormatter
 
 def get_current_datetime_formatted():
     now = datetime.now()
-    formatted_datetime = now.strftime("%m-%d_%H-%M")
+    formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
 
 
 def init_logger():
-    logging.getLogger("sregym-global").setLevel(logging.INFO)
-    logging.getLogger("sregym-global").propagate = False  # do not propagate to the real root logger ('')
 
     # set up the logger for log file
     root_logger = logging.getLogger("all")

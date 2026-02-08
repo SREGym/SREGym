@@ -1,8 +1,10 @@
+import io
+
+import numpy as np
+import pandas as pd
+
 from sregym.conductor.oracles.base import Oracle
 
-import pandas as pd
-import numpy as np
-import io
 
 class RPCRetryStormMitigationOracle(Oracle):
     importance = 1.0
@@ -13,22 +15,22 @@ class RPCRetryStormMitigationOracle(Oracle):
             df = pd.read_csv(io.StringIO(csv_file_path))
 
             # Ensure correct column names
-            if 'Second' not in df.columns or 'AverageLatency(ns)' not in df.columns:
-                print(f"Error: CSV file is missing required columns")
+            if "Second" not in df.columns or "AverageLatency(ns)" not in df.columns:
+                print("Error: CSV file is missing required columns")
                 return False
 
             # Convert data types
-            df['Second'] = pd.to_numeric(df['Second'], errors='coerce')
-            df['AverageLatency(ns)'] = pd.to_numeric(df['AverageLatency(ns)'], errors='coerce')
+            df["Second"] = pd.to_numeric(df["Second"], errors="coerce")
+            df["AverageLatency(ns)"] = pd.to_numeric(df["AverageLatency(ns)"], errors="coerce")
 
             # Remove invalid data
             df = df.dropna()
 
             # Extract 5-55 seconds data
-            early_period = df[(df['Second'] >= 5) & (df['Second'] <= 55)]
+            early_period = df[(df["Second"] >= 5) & (df["Second"] <= 55)]
 
             # Extract 95-119 seconds data
-            late_period = df[(df['Second'] >= 95) & (df['Second'] <= 119)]
+            late_period = df[(df["Second"] >= 95) & (df["Second"] <= 119)]
 
             # Check if data is sufficient
             if len(early_period) < 30 or len(late_period) < 15:
@@ -36,8 +38,8 @@ class RPCRetryStormMitigationOracle(Oracle):
                 return False
 
             # Get latency data
-            early_latency = early_period['AverageLatency(ns)'].values
-            late_latency = late_period['AverageLatency(ns)'].values
+            early_latency = early_period["AverageLatency(ns)"].values
+            late_latency = late_period["AverageLatency(ns)"].values
 
             # Calculate statistics
             early_mean = np.mean(early_latency)
@@ -50,7 +52,7 @@ class RPCRetryStormMitigationOracle(Oracle):
 
             # Standard 1: Mean Comparison
             # If the late mean is significantly higher than the early mean (exceeds the threshold ratio), it is deemed inconsistent
-            mean_ratio = late_mean / early_mean if early_mean > 0 else float('inf')
+            mean_ratio = late_mean / early_mean if early_mean > 0 else float("inf")
             print(f"Mean Ratio: {mean_ratio:.2f}")
 
             if mean_ratio > threshold_ratio:
@@ -75,7 +77,9 @@ class RPCRetryStormMitigationOracle(Oracle):
             late_median = np.median(late_latency)
 
             if late_median > early_median * 100:  # Define a significant jump in magnitude
-                print(f"Significant jump in magnitude detected: Late median is {late_median/early_median:.1f} times the Early median")
+                print(
+                    f"Significant jump in magnitude detected: Late median is {late_median / early_median:.1f} times the Early median"
+                )
                 return False
 
             # Standard 4: Outlier Detection
@@ -87,7 +91,7 @@ class RPCRetryStormMitigationOracle(Oracle):
             print(f"Late outlier ratio: {late_outlier_ratio:.2%}")
 
             if late_outlier_ratio > 0.3:  # If more than 30% of points are outliers
-                print(f"Late outlier ratio is too high")
+                print("Late outlier ratio is too high")
                 return False
 
             # Standard 5: Persistent Degradation Detection
@@ -102,7 +106,9 @@ class RPCRetryStormMitigationOracle(Oracle):
             degraded_points = np.sum(late_latency > early_threshold * persistent_degradation_threshold)
             degraded_ratio = degraded_points / len(late_latency)
 
-            print(f"Persistent degradation ratio: {degraded_ratio:.2%} (Points exceeding early 95th percentile by {persistent_degradation_threshold} times)")
+            print(
+                f"Persistent degradation ratio: {degraded_ratio:.2%} (Points exceeding early 95th percentile by {persistent_degradation_threshold} times)"
+            )
 
             if degraded_ratio > persistent_degradation_ratio:
                 print(f"Persistent degradation detected: {degraded_ratio:.2%} > {persistent_degradation_ratio:.2%}")
@@ -113,23 +119,25 @@ class RPCRetryStormMitigationOracle(Oracle):
             points_above_mean_threshold = np.sum(late_latency > early_mean_threshold)
             ratio_above_mean = points_above_mean_threshold / len(late_latency)
 
-            print(f"Late points exceeding early mean by {persistent_degradation_threshold} times: {ratio_above_mean:.2%}")
-            
+            print(
+                f"Late points exceeding early mean by {persistent_degradation_threshold} times: {ratio_above_mean:.2%}"
+            )
+
             if ratio_above_mean > persistent_degradation_ratio:
                 print(f"Persistent degradation detected: {ratio_above_mean:.2%} > {persistent_degradation_ratio:.2%}")
                 return False
 
             print("Latency trend is consistent")
             return True
-            
+
         except Exception as e:
             print(f"An error occurred during analysis: {e}")
             return False
 
-    def run_workload(self, problem, kubectl, namespace='default'):
+    def run_workload(self, problem, kubectl, namespace="default"):
         problem.start_workload()
         job_name = problem.wrk.job_name
-        kubectl.wait_for_job_completion(job_name=job_name, namespace=namespace, timeout=1200)
+        kubectl.wait_for_job_completion(job_name=job_name, namespace=namespace, timeout=1500)
         workentries = problem.wrk.retrievelog()
         workentry = workentries[0] if workentries else None
         print(f"Workload Entry: {workentry}")

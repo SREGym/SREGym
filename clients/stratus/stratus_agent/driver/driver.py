@@ -1,3 +1,4 @@
+import os
 import sys
 from pathlib import Path
 
@@ -27,8 +28,6 @@ init_logger()
 
 import logging
 
-import mlflow
-
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig
 from clients.stratus.stratus_agent.diagnosis_agent import single_run_with_predefined_prompts as diagnosis_single_run
 from clients.stratus.stratus_agent.mitigation_agent import (
@@ -52,7 +51,7 @@ logger.setLevel(logging.DEBUG)
 
 def get_current_datetime_formatted():
     now = datetime.now()
-    formatted_datetime = now.strftime("%m-%d_%H-%M")
+    formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
 
 
@@ -70,8 +69,8 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir="."):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    trajectory_file = output_dir / f"stratus_agent_trajectory_{problem_id}_{timestamp}.jsonl"
+    timestamp = get_current_datetime_formatted()
+    trajectory_file = output_dir / f"{timestamp}_{problem_id}_stratus_agent_trajectory.jsonl"
 
     def serialize_message(message):
         """Convert a LangChain message to a serializable dict"""
@@ -212,6 +211,29 @@ def get_curr_problem():
         return problem["problem_id"]
     except Exception as e:
         logger.error(f"[get_curr_problem] HTTP submission failed: {e}")
+        return "error"
+
+
+def get_benchmark_status():
+    """
+    Check the current status of the benchmark.
+    Returns the status string (e.g., "diagnosis", "mitigation", "done") or "error" on failure.
+    """
+    try:
+        # Construct the status URL from the benchmark API (not the MCP URL)
+        # The status endpoint is at http://localhost:API_PORT/status
+        api_port = os.getenv("API_PORT", "8000")
+        status_url = f"http://localhost:{api_port}/status"
+
+        response = requests.get(status_url, timeout=5)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("stage", "error")
+        else:
+            logger.warning(f"Failed to get benchmark status: {response.status_code}")
+            return "error"
+    except Exception as e:
+        logger.warning(f"Exception while getting benchmark status: {e}")
         return "error"
 
 
@@ -454,10 +476,17 @@ async def mitigation_task_main(diagnosis_summary):
             rollback_stack_lst.append("N/A, naive retry")
 
             # getting oracle result
-            oracle_results = await validate_oracles(oracles)
-            oracle_results_lst.append(str(oracle_results))
-            logger.info(f"oracle results: {oracle_results}")
-            if oracle_results[0] is True:
+            try:
+                oracle_results = await validate_oracles(oracles)
+                oracle_results_lst.append(str(oracle_results))
+                logger.info(f"oracle results: {oracle_results}")
+                has_succeeded = oracle_results[0] is True
+            except Exception as e:
+                logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
+                oracle_results = [False, []]
+                oracle_results_lst.append(f"Oracle error: {str(e)}")
+                has_succeeded = False
+            if has_succeeded:
                 # agent succeeds, let's finish here.
                 logger.info("agent succeeds, breaking!")
                 break
@@ -547,9 +576,15 @@ async def mitigation_task_main(diagnosis_summary):
             rollback_stack_lst.append("N/A, mitigation agent")
 
             # getting oracle result
-            oracle_results = await validate_oracles(oracles)
-            oracle_results_lst.append(str(oracle_results))
-            has_succeeded = oracle_results[0]
+            try:
+                oracle_results = await validate_oracles(oracles)
+                oracle_results_lst.append(str(oracle_results))
+                has_succeeded = oracle_results[0]
+            except Exception as e:
+                logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
+                oracle_results = [False, []]
+                oracle_results_lst.append(f"Oracle error: {str(e)}")
+                has_succeeded = False
             if has_succeeded:
                 # agent succeeds, let's finish here.
                 logger.info("agent succeeds! manually submitting for the agent")
@@ -608,10 +643,6 @@ async def mitigation_task_main(diagnosis_summary):
 
 
 async def main():
-    # Enable MLflow tracing for all LangGraph agents
-    mlflow.langchain.autolog()
-    logger.info("MLflow tracing enabled")
-
     # run diagnosis agent 2 times
     # here, running the file's main function should suffice.
     # 1 for noop diagnosis
@@ -687,26 +718,47 @@ async def main():
     diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path, "r"))
 
     # Check if diagnosis prompts have the summary prompt, otherwise use a default key
-    summary_prompt_key = "diagnosis_summary_prompt" if "diagnosis_summary_prompt" in diagnosis_agent_prompts else "localization_summary_prompt"
+    summary_prompt_key = (
+        "diagnosis_summary_prompt"
+        if "diagnosis_summary_prompt" in diagnosis_agent_prompts
+        else "localization_summary_prompt"
+    )
     diagnosis_fault_summary = generate_run_summary(
         diagnosis_agent_last_state, diagnosis_agent_prompts[summary_prompt_key]
     )
 
-    # run mitigation task 1 time for mitigation
-    # it includes retry logics
-    logger.info("*" * 25 + " Starting [mitigation agent] for [mitigation] " + "*" * 25)
-    mitigation_agent_exec_stats, mitigation_graph_events = await mitigation_task_main(diagnosis_fault_summary)
-    all_trajectories.extend(mitigation_graph_events)
-    agent_names.extend(mitigation_agent_exec_stats["agent_name"])
-    agent_in_tokens.extend(mitigation_agent_exec_stats["input_tokens"])
-    agent_out_tokens.extend(mitigation_agent_exec_stats["output_tokens"])
-    agent_total_tokens.extend(mitigation_agent_exec_stats["total_tokens"])
-    agent_times.extend(mitigation_agent_exec_stats["time"])
-    agent_steps.extend(mitigation_agent_exec_stats["steps"])
-    agent_retry_attempts.extend(mitigation_agent_exec_stats["num_retry_attempts"])
-    agent_rollback_stack.extend(mitigation_agent_exec_stats["rollback_stack"])
-    agent_oracle_results.extend(mitigation_agent_exec_stats["oracle_results"])
-    logger.info("*" * 25 + " Finished [mitigation agent] " + "*" * 25)
+    # Check benchmark status before attempting to run mitigation
+    # If the benchmark is already done (e.g., no mitigation oracle configured),
+    # we should skip mitigation to avoid the race condition
+    benchmark_status = get_benchmark_status()
+    logger.info(f"Benchmark status after diagnosis: {benchmark_status}")
+
+    if benchmark_status == "done":
+        logger.info(
+            "Benchmark is already in 'done' status. Skipping mitigation agent. "
+            "This typically means the problem does not have a mitigation oracle configured."
+        )
+    elif benchmark_status == "mitigation":
+        # run mitigation task 1 time for mitigation
+        # it includes retry logics
+        logger.info("*" * 25 + " Starting [mitigation agent] for [mitigation] " + "*" * 25)
+        mitigation_agent_exec_stats, mitigation_graph_events = await mitigation_task_main(diagnosis_fault_summary)
+        all_trajectories.extend(mitigation_graph_events)
+        agent_names.extend(mitigation_agent_exec_stats["agent_name"])
+        agent_in_tokens.extend(mitigation_agent_exec_stats["input_tokens"])
+        agent_out_tokens.extend(mitigation_agent_exec_stats["output_tokens"])
+        agent_total_tokens.extend(mitigation_agent_exec_stats["total_tokens"])
+        agent_times.extend(mitigation_agent_exec_stats["time"])
+        agent_steps.extend(mitigation_agent_exec_stats["steps"])
+        agent_retry_attempts.extend(mitigation_agent_exec_stats["num_retry_attempts"])
+        agent_rollback_stack.extend(mitigation_agent_exec_stats["rollback_stack"])
+        agent_oracle_results.extend(mitigation_agent_exec_stats["oracle_results"])
+        logger.info("*" * 25 + " Finished [mitigation agent] " + "*" * 25)
+    else:
+        logger.warning(
+            f"Unexpected benchmark status: {benchmark_status}. Expected 'mitigation' or 'done'. "
+            "Skipping mitigation agent to be safe."
+        )
 
     for lst in [
         agent_names,

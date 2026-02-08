@@ -24,7 +24,6 @@ dependencies = [
     "azure-storage-file-share==12.21.0",
     "bashlex>=0.18",
     "bcrypt==4.3.0",
-    "black==24.10.0",
     "blake3==1.0.5",
     "boto3>=1.28.57",
     "bs4>=0.0.2",
@@ -158,8 +157,6 @@ dependencies = [
     "dash>=3.2.0",
     "aiosignal>=1.3.2",
     "locust>=2.42.3",
-    "mlflow>=3.8.0",
-    "matplotlib>=3.10.8",
 ]
 
 [tool.black]
@@ -169,6 +166,40 @@ target-version = ["py312"]
 [tool.isort]
 profile = "black"
 line_length = 120
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+exclude = [
+    "SREGym-applications",
+    ".venv",
+    "build",
+    "*.egg-info",
+]
+
+[tool.ruff.lint]
+fixable = ["ALL"]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # Pyflakes
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "I",    # isort
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # function calls in defaults (FastAPI pattern)
+    "SIM102", # nested if statements
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["sregym", "clients", "provisioner", "scripts"]
+
+[tool.ruff.format]
+quote-style = "double"
+docstring-code-format = true
 
 [build-system]
 requires = ["setuptools>=80.8.0"]
@@ -180,7 +211,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["sregym", "clients", "provisioner", "scripts"]
+packages = ["sregym", "clients", "scripts"]
 
 [tool.uv.sources]
 geni-lib-xlab = { path = "scripts/geni_lib/mod/geni_lib_xlab-1.0.0.tar.gz" }
