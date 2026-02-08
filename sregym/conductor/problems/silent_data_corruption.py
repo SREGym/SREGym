@@ -1,18 +1,13 @@
-from enum import StrEnum
 import json
-import time
-from typing import Optional
+from enum import StrEnum
 
-from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_kernel import KernelInjector
 from sregym.service.apps.hotel_reservation import HotelReservation
+from sregym.service.dm_flakey_manager import DM_FLAKEY_DEVICE_NAME, DmFlakeyManager
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
-from sregym.conductor.oracles.localization import LocalizationOracle
-from sregym.service.dm_flakey_manager import DM_FLAKEY_DEVICE_NAME, DmFlakeyManager
-from sregym.conductor.oracles.workload import WorkloadOracle
 
 
 class SilentDataCorruptionStrategy(StrEnum):
@@ -22,13 +17,12 @@ class SilentDataCorruptionStrategy(StrEnum):
 
 
 class SilentDataCorruption(Problem):
-
     def __init__(
         self,
         target_deploy: str = "mongodb-geo",
         namespace: str = "hotel-reservation",
         strategy: SilentDataCorruptionStrategy = SilentDataCorruptionStrategy.BOTH_CORRUPT,
-        probability: int = 100, # (0-100)% probability 
+        probability: int = 100,  # (0-100)% probability
         up_interval: int = 0,  # Seconds device is healthy
         down_interval: int = 1,  # Seconds device corrupts data
     ):
@@ -38,16 +32,18 @@ class SilentDataCorruption(Problem):
         self.deploy = target_deploy
         self.injector = KernelInjector(self.kubectl)
         self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
-        self.target_node: Optional[str] = None
+        self.target_node: str | None = None
         self.strategy = strategy
         self.probability = probability
         self.up_interval = up_interval
         self.down_interval = down_interval
-        self.probability = self.probability * 10000000 # (0-1000000000 scale) for (0-100% probability)
+        self.probability = self.probability * 10000000  # (0-1000000000 scale) for (0-100% probability)
 
         super().__init__(app=self.app, namespace=self.app.namespace)
 
-        self.root_cause = "There's a silent data corruption on the hard drive that the mongodb-geo service's data is on."
+        self.root_cause = (
+            "There's a silent data corruption on the hard drive that the mongodb-geo service's data is on."
+        )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
@@ -57,7 +53,7 @@ class SilentDataCorruption(Problem):
         """This problem requires Khaos for dm-flakey infrastructure setup."""
         return True
 
-    def _discover_node_for_deploy(self) -> Optional[str]:
+    def _discover_node_for_deploy(self) -> str | None:
         """Return the node where the target deployment is running."""
         # First try with a label selector (common OpenEBS hotel-reservation pattern)
         svc = self.deploy.split("-", 1)[-1]  # e.g. "geo"
@@ -83,7 +79,7 @@ class SilentDataCorruption(Problem):
 
         return None
 
-    def _get_mongodb_pod(self) -> Optional[str]:
+    def _get_mongodb_pod(self) -> str | None:
         svc = self.deploy.split("-", 1)[-1]
         cmd = f"kubectl -n {self.namespace} get pods -l app=mongodb,component={svc} -o jsonpath='{{.items[0].metadata.name}}'"
         out = self.kubectl.exec_command(cmd)
@@ -119,7 +115,7 @@ class SilentDataCorruption(Problem):
             f"--quiet --username admin --password admin --authenticationDatabase admin"
         )
         try:
-            out = self.kubectl.exec_command(write_cmd)
+            self.kubectl.exec_command(write_cmd)
             fsync_cmd = (
                 f"kubectl -n {self.namespace} exec {pod_name} -- "
                 f"mongo {db_name} --eval 'db.runCommand({{fsync: 1}})' "
@@ -131,7 +127,7 @@ class SilentDataCorruption(Problem):
         except Exception:
             return False
 
-    def mongo_read(self, hotel_id: str) -> Optional[dict]:
+    def mongo_read(self, hotel_id: str) -> dict | None:
         pod_name = self._get_mongodb_pod()
         if not pod_name:
             return None
@@ -143,7 +139,7 @@ class SilentDataCorruption(Problem):
             f"--quiet --username admin --password admin --authenticationDatabase admin"
         )
         try:
-            out = self.kubectl.exec_command(read_cmd)
+            self.kubectl.exec_command(read_cmd)
         except Exception:
             return None
 
@@ -153,7 +149,7 @@ class SilentDataCorruption(Problem):
         Returns features like: "random_read_corrupt 500000000" or "random_read_corrupt 500000000 random_write_corrupt 500000000"
         """
         features = []
-        
+
         if self.strategy == SilentDataCorruptionStrategy.READ_CORRUPT:
             features.append(f"random_read_corrupt {self.probability}")
         elif self.strategy == SilentDataCorruptionStrategy.WRITE_CORRUPT:
@@ -161,7 +157,7 @@ class SilentDataCorruption(Problem):
         elif self.strategy == SilentDataCorruptionStrategy.BOTH_CORRUPT:
             features.append(f"random_read_corrupt {self.probability}")
             features.append(f"random_write_corrupt {self.probability}")
-        
+
         return " ".join(features)
 
     @mark_fault_injected
@@ -175,7 +171,7 @@ class SilentDataCorruption(Problem):
 
         print(f"[SDC] Target node: {self.target_node}")
         print(f"[SDC] Strategy: {self.strategy}")
-        print(f"[SDC] Probability: {self.probability}/1000000000 ({self.probability/10000000:.1f}%)")
+        print(f"[SDC] Probability: {self.probability}/1000000000 ({self.probability / 10000000:.1f}%)")
         print(f"[SDC] Up interval: {self.up_interval}s, Down interval: {self.down_interval}s")
 
         # Get corruption features string
@@ -184,51 +180,50 @@ class SilentDataCorruption(Problem):
 
         # The dm-flakey device is already set up by DmFlakeyManager in Conductor
         # We just need to configure it with corruption features
-        
-        print(f"[SDC] Configuring dm-flakey device for corruption...")
+
+        print("[SDC] Configuring dm-flakey device for corruption...")
         self.injector.dm_flakey_reload(
             self.target_node,
             DM_FLAKEY_DEVICE_NAME,
             up_interval=self.up_interval,
             down_interval=self.down_interval,
-            features=features
+            features=features,
         )
 
-        print(f"[SDC] Triggering MongoDB write and read to exercise corruption...")
+        print("[SDC] Triggering MongoDB write and read to exercise corruption...")
         import random
+
         for _ in range(10):
-            test_id = "SDC_TRIGGER_"+str(random.randint(0, 10000))
-            lat = 30 + random.randint(0, 10000)*0.0001
-            lon = -120 + random.randint(0, 10000)*0.0001
+            test_id = "SDC_TRIGGER_" + str(random.randint(0, 10000))
+            lat = 30 + random.randint(0, 10000) * 0.0001
+            lon = -120 + random.randint(0, 10000) * 0.0001
             self.mongo_write(test_id, lat, lon)
             self.injector.drop_caches(self.target_node, show_log=False)
             self.mongo_read(test_id)
 
-        print(f"[SDC] Silent data corruption injection complete")
+        print("[SDC] Silent data corruption injection complete")
         if self.up_interval == 0:
-            print(f"[SDC] ⚠️  Device corruption is ALWAYS ACTIVE (no healthy intervals)")
+            print("[SDC] ⚠️  Device corruption is ALWAYS ACTIVE (no healthy intervals)")
         else:
-            print(f"[SDC] Device will corrupt data for {self.down_interval}s every {self.up_interval + self.down_interval}s")
+            print(
+                f"[SDC] Device will corrupt data for {self.down_interval}s every {self.up_interval + self.down_interval}s"
+            )
 
     @mark_fault_injected
     def recover_fault(self):
-        print(f"[SDC] Starting recovery from silent data corruption")
+        print("[SDC] Starting recovery from silent data corruption")
 
         # Restore dm-flakey device to normal operation
         if hasattr(self, "target_node") and self.target_node:
             print(f"[SDC] Restoring dm-flakey device to normal operation on {self.target_node}")
             self.injector.dm_flakey_reload(
-                self.target_node,
-                DM_FLAKEY_DEVICE_NAME,
-                up_interval=1,
-                down_interval=0,
-                features=""
+                self.target_node, DM_FLAKEY_DEVICE_NAME, up_interval=1, down_interval=0, features=""
             )
-            print(f"[SDC] ✅ dm-flakey device restored to normal operation")
-        
+            print("[SDC] ✅ dm-flakey device restored to normal operation")
+
         # Clean up and redeploy the app
         self.app.cleanup()
-        
+
         try:
             cleanup_pods = self.kubectl.exec_command(
                 "kubectl get pods -n openebs --no-headers | grep 'cleanup-pvc-' | awk '{print $1}'"
@@ -241,9 +236,9 @@ class SilentDataCorruption(Problem):
                 print(f"[SDC] Cleaned up {len(pod_list)} OpenEBS cleanup pod(s)")
         except Exception as e:
             print(f"[SDC] ⚠️  Warning: Failed to clean up OpenEBS cleanup pods: {e}")
-        
-        self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure() # This helps clean up any corrupted data on the affected storage directories
+
+        self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()  # This helps clean up any corrupted data on the affected storage directories
         self.app.deploy()
         self.app.start_workload()
-        
-        print(f"[SDC] ✅ Recovery complete - App restarted with clean state")
+
+        print("[SDC] ✅ Recovery complete - App restarted with clean state")

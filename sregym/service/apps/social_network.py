@@ -3,7 +3,6 @@
 import logging
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
-from sregym.observer.trace_api import TraceAPI
 from sregym.paths import SOCIAL_NETWORK_METADATA, TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
 from sregym.service.apps.helpers import get_frontend_url
@@ -20,7 +19,6 @@ class SocialNetwork(Application):
         super().__init__(SOCIAL_NETWORK_METADATA)
         self.load_app_json()
         self.kubectl = KubeCtl()
-        self.trace_api = None
         self.local_tls_path = TARGET_MICROSERVICES / "socialNetwork/helm-chart/socialnetwork"
 
         self.payload_script = TARGET_MICROSERVICES / "socialNetwork/wrk2/scripts/social-network/mixed-workload.lua"
@@ -79,8 +77,6 @@ class SocialNetwork(Application):
 
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
-        self.trace_api = TraceAPI(self.namespace)
-        self.trace_api.start_port_forward()
 
     def delete(self):
         """Delete the Helm configurations."""
@@ -88,8 +84,6 @@ class SocialNetwork(Application):
 
     def cleanup(self):
         """Delete the entire namespace for the social network application."""
-        if self.trace_api:
-            self.trace_api.stop_port_forward()
         Helm.uninstall(**self.helm_configs)
 
         if hasattr(self, "wrk"):

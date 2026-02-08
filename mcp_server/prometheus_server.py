@@ -1,5 +1,4 @@
 import contextlib
-import os
 
 from fastmcp import Context, FastMCP
 
@@ -35,10 +34,7 @@ def get_metrics(query: str, ctx: Context) -> str:
 
     noise_manager.on_tool_call("prometheus", query, ssid)
 
-    # Use default port 9090 if PROMETHEUS_PORT is not set
-    # This handles cases where port forwarding cleanup fails or hasn't been set up yet
-    prometheus_port = os.environ.get("PROMETHEUS_PORT", "9090")
-    prometheus_url = f"http://localhost:{prometheus_port}"
+    prometheus_url = "http://prometheus-server.observe.svc.cluster.local:80"
     observability_client = ObservabilityClient(prometheus_url)
     try:
         url = f"{prometheus_url}/api/v1/query"

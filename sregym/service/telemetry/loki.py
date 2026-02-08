@@ -1,9 +1,7 @@
 import json
 import logging
 import os
-import socket
 import subprocess
-import time
 
 import yaml
 
@@ -21,8 +19,6 @@ class Loki:
         self.promtail_release_name = "promtail"
         self.promtail_values_file = str(BASE_DIR / "observer/loki/promtail-values.yaml")
         self.pvc_config_file = None
-        self.port = self.find_free_port()
-        self.port_forward_process = None
 
         self.logger = logging.getLogger("all.infra.loki")
         self.logger.propagate = True
@@ -90,7 +86,6 @@ class Loki:
         if self._is_loki_running():
             self.logger.warning("Loki is already running. Skipping redeployment.")
             self._deploy_promtail()
-            self.start_port_forward()
             return
 
         self._delete_pvc()
@@ -107,7 +102,6 @@ class Loki:
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.namespace)
         self._deploy_promtail()
-        self.start_port_forward()
 
     def _add_grafana_helm_repo(self):
         """Add Grafana Helm repository for Loki chart."""
@@ -125,73 +119,6 @@ class Loki:
 
         if self.pvc_config_file:
             self._delete_pvc()
-        self.stop_port_forward()
-
-    def start_port_forward(self):
-        """Starts port-forwarding to access Loki."""
-        self.logger.info("Start port-forwarding for Loki.")
-        if self.port_forward_process and self.port_forward_process.poll() is None:
-            self.logger.warning("Port-forwarding already active.")
-            return
-
-        for attempt in range(3):
-            self.logger.debug(f"Attempt {attempt + 1} of 3 in starting port-forwarding.")
-            if self.is_port_in_use(self.port):
-                self.logger.debug(
-                    f"Port {self.port} is already in use. Attempt {attempt + 1} of 3. Retrying in 3 seconds..."
-                )
-                time.sleep(3)
-                continue
-
-            # Port forward to loki-gateway service on port 80
-            command = f"kubectl port-forward svc/loki-gateway {self.port}:80 -n observe"
-            self.port_forward_process = subprocess.Popen(
-                command,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            os.environ["LOKI_PORT"] = str(self.port)
-            self.logger.debug(f"Set LOKI_PORT environment variable to {self.port}")
-            time.sleep(3)  # Wait a bit for the port-forward to establish
-
-            if self.port_forward_process.poll() is None:
-                self.logger.info(f"Port forwarding established at port {self.port}. LOKI_PORT set.")
-                os.environ["LOKI_PORT"] = str(self.port)
-                break
-            else:
-                self.logger.warning("Port forwarding failed. Retrying...")
-        else:
-            self.logger.warning("Failed to establish port forwarding after multiple attempts.")
-
-    def stop_port_forward(self):
-        """Stops the kubectl port-forward command and cleans up resources."""
-        if self.port_forward_process:
-            self.port_forward_process.terminate()
-            try:
-                self.port_forward_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.logger.warning("Port-forward process did not terminate in time, killing...")
-                self.port_forward_process.kill()
-
-            if self.port_forward_process.stdout:
-                self.port_forward_process.stdout.close()
-            if self.port_forward_process.stderr:
-                self.port_forward_process.stderr.close()
-
-            self.logger.info("Port forwarding for Loki stopped.")
-
-    def is_port_in_use(self, port):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            return s.connect_ex(("127.0.0.1", port)) == 0
-
-    def find_free_port(self, start=32100, end=32200):
-        for port in range(start, end):
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                if s.connect_ex(("127.0.0.1", port)) != 0:
-                    return port
-        raise RuntimeError("No free ports available in the range.")
 
     def _apply_pvc(self):
         """Apply the PersistentVolumeClaim configuration."""

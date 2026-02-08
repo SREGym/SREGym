@@ -4,15 +4,13 @@ import json
 import os
 import subprocess
 import time
-from pathlib import Path
 
 from sregym.generators.workload.locust import LocustWorkloadManager
 from sregym.observer import tidb_prometheus
-from sregym.observer.logstash.jaeger.jaeger import Jaeger
+from sregym.observer.jaeger import Jaeger
 from sregym.observer.tidb_cluster_deploy_helper import TiDBClusterDeployHelper
 from sregym.paths import FLEET_CAST_METADATA
 from sregym.service.apps.base import Application
-from sregym.service.apps.tidb_cluster_operator import TiDBClusterDeployer
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
@@ -117,8 +115,6 @@ class FleetCast(Application):
         self.ensure_ingress_controller()
 
         print("Deploying TiDB Cluster with Operator...")
-        base_dir = Path(__file__).parent.parent
-        meta_path = base_dir / "metadata" / "tidb_metadata.json"
         TiDBClusterDeployHelper.running_cluster()
         print("---DEPLOYED TiDB CLUSTER---")
 
@@ -206,9 +202,9 @@ class FleetCast(Application):
 
         if info["type"] == "LoadBalancer" and (info["external_ip"] or info["external_hostname"]):
             host = info["external_ip"] or info["external_hostname"]
-            print(f"\n FleetCast should be reachable at:  http://orbital.local/")
+            print("\n FleetCast should be reachable at:  http://orbital.local/")
             print(f"   (map {host} to orbital.local in /etc/hosts)")
-            print(f"   Backend health:                      http://orbital.local/api/health")
+            print("   Backend health:                      http://orbital.local/api/health")
             print(f"   e.g., echo '{host} orbital.local' | sudo tee -a /etc/hosts")
             return
 

@@ -10,7 +10,7 @@ from mcp_server.kubectl_server_helper.sliding_lru_session_cache import SlidingLR
 from sregym.generators.noise.manager import get_noise_manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("all.mcp.kubectl_mcp_tools")
+logger = logging.getLogger("all.mcp.kubectl")
 
 sessionCache = SlidingLRUSessionCache(
     max_size=kubectl_session_cfg.session_cache_size, ttl_seconds=kubectl_session_cfg.session_ttl

@@ -5,7 +5,6 @@ import uuid
 
 from fastmcp import Client
 from fastmcp.client import SSETransport
-from langchain_core.tools import BaseTool
 
 from clients.stratus.stratus_utils.get_logger import get_logger
 from clients.stratus.tools.jaeger_tools import get_dependency_graph, get_operations, get_services, get_traces
@@ -15,7 +14,6 @@ from clients.stratus.tools.kubectl_tools import (
     GetPreviousRollbackableCmd,
     RollbackCommand,
 )
-from clients.stratus.tools.localization import get_resource_uid
 from clients.stratus.tools.prometheus_tools import get_metrics
 from clients.stratus.tools.submit_tool import fake_submit_tool, rollback_submit_tool, submit_tool
 from clients.stratus.tools.wait_tool import wait_tool
@@ -31,7 +29,7 @@ def get_client():
         sse_timeout = None  # Unlimited
 
     transport = SSETransport(
-        url=f"{os.getenv("MCP_SERVER_URL", "http://localhost:9954")}/kubectl_mcp_tools/sse",
+        url=f"{os.getenv('MCP_SERVER_URL', 'http://localhost:9954')}/kubectl/sse",
         headers={"sregym_ssid": session_id},
         sse_read_timeout=sse_timeout,
     )
@@ -50,8 +48,6 @@ def str_to_tool(tool_struct: dict[str, str]):
         return get_dependency_graph
     elif tool_struct["name"] == "get_metrics":
         return get_metrics
-    elif tool_struct["name"] == "get_resource_uid":
-        return get_resource_uid
     elif tool_struct["name"] == "submit_tool":
         return submit_tool
     elif tool_struct["name"] == "f_submit_tool":
