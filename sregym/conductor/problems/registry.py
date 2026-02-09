@@ -52,6 +52,7 @@ from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
 from sregym.conductor.problems.readiness_probe_misconfiguration import ReadinessProbeMisconfiguration
 from sregym.conductor.problems.recommendation_service_cache_failure import RecommendationServiceCacheFailure
+from sregym.conductor.problems.resource_quota_exhaustion import ResourceQuotaExhaustion
 from sregym.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
 from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
@@ -128,6 +129,7 @@ class ProblemRegistry:
             "readiness_probe_misconfiguration_astronomy_shop": lambda: ReadinessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),
             "readiness_probe_misconfiguration_hotel_reservation": lambda: ReadinessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="frontend"),
             "readiness_probe_misconfiguration_social_network": lambda: ReadinessProbeMisconfiguration(app_name="social_network", faulty_service="user-service"),
+            "resource_quota_exhaustion": ResourceQuotaExhaustion,
             "resource_request_too_large": lambda: ResourceRequestTooLarge(app_name="hotel_reservation", faulty_service="mongodb-rate"),
             "resource_request_too_small": lambda: ResourceRequestTooSmall(app_name="hotel_reservation", faulty_service="mongodb-rate"),
             "rolling_update_misconfigured_hotel_reservation": lambda: RollingUpdateMisconfigured(app_name="hotel_reservation"),
