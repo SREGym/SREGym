@@ -10,12 +10,14 @@ from pathlib import Path
 
 from rich.console import Console
 
+from llm_backend.init_backend import load_model_config
 from logger import init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
+from sregym.config import load_sregym_config
 
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
@@ -234,27 +236,61 @@ def main(args):
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
 
-    # Resolve config
-    args.agent_model = args.agent_model or "gpt-4o"
-    args.judge_model = args.judge_model or "gpt-5"
+    # Load SREGym config
+    sregym_config = load_sregym_config()
 
-    logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {args.agent_model}, judge_model: {args.judge_model}")
+    if args.agent_model:
+        sregym_config.models.agent = args.agent_model
+    if args.judge_model:
+        sregym_config.models.judge = args.judge_model
+    if args.agent:
+        sregym_config.agent = args.agent
 
-    # Push resolved values to env so downstream code picks them up
-    os.environ["AGENT_MODEL_ID"] = args.agent_model
-    os.environ["JUDGE_MODEL_ID"] = args.judge_model
+    available_models = list(load_model_config().keys())
 
-    config = ConductorConfig(deploy_loki=not args.use_external_harness)
-    conductor = Conductor(config=config)
+    # Always validate judge model
+    if sregym_config.models.judge not in available_models:
+        logger.error(
+            f"❌ models.judge config error: '{sregym_config.models.judge}' not found in llm_backend/configs.yaml. Available: {available_models}"
+        )
+        sys.exit(1)
+
+    # Validate agent model for stratus
+    if sregym_config.agent in ["stratus"] and sregym_config.models.agent not in available_models:
+        logger.error(
+            f"❌ models.agent config error: '{sregym_config.models.agent}' not found in llm_backend/configs.yaml. Available: {available_models}"
+        )
+        sys.exit(1)
+
+    # Push config to env so downstream code picks it up
+    os.environ["AGENT_MODEL_ID"] = sregym_config.models.agent
+    os.environ["JUDGE_MODEL_ID"] = sregym_config.models.judge
+    os.environ["API_HOSTNAME"] = sregym_config.server.api_hostname
+    os.environ["API_PORT"] = str(sregym_config.server.api_port)
+    os.environ["MCP_SERVER_PORT"] = str(sregym_config.server.mcp_server_port)
+    os.environ["EXPOSE_SERVER"] = str(sregym_config.server.expose_server)
+    os.environ["SESSION_CACHE_SIZE"] = str(sregym_config.server.session_cache_size)
+    os.environ["SESSION_TTL"] = str(sregym_config.server.session_ttl)
+    os.environ["LLM_QUERY_MAX_RETRIES"] = str(sregym_config.llm.max_retries)
+    os.environ["LLM_QUERY_INIT_RETRY_DELAY"] = str(sregym_config.llm.init_retry_delay)
+    os.environ["WAIT_FOR_POD_READY_TIMEOUT"] = str(sregym_config.cluster.wait_for_pod_ready_timeout)
+    os.environ["MCP_SERVER_URL"] = f"http://127.0.0.1:{sregym_config.server.mcp_server_port}"
+
+    logger.info(
+        f"🔧 Config — agent: {sregym_config.agent}, agent_model: {sregym_config.models.agent}, judge_model: {sregym_config.models.judge}"
+    )
+
+    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness)
+    conductor = Conductor(config=conductor_config)
 
     # If ran with 3rd party agent, check if they are installed
-    if args.agent and args.agent not in ["stratus", "autosubmit"]:
-        conductor.dependency_check([args.agent])
+    if sregym_config.agent and sregym_config.agent not in ["stratus", "autosubmit"]:
+        conductor.dependency_check([sregym_config.agent])
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
-        args=(conductor, args.problem, args.agent, args.use_external_harness, args.n_attempts),
+        args=(conductor, args.problem, sregym_config.agent, args.use_external_harness, args.n_attempts),
         name="driver",
         daemon=True,
     )
@@ -352,10 +388,6 @@ if __name__ == "__main__":
         help="Number of attempts to run each problem (default: 1)",
     )
     args = parser.parse_args()
-
-    # Validate that --agent is provided when not using external harness
-    if not args.use_external_harness and args.agent is None:
-        parser.error("--agent is required when --use-external-harness is not set.")
 
     # Validate that n_attempts is positive
     if args.n_attempts < 1:

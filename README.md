@@ -75,26 +75,26 @@ To get started with the included Stratus agent:
 mv .env.example .env
 ```
 
-2. Open the `.env` file and configure your API keys.
+2. Edit `sregym_config.yaml` to set your models, and `.env` to add your API keys.
 
 3. Run the benchmark:
 ```bash
-python main.py --agent <agent-name> --agent-model <model-id> --judge-model <model-id>
+python main.py --agent stratus
 ```
 
-For example, to run the Stratus agent:
+Models are configured in `sregym_config.yaml`. You can override them per-run with CLI flags:
 ```bash
-python main.py --agent stratus --agent-model gpt-4o --judge-model gpt-5
+python main.py --agent stratus --agent-model claude-sonnet-4 --judge-model gpt-5
 ```
 
 ### Model Selection
 
-SREGym uses two models: an agent model for diagnosis/mitigation and a judge model for evaluating results.
+SREGym uses two model roles configured in `sregym_config.yaml`:
 
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `--agent-model` | `gpt-4o` | The SRE agent's LLM |
-| `--judge-model` | `gpt-5` | LLM-as-a-judge evaluator |
+| Config Key | CLI Override | Default | Purpose |
+|------------|-------------|---------|---------|
+| `models.agent` | `--agent-model` | `gpt-4o` | The SRE agent's LLM |
+| `models.judge` | `--judge-model` | `gpt-5` | LLM-as-a-judge evaluator |
 
 #### Available Models
 

@@ -1,0 +1,20 @@
+agent: "stratus"               # Agent to run (e.g., "stratus")
+
+models:
+  agent: "gpt-5-nano"          # LLM for the SRE agent (diagnosis, mitigation)
+  judge: "gpt-5"               # LLM for the LLM-as-a-judge evaluator
+
+server:
+  api_hostname: "0.0.0.0"
+  api_port: 8000
+  mcp_server_port: 9954
+  expose_server: false
+  session_cache_size: 10000    # The size of session that can be hold at most; LRU session will be evicted if overflowing
+  session_ttl: 600             # The time after which the session will be considered inactive if no interaction with the server;
+
+llm:
+  max_retries: 5
+  init_retry_delay: 1
+
+cluster:
+  wait_for_pod_ready_timeout: 1800
