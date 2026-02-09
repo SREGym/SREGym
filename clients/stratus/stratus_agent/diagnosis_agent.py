@@ -8,7 +8,7 @@ from langgraph.constants import END, START
 from clients.stratus.stratus_agent.base_agent import BaseAgent
 from clients.stratus.stratus_utils.str_to_tool import str_to_tool
 from clients.stratus.tools.stratus_tool_node import StratusToolNode
-from llm_backend.init_backend import get_llm_backend_for_tools
+from llm_backend.init_backend import get_llm_backend_for_agent
 
 logger = logging.getLogger("all.stratus.diagnosis")
 logger.propagate = True
@@ -134,7 +134,7 @@ class DiagnosisAgent(BaseAgent):
 def build_default_diagnosis_agent():
     file_parent_dir = Path(__file__).resolve().parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path, "r"))
+    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
     max_step = diagnosis_agent_config["max_step"]
     prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
     sync_tools = []
@@ -168,7 +168,7 @@ def build_default_diagnosis_agent():
             "name": "submit_tool",
             "description": """
                 The tool to submit benchmark results
-          
+
                     Args:
                         ans (str): the answer you would like to submit to the benchmark
         """,
@@ -176,7 +176,7 @@ def build_default_diagnosis_agent():
     )
 
     agent = DiagnosisAgent(
-        llm=get_llm_backend_for_tools(),
+        llm=get_llm_backend_for_agent(),
         max_step=max_step,
         sync_tools=sync_tools,
         async_tools=async_tools,

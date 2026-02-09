@@ -10,7 +10,7 @@ from langgraph.types import StateSnapshot
 from clients.stratus.stratus_agent.base_agent import BaseAgent
 from clients.stratus.stratus_utils.str_to_tool import str_to_tool
 from clients.stratus.tools.stratus_tool_node import StratusToolNode
-from llm_backend.init_backend import get_llm_backend_for_tools
+from llm_backend.init_backend import get_llm_backend_for_agent
 
 logger = logging.getLogger("all.stratus.mitigation")
 logger.propagate = True
@@ -133,7 +133,7 @@ def build_default_mitigation_agent():
     # agent config and init setup
     file_parent_dir = Path(__file__).resolve().parent
     mitigation_agent_config_path = file_parent_dir.parent / "configs" / "mitigation_agent_config.yaml"
-    mitigation_agent_config = yaml.safe_load(open(mitigation_agent_config_path, "r"))
+    mitigation_agent_config = yaml.safe_load(open(mitigation_agent_config_path))
     mitigation_agent_max_step = mitigation_agent_config["max_step"]
     mitigation_agent_prompt_path = file_parent_dir.parent / "configs" / mitigation_agent_config["prompts_path"]
 
@@ -177,7 +177,7 @@ def build_default_mitigation_agent():
 
     # defining mitigation agent
     mitigation_agent = MitigationAgent(
-        llm=get_llm_backend_for_tools(),
+        llm=get_llm_backend_for_agent(),
         max_step=mitigation_agent_max_step,
         sync_tools=mitigation_agent_sync_tools,
         async_tools=mitigation_agent_async_tools,
@@ -199,7 +199,7 @@ def generate_run_summary(last_state: StateSnapshot, summary_system_prompt) -> st
         Returns:
             a list of SystemMessage and HumanMessage representing the reflections
     """
-    llm = get_llm_backend_for_tools()
+    llm = get_llm_backend_for_agent()
     logger.info("asking LLM to summarize and reflect last run")
     last_run_msgs = last_state.values.get("messages", None)
     summary_input_messages = [

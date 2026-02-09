@@ -43,22 +43,20 @@ def set_param(params, config, field, default_value, required=False):
         # else do nothing
 
 
-def get_llm_backend_for_tools():
+def get_llm_backend(model_id: str) -> LiteLLMBackend:
+    """Initialize an LLM backend for the given model_id (e.g., 'gpt-4o')."""
     llm_config = load_model_config()
 
-    MODEL_ID = os.environ.get("MODEL_ID", "gpt-4o")
-    print("Found MODEL_ID: ", MODEL_ID)
+    print(f"🔧 Initializing LLM backend — model: {model_id}")
 
-    if MODEL_ID not in llm_config:
-        error_msg = f"Unable to find model configuration - {MODEL_ID}. Available models: {[key for key in llm_config.keys()]}"
+    if model_id not in llm_config:
+        error_msg = f"Unable to find model configuration - {model_id}. Available models: {list(llm_config.keys())}"
         print(error_msg)
         raise ValueError(error_msg)
-    model_config = llm_config[MODEL_ID]
+    model_config = llm_config[model_id]
 
     if model_config["provider"] == "litellm":
-        config_params = {
-            "provider": "litellm",
-        }
+        config_params = {"provider": "litellm"}
         set_param(config_params, model_config, "model_name", "openai/gpt-4o")
         set_param(config_params, model_config, "url", None)
         set_param(config_params, model_config, "api_key", None, required=False)
@@ -68,29 +66,23 @@ def get_llm_backend_for_tools():
 
         if "AZURE_API_VERSION" not in os.environ:
             if "azure_version" in model_config:
-                # set env
                 print(f"Setting Azure API version env from config - {model_config['azure_version']}")
                 os.environ["AZURE_API_VERSION"] = model_config["azure_version"]
 
         return LiteLLMBackend(**config_params)
 
     elif model_config["provider"] == "openai":
-        config_params = {
-            "provider": "openai",
-        }
+        config_params = {"provider": "openai"}
         set_param(config_params, model_config, "model_name", "openai/gpt-4o")
         set_param(config_params, model_config, "api_key", None, required=True)
         set_param(config_params, model_config, "seed", None)
         set_param(config_params, model_config, "top_p", 0.95)
         set_param(config_params, model_config, "temperature", 0.0)
         set_param(config_params, model_config, "max_tokens", None)
-
         return LiteLLMBackend(**config_params)
 
     elif model_config["provider"] == "watsonx":
-        config_params = {
-            "provider": "watsonx",
-        }
+        config_params = {"provider": "watsonx"}
         set_param(config_params, model_config, "model_name", "meta-llama/llama-3-3-70b-instruct")
         set_param(config_params, model_config, "url", "https://us-south.ml.cloud.ibm.com")
         set_param(config_params, model_config, "api_key", None, required=True)
@@ -99,8 +91,23 @@ def get_llm_backend_for_tools():
         set_param(config_params, model_config, "temperature", 0.0)
         set_param(config_params, model_config, "max_tokens", None)
         set_param(config_params, model_config, "wx_project_id", "$WX_PROJECT_ID", required=True)
-
         return LiteLLMBackend(**config_params)
 
     else:
         raise ValueError(f"Unsupported provider - {model_config['provider']}. Exiting...")
+
+
+def get_llm_backend_for_agent() -> LiteLLMBackend:
+    """Get LLM backend for agent tasks"""
+    model_id = os.environ.get("AGENT_MODEL_ID")
+    if not model_id:
+        raise ValueError("AGENT_MODEL_ID environment variable is not set.")
+    return get_llm_backend(model_id)
+
+
+def get_llm_backend_for_judge() -> LiteLLMBackend:
+    """Get LLM backend for the LLM-as-a-judge evaluator."""
+    model_id = os.environ.get("JUDGE_MODEL_ID")
+    if not model_id:
+        raise ValueError("JUDGE_MODEL_ID environment variable is not set.")
+    return get_llm_backend(model_id)

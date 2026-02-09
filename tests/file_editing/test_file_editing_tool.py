@@ -5,11 +5,11 @@ import pytest
 import yaml
 
 from clients.test_k8s_agent.k8s_agent import XAgent
-from llm_backend.init_backend import get_llm_backend_for_tools
+from llm_backend.init_backend import get_llm_backend_for_agent
 
 
 def get_agent():
-    llm = get_llm_backend_for_tools()
+    llm = get_llm_backend_for_agent()
     xagent = XAgent(llm)
     xagent.build_agent(mock=True)
     return xagent
@@ -48,7 +48,7 @@ class TestOpenFile:
         xagent = get_agent()
         print(f"xagent msg switch branch: {xagent.test_tool_or_ai_response}")
         xagent.test_campaign_setter(test_campaign_file)
-        test_campaign = yaml.safe_load(open(test_campaign_file, "r"))
+        test_campaign = yaml.safe_load(open(test_campaign_file))
         print(f"test campaign: {test_campaign}")
         test_user_inputs = test_campaign["user_inputs"]
         feed_input_to_agent(xagent, test_user_inputs)

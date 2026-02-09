@@ -2,7 +2,7 @@
 
 <h1>SREGym: A Benchmarking Platform for SRE Agents</h1>
 
-[🔍Overview](#🤖overview) | 
+[🔍Overview](#🤖overview) |
 [📦Installation](#📦installation) |
 [🚀Quick Start](#🚀quickstart) |
 [⚙️Usage](#⚙️usage) |
@@ -47,7 +47,7 @@ uv run pre-commit install
 Choose either a) or b) to set up your cluster and then proceed to the next steps.
 
 ### a) Kubernetes Cluster (Recommended)
-SREGym supports any kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself. 
+SREGym supports any kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself.
 
 We have an Ansible playbook to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster.
 
@@ -75,25 +75,26 @@ To get started with the included Stratus agent:
 mv .env.example .env
 ```
 
-2. Open the `.env` file and configure your model and API key.
+2. Edit `sregym_config.yaml` to set your models, and `.env` to add your API keys.
 
 3. Run the benchmark:
 ```bash
-python main.py --agent <agent-name> --model <model-id>
+python main.py --agent stratus
 ```
 
-For example, to run the Stratus agent:
+Models are configured in `sregym_config.yaml`. You can override them per-run with CLI flags:
 ```bash
-python main.py --agent stratus --model gpt-4o
+python main.py --agent stratus --agent-model claude-sonnet-4 --judge-model gpt-5
 ```
 
 ### Model Selection
 
-SREGym supports multiple LLM providers. Specify your model using the `--model` flag:
+SREGym uses two model roles configured in `sregym_config.yaml`:
 
-```bash
-python main.py --agent <agent-name> --model <model-id>
-```
+| Config Key | CLI Override | Default | Purpose |
+|------------|-------------|---------|---------|
+| `models.agent` | `--agent-model` | `gpt-4o` | The SRE agent's LLM |
+| `models.judge` | `--judge-model` | `gpt-5` | LLM-as-a-judge evaluator |
 
 #### Available Models
 
@@ -108,7 +109,6 @@ python main.py --agent <agent-name> --model <model-id>
 | `glm-4` | GLM | GLM-4 | `GLM_API_KEY` |
 | `azure-openai-gpt-4o` | Azure OpenAI | GPT-4o | `AZURE_API_KEY`, `AZURE_API_BASE` |
 
-**Default:** If no model is specified, `gpt-4o` is used by default.
 
 #### Examples
 
@@ -118,7 +118,7 @@ python main.py --agent <agent-name> --model <model-id>
 OPENAI_API_KEY="sk-proj-..."
 
 # Run with GPT-4o
-python main.py --agent stratus --model gpt-4o
+python main.py --agent stratus --agent-model gpt-4o
 ```
 
 **Anthropic:**
@@ -127,7 +127,7 @@ python main.py --agent stratus --model gpt-4o
 ANTHROPIC_API_KEY="sk-ant-api03-..."
 
 # Run with Claude Sonnet 4
-python main.py --agent stratus --model claude-sonnet-4
+python main.py --agent stratus --agent-model claude-sonnet-4
 ```
 
 **AWS Bedrock:**
@@ -137,7 +137,7 @@ AWS_PROFILE="bedrock"
 AWS_DEFAULT_REGION=us-east-2
 
 # Run with Claude Sonnet 4.5 on Bedrock
-python main.py --agent stratus --model bedrock-claude-sonnet-4.5
+python main.py --agent stratus --agent-model bedrock-claude-sonnet-4.5
 ```
 
 **Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.

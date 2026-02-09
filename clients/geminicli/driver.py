@@ -198,8 +198,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default=os.getenv("MODEL_ID", "gemini-2.0-flash"),
-        help="Model to use for Gemini CLI (default: from MODEL_ID env var or gemini-2.0-flash)",
+        default=os.getenv("AGENT_MODEL_ID", "gemini-2.0-flash"),
+        help="Model to use for Gemini CLI (default: from AGENT_MODEL_ID env var or gemini-2.0-flash)",
     )
     parser.add_argument(
         "--logs-dir",
