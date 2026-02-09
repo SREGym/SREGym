@@ -25,6 +25,7 @@ PROTECTED_NAMESPACES = frozenset(
         # Infrastructure namespaces managed by the benchmark
         "openebs",
         "observe",  # Prometheus namespace
+        "sregym",  # MCP server namespace
         "khaos",
     }
 )
@@ -100,7 +101,6 @@ class ClusterStateManager:
             coredns_configmap_data=self._get_coredns_configmap_data(),
         )
 
-        logger.info(f"Baseline captured: {self.baseline.to_dict()}")
         return self.baseline
 
     def reconcile_to_baseline(self) -> dict:

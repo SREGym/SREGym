@@ -1,20 +1,52 @@
 import logging
 import os
 import threading
-from typing import Optional
 
 import pyfiglet
 from fastapi import FastAPI, HTTPException
+from fastmcp import FastMCP
+from fastmcp.server.http import create_sse_app
 from pydantic import BaseModel
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from starlette.routing import Mount
 from uvicorn import Config, Server
 
-app = FastAPI()
 _conductor = None
 
-_server: Optional[Server] = None
+submit_mcp = FastMCP("Submit MCP Server")
+
+
+@submit_mcp.tool(name="submit")
+async def submit_via_conductor(ans: str) -> dict[str, str]:
+    """Submit task result to benchmark
+
+    Args:
+        ans (str): task result that the agent submits
+
+    Returns:
+        dict[str]: grading results from the conductor
+    """
+    if _conductor is None or _conductor.submission_stage not in {"diagnosis", "mitigation"}:
+        stage = _conductor.submission_stage if _conductor else None
+        return {"status": "error", "text": f"Cannot submit at stage: {stage!r}"}
+
+    wrapped = f"```\nsubmit({repr(ans)})\n```"
+    try:
+        results = await _conductor.submit(wrapped)
+        return {"status": "ok", "text": str(results)}
+    except Exception as e:
+        return {"status": "error", "text": f"Grading error: {e}"}
+
+
+app = FastAPI(
+    routes=[
+        Mount("/submit_mcp", app=create_sse_app(submit_mcp, "/messages/", "/sse")),
+    ]
+)
+
+_server: Server | None = None
 _shutdown_event = threading.Event()
 
 logger = logging.getLogger("all.sregym.conductor_api")
@@ -56,7 +88,7 @@ async def submit_solution(req: SubmitRequest):
         results = await _conductor.submit(wrapped)
     except Exception as e:
         logger.error(f"Grading error: {e}")
-        raise HTTPException(status_code=400, detail=f"Grading error: {e}")
+        raise HTTPException(status_code=400, detail=f"Grading error: {e}") from e
 
     logger.debug(f"API returns Grading results by now: {results}")
     return results
@@ -113,13 +145,19 @@ def run_api(conductor):
         Markdown(
             """
 **Available Endpoints**
-- **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage  
+- **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage
 - **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "done" }`
 """
         )
     )
 
-    config = Config(app=app, host=host, port=port, log_level="info")
+    config = Config(
+        app=app,
+        host=host,
+        port=port,
+        log_level="info",
+        timeout_graceful_shutdown=5,
+    )
     config.install_signal_handlers = False
     server = Server(config)
     _server = server  # expose to request_shutdown()

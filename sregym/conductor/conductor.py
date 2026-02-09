@@ -14,6 +14,7 @@ from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
+from sregym.observer.jaeger import Jaeger
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_dust_manager import DmDustManager
@@ -21,6 +22,7 @@ from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
+from sregym.service.mcp_server import MCPServer
 from sregym.service.telemetry.loki import Loki
 from sregym.service.telemetry.prometheus import Prometheus
 
@@ -40,7 +42,9 @@ class Conductor:
         self.problems = ProblemRegistry()
         self.kubectl = KubeCtl()
         self.prometheus = Prometheus()
+        self.jaeger = Jaeger()
         self.loki = Loki()
+        self.mcp_server = MCPServer()
         self.apps = AppRegistry()
         self.agent_name = None
 
@@ -512,11 +516,17 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying Prometheus…")
         self.prometheus.deploy()
 
+        self.logger.info("[DEPLOY] Deploying Jaeger…")
+        self.jaeger.deploy()
+
         if self.config.deploy_loki:
             self.logger.info("[DEPLOY] Deploying Loki…")
             self.loki.deploy()
         else:
             self.logger.info("[DEPLOY] Skipping Loki deployment (external harness mode)")
+
+        self.logger.info("[DEPLOY] Deploying MCP server…")
+        self.mcp_server.deploy()
 
         # Set up fault injection infrastructure based on problem type
         # Only one can be active at /var/openebs/local at a time
@@ -529,7 +539,7 @@ class Conductor:
             print("Setting up dm-flakey infrastructure for Silent Data Corruption fault injection...")
             self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
 
-        self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Loki")
+        self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki")
 
         # Capture cluster baseline state after infrastructure is deployed but before app deployment
         # This allows us to reset the cluster to a clean state after each problem
@@ -538,9 +548,22 @@ class Conductor:
             self.cluster_state.capture_baseline()
             self._baseline_captured = True
 
+        # train-ticket pods need jaeger at startup; create ExternalName before deploy.
+        # Other apps get it after deploy to avoid Helm ownership conflicts.
+        is_train_ticket = problem.app.__class__.__name__ == "TrainTicket"
+
+        if is_train_ticket:
+            self.kubectl.exec_command(
+                f"kubectl create namespace {problem.app.namespace} --dry-run=client -o yaml | kubectl apply -f -"
+            )
+            self.jaeger.create_external_name_service(problem.app.namespace)
+
         self.logger.info("[DEPLOY] Deploying and starting workload")
         problem.app.deploy()
         self.logger.info(f"[ENV] Deploy application: {problem.app.name}")
+
+        if not is_train_ticket:
+            self.jaeger.create_external_name_service(problem.app.namespace)
 
         problem.app.start_workload()
         self.logger.info("[ENV] Start workload")

@@ -5,16 +5,12 @@ import logging
 import os
 import sys
 import threading
-import time
 from datetime import datetime
 from pathlib import Path
 
-import uvicorn
 from rich.console import Console
 
 from logger import init_logger
-from mcp_server.configs.load_all_cfg import mcp_server_cfg
-from mcp_server.sregym_mcp_server import app as mcp_app
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor, ConductorConfig
@@ -194,27 +190,6 @@ def driver_loop(
     return asyncio.run(driver())
 
 
-def start_mcp_server_after_api():
-    # Small delay so the main API binds first (avoid port races if clients hit MCP immediately)
-    time.sleep(1.0)
-
-    host = "0.0.0.0" if mcp_server_cfg.expose_server else "127.0.0.1"
-    port = mcp_server_cfg.mcp_server_port
-
-    config = uvicorn.Config(
-        app=mcp_app,
-        host=host,
-        port=port,
-        log_level="info",
-    )
-    # IMPORTANT: we're not in the main thread
-    config.install_signal_handlers = False  # type: ignore[attr-defined]
-
-    server = uvicorn.Server(config)
-    # This call blocks *this* thread; it's fine because we're daemonizing the thread
-    server.run()
-
-
 def _run_driver_and_shutdown(
     conductor: Conductor,
     problem_filter: str | None = None,
@@ -263,9 +238,7 @@ def main(args):
     args.agent_model = args.agent_model or "gpt-4o"
     args.judge_model = args.judge_model or "gpt-5"
 
-    logger.info(
-        f"🔧 Config — agent: {args.agent}, agent_model: {args.agent_model}, judge_model: {args.judge_model}"
-    )
+    logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {args.agent_model}, judge_model: {args.judge_model}")
 
     # Push resolved values to env so downstream code picks them up
     os.environ["AGENT_MODEL_ID"] = args.agent_model
@@ -286,15 +259,6 @@ def main(args):
         daemon=True,
     )
     driver_thread.start()
-
-    # Start the MCP server in the background (lets the main thread run the Conductor API)
-    if not args.use_external_harness:  # No need for MCP if using external harness
-        mcp_thread = threading.Thread(
-            target=start_mcp_server_after_api,
-            name="mcp-server",
-            daemon=True,
-        )
-        mcp_thread.start()
 
     # Start the Conductor HTTP API in the MAIN thread (blocking)
     try:

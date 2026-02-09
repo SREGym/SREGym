@@ -18,27 +18,27 @@ class LanggraphToolConfig(BaseModel):
     )
     kubectl_mcp_url: str = Field(
         description="url for kubectl mcp server",
-        default=f"http://localhost:{os.getenv('MCP_SERVER_PORT', '9954')}/kubectl_mcp_tools/sse",
+        default=f"http://localhost:{os.getenv('MCP_SERVER_PORT', '9954')}/kubectl/sse",
     )
     submit_mcp_url: str = Field(
         description="url for submit mcp server",
-        default=f"http://localhost:{os.getenv('MCP_SERVER_PORT', '9954')}/submit/sse",
+        default=f"http://localhost:{os.getenv('API_PORT', '8000')}/submit_mcp/sse",
     )
     benchmark_submit_url: str = Field(
         description="url for the submission result destination, default to http://localhost:8000/submit",
-        default=f"http://localhost:{os.getenv("API_PORT", "8000")}/submit",
+        default=f"http://localhost:{os.getenv('API_PORT', '8000')}/submit",
     )
     benchmark_app_info_url: str = Field(
         description="url for getting benchmark application information, default to http://localhost:8000/get_app",
-        default=f"http://localhost:{os.getenv("API_PORT", "8000")}/get_app",
+        default=f"http://localhost:{os.getenv('API_PORT', '8000')}/get_app",
     )
     benchmark_current_problem: str = Field(
         description="url for getting current benchmark problem, default to http://localhost:8000/get_problem",
-        default=f"http://localhost:{os.getenv("API_PORT", "8000")}/get_problem",
+        default=f"http://localhost:{os.getenv('API_PORT', '8000')}/get_problem",
     )
 
     min_len_to_sum: int = Field(
-        description="Minimum length of text that will be summarized " "first before being input to the main agent.",
+        description="Minimum length of text that will be summarized first before being input to the main agent.",
         default=200,
         ge=50,
     )
