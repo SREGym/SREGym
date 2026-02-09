@@ -1,4 +1,5 @@
 from sregym.conductor.oracles.detection import DetectionOracle
+from sregym.conductor.oracles.gc_capacity_degradation_mitigation import GCCapacityDegradationMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -19,13 +20,15 @@ class GCCapacityDegradation(Problem):
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
+        self.mitigation_oracle = GCCapacityDegradationMitigationOracle(problem=self)
+
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector.inject_gogc_env_variable_patch(gogc_value="10")
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
-        self.run_workload()
+        self.mitigation_oracle.run_workload(problem=self, kubectl=self.kubectl)
 
     @mark_fault_injected
     def recover_fault(self):
