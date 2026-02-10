@@ -240,7 +240,7 @@ def main(args):
     conductor = Conductor(config=config)
 
     # If ran with 3rd party agent, check if they are installed
-    if args.agent and args.agent not in ["stratus", "autosubmit"]:
+    if args.agent and args.agent not in ["stratus", "autosubmit", "debug"]:
         conductor.dependency_check([args.agent])
 
     # Start the driver in the background; it will call request_shutdown() when finished
