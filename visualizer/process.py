@@ -1,14 +1,16 @@
 import argparse
 import json
 import re
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
-import subprocess
+from typing import Any
+
 import pandas as pd
-import shutil
+
+
 # Keep ONLY the single highest-event_index "event" record per stage (per file),
 # but render the FULL event using your existing HTML logic.
 @dataclass(frozen=True)
@@ -19,10 +21,12 @@ class Tags:
     mitigation_success: bool
     overall_success: bool
 
+
 TARGET_STAGES_ORDER = ["diagnosis", "mitigation_attempt_0"]
-all_results_csv: Optional[pd.DataFrame] = None
-ATTR_INDEX: Dict[str, Dict[str, Any]] = {}
+all_results_csv: pd.DataFrame | None = None
+ATTR_INDEX: dict[str, dict[str, Any]] = {}
 tags_by_problem_id = {}
+
 
 def pick_results_csv_with_most_rows(root: Path) -> Path:
     """
@@ -70,10 +74,13 @@ HOT_KEYS = {
     "last_message",
     "messages",
 }
+
+
 def _csv_row(problem_id: str) -> pd.Series:
     if all_results_csv is None:
         raise RuntimeError("all_results_csv not initialized. Did you call main() correctly?")
     return all_results_csv.loc[all_results_csv["problem_id"] == problem_id].iloc[0]
+
 
 def _as_bool(x: Any) -> bool:
     if isinstance(x, bool):
@@ -83,6 +90,7 @@ def _as_bool(x: Any) -> bool:
     if isinstance(x, (int, float)):
         return x != 0
     return False
+
 
 def diagnosis_success(problem_id: str) -> bool:
     row = _csv_row(problem_id)
@@ -103,21 +111,21 @@ def safe_filename(name: str) -> str:
     return name[:180] if name else "report"
 
 
-def _to_int(x: Any) -> Optional[int]:
+def _to_int(x: Any) -> int | None:
     try:
         return int(x)
     except Exception:
         return None
 
 
-def get_first(d: Dict[str, Any], keys: List[str]) -> Optional[Any]:
+def get_first(d: dict[str, Any], keys: list[str]) -> Any | None:
     for k in keys:
         if k in d and d[k] is not None:
             return d[k]
     return None
 
 
-def nested_get(d: Dict[str, Any], paths: List[List[str]]) -> Optional[Any]:
+def nested_get(d: dict[str, Any], paths: list[list[str]]) -> Any | None:
     for path in paths:
         cur: Any = d
         ok = True
@@ -149,15 +157,11 @@ def pretty_json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2, sort_keys=True)
 
 
-def is_event_record(rec: Dict[str, Any]) -> bool:
-    return (
-        rec.get("type") == "event"
-        and isinstance(rec.get("stage"), str)
-        and ("event_index" in rec)
-    )
+def is_event_record(rec: dict[str, Any]) -> bool:
+    return rec.get("type") == "event" and isinstance(rec.get("stage"), str) and ("event_index" in rec)
 
 
-def detect_messages(rec: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+def detect_messages(rec: dict[str, Any]) -> list[dict[str, Any]] | None:
     """
     Your JSONL schema often has:
       - {"type":"event", ..., "messages":[{...}, ...], "last_message": {...}}
@@ -168,14 +172,14 @@ def detect_messages(rec: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     return None
 
 
-def detect_steps(rec: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+def detect_steps(rec: dict[str, Any]) -> list[dict[str, Any]] | None:
     steps = get_first(rec, ["steps", "events", "trace", "spans"])
     if isinstance(steps, list) and steps and all(isinstance(s, dict) for s in steps):
         return steps
     return None
 
 
-def last_message_preview(rec: Dict[str, Any], max_len: int = 160) -> str:
+def last_message_preview(rec: dict[str, Any], max_len: int = 160) -> str:
     """
     Prefer rec["last_message"], else fall back to the last item in messages.
     Returns: "<type>: <content-preview>"
@@ -214,25 +218,26 @@ def generate_analysis_report(root: Path) -> None:
     directory = Path(__file__).resolve().parent
     path = directory / "queries.py"
     import os
+
     cwd = os.getcwd()
     subprocess.run(["python3", str(path), root, "-o analysis_report.html"], check=True, cwd=cwd)
 
 
 def stream_pick_highest_event_index_per_stage(
     path: Path,
-    stages_order: List[str],
-) -> Tuple[List[Dict[str, Any]], List[str], int]:
+    stages_order: list[str],
+) -> tuple[list[dict[str, Any]], list[str], int]:
     """
     Stream the JSONL file; do NOT store all records.
     Keep ONLY the highest event_index event per target stage.
     """
-    errors: List[str] = []
+    errors: list[str] = []
     total_lines = 0
 
     # best_num[stage] = (event_index_int, line_no, record)
-    best_num: Dict[str, Tuple[int, int, Dict[str, Any]]] = {}
+    best_num: dict[str, tuple[int, int, dict[str, Any]]] = {}
     # best_fallback[stage] = (line_no, record)  # used only if no numeric seen
-    best_fallback: Dict[str, Tuple[int, Dict[str, Any]]] = {}
+    best_fallback: dict[str, tuple[int, dict[str, Any]]] = {}
 
     with path.open("r", encoding="utf-8") as f:
         for line_no, line in enumerate(f, start=1):
@@ -271,7 +276,7 @@ def stream_pick_highest_event_index_per_stage(
                 if (ei_int > cur_ei) or (ei_int == cur_ei and line_no > cur_ln):
                     best_num[stage] = (ei_int, line_no, obj)
 
-    out: List[Dict[str, Any]] = []
+    out: list[dict[str, Any]] = []
     for s in stages_order:
         if s in best_num:
             out.append(best_num[s][2])
@@ -306,9 +311,9 @@ def find_problem_id(path: Path) -> str:
     return ""
 
 
-def load_problem_index(jsonl_path: str) -> Dict[str, Dict[str, Any]]:
-    index: Dict[str, Dict[str, Any]] = {}
-    with open(jsonl_path, "r", encoding="utf-8") as f:
+def load_problem_index(jsonl_path: str) -> dict[str, dict[str, Any]]:
+    index: dict[str, dict[str, Any]] = {}
+    with open(jsonl_path, encoding="utf-8") as f:
         for line in f:
             try:
                 obj = json.loads(line)
@@ -320,7 +325,7 @@ def load_problem_index(jsonl_path: str) -> Dict[str, Dict[str, Any]]:
     return index
 
 
-def load_attributes_index(root: Path) -> Dict[str, Dict[str, Any]]:
+def load_attributes_index(root: Path) -> dict[str, dict[str, Any]]:
     """
     Prefer attributes.jsonl under the provided root.
     Fallback to the script directory if not found.
@@ -689,7 +694,7 @@ _APP_RE = re.compile(
 )
 
 
-def find_namespace(rec: Dict[str, Any]) -> str:
+def find_namespace(rec: dict[str, Any]) -> str:
     msgs = detect_messages(rec) or []
     for m in msgs:
         content = m.get("content", "")
@@ -700,7 +705,7 @@ def find_namespace(rec: Dict[str, Any]) -> str:
     return ""
 
 
-def find_application(rec: Dict[str, Any]) -> str:
+def find_application(rec: dict[str, Any]) -> str:
     msgs = detect_messages(rec) or []
     for m in msgs:
         content = m.get("content", "")
@@ -714,7 +719,7 @@ def find_application(rec: Dict[str, Any]) -> str:
     return ""
 
 
-def summarize_record(rec: Dict[str, Any], idx: int, file_problem_id: str) -> SummaryRow:
+def summarize_record(rec: dict[str, Any], idx: int, file_problem_id: str) -> SummaryRow:
     rec_type = as_str(rec.get("type"))
     stage = as_str(rec.get("stage"))
     event_index = as_str(rec.get("event_index"))
@@ -958,7 +963,7 @@ def html_page(title: str, body: str) -> str:
 """
 
 
-def render_messages(msgs: List[Dict[str, Any]]) -> str:
+def render_messages(msgs: list[dict[str, Any]]) -> str:
     out = ["<div class='card'><h3 style='margin:0 0 10px 0;'>Messages</h3>"]
 
     for m in msgs:
@@ -985,7 +990,7 @@ def render_messages(msgs: List[Dict[str, Any]]) -> str:
         if tool_calls is None and isinstance(m.get("additional_kwargs"), dict):
             tool_calls = m["additional_kwargs"].get("tool_calls")
 
-        body_parts: List[str] = []
+        body_parts: list[str] = []
 
         if tool_calls:
             try:
@@ -995,9 +1000,7 @@ def render_messages(msgs: List[Dict[str, Any]]) -> str:
             body_parts.append(
                 "<div style='margin-top:6px;'>"
                 "<div class='mono' style='color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em;'>tool_calls</div>"
-                "<pre><code class='language-json'>"
-                + escape(tool_calls_json)
-                + "</code></pre>"
+                "<pre><code class='language-json'>" + escape(tool_calls_json) + "</code></pre>"
                 "</div>"
             )
 
@@ -1010,19 +1013,14 @@ def render_messages(msgs: List[Dict[str, Any]]) -> str:
         if not body_parts:
             body_parts.append("<div class='content'><small>(empty)</small></div>")
 
-        out.append(
-            f"<div class='msg {cls}'>"
-            f"<div class='role'>{escape(mtype)}</div>"
-            + "\n".join(body_parts)
-            + "</div>"
-        )
+        out.append(f"<div class='msg {cls}'><div class='role'>{escape(mtype)}</div>" + "\n".join(body_parts) + "</div>")
 
     out.append("</div>")
     return "\n".join(out)
 
 
-def render_kv(rec: Dict[str, Any], exclude_keys: set) -> str:
-    items: List[Tuple[str, str]] = []
+def render_kv(rec: dict[str, Any], exclude_keys: set) -> str:
+    items: list[tuple[str, str]] = []
     for k, v in rec.items():
         if k in exclude_keys:
             continue
@@ -1035,19 +1033,13 @@ def render_kv(rec: Dict[str, Any], exclude_keys: set) -> str:
     if not items:
         return ""
 
-    html = [
-        "<div class='card'><h3 style='margin:0 0 10px 0;'>Top-level fields</h3><div class='kv'>"
-    ]
+    html = ["<div class='card'><h3 style='margin:0 0 10px 0;'>Top-level fields</h3><div class='kv'>"]
     for k, v in items[:60]:
         key_cls = "k hot" if k in HOT_KEYS else "k"
-        html.append(
-            f"<div><span class='{key_cls}'>{escape(k)}</span></div><div>{escape(v)}</div>"
-        )
+        html.append(f"<div><span class='{key_cls}'>{escape(k)}</span></div><div>{escape(v)}</div>")
 
     if len(items) > 60:
-        html.append(
-            f"<div></div><div><small>+ {len(items)-60} more fields not shown</small></div>"
-        )
+        html.append(f"<div></div><div><small>+ {len(items) - 60} more fields not shown</small></div>")
     html.append("</div></div>")
     return "\n".join(html)
 
@@ -1082,8 +1074,8 @@ def render_index_chips(r: IndexRow) -> str:
 
 def render_file_report(
     file_name: str,
-    records: List[Dict[str, Any]],
-    parse_errors: List[str],
+    records: list[dict[str, Any]],
+    parse_errors: list[str],
     total_lines_scanned: int,
     file_problem_id: str,
 ) -> str:
@@ -1278,9 +1270,7 @@ def render_file_report(
 
         parts.append(
             "<div class='card'><details><summary>Raw JSON</summary>"
-            "<pre><code class='language-json'>"
-            + escape(pretty_json(rec))
-            + "</code></pre>"
+            "<pre><code class='language-json'>" + escape(pretty_json(rec)) + "</code></pre>"
             "</details></div></div>"
         )
 
@@ -1301,28 +1291,28 @@ def main():
     root = first if first.is_dir() else first.parent
 
     # Load results.csv from the provided root (NOT the script directory)
-    global all_results_csv
-    results_csv_path = pick_results_csv_with_most_rows(root)
-    all_results_csv = pd.read_csv(results_csv_path)
-    pd.set_option("display.max_columns", None)
+    # global all_results_csv
+    # results_csv_path = pick_results_csv_with_most_rows(root)
+    # all_results_csv = pd.read_csv(results_csv_path)
+    # pd.set_option("display.max_columns", None)
 
     # Load attributes.jsonl from the provided root (fallback to script dir)
-    global ATTR_INDEX
-    ATTR_INDEX = load_attributes_index(root)
-
+    # global ATTR_INDEX
+    # ATTR_INDEX = load_attributes_index(root)
+    #
     out_dir = Path(args.out).expanduser().resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Run analysis report generation in the provided root so relative paths work
-    generate_analysis_report(root)
+    # generate_analysis_report(root)
 
     # Copy analysis_report.html from root into the output dir (if present)
-    src = root / "analysis_report.html"
-    destination = out_dir / "analysis_report.html"
-    if src.exists():
-        shutil.copy2(src, destination)
+    # src = root / "analysis_report.html"
+    # destination = out_dir / "analysis_report.html"
+    # if src.exists():
+    #     shutil.copy2(src, destination)
 
-    jsonl_files: List[Path] = []
+    jsonl_files: list[Path] = []
     for inp in args.inputs:
         p = Path(inp).expanduser().resolve()
         if p.is_dir():
@@ -1335,13 +1325,11 @@ def main():
     if not jsonl_files:
         raise SystemExit("No .jsonl files found.")
 
-    index_rows: List[IndexRow] = []
-    all_parse_errors: List[str] = []
+    index_rows: list[IndexRow] = []
+    all_parse_errors: list[str] = []
 
     for fpath in jsonl_files:
-        records, errors, total_lines = stream_pick_highest_event_index_per_stage(
-            fpath, TARGET_STAGES_ORDER
-        )
+        records, errors, total_lines = stream_pick_highest_event_index_per_stage(fpath, TARGET_STAGES_ORDER)
         file_pid = find_problem_id(fpath)
         all_parse_errors.extend(errors)
 
