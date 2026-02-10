@@ -26,7 +26,7 @@ async def submit_via_conductor(ans: str) -> dict[str, str]:
         ans (str): task result that the agent submits
 
     Returns:
-        dict[str]: grading results from the conductor
+        dict[str]: acknowledgment without grading details to avoid leaking ground truth
     """
     if _conductor is None or _conductor.submission_stage not in {"diagnosis", "mitigation"}:
         stage = _conductor.submission_stage if _conductor else None
@@ -34,8 +34,8 @@ async def submit_via_conductor(ans: str) -> dict[str, str]:
 
     wrapped = f"```\nsubmit({repr(ans)})\n```"
     try:
-        results = await _conductor.submit(wrapped)
-        return {"status": "ok", "text": str(results)}
+        await _conductor.submit(wrapped)
+        return {"status": "ok", "text": "Submission received"}
     except Exception as e:
         return {"status": "error", "text": f"Grading error: {e}"}
 
@@ -85,13 +85,13 @@ async def submit_solution(req: SubmitRequest):
     logger.debug(f"Wrapped submit content: {wrapped}")
 
     try:
-        results = await _conductor.submit(wrapped)
+        await _conductor.submit(wrapped)
     except Exception as e:
         logger.error(f"Grading error: {e}")
         raise HTTPException(status_code=400, detail=f"Grading error: {e}") from e
 
-    logger.debug(f"API returns Grading results by now: {results}")
-    return results
+    logger.debug("Submission received, not returning grading results to avoid leaking ground truth")
+    return {"status": "ok", "message": "Submission received"}
 
 
 @app.get("/status")
