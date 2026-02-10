@@ -26,7 +26,7 @@ async def submit_via_conductor(ans: str) -> dict[str, str]:
         ans (str): task result that the agent submits
 
     Returns:
-        dict[str]: acknowledgment without grading details to avoid leaking ground truth
+        dict[str]: acknowledgment of submission status
     """
     if _conductor is None or _conductor.submission_stage not in {"diagnosis", "mitigation"}:
         stage = _conductor.submission_stage if _conductor else None
@@ -90,7 +90,6 @@ async def submit_solution(req: SubmitRequest):
         logger.error(f"Grading error: {e}")
         raise HTTPException(status_code=400, detail=f"Grading error: {e}") from e
 
-    logger.debug("Submission received, not returning grading results to avoid leaking ground truth")
     return {"status": "ok", "message": "Submission received"}
 
 
