@@ -1,18 +1,15 @@
 import argparse
 import base64
 import json
-import os
 import warnings
 from collections import Counter, defaultdict
 from datetime import datetime
 from html import escape as html_escape
 from pathlib import Path
-from typing import Dict, Tuple, Optional, List
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
 
 
 def pick_results_csv_with_most_rows(root: Path) -> Path:
@@ -139,13 +136,13 @@ def extract_tool_calls(msg: dict):
     return []
 
 
-def build_jsonl_index(traces_root: Path) -> Dict[str, Path]:
+def build_jsonl_index(traces_root: Path) -> dict[str, Path]:
     """
     Build problem_id -> jsonl_path index by reading the first JSON object of each file.
     If multiple JSONLs claim the same problem_id, we keep the largest file (usually most complete).
     """
-    idx: Dict[str, Path] = {}
-    sizes: Dict[str, int] = {}
+    idx: dict[str, Path] = {}
+    sizes: dict[str, int] = {}
 
     for p in traces_root.rglob("*.jsonl"):
         try:
@@ -171,7 +168,7 @@ def build_jsonl_index(traces_root: Path) -> Dict[str, Path]:
     return idx
 
 
-def load_jsonl_into_df(problem_id: str, jsonl_index: Dict[str, Path]) -> pd.DataFrame:
+def load_jsonl_into_df(problem_id: str, jsonl_index: dict[str, Path]) -> pd.DataFrame:
     rows = []
     jsonl_path = jsonl_index.get(problem_id)
     if not jsonl_path:
@@ -234,7 +231,6 @@ def build_problem_dfs(all_results_csv: pd.DataFrame, traces_root: Path) -> dict:
             print(f"Error loading problem_id {pid}: {e}")
             continue
     return problem_dfs
-
 
 
 def successful(all_results_csv: pd.DataFrame, problem_id, stage=None) -> bool:
@@ -513,7 +509,7 @@ def step_to_tool_call(all_results_csv, problem_dfs, filter_mode=None):
 # ----------------------------
 # Correlations (robust / no warnings)
 # ----------------------------
-def _safe_corr(x: pd.Series, y: pd.Series, method: str) -> Tuple[Optional[float], Optional[str]]:
+def _safe_corr(x: pd.Series, y: pd.Series, method: str) -> tuple[float | None, str | None]:
     df = pd.DataFrame({"x": x, "y": y}).dropna()
     if df.empty or df.shape[0] < 2:
         return None, "N/A (insufficient data)"
@@ -567,19 +563,21 @@ def correlation_tool_calls_vs_success(
                     tool_names |= names
 
         r = all_results_csv.loc[all_results_csv["problem_id"] == pid].iloc[0]
-        diag_ok = bool(r["Diagnosis.success"])
-        mit_ok = bool(r["Mitigation.success"])
+        diag_ok = bool(r.get("Diagnosis.success", False))
+        mit_ok = bool(r.get("Mitigation.success", False))
         overall_ok = diag_ok and mit_ok
 
-        rows.append({
-            "problem_id": pid,
-            "tool_calls_total": int(raw_total),
-            "tool_steps_with_any_tool": int(steps_with_any_tool),
-            "distinct_tools": int(len(tool_names)),
-            "diagnosis_success": diag_ok,
-            "mitigation_success": mit_ok,
-            "overall_success": overall_ok,
-        })
+        rows.append(
+            {
+                "problem_id": pid,
+                "tool_calls_total": int(raw_total),
+                "tool_steps_with_any_tool": int(steps_with_any_tool),
+                "distinct_tools": int(len(tool_names)),
+                "diagnosis_success": diag_ok,
+                "mitigation_success": mit_ok,
+                "overall_success": overall_ok,
+            }
+        )
 
     feat = pd.DataFrame(rows)
     if feat.empty:
@@ -594,7 +592,7 @@ def correlation_tool_calls_vs_success(
 
     x = feat[tool_metric].astype(float)
 
-    def _balance(col: str) -> Dict[str, int]:
+    def _balance(col: str) -> dict[str, int]:
         s = feat[col].astype(bool)
         return {"true": int(s.sum()), "false": int((~s).sum()), "n": int(len(s))}
 
@@ -697,7 +695,7 @@ def steps_tool_usage_correlation(
     return label, float(pearson)
 
 
-#plotting
+# plotting
 def plot_tool_usage_by_step(
     tool_count_per_step,
     top_k_tools=None,
@@ -725,10 +723,7 @@ def plot_tool_usage_by_step(
         else [t for t, _ in total_by_tool.most_common()]
     )
 
-    counts = {
-        tool: np.array([tool_count_per_step[s].get(tool, 0) for s in steps], dtype=int)
-        for tool in tools
-    }
+    counts = {tool: np.array([tool_count_per_step[s].get(tool, 0) for s in steps], dtype=int) for tool in tools}
 
     x = np.arange(n) * gap
     if width is None:
@@ -783,7 +778,7 @@ def _mode_suffix(mode: str) -> str:
     return "" if mode == "all" else f"_{mode}"
 
 
-def _fmt_corr(val: Optional[float], reason: Optional[str]) -> str:
+def _fmt_corr(val: float | None, reason: str | None) -> str:
     if val is None:
         return reason or "N/A"
     return f"{val:.3f}"
@@ -800,19 +795,27 @@ def collect_summary(all_results_csv: pd.DataFrame, problem_dfs: dict) -> dict:
         pid, steps = problem_with_max_steps(all_results_csv, problem_dfs, stage="diagnosis", filter_mode=filter_mode)
         summary[f"max_steps_diagnosis{suf}"] = {"problem_id": pid, "steps": steps}
 
-        pid, steps = problem_with_max_steps(all_results_csv, problem_dfs, stage="mitigation_attempt_0", filter_mode=filter_mode)
+        pid, steps = problem_with_max_steps(
+            all_results_csv, problem_dfs, stage="mitigation_attempt_0", filter_mode=filter_mode
+        )
         summary[f"max_steps_mitigation_0{suf}"] = {"problem_id": pid, "steps": steps}
 
         pid, steps, _ = total_maximum_steps(all_results_csv, problem_dfs, filter_mode=filter_mode)
         summary[f"max_total_steps_all_stages{suf}"] = {"problem_id": pid, "steps": steps}
 
-        summary[f"avg_steps_diagnosis{suf}"] = avg_steps_per_stage(all_results_csv, problem_dfs, stage="diagnosis", filter_mode=filter_mode)
-        summary[f"avg_steps_mitigation_0{suf}"] = avg_steps_per_stage(all_results_csv, problem_dfs, stage="mitigation_attempt_0", filter_mode=filter_mode)
+        summary[f"avg_steps_diagnosis{suf}"] = avg_steps_per_stage(
+            all_results_csv, problem_dfs, stage="diagnosis", filter_mode=filter_mode
+        )
+        summary[f"avg_steps_mitigation_0{suf}"] = avg_steps_per_stage(
+            all_results_csv, problem_dfs, stage="mitigation_attempt_0", filter_mode=filter_mode
+        )
 
         pid, steps = problem_with_min_steps(all_results_csv, problem_dfs, stage="diagnosis", filter_mode=filter_mode)
         summary[f"min_steps_diagnosis{suf}"] = {"problem_id": pid, "steps": steps}
 
-        pid, steps = problem_with_min_steps(all_results_csv, problem_dfs, stage="mitigation_attempt_0", filter_mode=filter_mode)
+        pid, steps = problem_with_min_steps(
+            all_results_csv, problem_dfs, stage="mitigation_attempt_0", filter_mode=filter_mode
+        )
         summary[f"min_steps_mitigation_0{suf}"] = {"problem_id": pid, "steps": steps}
 
         pid, steps, _ = total_minimum_steps(all_results_csv, problem_dfs, filter_mode=filter_mode)
@@ -821,7 +824,9 @@ def collect_summary(all_results_csv: pd.DataFrame, problem_dfs: dict) -> dict:
         tool, c = most_frequently_used_tool(all_results_csv, problem_dfs, stage="diagnosis", filter_mode=filter_mode)
         summary[f"most_used_tool_diagnosis{suf}"] = {"tool": tool, "steps": c}
 
-        tool, c = most_frequently_used_tool(all_results_csv, problem_dfs, stage="mitigation_attempt_0", filter_mode=filter_mode)
+        tool, c = most_frequently_used_tool(
+            all_results_csv, problem_dfs, stage="mitigation_attempt_0", filter_mode=filter_mode
+        )
         summary[f"most_used_tool_mitigation_0{suf}"] = {"tool": tool, "steps": c}
 
         tool, c = total_most_frequently_used_tool(all_results_csv, problem_dfs, filter_mode=filter_mode)
@@ -830,7 +835,9 @@ def collect_summary(all_results_csv: pd.DataFrame, problem_dfs: dict) -> dict:
         tool, c = least_frequently_used_tool(all_results_csv, problem_dfs, stage="diagnosis", filter_mode=filter_mode)
         summary[f"least_used_tool_diagnosis{suf}"] = {"tool": tool, "steps": c}
 
-        tool, c = least_frequently_used_tool(all_results_csv, problem_dfs, stage="mitigation_attempt_0", filter_mode=filter_mode)
+        tool, c = least_frequently_used_tool(
+            all_results_csv, problem_dfs, stage="mitigation_attempt_0", filter_mode=filter_mode
+        )
         summary[f"least_used_tool_mitigation_0{suf}"] = {"tool": tool, "steps": c}
 
         tool, c = total_least_frequently_used_tool(all_results_csv, problem_dfs, filter_mode=filter_mode)
@@ -878,76 +885,119 @@ def pretty_print_summary(summary: dict):
         suf = _mode_suffix(mode)
         m = _mode_label(mode)
 
-        rows.extend([
-            (m, "Max steps (diagnosis)",
-             summary[f"max_steps_diagnosis{suf}"]["problem_id"],
-             summary[f"max_steps_diagnosis{suf}"]["steps"]),
-
-            (m, "Max steps (Mitigation 0)",
-             summary[f"max_steps_mitigation_0{suf}"]["problem_id"],
-             summary[f"max_steps_mitigation_0{suf}"]["steps"]),
-
-            (m, "Max total steps (All stages)",
-             summary[f"max_total_steps_all_stages{suf}"]["problem_id"],
-             summary[f"max_total_steps_all_stages{suf}"]["steps"]),
-
-            (m, "Avg steps (diagnosis)", "-", f'{summary[f"avg_steps_diagnosis{suf}"]:.2f}'),
-            (m, "Avg steps (Mitigation 0)", "-", f'{summary[f"avg_steps_mitigation_0{suf}"]:.2f}'),
-
-            (m, "Min steps (diagnosis)",
-             summary[f"min_steps_diagnosis{suf}"]["problem_id"],
-             summary[f"min_steps_diagnosis{suf}"]["steps"]),
-
-            (m, "Min steps (Mitigation 0)",
-             summary[f"min_steps_mitigation_0{suf}"]["problem_id"],
-             summary[f"min_steps_mitigation_0{suf}"]["steps"]),
-
-            (m, "Min total steps (All stages)",
-             summary[f"min_total_steps_all_stages{suf}"]["problem_id"],
-             summary[f"min_total_steps_all_stages{suf}"]["steps"]),
-
-            (m, "Most used tool (diagnosis)",
-             summary[f"most_used_tool_diagnosis{suf}"]["tool"],
-             summary[f"most_used_tool_diagnosis{suf}"]["steps"]),
-
-            (m, "Most used tool (Mitigation 0)",
-             summary[f"most_used_tool_mitigation_0{suf}"]["tool"],
-             summary[f"most_used_tool_mitigation_0{suf}"]["steps"]),
-
-            (m, "Most used tool (All stages)",
-             summary[f"most_used_tool_all_stages{suf}"]["tool"],
-             summary[f"most_used_tool_all_stages{suf}"]["steps"]),
-
-            (m, "Least used tool (diagnosis)",
-             summary[f"least_used_tool_diagnosis{suf}"]["tool"],
-             summary[f"least_used_tool_diagnosis{suf}"]["steps"]),
-
-            (m, "Least used tool (Mitigation 0)",
-             summary[f"least_used_tool_mitigation_0{suf}"]["tool"],
-             summary[f"least_used_tool_mitigation_0{suf}"]["steps"]),
-
-            (m, "Least used tool (All stages)",
-             summary[f"least_used_tool_all_stages{suf}"]["tool"],
-             summary[f"least_used_tool_all_stages{suf}"]["steps"]),
-
-            (m, "Corr(tool_calls_total, Diagnosis.success) [Pearson]", "-", summary.get(f"corr_toolcalls_vs_diag{suf}", "-")),
-            (m, "Corr(tool_calls_total, Mitigation.success) [Pearson]", "-", summary.get(f"corr_toolcalls_vs_mit{suf}", "-")),
-            (m, "Corr(tool_calls_total, Overall.success) [Pearson]", "-", summary.get(f"corr_toolcalls_vs_overall{suf}", "-")),
-
-            (m, "Correlation between total_steps and tool usage",
-             summary.get(f"steps_tool_usage_label{suf}", "-"),
-             summary.get(f"steps_tool_usage_value{suf}", "-")),
-        ])
+        rows.extend(
+            [
+                (
+                    m,
+                    "Max steps (diagnosis)",
+                    summary[f"max_steps_diagnosis{suf}"]["problem_id"],
+                    summary[f"max_steps_diagnosis{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Max steps (Mitigation 0)",
+                    summary[f"max_steps_mitigation_0{suf}"]["problem_id"],
+                    summary[f"max_steps_mitigation_0{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Max total steps (All stages)",
+                    summary[f"max_total_steps_all_stages{suf}"]["problem_id"],
+                    summary[f"max_total_steps_all_stages{suf}"]["steps"],
+                ),
+                (m, "Avg steps (diagnosis)", "-", f"{summary[f'avg_steps_diagnosis{suf}']:.2f}"),
+                (m, "Avg steps (Mitigation 0)", "-", f"{summary[f'avg_steps_mitigation_0{suf}']:.2f}"),
+                (
+                    m,
+                    "Min steps (diagnosis)",
+                    summary[f"min_steps_diagnosis{suf}"]["problem_id"],
+                    summary[f"min_steps_diagnosis{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Min steps (Mitigation 0)",
+                    summary[f"min_steps_mitigation_0{suf}"]["problem_id"],
+                    summary[f"min_steps_mitigation_0{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Min total steps (All stages)",
+                    summary[f"min_total_steps_all_stages{suf}"]["problem_id"],
+                    summary[f"min_total_steps_all_stages{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Most used tool (diagnosis)",
+                    summary[f"most_used_tool_diagnosis{suf}"]["tool"],
+                    summary[f"most_used_tool_diagnosis{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Most used tool (Mitigation 0)",
+                    summary[f"most_used_tool_mitigation_0{suf}"]["tool"],
+                    summary[f"most_used_tool_mitigation_0{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Most used tool (All stages)",
+                    summary[f"most_used_tool_all_stages{suf}"]["tool"],
+                    summary[f"most_used_tool_all_stages{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Least used tool (diagnosis)",
+                    summary[f"least_used_tool_diagnosis{suf}"]["tool"],
+                    summary[f"least_used_tool_diagnosis{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Least used tool (Mitigation 0)",
+                    summary[f"least_used_tool_mitigation_0{suf}"]["tool"],
+                    summary[f"least_used_tool_mitigation_0{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Least used tool (All stages)",
+                    summary[f"least_used_tool_all_stages{suf}"]["tool"],
+                    summary[f"least_used_tool_all_stages{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Corr(tool_calls_total, Diagnosis.success) [Pearson]",
+                    "-",
+                    summary.get(f"corr_toolcalls_vs_diag{suf}", "-"),
+                ),
+                (
+                    m,
+                    "Corr(tool_calls_total, Mitigation.success) [Pearson]",
+                    "-",
+                    summary.get(f"corr_toolcalls_vs_mit{suf}", "-"),
+                ),
+                (
+                    m,
+                    "Corr(tool_calls_total, Overall.success) [Pearson]",
+                    "-",
+                    summary.get(f"corr_toolcalls_vs_overall{suf}", "-"),
+                ),
+                (
+                    m,
+                    "Correlation between total_steps and tool usage",
+                    summary.get(f"steps_tool_usage_label{suf}", "-"),
+                    summary.get(f"steps_tool_usage_value{suf}", "-"),
+                ),
+            ]
+        )
 
     try:
         from tabulate import tabulate
+
         print("\n" + tabulate(rows, headers=["Mode", "Metric", "Item", "Value"], tablefmt="rounded_grid"))
     except Exception:
         col0 = max(len(str(r[0])) for r in rows) + 2
         col1 = max(len(str(r[1])) for r in rows) + 2
         col2 = max(len(str(r[2])) for r in rows) + 2
         print("\n" + "=" * (col0 + col1 + col2 + 14))
-        print(f'{"Mode":<{col0}}{"Metric":<{col1}}{"Item":<{col2}}{"Value":>12}')
+        print(f"{'Mode':<{col0}}{'Metric':<{col1}}{'Item':<{col2}}{'Value':>12}")
         print("-" * (col0 + col1 + col2 + 14))
         for mode, metric, item, val in rows:
             print(f"{mode:<{col0}}{metric:<{col1}}{str(item):<{col2}}{str(val):>12}")
@@ -977,66 +1027,108 @@ def write_html_report(
         suf = _mode_suffix(mode)
         m = _mode_label(mode)
 
-        table_rows.extend([
-            (m, "Max steps (diagnosis)",
-             summary[f"max_steps_diagnosis{suf}"]["problem_id"],
-             summary[f"max_steps_diagnosis{suf}"]["steps"]),
-
-            (m, "Max steps (Mitigation 0)",
-             summary[f"max_steps_mitigation_0{suf}"]["problem_id"],
-             summary[f"max_steps_mitigation_0{suf}"]["steps"]),
-
-            (m, "Max total steps (All stages)",
-             summary[f"max_total_steps_all_stages{suf}"]["problem_id"],
-             summary[f"max_total_steps_all_stages{suf}"]["steps"]),
-
-            (m, "Avg steps (diagnosis)", "-", f'{summary[f"avg_steps_diagnosis{suf}"]:.2f}'),
-            (m, "Avg steps (Mitigation 0)", "-", f'{summary[f"avg_steps_mitigation_0{suf}"]:.2f}'),
-
-            (m, "Min steps (diagnosis)",
-             summary[f"min_steps_diagnosis{suf}"]["problem_id"],
-             summary[f"min_steps_diagnosis{suf}"]["steps"]),
-
-            (m, "Min steps (Mitigation 0)",
-             summary[f"min_steps_mitigation_0{suf}"]["problem_id"],
-             summary[f"min_steps_mitigation_0{suf}"]["steps"]),
-
-            (m, "Min total steps (All stages)",
-             summary[f"min_total_steps_all_stages{suf}"]["problem_id"],
-             summary[f"min_total_steps_all_stages{suf}"]["steps"]),
-
-            (m, "Most used tool (diagnosis)",
-             summary[f"most_used_tool_diagnosis{suf}"]["tool"],
-             summary[f"most_used_tool_diagnosis{suf}"]["steps"]),
-
-            (m, "Most used tool (Mitigation 0)",
-             summary[f"most_used_tool_mitigation_0{suf}"]["tool"],
-             summary[f"most_used_tool_mitigation_0{suf}"]["steps"]),
-
-            (m, "Most used tool (All stages)",
-             summary[f"most_used_tool_all_stages{suf}"]["tool"],
-             summary[f"most_used_tool_all_stages{suf}"]["steps"]),
-
-            (m, "Least used tool (diagnosis)",
-             summary[f"least_used_tool_diagnosis{suf}"]["tool"],
-             summary[f"least_used_tool_diagnosis{suf}"]["steps"]),
-
-            (m, "Least used tool (Mitigation 0)",
-             summary[f"least_used_tool_mitigation_0{suf}"]["tool"],
-             summary[f"least_used_tool_mitigation_0{suf}"]["steps"]),
-
-            (m, "Least used tool (All stages)",
-             summary[f"least_used_tool_all_stages{suf}"]["tool"],
-             summary[f"least_used_tool_all_stages{suf}"]["steps"]),
-
-            (m, "Corr(tool_calls_total, Diagnosis.success) [Pearson]", "-", summary.get(f"corr_toolcalls_vs_diag{suf}", "-")),
-            (m, "Corr(tool_calls_total, Mitigation.success) [Pearson]", "-", summary.get(f"corr_toolcalls_vs_mit{suf}", "-")),
-            (m, "Corr(tool_calls_total, Overall.success) [Pearson]", "-", summary.get(f"corr_toolcalls_vs_overall{suf}", "-")),
-
-            (m, "Correlation between total_steps and tool usage",
-             summary.get(f"steps_tool_usage_label{suf}", "-"),
-             summary.get(f"steps_tool_usage_value{suf}", "-")),
-        ])
+        table_rows.extend(
+            [
+                (
+                    m,
+                    "Max steps (diagnosis)",
+                    summary[f"max_steps_diagnosis{suf}"]["problem_id"],
+                    summary[f"max_steps_diagnosis{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Max steps (Mitigation 0)",
+                    summary[f"max_steps_mitigation_0{suf}"]["problem_id"],
+                    summary[f"max_steps_mitigation_0{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Max total steps (All stages)",
+                    summary[f"max_total_steps_all_stages{suf}"]["problem_id"],
+                    summary[f"max_total_steps_all_stages{suf}"]["steps"],
+                ),
+                (m, "Avg steps (diagnosis)", "-", f"{summary[f'avg_steps_diagnosis{suf}']:.2f}"),
+                (m, "Avg steps (Mitigation 0)", "-", f"{summary[f'avg_steps_mitigation_0{suf}']:.2f}"),
+                (
+                    m,
+                    "Min steps (diagnosis)",
+                    summary[f"min_steps_diagnosis{suf}"]["problem_id"],
+                    summary[f"min_steps_diagnosis{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Min steps (Mitigation 0)",
+                    summary[f"min_steps_mitigation_0{suf}"]["problem_id"],
+                    summary[f"min_steps_mitigation_0{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Min total steps (All stages)",
+                    summary[f"min_total_steps_all_stages{suf}"]["problem_id"],
+                    summary[f"min_total_steps_all_stages{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Most used tool (diagnosis)",
+                    summary[f"most_used_tool_diagnosis{suf}"]["tool"],
+                    summary[f"most_used_tool_diagnosis{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Most used tool (Mitigation 0)",
+                    summary[f"most_used_tool_mitigation_0{suf}"]["tool"],
+                    summary[f"most_used_tool_mitigation_0{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Most used tool (All stages)",
+                    summary[f"most_used_tool_all_stages{suf}"]["tool"],
+                    summary[f"most_used_tool_all_stages{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Least used tool (diagnosis)",
+                    summary[f"least_used_tool_diagnosis{suf}"]["tool"],
+                    summary[f"least_used_tool_diagnosis{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Least used tool (Mitigation 0)",
+                    summary[f"least_used_tool_mitigation_0{suf}"]["tool"],
+                    summary[f"least_used_tool_mitigation_0{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Least used tool (All stages)",
+                    summary[f"least_used_tool_all_stages{suf}"]["tool"],
+                    summary[f"least_used_tool_all_stages{suf}"]["steps"],
+                ),
+                (
+                    m,
+                    "Corr(tool_calls_total, Diagnosis.success) [Pearson]",
+                    "-",
+                    summary.get(f"corr_toolcalls_vs_diag{suf}", "-"),
+                ),
+                (
+                    m,
+                    "Corr(tool_calls_total, Mitigation.success) [Pearson]",
+                    "-",
+                    summary.get(f"corr_toolcalls_vs_mit{suf}", "-"),
+                ),
+                (
+                    m,
+                    "Corr(tool_calls_total, Overall.success) [Pearson]",
+                    "-",
+                    summary.get(f"corr_toolcalls_vs_overall{suf}", "-"),
+                ),
+                (
+                    m,
+                    "Correlation between total_steps and tool usage",
+                    summary.get(f"steps_tool_usage_label{suf}", "-"),
+                    summary.get(f"steps_tool_usage_value{suf}", "-"),
+                ),
+            ]
+        )
 
     def card(label, value):
         return f"""
@@ -1179,10 +1271,20 @@ def write_html_report(
     </header>
 
     <div class="grid">
-      {card("Max total steps (ALL)", f'{_safe(summary["max_total_steps_all_stages"]["problem_id"])} • {_safe(summary["max_total_steps_all_stages"]["steps"])}')}
-      {card("Avg steps (diagnosis, ALL)", f'{summary["avg_steps_diagnosis"]:.2f}')}
-      {card("Avg steps (Mitigation 0, ALL)", f'{summary["avg_steps_mitigation_0"]:.2f}')}
-      {card("Min total steps (ALL)", f'{_safe(summary["min_total_steps_all_stages"]["problem_id"])} • {_safe(summary["min_total_steps_all_stages"]["steps"])}')}
+      {
+        card(
+            "Max total steps (ALL)",
+            f"{_safe(summary['max_total_steps_all_stages']['problem_id'])} • {_safe(summary['max_total_steps_all_stages']['steps'])}",
+        )
+    }
+      {card("Avg steps (diagnosis, ALL)", f"{summary['avg_steps_diagnosis']:.2f}")}
+      {card("Avg steps (Mitigation 0, ALL)", f"{summary['avg_steps_mitigation_0']:.2f}")}
+      {
+        card(
+            "Min total steps (ALL)",
+            f"{_safe(summary['min_total_steps_all_stages']['problem_id'])} • {_safe(summary['min_total_steps_all_stages']['steps'])}",
+        )
+    }
     </div>
 
     <div class="panel">
@@ -1197,15 +1299,21 @@ def write_html_report(
           </tr>
         </thead>
         <tbody>
-          {''.join(
-              f"<tr><td>{html_escape(str(mode))}</td><td>{html_escape(str(metric))}</td><td>{html_escape(str(item))}</td><td>{html_escape(str(val))}</td></tr>"
-              for mode, metric, item, val in table_rows
-          )}
+          {
+        "".join(
+            f"<tr><td>{html_escape(str(mode))}</td><td>{html_escape(str(metric))}</td><td>{html_escape(str(item))}</td><td>{html_escape(str(val))}</td></tr>"
+            for mode, metric, item, val in table_rows
+        )
+    }
         </tbody>
       </table>
 
       <div class="figure">
-        {f'<img alt="Tool usage figure" src="data:image/png;base64,{img_b64}"/>' if img_b64 else '<div style="padding:14px;color:var(--muted);">Figure not available.</div>'}
+        {
+        f'<img alt="Tool usage figure" src="data:image/png;base64,{img_b64}"/>'
+        if img_b64
+        else '<div style="padding:14px;color:var(--muted);">Figure not available.</div>'
+    }
       </div>
     </div>
   </div>
@@ -1217,7 +1325,6 @@ def write_html_report(
         f.write(html)
 
     print(f"\nWrote HTML report: {out_path}")
-
 
 
 def main():
