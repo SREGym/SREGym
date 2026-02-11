@@ -397,6 +397,7 @@ for BLOCK in $BLOCKS; do
 done
 echo "Added $SUCCESS bad blocks, $FAILED already existed or failed"
 """
+        print(f"[dm-dust] Adding bad blocks script: {script}")
         result = self._exec_on_node(node, script)
         print(f"[dm-dust] {result.strip()}")
 

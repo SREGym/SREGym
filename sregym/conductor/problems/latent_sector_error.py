@@ -1,5 +1,5 @@
+import random
 from enum import StrEnum
-from typing import Dict, Optional, Tuple
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
@@ -22,6 +22,7 @@ class LatentSectorErrorStrategy(StrEnum):
     TEST = "test"
     EVERY_1000 = "every_1000"  # Also test strategy
     TARGETED = "targeted"
+    PERCENTAGE = "percentage"
 
 
 class LatentSectorError(Problem):
@@ -35,6 +36,7 @@ class LatentSectorError(Problem):
         target_deploy: str = DEFAULT_TARGET_DEPLOY,
         namespace: str = DEFAULT_NAMESPACE,
         strategy: LatentSectorErrorStrategy = LatentSectorErrorStrategy.TARGETED,
+        percentage: float = 1.0,
     ):
         self.app = HotelReservation()
         super().__init__(app=self.app, namespace=self.app.namespace)
@@ -42,10 +44,12 @@ class LatentSectorError(Problem):
         self.namespace = namespace
         self.deploy = target_deploy
         self.injector = KernelInjector(self.kubectl)
-        self.target_node: Optional[str] = None
-        self.pvc_path: Optional[str] = None
+        self.target_node: str | None = None
+        self.pvc_path: str | None = None
         self.strategy = strategy
-
+        self.percentage = percentage
+        if self.strategy == LatentSectorErrorStrategy.PERCENTAGE and not (0 <= self.percentage <= 100):
+            raise ValueError("Disk sector failure percentage must be between 0 and 100")
 
         self.root_cause = "There's a latent sector error on the hard drive that the mongodb-geo service's data is on."
 
@@ -66,7 +70,7 @@ class LatentSectorError(Problem):
 
         return json.loads(out)
 
-    def _discover_node_for_deploy(self) -> Optional[str]:
+    def _discover_node_for_deploy(self) -> str | None:
         """Return the node where the target deployment is running."""
         # First try with a label selector (common OpenEBS hotel-reservation pattern)
         svc = self.deploy.split("-", 1)[-1]  # e.g. "geo"
@@ -92,7 +96,7 @@ class LatentSectorError(Problem):
 
         return None
 
-    def _discover_pvc(self) -> Tuple[str, str, str]:
+    def _discover_pvc(self) -> tuple[str, str, str]:
         """
         Discover PVC information for the target deployment.
 
@@ -125,7 +129,7 @@ class LatentSectorError(Problem):
 
         return pvc_name, pv_name, local_path
 
-    def _get_openebs_storage_size(self, node: str) -> Dict[str, int]:
+    def _get_openebs_storage_size(self, node: str) -> dict[str, int]:
         """
         Get storage information for the OpenEBS dm-dust device.
 
@@ -204,7 +208,7 @@ fi
         except ValueError:
             return []
 
-    def _inject_badblocks_by_strategy(self, node: str, storage_info: Dict[str, int]) -> None:
+    def _inject_badblocks_by_strategy(self, node: str, storage_info: dict[str, int]) -> None:
         """Inject bad blocks according to the configured strategy."""
         if self.strategy == LatentSectorErrorStrategy.EVERY_1000:
             start_sector = 0
@@ -219,10 +223,10 @@ fi
             self.injector.dm_dust_add_badblocks(node, DM_DUST_DEVICE_NAME, TEST_BAD_BLOCKS)
 
         elif self.strategy == LatentSectorErrorStrategy.TARGETED:
-            print(f"[MongoDBLSE] Strategy TARGETED: Identifying MongoDB data blocks...")
+            print("[MongoDBLSE] Strategy TARGETED: Identifying MongoDB data blocks...")
             blocks = self._get_target_file_blocks(node)
             if not blocks:
-                print(f"[MongoDBLSE] Warning: No target blocks found. Falling back to TEST strategy.")
+                print("[MongoDBLSE] Warning: No target blocks found. Falling back to TEST strategy.")
                 self.injector.dm_dust_add_badblocks(node, DM_DUST_DEVICE_NAME, TEST_BAD_BLOCKS)
             else:
                 print(f"[MongoDBLSE] Injecting {len(blocks)} bad blocks targeting data files.")
@@ -231,6 +235,17 @@ fi
                 for i in range(0, len(blocks), chunk_size):
                     chunk = blocks[i : i + chunk_size]
                     self.injector.dm_dust_add_badblocks(node, DM_DUST_DEVICE_NAME, chunk)
+
+        elif self.strategy == LatentSectorErrorStrategy.PERCENTAGE:
+            total_sectors = storage_info["sectors"]
+            num_bad_blocks = int(total_sectors * (self.percentage / 100.0))
+            print(f"[MongoDBLSE] Strategy PERCENTAGE: Injecting {num_bad_blocks} bad blocks ({self.percentage}%)")
+            bad_blocks = random.sample(range(total_sectors), num_bad_blocks)
+            # Inject in chunks to avoid command line length limits
+            chunk_size = 1000
+            for i in range(0, len(bad_blocks), chunk_size):
+                chunk = bad_blocks[i : i + chunk_size]
+                self.injector.dm_dust_add_badblocks(node, DM_DUST_DEVICE_NAME, chunk)
 
         else:
             raise ValueError(f"Unknown strategy: {self.strategy}")
@@ -251,11 +266,11 @@ fi
         # we just need to add bad blocks and enable them
 
         # Clear any existing bad blocks from previous runs
-        print(f"[MongoDBLSE] Clearing existing bad blocks...")
+        print("[MongoDBLSE] Clearing existing bad blocks...")
         self.injector.dm_dust_clear(self.target_node, DM_DUST_DEVICE_NAME)
 
         # Ensure we start in bypass mode
-        print(f"[MongoDBLSE] Setting device to bypass mode...")
+        print("[MongoDBLSE] Setting device to bypass mode...")
         self.injector.dm_dust_disable(self.target_node, DM_DUST_DEVICE_NAME)
 
         # Apply strategy-based bad blocks injection
@@ -268,35 +283,35 @@ fi
 
         self._inject_badblocks_by_strategy(self.target_node, storage_info)
 
-        print(f"[MongoDBLSE] Enabling bad block simulation (fail_read_on_bad_block mode)")
+        print("[MongoDBLSE] Enabling bad block simulation (fail_read_on_bad_block mode)")
         self.injector.dm_dust_enable(self.target_node, DM_DUST_DEVICE_NAME)
 
         # Drop caches to force disk reads
-        print(f"[MongoDBLSE] Dropping caches to force disk reads...")
+        print("[MongoDBLSE] Dropping caches to force disk reads...")
         self.injector.drop_caches(self.target_node)
 
-        print(f"[MongoDBLSE] Latent sector error injection complete")
+        print("[MongoDBLSE] Latent sector error injection complete")
 
     def _restart_mongodb_pod(self) -> None:
         """Restart the MongoDB deployment to recover from CrashLoopBackOff."""
         print(f"[MongoDBLSE] Restarting MongoDB deployment {self.deploy}...")
         cmd = f"kubectl -n {self.namespace} rollout restart deployment {self.deploy}"
         self.kubectl.exec_command(cmd)
-        print(f"[MongoDBLSE] ✅ Deployment restart initiated")
+        print("[MongoDBLSE] ✅ Deployment restart initiated")
 
     @mark_fault_injected
     def recover_fault(self):
         """Recover from latent sector error injection by clearing bad blocks."""
-        print(f"[MongoDBLSE] Starting recovery from latent sector error injection")
+        print("[MongoDBLSE] Starting recovery from latent sector error injection")
 
         if not self.target_node:
-            print(f"[MongoDBLSE] No target node found, skipping recovery")
+            print("[MongoDBLSE] No target node found, skipping recovery")
             return
 
         print(f"[MongoDBLSE] Disabling bad block simulation on {self.target_node}")
         self.injector.dm_dust_disable(self.target_node, DM_DUST_DEVICE_NAME)
 
-        print(f"[MongoDBLSE] Clearing all bad blocks...")
+        print("[MongoDBLSE] Clearing all bad blocks...")
         self.injector.dm_dust_clear(self.target_node, DM_DUST_DEVICE_NAME)
 
         # Verify cleanup
@@ -304,9 +319,9 @@ fi
         if blocks != "No blocks in badblocklist":
             print(f"[MongoDBLSE] Warning: Bad blocks still present: {blocks}")
         else:
-            print(f"[MongoDBLSE] ✅ All bad blocks cleared")
+            print("[MongoDBLSE] ✅ All bad blocks cleared")
 
         # Restart MongoDB pod to recover instantly
         self._restart_mongodb_pod()
 
-        print(f"[MongoDBLSE] Recovery complete")
+        print("[MongoDBLSE] Recovery complete")
