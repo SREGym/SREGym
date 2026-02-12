@@ -23,15 +23,9 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - key: kubernetes.io/arch
-                    operator: In
-                    values: ["amd64"]
                   - key: node-role.kubernetes.io/control-plane
                     operator: Exists
               - matchExpressions:
-                  - key: kubernetes.io/arch
-                    operator: In
-                    values: ["amd64"]
                   - key: node-role.kubernetes.io/master
                     operator: Exists
       tolerations:
@@ -43,7 +37,7 @@ spec:
           effect: "NoSchedule"
       containers:
         - name: khaos
-          image: saad1038/khaos-x86:latest
+          image: ghcr.io/sregym/khaos:latest
           imagePullPolicy: IfNotPresent
           command: ["sleep", "infinity"]
           securityContext:
@@ -91,17 +85,13 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - key: kubernetes.io/arch
-                    operator: In
-                    values: ["amd64"]
                   - key: node-role.kubernetes.io/worker
                     operator: Exists
       nodeSelector:
-        kubernetes.io/arch: amd64
         node-role.kubernetes.io/worker: ""   # explicit worker targeting
       containers:
         - name: khaos
-          image: saad1038/khaos-x86:latest
+          image: ghcr.io/sregym/khaos:latest
           imagePullPolicy: IfNotPresent
           command: ["sleep", "infinity"]
           securityContext:
