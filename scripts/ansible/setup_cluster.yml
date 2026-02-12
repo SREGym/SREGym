@@ -661,6 +661,15 @@
   vars:
     kubeconfig_path: "/users/{{ k8s_user }}/.kube/config"
   tasks:
+    - name: Create audit policy file
+      copy:
+        dest: /etc/kubernetes/audit-policy.yaml
+        content: |
+          apiVersion: audit.k8s.io/v1
+          kind: Policy
+          rules:
+            - level: Metadata
+      become: true
     - name: Resolve control node hostname to IP
       command: getent ahosts "{{ hostvars['control_node'].ansible_host }}"
       register: resolved_ip_output
@@ -671,9 +680,15 @@
       add_host:
         name: "global"
         resolved_control_plane_ip: "{{ resolved_control_plane_ip }}"
+    - name: Create kubeadm config file from template
+      template:
+        src: kubeadm-config.j2
+        dest: /tmp/kubeadm-config.yaml
+        mode: '0644'
+      become: true
     - name: Initialize Kubernetes control plane
       shell: |
-        kubeadm init --pod-network-cidr=10.244.0.0/16 --cri-socket /var/run/cri-dockerd.sock --apiserver-advertise-address={{ resolved_control_plane_ip }}
+        kubeadm init --config /tmp/kubeadm-config.yaml
       args:
         creates: /etc/kubernetes/admin.conf
     - name: Ensure .kube directory exists
