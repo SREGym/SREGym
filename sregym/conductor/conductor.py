@@ -290,35 +290,61 @@ class Conductor:
             # No more stages; finish the problem
             self._finish_problem()
 
-    def _finish_problem(self):
-        self.logger.info("[STAGE] Done, recover fault")
+    async def _cleanup_async(self):
+        """
+        Performs async cleanup operations (fault recovery, app teardown, reconciliation).
+        This allows these slow operations to run in the background without blocking HTTP responses.
+        """
+        self.logger.info("[CLEANUP] Starting async cleanup (fault recovery, undeploy, reconcile)")
 
         # Stop noises
         try:
             nm = get_noise_manager()
             nm.stop()
+            self.logger.info("[CLEANUP] NoiseManager stopped")
         except Exception as e:
             self.logger.warning(f"Failed to stop NoiseManager: {e}")
 
+        # Recover fault
         if self.problem:
+            self.logger.info("[CLEANUP] Recovering fault...")
             self.problem.recover_fault()
+            self.logger.info("[CLEANUP] Fault recovered")
 
-        self.logger.info("[STAGE] Undeploy app")
+        # Undeploy app
+        self.logger.info("[CLEANUP] Undeploying app...")
         self.undeploy_app()
+        self.logger.info("[CLEANUP] App undeployed")
 
-        # Reconcile cluster state to baseline to clean up any changes made by the agent
+        # Reconcile cluster state to baseline
         if self._baseline_captured:
-            self.logger.info("[STAGE] Reconciling cluster state to baseline")
+            self.logger.info("[CLEANUP] Reconciling cluster state to baseline...")
             try:
                 changes = self.cluster_state.reconcile_to_baseline()
                 if any(v for v in changes.values() if v):
                     self.logger.info(f"Cluster state reconciliation changes: {changes}")
+                self.logger.info("[CLEANUP] Cluster state reconciled")
             except Exception as e:
                 self.logger.warning(f"Failed to reconcile cluster state: {e}")
 
-        # Set to "done" after all cleanup is complete to prevent race condition
-        # where the next problem starts before cleanup finishes
+        # Set to "done" after all cleanup is complete
         self.submission_stage = "done"
+        self.logger.info("[CLEANUP] Async cleanup complete, stage set to 'done'")
+
+    def _finish_problem(self):
+        """
+        Initiates problem teardown by transitioning to 'tearing_down' state
+        and scheduling async cleanup. Returns immediately without blocking.
+        """
+        self.logger.info("[STAGE] Done, initiating teardown")
+        # Set stage to "tearing_down" immediately so the HTTP response can return
+        self.submission_stage = "tearing_down"
+
+        # Schedule async cleanup to run in the background
+        import asyncio
+        asyncio.create_task(self._cleanup_async())
+
+        self.logger.info("[STAGE] Teardown initiated, cleanup running in background")
 
     async def start_problem(self) -> StartProblemResult:
         """
@@ -405,6 +431,11 @@ class Conductor:
             self.logger.info("All tasks already completed; ignoring new submission.")
             return dict(self.results)
 
+        # If teardown is in progress, return current results without evaluation
+        if self.submission_stage == "tearing_down":
+            self.logger.info("Teardown in progress; returning current results without evaluation.")
+            return dict(self.results)
+
         if not self.stage_sequence:
             self.logger.warning("submit() called but no stages are configured; returning current results.")
             return dict(self.results)
@@ -431,12 +462,15 @@ class Conductor:
         # Run the evaluation function for the current stage
         current_stage["evaluation"](sol)
 
+        # Create a snapshot of results before advancing (to return immediately)
+        results_snapshot = dict(self.results)
+
         # After evaluation, advance to the next stage (if any)
         next_index = self.current_stage_index + 1
         self._advance_to_next_stage(start_index=next_index)
 
-        # Restart noise if there are more stages
-        if self.submission_stage != "done":
+        # Restart noise if there are more stages AND not in teardown
+        if self.submission_stage != "done" and self.submission_stage != "tearing_down":
             try:
                 nm = get_noise_manager()
                 self.logger.info("Restarting noise manager for next stage...")
@@ -444,7 +478,9 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to restart noise manager: {e}")
 
-        return dict(self.results)
+        # Return the snapshot captured before advancing, so HTTP responds immediately
+        # even if _finish_problem() is running async cleanup in the background
+        return results_snapshot
 
     def fix_kubernetes(self):
         self.logger.info("Fixing Kubernetes... to normal state.")

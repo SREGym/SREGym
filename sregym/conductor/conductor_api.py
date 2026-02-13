@@ -145,7 +145,7 @@ def run_api(conductor):
             """
 **Available Endpoints**
 - **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage
-- **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "done" }`
+- **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "tearing_down" | "done" }`
 """
         )
     )
