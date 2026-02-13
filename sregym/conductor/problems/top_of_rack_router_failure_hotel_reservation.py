@@ -21,18 +21,13 @@ class TopOfRackRouterPartitionHotelReservation(Problem):
         self.faulty_service = faulty_service
         self.fault_type = "tor_network_partition"
         self.root_cause = (
-            f"A Top-of-Rack router partition is simulated by isolating deployments matching `{self.faulty_service}` "
+            f"A Top-of-Rack router partition is simulated by isolating nodes matching `{self.faulty_service}` "
             f"from the rest of the application in namespace `{self.namespace}`."
         )
 
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
-
-        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-
-        self.app.create_workload()
-        self.mitigation_oracle = MitigationOracle(problem=self)
 
         self.faulty_microservices: list[str] = []
 
