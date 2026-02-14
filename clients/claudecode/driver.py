@@ -211,7 +211,7 @@ def main():
     parser.add_argument(
         "--logs-dir",
         type=str,
-        default="./logs/claudecode",
+        default=os.environ.get("AGENT_LOGS_DIR", "./logs/claudecode"),
         help="Directory to store logs (default: ./logs/claudecode)",
     )
     parser.add_argument(

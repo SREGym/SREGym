@@ -40,8 +40,6 @@ class ContainerRunner:
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
         "MODEL_ID",
-        "JUDGE_MODEL_ID",
-        "AGENT_MODEL_ID",
         "AWS_PROFILE",
         "AWS_DEFAULT_REGION",
         "WATSONX_API_BASE",

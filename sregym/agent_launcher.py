@@ -128,6 +128,7 @@ class AgentLauncher:
             env=reg.kickoff_env or {},
             label=f"{reg.name}-run",
         )
+        exec_input.env.setdefault("AGENT_LOGS_DIR", "/logs")
 
         proc = self._container_runner.run_async(exec_input)
         ap = AgentProcess(reg.name, proc)
