@@ -20,7 +20,6 @@ import ssl
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Set
 from urllib.parse import urlparse
 
 import urllib3
@@ -31,7 +30,7 @@ logger.propagate = True
 logger.setLevel(logging.DEBUG)
 
 # Namespaces to hide from agents
-HIDDEN_NAMESPACES: Set[str] = {"chaos-mesh", "khaos"}
+HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
 
 # Disable SSL warnings for self-signed certs
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -40,8 +39,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 class KubernetesAPIProxy:
     """Manages the Kubernetes API filtering proxy."""
 
-    def __init__(self, hidden_namespaces: Set[str] | None = None, listen_port: int = 6443):
-        self.hidden_namespaces: Set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
+    def __init__(self, hidden_namespaces: set[str] | None = None, listen_port: int = 6443):
+        self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
         self.listen_port = listen_port
         self.server: HTTPServer | None = None
         self.server_thread: threading.Thread | None = None
@@ -263,7 +262,7 @@ class KubernetesAPIProxy:
 
                 # Block direct access to hidden namespaces
                 if self._is_hidden_namespace_request(path):
-                    self.send_error(403, f"Forbidden: Access to this namespace is not allowed")
+                    self.send_error(403, "Forbidden: Access to this namespace is not allowed")
                     return
 
                 # Read request body if present
@@ -314,6 +313,9 @@ class KubernetesAPIProxy:
 
                     conn.close()
 
+                except BrokenPipeError:
+                    # Client closed while agent still has in-flight request open. Ignore
+                    pass
                 except Exception as e:
                     logger.error(f"Proxy error: {e}")
                     self.send_error(502, f"Bad Gateway: {str(e)}")
@@ -433,7 +435,7 @@ def get_proxy() -> KubernetesAPIProxy:
     return _proxy_instance
 
 
-def start_proxy(hidden_namespaces: Set[str] | None = None, port: int = 16443) -> KubernetesAPIProxy:
+def start_proxy(hidden_namespaces: set[str] | None = None, port: int = 16443) -> KubernetesAPIProxy:
     """Start the Kubernetes API filtering proxy."""
     global _proxy_instance
     if _proxy_instance is not None:
