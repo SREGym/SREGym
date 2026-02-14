@@ -30,12 +30,23 @@ async def submit_via_conductor(ans: str) -> dict[str, str]:
     """
     if _conductor is None or _conductor.submission_stage not in {"diagnosis", "mitigation"}:
         stage = _conductor.submission_stage if _conductor else None
+        if stage == "done" and _conductor is not None:
+            return {
+                "status": "done",
+                "text": "All stages have been completed and graded. No further submissions are needed.",
+            }
         return {"status": "error", "text": f"Cannot submit at stage: {stage!r}"}
 
     wrapped = f"```\nsubmit({repr(ans)})\n```"
     try:
         await _conductor.submit(wrapped)
-        return {"status": "ok", "text": "Submission received"}
+        stage = _conductor.submission_stage
+        if stage == "done":
+            return {
+                "status": "done",
+                "text": "All stages have been completed and graded. No further submissions are needed. You may stop.",
+            }
+        return {"status": "200", "text": "Submission received."}
     except Exception as e:
         return {"status": "error", "text": f"Grading error: {e}"}
 
@@ -77,8 +88,15 @@ class SubmitRequest(BaseModel):
 async def submit_solution(req: SubmitRequest):
     allowed = {"diagnosis", "mitigation"}
     if _conductor is None or _conductor.submission_stage not in allowed:
-        logger.error(f"Cannot submit at stage: {_conductor.submission_stage!r}")
-        raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {_conductor.submission_stage!r}")
+        stage = _conductor.submission_stage if _conductor else None
+        if stage == "done" and _conductor is not None:
+            logger.debug("Submit received at stage 'done' — problem already graded, returning final results")
+            return {
+                "status": "done",
+                "message": "All stages have been completed and graded. No further submissions are needed.",
+            }
+        logger.error(f"Cannot submit at stage: {stage!r}")
+        raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {stage!r}")
 
     # Use repr() to properly escape special characters in the solution string
     wrapped = f"```\nsubmit({repr(req.solution)})\n```"
@@ -90,7 +108,13 @@ async def submit_solution(req: SubmitRequest):
         logger.error(f"Grading error: {e}")
         raise HTTPException(status_code=400, detail=f"Grading error: {e}") from e
 
-    return {"status": "ok", "message": "Submission received"}
+    stage = _conductor.submission_stage
+    response = {"status": stage, "message": "Submission received."}
+    if stage == "done":
+        response["message"] = (
+            "All stages have been completed and graded. No further submissions are needed. You may stop."
+        )
+    return response
 
 
 @app.get("/status")

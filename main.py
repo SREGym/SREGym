@@ -198,17 +198,20 @@ def _run_driver_and_shutdown(
     n_attempts: int = 1,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
-    results = driver_loop(
-        conductor,
-        problem_filter=problem_filter,
-        agent_to_run=agent_to_run,
-        use_external_harness=use_external_harness,
-        n_attempts=n_attempts,
-    )
-    global _driver_results
-    _driver_results = results
-    # ⬇️ Ask the API server (running in main thread) to stop so we can write CSV
-    request_shutdown()
+    try:
+        results = driver_loop(
+            conductor,
+            problem_filter=problem_filter,
+            agent_to_run=agent_to_run,
+            use_external_harness=use_external_harness,
+            n_attempts=n_attempts,
+        )
+        global _driver_results
+        _driver_results = results
+    except Exception:
+        logger.exception("Driver thread crashed")
+    finally:
+        request_shutdown()
 
 
 def main(args):
@@ -239,8 +242,12 @@ def main(args):
     config = ConductorConfig(deploy_loki=not args.use_external_harness)
     conductor = Conductor(config=config)
 
+    if args.containerize_agents:
+        LAUNCHER.enable_container_isolation(True, force_build=args.force_build)
+        logger.info("🐳 Agent container isolation ENABLED")
+
     # If ran with 3rd party agent, check if they are installed
-    if args.agent and args.agent not in ["stratus", "autosubmit", "debug"]:
+    if args.agent and args.agent not in ["stratus", "autosubmit", "debug"] and not args.containerize_agents:
         conductor.dependency_check([args.agent])
 
     # Start the driver in the background; it will call request_shutdown() when finished
@@ -334,6 +341,16 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Number of attempts to run each problem (default: 1)",
+    )
+    parser.add_argument(
+        "--containerize-agents",
+        action="store_true",
+        help="Run agents in isolated Docker containers (prevents filesystem access to SREGym internals)",
+    )
+    parser.add_argument(
+        "--force-build",
+        action="store_true",
+        help="Force rebuild the agent Docker image even if it already exists (use after updating dependencies or build scripts)",
     )
     args = parser.parse_args()
 

@@ -230,6 +230,7 @@ kubeconfig.yaml
 
 CLAUDE.md
 .cursor/
+.kiro/
 
 # Ignore CodeQL database
 python-database
@@ -239,3 +240,5 @@ python-database
 sregym/generators/noise/noise_config.yaml
 results/
 logs/
+
+docker/agents/build-context/

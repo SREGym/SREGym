@@ -5,25 +5,39 @@ agents:
       http://localhost:8000
     kickoff_workdir: .
     kickoff_env: null
+    install_script: null
+    agent_version: null
   - name: autosubmit
     kickoff_command: python -m clients.autosubmit.autosubmit_agent http://localhost:8000
     kickoff_workdir: .
     kickoff_env: null
+    install_script: null
+    agent_version: null
   - name: codex
     kickoff_command: python -m clients.codex.driver
     kickoff_workdir: .
     kickoff_env: null
+    install_script: install-codex.sh
+    agent_version: null
   - name: claudecode
     kickoff_command: python -m clients.claudecode.driver
     kickoff_workdir: .
     kickoff_env: null
+    install_script: install-claudecode.sh
+    agent_version: null
   - name: "debug"
     kickoff_command: "python -c \"import signal; signal.pause()\""
+    install_script: null
+    agent_version: null
   - name: gemini
     kickoff_command: python -m clients.geminicli.driver
     kickoff_workdir: .
     kickoff_env: null
+    install_script: install-gemini.sh
+    agent_version: null
   - name: opencode
     kickoff_command: python -m clients.opencode.driver
     kickoff_workdir: .
     kickoff_env: null
+    install_script: install-opencode.sh
+    agent_version: null

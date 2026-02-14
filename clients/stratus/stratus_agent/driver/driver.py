@@ -15,7 +15,6 @@ import time
 from ast import literal_eval
 from datetime import datetime
 from pathlib import Path
-from typing import List
 
 import pandas as pd
 import requests
@@ -38,7 +37,6 @@ from clients.stratus.stratus_agent.mitigation_agent import (
     single_run_with_predefined_prompts as mitigation_agent_single_run,
 )
 from clients.stratus.stratus_agent.rollback_agent import main as rollback_agent_main
-from clients.stratus.stratus_utils.get_logger import get_logger
 from clients.stratus.tools.submit_tool import manual_submit_tool
 from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
 from clients.stratus.weak_oracles.cluster_state_oracle import ClusterStateOracle
@@ -168,7 +166,7 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir="."):
         return None
 
 
-async def validate_oracles(oracles: List[BaseOracle]) -> List[bool | List[OracleResult]]:
+async def validate_oracles(oracles: list[BaseOracle]) -> list[bool | list[OracleResult]]:
     results = []
     attempt_failed = False
     for oracle in oracles:
@@ -250,7 +248,7 @@ def get_app_class_by_name(app_name):
     elif app_name == "Flight Ticket":
         from sregym.service.apps.flight_ticket import FlightTicket
 
-        logger.info(f"Flight ticket has never been tested!!")
+        logger.info("Flight ticket has never been tested!!")
         target_app = FlightTicket()
     elif app_name == "Hotel Reservation":
         from sregym.service.apps.hotel_reservation import HotelReservation
@@ -259,7 +257,7 @@ def get_app_class_by_name(app_name):
     elif app_name == "TiDB Cluster with Operator":
         from sregym.service.apps.fleet_cast import FleetCast
 
-        logger.info(f"TiDB has never been tested!!")
+        logger.info("TiDB has never been tested!!")
         target_app = FleetCast()
     elif app_name == "Train Ticket":
         from sregym.service.apps.train_ticket import TrainTicket
@@ -272,10 +270,10 @@ async def diagnosis_task_main():
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path, "r"))
+    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
     diagnosis_agent_max_step = diagnosis_agent_config["max_step"]
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path, "r"))
+    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path))
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
@@ -317,10 +315,10 @@ async def diagnosis_with_localization_task_main():
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path, "r"))
+    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
     diagnosis_agent_max_step = diagnosis_agent_config["max_step"]
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path, "r"))
+    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path))
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
@@ -367,20 +365,20 @@ async def mitigation_task_main(diagnosis_summary):
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     mitigation_agent_config_path = file_parent_dir.parent / "configs" / "mitigation_agent_config.yaml"
-    mitigation_agent_config = yaml.safe_load(open(mitigation_agent_config_path, "r"))
+    mitigation_agent_config = yaml.safe_load(open(mitigation_agent_config_path))
     mitigation_agent_max_step = mitigation_agent_config["max_step"]
     mitigation_agent_prompt_path = file_parent_dir.parent / "configs" / mitigation_agent_config["prompts_path"]
     mitigation_agent_max_retry_attempts = mitigation_agent_config["max_retry_attempts"]
     mitigation_agent_retry_mode = mitigation_agent_config["retry_mode"]
 
     rollback_agent_config_path = file_parent_dir.parent / "configs" / "rollback_agent_config.yaml"
-    rollback_agent_config = yaml.safe_load(open(rollback_agent_config_path, "r"))
+    rollback_agent_config = yaml.safe_load(open(rollback_agent_config_path))
     rollback_agent_max_step = rollback_agent_config["max_step"]
     rollback_agent_prompt_path = file_parent_dir.parent / "configs" / rollback_agent_config["prompts_path"]
 
     llm_summarization_prompt_file = file_parent_dir.parent / "configs" / "llm_summarization_prompt.yaml"
-    llm_summarization_prompt = yaml.safe_load(open(llm_summarization_prompt_file, "r"))["mitigation_retry_prompt"]
-    mitigation_agent_prompts = yaml.safe_load(open(mitigation_agent_prompt_path, "r"))
+    llm_summarization_prompt = yaml.safe_load(open(llm_summarization_prompt_file))["mitigation_retry_prompt"]
+    mitigation_agent_prompts = yaml.safe_load(open(mitigation_agent_prompt_path))
 
     # oracle
     logger.info("setting up oracles")
@@ -393,10 +391,10 @@ async def mitigation_task_main(diagnosis_summary):
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
-    target_app = get_app_class_by_name(app_name)
     if app_name not in ["Social Network", "Hotel Reservation"]:
         logger.info("Current app does not support workload oracle")
     else:
+        target_app = get_app_class_by_name(app_name)
         logger.info(f"adding oracle for app [{app_name}]")
         workload_oracle = WorkloadOracle(target_app)
         oracles.append(workload_oracle)
@@ -529,7 +527,7 @@ async def mitigation_task_main(diagnosis_summary):
         # starting retry loop
         while curr_attempt < mitigation_agent_max_retry_attempts:
             if curr_attempt == 0:
-                logger.info(f"running first try")
+                logger.info("running first try")
                 agent, mitigation_agent_last_state, graph_events = await mitigation_agent_single_run(
                     first_run_initial_messages
                 )
@@ -605,7 +603,7 @@ async def mitigation_task_main(diagnosis_summary):
                     # rollback agent is stateless and "best effort" idempotent, just rollback
                     # memory is cleared in the retry_run() method, so the agent can start anew.
                     logger.info(f"agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
-                    logger.info(f"running rollback agent to reverse progress")
+                    logger.info("running rollback agent to reverse progress")
                     rollback_start_time = time.perf_counter()
                     rollback_agent, rollback_agent_last_state, rollback_graph_events = await rollback_agent_main()
                     all_graph_events.append(
@@ -621,11 +619,11 @@ async def mitigation_task_main(diagnosis_summary):
                     steps_lst.append(rollback_agent_last_state.values["num_steps"])
                     num_retry_attempts_lst.append(str(curr_attempt))
                     rollback_stack_lst.append(rollback_agent_last_state.values["rollback_stack"])
-                    oracle_results_lst.append(str("N/A, rollback agent"))
+                    oracle_results_lst.append("N/A, rollback agent")
                     curr_attempt += 1
                 else:
                     logger.info("we shouldn't retry as we don't have more attempts left.")
-                    logger.info(f"making a real submission for the agent.")
+                    logger.info("making a real submission for the agent.")
                     await manual_submit_tool("")
                     break
                     # return agent_exec_stats
@@ -696,9 +694,11 @@ async def main():
     # run diagnosis agent 1 time for diagnosis (formerly called localization)
     # here, running the file's main function should suffice
     logger.info("*" * 25 + " Starting [diagnosis agent] for [diagnosis] " + "*" * 25)
-    diagnosis_agent_exec_stats, diagnosis_agent_last_state, diagnosis_graph_events = (
-        await diagnosis_with_localization_task_main()
-    )
+    (
+        diagnosis_agent_exec_stats,
+        diagnosis_agent_last_state,
+        diagnosis_graph_events,
+    ) = await diagnosis_with_localization_task_main()
     all_trajectories.append({"stage": "diagnosis", "events": diagnosis_graph_events})
     agent_names.append("diagnosis_agent")
     agent_in_tokens.append(diagnosis_agent_exec_stats["input_tokens"])
@@ -713,9 +713,9 @@ async def main():
 
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path, "r"))
+    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path, "r"))
+    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path))
 
     # Check if diagnosis prompts have the summary prompt, otherwise use a default key
     summary_prompt_key = (
