@@ -63,6 +63,7 @@ from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.target_port import K8STargetPortMisconfig
+from sregym.conductor.problems.top_of_rack_router_failure_hotel_reservation import TopOfRackRouterPartitionHotelReservation
 from sregym.conductor.problems.train_ticket_f22 import TrainTicketF22
 from sregym.conductor.problems.trainticket_f17 import TrainTicketF17
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
@@ -143,6 +144,7 @@ class ProblemRegistry:
             "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
             "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
+            "top_of_rack_router_failure_hotel_reservation": lambda: TopOfRackRouterPartitionHotelReservation(app_name="hotel_reservation", faulty_service="frontend"),
             "wrong_bin_usage": WrongBinUsage,
             "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_dns_policy_hotel_reservation": lambda: WrongDNSPolicy(app_name="hotel_reservation", faulty_service="profile"),

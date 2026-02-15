@@ -2105,6 +2105,193 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from hostPort conflict for service: {service}")
 
+    def inject_tor_network_partition(self, microservices: list[str]):
+        """Inject a network partition using NetworkChaos."""
+        chaos_resource_name = "tor-router-partition" # Name of the NetworkChaos object
+        tor_node_label_key = "sregym.io/tor-node" # Node label used to fix pods to faulty vs healthy groups
+        tor_pod_group_label_key = "sregym.io/tor-group" # Pod label used by NetworkChaos selectors
+
+        faulty_group = "faulty"
+        healthy_group = "healthy"
+
+        if not microservices:
+            raise ValueError("inject_tor_network_partition requires a non-empty `microservices` list (faulty group).")
+
+        # Check ChaosMesh is installed (fail-fast if not)
+        crd_check = self.kubectl.exec_command("kubectl get crd networkchaos.chaos-mesh.org")
+        if "NotFound" in crd_check or "Error" in crd_check:
+            raise RuntimeError(
+                "ChaosMesh NetworkChaos CRD not found. Install Chaos Mesh before running tor_network_partition."
+            )
+
+        # If the chaos object already exists, recover first to avoid double-injections
+        existing = self.kubectl.exec_command(
+            f"kubectl get networkchaos {chaos_resource_name} -n {self.namespace} -o name --ignore-not-found=true"
+        ).strip()
+        if existing:
+            print("NetworkChaos already instantiated, recovering from previous injection.")
+            self.recover_tor_network_partition(microservices)
+
+            existing = self.kubectl.exec_command(
+                f"kubectl get networkchaos {chaos_resource_name} -n {self.namespace} -o name --ignore-not-found=true"
+            ).strip()
+            if existing:
+                raise RuntimeError("Previous NetworkChaos still present after recovery attempt.")
+
+        # Prepare nodes (require >=2 workers)
+        nodes = [
+            n.metadata.name
+            for n in self.kubectl.list_nodes().items
+            if "node-role.kubernetes.io/control-planee" not in (n.metadata.labels or {})
+            and "node-role.kubernetes.io/master" not in (n.metadata.labels or {})
+        ]
+        if len(nodes) < 2:
+            raise RuntimeError("Top-of-rack partition requires >=2 worker nodes.")
+
+        faulty_node, healthy_node = nodes[0], nodes[1]
+        print(f"Selected faulty node: {faulty_node}")
+        print(f"Selected healthy node: {healthy_node}")
+
+        self.kubectl.exec_command(f"kubectl label node {faulty_node} {tor_node_label_key}={faulty_group} --overwrite")
+        self.kubectl.exec_command(f"kubectl label node {healthy_node} {tor_node_label_key}={healthy_group} --overwrite")
+        for n in nodes[2:]:
+            self.kubectl.exec_command(f"kubectl label node {n} {tor_node_label_key}={healthy_group} --overwrite")
+
+        dep_names = self.kubectl.exec_command(
+            f"kubectl get deployments -n {self.namespace} -o jsonpath='{{.items[*].metadata.name}}'"
+        ).split()
+        dep_names = [d for d in dep_names if d]
+
+        if not dep_names:
+            raise RuntimeError(f"No deployments found in namespace {self.namespace}; is the app deployed?")
+
+        # Force deployments onto specific node groups and pods
+        for dep in dep_names:
+            dep_yaml = self._get_deployment_yaml(dep)
+            group = faulty_group if dep in microservices else healthy_group
+
+            dep_yaml.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {}).setdefault("labels", {})
+            dep_yaml["spec"]["template"]["metadata"]["labels"][tor_pod_group_label_key] = group
+
+            dep_yaml.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {}).setdefault("nodeSelector", {})
+            dep_yaml["spec"]["template"]["spec"]["nodeSelector"][tor_node_label_key] = group
+
+            modified_yaml_path = self._write_yaml_to_file(dep, dep_yaml)
+
+            self.kubectl.exec_command(f"kubectl delete deployment {dep} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
+
+            print(
+                f"[{dep}] Forced placement: nodeSelector {tor_node_label_key}={group}; "
+                f"pod label {tor_pod_group_label_key}={group}"
+            )
+
+        self.kubectl.wait_for_stable(self.namespace)
+
+        # Apply NetworkChaos faulty/healthy partition
+        networkchaos_manifest = {
+            "apiVersion": "chaos-mesh.org/v1alpha1",
+            "kind": "NetworkChaos",
+            "metadata": {"name": chaos_resource_name, "namespace": self.namespace},
+            "spec": {
+                "action": "partition",
+                "mode": "all",
+                "direction": "both",
+                "selector": {
+                    "namespaces": [self.namespace],
+                    "labelSelectors": {tor_pod_group_label_key: faulty_group},
+                },
+                "target": {
+                    "mode": "all",
+                    "selector": {
+                        "namespaces": [self.namespace],
+                        "labelSelectors": {tor_pod_group_label_key: healthy_group},
+                    },
+                },
+            },
+        }
+
+        networkchaos_manifest_path = self._write_yaml_to_file("tor-networkchaos", networkchaos_manifest)
+        self.kubectl.exec_command(f"kubectl apply -f {networkchaos_manifest_path} -n {self.namespace}")
+
+        print(f"Injected network partition: {chaos_resource_name} (faulty <-> healthy) in namespace {self.namespace}")
+
+    def recover_tor_network_partition(self, microservices: list[str]):
+        """Recover form network partition created by inject_tor_network_partition() above."""
+        chaos_resource_name = "tor-router-partition" # Name of the NetworkChaos object
+        tor_node_label_key = "sregym.io/tor-node" # Node label used to fix pods to faulty vs healthy groups
+        tor_pod_group_label_key = "sregym.io/tor-group" # Pod label used by NetworkChaos selectors
+
+        # Delete NetworkChaos first to restore network
+        self.kubectl.exec_command(
+            f"kubectl delete networkchaos {chaos_resource_name} -n {self.namespace} --ignore-not-found=true"
+        )
+        print(f"Deleted NetworkChaos {chaos_resource_name} (if present).")
+
+        # Remove nodeSelector keys and pod label keys
+        dep_names = self.kubectl.exec_command(
+            f"kubectl get deployments -n {self.namespace} -o jsonpath='{{.items[*].metadata.name}}'"
+        ).split()
+        dep_names = [d for d in dep_names if d]
+        for dep in dep_names:
+            dep_yaml = self._get_deployment_yaml(dep)
+
+            tmpl = dep_yaml.get("spec", {}).get("template", {}) or {}
+            tmpl_md = tmpl.get("metadata", {}) or {}
+            tmpl_labels = (tmpl_md.get("labels", {}) or {}).copy()
+            tmpl_spec = tmpl.get("spec", {}) or {}
+            node_selector = (tmpl_spec.get("nodeSelector", {}) or {}).copy()
+
+            changed = False
+
+            if tor_pod_group_label_key in tmpl_labels:
+                tmpl_labels.pop(tor_pod_group_label_key, None)
+                changed = True
+
+            if tor_node_label_key in node_selector:
+                node_selector.pop(tor_node_label_key, None)
+                changed = True
+
+            if not changed:
+                print(f"[{dep}] No NetworkChaos keys found, skipping redeploying...")
+                continue
+
+            if tmpl_labels:
+                tmpl_md["labels"] = tmpl_labels
+            else:
+                tmpl_md.pop("labels", None)
+
+            if node_selector:
+                tmpl_spec["nodeSelector"] = node_selector
+            else:
+                tmpl_spec.pop("nodeSelector", None)
+
+            tmpl["metadata"] = tmpl_md
+            tmpl["spec"] = tmpl_spec
+            dep_yaml.setdefault("spec", {})["template"] = tmpl
+
+            modified_yaml_path = self._write_yaml_to_file(dep, dep_yaml)
+
+            self.kubectl.exec_command(f"kubectl delete deployment {dep} -n {self.namespace} --ignore-not-found=true")
+            self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
+
+            print(f"[{dep}] Removed {tor_pod_group_label_key} label and {tor_node_label_key} nodeSelector; redeployed.")
+
+        self.kubectl.wait_for_ready(self.namespace)
+
+        # Remove node labels (best effort cleanup)
+        nodes = [
+            n.metadata.name
+            for n in self.kubectl.list_nodes().items
+            if "node-role.kubernetes.io/control-plane" not in (n.metadata.labels or {})
+            and "node-role.kubernetes.io/master" not in (n.metadata.labels or {})
+        ]
+        for n in nodes:
+            self.kubectl.exec_command(f"kubectl label node {n} {tor_node_label_key}-")
+
+        print(f"Recovered network partition and cleaned node labels ({tor_node_label_key}-).")
+
+
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
