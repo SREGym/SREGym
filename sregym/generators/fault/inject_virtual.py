@@ -1392,6 +1392,63 @@ class VirtualizationFaultInjector(FaultInjector):
         # Scale deployment to 1 replica (if needed)
         self.kubectl.scale_deployment(name=deployment_name, namespace=namespace, replicas=1)
 
+    def inject_resource_quota_exhaustion(
+        self, deployment_name: str, namespace: str, quota_name: str, target_replicas: int
+    ) -> tuple[int, int]:
+        """
+        Inject resource quota exhaustion fault by creating a ResourceQuota with pod limit
+        matching current usage, then attempting to scale deployment.
+
+        Returns:
+            tuple[int, int]: (current_pod_count, original_replicas) for use in recovery
+        """
+        # Count the total number of running pods in the namespace
+        pod_list = self.kubectl.list_pods(namespace)
+        running_pods = [pod for pod in pod_list.items if pod.status.phase == "Running"]
+        current_pod_count = len(running_pods)
+
+        print(f"Current running pod count in namespace '{namespace}': {current_pod_count}")
+
+        # Get the current replica count of the deployment
+        deployment = self.kubectl.get_deployment(deployment_name, namespace)
+        original_replicas = deployment.spec.replicas
+        print(f"Current replicas for deployment '{deployment_name}': {original_replicas}")
+
+        # Create a ResourceQuota with pod count exactly matching current usage (no headroom)
+        quota_body = {
+            "apiVersion": "v1",
+            "kind": "ResourceQuota",
+            "metadata": {"name": quota_name, "namespace": namespace},
+            "spec": {"hard": {"pods": str(current_pod_count)}},
+        }
+        self.kubectl.apply_resource(quota_body)
+        print(f"Created ResourceQuota '{quota_name}' with hard limit: pods={current_pod_count}")
+
+        # Attempt to scale the deployment to target replicas
+        self.kubectl.scale_deployment(name=deployment_name, namespace=namespace, replicas=target_replicas)
+        print(f"Attempted to scale deployment '{deployment_name}' to {target_replicas} replicas")
+
+        return current_pod_count, original_replicas
+
+    def recover_resource_quota_exhaustion(
+        self, deployment_name: str, namespace: str, quota_name: str, original_replicas: int
+    ):
+        """
+        Recover from resource quota exhaustion fault by deleting the ResourceQuota
+        and scaling deployment back to original replicas.
+        """
+        # Delete the ResourceQuota
+        try:
+            self.kubectl.delete_resource_quota(name=quota_name, namespace=namespace)
+            print(f"Deleted ResourceQuota '{quota_name}'")
+        except Exception as e:
+            print(f"Note: ResourceQuota '{quota_name}' may have already been deleted: {e}")
+
+        # Scale the deployment back to original replicas
+        if original_replicas is not None:
+            self.kubectl.scale_deployment(name=deployment_name, namespace=namespace, replicas=original_replicas)
+            print(f"Scaled deployment '{deployment_name}' back to {original_replicas} replicas")
+
     def deploy_custom_service(self, service_name: str, script_path: str):
         print(f"Deploying {service_name} Service...................................")
         import tempfile
