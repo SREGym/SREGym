@@ -60,6 +60,9 @@ def request_shutdown():
     logger.warning("Shutting down API server...")
     _shutdown_event.set()
     if _server is not None:
+        # force_exit skips waiting for long-lived connections (like MCP SSE)
+        # to close gracefully — the agent is already cleaned up at this point
+        _server.force_exit = True
         _server.should_exit = True
 
 
