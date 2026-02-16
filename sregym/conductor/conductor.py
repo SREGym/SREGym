@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import shutil
 import time
@@ -290,12 +291,13 @@ class Conductor:
             # No more stages; finish the problem
             self._finish_problem()
 
-    async def _cleanup_async(self):
+    def _cleanup_sync(self):
         """
-        Performs async cleanup operations (fault recovery, app teardown, reconciliation).
-        This allows these slow operations to run in the background without blocking HTTP responses.
+        Blocking cleanup operations (fault recovery, app teardown, reconciliation).
+        Intended to be run in a thread via asyncio.to_thread() so the event loop
+        is not blocked and HTTP responses can return immediately.
         """
-        self.logger.info("[CLEANUP] Starting async cleanup (fault recovery, undeploy, reconcile)")
+        self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
 
         # Stop noises
         try:
@@ -329,7 +331,14 @@ class Conductor:
 
         # Set to "done" after all cleanup is complete
         self.submission_stage = "done"
-        self.logger.info("[CLEANUP] Async cleanup complete, stage set to 'done'")
+        self.logger.info("[CLEANUP] Cleanup complete, stage set to 'done'")
+
+    async def _cleanup_async(self):
+        """
+        Runs blocking cleanup in a background thread so the event loop stays free
+        and HTTP responses can return immediately.
+        """
+        await asyncio.to_thread(self._cleanup_sync)
 
     def _finish_problem(self):
         """
@@ -341,7 +350,6 @@ class Conductor:
         self.submission_stage = "tearing_down"
 
         # Schedule async cleanup to run in the background
-        import asyncio
         asyncio.create_task(self._cleanup_async())
 
         self.logger.info("[STAGE] Teardown initiated, cleanup running in background")
