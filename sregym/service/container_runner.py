@@ -77,10 +77,12 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
-        # On macOS, --network host is a no-op so the container can't reach
-        # the host via localhost.  Point API_HOSTNAME at the Docker Desktop
-        # magic DNS name instead.
-        if self.config.network_mode == "host" and platform.system() == "Darwin":
+        # When using host networking in containers, we need to ensure the agent
+        # can reach the host machine. On macOS, --network host is a no-op, and on
+        # Linux with some Docker setups (rootless Docker, CI environments), localhost
+        # doesn't properly resolve from inside containers. Use host.docker.internal
+        # which works reliably across platforms when combined with --add-host.
+        if self.config.network_mode == "host":
             env_vars.setdefault("API_HOSTNAME", "host.docker.internal")
 
         for key, value in env_vars.items():
@@ -96,10 +98,17 @@ class ContainerRunner:
             f"--memory={self.config.memory}",
         ]
 
-        # --network host is silently ignored on macOS Docker Desktop.
-        # Use bridge networking with host.docker.internal instead.
-        if self.config.network_mode == "host" and platform.system() == "Darwin":
-            args.append("--add-host=host.docker.internal:host-gateway")
+        # Configure networking based on the network mode
+        if self.config.network_mode == "host":
+            # On macOS, --network host is silently ignored by Docker Desktop.
+            # On all platforms, add host.docker.internal mapping for reliable host access.
+            if platform.system() == "Darwin":
+                # macOS: Don't use --network host (it's ignored), rely on host.docker.internal
+                args.append("--add-host=host.docker.internal:host-gateway")
+            else:
+                # Linux: Use --network host and add host.docker.internal for consistency
+                args.append(f"--network={self.config.network_mode}")
+                args.append("--add-host=host.docker.internal:host-gateway")
         else:
             args.append(f"--network={self.config.network_mode}")
 
