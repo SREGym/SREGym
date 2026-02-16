@@ -83,7 +83,11 @@ class ContainerRunner:
         # doesn't properly resolve from inside containers. Use host.docker.internal
         # which works reliably across platforms when combined with --add-host.
         if self.config.network_mode == "host":
-            env_vars.setdefault("API_HOSTNAME", "host.docker.internal")
+            # Force-set hostnames so containers reach host-side services via
+            # host.docker.internal rather than localhost/127.0.0.1.
+            env_vars["API_HOSTNAME"] = "host.docker.internal"
+            mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
+            env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
 
         for key, value in env_vars.items():
             flags.extend(["-e", f"{key}={value}"])
