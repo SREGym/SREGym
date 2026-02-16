@@ -35,7 +35,7 @@ async def submit_via_conductor(ans: str) -> dict[str, str]:
     wrapped = f"```\nsubmit({repr(ans)})\n```"
     try:
         await _conductor.submit(wrapped)
-        return {"status": "ok", "text": "Submission received"}
+        return {"status": "200", "text": "Submission received"}
     except Exception as e:
         return {"status": "error", "text": f"Grading error: {e}"}
 
@@ -90,7 +90,7 @@ async def submit_solution(req: SubmitRequest):
         logger.error(f"Grading error: {e}")
         raise HTTPException(status_code=400, detail=f"Grading error: {e}") from e
 
-    return {"status": "ok", "message": "Submission received"}
+    return {"status": "200", "message": "Submission received"}
 
 
 @app.get("/status")
