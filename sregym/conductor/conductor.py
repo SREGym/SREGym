@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -294,7 +295,7 @@ class Conductor:
     def _cleanup_sync(self):
         """
         Blocking cleanup operations (fault recovery, app teardown, reconciliation).
-        Intended to be run in a thread via asyncio.to_thread() so the event loop
+        Intended to be run in a background thread so the event loop
         is not blocked and HTTP responses can return immediately.
         """
         self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
@@ -333,24 +334,18 @@ class Conductor:
         self.submission_stage = "done"
         self.logger.info("[CLEANUP] Cleanup complete, stage set to 'done'")
 
-    async def _cleanup_async(self):
-        """
-        Runs blocking cleanup in a background thread so the event loop stays free
-        and HTTP responses can return immediately.
-        """
-        await asyncio.to_thread(self._cleanup_sync)
-
     def _finish_problem(self):
         """
         Initiates problem teardown by transitioning to 'tearing_down' state
-        and scheduling async cleanup. Returns immediately without blocking.
+        and scheduling cleanup in a background thread. Returns immediately without blocking.
         """
         self.logger.info("[STAGE] Done, initiating teardown")
         # Set stage to "tearing_down" immediately so the HTTP response can return
         self.submission_stage = "tearing_down"
 
-        # Schedule async cleanup to run in the background
-        asyncio.create_task(self._cleanup_async())
+        # Run cleanup in a background thread — works whether called from
+        # the event loop or from a thread pool (run_in_executor)
+        threading.Thread(target=self._cleanup_sync, name="cleanup", daemon=True).start()
 
         self.logger.info("[STAGE] Teardown initiated, cleanup running in background")
 
@@ -420,11 +415,42 @@ class Conductor:
             )
         return StartProblemResult.SUCCESS
 
+    def _submit_evaluate_and_advance(self, sol, current_stage):
+        """
+        Blocking work for a submission: evaluate the oracle, advance stage, manage noise.
+        Runs in a background thread so the HTTP response is not blocked.
+        """
+        stage_name: str = current_stage["name"]
+        self.logger.info(f"Evaluating stage '{stage_name}'", extra={"sol": sol})
+
+        # Stop noise before evaluation to ensure clean environment
+        try:
+            nm = get_noise_manager()
+            self.logger.info("Stopping noise manager before evaluation...")
+            nm.stop()
+        except Exception as e:
+            self.logger.warning(f"Failed to stop noise manager: {e}")
+
+        # Run the evaluation function for the current stage
+        current_stage["evaluation"](sol)
+
+        # After evaluation, advance to the next stage (if any)
+        next_index = self.current_stage_index + 1
+        self._advance_to_next_stage(start_index=next_index)
+
+        # Restart noise if there are more stages AND not in teardown
+        if self.submission_stage not in ("done", "tearing_down"):
+            try:
+                nm = get_noise_manager()
+                self.logger.info("Restarting noise manager for next stage...")
+                nm.start_background_noises()
+            except Exception as e:
+                self.logger.warning(f"Failed to restart noise manager: {e}")
+
     async def submit(self, wrapped_cmd: str) -> dict:
         """
-        Called by CLI or HTTP /submit.  Parses & grades the `submit(...)` call,
-        advances submission_stage, records results—and when we hit "done",
-        triggers undeploy_app. Returns a snapshot of the results dict.
+        Called by CLI or HTTP /submit.  Parses the `submit(...)` call,
+        kicks off evaluation in the background, and returns immediately.
         """
         from sregym.conductor.parser import ResponseParser
 
@@ -456,39 +482,15 @@ class Conductor:
             raise RuntimeError("Conductor is not currently waiting for an agent submission.")
 
         current_stage = self.stage_sequence[self.current_stage_index]
-        stage_name: str = current_stage["name"]
-        self.logger.info(f"Evaluating stage '{stage_name}'", extra={"sol": sol})
 
-        # Stop noise before evaluation to ensure clean environment
-        try:
-            nm = get_noise_manager()
-            self.logger.info("Stopping noise manager before evaluation...")
-            nm.stop()
-        except Exception as e:
-            self.logger.warning(f"Failed to stop noise manager: {e}")
+        # Mark that we're no longer waiting so duplicate submits are rejected
+        self.waiting_for_agent = False
 
-        # Run the evaluation function for the current stage
-        current_stage["evaluation"](sol)
+        # Run evaluation and stage advancement in a background thread
+        # so the HTTP response returns immediately
+        asyncio.get_event_loop().run_in_executor(None, self._submit_evaluate_and_advance, sol, current_stage)
 
-        # Create a snapshot of results before advancing (to return immediately)
-        results_snapshot = dict(self.results)
-
-        # After evaluation, advance to the next stage (if any)
-        next_index = self.current_stage_index + 1
-        self._advance_to_next_stage(start_index=next_index)
-
-        # Restart noise if there are more stages AND not in teardown
-        if self.submission_stage != "done" and self.submission_stage != "tearing_down":
-            try:
-                nm = get_noise_manager()
-                self.logger.info("Restarting noise manager for next stage...")
-                nm.start_background_noises()
-            except Exception as e:
-                self.logger.warning(f"Failed to restart noise manager: {e}")
-
-        # Return the snapshot captured before advancing, so HTTP responds immediately
-        # even if _finish_problem() is running async cleanup in the background
-        return results_snapshot
+        return {"status": "ok", "message": "Submission received"}
 
     def fix_kubernetes(self):
         self.logger.info("Fixing Kubernetes... to normal state.")
