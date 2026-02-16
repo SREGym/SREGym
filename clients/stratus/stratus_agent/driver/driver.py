@@ -192,8 +192,8 @@ def get_app_info():
         logger.debug(f"App info: {app_info}")
         return app_info
     except Exception as e:
-        logger.error(f"[get_app_info] HTTP submission failed: {e}")
-        return "error"
+        logger.error(f"[get_app_info] Failed to get app info from {url}: {e}")
+        raise RuntimeError(f"Failed to connect to benchmark API at {url}. Ensure the API server is running and accessible.") from e
 
 
 def get_curr_problem():
@@ -208,8 +208,8 @@ def get_curr_problem():
         logger.info(f"problem info: {problem}")
         return problem["problem_id"]
     except Exception as e:
-        logger.error(f"[get_curr_problem] HTTP submission failed: {e}")
-        return "error"
+        logger.error(f"[get_curr_problem] Failed to get problem from {url}: {e}")
+        raise RuntimeError(f"Failed to connect to benchmark API at {url}. Ensure the API server is running and accessible.") from e
 
 
 def get_benchmark_status():
