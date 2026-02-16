@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_hw import HWFaultInjector
+from sregym.generators.fault.inject_kernel import KernelInjector
 from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.utils.decorators import mark_fault_injected
@@ -68,6 +69,15 @@ class KhaosFaultName(StrEnum):
     latent_sector_error = "latent_sector_error"
 
 
+# Disk faults that intercept read/pread syscalls need page cache dropped
+# so the application is forced to issue new reads that hit the eBPF probes.
+_DISK_FAULTS: frozenset[str] = frozenset(
+    {
+        KhaosFaultName.latent_sector_error,
+    }
+)
+
+
 class KhaosFaultConfig(BaseModel):
     name: KhaosFaultName
     description: str
@@ -121,6 +131,14 @@ class KhaosFaultProblem(Problem):
             params=self.inject_args,
         )
         print(f"Injected {self.fault_name.value} into pods on node {self.target_node}\n")
+
+        # Disk faults intercept read/pread syscalls via eBPF. Data already in
+        # the page cache will be served without issuing those syscalls, so we
+        # must drop caches to force the application to re-read from disk.
+        if self.fault_name in _DISK_FAULTS and self.target_node:
+            print("Dropping page caches to force disk reads through eBPF probes...")
+            kernel_injector = KernelInjector(self.injector.kubectl)
+            kernel_injector.drop_caches(self.target_node)
 
     @mark_fault_injected
     def recover_fault(self):
