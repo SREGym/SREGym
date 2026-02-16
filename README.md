@@ -89,16 +89,12 @@ python main.py --agent stratus --model gpt-4o
 
 #### Container Isolation
 
-To run agents in isolated Docker containers (prevents agents from accessing SREGym internals like problem definitions and grading logic):
-
-```bash
-python main.py --agent stratus --model gpt-4o --containerize-agents
-```
+Agents always run in isolated Docker containers, preventing access to SREGym internals like problem definitions and grading logic. The image is built automatically on first run.
 
 Use `--force-build` to rebuild the container image after updating dependencies or agent code:
 
 ```bash
-python main.py --agent stratus --model gpt-4o --containerize-agents --force-build
+python main.py --agent codex --model gpt-4o --force-build
 ```
 
 ### Model Selection

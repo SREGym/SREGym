@@ -242,13 +242,7 @@ def main(args):
     config = ConductorConfig(deploy_loki=not args.use_external_harness)
     conductor = Conductor(config=config)
 
-    if args.containerize_agents:
-        LAUNCHER.enable_container_isolation(True, force_build=args.force_build)
-        logger.info("🐳 Agent container isolation ENABLED")
-
-    # If ran with 3rd party agent, check if they are installed
-    if args.agent and args.agent not in ["stratus", "autosubmit", "debug"] and not args.containerize_agents:
-        conductor.dependency_check([args.agent])
+    LAUNCHER.enable_container_isolation(force_build=args.force_build)
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
@@ -341,11 +335,6 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Number of attempts to run each problem (default: 1)",
-    )
-    parser.add_argument(
-        "--containerize-agents",
-        action="store_true",
-        help="Run agents in isolated Docker containers (prevents filesystem access to SREGym internals)",
     )
     parser.add_argument(
         "--force-build",

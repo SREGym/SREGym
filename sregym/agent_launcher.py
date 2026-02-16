@@ -25,7 +25,7 @@ class AgentLauncher:
     def __init__(self):
         self._procs: dict[str, AgentProcess] = {}
         self._agent_kubeconfig_path: str | None = None
-        self._use_containers: bool = False
+        self._use_containers: bool = True
         self._container_runner: ContainerRunner | None = None
 
     def set_agent_kubeconfig(self, kubeconfig_path: str | None):
@@ -35,10 +35,9 @@ class AgentLauncher:
         """
         self._agent_kubeconfig_path = kubeconfig_path
 
-    def enable_container_isolation(self, enabled: bool = True, force_build: bool = False):
-        """Enable or disable container isolation for agents."""
-        self._use_containers = enabled
-        if enabled and not self._container_runner:
+    def enable_container_isolation(self, force_build: bool = False):
+        """Initialize the container runner and build/check the image."""
+        if not self._container_runner:
             config = ContainerConfig(
                 kubeconfig_path=Path(self._agent_kubeconfig_path) if self._agent_kubeconfig_path else None,
                 logs_path=Path("./logs"),
