@@ -77,10 +77,13 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
-        # On macOS, --network host is a no-op so the container can't reach
-        # the host via localhost.  Point API_HOSTNAME at the Docker Desktop
-        # magic DNS name instead.
-        if self.config.network_mode == "host" and platform.system() == "Darwin":
+        # Point API_HOSTNAME to host.docker.internal to allow containers to reach
+        # the host machine's services. This works across all platforms when combined
+        # with --add-host flag.
+        # On macOS, --network host is a no-op, so we need this.
+        # On Linux, even with --network host, some Docker setups (rootless, CI) may
+        # not properly support localhost access from containers.
+        if self.config.network_mode == "host":
             env_vars.setdefault("API_HOSTNAME", "host.docker.internal")
 
         for key, value in env_vars.items():
@@ -96,9 +99,13 @@ class ContainerRunner:
             f"--memory={self.config.memory}",
         ]
 
-        # --network host is silently ignored on macOS Docker Desktop.
-        # Use bridge networking with host.docker.internal instead.
-        if self.config.network_mode == "host" and platform.system() == "Darwin":
+        # Use --network host for optimal performance, but add host.docker.internal
+        # mapping to ensure containers can always reach host services.
+        # On macOS, --network host is silently ignored by Docker Desktop.
+        # On Linux, we still add the host mapping for compatibility with rootless
+        # Docker and CI environments where localhost may not work from containers.
+        if self.config.network_mode == "host":
+            args.append(f"--network={self.config.network_mode}")
             args.append("--add-host=host.docker.internal:host-gateway")
         else:
             args.append(f"--network={self.config.network_mode}")
