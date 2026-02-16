@@ -1,5 +1,7 @@
+import contextlib
 import logging
 import os
+import platform
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -75,6 +77,12 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
+        # On macOS, --network host is a no-op so the container can't reach
+        # the host via localhost.  Point API_HOSTNAME at the Docker Desktop
+        # magic DNS name instead.
+        if self.config.network_mode == "host" and platform.system() == "Darwin":
+            env_vars.setdefault("API_HOSTNAME", "host.docker.internal")
+
         for key, value in env_vars.items():
             flags.extend(["-e", f"{key}={value}"])
         return flags
@@ -84,10 +92,16 @@ class ContainerRunner:
             "docker",
             "run",
             "--rm",
-            f"--network={self.config.network_mode}",
             f"--cpus={self.config.cpus}",
             f"--memory={self.config.memory}",
         ]
+
+        # --network host is silently ignored on macOS Docker Desktop.
+        # Use bridge networking with host.docker.internal instead.
+        if self.config.network_mode == "host" and platform.system() == "Darwin":
+            args.append("--add-host=host.docker.internal:host-gateway")
+        else:
+            args.append(f"--network={self.config.network_mode}")
 
         # Mount kubeconfig (read-only)
         if self.config.kubeconfig_path and self.config.kubeconfig_path.exists():
@@ -217,4 +231,10 @@ class ContainerRunner:
                     timeout=5,
                 )
             except Exception:
-                pass
+                # Force remove if stop fails
+                with contextlib.suppress(Exception):
+                    subprocess.run(
+                        ["docker", "rm", "-f", container_name],
+                        capture_output=True,
+                        timeout=5,
+                    )
