@@ -38,8 +38,9 @@ def get_benchmark_status() -> str:
     Returns the status string (e.g., "diagnosis", "mitigation", "done") or "error" on failure.
     """
     try:
+        api_hostname = os.getenv("API_HOSTNAME", "localhost")
         api_port = os.getenv("API_PORT", "8000")
-        status_url = f"http://localhost:{api_port}/status"
+        status_url = f"http://{api_hostname}:{api_port}/status"
 
         response = requests.get(status_url, timeout=5)
         if response.status_code == 200:

@@ -144,7 +144,7 @@ def run_api(conductor):
     logger.debug(f"API server is binded to the conductor {conductor}")
 
     # Load from .env with defaults
-    host = os.getenv("API_HOSTNAME", "0.0.0.0")
+    host = os.getenv("API_BIND_HOST", "0.0.0.0")
     port = int(os.getenv("API_PORT", "8000"))
 
     logger.debug(f"API server starting on http://{host}:{port}")

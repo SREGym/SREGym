@@ -219,9 +219,10 @@ def get_benchmark_status():
     """
     try:
         # Construct the status URL from the benchmark API (not the MCP URL)
-        # The status endpoint is at http://localhost:API_PORT/status
+        # The status endpoint is at http://API_HOSTNAME:API_PORT/status
+        api_hostname = os.getenv("API_HOSTNAME", "localhost")
         api_port = os.getenv("API_PORT", "8000")
-        status_url = f"http://localhost:{api_port}/status"
+        status_url = f"http://{api_hostname}:{api_port}/status"
 
         response = requests.get(status_url, timeout=5)
         if response.status_code == 200:

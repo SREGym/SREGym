@@ -336,7 +336,7 @@ class Conductor:
         self.detection_oracle = DetectionOracle(self.problem)
         self.results = {}
 
-        self.dependency_check(["kubectl", "helm"])
+        self.dependency_check(["kubectl", "helm", "docker"])
         self.logger.debug("Dependency check passed: kubectl, helm")
 
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
