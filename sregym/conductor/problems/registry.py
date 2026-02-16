@@ -22,7 +22,6 @@ from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.khaos_faults import KhaosFaultName, KhaosFaultProblem
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
-from sregym.conductor.problems.latent_sector_error import LatentSectorError
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from sregym.conductor.problems.llm_inaccurate_response import LlmInaccurateResponse
@@ -170,9 +169,9 @@ class ProblemRegistry:
             "trainticket_f17_nested_sql_select_clause_error": TrainTicketF17,
             "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
             # ==================== HARDWARE FAULT INJECTOR ====================
-            "latent_sector_error": LatentSectorError,
             "silent_data_corruption": SilentDataCorruption,
 
+            "latent_sector_error": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error),
             "read_error": lambda: KhaosFaultProblem(KhaosFaultName.read_error),
             # "pread_error": lambda: KhaosFaultProblem(KhaosFaultName.pread_error),
             # "write_error": lambda: KhaosFaultProblem(KhaosFaultName.write_error),
