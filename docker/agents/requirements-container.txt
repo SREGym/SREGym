@@ -12,6 +12,7 @@ langchain-ibm>=0.3.15
 langgraph>=0.4.7
 langsmith>=0.3.43
 litellm>=1.75.0
+boto3>=1.28.57
 pandas==2.2.3
 kubernetes==30.1.0
 pydantic==2.11.5
