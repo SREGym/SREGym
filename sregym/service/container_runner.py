@@ -77,14 +77,14 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
-        # When using host networking in containers, we need to ensure the agent
-        # can reach the host machine. On macOS, --network host is a no-op, and on
-        # Linux with some Docker setups (rootless Docker, CI environments), localhost
-        # doesn't properly resolve from inside containers. Use host.docker.internal
-        # which works reliably across platforms when combined with --add-host.
-        if self.config.network_mode == "host":
-            # Force-set hostnames so containers reach host-side services via
-            # host.docker.internal rather than localhost/127.0.0.1.
+        # On macOS, --network=host is a no-op so the container has its own
+        # network namespace. host.docker.internal routes to the Mac's loopback
+        # via Docker Desktop, so we must override the hostname.
+        # On Linux with --network=host the container shares the host's network
+        # stack directly, so localhost/127.0.0.1 already reaches host services.
+        # host.docker.internal resolves to the bridge IP (172.17.0.1) where
+        # kubectl port-forward is NOT listening, so we must NOT override.
+        if self.config.network_mode == "host" and platform.system() == "Darwin":
             env_vars["API_HOSTNAME"] = "host.docker.internal"
             mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
             env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
@@ -104,15 +104,13 @@ class ContainerRunner:
 
         # Configure networking based on the network mode
         if self.config.network_mode == "host":
-            # On macOS, --network host is silently ignored by Docker Desktop.
-            # On all platforms, add host.docker.internal mapping for reliable host access.
             if platform.system() == "Darwin":
                 # macOS: Don't use --network host (it's ignored), rely on host.docker.internal
                 args.append("--add-host=host.docker.internal:host-gateway")
             else:
-                # Linux: Use --network host and add host.docker.internal for consistency
+                # Linux: --network=host shares the host's network stack, so
+                # localhost already reaches host services directly.
                 args.append(f"--network={self.config.network_mode}")
-                args.append("--add-host=host.docker.internal:host-gateway")
         else:
             args.append(f"--network={self.config.network_mode}")
 
