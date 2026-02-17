@@ -2,7 +2,7 @@
 
 <h1>SREGym: A Benchmarking Platform for SRE Agents</h1>
 
-[🔍Overview](#🤖overview) | 
+[🔍Overview](#🤖overview) |
 [📦Installation](#📦installation) |
 [🚀Quick Start](#🚀quickstart) |
 [⚙️Usage](#⚙️usage) |
@@ -24,6 +24,7 @@ SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architecture
 
 ### Requirements
 - Python >= 3.12
+- [Docker](https://docs.docker.com/get-docker/)
 - [Helm](https://helm.sh/)
 - [brew](https://docs.brew.sh/Homebrew-and-Python)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
@@ -47,7 +48,7 @@ uv run pre-commit install
 Choose either a) or b) to set up your cluster and then proceed to the next steps.
 
 ### a) Kubernetes Cluster (Recommended)
-SREGym supports any kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself. 
+SREGym supports any kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself.
 
 We have an Ansible playbook to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster.
 
@@ -85,6 +86,16 @@ python main.py --agent <agent-name> --model <model-id>
 For example, to run the Stratus agent:
 ```bash
 python main.py --agent stratus --model gpt-4o
+```
+
+#### Container Isolation
+
+Agents always run in isolated Docker containers, preventing access to SREGym internals like problem definitions and grading logic. The image is built automatically on first run.
+
+Use `--force-build` to rebuild the container image after updating dependencies or agent code:
+
+```bash
+python main.py --agent codex --model gpt-4o --force-build
 ```
 
 ### Model Selection

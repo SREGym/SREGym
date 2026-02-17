@@ -13,7 +13,6 @@ def get_current_datetime_formatted():
 
 
 def init_logger():
-
     # set up the logger for log file
     root_logger = logging.getLogger("all")
     root_logger.setLevel(logging.DEBUG)
@@ -23,8 +22,9 @@ def init_logger():
     if not root_logger.handlers:
         timestamp = get_current_datetime_formatted()
         # create dir and file
-        path = f"./logs/sregym_{timestamp}.log"
-        os.makedirs("./logs", exist_ok=True)
+        log_dir = os.environ.get("AGENT_LOGS_DIR", "./logs")
+        path = f"{log_dir}/sregym_{timestamp}.log"
+        os.makedirs(log_dir, exist_ok=True)
 
         handler = logging.FileHandler(path)
         # add code line and filename and function name

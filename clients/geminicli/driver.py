@@ -204,7 +204,7 @@ def main():
     parser.add_argument(
         "--logs-dir",
         type=str,
-        default="./logs/geminicli",
+        default=os.environ.get("AGENT_LOGS_DIR", "./logs/geminicli"),
         help="Directory to store logs (default: ./logs/geminicli)",
     )
     parser.add_argument(

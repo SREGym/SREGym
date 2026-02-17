@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from enum import StrEnum
-from typing import Dict, List, Optional, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -64,21 +64,22 @@ class KhaosFaultName(StrEnum):
     # network packet loss
     packet_loss_sendto = "packet_loss_sendto"
     packet_loss_recvfrom = "packet_loss_recvfrom"
+    # disk faults
+    latent_sector_error = "latent_sector_error"
 
 
 class KhaosFaultConfig(BaseModel):
     name: KhaosFaultName
     description: str
-    default_args: List[int | str] = Field(default_factory=list)
+    default_args: list[int | str] = Field(default_factory=list)
 
 
 class KhaosFaultProblem(Problem):
-
     def __init__(
         self,
         fault_name: KhaosFaultName | str,
-        target_node: Optional[str] = None,
-        inject_args: Optional[List[int | str]] = None,
+        target_node: str | None = None,
+        inject_args: list[int | str] | None = None,
     ):
         self.app = HotelReservation()
         super().__init__(app=self.app, namespace=self.app.namespace)
@@ -91,7 +92,7 @@ class KhaosFaultProblem(Problem):
             self.fault_name = KhaosFaultName(fault_name)
             cfg = KHAOS_FAULT_CONFIGS[self.fault_name]
         except Exception as e:
-            raise ValueError(f"Fault name or config is missing for fault_name '{fault_name}'. Error: {e}")
+            raise ValueError(f"Fault name or config is missing for fault_name '{fault_name}'. Error: {e}") from e
 
         # Pick default args if none provided; caller can override via inject_args
         self.inject_args = inject_args if inject_args is not None else list(cfg.default_args)
@@ -100,7 +101,6 @@ class KhaosFaultProblem(Problem):
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
-
 
         self.root_cause = cfg.description
 
@@ -132,7 +132,7 @@ class KhaosFaultProblem(Problem):
         print("Recovery request sent.\n")
 
 
-_FAULT_CONFIG_ENTRIES: Sequence[tuple[KhaosFaultName, str, List[int | str]]] = [
+_FAULT_CONFIG_ENTRIES: Sequence[tuple[KhaosFaultName, str, list[int | str]]] = [
     # kprobe faults
     (KhaosFaultName.read_error, "read() returns EIO, leading to application I/O failures.", []),
     (KhaosFaultName.pread_error, "pread64() returns EIO, breaking file reads.", []),
@@ -191,10 +191,16 @@ _FAULT_CONFIG_ENTRIES: Sequence[tuple[KhaosFaultName, str, List[int | str]]] = [
         "Inbound recvfrom() calls drop packets based on drop rate and return errno.",
         [30],
     ),
+    # disk faults
+    (
+        KhaosFaultName.latent_sector_error,
+        "Disk read/write operations hit latent sector errors at the specified failure rate, simulating bad disk sectors.",
+        [30],
+    ),
 ]
 
 
-KHAOS_FAULT_CONFIGS: Dict[KhaosFaultName, KhaosFaultConfig] = {
+KHAOS_FAULT_CONFIGS: dict[KhaosFaultName, KhaosFaultConfig] = {
     name: KhaosFaultConfig(name=name, description=desc, default_args=defaults)
     for name, desc, defaults in _FAULT_CONFIG_ENTRIES
 }

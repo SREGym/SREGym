@@ -204,7 +204,7 @@ def main():
     parser.add_argument(
         "--logs-dir",
         type=str,
-        default="./logs/opencode",
+        default=os.environ.get("AGENT_LOGS_DIR", "./logs/opencode"),
         help="Directory to store logs (default: ./logs/opencode)",
     )
     parser.add_argument(
