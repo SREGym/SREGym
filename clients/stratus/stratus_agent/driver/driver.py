@@ -53,7 +53,7 @@ def get_current_datetime_formatted():
     return formatted_datetime
 
 
-def save_combined_trajectory(all_trajectories, problem_id, output_dir="."):
+def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
     """
     Save combined trajectory from all agent stages to a single JSONL file.
 
@@ -64,6 +64,9 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir="."):
     """
     from pathlib import Path
 
+    if output_dir is None:
+        agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
+        output_dir = os.path.join(agent_logs_dir, "trajectory") if agent_logs_dir else "."
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
