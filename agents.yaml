@@ -1,14 +1,12 @@
 agents:
   - name: stratus
-    kickoff_command:
-      python -m clients.stratus.stratus_agent.driver.driver --server
-      http://localhost:8000
+    kickoff_command: python -m clients.stratus.stratus_agent.driver.driver
     kickoff_workdir: .
     kickoff_env: null
     install_script: null
     agent_version: null
   - name: autosubmit
-    kickoff_command: python -m clients.autosubmit.autosubmit_agent http://localhost:8000
+    kickoff_command: python -m clients.autosubmit.autosubmit_agent
     kickoff_workdir: .
     kickoff_env: null
     install_script: null

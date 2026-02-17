@@ -77,11 +77,17 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
-        # On macOS, --network host is a no-op so the container can't reach
-        # the host via localhost.  Point API_HOSTNAME at the Docker Desktop
-        # magic DNS name instead.
+        # On macOS, --network=host is a no-op so the container has its own
+        # network namespace. host.docker.internal routes to the Mac's loopback
+        # via Docker Desktop, so we must override the hostname.
+        # On Linux with --network=host the container shares the host's network
+        # stack directly, so localhost/127.0.0.1 already reaches host services.
+        # host.docker.internal resolves to the bridge IP (172.17.0.1) where
+        # kubectl port-forward is NOT listening, so we must NOT override.
         if self.config.network_mode == "host" and platform.system() == "Darwin":
-            env_vars.setdefault("API_HOSTNAME", "host.docker.internal")
+            env_vars["API_HOSTNAME"] = "host.docker.internal"
+            mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
+            env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
 
         for key, value in env_vars.items():
             flags.extend(["-e", f"{key}={value}"])
@@ -96,10 +102,15 @@ class ContainerRunner:
             f"--memory={self.config.memory}",
         ]
 
-        # --network host is silently ignored on macOS Docker Desktop.
-        # Use bridge networking with host.docker.internal instead.
-        if self.config.network_mode == "host" and platform.system() == "Darwin":
-            args.append("--add-host=host.docker.internal:host-gateway")
+        # Configure networking based on the network mode
+        if self.config.network_mode == "host":
+            if platform.system() == "Darwin":
+                # macOS: Don't use --network host (it's ignored), rely on host.docker.internal
+                args.append("--add-host=host.docker.internal:host-gateway")
+            else:
+                # Linux: --network=host shares the host's network stack, so
+                # localhost already reaches host services directly.
+                args.append(f"--network={self.config.network_mode}")
         else:
             args.append(f"--network={self.config.network_mode}")
 

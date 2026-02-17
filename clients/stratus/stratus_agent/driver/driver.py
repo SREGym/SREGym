@@ -53,7 +53,7 @@ def get_current_datetime_formatted():
     return formatted_datetime
 
 
-def save_combined_trajectory(all_trajectories, problem_id, output_dir="."):
+def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
     """
     Save combined trajectory from all agent stages to a single JSONL file.
 
@@ -64,6 +64,9 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir="."):
     """
     from pathlib import Path
 
+    if output_dir is None:
+        agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
+        output_dir = os.path.join(agent_logs_dir, "trajectory") if agent_logs_dir else "."
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -219,9 +222,10 @@ def get_benchmark_status():
     """
     try:
         # Construct the status URL from the benchmark API (not the MCP URL)
-        # The status endpoint is at http://localhost:API_PORT/status
+        # The status endpoint is at http://API_HOSTNAME:API_PORT/status
+        api_hostname = os.getenv("API_HOSTNAME", "localhost")
         api_port = os.getenv("API_PORT", "8000")
-        status_url = f"http://localhost:{api_port}/status"
+        status_url = f"http://{api_hostname}:{api_port}/status"
 
         response = requests.get(status_url, timeout=5)
         if response.status_code == 200:
