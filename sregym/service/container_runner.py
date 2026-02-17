@@ -108,6 +108,11 @@ class ContainerRunner:
             args.extend(["-v", f"{self.config.kubeconfig_path.resolve()}:/root/.kube/config:ro"])
             args.extend(["-e", "KUBECONFIG=/root/.kube/config"])
 
+        # Mount AWS credentials directory (read-only) for Bedrock and other AWS services
+        aws_dir = Path.home() / ".aws"
+        if aws_dir.is_dir():
+            args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
+
         # Mount workspace directory for agent output (logs, results, trajectories)
         if self.config.workspace_path:
             self.config.workspace_path.mkdir(parents=True, exist_ok=True)
