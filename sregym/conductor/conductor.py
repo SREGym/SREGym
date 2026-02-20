@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -290,35 +292,62 @@ class Conductor:
             # No more stages; finish the problem
             self._finish_problem()
 
-    def _finish_problem(self):
-        self.logger.info("[STAGE] Done, recover fault")
+    def _cleanup_sync(self):
+        """
+        Blocking cleanup operations (fault recovery, app teardown, reconciliation).
+        Intended to be run in a background thread so the event loop
+        is not blocked and HTTP responses can return immediately.
+        """
+        self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
 
         # Stop noises
         try:
             nm = get_noise_manager()
             nm.stop()
+            self.logger.info("[CLEANUP] NoiseManager stopped")
         except Exception as e:
             self.logger.warning(f"Failed to stop NoiseManager: {e}")
 
+        # Recover fault
         if self.problem:
+            self.logger.info("[CLEANUP] Recovering fault...")
             self.problem.recover_fault()
+            self.logger.info("[CLEANUP] Fault recovered")
 
-        self.logger.info("[STAGE] Undeploy app")
+        # Undeploy app
+        self.logger.info("[CLEANUP] Undeploying app...")
         self.undeploy_app()
+        self.logger.info("[CLEANUP] App undeployed")
 
-        # Reconcile cluster state to baseline to clean up any changes made by the agent
+        # Reconcile cluster state to baseline
         if self._baseline_captured:
-            self.logger.info("[STAGE] Reconciling cluster state to baseline")
+            self.logger.info("[CLEANUP] Reconciling cluster state to baseline...")
             try:
                 changes = self.cluster_state.reconcile_to_baseline()
                 if any(v for v in changes.values() if v):
                     self.logger.info(f"Cluster state reconciliation changes: {changes}")
+                self.logger.info("[CLEANUP] Cluster state reconciled")
             except Exception as e:
                 self.logger.warning(f"Failed to reconcile cluster state: {e}")
 
-        # Set to "done" after all cleanup is complete to prevent race condition
-        # where the next problem starts before cleanup finishes
+        # Set to "done" after all cleanup is complete
         self.submission_stage = "done"
+        self.logger.info("[CLEANUP] Cleanup complete, stage set to 'done'")
+
+    def _finish_problem(self):
+        """
+        Initiates problem teardown by transitioning to 'tearing_down' state
+        and scheduling cleanup in a background thread. Returns immediately without blocking.
+        """
+        self.logger.info("[STAGE] Done, initiating teardown")
+        # Set stage to "tearing_down" immediately so the HTTP response can return
+        self.submission_stage = "tearing_down"
+
+        # Run cleanup in a background thread — works whether called from
+        # the event loop or from a thread pool (run_in_executor)
+        threading.Thread(target=self._cleanup_sync, name="cleanup", daemon=True).start()
+
+        self.logger.info("[STAGE] Teardown initiated, cleanup running in background")
 
     async def start_problem(self) -> StartProblemResult:
         """
@@ -386,37 +415,11 @@ class Conductor:
             )
         return StartProblemResult.SUCCESS
 
-    async def submit(self, wrapped_cmd: str) -> dict:
+    def _submit_evaluate_and_advance(self, sol, current_stage):
         """
-        Called by CLI or HTTP /submit.  Parses & grades the `submit(...)` call,
-        advances submission_stage, records results—and when we hit "done",
-        triggers undeploy_app. Returns a snapshot of the results dict.
+        Blocking work for a submission: evaluate the oracle, advance stage, manage noise.
+        Runs in a background thread so the HTTP response is not blocked.
         """
-        from sregym.conductor.parser import ResponseParser
-
-        parser = ResponseParser()
-        parsed = parser.parse(wrapped_cmd)
-        if parsed["api_name"] != "submit":
-            raise ValueError("Only `submit(...)` is supported.")
-        sol = parsed["args"][0] if parsed["args"] else None
-
-        # If all tasks are already completed, simply return the final snapshot.
-        if self.submission_stage == "done":
-            self.logger.info("All tasks already completed; ignoring new submission.")
-            return dict(self.results)
-
-        if not self.stage_sequence:
-            self.logger.warning("submit() called but no stages are configured; returning current results.")
-            return dict(self.results)
-
-        if not self.waiting_for_agent:
-            self.logger.error(
-                "submit() called when conductor is not waiting for a submission. "
-                f"Current submission_stage={self.submission_stage}"
-            )
-            raise RuntimeError("Conductor is not currently waiting for an agent submission.")
-
-        current_stage = self.stage_sequence[self.current_stage_index]
         stage_name: str = current_stage["name"]
         self.logger.info(f"Evaluating stage '{stage_name}'", extra={"sol": sol})
 
@@ -435,8 +438,8 @@ class Conductor:
         next_index = self.current_stage_index + 1
         self._advance_to_next_stage(start_index=next_index)
 
-        # Restart noise if there are more stages
-        if self.submission_stage != "done":
+        # Restart noise if there are more stages AND not in teardown
+        if self.submission_stage not in ("done", "tearing_down"):
             try:
                 nm = get_noise_manager()
                 self.logger.info("Restarting noise manager for next stage...")
@@ -444,7 +447,50 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to restart noise manager: {e}")
 
-        return dict(self.results)
+    async def submit(self, wrapped_cmd: str) -> dict:
+        """
+        Called by CLI or HTTP /submit.  Parses the `submit(...)` call,
+        kicks off evaluation in the background, and returns immediately.
+        """
+        from sregym.conductor.parser import ResponseParser
+
+        parser = ResponseParser()
+        parsed = parser.parse(wrapped_cmd)
+        if parsed["api_name"] != "submit":
+            raise ValueError("Only `submit(...)` is supported.")
+        sol = parsed["args"][0] if parsed["args"] else None
+
+        # If all tasks are already completed, simply return the final snapshot.
+        if self.submission_stage == "done":
+            self.logger.info("All tasks already completed; ignoring new submission.")
+            return dict(self.results)
+
+        # If teardown is in progress, return current results without evaluation
+        if self.submission_stage == "tearing_down":
+            self.logger.info("Teardown in progress; returning current results without evaluation.")
+            return dict(self.results)
+
+        if not self.stage_sequence:
+            self.logger.warning("submit() called but no stages are configured; returning current results.")
+            return dict(self.results)
+
+        if not self.waiting_for_agent:
+            self.logger.error(
+                "submit() called when conductor is not waiting for a submission. "
+                f"Current submission_stage={self.submission_stage}"
+            )
+            raise RuntimeError("Conductor is not currently waiting for an agent submission.")
+
+        current_stage = self.stage_sequence[self.current_stage_index]
+
+        # Mark that we're no longer waiting so duplicate submits are rejected
+        self.waiting_for_agent = False
+
+        # Run evaluation and stage advancement in a background thread
+        # so the HTTP response returns immediately
+        asyncio.get_event_loop().run_in_executor(None, self._submit_evaluate_and_advance, sol, current_stage)
+
+        return {"status": "ok", "message": "Submission received"}
 
     def fix_kubernetes(self):
         self.logger.info("Fixing Kubernetes... to normal state.")

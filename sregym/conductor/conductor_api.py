@@ -57,14 +57,35 @@ _shutdown_event = threading.Event()
 logger = logging.getLogger("all.sregym.conductor_api")
 
 
+class _ShutdownNoiseFilter(logging.Filter):
+    """Suppress expected CancelledError tracebacks from uvicorn during shutdown."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.exc_info and record.exc_info[1] is not None:
+            import asyncio
+
+            if isinstance(record.exc_info[1], asyncio.CancelledError):
+                return False
+        return True
+
+
 def request_shutdown():
     """
     Signal the API server to shut down.
     Safe to call from any thread and idempotent.
     """
     logger.warning("Shutting down API server...")
+
+    # Suppress expected CancelledError noise from uvicorn tearing down
+    # long-lived SSE connections during shutdown
+    for name in ("uvicorn.error", "uvicorn"):
+        logging.getLogger(name).addFilter(_ShutdownNoiseFilter())
+
     _shutdown_event.set()
     if _server is not None:
+        # force_exit skips waiting for long-lived connections (like MCP SSE)
+        # to close gracefully — the agent is already cleaned up at this point
+        _server.force_exit = True
         _server.should_exit = True
 
 
@@ -157,7 +178,7 @@ def run_api(conductor):
             """
 **Available Endpoints**
 - **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage
-- **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "done" }`
+- **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "tearing_down" | "done" }`
 """
         )
     )

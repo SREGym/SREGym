@@ -118,7 +118,7 @@ class FleetCast(Application):
         TiDBClusterDeployHelper.running_cluster()
         print("---DEPLOYED TiDB CLUSTER---")
 
-        Helm.add_repo("fleetcast", "https://lilygn.github.io/FleetCast")
+        Helm.add_repo("fleetcast", "https://yimingsu01.github.io/FleetCast")
 
         release = self.helm_configs.get("release_name", "fleetcast")
         fullname = f"{release}-satellite-app"
