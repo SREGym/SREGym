@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from enum import StrEnum
 
@@ -8,6 +9,7 @@ from pydantic import BaseModel, Field
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_hw import HWFaultInjector
+from sregym.generators.fault.inject_kernel import KernelInjector
 from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.utils.decorators import mark_fault_injected
@@ -68,6 +70,110 @@ class KhaosFaultName(StrEnum):
     latent_sector_error = "latent_sector_error"
 
 
+# Disk faults that intercept read/pread syscalls need page cache dropped
+# so the application is forced to issue new reads that hit the eBPF probes.
+_DISK_FAULTS: frozenset[str] = frozenset(
+    {
+        KhaosFaultName.latent_sector_error,
+    }
+)
+
+
+class _FaultReinjectionMonitor:
+    """Background thread that detects pod restarts and re-injects the eBPF fault
+    into the new host PID.  Follows the daemon-thread pattern used by NoiseManager."""
+
+    def __init__(
+        self,
+        injector: HWFaultInjector,
+        namespace: str,
+        node: str,
+        fault_type: str,
+        params: list[int | str] | None,
+    ):
+        self._injector = injector
+        self._namespace = namespace
+        self._node = node
+        self._fault_type = fault_type
+        self._params = params
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        # pod_name -> container_id (last known)
+        self._container_ids: dict[str, str] = {}
+
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        """Snapshot current container IDs and spawn the monitor thread."""
+        for pod_ref in self._injector._get_pods_on_node(self._namespace, self._node):
+            ns, pod = self._injector._split_ns_pod(pod_ref)
+            try:
+                cid = self._injector._get_container_id(ns, pod)
+                self._container_ids[pod_ref] = cid
+            except Exception:
+                print(f"[reinjection-monitor] Could not snapshot container ID for {pod_ref}")
+
+        self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
+        self._thread.start()
+        print(
+            f"[reinjection-monitor] Started for {self._fault_type} on node {self._node} "
+            f"(tracking {len(self._container_ids)} pods)"
+        )
+
+    def stop(self) -> None:
+        """Signal the loop to stop and wait for the thread to finish."""
+        self._stop_event.set()
+        if self._thread is not None:
+            self._thread.join(timeout=10)
+        print("[reinjection-monitor] Stopped")
+
+    # ------------------------------------------------------------------
+
+    def _monitor_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                self._check_pods()
+            except Exception as exc:
+                print(f"[reinjection-monitor] Error in monitor loop: {exc}")
+            # Sleep ~5 s, but wake early if stop_event is set
+            if self._stop_event.wait(timeout=5):
+                break
+
+    def _check_pods(self) -> None:
+        pods = self._injector._get_pods_on_node(self._namespace, self._node)
+        for pod_ref in pods:
+            try:
+                ns, pod = self._injector._split_ns_pod(pod_ref)
+
+                # Pod may be terminating or not yet running — skip quietly.
+                try:
+                    cid = self._injector._get_container_id(ns, pod)
+                except RuntimeError:
+                    continue
+
+                prev_cid = self._container_ids.get(pod_ref)
+
+                if prev_cid is not None and prev_cid == cid:
+                    continue  # no change
+
+                # New pod or restarted container — re-inject
+                host_pid = self._injector._get_host_pid_on_node(self._node, cid)
+                print(
+                    f"[reinjection-monitor] Re-injecting {self._fault_type} into "
+                    f"PID {host_pid} (pod {pod_ref}, container {cid[:12]})"
+                )
+                self._injector._exec_khaos_fault_on_node(self._node, self._fault_type, host_pid, self._params)
+
+                if self._fault_type in _DISK_FAULTS:
+                    kernel_injector = KernelInjector(self._injector.kubectl)
+                    kernel_injector.drop_caches(self._node, show_log=False)
+                    print(f"[reinjection-monitor] Dropped caches on {self._node} after re-injection")
+
+                self._container_ids[pod_ref] = cid
+            except Exception as exc:
+                print(f"[reinjection-monitor] Failed to re-inject fault for pod {pod_ref}: {exc}")
+
+
 class KhaosFaultConfig(BaseModel):
     name: KhaosFaultName
     description: str
@@ -102,6 +208,8 @@ class KhaosFaultProblem(Problem):
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
 
+        self._reinjection_monitor: _FaultReinjectionMonitor | None = None
+
         self.root_cause = cfg.description
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
@@ -122,9 +230,34 @@ class KhaosFaultProblem(Problem):
         )
         print(f"Injected {self.fault_name.value} into pods on node {self.target_node}\n")
 
+        # Disk faults intercept read/pread syscalls via eBPF. Data already in
+        # the page cache will be served without issuing those syscalls, so we
+        # must drop caches to force the application to re-read from disk.
+        if self.fault_name in _DISK_FAULTS and self.target_node:
+            print("Dropping page caches to force disk reads through eBPF probes...")
+            kernel_injector = KernelInjector(self.injector.kubectl)
+            kernel_injector.drop_caches(self.target_node)
+
+        # eBPF probes are pinned to host PIDs. When Kubernetes restarts a
+        # crashed pod, the new container gets a new PID and the fault
+        # disappears. Start a background monitor that re-injects on restart.
+        if self.fault_name in _DISK_FAULTS and self.target_node:
+            self._reinjection_monitor = _FaultReinjectionMonitor(
+                injector=self.injector,
+                namespace=self.namespace,
+                node=self.target_node,
+                fault_type=self.fault_name.value,
+                params=self.inject_args,
+            )
+            self._reinjection_monitor.start()
+
     @mark_fault_injected
     def recover_fault(self):
         print(f"== Fault Recovery: {self.fault_name.value} on node {self.target_node} ==")
+        # Stop the re-injection monitor first so it doesn't race with recovery.
+        if self._reinjection_monitor is not None:
+            self._reinjection_monitor.stop()
+            self._reinjection_monitor = None
         if self.target_node:
             self.injector.recover_node(self.namespace, self.fault_name.value, self.target_node)
         else:
