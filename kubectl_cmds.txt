@@ -1,0 +1,59 @@
+# Demo scenario: What happens during SREGym main.py execution
+# Shows conductor infrastructure, problem deployment, and agent troubleshooting
+
+# Step 1: Check overall cluster status (main.py initial check)
+kubectl get nodes
+
+# Step 2: List all namespaces (shows conductor, problem, agent namespaces)
+kubectl get namespaces
+
+# Step 3: Check all pods across namespaces to see overall health
+kubectl get pods --all-namespaces
+
+# Step 4: Check conductor namespace (where conductor API runs)
+kubectl get pods -n conductor
+
+# Step 5: Check for Loki observability infrastructure (deployed by conductor)
+kubectl get pods -n loki
+
+# Step 6: Check hotel-reservation namespace where problem is deployed
+kubectl get pods -n hotel-reservation
+
+# Step 4: Check the problematic geo service pod
+kubectl describe pod geo-84fbc958c7-8s6hs -n hotel-reservation
+
+# Step 5: Check recent logs from the geo pod
+kubectl logs geo-84fbc958c7-8s6hs -n hotel-reservation --tail=50
+
+# Step 7: Check if agent pod is running (containerized agent started by LAUNCHER)
+kubectl get pods --all-namespaces | grep agent
+
+# Step 8: Get deployments in hotel-reservation (problem application)
+kubectl get deployments -n hotel-reservation
+
+# Step 9: Check services in hotel-reservation (for agent/conductor connectivity)
+kubectl get svc -n hotel-reservation
+
+# Step 10: Check events in hotel-reservation to see problem injection (chaos/fault)
+kubectl get events -n hotel-reservation --sort-by='.lastTimestamp'
+
+# Step 11: Check a problematic pod for logs (agent debugging)
+kubectl describe pod geo-84fbc958c7-8s6hs -n hotel-reservation
+
+# Step 12: Check logs from the failing service (what agent sees)
+kubectl logs geo-84fbc958c7-8s6hs -n hotel-reservation --tail=50
+
+# Step 13: Check if mongodb is affected by the injected fault
+kubectl get pods -n hotel-reservation | grep mongodb
+
+# Step 14: Check mongodb pod logs to understand the issue
+kubectl logs mongodb-geo-7db569d69-xc2gh -n hotel-reservation --tail=30
+
+# Step 15: Check configmaps (agent may inspect configuration)
+kubectl get configmap -n hotel-reservation
+
+# Step 16: Check deployment YAML (agent needs to understand the setup)
+kubectl get deployment geo -n hotel-reservation -o yaml
+
+# Step 17: Final cluster state for grading (conductor collects metrics)
+kubectl get pods -n hotel-reservation -o wide
