@@ -42,6 +42,7 @@ from sregym.conductor.problems.operator_misoperation.non_existent_storage import
 from sregym.conductor.problems.operator_misoperation.overload_replicas import K8SOperatorOverloadReplicasFault
 from sregym.conductor.problems.operator_misoperation.security_context_fault import K8SOperatorSecurityContextFault
 from sregym.conductor.problems.operator_misoperation.wrong_update_strategy import K8SOperatorWrongUpdateStrategyFault
+from sregym.conductor.problems.operator_misoperation.wrong_operator_image import K8SOperatorWrongOperatorImage
 from sregym.conductor.problems.payment_service_failure import PaymentServiceFailure
 from sregym.conductor.problems.payment_service_unreachable import PaymentServiceUnreachable
 from sregym.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
@@ -266,6 +267,7 @@ class ProblemRegistry:
             "operator_invalid_affinity_toleration": K8SOperatorInvalidAffinityTolerationFault,
             "operator_security_context_fault": K8SOperatorSecurityContextFault,
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
+            "operator_wrong_operator_image": K8SOperatorWrongOperatorImage,
         }
 # fmt: on
         self.kubectl = KubeCtl()
