@@ -175,9 +175,7 @@ class ProblemRegistry:
             # ==================== HARDWARE FAULT INJECTOR ====================
             "silent_data_corruption": SilentDataCorruption,
 
-            "latent_sector_error_30": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error,inject_args=[30]),
-            "latent_sector_error_50": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error,inject_args=[50]),
-            "latent_sector_error_100": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error,inject_args=[100]),
+            "latent_sector_error": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error,inject_args=[30]),
             "read_error": lambda: KhaosFaultProblem(KhaosFaultName.read_error),
             # "pread_error": lambda: KhaosFaultProblem(KhaosFaultName.pread_error),
             # "write_error": lambda: KhaosFaultProblem(KhaosFaultName.write_error),
