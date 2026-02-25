@@ -55,6 +55,8 @@ We have an Ansible playbook to setup clusters on providers like [CloudLab](https
 ### b) Emulated cluster
 SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/) on your local machine. However, not all problems are supported.
 
+**Note:** If you run into pod crashes or "too many open files" errors, see the [kind README](./kind/README.md) for required host kernel settings and troubleshooting.
+
 ```bash
 # For x86 machines
 kind create cluster --config kind/kind-config-x86.yaml
