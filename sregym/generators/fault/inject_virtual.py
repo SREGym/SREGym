@@ -312,6 +312,10 @@ class VirtualizationFaultInjector(FaultInjector):
             result = self.kubectl.exec_command(create_service_command)
             print(f"Recreated service {service} to recover from the fault: {result}")
 
+        # Restart all pods to clear cached DNS failures from the fault period
+        self.kubectl.exec_command(f"kubectl delete pods --all -n {self.namespace}")
+        self.kubectl.wait_for_stable(namespace=self.namespace)
+
     # V.8 - Inject a fault by modifying the resource request of a service
     def inject_resource_request(self, microservices: list[str], memory_limit_func):
         """Inject a fault by modifying the resource request of a service."""
