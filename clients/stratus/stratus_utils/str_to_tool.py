@@ -28,8 +28,11 @@ def get_client():
     if sse_timeout < 0:
         sse_timeout = None  # Unlimited
 
+    api_hostname = os.getenv("API_HOSTNAME", "localhost")
+    mcp_server_port = os.getenv("MCP_SERVER_PORT", "9954")
+    mcp_base_url = os.getenv("MCP_SERVER_URL", f"http://{api_hostname}:{mcp_server_port}")
     transport = SSETransport(
-        url=f"{os.getenv('MCP_SERVER_URL', 'http://localhost:9954')}/kubectl/sse",
+        url=f"{mcp_base_url}/kubectl/sse",
         headers={"sregym_ssid": session_id},
         sse_read_timeout=sse_timeout,
     )

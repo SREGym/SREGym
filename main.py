@@ -198,17 +198,21 @@ def _run_driver_and_shutdown(
     n_attempts: int = 1,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
-    results = driver_loop(
-        conductor,
-        problem_filter=problem_filter,
-        agent_to_run=agent_to_run,
-        use_external_harness=use_external_harness,
-        n_attempts=n_attempts,
-    )
-    global _driver_results
-    _driver_results = results
-    # ⬇️ Ask the API server (running in main thread) to stop so we can write CSV
-    request_shutdown()
+    try:
+        results = driver_loop(
+            conductor,
+            problem_filter=problem_filter,
+            agent_to_run=agent_to_run,
+            use_external_harness=use_external_harness,
+            n_attempts=n_attempts,
+        )
+        global _driver_results
+        _driver_results = results
+    except Exception:
+        logger.exception("Driver thread crashed")
+    finally:
+        LAUNCHER.cleanup_all()
+        request_shutdown()
 
 
 def main(args):
@@ -239,9 +243,7 @@ def main(args):
     config = ConductorConfig(deploy_loki=not args.use_external_harness)
     conductor = Conductor(config=config)
 
-    # If ran with 3rd party agent, check if they are installed
-    if args.agent and args.agent not in ["stratus", "autosubmit", "debug"]:
-        conductor.dependency_check([args.agent])
+    LAUNCHER.enable_container_isolation(force_build=args.force_build)
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
@@ -257,8 +259,12 @@ def main(args):
         run_api(conductor)
     except KeyboardInterrupt:
         # If interrupted, still try to shut down cleanly
+        LAUNCHER.cleanup_all()
         request_shutdown()
     finally:
+        # Stop any remaining agent containers/processes
+        LAUNCHER.cleanup_all()
+
         # Stop noise manager if it was initialized
         if nm:
             try:
@@ -334,6 +340,11 @@ if __name__ == "__main__":
         type=int,
         default=1,
         help="Number of attempts to run each problem (default: 1)",
+    )
+    parser.add_argument(
+        "--force-build",
+        action="store_true",
+        help="Force rebuild the agent Docker image even if it already exists (use after updating dependencies or build scripts)",
     )
     args = parser.parse_args()
 

@@ -1,9 +1,6 @@
 import logging
 
-from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.mitigation import MitigationOracle
-from sregym.conductor.oracles.workload import WorkloadOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_tt import TrainTicketFaultInjector
 from sregym.service.apps.train_ticket import TrainTicket
@@ -28,10 +25,6 @@ class TrainTicketF22(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
-        self.mitigation_oracle = CompoundedOracle(
-            self,
-            WorkloadOracle(problem=self, wrk_manager=self.app.wrk),
-        )
 
     @mark_fault_injected
     def inject_fault(self):

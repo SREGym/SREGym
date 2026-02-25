@@ -330,6 +330,12 @@ _FAULT_CONFIG_ENTRIES: Sequence[tuple[KhaosFaultName, str, list[int | str]]] = [
         "Disk read/write operations hit latent sector errors at the specified failure rate, simulating bad disk sectors.",
         [30],
     ),
+    # disk faults
+    (
+        KhaosFaultName.latent_sector_error,
+        "Disk read/write operations hit latent sector errors at the specified failure rate, simulating bad disk sectors.",
+        [30],
+    ),
 ]
 
 

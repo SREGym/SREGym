@@ -1,9 +1,10 @@
+import os
 import subprocess
-import sys
-import threading
 from time import sleep
 
-server_url = sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000"
+api_hostname = os.getenv("API_HOSTNAME", "localhost")
+api_port = os.getenv("API_PORT", "8000")
+server_url = f"http://{api_hostname}:{api_port}"
 
 
 def automatic_submit():
@@ -14,7 +15,7 @@ def automatic_submit():
                 "curl",
                 "-X",
                 "POST",
-                "http://localhost:8000/submit",
+                f"{server_url}/submit",
                 "-H",
                 "Content-Type: application/json",
                 "-d",

@@ -53,19 +53,23 @@ class Helm:
         if extra_args:
             command += " " + " ".join(extra_args)
 
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, error = process.communicate()
 
-        if error:
-            stderr = error.decode("utf-8").strip()
-            stdout = output.decode("utf-8").strip()
+        stderr = error.decode("utf-8").strip() if error else ""
+        stdout = output.decode("utf-8").strip() if output else ""
+
+        if stderr:
+            logger.warning(f"Helm install stderr output:\n{stderr}")
+
+        if process.returncode != 0:
             raise RuntimeError(
                 f"Helm install failed for release '{release_name}' in namespace '{namespace}'. "
                 f"Chart: {chart_path}. Error output:\n{stderr}\n"
                 f"Stdout (for context):\n{stdout}"
             )
         else:
-            logger.debug(output.decode("utf-8"))
+            logger.debug(stdout)
 
     @staticmethod
     def uninstall(**args):
@@ -85,19 +89,23 @@ class Helm:
             return
 
         command = f"helm uninstall {release_name} -n {namespace}"
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, error = process.communicate()
 
-        if error:
-            stderr = error.decode("utf-8").strip()
-            stdout = output.decode("utf-8").strip()
+        stderr = error.decode("utf-8").strip() if error else ""
+        stdout = output.decode("utf-8").strip() if output else ""
+
+        if stderr:
+            logger.warning(f"Helm uninstall stderr output:\n{stderr}")
+
+        if process.returncode != 0:
             raise RuntimeError(
                 f"Helm uninstall failed for release '{release_name}' in namespace '{namespace}'. "
                 f"Release: {release_name}. Error output:\n{stderr}\n"
                 f"Stdout (for context):\n{stdout}"
             )
         else:
-            logger.debug(output.decode("utf-8"))
+            logger.debug(stdout)
 
     @staticmethod
     def exists_release(release_name: str, namespace: str) -> bool:
@@ -180,18 +188,22 @@ class Helm:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, error = process.communicate()
 
-        if error:
+        stderr = error.decode("utf-8").strip() if error else ""
+        stdout = output.decode("utf-8").strip() if output else ""
+
+        if stderr:
+            logger.warning(f"Helm upgrade stderr output:\n{stderr}")
+
+        if process.returncode != 0:
             logger.error("Error during helm upgrade:")
-            stderr = error.decode("utf-8").strip()
-            stdout = output.decode("utf-8").strip()
             raise RuntimeError(
-                f"Helm install failed for release '{release_name}' in namespace '{namespace}'. "
+                f"Helm upgrade failed for release '{release_name}' in namespace '{namespace}'. "
                 f"Chart: {chart_path}. Error output:\n{stderr}\n"
                 f"Stdout (for context):\n{stdout}"
             )
         else:
             logger.info("Helm upgrade successful!")
-            logger.debug(output.decode("utf-8"))
+            logger.debug(stdout)
 
     @staticmethod
     def add_repo(name: str, url: str, max_retries: int = 3, backoff_factor: float = 2.0):

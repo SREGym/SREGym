@@ -6,16 +6,21 @@ import yaml
 
 DEFAULT_REG_PATH = Path(os.environ.get("SREGYM_AGENT_REGISTRY", "agents.yaml"))
 
+
 @dataclass
 class AgentRegistration:
     name: str
     kickoff_command: str | None = None
     kickoff_workdir: str | None = None
     kickoff_env: dict[str, str] | None = None
+    install_script: str | None = None
+    agent_version: str | None = None
+
 
 def _ensure_file(path: Path):
     if not path.exists():
         path.write_text(yaml.safe_dump({"agents": []}, sort_keys=False))
+
 
 def list_agents(path: Path = DEFAULT_REG_PATH) -> dict[str, AgentRegistration]:
     _ensure_file(path)
@@ -27,11 +32,15 @@ def list_agents(path: Path = DEFAULT_REG_PATH) -> dict[str, AgentRegistration]:
             kickoff_command=a.get("kickoff_command"),
             kickoff_workdir=a.get("kickoff_workdir"),
             kickoff_env=a.get("kickoff_env") or {},
+            install_script=a.get("install_script"),
+            agent_version=a.get("agent_version"),
         )
     return out
 
+
 def get_agent(name: str, path: Path = DEFAULT_REG_PATH) -> AgentRegistration | None:
     return list_agents(path).get(name)
+
 
 def save_agent(reg: AgentRegistration, path: Path = DEFAULT_REG_PATH) -> None:
     _ensure_file(path)

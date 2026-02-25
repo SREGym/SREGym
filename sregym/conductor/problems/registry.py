@@ -21,7 +21,6 @@ from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAss
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.khaos_faults import KhaosFaultName, KhaosFaultProblem
-from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from sregym.conductor.problems.llm_inaccurate_response import LlmInaccurateResponse
@@ -41,6 +40,7 @@ from sregym.conductor.problems.operator_misoperation.invalid_affinity_toleration
 from sregym.conductor.problems.operator_misoperation.non_existent_storage import K8SOperatorNonExistentStorageFault
 from sregym.conductor.problems.operator_misoperation.overload_replicas import K8SOperatorOverloadReplicasFault
 from sregym.conductor.problems.operator_misoperation.security_context_fault import K8SOperatorSecurityContextFault
+from sregym.conductor.problems.operator_misoperation.wrong_operator_image import K8SOperatorWrongOperatorImage
 from sregym.conductor.problems.operator_misoperation.wrong_update_strategy import K8SOperatorWrongUpdateStrategyFault
 from sregym.conductor.problems.payment_service_failure import PaymentServiceFailure
 from sregym.conductor.problems.payment_service_unreachable import PaymentServiceUnreachable
@@ -63,6 +63,9 @@ from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.target_port import K8STargetPortMisconfig
+from sregym.conductor.problems.top_of_rack_router_failure_hotel_reservation import (
+    TopOfRackRouterPartitionHotelReservation,
+)
 from sregym.conductor.problems.train_ticket_f22 import TrainTicketF22
 from sregym.conductor.problems.trainticket_f17 import TrainTicketF17
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
@@ -143,6 +146,7 @@ class ProblemRegistry:
             "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
             "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
+            "top_of_rack_router_failure_hotel_reservation": lambda: TopOfRackRouterPartitionHotelReservation(app_name="hotel_reservation", faulty_service="frontend"),
             "wrong_bin_usage": WrongBinUsage,
             "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_dns_policy_hotel_reservation": lambda: WrongDNSPolicy(app_name="hotel_reservation", faulty_service="profile"),
@@ -256,7 +260,7 @@ class ProblemRegistry:
             #     LivenessProbeTooAggressive(app_name="social_network"),
             # ]),
             # ad hoc:
-            "kubelet_crash": KubeletCrash,
+            # "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
             # ==================== K8S OPERATOR MISOPERATION ==================
             "operator_overload_replicas": K8SOperatorOverloadReplicasFault,
@@ -264,6 +268,7 @@ class ProblemRegistry:
             "operator_invalid_affinity_toleration": K8SOperatorInvalidAffinityTolerationFault,
             "operator_security_context_fault": K8SOperatorSecurityContextFault,
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
+            "operator_wrong_operator_image": K8SOperatorWrongOperatorImage,
         }
 # fmt: on
         self.kubectl = KubeCtl()

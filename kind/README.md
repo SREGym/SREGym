@@ -34,11 +34,11 @@ SREGym is deployed using **containerized components** and Kubernetes manifests. 
 
 ## **System Compatibility**
 This setup has been successfully verified on the following environments:
-1. **WSL2 Ubuntu**  
+1. **WSL2 Ubuntu**
    ```
    Linux Warrens-Laptop 5.15.167.4-microsoft-standard-WSL2 #1 SMP Tue Nov 5 00:21:55 UTC 2024 x86_64 GNU/Linux
    ```
-2. **Ubuntu 24.04 LTS (Cloud/Local Machine)**  
+2. **Ubuntu 24.04 LTS (Cloud/Local Machine)**
    ```
    Linux ubuntu-s-4vcpu-8gb-sfo3-01 6.8.0-52-generic #53-Ubuntu SMP PREEMPT_DYNAMIC Sat Jan 11 00:06:25 UTC 2025 x86_64 GNU/Linux
    ```
@@ -101,13 +101,29 @@ sudo apt-get install helm
 
 For more information, see the [Helm installation guide](https://helm.sh/docs/intro/install/).
 
+### Configure Host Kernel Parameters
+
+Kind cluster nodes share the host kernel's inotify limits. The default
+`fs.inotify.max_user_instances=128` is insufficient for multi-node clusters and
+will cause kube-system pods (kube-proxy, etc.) to crash with "too many open
+files". Run this before creating your cluster:
+
+    sudo sysctl -w fs.inotify.max_user_instances=1024
+    sudo sysctl -w fs.inotify.max_user_watches=1048576
+
+To make persistent across reboots:
+
+    echo "fs.inotify.max_user_instances=1024" | sudo tee /etc/sysctl.d/99-kind.conf
+    echo "fs.inotify.max_user_watches=1048576" | sudo tee -a /etc/sysctl.d/99-kind.conf
+    sudo sysctl --system
+
 ---
 
 ## Deployment Steps
 
 ### 1. Build the Custom KIND Image
 
-The Dockerfile in this directory is designed specifically for Ubuntu running under WSL2 (amd64). **Please refer to this Dockerfile** to build an image that is compatible with your own machine 
+The Dockerfile in this directory is designed specifically for Ubuntu running under WSL2 (amd64). **Please refer to this Dockerfile** to build an image that is compatible with your own machine
 
 Build the custom image using:
 
@@ -133,25 +149,31 @@ After finishing cluster creation, proceed to the next "Update config.yml" step.
 
 ## **Troubleshooting**
 
-- **Docker Issues:**  
+- **Docker Issues:**
   Ensure Docker is running within your WSL2 environment. Verify with `docker ps` to list running containers.
 
-- **Cluster Creation Failures:**  
+- **Cluster Creation Failures:**
   Check that Docker is correctly installed and that your system has enough resources (CPU, memory). Examine the output of `kind export logs <cluster-name>` for details.
 
-- **Deployment Problems:**  
+- **Deployment Problems:**
   Use `kubectl logs <pod-name>` to view pod logs and diagnose application issues. Make sure that your `kind-config.yaml` file references the correct image.
 
-- **Resource Allocation:**  
+- **kube-proxy CrashLoopBackOff / "too many open files":**
+  All kind nodes share the host kernel's `fs.inotify.max_user_instances` limit
+  (default: 128). When this is exhausted, new pods that need inotify instances
+  (like kube-proxy) crash immediately. Fix with:
+  `sudo sysctl -w fs.inotify.max_user_instances=1024`
+
+- **Resource Allocation:**
   WSL2 may require additional resources. Adjust the WSL2 settings in your `.wslconfig` file on Windows if you encounter performance issues.
 
-- **Deployment Timeout Issues (Slow Network):**  
+- **Deployment Timeout Issues (Slow Network):**
   If you have a slow local network connection, first-time deployments may timeout while pulling container images. Increase the timeout in your `.env` file:
-  
+
   ```bash
   WAIT_FOR_POD_READY_TIMEOUT=1800  # 30 minutes (recommended for slow networks)
   ```
-  
+
   Subsequent deployments are faster since images are cached. Remote clusters typically don't need this adjustment.
 
 ---
