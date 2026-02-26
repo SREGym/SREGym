@@ -75,106 +75,58 @@ GENI (Global Environment for Network Innovations) and CloudLab use two core conc
   - SSH access information
 - Sliver expiration time cannot exceed its parent slice's expiration time
 
-## Understanding RSpec Files
-
-RSpec files are used to define the resources and their configurations for a slice. We can get them two ways:
-1. We can modify the `generate_rspec.py` script to programmatically define our resources and generate the RSpec file corresponding to our resources.
-2. We can simply go to cloudlab and copy the rspec of a profile we want to use. Store the rspec files in the `scripts/geni-lib/rspecs` directory.
-
 ## Using the GENI Manager
 
 The `genictl.py` script provides a CLI to manage both slices and slivers.
 
 ### Available Commands
 
-1. **create-slice**
-   - Creates a new slice container for your experiment
+1. **create-slice** — Creates a new slice container for your experiment
    ```bash
    python3 genictl.py create-slice <slice_name> [--hours HOURS] [--description DESCRIPTION]
    ```
 
-2. **create-sliver**
-   - Allocates resources in a specific site
-   - Saves login information to `<slice_name>.login.info.txt`
+2. **create-sliver** — Allocates resources in a specific site
    ```bash
    python3 genictl.py create-sliver <slice_name> <rspec_file> --site {utah,clemson,wisconsin}
    ```
 
-3. **sliver-status**
-   - Checks the current status of allocated resources
+3. **sliver-status** — Checks the current status of allocated resources
    ```bash
    python3 genictl.py sliver-status <slice_name> --site {utah,clemson,wisconsin}
    ```
 
-4. **renew-slice**
-   - Extends the expiration time of a slice
+4. **renew-slice** — Extends the expiration time of a slice
    ```bash
    python3 genictl.py renew-slice <slice_name> [--hours HOURS]
    ```
 
-5. **renew-sliver**
-   - Extends the expiration time of resources at a specific site
-   - Note: Set sliver expiration slightly less than slice expiration (e.g., 2.9h instead of 3h) to account for command execution delays
+5. **renew-sliver** — Extends the expiration time of resources at a specific site
    ```bash
    python3 genictl.py renew-sliver <slice_name> [--hours HOURS] --site {utah,clemson,wisconsin}
    ```
 
-6. **list-slices**
-   - Shows all active slices and their details
+6. **list-slices** — Shows all active slices and their details
    ```bash
    python3 genictl.py list-slices
    ```
 
-7. **sliver-spec**
-   - Shows detailed specifications of allocated resources
-   - Includes node specs, IP addresses, and network info
+7. **sliver-spec** — Shows detailed specifications of allocated resources
    ```bash
    python3 genictl.py sliver-spec <slice_name> --site {utah,clemson,wisconsin}
    ```
 
-8. **delete-sliver**
-   - Removes allocated resources from a slice
+8. **delete-sliver** — Removes allocated resources from a slice
    ```bash
    python3 genictl.py delete-sliver <slice_name> --site {utah,clemson,wisconsin}
    ```
 
-9. **get-hardware-info**
-   - Gets the hardware information from CloudLab. This is useful to get the hardware information of the nodes available in the different sites.
+9. **create-experiment** — Creates a quick experiment with specified hardware, nodes, OS, and site
    ```bash
-   python3 genictl.py get-hardware-info
+   python3 genictl.py create-experiment --hardware-type c220g5 --nodes 3 --duration 2 --site wisconsin --os-type UBUNTU22-64-STD [--ssh-user USER] [--ssh-key KEY] [--k8s] [--pod-network-cidr CIDR]
    ```
 
-10. **create-experiment**
-    - Creates a quick experiment with the desired hardware type, number of nodes, OS type and duration
-    ```bash
-    python3 genictl.py create-experiment [--hardware-type HARDWARE_TYPE] [--nodes NODES] [--duration DURATION] [--os-type OS_TYPE] [--ssh-user SSH_USER] [--ssh-key SSH_KEY] [--k8s] [--pod-network-cidr POD_NETWORK_CIDR] [--deploy-sregym] [--deploy-key DEPLOY_KEY]
-    ```
-    Options:
-    - `--hardware-type`: Hardware type (default: c220g5)
-    - `--nodes`: Number of nodes (default: 3)
-    - `--duration`: Duration in hours (default: 1)
-    - `--os-type`: OS image (default: UBUNTU22-64-STD)
-    - `--ssh-user`: SSH username
-    - `--ssh-key`: SSH private key file
-    - `--k8s`: boolean flag to bootstrap Kubernetes after sliver is ready
-    - `--pod-network-cidr`: Calico pod CIDR (default: 192.168.0.0/16)
-    - `--deploy-sregym`: boolean flag to deploy SREGym after K8s cluster is ready
-    - `--deploy-key`: Path to SSH deploy key for SREGym private repo
-
-11. **renew-experiment**
-    - Renews both slice and sliver for an experiment
+10. **renew-experiment** — Renews both slice and sliver for an experiment
     ```bash
     python3 genictl.py renew-experiment <slice_name> --site {utah,clemson,wisconsin} [--hours HOURS]
     ```
-
-## Quick Test
-
-Under the `tests/geni-lib/` directory, there is a script called `test_experiment_creation.py` that can be used to create a quick experiment.
-
-```bash
-cd tests/geni-lib
-python3 test_experiment_creation.py
-```
-
-This will create a 3-node experiment with 3 c220g5 nodes in the Wisconsin site for 1 hour.
-The login info will be saved to a file called `<slice_name>.login.info.txt`.
