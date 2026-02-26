@@ -11,8 +11,6 @@
 [![Slack](https://img.shields.io/badge/-Slack-4A154B?style=flat-square&logo=slack&logoColor=white)](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w)
 </div>
 
-[The Story of SREGym](https://github.com/user-attachments/assets/2cc6b4f3-0e57-4bba-bd37-167d3595f096)
-
 <h2 id="overview">🔍 Overview</h2>
 SREGym is an AI-native platform to enable the design, development, and evaluation of AI agents for Site Reliability Engineering (SRE). The core idea is to create live system environments for SRE agents to solve real-world SRE problems. SREGym provides a comprehensive SRE benchmark suite with a wide variety of problems for evaluating SRE agents and also for training next-generation AI agents.
 <br><br>
@@ -158,6 +156,8 @@ python main.py --agent stratus --model bedrock-claude-sonnet-4.5
 
 ## Acknowledgements
 This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org/).
+https://github.com/user-attachments/assets/308bb58c-9b9e-4122-94d1-5473ee2eaf57
+
 
 ## License
 Licensed under the [MIT](LICENSE.txt) license.
