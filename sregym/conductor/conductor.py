@@ -17,6 +17,7 @@ from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
+from sregym.paths import CLUSTER_BASELINE_STATE_FILE
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
@@ -515,6 +516,18 @@ class Conductor:
         """Kubectl + Prometheus + problem.app deployment."""
         problem = self.current_problem
         self.submission_stage = "setup"
+
+        # Load or capture baseline state BEFORE any infrastructure deployment.
+        # This captures the bare cluster state so reconciliation can clean up
+        # everything added during a problem run (including infrastructure drift).
+        if not self._baseline_captured:
+            if self.cluster_state.load_baseline_state(CLUSTER_BASELINE_STATE_FILE):
+                self.logger.info("[DEPLOY] Loaded persisted cluster baseline state")
+            else:
+                self.logger.info("[DEPLOY] No persisted baseline state found, capturing and saving...")
+                self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
+            self._baseline_captured = True
+
         self.logger.info("[DEPLOY] Setting up metrics-server…")
         self.kubectl.exec_command(
             "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
@@ -581,13 +594,6 @@ class Conductor:
             self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
 
         self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki")
-
-        # Capture cluster baseline state after infrastructure is deployed but before app deployment
-        # This allows us to reset the cluster to a clean state after each problem
-        if not self._baseline_captured:
-            self.logger.info("[DEPLOY] Capturing cluster baseline state...")
-            self.cluster_state.capture_baseline()
-            self._baseline_captured = True
 
         # train-ticket pods need jaeger at startup; create ExternalName before deploy.
         # Other apps get it after deploy to avoid Helm ownership conflicts.
