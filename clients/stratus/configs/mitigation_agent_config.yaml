@@ -1,6 +1,6 @@
 # each step is defined as one tool call
-max_step: 20
-max_retry_attempts: 10
+max_step: 1
+max_retry_attempts: 1
 # choose from: naive, validate, none
 retry_mode: validate
 sync_tools:
@@ -63,7 +63,7 @@ async_tools:
               command (str): The kubectl command you would like to execute, must start with "kubectl"
               INTERACTIVE COMMANDS ARE NOT SUPPORTED, e.g. "kubectl edit" 
               INTERACTIVE FLAGS ARE NOT SUPPORTED, e.g., "kubectl logs -f"
-  - name: f_submit_tool
+  - name: submit_tool
     description: |
       The tool to submit benchmark results
           
