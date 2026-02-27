@@ -62,11 +62,6 @@ jobs:
           kubectl -n observe wait --for=condition=Ready pod --all --timeout=300s
 
       # ── Python environment ────────────────────────────────────────────
-      - name: Setup Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
