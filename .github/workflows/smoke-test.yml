@@ -41,26 +41,6 @@ jobs:
           kubectl cluster-info
           kubectl get nodes -o wide
 
-      # ── Pre-install OpenEBS ───────────────────────────────────────────
-      - name: Install OpenEBS
-        run: |
-          kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml
-          echo "Waiting for OpenEBS pods…"
-          kubectl -n openebs wait --for=condition=Ready pod --all --timeout=300s
-          kubectl patch storageclass openebs-hostpath \
-            -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
-
-      # ── Pre-install Prometheus ────────────────────────────────────────
-      - name: Install Prometheus
-        run: |
-          kubectl create namespace observe || true
-          kubectl apply -f sregym/observer/prometheus/prometheus-pvc.yml
-          helm dependency update sregym/observer/prometheus/prometheus/
-          helm install prometheus sregym/observer/prometheus/prometheus/ \
-            --namespace observe --wait --timeout 10m
-          echo "Waiting for Prometheus pods…"
-          kubectl -n observe wait --for=condition=Ready pod --all --timeout=300s
-
       # ── Python environment ────────────────────────────────────────────
       - name: Install uv
         uses: astral-sh/setup-uv@v4
