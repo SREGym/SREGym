@@ -1,6 +1,16 @@
 name: Run SRE-QL Queries
 on:
   pull_request:
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/workflows/claude.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   codeql-custom:
     runs-on: ubuntu-latest
@@ -9,32 +19,32 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-    
+
     - name: Download CodeQL CLI v2.23.5
       run: |
         curl -L https://github.com/github/codeql-cli-binaries/releases/download/v2.23.5/codeql-linux64.zip -o codeql.zip
         unzip codeql.zip
         mv codeql /opt/codeql
         echo "/opt/codeql" >> $GITHUB_PATH
-    
+
     - name: Verify CodeQL Installation
       run: |
         codeql --version
-    
+
     - name: Install CodeQL Packs
       run: |
         cd tests/sre-ql
         codeql pack install
         cd ../..
-    
+
     - name: Create CodeQL DB
       run: |
         codeql database create sreql-db \
           --language=python \
           --source-root=. \
           --overwrite
-    
-    - name: Run Queries 
+
+    - name: Run Queries
       run: |
         QUERIES=$(find tests/sre-ql/queries -name "*.ql" ! -name "problem_lifecycle.ql")
         echo "Running queries:"
@@ -49,7 +59,7 @@ jobs:
           --output=results.csv \
           --sarif-category=sre-ql \
           --verbose
-    
+
     - name: Display Results Summary
       if: always()
       run: |
@@ -61,7 +71,7 @@ jobs:
         else
           echo "No results file generated"
         fi
-    
+
     - name: Upload CSV
       if: always()
       uses: actions/upload-artifact@v4
@@ -69,7 +79,7 @@ jobs:
         name: sreql-results-csv
         path: results.csv
         if-no-files-found: warn
-    
+
     - name: Check for Critical Issues
       if: success()
       run: |
