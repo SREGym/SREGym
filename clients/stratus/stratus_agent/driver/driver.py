@@ -387,7 +387,10 @@ async def mitigation_task_main(diagnosis_summary):
     # oracle
     logger.info("setting up oracles")
     cluster_state_oracle = ClusterStateOracle()
-    oracles = [cluster_state_oracle]
+    # oracles = [cluster_state_oracle]
+    # FIXME: cluster state oracle has trouble connecting to cluster, need repro.
+    oracles = []
+
 
     # setting up workload oracle, need to interact with benchmark.
     logger.info("getting app info")
