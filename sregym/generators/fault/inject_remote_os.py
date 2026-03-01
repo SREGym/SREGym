@@ -37,7 +37,7 @@ class RemoteOSFaultInjector(FaultInjector):
             return False
         return True
 
-    def get_worker_info(self):
+    def _get_remote_worker_info(self):
         """Read worker node SSH info from the Ansible inventory."""
         if self.worker_info:
             return self.worker_info
@@ -93,6 +93,8 @@ class RemoteOSFaultInjector(FaultInjector):
             capture_output=True,
             text=True,
         )
+        if result.returncode != 0:
+            print(f"docker exec failed on {container}: {result.stderr.strip()}")
         return result.stdout
 
     def _get_kind_worker_containers(self):
@@ -102,6 +104,9 @@ class RemoteOSFaultInjector(FaultInjector):
             capture_output=True,
             text=True,
         )
+        if result.returncode != 0:
+            print(f"Failed to list Kind containers: {result.stderr.strip()}")
+            return []
         containers = [c.strip() for c in result.stdout.strip().splitlines() if c.strip()]
         if not containers:
             print("No Kind worker containers found.")
@@ -151,7 +156,7 @@ class RemoteOSFaultInjector(FaultInjector):
         else:
             if not self._check_remote_host():
                 return
-            worker_info = self.get_worker_info()
+            worker_info = self._get_remote_worker_info()
             if not worker_info:
                 return
             for host, user in worker_info.items():
@@ -174,7 +179,7 @@ class RemoteOSFaultInjector(FaultInjector):
         else:
             if not self._check_remote_host():
                 return
-            worker_info = self.get_worker_info()
+            worker_info = self._get_remote_worker_info()
             if not worker_info:
                 return
             for host, user in worker_info.items():
