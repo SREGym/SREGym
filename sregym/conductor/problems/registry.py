@@ -21,6 +21,7 @@ from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAss
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.khaos_faults import KhaosFaultName, KhaosFaultProblem
+from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from sregym.conductor.problems.llm_inaccurate_response import LlmInaccurateResponse
@@ -260,7 +261,7 @@ class ProblemRegistry:
             #     LivenessProbeTooAggressive(app_name="social_network"),
             # ]),
             # ad hoc:
-            # "kubelet_crash": KubeletCrash,
+            "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
             # ==================== K8S OPERATOR MISOPERATION ==================
             "operator_overload_replicas": K8SOperatorOverloadReplicasFault,
