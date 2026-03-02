@@ -35,7 +35,6 @@
       changed_when: false
       ignore_errors: yes
 
-    # CRITICAL: Install Ubuntu generic 6.8 kernel and headers (must match for dm_dust)
     - name: Install Ubuntu generic 6.8 kernel and matching headers
       apt:
         name:
@@ -246,7 +245,7 @@
       stat:
         path: /var/run/cri-dockerd.sock
       register: cri_socket
-    
+
     - name: Install QEMU user-static for x86_64 emulation on ARM nodes
       apt:
         name: qemu-user-static
@@ -388,18 +387,15 @@
       register: kernel_version_full
       changed_when: false
 
-    - name: Check if dm_dust and dm_flakey modules exist
+    - name: Check if dm_flakey module exists
       shell: |
-        DUST=$(modinfo dm_dust 2>/dev/null && echo "exists" || echo "not_found")
         FLAKEY=$(modinfo dm_flakey 2>/dev/null && echo "exists" || echo "not_found")
-        echo "dm_dust:$DUST"
         echo "dm_flakey:$FLAKEY"
       register: dm_modules_check
       changed_when: false
 
     - name: Set module facts (reusable throughout playbook)
       set_fact:
-        dm_dust_exists: "{{ 'dm_dust:exists' in dm_modules_check.stdout }}"
         dm_flakey_exists: "{{ 'dm_flakey:exists' in dm_modules_check.stdout }}"
 
     - name: Check if Ubuntu kernel headers are available
@@ -414,7 +410,7 @@
         state: present
         update_cache: no
       when: >
-        (not dm_dust_exists or not dm_flakey_exists)
+        not dm_flakey_exists
         and not ubuntu_headers.stat.exists
       become: yes
       ignore_errors: yes
@@ -429,7 +425,7 @@
       fail:
         msg: "Kernel headers not available for {{ kernel_version_full.stdout }}. Cannot build modules."
       when: >
-        (not dm_dust_exists or not dm_flakey_exists)
+        not dm_flakey_exists
         and not ubuntu_headers.stat.exists
 
     - name: Check if build symlink exists
@@ -438,7 +434,7 @@
       register: build_symlink
       changed_when: false
       when: >
-        (not dm_dust_exists or not dm_flakey_exists)
+        not dm_flakey_exists
         and ubuntu_headers.stat.exists
 
     - name: Create build symlink if headers exist but symlink is missing
@@ -448,7 +444,7 @@
         state: link
       become: yes
       when: >
-        (not dm_dust_exists or not dm_flakey_exists)
+        not dm_flakey_exists
         and ubuntu_headers.stat.exists
         and (build_symlink is defined and (not build_symlink.stat.exists or not build_symlink.stat.islnk))
 
@@ -458,151 +454,7 @@
         state: directory
         mode: '0755'
       become: yes
-      when: not dm_dust_exists or not dm_flakey_exists
-
-    - name: Load dm_dust module if available
-      modprobe:
-        name: dm_dust
-        state: present
-      when: dm_dust_exists
-      ignore_errors: yes
-      become: yes
-
-    - name: Build and install dm_dust module if not available
-      block:
-        - name: Create dm-dust build directory
-          file:
-            path: /tmp/dm-dust-build
-            state: directory
-
-        # Download kernel source for dm-dust.c
-        - name: Extract kernel major.minor version
-          set_fact:
-            kernel_major_minor: "{{ kernel_version_full.stdout | regex_replace('^([0-9]+\\.[0-9]+).*', '\\1') }}"
-
-        - name: Debug kernel version for download
-          debug:
-            msg: "Full kernel: {{ kernel_version_full.stdout }}, Major.Minor: {{ kernel_major_minor }}"
-
-        - name: Check if kernel source already downloaded
-          stat:
-            path: /tmp/linux-{{ kernel_major_minor }}.tar.xz
-          register: kernel_source_exists
-
-        - name: Download kernel source for dm-dust source code
-          get_url:
-            url: "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-{{ kernel_major_minor }}.tar.xz"
-            dest: /tmp/linux-{{ kernel_major_minor }}.tar.xz
-          when: not kernel_source_exists.stat.exists
-          register: kernel_source_download
-
-        - name: Check if kernel source already extracted
-          stat:
-            path: /tmp/linux-{{ kernel_major_minor }}/drivers/md/dm-dust.c
-          register: dm_dust_source_exists
-
-        - name: Extract only the dm-dust source file from kernel tarball
-          shell: |
-            cd /tmp
-            tar -xJf linux-{{ kernel_major_minor }}.tar.xz linux-{{ kernel_major_minor }}/drivers/md/dm-dust.c
-          when: not dm_dust_source_exists.stat.exists
-          args:
-            creates: /tmp/linux-{{ kernel_major_minor }}/drivers/md/dm-dust.c
-
-        - name: Copy dm-dust source to build directory
-          shell: |
-            cp /tmp/linux-{{ kernel_major_minor }}/drivers/md/dm-dust.c /tmp/dm-dust-build/dm-dust.c
-          args:
-            creates: /tmp/dm-dust-build/dm-dust.c
-
-        - name: Create Makefile for dm-dust (use system headers)
-          copy:
-            dest: /tmp/dm-dust-build/Makefile
-            content: |
-              obj-m := dm-dust.o
-              KDIR := /lib/modules/$(shell uname -r)/build
-              PWD := $(shell pwd)
-              CC := gcc-12
-
-              default:
-              	$(MAKE) -C $(KDIR) M=$(PWD) modules CC=gcc-12
-
-              clean:
-              	$(MAKE) -C $(KDIR) M=$(PWD) clean
-
-              install:
-              	mkdir -p /lib/modules/$(shell uname -r)/kernel/drivers/md/
-              	cp dm-dust.ko /lib/modules/$(shell uname -r)/kernel/drivers/md/
-              	depmod -a
-            mode: '0644'
-
-        - name: Check if dm-dust module already built
-          stat:
-            path: /tmp/dm-dust-build/dm-dust.ko
-          register: dm_dust_ko_precheck
-
-        - name: Build dm-dust module
-          make:
-            chdir: /tmp/dm-dust-build
-          environment:
-            KBUILD_MODPOST_WARN: "1"
-            CC: "gcc-12"
-          ignore_errors: yes
-          register: dm_dust_build_result
-          when: not dm_dust_ko_precheck.stat.exists
-
-        - name: Verify dm_dust module was built successfully
-          stat:
-            path: /tmp/dm-dust-build/dm-dust.ko
-          register: dm_dust_ko
-          failed_when: not dm_dust_ko.stat.exists
-          ignore_errors: yes
-
-        - name: Install dm-dust module
-          make:
-            chdir: /tmp/dm-dust-build
-            target: install
-          become: yes
-          ignore_errors: yes
-          when: dm_dust_ko.stat.exists | default(false)
-
-        - name: Verify dm_dust module is installed
-          stat:
-            path: "/lib/modules/{{ kernel_version_full.stdout }}/kernel/drivers/md/dm-dust.ko"
-          register: dm_dust_installed
-          failed_when: false
-          changed_when: false
-
-        - name: Load dm_dust module
-          modprobe:
-            name: dm_dust
-            state: present
-          become: yes
-          ignore_errors: yes
-          register: dm_dust_load_result
-
-        - name: Debug dm_dust module load result
-          debug:
-            msg: "dm_dust module load result: {{ dm_dust_load_result }}"
-
-        - name: Verify dm_dust module can be loaded
-          shell: |
-            modprobe dm_dust
-            lsmod | grep -q "^dm_dust" || exit 1
-            dmsetup targets | grep -q "dust" || exit 1
-            echo "dm_dust module is loaded and functional"
-          become: yes
-          register: dm_dust_load_test
-          failed_when: dm_dust_load_test.rc != 0
-          changed_when: false
-          ignore_errors: yes
-
-        - name: Clean up build directory after successful install
-          file:
-            path: /tmp/dm-dust-build
-            state: absent
-          when: dm_dust_installed.stat.exists
-      when: not dm_dust_exists
+      when: not dm_flakey_exists
 
     - name: Load dm_flakey module (built into kernel 6.8.x)
       modprobe:
@@ -615,7 +467,6 @@
       shell: |
         modprobe overlay
         modprobe br_netfilter
-        modprobe dm_dust || true
         modprobe dm_flakey || true
       become: yes
       args:
@@ -626,7 +477,6 @@
         content: |
           overlay
           br_netfilter
-          dm_dust
           dm_flakey
         dest: /etc/modules-load.d/k8s.conf
       become: yes
@@ -689,7 +539,7 @@
         path: /etc/kubernetes/admin.conf
         mode: '0644'
       become: true
-    
+
     - name: Set up kube config for kubectl on control plane
       copy:
         src: /etc/kubernetes/admin.conf
@@ -708,7 +558,7 @@
     - name: Display ansible_user_id
       debug:
         msg: "ansible_user_id is {{ ansible_user_id }}"
-    
+
     - name: Fetch admin.conf to localhost for kubeconfig
       fetch:
         src: /etc/kubernetes/admin.conf
@@ -722,7 +572,7 @@
       set_fact:
         kube_token: "{{ (kubeadm_join_command.stdout | regex_search('--token\\s+([\\w.]+)', '\\1')).0 }}"
         cert_hash: "{{ (kubeadm_join_command.stdout | regex_search('--discovery-token-ca-cert-hash\\s+sha256:([\\w]+)', '\\1')).0 }}"
-  
+
     - name: Display kube_token
       debug:
         msg: "kube_token is {{ kube_token }}"

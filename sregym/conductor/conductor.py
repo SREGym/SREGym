@@ -19,7 +19,6 @@ from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
-from sregym.service.dm_dust_manager import DmDustManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController
@@ -51,7 +50,6 @@ class Conductor:
         self.agent_name = None
 
         self.khaos = KhaosController(self.kubectl)
-        self.dm_dust_manager = DmDustManager(self.kubectl)
         self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
         self.cluster_state = ClusterStateManager(self.kubectl)
         self._baseline_captured = False
@@ -578,10 +576,7 @@ class Conductor:
         # Only one can be active at /var/openebs/local at a time
         problem_name = problem.__class__.__name__
 
-        if "LatentSectorError" in problem_name:
-            print("Setting up dm-dust infrastructure for LSE fault injection...")
-            self.dm_dust_manager.setup_openebs_dm_dust_infrastructure()
-        elif "SilentDataCorruption" in problem_name:
+        if "SilentDataCorruption" in problem_name:
             print("Setting up dm-flakey infrastructure for Silent Data Corruption fault injection...")
             self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
 

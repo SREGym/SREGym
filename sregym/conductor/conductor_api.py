@@ -61,11 +61,17 @@ class _ShutdownNoiseFilter(logging.Filter):
     """Suppress expected CancelledError tracebacks from uvicorn during shutdown."""
 
     def filter(self, record: logging.LogRecord) -> bool:
+        # Case 1: exc_info carries the exception object directly.
         if record.exc_info and record.exc_info[1] is not None:
             import asyncio
 
             if isinstance(record.exc_info[1], asyncio.CancelledError):
                 return False
+        # Case 2: uvicorn formats the traceback as a plain string message
+        # (e.g. logger.error(traceback.format_exc())) with no exc_info.
+        # The string will end with "asyncio.exceptions.CancelledError".
+        if "CancelledError" in record.getMessage():
+            return False
         return True
 
 

@@ -211,6 +211,7 @@ def _run_driver_and_shutdown(
     except Exception:
         logger.exception("Driver thread crashed")
     finally:
+        LAUNCHER.cleanup_all()
         request_shutdown()
 
 
@@ -258,8 +259,12 @@ def main(args):
         run_api(conductor)
     except KeyboardInterrupt:
         # If interrupted, still try to shut down cleanly
+        LAUNCHER.cleanup_all()
         request_shutdown()
     finally:
+        # Stop any remaining agent containers/processes
+        LAUNCHER.cleanup_all()
+
         # Stop noise manager if it was initialized
         if nm:
             try:

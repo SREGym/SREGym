@@ -137,6 +137,11 @@ class AgentLauncher:
         t.start()
         return ap
 
+    def cleanup_all(self, timeout: int = 10) -> None:
+        """Terminate and cleanup all tracked agent processes/containers."""
+        for name in list(self._procs):
+            self.cleanup_agent(name, timeout=timeout)
+
     def cleanup_agent(self, agent_name: str, timeout: int = 5) -> None:
         """
         Terminate and cleanup an agent process.

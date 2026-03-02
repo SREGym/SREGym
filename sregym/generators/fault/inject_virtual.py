@@ -84,14 +84,10 @@ class VirtualizationFaultInjector(FaultInjector):
 
             Helm.upgrade(**helm_args)
 
-            pods = self.kubectl.list_pods(self.namespace)
-            target_service_pods = [
-                pod.metadata.name for pod in pods.items if self.mongo_service_pod_map[service] in pod.metadata.name
-            ]
-            print(f"Target Service Pods: {target_service_pods}")
-            self.delete_service_pods(target_service_pods)
-
-            self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
+            # Scale down to 0 to terminate all healthy pods, then scale back up so only the faulty pod starts
+            self.kubectl.exec_command(f"kubectl scale deployment {service} -n {self.namespace} --replicas=0")
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=60s")
+            self.kubectl.exec_command(f"kubectl scale deployment {service} -n {self.namespace} --replicas=1")
 
     def recover_auth_miss_mongodb(self, microservices: list[str]):
         for service in microservices:
@@ -315,6 +311,10 @@ class VirtualizationFaultInjector(FaultInjector):
             create_service_command = f"kubectl apply -f /tmp/{service}_modified.yaml -n {self.namespace}"
             result = self.kubectl.exec_command(create_service_command)
             print(f"Recreated service {service} to recover from the fault: {result}")
+
+        # Restart all pods to clear cached DNS failures from the fault period
+        self.kubectl.exec_command(f"kubectl delete pods --all -n {self.namespace}")
+        self.kubectl.wait_for_stable(namespace=self.namespace)
 
     # V.8 - Inject a fault by modifying the resource request of a service
     def inject_resource_request(self, microservices: list[str], memory_limit_func):
@@ -861,8 +861,12 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(delete_cmd)
             print(f"Deleted ConfigMap: {configmap_name}")
 
-            restart_cmd = f"kubectl rollout restart deployment {microservice} -n {self.namespace}"
-            self.kubectl.exec_command(restart_cmd)
+            # Scale down to 0 to terminate all healthy pods, then scale back up so only the faulty pod starts
+            self.kubectl.exec_command(f"kubectl scale deployment {microservice} -n {self.namespace} --replicas=0")
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment {microservice} -n {self.namespace} --timeout=60s"
+            )
+            self.kubectl.exec_command(f"kubectl scale deployment {microservice} -n {self.namespace} --replicas=1")
             print("Restarted pods to apply ConfigMap fault")
 
     def recover_missing_configmap(self, microservices: list[str]):
@@ -2107,9 +2111,9 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def inject_tor_network_partition(self, microservices: list[str]):
         """Inject a network partition using NetworkChaos."""
-        chaos_resource_name = "tor-router-partition" # Name of the NetworkChaos object
-        tor_node_label_key = "sregym.io/tor-node" # Node label used to fix pods to faulty vs healthy groups
-        tor_pod_group_label_key = "sregym.io/tor-group" # Pod label used by NetworkChaos selectors
+        chaos_resource_name = "tor-router-partition"  # Name of the NetworkChaos object
+        tor_node_label_key = "sregym.io/tor-node"  # Node label used to fix pods to faulty vs healthy groups
+        tor_pod_group_label_key = "sregym.io/tor-group"  # Pod label used by NetworkChaos selectors
 
         faulty_group = "faulty"
         healthy_group = "healthy"
@@ -2170,10 +2174,14 @@ class VirtualizationFaultInjector(FaultInjector):
             dep_yaml = self._get_deployment_yaml(dep)
             group = faulty_group if dep in microservices else healthy_group
 
-            dep_yaml.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {}).setdefault("labels", {})
+            dep_yaml.setdefault("spec", {}).setdefault("template", {}).setdefault("metadata", {}).setdefault(
+                "labels", {}
+            )
             dep_yaml["spec"]["template"]["metadata"]["labels"][tor_pod_group_label_key] = group
 
-            dep_yaml.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {}).setdefault("nodeSelector", {})
+            dep_yaml.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {}).setdefault(
+                "nodeSelector", {}
+            )
             dep_yaml["spec"]["template"]["spec"]["nodeSelector"][tor_node_label_key] = group
 
             modified_yaml_path = self._write_yaml_to_file(dep, dep_yaml)
@@ -2218,9 +2226,9 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_tor_network_partition(self, microservices: list[str]):
         """Recover form network partition created by inject_tor_network_partition() above."""
-        chaos_resource_name = "tor-router-partition" # Name of the NetworkChaos object
-        tor_node_label_key = "sregym.io/tor-node" # Node label used to fix pods to faulty vs healthy groups
-        tor_pod_group_label_key = "sregym.io/tor-group" # Pod label used by NetworkChaos selectors
+        chaos_resource_name = "tor-router-partition"  # Name of the NetworkChaos object
+        tor_node_label_key = "sregym.io/tor-node"  # Node label used to fix pods to faulty vs healthy groups
+        tor_pod_group_label_key = "sregym.io/tor-group"  # Pod label used by NetworkChaos selectors
 
         # Delete NetworkChaos first to restore network
         self.kubectl.exec_command(
@@ -2290,7 +2298,6 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl label node {n} {tor_node_label_key}-")
 
         print(f"Recovered network partition and cleaned node labels ({tor_node_label_key}-).")
-
 
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
