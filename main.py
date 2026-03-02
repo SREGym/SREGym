@@ -132,7 +132,7 @@ def driver_loop(
                     agent_proc = LAUNCHER._procs.get(agent_to_run)
                     if agent_proc:
                         console.log("⏳ Waiting for agent process to complete...")
-                        timeout = 30  # seconds
+                        timeout = 60  # seconds
                         elapsed = 0
                         while elapsed < timeout:
                             agent_proc.proc.poll()
