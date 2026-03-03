@@ -71,6 +71,9 @@ class Prometheus:
             self.logger.warning("Prometheus is already running. Skipping redeployment.")
             return
 
+        # Wait for namespace to be fully terminated before attempting fresh install
+        self._wait_for_namespace_termination()
+
         self._delete_pvc()
         Helm.uninstall(**self.helm_configs)
 
@@ -122,6 +125,18 @@ class Prometheus:
         except subprocess.CalledProcessError:
             return False
         return True
+
+    def _wait_for_namespace_termination(self):
+        """Wait for namespace to be fully deleted if it's currently in Terminating state."""
+        result = subprocess.run(
+            f"kubectl get namespace {self.namespace} -o jsonpath='{{.status.phase}}' 2>/dev/null",
+            shell=True,
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout.strip() == "Terminating":
+            self.logger.info(f"Namespace '{self.namespace}' is terminating, waiting for full deletion...")
+            KubeCtl().wait_for_namespace_deletion(self.namespace)
 
     def _is_prometheus_running(self) -> bool:
         """Check if Prometheus is already running in the cluster."""
