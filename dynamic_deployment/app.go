@@ -320,7 +320,7 @@ func runProblem(problem string) {
 	cmd.Run()
 }
 func recoverProblem(problem string) {
-    cmd := exec.Command("uv", "run", "deploy.py","recover" "--problem", problem)
+    cmd := exec.Command("uv", "run", "deploy.py","recover", "--problem", problem)
 
     output, err := cmd.CombinedOutput()
     if err != nil {
