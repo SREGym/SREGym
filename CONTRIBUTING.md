@@ -62,9 +62,9 @@ Before contributing, please:
    uv sync
    ```
 
-4. Install pre-commit hooks:
+4. Install git hooks via prek:
    ```bash
-   uv run pre-commit install
+   uv run prek install
    ```
 
 5. Set up your cluster (see [README.md](README.md#🚀quickstart) for options)
@@ -112,7 +112,7 @@ We welcome contributions including:
 
 ### Code Style
 
-SREGym follows code style guidelines enforced by pre-commit hooks:
+SREGym follows code style guidelines enforced by prek (git hooks):
 
 #### Python Code Style
 
@@ -133,7 +133,7 @@ line_length = 120
 
 #### Running Code Formatters
 
-Pre-commit hooks will automatically run on commit. To manually format:
+Prek hooks will automatically run on commit. To manually format:
 ```bash
 # Format all Python files
 uv run black .
@@ -141,8 +141,8 @@ uv run black .
 # Sort imports
 uv run isort .
 
-# Run all pre-commit hooks manually
-uv run pre-commit run --all-files
+# Run all hooks manually
+uv run prek run --all-files
 ```
 
 #### Code Quality Best Practices
@@ -300,7 +300,7 @@ Before submitting, ensure:
 
 - [ ] Code follows the project's style guidelines
 - [ ] Documentation updated if needed
-- [ ] Pre-commit hooks pass
+- [ ] Prek hooks pass
 - [ ] No unnecessary files or changes included
 - [ ] Commit messages are clear and descriptive
 - [ ] PR description explains the changes
