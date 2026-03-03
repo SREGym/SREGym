@@ -24,16 +24,43 @@ def list_apps():
     for name in registry.get_app_names():
         print(name)
 
-async def run_problem(problem):
+async def run_problem(problem_id):
     from sregym.conductor.conductor import Conductor, ConductorConfig
+    from sregym.generators.noise.manager import get_noise_manager
 
     config = ConductorConfig(deploy_loki=True)
     conductor = Conductor(config=config)
-    conductor.problem_id = problem
+    conductor.problem_id = problem_id
 
-    print(f"Running problem: {problem}")
-    await conductor.start_problem()
-    print("Problem finished.")
+    conductor.problem = conductor.problems.get_problem_instance(problem_id)
+    conductor.app = conductor.problem.app
+
+    print(f"[ATTACH] Attached to problem: {problem_id}")
+    print(f"[ATTACH] Using namespace: {conductor.app.namespace}")
+
+    conductor.get_problem_stages()
+    conductor._build_stage_sequence()
+
+    conductor._inject_fault()
+
+    try:
+        nm = get_noise_manager()
+        context = {
+            "namespace": conductor.app.namespace,
+            "app_name": conductor.app.name,
+        }
+        nm.set_problem_context(context)
+        nm.start_background_noises()
+    except Exception as e:
+        print(f"Failed to update NoiseManager context: {e}")
+
+    conductor._advance_to_next_stage(start_index=0)
+
+    print(f"[READY] Current stage: {conductor.submission_stage}")
+
+    # print(f"Running problem: {problem}")
+    # await conductor.start_problem()
+    # print("Problem finished.")
 
 
 if __name__ == "__main__":
