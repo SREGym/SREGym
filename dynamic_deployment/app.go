@@ -3,6 +3,7 @@ package main
 import (
 	"os/exec"
 	"strings"
+	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
