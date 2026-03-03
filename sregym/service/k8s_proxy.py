@@ -15,6 +15,7 @@ The proxy:
 """
 
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -39,6 +40,7 @@ HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
 HIDDEN_LABELS: dict[str, set[str]] = {
     "app": {"load-generator", "locust-fetcher"},
     "job": {"workload"},
+    "opentelemetry.io/name": {"load-generator"},
 }
 
 # Disable SSL warnings for self-signed certs
@@ -156,23 +158,20 @@ class KubernetesAPIProxy:
         files = {}
 
         if self.ca_cert:
-            ca_file = tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False)
-            ca_file.write(self.ca_cert)
-            ca_file.close()
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False) as ca_file:
+                ca_file.write(self.ca_cert)
             files["ca"] = ca_file.name
             self._temp_files.append(ca_file.name)
 
         if self.client_cert:
-            cert_file = tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False)
-            cert_file.write(self.client_cert)
-            cert_file.close()
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False) as cert_file:
+                cert_file.write(self.client_cert)
             files["cert"] = cert_file.name
             self._temp_files.append(cert_file.name)
 
         if self.client_key:
-            key_file = tempfile.NamedTemporaryFile(mode="w", suffix=".key", delete=False)
-            key_file.write(self.client_key)
-            key_file.close()
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".key", delete=False) as key_file:
+                key_file.write(self.client_key)
             files["key"] = key_file.name
             self._temp_files.append(key_file.name)
 
@@ -241,10 +240,7 @@ class KubernetesAPIProxy:
             def _has_hidden_label(self, metadata: dict) -> bool:
                 """Check if a resource's metadata contains any hidden labels."""
                 labels = metadata.get("labels") or {}
-                for key, values in hidden_labels.items():
-                    if labels.get(key) in values:
-                        return True
-                return False
+                return any(labels.get(key) in values for key, values in hidden_labels.items())
 
             def _filter_resource_list(self, data: dict) -> dict:
                 """Filter resources in hidden namespaces or with hidden labels from list responses."""
@@ -412,10 +408,8 @@ class KubernetesAPIProxy:
 
         # Cleanup temp files
         for temp_file in self._temp_files:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(temp_file)
-            except OSError:
-                pass
         self._temp_files = []
 
     def generate_agent_kubeconfig(self, output_path: str | None = None) -> str:
@@ -498,7 +492,9 @@ def start_proxy(
     global _proxy_instance
     if _proxy_instance is not None:
         _proxy_instance.stop()
-    _proxy_instance = KubernetesAPIProxy(hidden_namespaces=hidden_namespaces, hidden_labels=hidden_labels, listen_port=port)
+    _proxy_instance = KubernetesAPIProxy(
+        hidden_namespaces=hidden_namespaces, hidden_labels=hidden_labels, listen_port=port
+    )
     _proxy_instance.start()
     return _proxy_instance
 
