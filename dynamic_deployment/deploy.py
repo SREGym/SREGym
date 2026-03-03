@@ -62,11 +62,38 @@ async def run_problem(problem_id):
     # await conductor.start_problem()
     # print("Problem finished.")
 
+def recover(problem):
+    from sregym.conductor.conductor import Conductor, ConductorConfig
+    from sregym.generators.noise.manager import get_noise_manager
+
+    config = ConductorConfig(deploy_loki=True)
+    conductor = Conductor(config=config)
+    conductor.problem_id = problem
+    conductor.problem = conductor.problems.get_problem_instance(problem)
+    conductor.app = conductor.problem.app
+    print(f"[RECOVER] Attaching to problem: {problem}")
+    
+    try:
+        conductor.problem.recover_fault()
+        print("[RECOVER] Fault recovered")
+    except:
+        print("[RECOVER] Failed")
+    if conductor._baseline_captured:
+            print("[CLEANUP] Reconciling cluster state to baseline...")
+            try:
+                changes = conductor.cluster_state.reconcile_to_baseline()
+                if any(v for v in changes.values() if v):
+                    print(f"Cluster state reconciliation changes: {changes}")
+                print("[CLEANUP] Cluster state reconciled")
+            except Exception as e:
+                print(f"Failed to reconcile cluster state: {e}")
+
+        
 
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["deploy", "run", "list-problems", "list-apps"])
+    parser.add_argument("command", choices=["deploy", "run","recover", "list-problems", "list-apps"])
     parser.add_argument("--application")
     parser.add_argument("--problem")
 
@@ -83,4 +110,6 @@ if __name__ == "__main__":
 
     elif args.command == "run":
         asyncio.run(run_problem(args.problem))
+    elif args.command == "recover":
+        recover(args.problem)
     

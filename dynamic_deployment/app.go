@@ -186,6 +186,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Ran problem: " + problem
 				go runProblem(problem)
 				return m, nil
+			case "r":
+        		problem := m.problemList.SelectedItem().(item).Title()
+				m.status = "Recovered problem: " + problem
+        		go recoverProblem(problem)
+        		return m, nil
+    
 
 			case "i":
 				m.answer.SetValue("")
@@ -312,6 +318,17 @@ func deployApp(app string) {
 func runProblem(problem string) {
 	cmd := exec.Command("uv", "run", "deploy.py", "run", "--problem", problem)
 	cmd.Run()
+}
+func recoverProblem(problem string) {
+    cmd := exec.Command("uv", "run", "deploy.py","recover" "--problem", problem)
+
+    output, err := cmd.CombinedOutput()
+    if err != nil {
+        fmt.Println("Recovery error:", err)
+        return
+    }
+
+    fmt.Println(string(output))
 }
 
 //
