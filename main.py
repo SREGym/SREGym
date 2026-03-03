@@ -121,6 +121,11 @@ def driver_loop(
                         agent_proc.proc.poll()
                         if agent_proc.proc.returncode is not None:
                             console.log(f"⚠️  Agent process exited with return code {agent_proc.proc.returncode}")
+                            # Wait for any in-progress background evaluation to finish
+                            eval_wait = 0
+                            while eval_wait < 120 and conductor.submission_stage != "done":
+                                await asyncio.sleep(1)
+                                eval_wait += 1
                             break
                     await asyncio.sleep(1)
 
