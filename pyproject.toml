@@ -157,6 +157,7 @@ dependencies = [
     "dash>=3.2.0",
     "aiosignal>=1.3.2",
     "locust>=2.42.3",
+    "setuptools==80.10.2",
 ]
 
 [tool.black]
@@ -200,6 +201,11 @@ known-first-party = ["sregym", "clients", "provisioner", "scripts"]
 [tool.ruff.format]
 quote-style = "double"
 docstring-code-format = true
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: end-to-end tests requiring a running Kubernetes cluster",
+]
 
 [build-system]
 requires = ["setuptools>=80.8.0"]

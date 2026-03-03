@@ -12,6 +12,18 @@ loki:
   # Disable authentication for internal cluster use
   auth_enabled: false
 
+  compactor:
+    retention_enabled: true
+    working_directory: /var/loki/compactor
+    delete_request_store: filesystem
+    retention_delete_delay: 2h
+    retention_delete_worker_count: 150
+
+  limits_config:
+    retention_period: 24h
+    reject_old_samples: true
+    reject_old_samples_max_age: 24h
+
   # Schema configuration for log storage
   schemaConfig:
     configs:
@@ -71,6 +83,8 @@ resources:
   limits:
     cpu: 500m
     memory: 512Mi
+    ephemeral-storage: 10Gi
   requests:
     cpu: 100m
     memory: 256Mi
+    ephemeral-storage: 1Gi

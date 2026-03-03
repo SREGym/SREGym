@@ -39,21 +39,38 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 class KubernetesAPIProxy:
     """Manages the Kubernetes API filtering proxy."""
 
+    # Paths used when running inside a Kubernetes pod
+    _INCLUSTER_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+    _INCLUSTER_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
     def __init__(self, hidden_namespaces: set[str] | None = None, listen_port: int = 6443):
         self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
         self.listen_port = listen_port
         self.server: HTTPServer | None = None
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
+        self._bearer_token: str | None = None
 
-        # Load kubernetes config to get API server details
-        # Always load from the default kubeconfig path, ignoring KUBECONFIG env var
-        # This prevents circular dependency if KUBECONFIG points to our proxy
-        default_kubeconfig = os.path.expanduser("~/.kube/config")
-        config.load_kube_config(config_file=default_kubeconfig)
-        self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
-            kubeconfig_path=default_kubeconfig
-        )
+        if os.path.exists(self._INCLUSTER_TOKEN_PATH):
+            # Running inside a Kubernetes pod — use ServiceAccount credentials
+            logger.info("Detected in-cluster environment; using ServiceAccount token for upstream auth")
+            with open(self._INCLUSTER_TOKEN_PATH) as f:
+                self._bearer_token = f.read().strip()
+            with open(self._INCLUSTER_CA_PATH) as f:
+                self.ca_cert = f.read()
+            self.client_cert = None
+            self.client_key = None
+            self.api_host = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
+            self.api_port = int(os.environ.get("KUBERNETES_SERVICE_PORT", "443"))
+        else:
+            # Running outside the cluster — load from kubeconfig
+            # Always load from the default kubeconfig path, ignoring KUBECONFIG env var
+            # This prevents circular dependency if KUBECONFIG points to our proxy
+            default_kubeconfig = os.path.expanduser("~/.kube/config")
+            config.load_kube_config(config_file=default_kubeconfig)
+            self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
+                kubeconfig_path=default_kubeconfig
+            )
 
     def _load_cluster_config(self, kubeconfig_path: str | None = None):
         """Extract API server connection details from kubeconfig."""
@@ -152,6 +169,7 @@ class KubernetesAPIProxy:
         hidden_namespaces = self.hidden_namespaces
         api_host = self.api_host
         api_port = self.api_port
+        bearer_token = self._bearer_token
 
         class FilteringProxyHandler(BaseHTTPRequestHandler):
             """HTTP request handler that proxies and filters Kubernetes API responses."""
@@ -274,6 +292,9 @@ class KubernetesAPIProxy:
                     conn = self._get_upstream_connection()
                     # Forward headers (except Host and Accept-Encoding to avoid gzip)
                     headers = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "accept-encoding")}
+                    # In-cluster mode: authenticate to the API server with the ServiceAccount bearer token
+                    if bearer_token:
+                        headers["Authorization"] = f"Bearer {bearer_token}"
                     conn.request(method, path, body=body, headers=headers)
                     response = conn.getresponse()
 
