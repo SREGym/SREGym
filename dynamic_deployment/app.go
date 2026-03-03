@@ -112,11 +112,14 @@ func New() *model {
 	appList.SetShowStatusBar(false)
 	appList.SetFilteringEnabled(false)
 	appList.SetShowHelp(false)
+	appList.SetShowTitle(false)
 
 	problemList := list.New(problemItems, delegate, 0, 0)
 	problemList.SetShowStatusBar(false)
 	problemList.SetFilteringEnabled(false)
 	problemList.SetShowHelp(false)
+	problemList.SetShowTitle(false)
+
 
 	answer := textinput.New()
 	answer.Placeholder = "Type problem ID..."
