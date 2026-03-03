@@ -2,17 +2,20 @@
 Kubernetes API Filtering Proxy
 
 This proxy sits between agents and the Kubernetes API server, filtering out
-chaos engineering namespaces (chaos-mesh, khaos) from API responses to prevent
-agents from discovering that faults are being injected via chaos tools.
+chaos engineering namespaces (chaos-mesh, khaos) and load generator resources
+from API responses to prevent agents from discovering that faults are being
+injected via chaos tools or that traffic is synthetic.
 
 The proxy:
 1. Forwards all requests to the real Kubernetes API
 2. Filters namespace listings to exclude hidden namespaces
-3. Returns 403 Forbidden for direct access to hidden namespaces
+3. Returns 403 Forbidden for direct access to hidden namespaces or hidden resources
 4. Filters cluster-wide resource listings to exclude resources in hidden namespaces
+5. Filters resources with hidden labels (e.g. load generators) from list responses
 """
 
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -32,6 +35,14 @@ logger.setLevel(logging.DEBUG)
 # Namespaces to hide from agents
 HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
 
+# Labels to hide from agents - resources matching any of these label key/value pairs are hidden.
+# Load generators produce synthetic traffic and should not be visible to agents.
+HIDDEN_LABELS: dict[str, set[str]] = {
+    "app": {"load-generator", "locust-fetcher"},
+    "job": {"workload"},
+    "opentelemetry.io/name": {"load-generator"},
+}
+
 # Disable SSL warnings for self-signed certs
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -43,8 +54,14 @@ class KubernetesAPIProxy:
     _INCLUSTER_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
     _INCLUSTER_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 
-    def __init__(self, hidden_namespaces: set[str] | None = None, listen_port: int = 6443):
+    def __init__(
+        self,
+        hidden_namespaces: set[str] | None = None,
+        hidden_labels: dict[str, set[str]] | None = None,
+        listen_port: int = 6443,
+    ):
         self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
+        self.hidden_labels: dict[str, set[str]] = hidden_labels if hidden_labels is not None else HIDDEN_LABELS
         self.listen_port = listen_port
         self.server: HTTPServer | None = None
         self.server_thread: threading.Thread | None = None
@@ -141,23 +158,20 @@ class KubernetesAPIProxy:
         files = {}
 
         if self.ca_cert:
-            ca_file = tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False)
-            ca_file.write(self.ca_cert)
-            ca_file.close()
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False) as ca_file:
+                ca_file.write(self.ca_cert)
             files["ca"] = ca_file.name
             self._temp_files.append(ca_file.name)
 
         if self.client_cert:
-            cert_file = tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False)
-            cert_file.write(self.client_cert)
-            cert_file.close()
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False) as cert_file:
+                cert_file.write(self.client_cert)
             files["cert"] = cert_file.name
             self._temp_files.append(cert_file.name)
 
         if self.client_key:
-            key_file = tempfile.NamedTemporaryFile(mode="w", suffix=".key", delete=False)
-            key_file.write(self.client_key)
-            key_file.close()
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".key", delete=False) as key_file:
+                key_file.write(self.client_key)
             files["key"] = key_file.name
             self._temp_files.append(key_file.name)
 
@@ -167,6 +181,7 @@ class KubernetesAPIProxy:
         """Start the proxy server in a background thread."""
         cert_files = self._create_temp_cert_files()
         hidden_namespaces = self.hidden_namespaces
+        hidden_labels = self.hidden_labels
         api_host = self.api_host
         api_port = self.api_port
         bearer_token = self._bearer_token
@@ -222,14 +237,20 @@ class KubernetesAPIProxy:
                     ]
                 return data
 
+            def _has_hidden_label(self, metadata: dict) -> bool:
+                """Check if a resource's metadata contains any hidden labels."""
+                labels = metadata.get("labels") or {}
+                return any(labels.get(key) in values for key, values in hidden_labels.items())
+
             def _filter_resource_list(self, data: dict) -> dict:
-                """Filter resources in hidden namespaces from list responses."""
+                """Filter resources in hidden namespaces or with hidden labels from list responses."""
                 # Handle standard List format
                 if "items" in data:
                     data["items"] = [
                         item
                         for item in data["items"]
                         if item.get("metadata", {}).get("namespace") not in hidden_namespaces
+                        and not self._has_hidden_label(item.get("metadata", {}))
                     ]
                 # Handle Table format (kubectl's default)
                 if "rows" in data:
@@ -237,6 +258,7 @@ class KubernetesAPIProxy:
                         row
                         for row in data["rows"]
                         if row.get("object", {}).get("metadata", {}).get("namespace") not in hidden_namespaces
+                        and not self._has_hidden_label(row.get("object", {}).get("metadata", {}))
                     ]
                 return data
 
@@ -311,14 +333,20 @@ class KubernetesAPIProxy:
 
                     # Filter JSON responses if needed
                     filter_type = self._should_filter_response(path)
-                    if filter_type and response.status == 200 and "application/json" in content_type:
+                    if response.status == 200 and "application/json" in content_type:
                         try:
                             data = json.loads(response_body)
                             if filter_type == "namespaces":
                                 data = self._filter_namespace_list(data)
+                                response_body = json.dumps(data).encode()
                             elif filter_type == "resources":
                                 data = self._filter_resource_list(data)
-                            response_body = json.dumps(data).encode()
+                                response_body = json.dumps(data).encode()
+                            elif filter_type is None and self._has_hidden_label(data.get("metadata", {})):
+                                # Block direct access to individual hidden resources
+                                self.send_error(403, "Forbidden: Access to this resource is not allowed")
+                                conn.close()
+                                return
                         except json.JSONDecodeError:
                             pass  # Not valid JSON, pass through as-is
 
@@ -368,6 +396,7 @@ class KubernetesAPIProxy:
         self.server_thread.start()
         logger.info(f"Kubernetes API filtering proxy started on port {self.listen_port}")
         logger.info(f"Hidden namespaces: {self.hidden_namespaces}")
+        logger.info(f"Hidden labels: {self.hidden_labels}")
 
     def stop(self):
         """Stop the proxy server."""
@@ -379,10 +408,8 @@ class KubernetesAPIProxy:
 
         # Cleanup temp files
         for temp_file in self._temp_files:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(temp_file)
-            except OSError:
-                pass
         self._temp_files = []
 
     def generate_agent_kubeconfig(self, output_path: str | None = None) -> str:
@@ -456,12 +483,18 @@ def get_proxy() -> KubernetesAPIProxy:
     return _proxy_instance
 
 
-def start_proxy(hidden_namespaces: set[str] | None = None, port: int = 16443) -> KubernetesAPIProxy:
+def start_proxy(
+    hidden_namespaces: set[str] | None = None,
+    hidden_labels: dict[str, set[str]] | None = None,
+    port: int = 16443,
+) -> KubernetesAPIProxy:
     """Start the Kubernetes API filtering proxy."""
     global _proxy_instance
     if _proxy_instance is not None:
         _proxy_instance.stop()
-    _proxy_instance = KubernetesAPIProxy(hidden_namespaces=hidden_namespaces, listen_port=port)
+    _proxy_instance = KubernetesAPIProxy(
+        hidden_namespaces=hidden_namespaces, hidden_labels=hidden_labels, listen_port=port
+    )
     _proxy_instance.start()
     return _proxy_instance
 
