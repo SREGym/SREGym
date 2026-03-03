@@ -1,0 +1,106 @@
+name: Integration Smoke Test
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/workflows/claude.yml'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.github/workflows/claude.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # ── Cluster tooling ───────────────────────────────────────────────
+      - name: Install Kind
+        run: |
+          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+          kind version
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Pre-pull kind node image
+        run: docker pull jacksonarthurclark/aiopslab-kind-x86:latest
+
+      - name: Prepare /run/udev for OpenEBS NDM
+        run: sudo mkdir -p /run/udev
+
+      - name: Create kind cluster
+        run: |
+          kind create cluster --config kind/kind-config-x86.yaml --wait 5m
+          kubectl cluster-info
+          kubectl get nodes -o wide
+
+      # ── Python environment ────────────────────────────────────────────
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      # ── Generate mitigation-only tasklist ─────────────────────────────
+      - name: Generate tasklist.yml (mitigation-only)
+        run: |
+          cat > sregym/conductor/tasklist.yml << 'EOF'
+          all:
+            problems:
+              misconfig_app_hotel_res:
+                - mitigation
+          EOF
+
+      # ── Run smoke test ────────────────────────────────────────────────
+      - name: Run smoke test
+        run: uv run pytest tests/integration/smoke_test.py -v -s -m integration
+
+      # ── Diagnostics on failure ────────────────────────────────────────
+      - name: Dump cluster diagnostics
+        if: failure()
+        run: |
+          echo "=== Cluster Info ==="
+          kubectl cluster-info || true
+          echo "=== All Pods (all namespaces) ==="
+          kubectl get pods -A -o wide || true
+          echo "=== Pod Descriptions (non-Running) ==="
+          kubectl get pods -A --no-headers | grep -v Running | awk '{print $1, $2}' | \
+            while read ns pod; do
+              echo "--- $ns/$pod ---"
+              kubectl describe pod "$pod" -n "$ns" 2>/dev/null | tail -30
+            done || true
+          echo "=== Recent Events ==="
+          kubectl get events -A --sort-by='.lastTimestamp' | tail -50 || true
+
+      - name: Export kind logs
+        if: failure()
+        run: kind export logs /tmp/kind-logs || true
+
+      - name: Upload kind logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kind-logs
+          path: /tmp/kind-logs/
+          if-no-files-found: ignore
