@@ -1,16 +1,12 @@
 """Inject faults at the OS layer via SSH (remote clusters) or docker exec (Kind)."""
 
-import os
-import re
 import subprocess
 import time
 
 import paramiko
-import yaml
 from paramiko.client import AutoAddPolicy
 
 from sregym.generators.fault.base import FaultInjector
-from sregym.paths import BASE_DIR
 from sregym.service.kubectl import KubeCtl
 
 NODE_NOT_READY_TIMEOUT = 120  # seconds
@@ -18,10 +14,11 @@ NODE_NOT_READY_POLL_INTERVAL = 5  # seconds
 
 
 class RemoteOSFaultInjector(FaultInjector):
-    def __init__(self):
+    def __init__(self, ssh_user: str = "ubuntu"):
         self.kubectl = KubeCtl()
         self.worker_info = None
         self._is_kind = None
+        self.ssh_user = ssh_user
 
     def _check_is_kind(self):
         """Detect if the cluster is Kind-based."""
@@ -30,49 +27,28 @@ class RemoteOSFaultInjector(FaultInjector):
             self._is_kind = "kind-worker" in out
         return self._is_kind
 
-    def _check_remote_host(self):
-        """Verify the remote cluster has an inventory file."""
-        if not os.path.exists(f"{BASE_DIR}/../scripts/ansible/inventory.yml"):
-            print("Inventory file not found: " + f"{BASE_DIR}/../scripts/ansible/inventory.yml")
-            return False
-        return True
-
     def _get_remote_worker_info(self):
-        """Read worker node SSH info from the Ansible inventory."""
+        """Get worker node IPs from kubectl get nodes."""
         if self.worker_info:
             return self.worker_info
 
+        output = self.kubectl.exec_command("kubectl get nodes -o wide --no-headers")
         worker_info = {}
-        with open(f"{BASE_DIR}/../scripts/ansible/inventory.yml") as f:
-            inventory = yaml.safe_load(f)
+        for line in output.strip().splitlines():
+            parts = line.split()
+            # Columns: NAME STATUS ROLES AGE VERSION INTERNAL-IP ...
+            if len(parts) >= 6:
+                roles = parts[2]
+                internal_ip = parts[5]
+                if "control-plane" not in roles and "master" not in roles:
+                    worker_info[internal_ip] = self.ssh_user
 
-        variables = inventory.get("all", {}).get("vars", {})
-        children = inventory.get("all", {}).get("children", {})
-        workers = children.get("worker_nodes", {}).get("hosts", {})
-
-        if not workers:
-            print("No worker nodes found in inventory.")
+        if not worker_info:
+            print("No worker nodes found in cluster.")
             return None
-
-        for name, info in workers.items():
-            host = info["ansible_host"]
-            user = self._replace_variables(info["ansible_user"], variables)
-            if "{{" in user:
-                print(f"Warning: Unresolved variables in {name} user: {user}")
-                continue
-            worker_info[host] = user
 
         self.worker_info = worker_info
         return self.worker_info
-
-    def _replace_variables(self, text: str, variables: dict) -> str:
-        """Replace {{ variable_name }} with actual values from variables dict."""
-
-        def replace_var(match):
-            var_name = match.group(1).strip()
-            return str(variables[var_name]) if var_name in variables else match.group(0)
-
-        return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace_var, text)
 
     def _ssh_exec(self, host: str, user: str, command: str):
         """Run a command on a remote host via SSH."""
@@ -154,8 +130,6 @@ class RemoteOSFaultInjector(FaultInjector):
                 self._docker_exec(container, "kill -9 $(pgrep -x kubelet) 2>/dev/null; systemctl stop kubelet")
                 print(f"Kubelet stopped in {container}")
         else:
-            if not self._check_remote_host():
-                return
             worker_info = self._get_remote_worker_info()
             if not worker_info:
                 return
@@ -177,8 +151,6 @@ class RemoteOSFaultInjector(FaultInjector):
                 self._docker_exec(container, "systemctl start kubelet")
                 print(f"Kubelet started in {container}")
         else:
-            if not self._check_remote_host():
-                return
             worker_info = self._get_remote_worker_info()
             if not worker_info:
                 return
