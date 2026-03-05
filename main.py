@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -34,6 +35,7 @@ def driver_loop(
     agent_to_run: str | None = None,
     use_external_harness: bool = False,
     n_attempts: int = 1,
+    agent_timeout: int = 1800,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -113,8 +115,15 @@ def driver_loop(
                 if reg:
                     await LAUNCHER.ensure_started(reg)
 
-                # Poll until grading completes or agent exits
+                # Poll until grading completes, agent exits, or timeout
+                agent_start_time = time.time()
                 while conductor.submission_stage != "done":
+                    # Check agent timeout
+                    if time.time() - agent_start_time > agent_timeout:
+                        console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
+                        LAUNCHER.cleanup_agent(agent_to_run)
+                        break
+
                     # Check if agent process has exited
                     agent_proc = LAUNCHER._procs.get(agent_to_run)
                     if agent_proc:
@@ -201,6 +210,7 @@ def _run_driver_and_shutdown(
     agent_to_run: str | None = None,
     use_external_harness: bool = False,
     n_attempts: int = 1,
+    agent_timeout: int = 1800,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     try:
@@ -210,6 +220,7 @@ def _run_driver_and_shutdown(
             agent_to_run=agent_to_run,
             use_external_harness=use_external_harness,
             n_attempts=n_attempts,
+            agent_timeout=agent_timeout,
         )
         global _driver_results
         _driver_results = results
@@ -253,7 +264,7 @@ def main(args):
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
-        args=(conductor, args.problem, args.agent, args.use_external_harness, args.n_attempts),
+        args=(conductor, args.problem, args.agent, args.use_external_harness, args.n_attempts, args.agent_timeout),
         name="driver",
         daemon=True,
     )
@@ -350,6 +361,12 @@ if __name__ == "__main__":
         "--force-build",
         action="store_true",
         help="Force rebuild the agent Docker image even if it already exists (use after updating dependencies or build scripts)",
+    )
+    parser.add_argument(
+        "--agent-timeout",
+        type=int,
+        default=1800,
+        help="Agent timeout in seconds after deployment (default: 1800 = 30 min)",
     )
     args = parser.parse_args()
 

@@ -406,6 +406,8 @@ class Conductor:
         # After deployment, advance to the first stage
         self._advance_to_next_stage(start_index=0)
 
+        self.execution_start_time = time.time()  # Reset: measure agent time only
+
         if self.submission_stage and self.submission_stage != "done":
             self.logger.info(f"✅ Deployment complete. Ready for submission. Current stage is: {self.submission_stage}")
         else:
