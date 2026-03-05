@@ -31,7 +31,6 @@ class TiDBClusterDeployer:
         else:
             repo_root = Path(__file__).resolve().parents[3]
             candidates = [
-                repo_root / "SREGym-applications/FleetCast/satellite-app/values.yaml",
                 repo_root / "SREGym-applications/FleetCast/tidb-operator/values.yaml",
             ]
             for p in candidates:
