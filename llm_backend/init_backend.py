@@ -1,106 +1,69 @@
-"""Adopted from previous project"""
-
+import logging
 import os
 
-import yaml
 from dotenv import load_dotenv
 
 from llm_backend.get_llm_backend import LiteLLMBackend
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 
-def load_model_config():
-    with open(os.path.join(os.path.dirname(__file__), "configs.yaml")) as f:
-        configs = yaml.load(f, Loader=yaml.FullLoader)
-    return configs
+_PROVIDER_API_KEY_ENV: dict[str, str | None] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "azure": None,  # uses AZURE_API_KEY / AZURE_API_BASE / AZURE_API_VERSION
+    "huggingface": "HUGGINGFACE_API_KEY",
+    "bedrock": None,  # uses AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
+    "vertex_ai": None,  # uses VERTEXAI_PROJECT / VERTEXAI_LOCATION + gcloud ADC
+    "watsonx": None,  # uses WATSONX_API_KEY / WATSONX_URL / WX_PROJECT_ID
+}
 
+_PREFIX_TO_BACKEND_PROVIDER: dict[str, str] = {
+    "openai": "openai",
+    "watsonx": "watsonx",
+}
 
-def set_param(params, config, field, default_value, required=False):
-    value_to_set = None
-    value_or_env = None
-
-    if field in config:
-        value_or_env = config[field]
-    elif default_value is not None:
-        value_or_env = default_value
-
-    if value_or_env is not None and isinstance(value_or_env, str) and value_or_env.startswith("$"):
-        key = value_or_env[1:]
-        if key in os.environ:
-            value_to_set = os.environ[key]
-        # else do nothing
-    else:
-        value_to_set = value_or_env
-
-    if value_to_set is not None:
-        params[field] = value_to_set
-    else:
-        if required:
-            error_msg = f"Unable to find value for required field - {field}"
-            print(f"{error_msg}. Exiting...")
-            raise ValueError(error_msg)
-        # else do nothing
+_WATSONX_DEFAULT_URL = "https://us-south.ml.cloud.ibm.com"
 
 
-def get_llm_backend_for_tools():
-    llm_config = load_model_config()
+def get_llm_backend_for_tools(
+    model: str | None = None,
+    temperature: float = 0.0,
+    top_p: float = 0.95,
+    max_tokens: int | None = None,
+) -> LiteLLMBackend:
+    model = model or os.environ.get("MODEL_ID", "openai/gpt-4o")
+    logger.info(f"Using model: {model}")
 
-    MODEL_ID = os.environ.get("MODEL_ID", "gpt-4o")
-    print("Found MODEL_ID: ", MODEL_ID)
+    parts = model.split("/", 1)
+    if len(parts) < 2:
+        raise ValueError(f"Model must be in 'provider/model-name' format, got: {model!r}")
+    provider_prefix = parts[0].lower()
 
-    if MODEL_ID not in llm_config:
-        error_msg = f"Unable to find model configuration - {MODEL_ID}. Available models: {[key for key in llm_config.keys()]}"
-        print(error_msg)
-        raise ValueError(error_msg)
-    model_config = llm_config[MODEL_ID]
+    backend_provider = _PREFIX_TO_BACKEND_PROVIDER.get(provider_prefix, "litellm")
 
-    if model_config["provider"] == "litellm":
-        config_params = {
-            "provider": "litellm",
-        }
-        set_param(config_params, model_config, "model_name", "openai/gpt-4o")
-        set_param(config_params, model_config, "url", None)
-        set_param(config_params, model_config, "api_key", None, required=False)
-        set_param(config_params, model_config, "top_p", 0.95)
-        set_param(config_params, model_config, "temperature", 0.0)
-        set_param(config_params, model_config, "max_tokens", None)
+    key_env = _PROVIDER_API_KEY_ENV.get(provider_prefix)
+    api_key = os.environ.get(key_env) if key_env else None
 
-        if "AZURE_API_VERSION" not in os.environ:
-            if "azure_version" in model_config:
-                # set env
-                print(f"Setting Azure API version env from config - {model_config['azure_version']}")
-                os.environ["AZURE_API_VERSION"] = model_config["azure_version"]
+    extra_kwargs: dict = {}
+    if provider_prefix == "watsonx":
+        wx_project_id = os.environ.get("WX_PROJECT_ID")
+        if not wx_project_id:
+            raise ValueError("WX_PROJECT_ID environment variable is required for WatsonX models")
+        api_key = os.environ.get("WATSONX_API_KEY")
+        if not api_key:
+            raise ValueError("WATSONX_API_KEY environment variable is required for WatsonX models")
+        extra_kwargs["wx_project_id"] = wx_project_id
+        extra_kwargs["url"] = os.environ.get("WATSONX_URL", _WATSONX_DEFAULT_URL)
 
-        return LiteLLMBackend(**config_params)
-
-    elif model_config["provider"] == "openai":
-        config_params = {
-            "provider": "openai",
-        }
-        set_param(config_params, model_config, "model_name", "openai/gpt-4o")
-        set_param(config_params, model_config, "api_key", None, required=True)
-        set_param(config_params, model_config, "seed", None)
-        set_param(config_params, model_config, "top_p", 0.95)
-        set_param(config_params, model_config, "temperature", 0.0)
-        set_param(config_params, model_config, "max_tokens", None)
-
-        return LiteLLMBackend(**config_params)
-
-    elif model_config["provider"] == "watsonx":
-        config_params = {
-            "provider": "watsonx",
-        }
-        set_param(config_params, model_config, "model_name", "meta-llama/llama-3-3-70b-instruct")
-        set_param(config_params, model_config, "url", "https://us-south.ml.cloud.ibm.com")
-        set_param(config_params, model_config, "api_key", None, required=True)
-        set_param(config_params, model_config, "seed", None)
-        set_param(config_params, model_config, "top_p", 0.95)
-        set_param(config_params, model_config, "temperature", 0.0)
-        set_param(config_params, model_config, "max_tokens", None)
-        set_param(config_params, model_config, "wx_project_id", "$WX_PROJECT_ID", required=True)
-
-        return LiteLLMBackend(**config_params)
-
-    else:
-        raise ValueError(f"Unsupported provider - {model_config['provider']}. Exiting...")
+    return LiteLLMBackend(
+        provider=backend_provider,
+        model_name=model,
+        api_key=api_key,
+        temperature=temperature,
+        top_p=top_p,
+        max_tokens=max_tokens,
+        **extra_kwargs,
+    )
