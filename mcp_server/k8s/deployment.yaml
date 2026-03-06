@@ -42,6 +42,11 @@ spec:
               value: "http://loki.observe.svc.cluster.local:3100"
             - name: JAEGER_BASE_URL
               value: "http://jaeger-out.observe.svc.cluster.local:16686"
+            # Conductor API (submit proxy) — points to the benchmark host
+            - name: API_HOSTNAME
+              value: "conductor-api.sregym.svc.cluster.local"
+            - name: API_PORT
+              value: "8000"
           resources:
             requests:
               cpu: 100m
