@@ -53,24 +53,6 @@ class SilentDataCorruption(Problem):
         """This problem requires Khaos for dm-flakey infrastructure setup."""
         return True
 
-    def setup_infrastructure(self):
-        """Set up dm-flakey devices on all nodes before app deployment.
-
-        The app's PVs must land on the dm-flakey-backed /var/openebs/local
-        so that corruption can be injected later via dm_flakey_reload.
-        """
-        print("[SDC] Setting up dm-flakey infrastructure for fault injection...")
-        self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
-
-    def teardown_infrastructure(self):
-        """Remove dm-flakey devices and restore direct host storage.
-
-        Called during cleanup and as a fallback in fix_kubernetes() to prevent
-        leftover dm-flakey from slowing down subsequent problem deployments.
-        """
-        print("[SDC] Tearing down dm-flakey infrastructure...")
-        self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
-
     def _discover_node_for_deploy(self) -> str | None:
         """Return the node where the target deployment is running."""
         # First try with a label selector (common OpenEBS hotel-reservation pattern)
@@ -182,6 +164,16 @@ class SilentDataCorruption(Problem):
     def inject_fault(self):
         print(f"[SDC] Starting silent data corruption injection for {self.deploy}")
 
+        # Set up dm-flakey infrastructure, then redeploy the app so its PVs
+        # land on the dm-flakey-backed storage where corruption can be injected.
+        print("[SDC] Setting up dm-flakey infrastructure...")
+        self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
+
+        print("[SDC] Redeploying app onto dm-flakey-backed storage...")
+        self.app.cleanup()
+        self.app.deploy()
+        self.app.start_workload()
+
         # Get target node where the deployment is running
         self.target_node = self._discover_node_for_deploy()
         if not self.target_node:
@@ -195,9 +187,6 @@ class SilentDataCorruption(Problem):
         # Get corruption features string
         features = self._get_corruption_features()
         print(f"[SDC] Features: {features}")
-
-        # The dm-flakey device is already set up by DmFlakeyManager in Conductor
-        # We just need to configure it with corruption features
 
         print("[SDC] Configuring dm-flakey device for corruption...")
         self.injector.dm_flakey_reload(
@@ -255,7 +244,8 @@ class SilentDataCorruption(Problem):
         except Exception as e:
             print(f"[SDC] ⚠️  Warning: Failed to clean up OpenEBS cleanup pods: {e}")
 
-        self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()  # This helps clean up any corrupted data on the affected storage directories
+        # Tear down dm-flakey to restore direct host storage, then redeploy clean
+        self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
         self.app.deploy()
         self.app.start_workload()
 

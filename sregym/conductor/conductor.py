@@ -594,10 +594,6 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying MCP server…")
         self.mcp_server.deploy()
 
-        # Let the problem set up any infrastructure it needs before app deployment
-        # (e.g., SilentDataCorruption sets up dm-flakey devices)
-        problem.setup_infrastructure()
-
         self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki")
 
         # train-ticket pods need jaeger at startup; create ExternalName before deploy.
