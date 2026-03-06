@@ -594,6 +594,14 @@ class Conductor:
         if "SilentDataCorruption" in problem_name:
             print("Setting up dm-flakey infrastructure for Silent Data Corruption fault injection...")
             self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
+        else:
+            # Ensure dm-flakey is removed if left over from a previous problem run.
+            # The loop-backed dm-flakey device is too slow for apps like TiDB that
+            # have tight bootstrap timeouts.
+            try:
+                self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
+            except Exception as e:
+                self.logger.warning(f"[dm-flakey] Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
 
         self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki")
 
