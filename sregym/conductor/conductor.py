@@ -512,6 +512,13 @@ class Conductor:
             injector.recover_all_nxdomain_templates()
         except Exception as e:
             self.logger.error(f"Failed to recover CoreDNS NXDOMAIN templates: {e}")
+
+        self.logger.info("[FIX] Leftover dm-flakey infrastructure if any")
+        try:
+            self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
+        except Exception as e:
+            self.logger.warning(f"Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
+
         self.logger.info("Fix Kubernetes completed.")
 
     def deploy_app(self):
@@ -587,21 +594,9 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying MCP server…")
         self.mcp_server.deploy()
 
-        # Set up fault injection infrastructure based on problem type
-        # Only one can be active at /var/openebs/local at a time
-        problem_name = problem.__class__.__name__
-
-        if "SilentDataCorruption" in problem_name:
-            print("Setting up dm-flakey infrastructure for Silent Data Corruption fault injection...")
-            self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
-        else:
-            # Ensure dm-flakey is removed if left over from a previous problem run.
-            # The loop-backed dm-flakey device is too slow for apps like TiDB that
-            # have tight bootstrap timeouts.
-            try:
-                self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
-            except Exception as e:
-                self.logger.warning(f"[dm-flakey] Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
+        # Let the problem set up any infrastructure it needs before app deployment
+        # (e.g., SilentDataCorruption sets up dm-flakey devices)
+        problem.setup_infrastructure()
 
         self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki")
 

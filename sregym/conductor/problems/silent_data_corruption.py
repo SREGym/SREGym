@@ -53,6 +53,24 @@ class SilentDataCorruption(Problem):
         """This problem requires Khaos for dm-flakey infrastructure setup."""
         return True
 
+    def setup_infrastructure(self):
+        """Set up dm-flakey devices on all nodes before app deployment.
+
+        The app's PVs must land on the dm-flakey-backed /var/openebs/local
+        so that corruption can be injected later via dm_flakey_reload.
+        """
+        print("[SDC] Setting up dm-flakey infrastructure for fault injection...")
+        self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
+
+    def teardown_infrastructure(self):
+        """Remove dm-flakey devices and restore direct host storage.
+
+        Called during cleanup and as a fallback in fix_kubernetes() to prevent
+        leftover dm-flakey from slowing down subsequent problem deployments.
+        """
+        print("[SDC] Tearing down dm-flakey infrastructure...")
+        self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
+
     def _discover_node_for_deploy(self) -> str | None:
         """Return the node where the target deployment is running."""
         # First try with a label selector (common OpenEBS hotel-reservation pattern)
