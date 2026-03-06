@@ -55,8 +55,6 @@ We have an Ansible playbook to setup clusters on providers like [CloudLab](https
 ### b) Emulated cluster
 SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/) on your local machine. However, not all problems are supported.
 
-**Note:** If you run into pod crashes or "too many open files" errors, see the [kind README](./kind/README.md) for required host kernel settings and troubleshooting.
-
 ```bash
 # For x86 machines
 kind create cluster --config kind/kind-config-x86.yaml
@@ -87,7 +85,7 @@ python main.py --agent <agent-name> --model <model-id>
 
 For example, to run the Stratus agent:
 ```bash
-python main.py --agent stratus --model gpt-4o
+python main.py --agent stratus --model openai/gpt-4o
 ```
 
 #### Container Isolation
@@ -97,7 +95,7 @@ Agents always run in isolated Docker containers, preventing access to SREGym int
 Use `--force-build` to rebuild the container image after updating dependencies or agent code:
 
 ```bash
-python main.py --agent codex --model gpt-4o --force-build
+python main.py --agent codex --model openai/gpt-4o --force-build
 ```
 
 ### Model Selection
@@ -112,15 +110,20 @@ python main.py --agent <agent-name> --model <model-id>
 
 | Model ID | Provider | Model Name | Required Environment Variables |
 |----------|----------|------------|-------------------------------|
-| `gpt-5` | OpenAI | GPT-5 | `OPENAI_API_KEY` |
-| `gemini-2.5-pro` | Google | Gemini 2.5 Pro | `GEMINI_API_KEY` |
-| `claude-sonnet-4` | Anthropic | Claude Sonnet 4 | `ANTHROPIC_API_KEY` |
-| `bedrock-claude-sonnet-4.5` | AWS Bedrock | Claude Sonnet 4.5 | `AWS_PROFILE`, `AWS_DEFAULT_REGION` |
+| `openai/gpt-4o` | OpenAI | GPT-4o | `OPENAI_API_KEY` |
+| `gemini/gemini-2.5-pro` | Google | Gemini 2.5 Pro | `GEMINI_API_KEY` |
+| `anthropic/claude-sonnet-4` | Anthropic | Claude Sonnet 4 | `ANTHROPIC_API_KEY` |
+| `bedrock/anthropic.claude-sonnet-4-5` | AWS Bedrock | Claude Sonnet 4.5 | `AWS_PROFILE`, `AWS_DEFAULT_REGION` |
+| `litellm/moonshot-v1-8k` | Moonshot | Moonshot | `MOONSHOT_API_KEY` |
+| `watsonx/meta-llama/llama-3-3-70b-instruct` | IBM watsonx | Llama 3.3 70B | `WATSONX_API_KEY`, `WX_PROJECT_ID`|
+| `litellm/glm-4` | GLM | GLM-4 | `GLM_API_KEY` |
+| `azure/gpt-4o` | Azure OpenAI | GPT-4o | `AZURE_API_KEY`, `AZURE_API_BASE` |
 
-**Default:** If no model is specified, `gpt-4o` is used by default.
+**Default:** If no model is specified, `openai/gpt-4o` is used by default.
 
-<details>
-<summary><strong>Provider Examples</strong></summary>
+Model IDs must be in `provider/model-name` format. The prefix determines which backend and credentials are used.
+
+#### Examples
 
 **OpenAI:**
 ```bash
@@ -128,7 +131,7 @@ python main.py --agent <agent-name> --model <model-id>
 OPENAI_API_KEY="sk-proj-..."
 
 # Run with GPT-4o
-python main.py --agent stratus --model gpt-4o
+python main.py --agent stratus --model openai/gpt-4o
 ```
 
 **Anthropic:**
@@ -137,7 +140,7 @@ python main.py --agent stratus --model gpt-4o
 ANTHROPIC_API_KEY="sk-ant-api03-..."
 
 # Run with Claude Sonnet 4
-python main.py --agent stratus --model claude-sonnet-4
+python main.py --agent stratus --model anthropic/claude-sonnet-4
 ```
 
 **AWS Bedrock:**
@@ -147,17 +150,13 @@ AWS_PROFILE="bedrock"
 AWS_DEFAULT_REGION=us-east-2
 
 # Run with Claude Sonnet 4.5 on Bedrock
-python main.py --agent stratus --model bedrock-claude-sonnet-4.5
+python main.py --agent stratus --model bedrock/anthropic.claude-sonnet-4-5
 ```
 
 **Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.
 
-</details>
-
 ## Acknowledgements
 This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org/).
-
-https://github.com/user-attachments/assets/e7b2ee27-e7a9-436a-858d-ee58e8bbd61d
 
 ## License
 Licensed under the [MIT](LICENSE.txt) license.
