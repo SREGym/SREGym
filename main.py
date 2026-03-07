@@ -243,7 +243,14 @@ def main(args):
     config = ConductorConfig(deploy_loki=not args.use_external_harness)
     conductor = Conductor(config=config)
 
-    LAUNCHER.enable_container_isolation(force_build=args.force_build)
+    # Only build/check agent container image if the agent requires it
+    agent_reg = (
+        get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+        if args.agent
+        else None
+    )
+    if not agent_reg or agent_reg.container_isolation:
+        LAUNCHER.enable_container_isolation(force_build=args.force_build)
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(

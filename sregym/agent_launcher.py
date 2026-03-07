@@ -60,7 +60,7 @@ class AgentLauncher:
             if existing.proc.returncode is None:
                 return existing
 
-        if self._use_containers:
+        if self._use_containers and reg.container_isolation:
             return await self._start_containerized(reg)
 
         env = os.environ.copy()
