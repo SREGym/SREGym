@@ -1,21 +1,26 @@
 """Resolve AI infrastructure setup and teardown.
 
-Manages the ktunnel reverse tunnel and Resolve satellite Helm chart
-that are required for Resolve AI to interact with SREGym.
+Manages the ktunnel reverse tunnel, Resolve satellite Helm chart,
+and MCP server submit proxy configuration.
 """
 
 import logging
 import subprocess
 import time
 
+from sregym.service.helm import Helm
+
 logger = logging.getLogger(__name__)
 
 SATELLITE_RELEASE = "resolve-satellite"
 SATELLITE_CHART = "oci://registry-1.docker.io/resolveaihq/satellite-chart"
 SATELLITE_VALUES = "resolve-values.yaml"
+SATELLITE_NAMESPACE = "default"
 KTUNNEL_NAMESPACE = "sregym"
 KTUNNEL_SERVICE = "conductor-api"
 KTUNNEL_PORT = "8000:8000"
+MCP_DEPLOYMENT = "deployment/mcp-server"
+MCP_NAMESPACE = "sregym"
 
 
 class ResolveSetup:
@@ -23,17 +28,31 @@ class ResolveSetup:
         self._ktunnel_proc: subprocess.Popen | None = None
 
     def start(self):
-        """Start ktunnel and install the Resolve satellite."""
+        """Set up all Resolve-specific infrastructure."""
         self._start_ktunnel()
+        self._enable_submit_proxy()
         self._install_satellite()
 
     def stop(self):
-        """Tear down ktunnel and uninstall the Resolve satellite."""
+        """Tear down all Resolve-specific infrastructure."""
         self._uninstall_satellite()
+        self._disable_submit_proxy()
         self._stop_ktunnel()
+
+    def _clean_stale_ktunnel(self):
+        """Remove leftover ktunnel resources from a previous run."""
+        subprocess.run(
+            ["kubectl", "delete", "deployment", KTUNNEL_SERVICE, "-n", KTUNNEL_NAMESPACE, "--ignore-not-found"],
+            capture_output=True,
+        )
+        subprocess.run(
+            ["kubectl", "delete", "service", KTUNNEL_SERVICE, "-n", KTUNNEL_NAMESPACE, "--ignore-not-found"],
+            capture_output=True,
+        )
 
     def _start_ktunnel(self):
         """Start ktunnel to expose the local conductor API into the cluster."""
+        self._clean_stale_ktunnel()
         logger.info(f"Starting ktunnel: exposing localhost:8000 as {KTUNNEL_SERVICE}.{KTUNNEL_NAMESPACE}.svc")
         self._ktunnel_proc = subprocess.Popen(
             ["ktunnel", "expose", "-n", KTUNNEL_NAMESPACE, KTUNNEL_SERVICE, KTUNNEL_PORT],
@@ -61,52 +80,78 @@ class ResolveSetup:
             self._ktunnel_proc = None
             logger.info("ktunnel stopped")
 
-    def _install_satellite(self):
-        """Install the Resolve satellite Helm chart."""
-        logger.info(f"Installing Resolve satellite chart ({SATELLITE_RELEASE})...")
+    def _enable_submit_proxy(self):
+        """Patch the MCP server deployment to enable the submit proxy."""
+        logger.info("Enabling submit proxy on MCP server...")
         result = subprocess.run(
             [
-                "helm",
-                "install",
-                SATELLITE_RELEASE,
-                SATELLITE_CHART,
-                "--values",
-                SATELLITE_VALUES,
+                "kubectl",
+                "set",
+                "env",
+                MCP_DEPLOYMENT,
+                "-n",
+                MCP_NAMESPACE,
+                f"API_HOSTNAME={KTUNNEL_SERVICE}.{KTUNNEL_NAMESPACE}.svc.cluster.local",
+                "API_PORT=8000",
             ],
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
-            # If already installed, try upgrade instead
-            if "cannot re-use" in result.stderr:
-                logger.info("Satellite already installed, upgrading...")
-                result = subprocess.run(
-                    [
-                        "helm",
-                        "upgrade",
-                        SATELLITE_RELEASE,
-                        SATELLITE_CHART,
-                        "--values",
-                        SATELLITE_VALUES,
-                    ],
-                    capture_output=True,
-                    text=True,
-                )
-                if result.returncode != 0:
-                    raise RuntimeError(f"Helm upgrade failed: {result.stderr}")
-            else:
-                raise RuntimeError(f"Helm install failed: {result.stderr}")
-        logger.info("Resolve satellite installed")
+            raise RuntimeError(f"Failed to patch MCP server env: {result.stderr}")
+        # Wait for rollout to complete
+        logger.info("Waiting for MCP server rollout...")
+        subprocess.run(
+            ["kubectl", "rollout", "status", MCP_DEPLOYMENT, "-n", MCP_NAMESPACE, "--timeout=120s"],
+            capture_output=True,
+            text=True,
+        )
+        logger.info("Submit proxy enabled on MCP server")
 
-    def _uninstall_satellite(self):
-        """Uninstall the Resolve satellite Helm chart."""
-        logger.info(f"Uninstalling Resolve satellite ({SATELLITE_RELEASE})...")
+    def _disable_submit_proxy(self):
+        """Remove the submit proxy env vars from the MCP server deployment."""
+        logger.info("Disabling submit proxy on MCP server...")
         result = subprocess.run(
-            ["helm", "uninstall", SATELLITE_RELEASE],
+            [
+                "kubectl",
+                "set",
+                "env",
+                MCP_DEPLOYMENT,
+                "-n",
+                MCP_NAMESPACE,
+                "API_HOSTNAME-",
+                "API_PORT-",
+            ],
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
-            logger.warning(f"Helm uninstall warning: {result.stderr}")
+            logger.warning(f"Failed to remove MCP server env vars: {result.stderr}")
         else:
-            logger.info("Resolve satellite uninstalled")
+            logger.info("Submit proxy disabled on MCP server")
+
+    def _install_satellite(self):
+        """Install the Resolve satellite Helm chart."""
+        if Helm.exists_release(SATELLITE_RELEASE, SATELLITE_NAMESPACE):
+            logger.info("Satellite already installed, upgrading...")
+            Helm.upgrade(
+                release_name=SATELLITE_RELEASE,
+                chart_path=SATELLITE_CHART,
+                namespace=SATELLITE_NAMESPACE,
+                values_file=SATELLITE_VALUES,
+            )
+        else:
+            Helm.install(
+                release_name=SATELLITE_RELEASE,
+                chart_path=SATELLITE_CHART,
+                namespace=SATELLITE_NAMESPACE,
+                remote_chart=True,
+                extra_args=["-f", SATELLITE_VALUES],
+            )
+
+    def _uninstall_satellite(self):
+        """Uninstall the Resolve satellite Helm chart."""
+        Helm.uninstall(
+            release_name=SATELLITE_RELEASE,
+            namespace=SATELLITE_NAMESPACE,
+        )

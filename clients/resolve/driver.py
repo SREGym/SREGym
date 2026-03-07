@@ -7,8 +7,10 @@ trigger Resolve AI, then waits for it to complete via MCP tools.
 import json
 import logging
 import os
+import shutil
 import signal
 import sys
+import time
 from datetime import UTC, datetime
 
 import requests
@@ -26,15 +28,20 @@ RESOLVE_WEBHOOK_URL = os.environ.get("RESOLVE_WEBHOOK_URL")
 RESOLVE_WEBHOOK_TOKEN = os.environ.get("RESOLVE_WEBHOOK_TOKEN")
 
 
-def get_app_info() -> dict:
+def get_app_info(max_retries: int = 6, backoff: int = 5) -> dict:
     """Fetch current application info from the conductor API."""
-    try:
-        resp = requests.get(f"{CONDUCTOR_URL}/get_app", timeout=10)
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as e:
-        logger.error(f"Failed to get app info from conductor: {e}")
-        sys.exit(1)
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = requests.get(f"{CONDUCTOR_URL}/get_app", timeout=10)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            if attempt < max_retries:
+                logger.warning(f"Failed to reach conductor (attempt {attempt}/{max_retries}): {e}")
+                time.sleep(backoff)
+            else:
+                logger.error(f"Failed to get app info from conductor after {max_retries} attempts: {e}")
+                sys.exit(1)
 
 
 def fire_alert(app_info: dict):
@@ -99,17 +106,28 @@ def _shutdown_handler(signum, frame):
 def main():
     logger.info("Resolve AI agent driver starting")
 
+    # The agent launcher sets KUBECONFIG to a filtering proxy, but the
+    # Resolve driver manages cluster infrastructure (ktunnel, helm, kubectl
+    # patches) that must talk to the real K8s API server.
+    os.environ.pop("KUBECONFIG", None)
+
+    # Check that ktunnel is installed
+    if not shutil.which("ktunnel"):
+        logger.error("ktunnel is not installed. Install it from https://github.com/omrikiei/ktunnel")
+        sys.exit(1)
+
     # Register cleanup handler so ktunnel + satellite are torn down
     # when main.py terminates this process
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGINT, _shutdown_handler)
 
-    # Set up ktunnel and install Resolve satellite
-    resolve_setup.start()
-
-    # Get app info from conductor
+    # Get app info from conductor BEFORE starting ktunnel, because ktunnel
+    # binds to local port 8000 and intercepts connections to the conductor.
     app_info = get_app_info()
     logger.info(f"App info: {app_info}")
+
+    # Set up ktunnel and install Resolve satellite
+    resolve_setup.start()
 
     # Fire the alert
     fire_alert(app_info)
