@@ -1,8 +1,6 @@
 import json
 import shlex
 import subprocess
-import time
-from typing import Dict, List, Optional
 
 from sregym.service.kubectl import KubeCtl
 
@@ -40,9 +38,9 @@ class DmFlakeyManager:
         self.kubectl = kubectl
         self.khaos_ns = khaos_ns
         self.khaos_label = khaos_label
-        self._pod_cache: Dict[str, str] = {}  # Cache pod names by node
+        self._pod_cache: dict[str, str] = {}  # Cache pod names by node
 
-    def setup_openebs_dm_flakey_infrastructure(self, nodes: Optional[List[str]] = None) -> None:
+    def setup_openebs_dm_flakey_infrastructure(self, nodes: list[str] | None = None) -> None:
         """
         Set up dm-flakey to intercept all OpenEBS local storage on the specified nodes.
         Creates a dm-flakey device that will be used for all PVs created in /var/openebs/local/.
@@ -111,18 +109,18 @@ class DmFlakeyManager:
                 if rc.stdout:
                     error_msg += f"\nStdout: {rc.stdout}"
                 raise RuntimeError(error_msg)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"Timeout setting up dm-flakey on {node} after {SETUP_TIMEOUT_SECONDS} seconds")
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(f"Timeout setting up dm-flakey on {node} after {SETUP_TIMEOUT_SECONDS} seconds") from e
 
     def _build_module_check_script(self) -> str:
         """Build script to check and load dm_flakey module."""
-        return f"""
+        return """
 echo 'Setting up dm-flakey for OpenEBS local storage...'
 echo 'Checking dm_flakey module...'
-modprobe dm_flakey || {{ echo 'Failed to load dm_flakey module'; exit 1; }}
-lsmod | grep dm_flakey || {{ echo 'dm_flakey module not found in lsmod'; exit 1; }}
+modprobe dm_flakey || { echo 'Failed to load dm_flakey module'; exit 1; }
+lsmod | grep dm_flakey || { echo 'dm_flakey module not found in lsmod'; exit 1; }
 echo 'Checking device-mapper targets...'
-dmsetup targets | grep flakey || {{ echo 'flakey target not available in dmsetup'; exit 1; }}
+dmsetup targets | grep flakey || { echo 'flakey target not available in dmsetup'; exit 1; }
 """
 
     def _build_cleanup_script(self) -> str:
@@ -223,6 +221,77 @@ chmod 755 {shlex.quote(openebs_path)}
 echo 'OpenEBS dm-flakey infrastructure ready - all PVs will use dm-flakey'
 """
 
+    def teardown_openebs_dm_flakey_infrastructure(self, nodes: list[str] | None = None) -> None:
+        """
+        Remove dm-flakey from OpenEBS storage on all nodes, restoring direct host storage.
+
+        This is needed before deploying apps that require fast I/O (e.g., TiDB),
+        since the loop-backed dm-flakey device is too slow for some bootstrap operations.
+        """
+        if nodes is None:
+            nodes_response = self.kubectl.list_nodes()
+            nodes = [node.metadata.name for node in nodes_response.items]
+
+        for node in nodes:
+            try:
+                self._teardown_dm_flakey_on_node(node)
+                print(f"[dm-flakey] ✅ Removed dm-flakey infrastructure on {node}")
+            except Exception as e:
+                print(f"[dm-flakey] ⚠️ Could not remove dm-flakey on {node} (may not exist): {e}")
+
+    def _teardown_dm_flakey_on_node(self, node: str) -> None:
+        """Remove dm-flakey device and restore direct host storage on a single node."""
+        openebs_path = OPENEBS_LOCAL_PATH
+        script = f"""set -e
+# Check if dm-flakey is active
+if ! dmsetup info {DM_FLAKEY_DEVICE_NAME} >/dev/null 2>&1; then
+    echo 'No dm-flakey device found, nothing to do'
+    exit 0
+fi
+
+echo 'Removing dm-flakey infrastructure...'
+
+# Unmount
+if mountpoint -q {shlex.quote(openebs_path)} 2>/dev/null; then
+    umount {shlex.quote(openebs_path)} 2>/dev/null || umount -l {shlex.quote(openebs_path)} 2>/dev/null || true
+fi
+
+# Remove dm device
+dmsetup remove {DM_FLAKEY_DEVICE_NAME} 2>/dev/null || dmsetup remove --force {DM_FLAKEY_DEVICE_NAME} 2>/dev/null || true
+
+# Detach loop device
+LOOP=$(losetup -j {shlex.quote(DM_FLAKEY_BACKING_FILE)} 2>/dev/null | cut -d: -f1)
+[ -n "$LOOP" ] && losetup -d "$LOOP" 2>/dev/null || true
+
+# Ensure directory exists as regular hostpath
+mkdir -p {shlex.quote(openebs_path)}
+chmod 755 {shlex.quote(openebs_path)}
+echo 'dm-flakey removed, using direct host storage'
+"""
+        pod = self._get_khaos_pod_on_node(node)
+        cmd = [
+            "kubectl",
+            "-n",
+            self.khaos_ns,
+            "exec",
+            pod,
+            "--",
+            "nsenter",
+            "-t",
+            "1",
+            "-m",
+            "-u",
+            "-i",
+            "-n",
+            "-p",
+            "sh",
+            "-c",
+            script,
+        ]
+        rc = subprocess.run(cmd, timeout=SETUP_TIMEOUT_SECONDS, capture_output=True, text=True)
+        if rc.returncode != 0:
+            raise RuntimeError(f"Failed on {node}: {rc.stderr}")
+
     def _get_khaos_pod_on_node(self, node: str) -> str:
         """Find a running Khaos pod on the specified node, with caching."""
         if node in self._pod_cache:
@@ -231,7 +300,7 @@ echo 'OpenEBS dm-flakey infrastructure ready - all PVs will use dm-flakey'
         cmd = f"kubectl -n {shlex.quote(self.khaos_ns)} get pods -l {shlex.quote(self.khaos_label)} -o json"
         out = self.kubectl.exec_command(cmd)
         if not out:
-            raise RuntimeError(f"Failed to get pods: empty response")
+            raise RuntimeError("Failed to get pods: empty response")
 
         data = json.loads(out)
         for item in data.get("items", []):

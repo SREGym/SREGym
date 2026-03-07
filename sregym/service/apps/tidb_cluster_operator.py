@@ -31,13 +31,20 @@ class TiDBClusterDeployer:
         else:
             repo_root = Path(__file__).resolve().parents[3]
             candidates = [
-                repo_root / "SREGym-applications/FleetCast/satellite-app/values.yaml",
                 repo_root / "SREGym-applications/FleetCast/tidb-operator/values.yaml",
             ]
             for p in candidates:
                 if p.exists():
                     self.operator_values_path = str(p.resolve())
                     break
+
+        # Prefer local tidb-cluster.yaml over remote URL
+        repo_root = Path(__file__).resolve().parents[3]
+        local_cluster_yaml = repo_root / "SREGym-applications/FleetCast/tidb-operator/tidb-cluster.yaml"
+        if local_cluster_yaml.exists():
+            self.cluster_config_path = str(local_cluster_yaml.resolve())
+        else:
+            self.cluster_config_path = self.cluster_config_url
 
         self.tidb_service = self.metadata.get("TiDB Service", "basic-tidb")
         self.tidb_port = int(self.metadata.get("TiDB Port", 4000))
@@ -131,8 +138,8 @@ class TiDBClusterDeployer:
     def deploy_tidb_cluster(self):
         print(f"Creating TiDB cluster namespace '{self.namespace_tidb_cluster}'...")
         self.create_namespace(self.namespace_tidb_cluster)
-        print(f"Deploying TiDB cluster manifest from {self.cluster_config_url}...")
-        self.run_cmd(f"kubectl apply -f {self.cluster_config_url} -n {self.namespace_tidb_cluster}")
+        print(f"Deploying TiDB cluster manifest from {self.cluster_config_path}...")
+        self.run_cmd(f"kubectl apply -f {self.cluster_config_path} -n {self.namespace_tidb_cluster}")
 
     def run_sql(self, sql_text: str):
         ns = self.namespace_tidb_cluster
@@ -195,13 +202,14 @@ SQL"
         """
         self.run_sql(sql)
 
-    def wait_for_pods_ready(self, selector: str, poll: float = 1.0):
+    def wait_for_pods_ready(self, selector: str, poll: float = 1.0, timeout: float = 600):
         """
         Poll every `poll` seconds until ALL pods matching `selector` are Ready.
-        Runs indefinitely until condition is met.
+        Raises RuntimeError if `timeout` seconds elapse without all pods becoming ready.
         """
         ns = self.namespace_tidb_cluster
-        while True:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
             try:
                 out = subprocess.check_output(
                     f"kubectl -n {ns} get pods -l '{selector}' "
@@ -224,11 +232,12 @@ SQL"
             except subprocess.CalledProcessError:
                 pass
             time.sleep(poll)
+        raise RuntimeError(f"Timeout ({timeout}s) waiting for pods with selector '{selector}' in namespace '{ns}'")
 
     def wait_for_basic_workloads(self):
         """
-        Wait (no timeout) for PD, TiKV, and TiDB pods to be Ready,
-        then wait for the TiDB Service to exist and have endpoints.
+        Wait for PD, TiKV, and TiDB pods to be Ready (600s each),
+        then wait for the TiDB Service to have endpoints (300s).
         """
         ns = self.namespace_tidb_cluster
         cluster = "basic"
@@ -261,7 +270,8 @@ SQL"
 
         print(f"[info] Using TiDB Service: {svc_name}")
         self.tidb_service = svc_name
-        while True:
+        deadline = time.time() + 300  # 5 min timeout for endpoints
+        while time.time() < deadline:
             try:
                 eps = (
                     subprocess.check_output(
@@ -279,6 +289,7 @@ SQL"
             except subprocess.CalledProcessError:
                 pass
             time.sleep(1.0)
+        raise RuntimeError(f"Timeout (300s) waiting for endpoints on service '{svc_name}' in namespace '{ns}'")
 
     def deploy_all(self):
         print(f"----------Starting deployment: {self.name}")
