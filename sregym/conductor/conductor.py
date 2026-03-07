@@ -72,6 +72,7 @@ class Conductor:
         # submission_stage reflects the current stage (e.g., "diagnosis", "mitigation") or "done"
         self.submission_stage = None
         self.results = {}
+        self._cleanup_thread: threading.Thread | None = None
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
@@ -344,7 +345,8 @@ class Conductor:
 
         # Run cleanup in a background thread — works whether called from
         # the event loop or from a thread pool (run_in_executor)
-        threading.Thread(target=self._cleanup_sync, name="cleanup", daemon=True).start()
+        self._cleanup_thread = threading.Thread(target=self._cleanup_sync, name="cleanup", daemon=True)
+        self._cleanup_thread.start()
 
         self.logger.info("[STAGE] Teardown initiated, cleanup running in background")
 
@@ -358,6 +360,19 @@ class Conductor:
         """
         if self.problem_id is None:
             raise RuntimeError("Cannot start problem: problem_id is not set")
+
+        # Wait for any in-progress cleanup thread from a previous attempt to finish
+        # before starting a new problem. This prevents a race condition where the
+        # background cleanup sets submission_stage="done" after the new problem starts.
+        if self._cleanup_thread is not None and self._cleanup_thread.is_alive():
+            self.logger.info("[WAIT] Waiting for previous cleanup thread to finish...")
+            self._cleanup_thread.join(timeout=300)
+            if self._cleanup_thread.is_alive():
+                self.logger.warning("[WAIT] Cleanup thread did not finish within 300s, proceeding anyway")
+            else:
+                self.logger.info("[WAIT] Previous cleanup thread finished")
+            self._cleanup_thread = None
+
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.app = self.problem.app
