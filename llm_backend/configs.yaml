@@ -115,3 +115,7 @@
 "bedrock-claude-sonnet-4.5":
   provider: "litellm"
   model_name: "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+"bedrock-claude-haiku-4-5":
+  provider: "litellm"
+  model_name: "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"

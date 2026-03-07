@@ -202,6 +202,11 @@ known-first-party = ["sregym", "clients", "provisioner", "scripts"]
 quote-style = "double"
 docstring-code-format = true
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: end-to-end tests requiring a running Kubernetes cluster",
+]
+
 [build-system]
 requires = ["setuptools>=80.8.0"]
 build-backend = "setuptools.build_meta"
