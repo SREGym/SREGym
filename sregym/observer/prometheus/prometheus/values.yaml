@@ -711,17 +711,66 @@ serverFiles:
   ## Ref: https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
   alerting_rules.yml:
       groups:
-        - name: opentelemetrydemo.workloads
+        # ---- App namespace pod lifecycle alerts ----
+        # Namespaces: astronomy-shop, hotel-reservation, social-network, blueprint-hotel-reservation, train-ticket, tidb-cluster
+        - name: app.workloads
           rules:
             - alert: PodStatusError
               expr: |
-                sum by (namespace, pod, reason) (kube_pod_container_status_waiting_reason > 0)
-              for: 2m
+                sum by (namespace, pod, reason) (
+                  kube_pod_container_status_waiting_reason{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"} > 0
+                )
+              for: 1m
               labels:
                 severity: critical
               annotations:
                 summary: "Pod startup failure: {{ $labels.pod }}"
-                description: "The pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is stuck in {{ $labels.reason }}. Current failed container count: {{ $value }}."
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is stuck in {{ $labels.reason }}."
+
+            - alert: FailedPodsDetected
+              expr: |
+                sum by (namespace, pod) (
+                  kube_pod_status_phase{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster", phase="Failed"}
+                ) > 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is in Failed state."
+
+            - alert: PendingPodsDetected
+              expr: |
+                sum by (namespace, pod) (
+                  kube_pod_status_phase{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster", phase="Pending"}
+                ) > 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is stuck in Pending state."
+
+            - alert: PodSchedulingFailure
+              expr: |
+                sum by (namespace, pod) (
+                  kube_pod_status_unschedulable{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"}
+                ) > 0
+              for: 30s
+              labels:
+                severity: critical
+              annotations:
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is unschedulable."
+
+            - alert: KubePodNotReady
+              expr: |
+                sum by (namespace, pod) (
+                  kube_pod_status_ready{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster", condition="false"}
+                ) > 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 2 minutes."
+
   # groups:
   #   - name: Instances
   #     rules:
