@@ -729,25 +729,25 @@ serverFiles:
 
             - alert: FailedPodsDetected
               expr: |
-                sum by (namespace) (
+                sum by (namespace, pod) (
                   kube_pod_status_phase{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster", phase="Failed"}
                 ) > 0
               for: 1m
               labels:
                 severity: critical
               annotations:
-                description: "Pods in failed state in namespace {{ $labels.namespace }} (current: {{ $value }})."
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is in Failed state."
 
             - alert: PendingPodsDetected
               expr: |
-                sum by (namespace) (
+                sum by (namespace, pod) (
                   kube_pod_status_phase{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster", phase="Pending"}
                 ) > 0
               for: 1m
               labels:
                 severity: critical
               annotations:
-                description: "Pods in pending state in namespace {{ $labels.namespace }} (current: {{ $value }})."
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is stuck in Pending state."
 
             - alert: PodSchedulingFailure
               expr: |
