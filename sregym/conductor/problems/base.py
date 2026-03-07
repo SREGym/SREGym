@@ -15,6 +15,9 @@ class Problem(ABC):
         self.diagnosis_oracle = None
         self.mitigation_oracle = None
 
+        # Alert names expected to fire when this fault is active.
+        self.expected_alerts: list[str] = []
+
     def requires_khaos(self) -> bool:
         """Override this method to return True if the problem requires Khaos for fault injection."""
         return False
