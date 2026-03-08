@@ -769,7 +769,7 @@ serverFiles:
               labels:
                 severity: critical
               annotations:
-                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 2 minutes."
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 1 minute."
 
         # ---- Blackbox endpoint probe alerts ----
         # Apps: astronomy-shop (16 endpoints), hotel-reservation (8 endpoints), social-network (13 endpoints)
