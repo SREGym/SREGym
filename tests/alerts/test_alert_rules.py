@@ -197,6 +197,16 @@ def run_test(
         result.error = f"Failed to instantiate: {e}"
         return result
 
+    # --- Deploy the application ---
+    try:
+        print(f"  Deploying app '{problem.app.name}' to namespace '{problem.app.namespace}'...")
+        problem.app.deploy()
+    except Exception as e:
+        result.error = f"Failed to deploy app: {e}"
+        with contextlib.suppress(Exception):
+            problem.app.cleanup()
+        return result
+
     # --- Inject fault ---
     try:
         print("  Injecting fault...")
@@ -205,6 +215,8 @@ def run_test(
         result.error = f"Failed to inject fault: {e}"
         with contextlib.suppress(Exception):
             problem.recover_fault()
+        with contextlib.suppress(Exception):
+            problem.app.cleanup()
         return result
 
     # --- Watch for alerts ---
@@ -229,6 +241,13 @@ def run_test(
         problem.recover_fault()
     except Exception as e:
         print(f"  [warn] Recovery failed: {e}", file=sys.stderr)
+
+    # --- Cleanup app deployment ---
+    try:
+        print(f"  Cleaning up app '{problem.app.name}'...")
+        problem.app.cleanup()
+    except Exception as e:
+        print(f"  [warn] App cleanup failed: {e}", file=sys.stderr)
 
     # --- Wait for alerts to clear ---
     print(f"  Waiting for alerts to clear (timeout={recover_timeout}s)...")
