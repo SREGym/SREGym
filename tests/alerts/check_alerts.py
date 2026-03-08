@@ -1,18 +1,14 @@
+"""
+### Pipe to a log file
+PYTHONUNBUFFERED=1 uv run tests/alerts/check_alerts.py --include-pending 2>&1 | tee tmp.log
+"""
+
 import argparse
 import subprocess
 import sys
 import time
 
 import requests
-
-APP_NAMESPACES = {
-    "astronomy-shop",
-    "hotel-reservation",
-    "social-network",
-    "blueprint-hotel-reservation",
-    "train-ticket",
-    "tidb-cluster",
-}
 
 PROMETHEUS_NODE_PORT = 32000
 
@@ -42,7 +38,7 @@ def get_alerts(prometheus_url: str, include_pending: bool) -> list[dict]:
         print(f"Error: {e}", file=sys.stderr)
         return []
     alerts = resp.json().get("data", {}).get("alerts", [])
-    return [a for a in alerts if a.get("state") in states and a.get("labels", {}).get("namespace") in APP_NAMESPACES]
+    return [a for a in alerts if a.get("state") in states]
 
 
 def print_alerts(alerts: list[dict], turn: int) -> None:
@@ -88,7 +84,7 @@ def main():
         turn += 1
         alerts = get_alerts(url, args.include_pending)
         print_alerts(alerts, turn)
-        time.sleep(10)
+        time.sleep(15)
 
 
 if __name__ == "__main__":

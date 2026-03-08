@@ -765,13 +765,32 @@ serverFiles:
                 sum by (namespace, pod) (
                   kube_pod_status_ready{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster", condition="false"}
                 ) > 0
-              for: 2m
+              for: 1m
               labels:
                 severity: critical
               annotations:
                 description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 2 minutes."
 
-  # groups:
+        # ---- Blackbox endpoint probe alerts ----
+        # Apps: astronomy-shop (16 endpoints), hotel-reservation (8 endpoints), social-network (13 endpoints)
+        - name: app.endpoints
+          rules:
+            - alert: ServiceEndpointDown
+              # Only fires if the deployment for that service has ready pods.
+              expr: |
+                label_replace(
+                  probe_success{job=~"blackbox-.*"} == 0,
+                  "deployment", "$1", "instance", "([^.]+)\\..*"
+                )
+                  and on (namespace, deployment)
+                (kube_deployment_status_replicas_available > 0)
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                description: "Service endpoint {{ $labels.instance }} in {{ $labels.namespace }} is unreachable."
+
+
   #   - name: Instances
   #     rules:
   #       - alert: InstanceDown
@@ -866,7 +885,94 @@ serverFiles:
 # adds additional scrape configs to prometheus.yml
 # must be a string so you have to add a | after extraScrapeConfigs:
 # example adds prometheus-blackbox-exporter scrape config
-extraScrapeConfigs: ""
+extraScrapeConfigs: |
+  # ---- Blackbox TCP probes for app service endpoints ----
+  # Probes each service's ClusterIP:port via the blackbox exporter.
+
+  - job_name: 'blackbox-astronomy-shop'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - ad.astronomy-shop:8080
+          - cart.astronomy-shop:8080
+          - checkout.astronomy-shop:8080
+          - currency.astronomy-shop:8080
+          - email.astronomy-shop:8080
+          - frontend.astronomy-shop:8080
+          - frontend-proxy.astronomy-shop:8080
+          - image-provider.astronomy-shop:8081
+          - payment.astronomy-shop:8080
+          - product-catalog.astronomy-shop:8080
+          - product-reviews.astronomy-shop:3551
+          - quote.astronomy-shop:8080
+          - recommendation.astronomy-shop:8080
+          - shipping.astronomy-shop:8080
+          - flagd.astronomy-shop:8013
+          - kafka.astronomy-shop:9092
+        labels:
+          namespace: astronomy-shop
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  - job_name: 'blackbox-hotel-reservation'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - frontend.hotel-reservation:5000
+          - search.hotel-reservation:8082
+          - profile.hotel-reservation:8081
+          - geo.hotel-reservation:8083
+          - rate.hotel-reservation:8084
+          - recommendation.hotel-reservation:8085
+          - user.hotel-reservation:8086
+          - reservation.hotel-reservation:8087
+        labels:
+          namespace: hotel-reservation
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  - job_name: 'blackbox-social-network'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - nginx-thrift.social-network:8080
+          - media-frontend.social-network:8081
+          - user-service.social-network:9090
+          - compose-post-service.social-network:9090
+          - social-graph-service.social-network:9090
+          - post-storage-service.social-network:9090
+          - user-timeline-service.social-network:9090
+          - url-shorten-service.social-network:9090
+          - text-service.social-network:9090
+          - unique-id-service.social-network:9090
+          - user-mention-service.social-network:9090
+          - home-timeline-service.social-network:9090
+          - media-service.social-network:9090
+        labels:
+          namespace: social-network
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
   # - job_name: 'prometheus-blackbox-exporter'
   #   metrics_path: /probe
   #   params:
@@ -963,4 +1069,16 @@ prometheus-pushgateway:
     prometheus.io/probe: pushgateway
 
 prometheus-blackbox-exporter:
-  enabled: false
+  enabled: true
+  config:
+    modules:
+      http_2xx:
+        prober: http
+        timeout: 5s
+        http:
+          valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+          follow_redirects: true
+          preferred_ip_protocol: "ip4"
+      tcp_connect:
+        prober: tcp
+        timeout: 5s

@@ -42,7 +42,6 @@ class ServicePortConflict(Problem):
 
         self.app.create_workload()
         self.mitigation_oracle = MitigationOracle(problem=self)
-        self.expected_alerts = ["PendingPodsDetected", "PodSchedulingFailure"]
 
     @mark_fault_injected
     def inject_fault(self):
