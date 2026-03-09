@@ -158,8 +158,8 @@ async def run_demo_agent():
 
     async with Client(transport) as client:
         for idx, cmd in enumerate(cmds):
-            print(f"\n{'=' * 20}")
-            print(f"WAITING FOR TRIGGER for command [{idx + 1}/{len(cmds)}]: {cmd}")
+            print(f"\n{'=' * 20}", flush=True)
+            print(f"WAITING FOR TRIGGER for command [{idx + 1}/{len(cmds)}]: {cmd}", flush=True)
 
             # Wait for file trigger
             action = await wait_for_file_trigger()
