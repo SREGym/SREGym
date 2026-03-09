@@ -827,8 +827,12 @@ serverFiles:
                 description: "Service endpoint {{ $labels.instance }} in {{ $labels.namespace }} is unreachable."
 
             - alert: HTTPProbeFailure
+              # Only fires when the nginx ingress controller is running
+              # (deployed exclusively by the ingress_misroute problem).
               expr: |
                 probe_success{job=~"blackbox-ingress-.*"} == 0
+                  and on ()
+                (kube_deployment_status_replicas_available{namespace="ingress-nginx", deployment="ingress-nginx-controller"} > 0)
               for: 30s
               labels:
                 severity: critical
