@@ -54,7 +54,7 @@ class Conductor:
         self.cluster_state = ClusterStateManager(self.kubectl)
         self._baseline_captured = False
 
-        # Kubernetes API proxy to hide chaos engineering namespaces from agents
+        # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
             listen_port=16443,

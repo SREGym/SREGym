@@ -1,5 +1,3 @@
-import time
-
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
@@ -22,17 +20,13 @@ class KubeletCrash(Problem):
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
-        # note from JC after talking to Bohan:
-        # We could consider adding an oracle later, but it's not trivial where diagnosis should go
-        # Same with mitigation, this is done with a script to kill the kubelet daemon.
-        # Maybe we could implement an oracle later to check for the status of the kubelet daemon?
         self.app.create_workload()
 
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
         self.injector.inject_kubelet_crash()
-        # rollout the services to trigger the failure
+        # rollout restart selected services for faster symptom
         for service in self.rollout_services:
             print(f"Rolling out {service}...")
             self.kubectl.trigger_rollout(deployment_name=service, namespace=self.namespace)
@@ -41,6 +35,6 @@ class KubeletCrash(Problem):
     def recover_fault(self):
         print("== Fault Recovery ==")
         self.injector.recover_kubelet_crash()
-        for service in self.rollout_services:
-            print(f"Rolling out {service}...")
-            self.kubectl.trigger_rollout(deployment_name=service, namespace=self.namespace)
+        # rollout restart all services for faster recovery
+        self.kubectl.exec_command(f"kubectl rollout restart deployment -n {self.namespace}")
+        self.kubectl.wait_for_ready(self.namespace)

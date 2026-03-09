@@ -133,6 +133,8 @@ class DiagnosisAgent(BaseAgent):
                     f"[Loop {self.loop_count}] Agent reached step limit ({self.max_step}) without submitting. "
                     "Exiting to prevent infinite retry loop. This benchmark problem is marked as failed."
                 )
+                from clients.stratus.tools.submit_tool import manual_submit_tool
+                await manual_submit_tool(ans="Agent failed to submit within step limit. Marking benchmark as failed.")
                 break
 
             self.loop_count += 1
