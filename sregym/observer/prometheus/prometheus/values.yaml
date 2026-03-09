@@ -771,6 +771,40 @@ serverFiles:
               annotations:
                 description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 1 minute."
 
+        # ---- Golden signal alerts (from OTel spanmetrics) ----
+        - name: app.goldensignal
+          rules:
+            - alert: HighRequestErrorRate
+              expr: |
+                sum by (service_name, namespace) (
+                  rate(traces_span_metrics_calls_total{
+                    status_code="STATUS_CODE_ERROR",
+                    namespace=~"astronomy-shop|hotel-reservation|social-network"
+                  }[2m])
+                ) > 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "High error rate: {{ $labels.service_name }}"
+                description: "Service {{ $labels.service_name }} in namespace {{ $labels.namespace }} has an elevated error rate (current: {{ $value | printf \"%.2f\" }} errors/s)."
+
+            - alert: HighRequestLatency
+              expr: |
+                histogram_quantile(0.95,
+                  sum by (le, service_name, namespace) (
+                    rate(traces_span_metrics_duration_milliseconds_bucket{
+                      namespace=~"astronomy-shop|hotel-reservation|social-network"
+                    }[2m])
+                  )
+                ) > 1500
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "High latency: {{ $labels.service_name }}"
+                description: "P95 latency for {{ $labels.service_name }} in namespace {{ $labels.namespace }} is above 1500ms (current: {{ $value | printf \"%.0f\" }}ms)."
+
         # ---- Blackbox endpoint probe alerts ----
         # Apps: astronomy-shop (16 endpoints), hotel-reservation (8 endpoints), social-network (13 endpoints)
         - name: app.endpoints
@@ -973,20 +1007,14 @@ extraScrapeConfigs: |
         target_label: instance
       - target_label: __address__
         replacement: prometheus-prometheus-blackbox-exporter:9115
-  # - job_name: 'prometheus-blackbox-exporter'
-  #   metrics_path: /probe
-  #   params:
-  #     module: [http_2xx]
-  #   static_configs:
-  #     - targets:
-  #       - https://example.com
-  #   relabel_configs:
-  #     - source_labels: [__address__]
-  #       target_label: __param_target
-  #     - source_labels: [__param_target]
-  #       target_label: instance
-  #     - target_label: __address__
-  #       replacement: prometheus-blackbox-exporter:9115
+  # ---- OTel Collector spanmetrics ----
+  - job_name: 'otel-spanmetrics'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - otel-collector.observe:8889
+        labels:
+          namespace: hotel-reservation
 
 # Adds option to add alert_relabel_configs to avoid duplicate alerts in alertmanager
 # useful in H/A prometheus with different external labels but the same alerts
