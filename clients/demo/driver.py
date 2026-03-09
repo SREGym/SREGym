@@ -171,18 +171,36 @@ async def run_demo_agent():
                 logger.info(f"Skipping command via file trigger: {cmd}")
                 continue
 
-            logger.info(f"[Turn {idx + 1}] Executing: {cmd}")
+            # Check if the command is a deterministic submission
+            # Matches: submit("text") or submit('text')
+            import re
 
-            start_time = time.perf_counter()
-            try:
-                result = await client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": cmd})
-                text_result = "\n".join([part.text for part in result])
-                logger.info(f"[Turn {idx + 1}] Result: {text_result}")
-                status = "success"
-            except Exception as e:
-                logger.error(f"[Turn {idx + 1}] Failed to execute: {e}")
-                text_result = str(e)
-                status = "error"
+            submit_match = re.match(r"^submit\([\"\'](.*)[\"\']\)$", cmd)
+
+            if submit_match:
+                ans = submit_match.group(1)
+                logger.info(f"[Turn {idx + 1}] Performing deterministic submission: {ans}")
+                start_time = time.perf_counter()
+                try:
+                    await manual_submit_tool(ans)
+                    text_result = f"Submitted answer: {ans}"
+                    status = "success"
+                except Exception as e:
+                    logger.error(f"[Turn {idx + 1}] Submission failed: {e}")
+                    text_result = str(e)
+                    status = "error"
+            else:
+                logger.info(f"[Turn {idx + 1}] Executing: {cmd}")
+                start_time = time.perf_counter()
+                try:
+                    result = await client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": cmd})
+                    text_result = "\n".join([part.text for part in result])
+                    logger.info(f"[Turn {idx + 1}] Result: {text_result}")
+                    status = "success"
+                except Exception as e:
+                    logger.error(f"[Turn {idx + 1}] Failed to execute: {e}")
+                    text_result = str(e)
+                    status = "error"
 
             execution_time = time.perf_counter() - start_time
 
