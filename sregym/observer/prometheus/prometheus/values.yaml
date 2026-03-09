@@ -813,16 +813,27 @@ serverFiles:
               # Only fires if the deployment for that service has ready pods.
               expr: |
                 label_replace(
-                  probe_success{job=~"blackbox-.*"} == 0,
+                  probe_success{job=~"blackbox-(astronomy-shop|hotel-reservation|social-network)"} == 0,
                   "deployment", "$1", "instance", "([^.]+)\\..*"
                 )
                   and on (namespace, deployment)
                 (kube_deployment_status_replicas_available > 0)
+
               for: 1m
               labels:
                 severity: critical
               annotations:
                 description: "Service endpoint {{ $labels.instance }} in {{ $labels.namespace }} is unreachable."
+
+            - alert: HTTPProbeFailure
+              expr: |
+                probe_success{job=~"blackbox-ingress-.*"} == 0
+              for: 30s
+              labels:
+                severity: critical
+              annotations:
+                summary: "HTTP probe failed in {{ $labels.namespace }}"
+                description: "HTTP probe to {{ $labels.instance }} in {{ $labels.namespace }} is failing."
 
 
   #   - name: Instances
@@ -1007,6 +1018,25 @@ extraScrapeConfigs: |
         target_label: instance
       - target_label: __address__
         replacement: prometheus-prometheus-blackbox-exporter:9115
+  # ---- Ingress HTTP probes ----
+  - job_name: 'blackbox-ingress-hotel-reservation'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - http://ingress-nginx-controller.ingress-nginx/api/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=38.0235&lon=-122.095
+        labels:
+          namespace: hotel-reservation
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
   # ---- OTel Collector spanmetrics ----
   - job_name: 'otel-spanmetrics'
     scrape_interval: 15s
