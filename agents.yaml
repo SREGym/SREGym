@@ -39,3 +39,9 @@ agents:
     kickoff_env: null
     install_script: install-opencode.sh
     agent_version: null
+  - name: demo
+    kickoff_command: python -m clients.demo.driver
+    kickoff_workdir: .
+    kickoff_env: null
+    install_script: null
+    agent_version: null
