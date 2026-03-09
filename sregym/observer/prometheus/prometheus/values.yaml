@@ -722,7 +722,419 @@ serverFiles:
               annotations:
                 summary: "Pod startup failure: {{ $labels.pod }}"
                 description: "The pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is stuck in {{ $labels.reason }}. Current failed container count: {{ $value }}."
-  # groups:
+            - alert: DeploymentNotReady
+              expr: |
+                 kube_deployment_status_replicas_unavailable{
+                  deployment="search"
+                  } > 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Deployment not ready: search"
+                description: "The search deployment in namespace {{ $labels.namespace }} does not have all replicas available." 
+            - alert: TiDBClusterNotReady
+              expr: |
+                tidb_cluster_status_condition{condition="Ready",status="false"} == 1
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "TiDB cluster not ready"
+                description: "TiDB cluster {{ $labels.cluster }} in namespace {{ $labels.namespace }} is not ready."
+            - alert: DeploymentNotReady
+              expr: |
+                  kube_deployment_status_replicas_unavailable{
+                    deployment="custom-service",
+                    namespace="hotel-reservation"
+                  } > 0
+                  for: 2m
+                  labels:
+                  severity: critical
+                  annotations:
+                  summary: "Custom-service deployment not ready"
+                  description: "Deployment custom-service in namespace hotel-reservation has unavailable replicas. Available replicas: {{ $value }}"
+            - alert: TiDBReplicaDeficit
+              expr: |
+                  (
+                    tidb_cluster_spec_tidb_replicas{namespace="tidb-cluster"}
+                    -
+                    tidb_cluster_status_tidb_ready_replicas{namespace="tidb-cluster"}
+                  ) > 0
+                  for: 2m
+                  labels:
+                  severity: critical
+                  annotations:
+                  summary: "TiDB replicas missing"
+                  description: "Cluster {{ $labels.cluster }} has fewer ready replicas than desired."
+            - alert: TiDBReplicaMismatch
+              expr: |
+                kube_statefulset_replicas{namespace="tidb-cluster",statefulset=~"basic-tidb.*"}
+                >
+                kube_statefulset_status_replicas_ready{namespace="tidb-cluster",statefulset=~"basic-tidb.*"}
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "TiDB replicas not ready"
+                description: "StatefulSet {{ $labels.statefulset }} has fewer ready replicas than desired."
+            - alert: HotelReservationPodCrashLooping
+              expr: increase(kube_pod_container_status_restarts_total{namespace="hotel-reservation"}[5m]) > 3
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Pod crash looping in Hotel Reservation"
+                description: "Pod {{ $labels.pod }} is restarting repeatedly."
+            - alert: GeoServiceCrashLoopBackOff
+              expr: kube_pod_container_status_waiting_reason{
+                      namespace="hotel-reservation",
+                      pod=~"geo.*",
+                      reason="CrashLoopBackOff"
+                    } == 1
+              for: 1m
+              labels:
+                severity: critical
+                service: geo
+              annotations:
+                summary: "Geo service is in CrashLoopBackOff"
+                description: "Geo pod in hotel-reservation namespace is repeatedly crashing. Likely dependency failure (MongoDB authentication or connection issue)."
+            - alert: GeoServiceRestartStorm
+              expr: increase(
+                      kube_pod_container_status_restarts_total{
+                        namespace="hotel-reservation",
+                        pod=~"geo.*"
+                      }[5m]
+                    ) > 3
+              for: 1m
+              labels:
+                severity: critical
+                service: geo
+              annotations:
+                summary: "Geo service restart storm detected"
+                description: "Geo container restarted more than 3 times in 5 minutes."
+            - alert: RateServiceCrashLoopBackOff
+              expr: kube_pod_container_status_waiting_reason{
+                      namespace="hotel-reservation",
+                      pod=~"rate.*",
+                      reason="CrashLoopBackOff"
+                    } == 1
+              for: 1m
+              labels:
+                severity: critical
+                service: rate
+              annotations:
+                summary: "Rate service is in CrashLoopBackOff"
+                description: "Rate pod in hotel-reservation namespace is repeatedly crashing."
+            - alert: RateServiceRestartStorm
+              expr: increase(
+                      kube_pod_container_status_restarts_total{
+                        namespace="hotel-reservation",
+                        pod=~"rate.*"
+                      }[5m]
+                    ) > 3
+              for: 1m
+              labels:
+                severity: critical
+                service: rate
+              annotations:
+                summary: "Rate service restart storm detected"
+                description: "Rate container restarted more than 3 times in 5 minutes."
+            - alert: ValkeyCartCrashLooping
+              expr: kube_pod_container_status_waiting_reason{pod=~"valkey-cart.*", reason="CrashLoopBackOff"} == 1
+              for: 30s
+              labels:
+                severity: critical
+              annotations:
+                summary: "Valkey cart pod crash looping"
+                description: "Pod {{ $labels.pod }} is in CrashLoopBackOff and not ready"
+            - alert: ValkeyUnavailable
+              expr: redis_up{instance=~".*valkey.*"} == 0
+              for: 30s
+              labels:
+                severity: critical
+              annotations:
+                summary: "Valkey database unavailable"
+                description: "Prometheus exporter cannot connect to Valkey instance"
+            - alert: UserServiceUnschedulable
+              expr: kube_pod_status_unschedulable{pod=~"user-service.*"} == 1
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "User service pod unschedulable"
+                description: "user-service pod cannot be scheduled to any node"
+            - alert: JaegerPodsPending
+              expr: kube_pod_status_phase{pod=~"jaeger.*", phase="Pending"} == 1
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Jaeger pods pending"
+                description: "Jaeger Pods stuck in 'Pending' status"
+            - alert: JaegerReplicasUnavailable
+              expr: kube_deployment_status_replicas_unavailable{deployment="jaeger", namespace="social-network"} > 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Jaeger deployment unhealthy"
+                description: "Jaeger deployment has unavailable replicas"
+            - alert: ProfileServiceUnavailable
+              expr: kube_endpoint_address_available{service="profile", namespace="hotel-reservation"} == 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Profile service unavailable"
+                description: "Profile service has no ready endpoints"
+       
+            - alert: DeploymentNotReady
+              expr: |
+                kube_deployment_spec_replicas{namespace="social-network", deployment="custom-service"} > 0
+                and
+                kube_deployment_status_replicas_ready{namespace="social-network", deployment="custom-service"} == 0
+              for: 2m
+              labels:
+                severity: critical
+                service: custom-service
+                fault: rolling_update_misconfiguration
+              annotations:
+                summary: "Deployment custom-service has no ready pods"
+                description: |
+                  All replicas are unavailable and pods may be stuck in Init state.
+            - alert: PodStuckInInit
+              expr: |
+                kube_pod_container_status_waiting_reason{
+                  namespace="social-network",
+                  reason="Init"
+                } > 0
+              for: 2m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Pods stuck in Init phase"
+                description: |
+                  One or more pods are stuck in Init containers in namespace social-network.
+            - alert: DeploymentRolloutStalled
+              expr: |
+                kube_deployment_spec_replicas{namespace="social-network", deployment="custom-service"} > 0
+                and
+                kube_deployment_status_replicas_available{namespace="social-network", deployment="custom-service"} == 0
+                and
+                sum by (deployment) (
+                  kube_pod_container_status_waiting_reason{
+                    namespace="social-network",
+                    reason="Init"
+                  }
+                ) > 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Stalled Rollout"
+                description: |
+                  The custom-service deployment rollout is stalled.
+                  Pods are stuck in init containers and no replicas are available.
+            - alert: ServiceConnectionErrors
+              expr: |
+                rate(http_client_errors_total[2m]) > 2
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "High client connection error rate"
+                description: |
+                  Services are experiencing connection errors to dependencies.
+
+            - alert: DownstreamRequestFailures
+              expr: |
+                rate(http_requests_total{namespace="social-network",status=~"5.."}[2m]) > 5
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Downstream service failures detected"
+                description: |
+                  Service requests are failing.
+            - alert: DownstreamRequestFailures
+              expr: |
+                rate(http_requests_total{namespace="astronomy-shop",status=~"5.."}[2m]) > 5
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Downstream service failures detected"
+                description: |
+                  Service requests are failing.
+            - alert: AstronomyShopConnectionErrors
+              expr: |
+                rate(http_client_errors_total{namespace="astronomy-shop"}[2m]) > 2
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Service connection errors"
+                description: |
+                  Services are unable to connect to dependencies.
+            - alert: SocialNetworkConnectionErrors
+              expr: |
+                rate(http_client_errors_total{namespace="social-network"}[2m]) > 2
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Service connection errors"
+                description: |
+                  Services are unable to connect to dependencies.
+            - alert: DeploymentUnavailable
+              expr: |
+                kube_deployment_spec_replicas{
+                  namespace="social-network",
+                  deployment="user-service"
+                } > 0
+                and
+                kube_deployment_status_replicas_available{
+                  namespace="social-network",
+                  deployment="user-service"
+                } == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "user-service deployment unavailable"
+                description: |
+                  Deployment user-service has no available replicas.
+            - alert: UserServiceSchedulingBlocked
+              expr: |
+                kube_pod_status_phase{
+                  namespace="social-network",
+                  phase="Pending",
+                  pod=~"user-service.*"
+                } > 0
+                and
+                kube_deployment_status_replicas_available{
+                  namespace="social-network",
+                  deployment="user-service"
+                } == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "user-service pods stuck pending"
+                description: |
+                  user-service pods cannot be scheduled and remain in Pending state.
+                  This may indicate a persistent volume node affinity conflict.
+            - alert: MongoDBPodsPending
+              expr: |
+                kube_pod_status_phase{
+                  namespace="hotel-reservation",
+                  pod=~"mongodb-.*",
+                  phase="Pending"
+                } > 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "MongoDB pods stuck in Pending state"
+                description: |
+                  MongoDB pods are stuck in Pending state.
+            - alert: MongoDBPodsUnavailable
+              expr: |
+                sum by (namespace)(
+                  kube_pod_status_ready{
+                    namespace="hotel-reservation",
+                    pod=~"mongodb-.*",
+                    condition="true"
+                  }
+                ) == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "MongoDB database unavailable"
+                description: |
+                  No MongoDB pods are ready in the hotel-reservation namespace.
+            - alert: MongoDBConnectionFailures
+              expr: |
+                rate(database_query_errors_total{namespace="hotel-reservation"}[2m]) > 2
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Database connection failures detected"
+                description: |
+                  Services are failing to connect to MongoDB.
+            - alert: ServiceCrashLoop
+              expr: |
+                rate(kube_pod_container_status_restarts_total{
+                  namespace="hotel-reservation",
+                  pod=~"rate|reservation"
+                }[5m]) > 1
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Service repeatedly crashing"
+                description: |
+                  A service pod is restarting repeatedly, likely due to database connectivity failures.
+            - alert: InitContainerFailures
+              expr: |
+                kube_pod_init_container_status_restarts_total{
+                  namespace="astronomy-shop",
+                  pod=~"frontend.*"
+                } > 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Frontend init container failing"
+                description: |
+                  The frontend pod init container is failing repeatedly.
+            - alert: FrontendPodStuckInitializing
+              expr: |
+                kube_pod_status_phase{
+                  namespace="astronomy-shop",
+                  pod=~"frontend.*",
+                  phase="Pending"
+                } > 0
+              for: 3m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Frontend pod stuck initializing"
+                description: |
+                  Frontend pod is stuck during initialization.
+            - alert: FrontendUnavailable
+              expr: |
+                kube_pod_container_status_ready{
+                  namespace="astronomy-shop",
+                  pod=~"frontend.*",
+                  condition="true"
+                } == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Frontend service unavailable"
+                description: |
+                  No frontend pod is ready in astronomy-shop namespace.
+            - alert: FrontendUnavailable
+              expr: |
+                sum by (namespace)(
+                  kube_pod_container_status_ready{
+                    namespace="astronomy-shop",
+                    pod=~"frontend.*",
+                    condition="true"
+                  }
+                ) == 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Frontend service unavailable"
+            
+              # groups:
   #   - name: Instances
   #     rules:
   #       - alert: InstanceDown
