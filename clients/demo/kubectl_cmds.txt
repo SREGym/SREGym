@@ -1,5 +1,2 @@
-kubectl get pods
-kubectl get services
-kubectl get deployments
-kubectl get nodes
-kubectl get pods -o wide
+kubectl scale deployment user-service --replicas=1 -n social-network
+kubectl patch deployment user-service -n social-network -p '{"spec":{"replicas":1}}'

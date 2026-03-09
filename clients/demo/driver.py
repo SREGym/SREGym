@@ -118,7 +118,7 @@ async def run_demo_agent():
     problem_id = get_curr_problem()
     logger.info(f"Starting Demo Agent for problem: {problem_id}")
 
-    cmds_file = Path("kubectl_cmds.txt")
+    cmds_file = Path(__file__).parent / Path("kubectl_cmds.txt")
     if not cmds_file.exists():
         logger.error("kubectl_cmds.txt not found! Please create it with kubectl commands, one per line.")
         return
@@ -177,7 +177,7 @@ async def run_demo_agent():
             try:
                 result = await client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": cmd})
                 text_result = "\n".join([part.text for part in result])
-                logger.info(f"[Turn {idx + 1}] Result: {text_result[:200]}...")
+                logger.info(f"[Turn {idx + 1}] Result: {text_result}")
                 status = "success"
             except Exception as e:
                 logger.error(f"[Turn {idx + 1}] Failed to execute: {e}")
