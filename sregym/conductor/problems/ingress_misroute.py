@@ -35,15 +35,22 @@ class IngressMisroute(Problem):
                 ingress_manifest = {
                     "apiVersion": "networking.k8s.io/v1",
                     "kind": "Ingress",
-                    "metadata": {"name": self.ingress_name, "namespace": self.namespace},
+                    "metadata": {
+                        "name": self.ingress_name,
+                        "namespace": self.namespace,
+                        "annotations": {
+                            "nginx.ingress.kubernetes.io/rewrite-target": "/$2",
+                        },
+                    },
                     "spec": {
+                        "ingressClassName": "nginx",
                         "rules": [
                             {
                                 "http": {
                                     "paths": [
                                         {
-                                            "path": self.path,
-                                            "pathType": "Prefix",
+                                            "path": self.path + "(/|$)(.*)",
+                                            "pathType": "ImplementationSpecific",
                                             "backend": {
                                                 "service": {"name": self.correct_service, "port": {"number": 80}}
                                             },
@@ -51,7 +58,7 @@ class IngressMisroute(Problem):
                                     ]
                                 }
                             }
-                        ]
+                        ],
                     },
                 }
                 self.networking_v1.create_namespaced_ingress(namespace=self.namespace, body=ingress_manifest)
@@ -62,7 +69,7 @@ class IngressMisroute(Problem):
         # Modify the rule for /api to wrong_service
         for rule in ingress.spec.rules:
             for path in rule.http.paths:
-                if path.path == self.path:
+                if path.path.startswith(self.path):
                     path.backend.service.name = self.wrong_service
         self.networking_v1.replace_namespaced_ingress(name=self.ingress_name, namespace=self.namespace, body=ingress)
 
@@ -72,6 +79,6 @@ class IngressMisroute(Problem):
         ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.namespace)
         for rule in ingress.spec.rules:
             for path in rule.http.paths:
-                if path.path == self.path:
+                if path.path.startswith(self.path):
                     path.backend.service.name = self.correct_service
         self.networking_v1.replace_namespaced_ingress(name=self.ingress_name, namespace=self.namespace, body=ingress)
