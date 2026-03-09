@@ -78,6 +78,8 @@ spec:
         app-name: otel-collector
       name: otel-collector
     spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
       containers:
         - name: otel-collector
           image: otel/opentelemetry-collector-contrib:0.98.0

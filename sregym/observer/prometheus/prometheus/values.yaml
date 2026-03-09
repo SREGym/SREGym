@@ -384,7 +384,8 @@ server:
   ## Node labels for Prometheus server pod assignment
   ## Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/
   ##
-  nodeSelector: {}
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
 
   ## Pod affinity
   ##
@@ -1086,6 +1087,9 @@ alertmanager:
   persistence:
     size: 2Gi
 
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+
   podSecurityContext:
     runAsUser: 65534
     runAsNonRoot: true
@@ -1099,6 +1103,9 @@ kube-state-metrics:
   ## If false, kube-state-metrics sub-chart will not be installed
   ##
   enabled: true
+
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
 
 ## prometheus-node-exporter sub-chart configurable values
 ## Please see https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus-node-exporter
@@ -1122,12 +1129,18 @@ prometheus-pushgateway:
   ##
   enabled: true
 
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+
   # Optional service annotations
   serviceAnnotations:
     prometheus.io/probe: pushgateway
 
 prometheus-blackbox-exporter:
   enabled: true
+
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
   config:
     modules:
       http_2xx:

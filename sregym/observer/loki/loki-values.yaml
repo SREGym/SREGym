@@ -40,6 +40,8 @@ deploymentMode: SingleBinary
 
 singleBinary:
   replicas: 1
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
   persistence:
     enabled: true
     storageClass: openebs-hostpath
@@ -57,6 +59,8 @@ write:
 gateway:
   enabled: true
   replicas: 1
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
 
 # Enable Promtail for log collection
 promtail:
