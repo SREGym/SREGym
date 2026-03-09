@@ -149,17 +149,17 @@ async def run_demo_agent():
         if f.exists():
             f.unlink()
 
-    print(f"\n{'*' * 50}")
-    print("DEMO AGENT ACTIVE (FILE-TRIGGER MODE)")
-    print(f"Advance commands: docker exec <id> touch {NEXT_FILE}")
-    print(f"Skip commands:    docker exec <id> touch {SKIP_FILE}")
-    print(f"Quit agent:       docker exec <id> touch {QUIT_FILE}")
-    print(f"{'*' * 50}\n")
+    print(f"\n{'*' * 50}", flush=True)
+    print("DEMO AGENT ACTIVE (FILE-TRIGGER MODE)", flush=True)
+    print(f"Advance commands: docker exec <id> touch {NEXT_FILE}", flush=True)
+    print(f"Skip commands:    docker exec <id> touch {SKIP_FILE}", flush=True)
+    print(f"Quit agent:       docker exec <id> touch {QUIT_FILE}", flush=True)
+    print(f"{'*' * 50}\n", flush=True)
 
     async with Client(transport) as client:
         for idx, cmd in enumerate(cmds):
-            print(f"\n{'=' * 20}")
-            print(f"WAITING FOR TRIGGER for command [{idx + 1}/{len(cmds)}]: {cmd}")
+            print(f"\n{'=' * 20}", flush=True)
+            print(f"WAITING FOR TRIGGER for command [{idx + 1}/{len(cmds)}]: {cmd}", flush=True)
 
             # Wait for file trigger
             action = await wait_for_file_trigger()
