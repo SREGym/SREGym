@@ -36,6 +36,7 @@ def driver_loop(
     use_external_harness: bool = False,
     n_attempts: int = 1,
     agent_timeout: int = 1800,
+    resume_csv: str | None = None,
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -47,6 +48,7 @@ def driver_loop(
         agent_to_run: Agent name to run (required unless use_external_harness is True).
         use_external_harness: If True, inject fault and exit without running evaluation logic.
         n_attempts: Number of end-to-end attempts to run each problem.
+        resume_csv: Path to a previous results CSV to resume from (skip completed problems).
     """
 
     async def driver():
@@ -90,7 +92,32 @@ def driver_loop(
         for unknown_problem_id in unknown_problem_ids:
             problem_ids.remove(unknown_problem_id)
 
+        # Resume support: load completed problems from previous CSV and pre-seed results
+        completed_problems: set[str] = set()
+        if resume_csv:
+            try:
+                with open(resume_csv, newline="") as f:
+                    reader = csv.DictReader(f)
+                    resume_rows = list(reader)
+                # Group by problem_id and count attempts
+                from collections import Counter
+
+                attempt_counts = Counter(r["problem_id"] for r in resume_rows)
+                completed_problems = {pid for pid, count in attempt_counts.items() if count >= n_attempts}
+                # Pre-seed all_results_for_agent with the resumed data
+                for row in resume_rows:
+                    all_results_for_agent.append({agent_to_run: [row]})
+                console.log(
+                    f"📋 Resuming from {resume_csv}: {len(completed_problems)} problems already done, skipping them"
+                )
+            except Exception as e:
+                console.log(f"⚠️  Failed to load resume CSV: {e}")
+
         for pid in problem_ids:
+            if pid in completed_problems:
+                console.log(f"⏭️  Skipping already-completed problem: {pid}")
+                continue
+
             conductor.problem_id = pid
 
             # Keep a record of results for this problem in a temp file in case an attempt fails
@@ -211,6 +238,7 @@ def _run_driver_and_shutdown(
     use_external_harness: bool = False,
     n_attempts: int = 1,
     agent_timeout: int = 1800,
+    resume_csv: str | None = None,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     try:
@@ -221,6 +249,7 @@ def _run_driver_and_shutdown(
             use_external_harness=use_external_harness,
             n_attempts=n_attempts,
             agent_timeout=agent_timeout,
+            resume_csv=resume_csv,
         )
         global _driver_results
         _driver_results = results
@@ -264,7 +293,15 @@ def main(args):
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
-        args=(conductor, args.problem, args.agent, args.use_external_harness, args.n_attempts, args.agent_timeout),
+        args=(
+            conductor,
+            args.problem,
+            args.agent,
+            args.use_external_harness,
+            args.n_attempts,
+            args.agent_timeout,
+            args.resume,
+        ),
         name="driver",
         daemon=True,
     )
@@ -367,6 +404,12 @@ if __name__ == "__main__":
         type=int,
         default=1800,
         help="Agent timeout in seconds after deployment (default: 1800 = 30 min)",
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Resume from a previous results CSV file. Problems already in the CSV will be skipped.",
     )
     args = parser.parse_args()
 
