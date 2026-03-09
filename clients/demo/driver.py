@@ -5,8 +5,6 @@ import os
 import sys
 import time
 import uuid
-
-# for external call
 from ast import literal_eval
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +18,7 @@ from mcp.client.sse import sse_client
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig
 from logger import init_logger
 
+# for external call
 sregym_core_path = Path(__file__).resolve().parents[2]
 if str(sregym_core_path) not in sys.path:
     sys.path.insert(0, str(sregym_core_path))
@@ -28,6 +27,26 @@ init_logger()
 logger = logging.getLogger("all.demo.driver")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
+
+# File trigger paths
+NEXT_FILE = Path("/tmp/next")
+SKIP_FILE = Path("/tmp/skip")
+QUIT_FILE = Path("/tmp/quit")
+
+
+async def wait_for_file_trigger():
+    """Wait for one of the trigger files to be created, then delete it and return the action."""
+    while True:
+        if QUIT_FILE.exists():
+            QUIT_FILE.unlink()
+            return "quit"
+        if SKIP_FILE.exists():
+            SKIP_FILE.unlink()
+            return "skip"
+        if NEXT_FILE.exists():
+            NEXT_FILE.unlink()
+            return "next"
+        await asyncio.sleep(0.5)
 
 
 def get_current_datetime_formatted():
@@ -125,8 +144,33 @@ async def run_demo_agent():
 
     events = []
 
+    # Ensure any stale trigger files are removed
+    for f in [NEXT_FILE, SKIP_FILE, QUIT_FILE]:
+        if f.exists():
+            f.unlink()
+
+    print(f"\n{'*' * 50}")
+    print("DEMO AGENT ACTIVE (FILE-TRIGGER MODE)")
+    print(f"Advance commands: docker exec <id> touch {NEXT_FILE}")
+    print(f"Skip commands:    docker exec <id> touch {SKIP_FILE}")
+    print(f"Quit agent:       docker exec <id> touch {QUIT_FILE}")
+    print(f"{'*' * 50}\n")
+
     async with Client(transport) as client:
         for idx, cmd in enumerate(cmds):
+            print(f"\n{'=' * 20}")
+            print(f"WAITING FOR TRIGGER for command [{idx + 1}/{len(cmds)}]: {cmd}")
+
+            # Wait for file trigger
+            action = await wait_for_file_trigger()
+
+            if action == "quit":
+                logger.info("User requested to quit via file trigger. Stopping execution.")
+                break
+            elif action == "skip":
+                logger.info(f"Skipping command via file trigger: {cmd}")
+                continue
+
             logger.info(f"[Turn {idx + 1}] Executing: {cmd}")
 
             start_time = time.perf_counter()
@@ -169,8 +213,7 @@ async def run_demo_agent():
             }
             events.append(event)
 
-            # Optional: Add small sleep between commands to simulate thinking
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
 
     # Manual submission at the end
     logger.info("All commands executed. Submitting results.")
