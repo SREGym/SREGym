@@ -46,9 +46,10 @@ class Jaeger:
         for resource in ["deployment", "statefulset"]:
             self.run_cmd(f"kubectl delete {resource} -n {namespace} -l app-name=jaeger --ignore-not-found")
 
-        # All jaeger service names that apps might reference
+        # All jaeger service names that apps might reference.
+        # Route through OTel Collector so traces are converted to span metrics.
         jaeger_service_names = ["jaeger", "jaeger-agent", "jaeger-collector", "jaeger-query"]
-        external_name = f"jaeger-agent.{self.namespace}.svc.cluster.local"
+        external_name = f"otel-collector.{self.namespace}.svc.cluster.local"
 
         for svc_name in jaeger_service_names:
             self.run_cmd(f"kubectl delete svc -n {namespace} {svc_name} --ignore-not-found")
