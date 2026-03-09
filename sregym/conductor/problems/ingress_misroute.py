@@ -3,6 +3,7 @@ from kubernetes import client
 from sregym.conductor.oracles.ingress_misroute_oracle import IngressMisrouteMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.observer.ingress_nginx import IngressNginx
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -24,9 +25,32 @@ class IngressMisroute(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = IngressMisrouteMitigationOracle(problem=self)
 
+    def _ensure_proxy_services(self):
+        """Create proxy services that map the ingress backend names to the real app services."""
+        v1 = client.CoreV1Api()
+        service_map = {
+            self.correct_service: ("frontend", 5000),
+            self.wrong_service: ("recommendation", 8085),
+        }
+        for svc_name, (app_name, target_port) in service_map.items():
+            body = client.V1Service(
+                metadata=client.V1ObjectMeta(name=svc_name, namespace=self.namespace),
+                spec=client.V1ServiceSpec(
+                    ports=[client.V1ServicePort(port=80, target_port=target_port)],
+                    selector={"io.kompose.service": app_name},
+                ),
+            )
+            try:
+                v1.create_namespaced_service(namespace=self.namespace, body=body)
+            except client.exceptions.ApiException as e:
+                if e.status != 409:  # already exists
+                    raise
+
     @mark_fault_injected
     def inject_fault(self):
         """Misroute /api to wrong backend"""
+        IngressNginx().deploy()
+        self._ensure_proxy_services()
 
         try:
             ingress = self.networking_v1.read_namespaced_ingress(name=self.ingress_name, namespace=self.namespace)
