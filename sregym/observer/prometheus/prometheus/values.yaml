@@ -803,19 +803,34 @@ serverFiles:
         - name: app.goldensignal
           rules:
             - alert: HighRequestErrorRate
+              # Fires when >5% of requests are errors, with a minimum request volume.
               expr: |
+                (
+                  sum by (service_name, namespace) (
+                    rate(traces_span_metrics_calls_total{
+                      status_code="STATUS_CODE_ERROR",
+                      namespace=~"astronomy-shop|hotel-reservation|social-network"
+                    }[2m])
+                  )
+                  /
+                  sum by (service_name, namespace) (
+                    rate(traces_span_metrics_calls_total{
+                      namespace=~"astronomy-shop|hotel-reservation|social-network"
+                    }[2m])
+                  )
+                ) > 0.05
+                  and
                 sum by (service_name, namespace) (
                   rate(traces_span_metrics_calls_total{
-                    status_code="STATUS_CODE_ERROR",
                     namespace=~"astronomy-shop|hotel-reservation|social-network"
                   }[2m])
-                ) > 0
+                ) > 0.1
               for: 1m
               labels:
                 severity: critical
               annotations:
                 summary: "High error rate: {{ $labels.service_name }}"
-                description: "Service {{ $labels.service_name }} in namespace {{ $labels.namespace }} has an elevated error rate (current: {{ $value | printf \"%.2f\" }} errors/s)."
+                description: "Service {{ $labels.service_name }} in namespace {{ $labels.namespace }} has an elevated error rate (current: {{ $value | humanizePercentage }})."
 
             - alert: HighRequestErrorRate
               # Locust load generator error detection (train-ticket).
