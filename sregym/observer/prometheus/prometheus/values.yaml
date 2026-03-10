@@ -799,33 +799,6 @@ serverFiles:
                 summary: "CPU throttling: {{ $labels.pod }}"
                 description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is being CPU throttled ({{ $value | humanizePercentage }} of periods throttled)."
 
-            - alert: ContainerMemoryPressure
-              # Fires when a container's working set memory exceeds 85% of its limit.
-              # Catches memory leaks approaching OOMKill.
-              expr: |
-                (
-                  container_memory_working_set_bytes{
-                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
-                    container!=""
-                  }
-                  /
-                  container_spec_memory_limit_bytes{
-                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
-                    container!=""
-                  }
-                ) > 0.85
-                  and
-                container_spec_memory_limit_bytes{
-                  namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
-                  container!=""
-                } > 0
-              for: 2m
-              labels:
-                severity: warning
-              annotations:
-                summary: "Memory pressure: {{ $labels.pod }}/{{ $labels.container }}"
-                description: "Container {{ $labels.container }} in pod {{ $labels.pod }} ({{ $labels.namespace }}) is using {{ $value | humanizePercentage }} of its memory limit."
-
         # ---- Golden signal alerts (from OTel spanmetrics) ----
         - name: app.goldensignal
           rules:

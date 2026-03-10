@@ -11,8 +11,8 @@ from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import Capacity
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
-from sregym.conductor.problems.email_memory_leak import EmailMemoryLeak
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
+from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
@@ -161,7 +161,7 @@ class ProblemRegistry:
             "astronomy_shop_ad_service_image_slow_load": ImageSlowLoad,
             "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,
             "astronomy_shop_cart_service_failure": CartServiceFailure,
-            "astronomy_shop_email_memory_leak": EmailMemoryLeak,
+            "astronomy_shop_failed_readiness_probe": FailedReadinessProbe,
             "astronomy_shop_llm_inaccurate_response": LlmInaccurateResponse,
             "astronomy_shop_llm_rate_limit_error": LlmRateLimitError,
             "astronomy_shop_payment_service_failure": PaymentServiceFailure,
