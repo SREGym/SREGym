@@ -13,9 +13,19 @@ data:
             endpoint: "0.0.0.0:6831"
           grpc:
             endpoint: "0.0.0.0:14250"
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
 
     connectors:
       spanmetrics:
+        namespace: traces_span_metrics
+        histogram:
+          explicit:
+            buckets: [5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 1500, 2000, 5000]
+        dimensions: []
+      spanmetrics/otlp:
         namespace: traces_span_metrics
         histogram:
           explicit:
@@ -29,15 +39,23 @@ data:
           insecure: true
       prometheus:
         endpoint: "0.0.0.0:8889"
+      prometheus/otlp:
+        endpoint: "0.0.0.0:8890"
 
     service:
       pipelines:
         traces:
           receivers: [jaeger]
           exporters: [otlp, spanmetrics]
+        traces/otlp:
+          receivers: [otlp]
+          exporters: [otlp, spanmetrics/otlp]
         metrics/spanmetrics:
           receivers: [spanmetrics]
           exporters: [prometheus]
+        metrics/spanmetrics-otlp:
+          receivers: [spanmetrics/otlp]
+          exporters: [prometheus/otlp]
 ---
 apiVersion: v1
 kind: Service
@@ -54,8 +72,14 @@ spec:
     - port: 14250
       name: jaeger-grpc
       protocol: TCP
+    - port: 4317
+      name: otlp-grpc
+      protocol: TCP
     - port: 8889
       name: prometheus
+      protocol: TCP
+    - port: 8890
+      name: prometheus-otlp
       protocol: TCP
   selector:
     app-name: otel-collector
@@ -82,7 +106,7 @@ spec:
         node-role.kubernetes.io/control-plane: ""
       containers:
         - name: otel-collector
-          image: otel/opentelemetry-collector-contrib:0.98.0
+          image: otel/opentelemetry-collector-contrib:0.104.0
           args:
             - "--config=/etc/otel/config.yaml"
           ports:
@@ -90,7 +114,11 @@ spec:
               protocol: UDP
             - containerPort: 14250
               protocol: TCP
+            - containerPort: 4317
+              protocol: TCP
             - containerPort: 8889
+              protocol: TCP
+            - containerPort: 8890
               protocol: TCP
           volumeMounts:
             - name: config
