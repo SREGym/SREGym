@@ -867,6 +867,42 @@ serverFiles:
                 summary: "High latency: {{ $labels.service_name }}"
                 description: "P95 latency for {{ $labels.service_name }} in namespace {{ $labels.namespace }} is above 1500ms (current: {{ $value | printf \"%.0f\" }}ms)."
 
+        # ---- Messaging / async processing alerts ----
+        - name: app.messaging
+          rules:
+            - alert: MessageConsumerLag
+              # Detects when individual message consumers fall behind producers.
+              # Compares per-consumer "receive" rate to producer "publish" rate.
+              # Normal: each consumer keeps pace with the producer (ratio ≈ 1.0).
+              # Under lag: consumer falls behind (ratio > 1.5).
+              expr: |
+                (
+                  sum by (namespace) (
+                    rate(traces_span_metrics_calls_total{
+                      namespace=~"astronomy-shop|hotel-reservation|social-network",
+                      span_name=~"publish .*"
+                    }[5m])
+                  )
+                  /
+                  clamp_min(
+                    min by (namespace) (
+                      sum by (namespace, service_name) (
+                        rate(traces_span_metrics_calls_total{
+                          namespace=~"astronomy-shop|hotel-reservation|social-network",
+                          span_name=~"receive .*"
+                        }[5m])
+                      )
+                    ),
+                    0.001
+                  )
+                ) > 1.5
+              for: 2m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Message consumer lag detected in {{ $labels.namespace }}"
+                description: "Producers are outpacing the slowest consumer in {{ $labels.namespace }} by {{ $value | printf \"%.1f\" }}x. Messages may be accumulating in the queue."
+
         # ---- Blackbox endpoint probe alerts ----
         # Apps: astronomy-shop (16 endpoints), hotel-reservation (8 endpoints), social-network (13 endpoints)
         - name: app.endpoints
