@@ -781,13 +781,13 @@ serverFiles:
             - alert: ContainerCPUThrottling
               # Fires when >25% of CPU periods are throttled (container hitting its limit).
               expr: |
-                sum by (namespace, pod, container) (
+                sum by (namespace, pod) (
                   rate(container_cpu_cfs_throttled_periods_total{
                     namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket"
                   }[5m])
                 )
                 /
-                sum by (namespace, pod, container) (
+                sum by (namespace, pod) (
                   rate(container_cpu_cfs_periods_total{
                     namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket"
                   }[5m])
@@ -796,8 +796,8 @@ serverFiles:
               labels:
                 severity: warning
               annotations:
-                summary: "CPU throttling: {{ $labels.pod }}/{{ $labels.container }}"
-                description: "Container {{ $labels.container }} in pod {{ $labels.pod }} ({{ $labels.namespace }}) is being CPU throttled ({{ $value | printf \"%.0f\" }}% of periods throttled)."
+                summary: "CPU throttling: {{ $labels.pod }}"
+                description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is being CPU throttled ({{ $value | humanizePercentage }} of periods throttled)."
 
         # ---- Golden signal alerts (from OTel spanmetrics) ----
         - name: app.goldensignal
@@ -939,7 +939,7 @@ serverFiles:
           - source_labels: [__meta_kubernetes_endpoints_name]
             action: keep
             regex: .*kube-state-metrics.*
-      - job_name: prometheus
+      - job_name: prometheus-self
         static_configs:
           - targets:
             - localhost:9090
@@ -985,7 +985,7 @@ serverFiles:
           - action: labelmap
             regex: __meta_kubernetes_node_label_(.+)
 
-      - job_name: 'kubernetes-nodes'
+      - job_name: 'node-exporter'
         kubernetes_sd_configs:
           - role: endpoints
         relabel_configs:

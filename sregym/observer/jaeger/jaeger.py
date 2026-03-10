@@ -57,3 +57,12 @@ class Jaeger:
                 f"kubectl create service externalname {svc_name} -n {namespace} --external-name {external_name}"
             )
             logger.info(f"Created ExternalName service '{svc_name}' in namespace '{namespace}' -> {external_name}")
+
+        # Restart any OTel collector DaemonSets in the namespace so they
+        # re-resolve DNS and connect to the central collector instead of the
+        # now-deleted local Jaeger.
+        try:
+            self.run_cmd(f"kubectl rollout restart daemonset/otel-collector-agent -n {namespace}")
+            logger.info(f"Restarted otel-collector-agent DaemonSet in namespace '{namespace}'")
+        except Exception:
+            pass  # DaemonSet may not exist in every namespace
