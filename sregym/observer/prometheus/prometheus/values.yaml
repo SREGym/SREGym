@@ -799,32 +799,60 @@ serverFiles:
                 summary: "CPU throttling: {{ $labels.pod }}"
                 description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is being CPU throttled ({{ $value | humanizePercentage }} of periods throttled)."
 
+            - alert: ContainerMemoryPressure
+              # Fires when a container's working set memory exceeds 85% of its limit.
+              # Catches memory leaks approaching OOMKill.
+              expr: |
+                (
+                  container_memory_working_set_bytes{
+                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
+                    container!=""
+                  }
+                  /
+                  container_spec_memory_limit_bytes{
+                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
+                    container!=""
+                  }
+                ) > 0.85
+                  and
+                container_spec_memory_limit_bytes{
+                  namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
+                  container!=""
+                } > 0
+              for: 2m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Memory pressure: {{ $labels.pod }}/{{ $labels.container }}"
+                description: "Container {{ $labels.container }} in pod {{ $labels.pod }} ({{ $labels.namespace }}) is using {{ $value | humanizePercentage }} of its memory limit."
+
         # ---- Golden signal alerts (from OTel spanmetrics) ----
         - name: app.goldensignal
           rules:
             - alert: HighRequestErrorRate
-              # Fires when >5% of requests are errors, with a minimum request volume.
+              # Fires when >10% of requests are errors, with a minimum request volume.
+              # Excludes infrastructure services (load-generator, flagd, kafka, valkey-cart, postgresql).
               expr: |
                 (
                   sum by (service_name, namespace) (
                     rate(traces_span_metrics_calls_total{
                       status_code="STATUS_CODE_ERROR",
-                      service_name!="load-generator",
+                      service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
                       namespace=~"astronomy-shop|hotel-reservation|social-network"
                     }[2m])
                   )
                   /
                   sum by (service_name, namespace) (
                     rate(traces_span_metrics_calls_total{
-                      service_name!="load-generator",
+                      service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
                       namespace=~"astronomy-shop|hotel-reservation|social-network"
                     }[2m])
                   )
-                ) > 0.05
+                ) > 0.10
                   and
                 sum by (service_name, namespace) (
                   rate(traces_span_metrics_calls_total{
-                    service_name!="load-generator",
+                    service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
                     namespace=~"astronomy-shop|hotel-reservation|social-network"
                   }[2m])
                 ) > 0.1
@@ -859,7 +887,7 @@ serverFiles:
               expr: |
                 sum by (service_name, namespace) (
                   rate(traces_span_metrics_calls_total{
-                    service_name!="load-generator",
+                    service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
                     namespace=~"astronomy-shop|hotel-reservation|social-network"
                   }[2m])
                 ) > 50
@@ -875,7 +903,7 @@ serverFiles:
                 histogram_quantile(0.95,
                   sum by (le, service_name, namespace) (
                     rate(traces_span_metrics_duration_milliseconds_bucket{
-                      service_name!="load-generator",
+                      service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
                       namespace=~"astronomy-shop|hotel-reservation|social-network"
                     }[2m])
                   )
@@ -899,7 +927,7 @@ serverFiles:
                 (
                   sum by (namespace) (
                     rate(traces_span_metrics_calls_total{
-                      service_name!="load-generator",
+                      service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
                       namespace=~"astronomy-shop|hotel-reservation|social-network",
                       span_name=~"publish .*"
                     }[5m])
@@ -909,7 +937,7 @@ serverFiles:
                     min by (namespace) (
                       sum by (namespace, service_name) (
                         rate(traces_span_metrics_calls_total{
-                          service_name!="load-generator",
+                          service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
                           namespace=~"astronomy-shop|hotel-reservation|social-network",
                           span_name=~"receive .*"
                         }[5m])
