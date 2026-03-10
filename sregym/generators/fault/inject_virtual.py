@@ -1664,9 +1664,9 @@ class VirtualizationFaultInjector(FaultInjector):
         for service in microservices:
             deployment_yaml = self._get_deployment_yaml(service)
 
-            # Ensure we have replicas > 1 to create potential deadlock
-            if "replicas" not in deployment_yaml["spec"] or deployment_yaml["spec"]["replicas"] < 2:
-                deployment_yaml["spec"]["replicas"] = 3  # Force multiple replicas
+            # Set replicas higher than node count to guarantee a scheduling deadlock.
+            node_count = int(self.kubectl.exec_command("kubectl get nodes --no-headers | wc -l").strip())
+            deployment_yaml["spec"]["replicas"] = node_count + 1
 
             # Create anti-affinity rules that prevent pods from being scheduled on same nodes
             anti_affinity_rules = {
