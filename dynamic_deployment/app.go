@@ -1,9 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"os/exec"
 	"strings"
-	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/list"
@@ -20,8 +20,6 @@ type Styles struct {
 	InputField lipgloss.Style
 	Footer     lipgloss.Style
 	Panel      lipgloss.Style
-	Selected   lipgloss.Style
-	Unselected lipgloss.Style
 }
 
 func DefaultStyles() *Styles {
@@ -32,8 +30,6 @@ func DefaultStyles() *Styles {
 		InputField: lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(glow).Padding(1).Width(60),
 		Footer:     lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Padding(0, 1),
 		Panel:      lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(glow).Padding(1).Margin(1),
-		Selected:   lipgloss.NewStyle().Foreground(glow).Bold(true),
-		Unselected: lipgloss.NewStyle().Foreground(lipgloss.Color("252")),
 	}
 }
 
@@ -66,23 +62,26 @@ type model struct {
 }
 
 //
-// FETCH PROBLEMS FROM PYTHON REGISTRY
+// FETCH PROBLEMS
 //
 
 func fetchProblems() []list.Item {
 	cmd := exec.Command("uv", "run", "deploy.py", "list-problems")
+
 	out, err := cmd.Output()
 	if err != nil {
 		return []list.Item{item{"Error loading problems"}}
 	}
 
 	lines := strings.Split(string(out), "\n")
+
 	var items []list.Item
 	for _, line := range lines {
 		if line != "" {
 			items = append(items, item{line})
 		}
 	}
+
 	return items
 }
 
@@ -91,6 +90,7 @@ func fetchProblems() []list.Item {
 //
 
 func New() *model {
+
 	styles := DefaultStyles()
 
 	delegate := list.NewDefaultDelegate()
@@ -104,7 +104,6 @@ func New() *model {
 	for _, name := range appNames {
 		appItems = append(appItems, item{title: name})
 	}
-	
 
 	problemItems := fetchProblems()
 
@@ -120,7 +119,6 @@ func New() *model {
 	problemList.SetShowHelp(false)
 	problemList.SetShowTitle(false)
 
-
 	answer := textinput.New()
 	answer.Placeholder = "Type problem ID..."
 	answer.Focus()
@@ -129,9 +127,8 @@ func New() *model {
 		appList:     appList,
 		problemList: problemList,
 		answer:      answer,
-		mode:        "select",
+		mode:        "apps",
 		styles:      styles,
-		status:      "",
 	}
 }
 
@@ -156,54 +153,95 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 
+		switch msg.String() {
+
+		case "tab":
+
+			if m.mode == "apps" {
+				m.mode = "problems"
+			} else if m.mode == "problems" {
+				m.mode = "apps"
+			}
+
+			return m, nil
+
+		case "q", "ctrl+c":
+			return m, tea.Quit
+		}
+
 		switch m.mode {
 
-		case "select":
+		//
+		// APP VIEW
+		//
+
+		case "apps":
 
 			switch msg.String() {
 
 			case "enter":
+
 				app := m.appList.SelectedItem().(item).Title()
+
 				m.selectedApp = app
-				m.status = "Deployed application: " + app
+				m.status = "Deploying application: " + app
+
 				go deployApp(app)
+
 				return m, nil
 
 			case "p":
-				m.mode = "problem_select"
-				return m, nil
 
-			case "q", "ctrl+c":
-				return m, tea.Quit
+				m.problemList.SetItems(fetchProblems())
+				m.problemList.ResetSelected()
+				m.mode = "problems"
+
+				return m, nil
 			}
 
 			var cmd tea.Cmd
 			m.appList, cmd = m.appList.Update(msg)
 			return m, cmd
 
-		case "problem_select":
+		//
+		// PROBLEM VIEW
+		//
+
+		case "problems":
 
 			switch msg.String() {
 
 			case "enter":
+
 				problem := m.problemList.SelectedItem().(item).Title()
-				m.status = "Ran problem: " + problem
+
+				m.status = "Running problem: " + problem
+
 				go runProblem(problem)
+
 				return m, nil
+
 			case "r":
-        		problem := m.problemList.SelectedItem().(item).Title()
-				m.status = "Recovered problem: " + problem
-        		go recoverProblem(problem)
-        		return m, nil
-    
+
+				problem := m.problemList.SelectedItem().(item).Title()
+
+				m.status = "Recovering problem: " + problem
+
+				go recoverProblem(problem)
+
+				return m, nil
 
 			case "i":
+
 				m.answer.SetValue("")
 				m.mode = "problem_input"
+
 				return m, nil
 
 			case "esc":
-				m.mode = "select"
+
+				m.mode = "apps"
+
 				return m, nil
 			}
 
@@ -211,20 +249,30 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.problemList, cmd = m.problemList.Update(msg)
 			return m, cmd
 
+		//
+		// MANUAL INPUT
+		//
+
 		case "problem_input":
 
 			switch msg.String() {
 
 			case "enter":
+
 				problem := m.answer.Value()
-				m.status = "Ran problem: " + problem
+
+				m.status = "Running problem: " + problem
+
 				go runProblem(problem)
-				m.answer.SetValue("")
-				m.mode = "problem_select"
+
+				m.mode = "problems"
+
 				return m, nil
 
 			case "esc":
-				m.mode = "problem_select"
+
+				m.mode = "problems"
+
 				return m, nil
 			}
 
@@ -251,29 +299,31 @@ func (m model) View() string {
 
 	switch m.mode {
 
-	case "select":
+	case "apps":
 
-		header := m.styles.Header.Render("DEPLOY APPLICATION (press p for problems)")
+		header := m.styles.Header.Render("APPLICATIONS")
+
 		panel := m.styles.Panel.Width(m.width - 6).Render(m.appList.View())
 
 		return lipgloss.JoinVertical(
 			lipgloss.Center,
 			header,
 			panel,
-			m.styles.Footer.Render("Enter Deploy  •  p Problems  •  q Quit"),
+			m.styles.Footer.Render("Enter Deploy • p Problems • TAB Switch • q Quit"),
 			statusLine,
 		)
 
-	case "problem_select":
+	case "problems":
 
-		header := m.styles.Header.Render("SELECT PROBLEM (press i to type manually)")
+		header := m.styles.Header.Render("PROBLEMS")
+
 		panel := m.styles.Panel.Width(m.width - 6).Render(m.problemList.View())
 
 		return lipgloss.JoinVertical(
 			lipgloss.Center,
 			header,
 			panel,
-			m.styles.Footer.Render("Enter Run  •  i Manual  •  Esc Back"),
+			m.styles.Footer.Render("Enter Run • r Recover • i Manual • TAB Switch • Esc Apps"),
 			statusLine,
 		)
 
@@ -287,7 +337,7 @@ func (m model) View() string {
 			"",
 			m.styles.InputField.Render(m.answer.View()),
 			"",
-			m.styles.Footer.Render("Enter Run  •  Esc Back"),
+			m.styles.Footer.Render("Enter Run • Esc Back"),
 			statusLine,
 		)
 	}
@@ -298,41 +348,56 @@ func (m model) View() string {
 //
 // BACKEND CALLS
 //
+
 func fetchApps() []string {
+
 	cmd := exec.Command("uv", "run", "deploy.py", "list-apps")
+
 	out, err := cmd.CombinedOutput()
+
 	if err != nil {
 		return []string{"Error loading applications"}
 	}
 
 	lines := strings.Split(string(out), "\n")
+
 	var results []string
+
 	for _, l := range lines {
 		if l != "" {
 			results = append(results, l)
 		}
 	}
+
 	return results
 }
+
 func deployApp(app string) {
+
 	cmd := exec.Command("uv", "run", "deploy.py", "deploy", "--application", app)
+
 	cmd.Run()
 }
 
 func runProblem(problem string) {
+
 	cmd := exec.Command("uv", "run", "deploy.py", "run", "--problem", problem)
+
 	cmd.Run()
 }
+
 func recoverProblem(problem string) {
-    cmd := exec.Command("uv", "run", "deploy.py","recover", "--problem", problem)
 
-    output, err := cmd.CombinedOutput()
-    if err != nil {
-        fmt.Println("Recovery error:", err)
-        return
-    }
+	cmd := exec.Command("uv", "run", "deploy.py", "recover", "--problem", problem)
 
-    fmt.Println(string(output))
+	output, err := cmd.CombinedOutput()
+
+	if err != nil {
+		fmt.Println("Recovery error:", err)
+		return
+	}
+
+	fmt.Println(string(output))
 }
 
 //
@@ -340,8 +405,11 @@ func recoverProblem(problem string) {
 //
 
 func main() {
+
 	m := New()
+
 	p := tea.NewProgram(m, tea.WithAltScreen())
+
 	if err := p.Start(); err != nil {
 		panic(err)
 	}
