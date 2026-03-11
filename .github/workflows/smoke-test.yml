@@ -49,6 +49,11 @@ jobs:
       - name: Prepare /run/udev for OpenEBS NDM
         run: sudo mkdir -p /run/udev
 
+      - name: Increase inotify limits for kind
+        run: |
+          sudo sysctl -w fs.inotify.max_user_instances=1024
+          sudo sysctl -w fs.inotify.max_user_watches=1048576
+
       - name: Create kind cluster
         run: |
           kind create cluster --config kind/kind-config-x86.yaml --wait 5m
