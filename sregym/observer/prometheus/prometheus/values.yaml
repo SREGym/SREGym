@@ -375,11 +375,10 @@ server:
   ## Node tolerations for server scheduling to nodes with taints
   ## Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
   ##
-  tolerations: []
-    # - key: "key"
-    #   operator: "Equal|Exists"
-    #   value: "value"
-    #   effect: "NoSchedule|PreferNoSchedule|NoExecute(1.6 only)"
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
 
   ## Node labels for Prometheus server pod assignment
   ## Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/
@@ -1239,6 +1238,11 @@ alertmanager:
   nodeSelector:
     node-role.kubernetes.io/control-plane: ""
 
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+
   podSecurityContext:
     runAsUser: 65534
     runAsNonRoot: true
@@ -1255,6 +1259,11 @@ kube-state-metrics:
 
   nodeSelector:
     node-role.kubernetes.io/control-plane: ""
+
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
 
 ## prometheus-node-exporter sub-chart configurable values
 ## Please see https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus-node-exporter
@@ -1281,6 +1290,11 @@ prometheus-pushgateway:
   nodeSelector:
     node-role.kubernetes.io/control-plane: ""
 
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+
   # Optional service annotations
   serviceAnnotations:
     prometheus.io/probe: pushgateway
@@ -1290,6 +1304,12 @@ prometheus-blackbox-exporter:
 
   nodeSelector:
     node-role.kubernetes.io/control-plane: ""
+
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+
   config:
     modules:
       http_2xx:

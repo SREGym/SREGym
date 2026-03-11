@@ -42,6 +42,10 @@ singleBinary:
   replicas: 1
   nodeSelector:
     node-role.kubernetes.io/control-plane: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
   persistence:
     enabled: true
     storageClass: openebs-hostpath
@@ -61,6 +65,10 @@ gateway:
   replicas: 1
   nodeSelector:
     node-role.kubernetes.io/control-plane: ""
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
 
 # Enable Promtail for log collection
 promtail:

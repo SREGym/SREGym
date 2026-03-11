@@ -104,6 +104,10 @@ spec:
     spec:
       nodeSelector:
         node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
       containers:
         - name: otel-collector
           image: otel/opentelemetry-collector-contrib:0.104.0
