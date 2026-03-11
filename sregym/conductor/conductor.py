@@ -17,6 +17,7 @@ from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
+from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import CLUSTER_BASELINE_STATE_FILE
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
@@ -45,6 +46,7 @@ class Conductor:
         self.kubectl = KubeCtl()
         self.prometheus = Prometheus()
         self.jaeger = Jaeger()
+        self.otel_collector = OtelCollector()
         self.loki = Loki()
         self.mcp_server = MCPServer()
         self.apps = AppRegistry()
@@ -599,6 +601,9 @@ class Conductor:
 
         self.logger.info("[DEPLOY] Deploying Jaeger…")
         self.jaeger.deploy()
+
+        self.logger.info("[DEPLOY] Deploying OTel Collector…")
+        self.otel_collector.deploy()
 
         if self.config.deploy_loki:
             self.logger.info("[DEPLOY] Deploying Loki…")
