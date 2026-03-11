@@ -20,6 +20,10 @@ spec:
       serviceAccountName: mcp-server
       nodeSelector:
         node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
       containers:
         - name: mcp-server
           image: sregym:latest
