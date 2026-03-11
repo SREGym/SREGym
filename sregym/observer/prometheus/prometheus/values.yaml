@@ -1177,8 +1177,15 @@ extraScrapeConfigs: |
     static_configs:
       - targets:
           - otel-collector.observe:8889
-        labels:
-          namespace: hotel-reservation
+    metric_relabel_configs:
+      # Default namespace for hotel-reservation services
+      - target_label: namespace
+        replacement: hotel-reservation
+      # Override for social-network services
+      - source_labels: [service_name]
+        regex: 'nginx-thrift|compose-post-service|social-graph-service|post-storage-service|user-timeline-service|url-shorten-service|text-service|unique-id-service|user-mention-service|home-timeline-service|media-service|media-frontend|user-service'
+        target_label: namespace
+        replacement: social-network
 
   # ---- OTel Collector spanmetrics (OTLP traces — astronomy-shop) ----
   - job_name: 'otel-spanmetrics-otlp'
