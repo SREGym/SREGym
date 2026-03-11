@@ -32,9 +32,13 @@ class MCPServer:
 
     def start_port_forward(self):
         """Starts port-forwarding to access the MCP server."""
+        # Always kill a stale port-forward and restart. The old process may still
+        # be running but forwarding to a now-deleted pod (e.g. after namespace
+        # cleanup between attempts), which silently breaks MCP connectivity.
         if self.port_forward_process and self.port_forward_process.poll() is None:
-            logger.warning("Port-forwarding already active.")
-            return
+            logger.info("Killing existing port-forward process to re-establish fresh connection.")
+            self.stop_port_forward()
+            self.port_forward_process = None
 
         for attempt in range(3):
             if self.is_port_in_use(self.port):

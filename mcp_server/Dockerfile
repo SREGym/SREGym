@@ -5,7 +5,8 @@ WORKDIR /app
 # Install system dependencies (curl for healthcheck, kubectl for commands, uv for Python deps)
 RUN apt-get update && apt-get install -y \
     curl \
-    && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+    && ARCH=$(dpkg --print-architecture) \
+    && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${ARCH}/kubectl" \
     && install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl \
     && rm kubectl \
     && curl -LsSf https://astral.sh/uv/install.sh | sh \

@@ -17,6 +17,8 @@ from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
+from sregym.observer.otel_collector import OtelCollector
+from sregym.paths import CLUSTER_BASELINE_STATE_FILE
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
@@ -44,6 +46,7 @@ class Conductor:
         self.kubectl = KubeCtl()
         self.prometheus = Prometheus()
         self.jaeger = Jaeger()
+        self.otel_collector = OtelCollector()
         self.loki = Loki()
         self.mcp_server = MCPServer()
         self.apps = AppRegistry()
@@ -71,6 +74,7 @@ class Conductor:
         # submission_stage reflects the current stage (e.g., "diagnosis", "mitigation") or "done"
         self.submission_stage = None
         self.results = {}
+        self._cleanup_thread: threading.Thread | None = None
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
@@ -343,7 +347,8 @@ class Conductor:
 
         # Run cleanup in a background thread — works whether called from
         # the event loop or from a thread pool (run_in_executor)
-        threading.Thread(target=self._cleanup_sync, name="cleanup", daemon=True).start()
+        self._cleanup_thread = threading.Thread(target=self._cleanup_sync, name="cleanup", daemon=True)
+        self._cleanup_thread.start()
 
         self.logger.info("[STAGE] Teardown initiated, cleanup running in background")
 
@@ -357,6 +362,19 @@ class Conductor:
         """
         if self.problem_id is None:
             raise RuntimeError("Cannot start problem: problem_id is not set")
+
+        # Wait for any in-progress cleanup thread from a previous attempt to finish
+        # before starting a new problem. This prevents a race condition where the
+        # background cleanup sets submission_stage="done" after the new problem starts.
+        if self._cleanup_thread is not None and self._cleanup_thread.is_alive():
+            self.logger.info("[WAIT] Waiting for previous cleanup thread to finish...")
+            self._cleanup_thread.join(timeout=300)
+            if self._cleanup_thread.is_alive():
+                self.logger.warning("[WAIT] Cleanup thread did not finish within 300s, proceeding anyway")
+            else:
+                self.logger.info("[WAIT] Previous cleanup thread finished")
+            self._cleanup_thread = None
+
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.app = self.problem.app
@@ -404,6 +422,8 @@ class Conductor:
 
         # After deployment, advance to the first stage
         self._advance_to_next_stage(start_index=0)
+
+        self.execution_start_time = time.time()  # Reset: measure agent time only
 
         if self.submission_stage and self.submission_stage != "done":
             self.logger.info(f"✅ Deployment complete. Ready for submission. Current stage is: {self.submission_stage}")
@@ -509,12 +529,31 @@ class Conductor:
             injector.recover_all_nxdomain_templates()
         except Exception as e:
             self.logger.error(f"Failed to recover CoreDNS NXDOMAIN templates: {e}")
+
+        self.logger.info("[FIX] Leftover dm-flakey infrastructure if any")
+        try:
+            self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
+        except Exception as e:
+            self.logger.warning(f"Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
+
         self.logger.info("Fix Kubernetes completed.")
 
     def deploy_app(self):
         """Kubectl + Prometheus + problem.app deployment."""
         problem = self.current_problem
         self.submission_stage = "setup"
+
+        # Load or capture baseline state BEFORE any infrastructure deployment.
+        # This captures the bare cluster state so reconciliation can clean up
+        # everything added during a problem run (including infrastructure drift).
+        if not self._baseline_captured:
+            if self.cluster_state.load_baseline_state(CLUSTER_BASELINE_STATE_FILE):
+                self.logger.info("[DEPLOY] Loaded persisted cluster baseline state")
+            else:
+                self.logger.info("[DEPLOY] No persisted baseline state found, capturing and saving...")
+                self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
+            self._baseline_captured = True
+
         self.logger.info("[DEPLOY] Setting up metrics-server…")
         self.kubectl.exec_command(
             "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
@@ -563,6 +602,9 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying Jaeger…")
         self.jaeger.deploy()
 
+        self.logger.info("[DEPLOY] Deploying OTel Collector…")
+        self.otel_collector.deploy()
+
         if self.config.deploy_loki:
             self.logger.info("[DEPLOY] Deploying Loki…")
             self.loki.deploy()
@@ -572,22 +614,7 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying MCP server…")
         self.mcp_server.deploy()
 
-        # Set up fault injection infrastructure based on problem type
-        # Only one can be active at /var/openebs/local at a time
-        problem_name = problem.__class__.__name__
-
-        if "SilentDataCorruption" in problem_name:
-            print("Setting up dm-flakey infrastructure for Silent Data Corruption fault injection...")
-            self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
-
         self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki")
-
-        # Capture cluster baseline state after infrastructure is deployed but before app deployment
-        # This allows us to reset the cluster to a clean state after each problem
-        if not self._baseline_captured:
-            self.logger.info("[DEPLOY] Capturing cluster baseline state...")
-            self.cluster_state.capture_baseline()
-            self._baseline_captured = True
 
         # train-ticket pods need jaeger at startup; create ExternalName before deploy.
         # Other apps get it after deploy to avoid Helm ownership conflicts.

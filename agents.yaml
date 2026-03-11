@@ -41,6 +41,8 @@ agents:
     agent_version: null
   - name: resolve
     kickoff_command: python -m clients.resolve.driver
+  - name: demo
+    kickoff_command: python -m clients.demo.driver
     kickoff_workdir: .
     kickoff_env: null
     install_script: null

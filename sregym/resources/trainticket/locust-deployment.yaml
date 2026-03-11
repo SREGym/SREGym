@@ -13,6 +13,9 @@ spec:
     port: 8089
     targetPort: 8089
     nodePort: 30089
+  - name: metrics
+    port: 9646
+    targetPort: 9646
   type: NodePort
 ---
 apiVersion: apps/v1
@@ -66,6 +69,21 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "500m"
+      - name: locust-exporter
+        image: containersol/locust_exporter:v0.5.0
+        ports:
+        - containerPort: 9646
+          name: metrics
+        env:
+        - name: LOCUST_EXPORTER_URI
+          value: "http://localhost:8089"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
       volumes:
       - name: locustfile
         configMap:

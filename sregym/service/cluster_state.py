@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from kubernetes import client
 from kubernetes.client.rest import ApiException
@@ -16,19 +17,7 @@ logger.setLevel(logging.DEBUG)
 
 
 # Namespaces that should never be deleted during reconciliation
-PROTECTED_NAMESPACES = frozenset(
-    {
-        "kube-system",
-        "kube-public",
-        "kube-node-lease",
-        "default",
-        # Infrastructure namespaces managed by the benchmark
-        "openebs",
-        "observe",  # Prometheus namespace
-        "sregym",  # MCP server namespace
-        "khaos",
-    }
-)
+PROTECTED_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease", "default"})
 
 
 @dataclass
@@ -64,6 +53,39 @@ class ClusterBaseline:
                 json.dumps(self.coredns_configmap_data, sort_keys=True).encode()
             ).hexdigest(),
         }
+
+    def to_json(self) -> dict:
+        """Lossless serialization to a JSON-compatible dict (for persisting to disk)."""
+        return {
+            "namespaces": sorted(self.namespaces),
+            "cluster_roles": sorted(self.cluster_roles),
+            "cluster_role_bindings": sorted(self.cluster_role_bindings),
+            "persistent_volumes": sorted(self.persistent_volumes),
+            "storage_classes": sorted(self.storage_classes),
+            "crds": sorted(self.crds),
+            "validating_webhook_configs": sorted(self.validating_webhook_configs),
+            "mutating_webhook_configs": sorted(self.mutating_webhook_configs),
+            "node_labels": self.node_labels,
+            "node_taints": self.node_taints,
+            "coredns_configmap_data": self.coredns_configmap_data,
+        }
+
+    @classmethod
+    def from_json(cls, data: dict) -> "ClusterBaseline":
+        """Deserialize from a JSON-compatible dict (loaded from disk)."""
+        return cls(
+            namespaces=set(data.get("namespaces", [])),
+            cluster_roles=set(data.get("cluster_roles", [])),
+            cluster_role_bindings=set(data.get("cluster_role_bindings", [])),
+            persistent_volumes=set(data.get("persistent_volumes", [])),
+            storage_classes=set(data.get("storage_classes", [])),
+            crds=set(data.get("crds", [])),
+            validating_webhook_configs=set(data.get("validating_webhook_configs", [])),
+            mutating_webhook_configs=set(data.get("mutating_webhook_configs", [])),
+            node_labels=data.get("node_labels", {}),
+            node_taints=data.get("node_taints", {}),
+            coredns_configmap_data=data.get("coredns_configmap_data", {}),
+        )
 
 
 class ClusterStateManager:
@@ -102,6 +124,37 @@ class ClusterStateManager:
         )
 
         return self.baseline
+
+    def save_baseline_state(self, path: Path) -> None:
+        """
+        Capture the current cluster state and persist it as the baseline state snapshot.
+        Should be called on a freshly created cluster (after infrastructure deployment)
+        to establish a known-clean reference state.
+        """
+        baseline = self.capture_baseline()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(baseline.to_json(), f, indent=2)
+        logger.info(f"Baseline state snapshot saved to {path}")
+
+    def load_baseline_state(self, path: Path) -> bool:
+        """
+        Load a previously saved baseline state snapshot and use it as the baseline.
+        Returns True if the baseline state was loaded successfully, False otherwise.
+        """
+        if not path.exists():
+            logger.debug(f"No baseline state file found at {path}")
+            return False
+
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            self.baseline = ClusterBaseline.from_json(data)
+            logger.info(f"Baseline state loaded from {path}")
+            return True
+        except (json.JSONDecodeError, KeyError) as e:
+            logger.warning(f"Failed to load baseline state from {path}: {e}")
+            return False
 
     def reconcile_to_baseline(self) -> dict:
         """
