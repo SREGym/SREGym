@@ -24,8 +24,6 @@ from sregym.conductor.problems.khaos_faults import KhaosFaultName, KhaosFaultPro
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
-from sregym.conductor.problems.llm_inaccurate_response import LlmInaccurateResponse
-from sregym.conductor.problems.llm_rate_limit_error import LlmRateLimitError
 from sregym.conductor.problems.load_spike_rpc_retry_storm import LoadSpikeRPCRetryStorm
 from sregym.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
 from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
@@ -161,8 +159,6 @@ class ProblemRegistry:
             "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,
             "astronomy_shop_cart_service_failure": CartServiceFailure,
             "astronomy_shop_failed_readiness_probe": FailedReadinessProbe,
-            "astronomy_shop_llm_inaccurate_response": LlmInaccurateResponse,
-            "astronomy_shop_llm_rate_limit_error": LlmRateLimitError,
             "astronomy_shop_payment_service_failure": PaymentServiceFailure,
             "astronomy_shop_payment_service_unreachable": PaymentServiceUnreachable,
             "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
