@@ -51,7 +51,6 @@ from sregym.conductor.problems.product_catalog_failure import ProductCatalogServ
 from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
 from sregym.conductor.problems.readiness_probe_misconfiguration import ReadinessProbeMisconfiguration
-from sregym.conductor.problems.recommendation_service_cache_failure import RecommendationServiceCacheFailure
 from sregym.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
 from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
@@ -167,7 +166,6 @@ class ProblemRegistry:
             "astronomy_shop_payment_service_failure": PaymentServiceFailure,
             "astronomy_shop_payment_service_unreachable": PaymentServiceUnreachable,
             "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
-            "astronomy_shop_recommendation_service_cache_failure": RecommendationServiceCacheFailure,
             "kafka_queue_problems": KafkaQueueProblems,
             "loadgenerator_flood_homepage": LoadGeneratorFloodHomepage,
             # ==================== TRAIN TICKET FAULT INJECTOR ====================
