@@ -19,10 +19,36 @@ class Jaeger:
         return result.stdout.strip()
 
     def deploy(self):
-        """Deploy Jaeger with TiDB as the storage backend."""
+        """Deploy Jaeger to the observe namespace."""
+        self._ensure_namespace_ready()
         self.run_cmd(f"kubectl apply -f {self.config_file} -n {self.namespace}")
         self.wait_for_service("jaeger-out", timeout=120)
         logger.info("Jaeger deployed successfully.")
+
+    def _ensure_namespace_ready(self, timeout: int = 120):
+        """Ensure the observe namespace exists and is not terminating."""
+        from kubernetes import client as k8s_client
+        from kubernetes.client.rest import ApiException
+
+        core_v1 = k8s_client.CoreV1Api()
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            try:
+                ns = core_v1.read_namespace(name=self.namespace)
+                if ns.status.phase == "Active":
+                    return
+                logger.info(f"Namespace '{self.namespace}' is {ns.status.phase}, waiting...")
+            except ApiException as e:
+                if e.status == 404:
+                    # Namespace doesn't exist, create it
+                    logger.info(f"Creating namespace '{self.namespace}'")
+                    self.run_cmd(
+                        f"kubectl create namespace {self.namespace} --dry-run=client -o yaml | kubectl apply -f -"
+                    )
+                    return
+                raise
+            time.sleep(3)
+        raise RuntimeError(f"Namespace '{self.namespace}' not ready within {timeout}s")
 
     def wait_for_service(self, service: str, timeout: int = 60):
         """Wait until the Jaeger service exists in Kubernetes."""
