@@ -39,7 +39,7 @@ SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architecture
 git clone --recurse-submodules https://github.com/SREGym/SREGym
 cd SREGym
 uv sync
-uv run pre-commit install
+uv run prek install
 ```
 
 <h2 id="🚀quickstart">🚀 Quickstart</h2>
