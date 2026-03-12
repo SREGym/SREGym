@@ -95,7 +95,7 @@ Agents always run in isolated Docker containers, preventing access to SREGym int
 Use `--force-build` to rebuild the container image after updating dependencies or agent code:
 
 ```bash
-python main.py --agent codex --model gpt-4o --force-build
+python main.py --agent codex --model gpt-5 --force-build
 ```
 
 ### Model Selection
@@ -104,7 +104,7 @@ SREGym uses two model roles, both configurable via CLI:
 
 | CLI Flag | Default | Purpose |
 |----------|---------|---------|
-| `--model` | `gpt-4o` | Sets both agent and judge model |
+| `--model` | `gpt-5` | Sets both agent and judge model |
 | `--judge-model` | (same as `--model`) | Override just the judge evaluator model |
 
 #### Available Models
@@ -122,7 +122,7 @@ SREGym uses two model roles, both configurable via CLI:
 
 **OpenAI:**
 ```bash
-python main.py --agent stratus --model gpt-4o
+python main.py --agent stratus --model gpt-5
 ```
 
 **Anthropic:**

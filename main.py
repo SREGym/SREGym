@@ -410,8 +410,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-4o",
-        help="Model for both agent and judge (default: gpt-4o)",
+        default="gpt-5",
+        help="Model for both agent and judge (default: gpt-5)",
     )
     parser.add_argument(
         "--judge-model",
