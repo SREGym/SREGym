@@ -18,3 +18,8 @@ llm:
 
 cluster:
   wait_for_pod_ready_timeout: 1800
+
+n_attempts: 1                  # Number of attempts to run each problem
+agent_timeout: 1800            # Agent timeout in seconds after deployment
+force_build: false             # Force rebuild the agent Docker image
+noise_config: null             # Path to noise configuration YAML file

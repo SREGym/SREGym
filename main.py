@@ -266,9 +266,27 @@ def main(args):
     # set up the logger
     init_logger()
 
+    # Load SREGym config
+    sregym_config = load_sregym_config()
+
+    # CLI overrides
+    if args.model:
+        sregym_config.models.agent = args.model
+        sregym_config.models.judge = args.model
+    if args.agent:
+        sregym_config.agent = args.agent
+    if args.n_attempts is not None:
+        sregym_config.n_attempts = args.n_attempts
+    if args.agent_timeout is not None:
+        sregym_config.agent_timeout = args.agent_timeout
+    if args.force_build:
+        sregym_config.force_build = True
+    if args.noise_config:
+        sregym_config.noise_config = args.noise_config
+
     # Initialize Noise Manager if config is provided or default config exists
     nm = None
-    noise_config_path = args.noise_config
+    noise_config_path = sregym_config.noise_config
     default_noise_config = "sregym/generators/noise/noise_config.yaml"
 
     # Use default path if no argument provided but default file exists
@@ -284,16 +302,6 @@ def main(args):
             logger.info(f"✅ Noise manager initialized with config: {noise_config_path}")
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
-
-    # Load SREGym config
-    sregym_config = load_sregym_config()
-
-    # --model sets both agent and judge;
-    if args.model:
-        sregym_config.models.agent = args.model
-        sregym_config.models.judge = args.model
-    if args.agent:
-        sregym_config.agent = args.agent
 
     available_models = list(load_model_config().keys())
 
@@ -334,12 +342,12 @@ def main(args):
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (
-        get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
-        if args.agent
+        get_agent(sregym_config.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+        if sregym_config.agent
         else None
     )
     if not agent_reg or agent_reg.container_isolation:
-        LAUNCHER.enable_container_isolation(force_build=args.force_build)
+        LAUNCHER.enable_container_isolation(force_build=sregym_config.force_build)
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
@@ -347,10 +355,10 @@ def main(args):
         args=(
             conductor,
             args.problem,
-            args.agent,
+            sregym_config.agent,
             args.use_external_harness,
-            args.n_attempts,
-            args.agent_timeout,
+            sregym_config.n_attempts,
+            sregym_config.agent_timeout,
             args.resume,
         ),
         name="driver",
@@ -437,13 +445,13 @@ if __name__ == "__main__":
         "--noise-config",
         type=str,
         default=None,
-        help="Path to noise configuration YAML file",
+        help="Path to noise configuration YAML file (default: from sregym_config.yaml)",
     )
     parser.add_argument(
         "--n-attempts",
         type=int,
-        default=1,
-        help="Number of attempts to run each problem (default: 1)",
+        default=None,
+        help="Number of attempts to run each problem (default: from sregym_config.yaml)",
     )
     parser.add_argument(
         "--force-build",
@@ -453,8 +461,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--agent-timeout",
         type=int,
-        default=1800,
-        help="Agent timeout in seconds after deployment (default: 1800 = 30 min)",
+        default=None,
+        help="Agent timeout in seconds after deployment (default: from sregym_config.yaml)",
     )
     parser.add_argument(
         "--resume",
@@ -465,7 +473,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Validate that n_attempts is positive
-    if args.n_attempts < 1:
+    if args.n_attempts is not None and args.n_attempts < 1:
         parser.error("--n-attempts must be a positive integer")
 
     main(args)

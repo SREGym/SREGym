@@ -13,7 +13,7 @@ class ModelsConfig(BaseModel):
 class ServerConfig(BaseModel):
     api_hostname: str = "0.0.0.0"
     api_port: int = 8000
-    mcp_server_port: int = 8001
+    mcp_server_port: int = 9954
     expose_server: bool = False
     session_cache_size: int = 10000
     session_ttl: int = 600
@@ -34,6 +34,10 @@ class SREGymConfig(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     cluster: ClusterConfig = Field(default_factory=ClusterConfig)
+    n_attempts: int = Field(default=1, description="Number of attempts to run each problem")
+    agent_timeout: int = Field(default=1800, description="Agent timeout in seconds after deployment")
+    force_build: bool = Field(default=False, description="Force rebuild the agent Docker image")
+    noise_config: str | None = Field(default=None, description="Path to noise configuration YAML file")
 
 
 _config: SREGymConfig | None = None
