@@ -776,7 +776,7 @@ serverFiles:
 
             - alert: TiDBInstanceNotReady
               expr: tidb_server_connections == 0 or absent(tidb_server_connections)
-              for: 15s
+              for: 2m
               labels:
                 severity: critical
               annotations:
@@ -785,7 +785,7 @@ serverFiles:
 
             - alert: TiDBStatefulSetNotReady
               expr: group by (statefulset) (kube_statefulset_replicas{namespace="tidb-cluster"} - kube_statefulset_status_replicas_ready) > 0
-              for: 15s
+              for: 2m
               labels:
                 severity: critical
               annotations:
@@ -908,7 +908,7 @@ serverFiles:
             - alert: DeploymentNotReady
               expr: |
                 kube_deployment_status_replicas_unavailable{namespace=~"astronomy-shop|hotel-reservation|social-network|tidb-cluster"} > 0
-              for: 15s
+              for: 2m
               labels:
                 severity: critical
               annotations:
