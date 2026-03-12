@@ -774,40 +774,6 @@ serverFiles:
               annotations:
                 description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 1 minute."
 
-            - alert: TiDBClusterNotReady
-              expr: |
-                tidb_cluster_status_condition{condition="Ready",status="false"} == 1
-              for: 2m
-              labels:
-                severity: critical
-              annotations:
-                summary: "TiDB cluster not ready"
-                description: "TiDB cluster {{ $labels.cluster }} in namespace {{ $labels.namespace }} is not ready."
-
-            - alert: TiDBReplicaDeficit
-              expr: |
-                  (
-                    tidb_cluster_spec_tidb_replicas{namespace="tidb-cluster"}
-                    -
-                    tidb_cluster_status_tidb_ready_replicas{namespace="tidb-cluster"}
-                  ) > 0
-                  for: 2m
-                  labels:
-                  severity: critical
-                  annotations:
-                  summary: "TiDB replicas missing"
-                  description: "Cluster {{ $labels.cluster }} has fewer ready replicas than desired."
-            - alert: TiDBReplicaMismatch
-              expr: |
-                kube_statefulset_replicas{namespace="tidb-cluster",statefulset=~"basic-tidb.*"}
-                >
-                kube_statefulset_status_replicas_ready{namespace="tidb-cluster",statefulset=~"basic-tidb.*"}
-              for: 2m
-              labels:
-                severity: critical
-              annotations:
-                summary: "TiDB replicas not ready"
-                description: "StatefulSet {{ $labels.statefulset }} has fewer ready replicas than desired."
             - alert: TiDBInstanceNotReady
               expr: tidb_server_connections == 0 or absent(tidb_server_connections)
               for: 15s
@@ -816,9 +782,9 @@ serverFiles:
               annotations:
                 summary: "TiDB instance is not ready"
                 description: "TiDB instance {{ $labels.instance }} has been unreachable or has no connections for more than 2 minutes."
+
             - alert: TiDBStatefulSetNotReady
-              expr:
-               group by (statefulset) (kube_statefulset_replicas{namespace="tidb-cluster"} - kube_statefulset_status_replicas_ready) > 0
+              expr: group by (statefulset) (kube_statefulset_replicas{namespace="tidb-cluster"} - kube_statefulset_status_replicas_ready) > 0
               for: 15s
               labels:
                 severity: critical
@@ -938,10 +904,11 @@ serverFiles:
               annotations:
                 summary: "High latency: {{ $labels.service_name }}"
                 description: "P95 latency for {{ $labels.service_name }} in namespace {{ $labels.namespace }} is above 1500ms (current: {{ $value | printf \"%.0f\" }}ms)."
+
             - alert: DeploymentNotReady
               expr: |
-                 kube_deployment_status_replicas_unavailable{namespace=~"astronomy-shop|hotel-reservation|social-network|tidb-cluster"} > 0
-              for: 2m
+                kube_deployment_status_replicas_unavailable{namespace=~"astronomy-shop|hotel-reservation|social-network|tidb-cluster"} > 0
+              for: 15s
               labels:
                 severity: critical
               annotations:
