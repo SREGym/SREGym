@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 
 import yaml
@@ -15,6 +16,33 @@ from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger("all.stratus.workload_oracle")
 
+
+def _make_real_api_client() -> client.ApiClient:
+    """Create a Kubernetes ApiClient that connects directly to the real cluster.
+
+    Bypasses any KUBECONFIG env var that may point to a filtering proxy (such as
+    the k8s_proxy used to hide workload generator resources from agents). This
+    mirrors the approach used by KubernetesAPIProxy itself and by the Resolve driver.
+
+    Inside containers, the real kubeconfig is mounted at a separate path and
+    advertised via SREGYM_REAL_KUBECONFIG. On the host, ~/.kube/config is used.
+    """
+    try:
+        config.load_incluster_config()
+        return client.ApiClient()
+    except config.ConfigException:
+        # Running outside the cluster — load from the real kubeconfig path,
+        # ignoring the KUBECONFIG env var which may point to the filtering proxy.
+        # In containers, SREGYM_REAL_KUBECONFIG points to the unproxied config.
+        real_kubeconfig = os.environ.get(
+            "SREGYM_REAL_KUBECONFIG",
+            os.path.expanduser("~/.kube/config"),
+        )
+        cfg = client.Configuration()
+        config.load_kube_config(config_file=real_kubeconfig, client_configuration=cfg)
+        return client.ApiClient(configuration=cfg)
+
+
 # from sregym.generators.workload.wrk2 import Wrk2 as Wrk
 
 
@@ -27,8 +55,7 @@ class Wrk:
         self.threads = threads
         self.latency = latency
 
-        config.load_kube_config()
-
+        self._api_client = _make_real_api_client()
         self.kubectl = KubeCtl()
 
     def create_configmap(self, name, namespace, payload_script_path):
@@ -40,7 +67,7 @@ class Wrk:
             data={payload_script_path.name: script_content},
         )
 
-        api_instance = client.CoreV1Api()
+        api_instance = client.CoreV1Api(api_client=self._api_client)
         try:
             print(f"Checking for existing ConfigMap '{name}'...")
             api_instance.delete_namespaced_config_map(name=name, namespace=namespace)
@@ -99,7 +126,7 @@ class Wrk:
             }
         ]
 
-        api_instance = client.BatchV1Api()
+        api_instance = client.BatchV1Api(api_client=self._api_client)
         try:
             existing_job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
             if existing_job:
@@ -155,9 +182,9 @@ class WorkloadOracle(BaseOracle):
         super().__init__()
         self.app = app
 
-        config.load_kube_config()
-        self.core_v1_api = client.CoreV1Api()
-        self.batch_v1_api = client.BatchV1Api()
+        self._api_client = _make_real_api_client()
+        self.core_v1_api = client.CoreV1Api(api_client=self._api_client)
+        self.batch_v1_api = client.BatchV1Api(api_client=self._api_client)
         self.kubectl = KubeCtl()
 
     def get_job_logs(self, job_name, namespace):
@@ -202,7 +229,7 @@ class WorkloadOracle(BaseOracle):
         return False
 
     async def get_workload_result(self, job_name):
-        self.kubectl.wait_for_job_completion(job_name=job_name, namespace="default")
+        self.kubectl.wait_for_job_completion(job_name=job_name, namespace="default", api_client=self._api_client)
 
         namespace = "default"
 
