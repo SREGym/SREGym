@@ -5,13 +5,10 @@ import sys
 from contextlib import AsyncExitStack
 
 from anthropic import Anthropic
-from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 from llm_backend.init_backend import get_llm_backend_for_agent
-
-load_dotenv()  # load environment variables from .env
 
 
 class MCPClient:

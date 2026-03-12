@@ -288,10 +288,10 @@ def main(args):
     # Load SREGym config
     sregym_config = load_sregym_config()
 
-    if args.agent_model:
-        sregym_config.models.agent = args.agent_model
-    if args.judge_model:
-        sregym_config.models.judge = args.judge_model
+    # --model sets both agent and judge;
+    if args.model:
+        sregym_config.models.agent = args.model
+        sregym_config.models.judge = args.model
     if args.agent:
         sregym_config.agent = args.agent
 
@@ -425,18 +425,10 @@ if __name__ == "__main__":
         help="Agent to run (e.g., 'stratus').",
     )
     parser.add_argument(
-        "--agent-model",
+        "--model",
         type=str,
         default=None,
-        dest="agent_model",
-        help="Model for the agent (default: gpt-4o).",
-    )
-    parser.add_argument(
-        "--judge-model",
-        type=str,
-        default=None,
-        dest="judge_model",
-        help="Model for the LLM judge (default: gpt-5).",
+        help="Default model for both agent and judge",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."

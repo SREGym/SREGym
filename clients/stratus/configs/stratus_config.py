@@ -1,15 +1,12 @@
 import logging
 from pathlib import Path
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 parent_dir = Path(__file__).resolve().parent
-
-load_dotenv()
 
 
 class BaseAgentCfg(BaseModel):

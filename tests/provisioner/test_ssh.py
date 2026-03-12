@@ -1,12 +1,8 @@
 import logging
 import os
 
-from dotenv import load_dotenv
-
 from provisioner.utils.logger import logger
 from provisioner.utils.ssh import SSHManager, SSHUtilError
-
-load_dotenv(override=True)
 
 # Put actual hostname here
 TEST_HOSTNAME = "YOUR_TEST_HOSTNAME_OR_IP"
@@ -54,7 +50,7 @@ if __name__ == "__main__":
 
             ssh_manager.download_file_scp(remote_test_file, local_downloaded_file)
             assert os.path.exists(local_downloaded_file)
-            with open(local_downloaded_file, "r") as f:
+            with open(local_downloaded_file) as f:
                 content = f.read()
                 assert "This is a test file for SCP upload." in content
             logger.info(f"Verified downloaded file content: {content.strip()}")

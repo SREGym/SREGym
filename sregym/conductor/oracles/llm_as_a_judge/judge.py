@@ -6,12 +6,9 @@ from enum import Enum
 from pathlib import Path
 
 import yaml
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from llm_backend.init_backend import get_llm_backend_for_judge
-
-load_dotenv()
 
 
 class JudgmentResult(str, Enum):
@@ -53,12 +50,12 @@ class LLMJudge:
                 return None
         return self._backend
 
-    def judge(self, solution: str, expectation: str) -> tuple[JudgmentResult, str]:
+    def judge(self, solution: str, expectation: str) -> tuple[JudgmentResult | None, str]:
         """
         Judge whether a solution matches the expectation.
 
         Returns:
-            tuple[JudgmentResult, str]: A tuple of (judgment, reasoning)
+            tuple[JudgmentResult | None, str]: A tuple of (judgment, reasoning)
             Returns (None, error_message) if backend is not initialized
         """
         # Check if backend is initialized

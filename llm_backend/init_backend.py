@@ -3,11 +3,8 @@
 import os
 
 import yaml
-from dotenv import load_dotenv
 
 from llm_backend.get_llm_backend import LiteLLMBackend
-
-load_dotenv()
 
 
 def load_model_config():
