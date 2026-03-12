@@ -73,9 +73,20 @@ kind create cluster --config kind/kind-config-arm.yaml
 
 To get started with the included Stratus agent:
 
-1. Set your API keys in the environment:
+1. Set your LLM API keys in the environment (required for your chosen model provider):
 ```bash
+# OpenAI
 export OPENAI_API_KEY="sk-proj-..."
+
+# Anthropic
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Google
+export GEMINI_API_KEY="..."
+
+# AWS Bedrock
+export AWS_PROFILE="bedrock"
+export AWS_DEFAULT_REGION="us-east-2"
 ```
 
 2. Run the benchmark:
@@ -106,6 +117,8 @@ SREGym uses two model roles, both configurable via CLI:
 |----------|---------|---------|
 | `--model` | `gpt-5` | Sets both agent and judge model |
 | `--judge-model` | (same as `--model`) | Override just the judge evaluator model |
+
+Make sure the required environment variables for your chosen provider are set before running. See the table below.
 
 #### Available Models
 
