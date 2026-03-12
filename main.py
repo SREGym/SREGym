@@ -308,12 +308,6 @@ def main(args):
     os.environ["API_HOSTNAME"] = "0.0.0.0"
     os.environ["API_PORT"] = "8000"
     os.environ["MCP_SERVER_PORT"] = "9954"
-    os.environ["EXPOSE_SERVER"] = "False"
-    os.environ["SESSION_CACHE_SIZE"] = "10000"
-    os.environ["SESSION_TTL"] = "600"
-    os.environ["LLM_QUERY_MAX_RETRIES"] = "5"
-    os.environ["LLM_QUERY_INIT_RETRY_DELAY"] = "1"
-    os.environ["WAIT_FOR_POD_READY_TIMEOUT"] = "1800"
     os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
 
     logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}")

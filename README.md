@@ -73,21 +73,19 @@ kind create cluster --config kind/kind-config-arm.yaml
 
 To get started with the included Stratus agent:
 
-1. Create your `.env` file:
+1. Set your API keys in the environment:
 ```bash
-mv .env.example .env
+export OPENAI_API_KEY="sk-proj-..."
 ```
 
-2. Edit `sregym_config.yaml` to set your models, and `.env` to add your API keys.
-
-3. Run the benchmark:
+2. Run the benchmark:
 ```bash
-python main.py --agent stratus
+python main.py --agent stratus --model gpt-5
 ```
 
-Models are configured in `sregym_config.yaml`. You can override them per-run with CLI flags:
+Use `--judge-model` to override the judge model separately (defaults to `--model`):
 ```bash
-python main.py --agent stratus --agent-model claude-sonnet-4 --judge-model gpt-5
+python main.py --agent stratus --model gpt-5 --judge-model claude-sonnet-4
 ```
 
 #### Container Isolation
@@ -102,12 +100,12 @@ python main.py --agent codex --model gpt-4o --force-build
 
 ### Model Selection
 
-SREGym uses two model roles configured in `sregym_config.yaml`:
+SREGym uses two model roles, both configurable via CLI:
 
-| Config Key | CLI Override | Default | Purpose |
-|------------|-------------|---------|---------|
-| `models.agent` | `--agent-model` | `gpt-4o` | The SRE agent's LLM |
-| `models.judge` | `--judge-model` | `gpt-5` | LLM-as-a-judge evaluator |
+| CLI Flag | Default | Purpose |
+|----------|---------|---------|
+| `--model` | `gpt-4o` | Sets both agent and judge model |
+| `--judge-model` | (same as `--model`) | Override just the judge evaluator model |
 
 #### Available Models
 
@@ -124,30 +122,17 @@ SREGym uses two model roles configured in `sregym_config.yaml`:
 
 **OpenAI:**
 ```bash
-# In .env file
-OPENAI_API_KEY="sk-proj-..."
-
-# Run with GPT-4o
-python main.py --agent stratus --agent-model gpt-4o
+python main.py --agent stratus --model gpt-4o
 ```
 
 **Anthropic:**
 ```bash
-# In .env file
-ANTHROPIC_API_KEY="sk-ant-api03-..."
-
-# Run with Claude Sonnet 4
-python main.py --agent stratus --agent-model claude-sonnet-4
+python main.py --agent stratus --model claude-sonnet-4
 ```
 
 **AWS Bedrock:**
 ```bash
-# In .env file
-AWS_PROFILE="bedrock"
-AWS_DEFAULT_REGION=us-east-2
-
-# Run with Claude Sonnet 4.5 on Bedrock
-python main.py --agent stratus --agent-model bedrock-claude-sonnet-4.5
+python main.py --agent stratus --model bedrock-claude-sonnet-4.5
 ```
 
 **Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.
