@@ -215,8 +215,8 @@ dev = [
     "deptry>=0.24.0",
 ]
 
-[tool.setuptools]
-packages = ["sregym", "clients", "scripts"]
+[tool.setuptools.packages.find]
+include = ["sregym*", "clients*", "scripts*", "llm_backend*", "logger*"]
 
 [tool.uv.sources]
 geni-lib-xlab = { path = "scripts/geni_lib/mod/geni_lib_xlab-1.0.0.tar.gz" }
