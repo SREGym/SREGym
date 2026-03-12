@@ -18,7 +18,6 @@ from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
-from sregym.config import load_sregym_config
 
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
@@ -266,30 +265,14 @@ def main(args):
     # set up the logger
     init_logger()
 
-    # Load SREGym config
-    sregym_config = load_sregym_config()
-
-    # CLI overrides
-    if args.model:
-        sregym_config.models.agent = args.model
-        sregym_config.models.judge = args.model
-    if args.agent:
-        sregym_config.agent = args.agent
-    if args.n_attempts is not None:
-        sregym_config.n_attempts = args.n_attempts
-    if args.agent_timeout is not None:
-        sregym_config.agent_timeout = args.agent_timeout
-    if args.force_build:
-        sregym_config.force_build = True
-    if args.noise_config:
-        sregym_config.noise_config = args.noise_config
+    agent_model = args.model
+    judge_model = args.judge_model or args.model
 
     # Initialize Noise Manager if config is provided or default config exists
     nm = None
-    noise_config_path = sregym_config.noise_config
+    noise_config_path = args.noise_config
     default_noise_config = "sregym/generators/noise/noise_config.yaml"
 
-    # Use default path if no argument provided but default file exists
     if not noise_config_path and os.path.exists(default_noise_config):
         noise_config_path = default_noise_config
 
@@ -306,48 +289,46 @@ def main(args):
     available_models = list(load_model_config().keys())
 
     # Always validate judge model
-    if sregym_config.models.judge not in available_models:
+    if judge_model not in available_models:
         logger.error(
-            f"❌ models.judge config error: '{sregym_config.models.judge}' not found in llm_backend/configs.yaml. Available: {available_models}"
+            f"❌ Judge model '{judge_model}' not found in llm_backend/configs.yaml. Available: {available_models}"
         )
         sys.exit(1)
 
     # Validate agent model for stratus
-    if sregym_config.agent in ["stratus"] and sregym_config.models.agent not in available_models:
+    if args.agent in ["stratus"] and agent_model not in available_models:
         logger.error(
-            f"❌ models.agent config error: '{sregym_config.models.agent}' not found in llm_backend/configs.yaml. Available: {available_models}"
+            f"❌ Agent model '{agent_model}' not found in llm_backend/configs.yaml. Available: {available_models}"
         )
         sys.exit(1)
 
-    # Push config to env so downstream code picks it up
-    os.environ["AGENT_MODEL_ID"] = sregym_config.models.agent
-    os.environ["JUDGE_MODEL_ID"] = sregym_config.models.judge
-    os.environ["API_HOSTNAME"] = sregym_config.server.api_hostname
-    os.environ["API_PORT"] = str(sregym_config.server.api_port)
-    os.environ["MCP_SERVER_PORT"] = str(sregym_config.server.mcp_server_port)
-    os.environ["EXPOSE_SERVER"] = str(sregym_config.server.expose_server)
-    os.environ["SESSION_CACHE_SIZE"] = str(sregym_config.server.session_cache_size)
-    os.environ["SESSION_TTL"] = str(sregym_config.server.session_ttl)
-    os.environ["LLM_QUERY_MAX_RETRIES"] = str(sregym_config.llm.max_retries)
-    os.environ["LLM_QUERY_INIT_RETRY_DELAY"] = str(sregym_config.llm.init_retry_delay)
-    os.environ["WAIT_FOR_POD_READY_TIMEOUT"] = str(sregym_config.cluster.wait_for_pod_ready_timeout)
-    os.environ["MCP_SERVER_URL"] = f"http://127.0.0.1:{sregym_config.server.mcp_server_port}"
+    # Push to env so downstream code picks it up
+    os.environ["AGENT_MODEL_ID"] = agent_model
+    os.environ["JUDGE_MODEL_ID"] = judge_model
+    os.environ["API_HOSTNAME"] = "0.0.0.0"
+    os.environ["API_PORT"] = "8000"
+    os.environ["MCP_SERVER_PORT"] = "9954"
+    os.environ["EXPOSE_SERVER"] = "False"
+    os.environ["SESSION_CACHE_SIZE"] = "10000"
+    os.environ["SESSION_TTL"] = "600"
+    os.environ["LLM_QUERY_MAX_RETRIES"] = "5"
+    os.environ["LLM_QUERY_INIT_RETRY_DELAY"] = "1"
+    os.environ["WAIT_FOR_POD_READY_TIMEOUT"] = "1800"
+    os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
 
-    logger.info(
-        f"🔧 Config — agent: {sregym_config.agent}, agent_model: {sregym_config.models.agent}, judge_model: {sregym_config.models.judge}"
-    )
+    logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}")
 
     conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness)
     conductor = Conductor(config=conductor_config)
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (
-        get_agent(sregym_config.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
-        if sregym_config.agent
+        get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
+        if args.agent
         else None
     )
     if not agent_reg or agent_reg.container_isolation:
-        LAUNCHER.enable_container_isolation(force_build=sregym_config.force_build)
+        LAUNCHER.enable_container_isolation(force_build=args.force_build)
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
@@ -355,10 +336,10 @@ def main(args):
         args=(
             conductor,
             args.problem,
-            sregym_config.agent,
+            args.agent,
             args.use_external_harness,
-            sregym_config.n_attempts,
-            sregym_config.agent_timeout,
+            args.n_attempts,
+            args.agent_timeout,
             args.resume,
         ),
         name="driver",
@@ -429,14 +410,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--agent",
         type=str,
-        default=None,
-        help="Agent to run (e.g., 'stratus').",
+        default="stratus",
+        help="Agent to run (default: stratus)",
     )
     parser.add_argument(
         "--model",
         type=str,
+        default="gpt-4o",
+        help="Model for both agent and judge (default: gpt-4o)",
+    )
+    parser.add_argument(
+        "--judge-model",
+        type=str,
         default=None,
-        help="Default model for both agent and judge",
+        help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set)",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
@@ -445,13 +432,13 @@ if __name__ == "__main__":
         "--noise-config",
         type=str,
         default=None,
-        help="Path to noise configuration YAML file (default: from sregym_config.yaml)",
+        help="Path to noise configuration YAML file",
     )
     parser.add_argument(
         "--n-attempts",
         type=int,
-        default=None,
-        help="Number of attempts to run each problem (default: from sregym_config.yaml)",
+        default=1,
+        help="Number of attempts to run each problem (default: 1)",
     )
     parser.add_argument(
         "--force-build",
@@ -461,8 +448,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--agent-timeout",
         type=int,
-        default=None,
-        help="Agent timeout in seconds after deployment (default: from sregym_config.yaml)",
+        default=1800,
+        help="Agent timeout in seconds after deployment (default: 1800)",
     )
     parser.add_argument(
         "--resume",
