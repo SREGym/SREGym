@@ -205,8 +205,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default=os.getenv("MODEL_ID", "claude-sonnet-4-5"),
-        help="Model to use for Claude Code (default: from MODEL_ID env var or claude-sonnet-4-5)",
+        default=os.getenv("AGENT_MODEL_ID", "claude-sonnet-4-5"),
+        help="Model to use for Claude Code (default: from AGENT_MODEL_ID env var or claude-sonnet-4-5)",
     )
     parser.add_argument(
         "--logs-dir",

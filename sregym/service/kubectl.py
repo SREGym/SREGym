@@ -16,13 +16,10 @@ except ModuleNotFoundError:
     exit(1)
 import os
 
-import dotenv
 from kubernetes import dynamic
 from kubernetes.client import api_client
 from kubernetes.client.rest import ApiException
 from rich.console import Console
-
-dotenv.load_dotenv(override=True)
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
 

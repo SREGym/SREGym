@@ -119,7 +119,6 @@ dependencies = [
     "pyright==1.1.401",
     "pytest>=8.3.5",
     "python-dateutil==2.9.0.post0",
-    "python-dotenv==1.1.0",
     "python-multipart==0.0.20",
     "pytz==2025.2",
     "pyyaml==6.0.2",
@@ -217,7 +216,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["sregym", "clients", "scripts"]
+packages = ["sregym", "clients", "scripts", "llm_backend", "logger"]
 
 [tool.uv.sources]
 geni-lib-xlab = { path = "scripts/geni_lib/mod/geni_lib_xlab-1.0.0.tar.gz" }

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from rich.console import Console
 
+from llm_backend.init_backend import load_model_config
 from logger import init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
@@ -264,12 +265,14 @@ def main(args):
     # set up the logger
     init_logger()
 
+    agent_model = args.model
+    judge_model = args.judge_model or args.model
+
     # Initialize Noise Manager if config is provided or default config exists
     nm = None
     noise_config_path = args.noise_config
     default_noise_config = "sregym/generators/noise/noise_config.yaml"
 
-    # Use default path if no argument provided but default file exists
     if not noise_config_path and os.path.exists(default_noise_config):
         noise_config_path = default_noise_config
 
@@ -283,10 +286,34 @@ def main(args):
         except Exception as e:
             logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
 
-    os.environ["MODEL_ID"] = args.model
+    available_models = list(load_model_config().keys())
 
-    config = ConductorConfig(deploy_loki=not args.use_external_harness)
-    conductor = Conductor(config=config)
+    # Always validate judge model
+    if judge_model not in available_models:
+        logger.error(
+            f"❌ Judge model '{judge_model}' not found in llm_backend/configs.yaml. Available: {available_models}"
+        )
+        sys.exit(1)
+
+    # Validate agent model for stratus
+    if args.agent in ["stratus"] and agent_model not in available_models:
+        logger.error(
+            f"❌ Agent model '{agent_model}' not found in llm_backend/configs.yaml. Available: {available_models}"
+        )
+        sys.exit(1)
+
+    # Push to env so downstream code picks it up
+    os.environ["AGENT_MODEL_ID"] = agent_model
+    os.environ["JUDGE_MODEL_ID"] = judge_model
+    os.environ["API_HOSTNAME"] = "0.0.0.0"
+    os.environ["API_PORT"] = "8000"
+    os.environ["MCP_SERVER_PORT"] = "9954"
+    os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
+
+    logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}")
+
+    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness)
+    conductor = Conductor(config=conductor_config)
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (
@@ -377,14 +404,20 @@ if __name__ == "__main__":
     parser.add_argument(
         "--agent",
         type=str,
-        default=None,
-        help="Agent to run by its name (e.g., 'stratus')",
+        default="stratus",
+        help="Agent to run (default: stratus)",
     )
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-5-nano",
-        help="Run only a specific model backend (e.g., 'gpt-5', 'gemini-2.5-pro', 'claude-sonnet-4', 'moonshot')",
+        default="gpt-5",
+        help="Model for both agent and judge (default: gpt-5)",
+    )
+    parser.add_argument(
+        "--judge-model",
+        type=str,
+        default=None,
+        help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set)",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
@@ -410,7 +443,7 @@ if __name__ == "__main__":
         "--agent-timeout",
         type=int,
         default=1800,
-        help="Agent timeout in seconds after deployment (default: 1800 = 30 min)",
+        help="Agent timeout in seconds after deployment (default: 1800)",
     )
     parser.add_argument(
         "--resume",
@@ -420,12 +453,8 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Validate that --agent is provided when not using external harness
-    if not args.use_external_harness and args.agent is None:
-        parser.error("--agent is required when --use-external-harness is not set")
-
     # Validate that n_attempts is positive
-    if args.n_attempts < 1:
+    if args.n_attempts is not None and args.n_attempts < 1:
         parser.error("--n-attempts must be a positive integer")
 
     main(args)
