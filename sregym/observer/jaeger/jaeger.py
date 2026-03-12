@@ -19,10 +19,36 @@ class Jaeger:
         return result.stdout.strip()
 
     def deploy(self):
-        """Deploy Jaeger with TiDB as the storage backend."""
+        """Deploy Jaeger to the observe namespace."""
+        self._ensure_namespace_ready()
         self.run_cmd(f"kubectl apply -f {self.config_file} -n {self.namespace}")
         self.wait_for_service("jaeger-out", timeout=120)
         logger.info("Jaeger deployed successfully.")
+
+    def _ensure_namespace_ready(self, timeout: int = 120):
+        """Ensure the observe namespace exists and is not terminating."""
+        from kubernetes import client as k8s_client
+        from kubernetes.client.rest import ApiException
+
+        core_v1 = k8s_client.CoreV1Api()
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            try:
+                ns = core_v1.read_namespace(name=self.namespace)
+                if ns.status.phase == "Active":
+                    return
+                logger.info(f"Namespace '{self.namespace}' is {ns.status.phase}, waiting...")
+            except ApiException as e:
+                if e.status == 404:
+                    # Namespace doesn't exist, create it
+                    logger.info(f"Creating namespace '{self.namespace}'")
+                    self.run_cmd(
+                        f"kubectl create namespace {self.namespace} --dry-run=client -o yaml | kubectl apply -f -"
+                    )
+                    return
+                raise
+            time.sleep(3)
+        raise RuntimeError(f"Namespace '{self.namespace}' not ready within {timeout}s")
 
     def wait_for_service(self, service: str, timeout: int = 60):
         """Wait until the Jaeger service exists in Kubernetes."""
@@ -46,9 +72,10 @@ class Jaeger:
         for resource in ["deployment", "statefulset"]:
             self.run_cmd(f"kubectl delete {resource} -n {namespace} -l app-name=jaeger --ignore-not-found")
 
-        # All jaeger service names that apps might reference
+        # All jaeger service names that apps might reference.
+        # Route through OTel Collector so traces are converted to span metrics.
         jaeger_service_names = ["jaeger", "jaeger-agent", "jaeger-collector", "jaeger-query"]
-        external_name = f"jaeger-agent.{self.namespace}.svc.cluster.local"
+        external_name = f"otel-collector.{self.namespace}.svc.cluster.local"
 
         for svc_name in jaeger_service_names:
             self.run_cmd(f"kubectl delete svc -n {namespace} {svc_name} --ignore-not-found")
@@ -56,3 +83,12 @@ class Jaeger:
                 f"kubectl create service externalname {svc_name} -n {namespace} --external-name {external_name}"
             )
             logger.info(f"Created ExternalName service '{svc_name}' in namespace '{namespace}' -> {external_name}")
+
+        # Restart any OTel collector DaemonSets in the namespace so they
+        # re-resolve DNS and connect to the central collector instead of the
+        # now-deleted local Jaeger.
+        try:
+            self.run_cmd(f"kubectl rollout restart daemonset/otel-collector-agent -n {namespace}")
+            logger.info(f"Restarted otel-collector-agent DaemonSet in namespace '{namespace}'")
+        except Exception:
+            pass  # DaemonSet may not exist in every namespace

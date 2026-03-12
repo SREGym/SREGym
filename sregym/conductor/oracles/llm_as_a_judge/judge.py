@@ -184,7 +184,7 @@ def main():
         answer = test_case.get("answer", "")
         expected_judgment = test_case.get("oracle", "")
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"Test Case {i}/{total_cases}")
         print(
             f"Expected Root Cause: {description[:100]}..."
@@ -237,12 +237,12 @@ def main():
             )
 
     # Print summary
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("SUMMARY")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"Total test cases: {total_cases}")
-    print(f"Correct: {correct} ({correct/total_cases*100:.1f}%)")
-    print(f"Incorrect: {incorrect} ({incorrect/total_cases*100:.1f}%)")
+    print(f"Correct: {correct} ({correct / total_cases * 100:.1f}%)")
+    print(f"Incorrect: {incorrect} ({incorrect / total_cases * 100:.1f}%)")
     print("\nDetailed Results:")
 
     for result in results:

@@ -35,7 +35,7 @@ class Wrk2:
         config.load_kube_config()
 
     def create_configmap(self, name, namespace, payload_script_path, url):
-        with open(payload_script_path, "r") as script_file:
+        with open(payload_script_path) as script_file:
             script_content = script_file.read()
 
         workload_script = f"""
@@ -60,7 +60,7 @@ class Wrk2:
         workload_script = textwrap.dedent(workload_script).strip()
 
         configmap_body = client.V1ConfigMap(
-            metadata=client.V1ObjectMeta(name=name),
+            metadata=client.V1ObjectMeta(name=name, labels={"job": "workload"}),
             data={
                 payload_script_path.name: script_content,
                 "wrk2-workload.sh": workload_script,
@@ -86,7 +86,7 @@ class Wrk2:
 
     def create_wrk_job(self, job_name, namespace, payload_script):
         wrk_job_yaml = BASE_DIR / "generators" / "workload" / "wrk-job-template.yaml"
-        with open(wrk_job_yaml, "r") as f:
+        with open(wrk_job_yaml) as f:
             job_template = yaml.safe_load(f)
 
         job_template["metadata"]["name"] = job_name
@@ -107,7 +107,7 @@ class Wrk2:
             },
             {
                 "name": "wrk2-scripts",
-                "mountPath": f"/scripts/wrk2-workload.sh",
+                "mountPath": "/scripts/wrk2-workload.sh",
                 "subPath": "wrk2-workload.sh",
             },
         ]

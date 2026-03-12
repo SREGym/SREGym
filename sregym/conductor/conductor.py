@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,9 +17,10 @@ from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
+from sregym.observer.otel_collector import OtelCollector
+from sregym.paths import CLUSTER_BASELINE_STATE_FILE
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
-from sregym.service.dm_dust_manager import DmDustManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController
@@ -43,18 +46,18 @@ class Conductor:
         self.kubectl = KubeCtl()
         self.prometheus = Prometheus()
         self.jaeger = Jaeger()
+        self.otel_collector = OtelCollector()
         self.loki = Loki()
         self.mcp_server = MCPServer()
         self.apps = AppRegistry()
         self.agent_name = None
 
         self.khaos = KhaosController(self.kubectl)
-        self.dm_dust_manager = DmDustManager(self.kubectl)
         self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
         self.cluster_state = ClusterStateManager(self.kubectl)
         self._baseline_captured = False
 
-        # Kubernetes API proxy to hide chaos engineering namespaces from agents
+        # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
             listen_port=16443,
@@ -71,6 +74,7 @@ class Conductor:
         # submission_stage reflects the current stage (e.g., "diagnosis", "mitigation") or "done"
         self.submission_stage = None
         self.results = {}
+        self._cleanup_thread: threading.Thread | None = None
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
@@ -290,35 +294,63 @@ class Conductor:
             # No more stages; finish the problem
             self._finish_problem()
 
-    def _finish_problem(self):
-        self.logger.info("[STAGE] Done, recover fault")
+    def _cleanup_sync(self):
+        """
+        Blocking cleanup operations (fault recovery, app teardown, reconciliation).
+        Intended to be run in a background thread so the event loop
+        is not blocked and HTTP responses can return immediately.
+        """
+        self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
 
         # Stop noises
         try:
             nm = get_noise_manager()
             nm.stop()
+            self.logger.info("[CLEANUP] NoiseManager stopped")
         except Exception as e:
             self.logger.warning(f"Failed to stop NoiseManager: {e}")
 
+        # Recover fault
         if self.problem:
+            self.logger.info("[CLEANUP] Recovering fault...")
             self.problem.recover_fault()
+            self.logger.info("[CLEANUP] Fault recovered")
 
-        self.logger.info("[STAGE] Undeploy app")
+        # Undeploy app
+        self.logger.info("[CLEANUP] Undeploying app...")
         self.undeploy_app()
+        self.logger.info("[CLEANUP] App undeployed")
 
-        # Reconcile cluster state to baseline to clean up any changes made by the agent
+        # Reconcile cluster state to baseline
         if self._baseline_captured:
-            self.logger.info("[STAGE] Reconciling cluster state to baseline")
+            self.logger.info("[CLEANUP] Reconciling cluster state to baseline...")
             try:
                 changes = self.cluster_state.reconcile_to_baseline()
                 if any(v for v in changes.values() if v):
                     self.logger.info(f"Cluster state reconciliation changes: {changes}")
+                self.logger.info("[CLEANUP] Cluster state reconciled")
             except Exception as e:
                 self.logger.warning(f"Failed to reconcile cluster state: {e}")
 
-        # Set to "done" after all cleanup is complete to prevent race condition
-        # where the next problem starts before cleanup finishes
+        # Set to "done" after all cleanup is complete
         self.submission_stage = "done"
+        self.logger.info("[CLEANUP] Cleanup complete, stage set to 'done'")
+
+    def _finish_problem(self):
+        """
+        Initiates problem teardown by transitioning to 'tearing_down' state
+        and scheduling cleanup in a background thread. Returns immediately without blocking.
+        """
+        self.logger.info("[STAGE] Done, initiating teardown")
+        # Set stage to "tearing_down" immediately so the HTTP response can return
+        self.submission_stage = "tearing_down"
+
+        # Run cleanup in a background thread — works whether called from
+        # the event loop or from a thread pool (run_in_executor)
+        self._cleanup_thread = threading.Thread(target=self._cleanup_sync, name="cleanup", daemon=True)
+        self._cleanup_thread.start()
+
+        self.logger.info("[STAGE] Teardown initiated, cleanup running in background")
 
     async def start_problem(self) -> StartProblemResult:
         """
@@ -330,13 +362,26 @@ class Conductor:
         """
         if self.problem_id is None:
             raise RuntimeError("Cannot start problem: problem_id is not set")
+
+        # Wait for any in-progress cleanup thread from a previous attempt to finish
+        # before starting a new problem. This prevents a race condition where the
+        # background cleanup sets submission_stage="done" after the new problem starts.
+        if self._cleanup_thread is not None and self._cleanup_thread.is_alive():
+            self.logger.info("[WAIT] Waiting for previous cleanup thread to finish...")
+            self._cleanup_thread.join(timeout=300)
+            if self._cleanup_thread.is_alive():
+                self.logger.warning("[WAIT] Cleanup thread did not finish within 300s, proceeding anyway")
+            else:
+                self.logger.info("[WAIT] Previous cleanup thread finished")
+            self._cleanup_thread = None
+
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.app = self.problem.app
         self.detection_oracle = DetectionOracle(self.problem)
         self.results = {}
 
-        self.dependency_check(["kubectl", "helm"])
+        self.dependency_check(["kubectl", "helm", "docker"])
         self.logger.debug("Dependency check passed: kubectl, helm")
 
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
@@ -378,6 +423,8 @@ class Conductor:
         # After deployment, advance to the first stage
         self._advance_to_next_stage(start_index=0)
 
+        self.execution_start_time = time.time()  # Reset: measure agent time only
+
         if self.submission_stage and self.submission_stage != "done":
             self.logger.info(f"✅ Deployment complete. Ready for submission. Current stage is: {self.submission_stage}")
         else:
@@ -386,37 +433,11 @@ class Conductor:
             )
         return StartProblemResult.SUCCESS
 
-    async def submit(self, wrapped_cmd: str) -> dict:
+    def _submit_evaluate_and_advance(self, sol, current_stage):
         """
-        Called by CLI or HTTP /submit.  Parses & grades the `submit(...)` call,
-        advances submission_stage, records results—and when we hit "done",
-        triggers undeploy_app. Returns a snapshot of the results dict.
+        Blocking work for a submission: evaluate the oracle, advance stage, manage noise.
+        Runs in a background thread so the HTTP response is not blocked.
         """
-        from sregym.conductor.parser import ResponseParser
-
-        parser = ResponseParser()
-        parsed = parser.parse(wrapped_cmd)
-        if parsed["api_name"] != "submit":
-            raise ValueError("Only `submit(...)` is supported.")
-        sol = parsed["args"][0] if parsed["args"] else None
-
-        # If all tasks are already completed, simply return the final snapshot.
-        if self.submission_stage == "done":
-            self.logger.info("All tasks already completed; ignoring new submission.")
-            return dict(self.results)
-
-        if not self.stage_sequence:
-            self.logger.warning("submit() called but no stages are configured; returning current results.")
-            return dict(self.results)
-
-        if not self.waiting_for_agent:
-            self.logger.error(
-                "submit() called when conductor is not waiting for a submission. "
-                f"Current submission_stage={self.submission_stage}"
-            )
-            raise RuntimeError("Conductor is not currently waiting for an agent submission.")
-
-        current_stage = self.stage_sequence[self.current_stage_index]
         stage_name: str = current_stage["name"]
         self.logger.info(f"Evaluating stage '{stage_name}'", extra={"sol": sol})
 
@@ -435,8 +456,8 @@ class Conductor:
         next_index = self.current_stage_index + 1
         self._advance_to_next_stage(start_index=next_index)
 
-        # Restart noise if there are more stages
-        if self.submission_stage != "done":
+        # Restart noise if there are more stages AND not in teardown
+        if self.submission_stage not in ("done", "tearing_down"):
             try:
                 nm = get_noise_manager()
                 self.logger.info("Restarting noise manager for next stage...")
@@ -444,7 +465,50 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to restart noise manager: {e}")
 
-        return dict(self.results)
+    async def submit(self, wrapped_cmd: str) -> dict:
+        """
+        Called by CLI or HTTP /submit.  Parses the `submit(...)` call,
+        kicks off evaluation in the background, and returns immediately.
+        """
+        from sregym.conductor.parser import ResponseParser
+
+        parser = ResponseParser()
+        parsed = parser.parse(wrapped_cmd)
+        if parsed["api_name"] != "submit":
+            raise ValueError("Only `submit(...)` is supported.")
+        sol = parsed["args"][0] if parsed["args"] else None
+
+        # If all tasks are already completed, simply return the final snapshot.
+        if self.submission_stage == "done":
+            self.logger.info("All tasks already completed; ignoring new submission.")
+            return dict(self.results)
+
+        # If teardown is in progress, return current results without evaluation
+        if self.submission_stage == "tearing_down":
+            self.logger.info("Teardown in progress; returning current results without evaluation.")
+            return dict(self.results)
+
+        if not self.stage_sequence:
+            self.logger.warning("submit() called but no stages are configured; returning current results.")
+            return dict(self.results)
+
+        if not self.waiting_for_agent:
+            self.logger.error(
+                "submit() called when conductor is not waiting for a submission. "
+                f"Current submission_stage={self.submission_stage}"
+            )
+            raise RuntimeError("Conductor is not currently waiting for an agent submission.")
+
+        current_stage = self.stage_sequence[self.current_stage_index]
+
+        # Mark that we're no longer waiting so duplicate submits are rejected
+        self.waiting_for_agent = False
+
+        # Run evaluation and stage advancement in a background thread
+        # so the HTTP response returns immediately
+        asyncio.get_event_loop().run_in_executor(None, self._submit_evaluate_and_advance, sol, current_stage)
+
+        return {"status": "ok", "message": "Submission received"}
 
     def fix_kubernetes(self):
         self.logger.info("Fixing Kubernetes... to normal state.")
@@ -465,12 +529,31 @@ class Conductor:
             injector.recover_all_nxdomain_templates()
         except Exception as e:
             self.logger.error(f"Failed to recover CoreDNS NXDOMAIN templates: {e}")
+
+        self.logger.info("[FIX] Leftover dm-flakey infrastructure if any")
+        try:
+            self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
+        except Exception as e:
+            self.logger.warning(f"Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
+
         self.logger.info("Fix Kubernetes completed.")
 
     def deploy_app(self):
         """Kubectl + Prometheus + problem.app deployment."""
         problem = self.current_problem
         self.submission_stage = "setup"
+
+        # Load or capture baseline state BEFORE any infrastructure deployment.
+        # This captures the bare cluster state so reconciliation can clean up
+        # everything added during a problem run (including infrastructure drift).
+        if not self._baseline_captured:
+            if self.cluster_state.load_baseline_state(CLUSTER_BASELINE_STATE_FILE):
+                self.logger.info("[DEPLOY] Loaded persisted cluster baseline state")
+            else:
+                self.logger.info("[DEPLOY] No persisted baseline state found, capturing and saving...")
+                self.cluster_state.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
+            self._baseline_captured = True
+
         self.logger.info("[DEPLOY] Setting up metrics-server…")
         self.kubectl.exec_command(
             "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
@@ -519,6 +602,9 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying Jaeger…")
         self.jaeger.deploy()
 
+        self.logger.info("[DEPLOY] Deploying OTel Collector…")
+        self.otel_collector.deploy()
+
         if self.config.deploy_loki:
             self.logger.info("[DEPLOY] Deploying Loki…")
             self.loki.deploy()
@@ -528,25 +614,7 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying MCP server…")
         self.mcp_server.deploy()
 
-        # Set up fault injection infrastructure based on problem type
-        # Only one can be active at /var/openebs/local at a time
-        problem_name = problem.__class__.__name__
-
-        if "LatentSectorError" in problem_name:
-            print("Setting up dm-dust infrastructure for LSE fault injection...")
-            self.dm_dust_manager.setup_openebs_dm_dust_infrastructure()
-        elif "SilentDataCorruption" in problem_name:
-            print("Setting up dm-flakey infrastructure for Silent Data Corruption fault injection...")
-            self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
-
         self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki")
-
-        # Capture cluster baseline state after infrastructure is deployed but before app deployment
-        # This allows us to reset the cluster to a clean state after each problem
-        if not self._baseline_captured:
-            self.logger.info("[DEPLOY] Capturing cluster baseline state...")
-            self.cluster_state.capture_baseline()
-            self._baseline_captured = True
 
         # train-ticket pods need jaeger at startup; create ExternalName before deploy.
         # Other apps get it after deploy to avoid Helm ownership conflicts.

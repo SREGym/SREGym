@@ -213,7 +213,7 @@ def main():
     parser.add_argument(
         "--logs-dir",
         type=str,
-        default="./logs/codex",
+        default=os.environ.get("AGENT_LOGS_DIR", "./logs/codex"),
         help="Directory to store logs (default: ./logs/codex)",
     )
     parser.add_argument(

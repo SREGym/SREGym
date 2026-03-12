@@ -124,6 +124,19 @@ class MitigationAgent(BaseAgent):
                     graph_events.append(last_state.values)
                 break
 
+            # Break if agent hit its step limit without submitting — prevents infinite retry loop.
+            # This happens when force submit is triggered but the LLM fails to call the submit tool,
+            # leaving submitted=False and num_steps=max_step, which causes the router to re-trigger
+            # force submit on every subsequent iteration.
+            if last_state.values.get("num_steps", 0) >= self.max_step:
+                logger.error(
+                    f"[Loop {self.loop_count}] Agent reached step limit ({self.max_step}) without submitting. "
+                    "Exiting to prevent infinite retry loop. This benchmark problem is marked as failed."
+                )
+                from clients.stratus.tools.submit_tool import manual_submit_tool
+                await manual_submit_tool(ans="Agent failed to submit within step limit. Marking benchmark as failed.")
+                break
+
             self.loop_count += 1
 
         return last_state, graph_events

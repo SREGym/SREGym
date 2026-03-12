@@ -240,3 +240,7 @@ python-database
 sregym/generators/noise/noise_config.yaml
 results/
 logs/
+
+docker/agents/build-context/
+
+resolve-values.yaml
