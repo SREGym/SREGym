@@ -23,14 +23,21 @@ def _make_real_api_client() -> client.ApiClient:
     Bypasses any KUBECONFIG env var that may point to a filtering proxy (such as
     the k8s_proxy used to hide workload generator resources from agents). This
     mirrors the approach used by KubernetesAPIProxy itself and by the Resolve driver.
+
+    Inside containers, the real kubeconfig is mounted at a separate path and
+    advertised via SREGYM_REAL_KUBECONFIG. On the host, ~/.kube/config is used.
     """
     try:
         config.load_incluster_config()
         return client.ApiClient()
     except config.ConfigException:
-        # Running outside the cluster — load from the default kubeconfig path,
+        # Running outside the cluster — load from the real kubeconfig path,
         # ignoring the KUBECONFIG env var which may point to the filtering proxy.
-        real_kubeconfig = os.path.expanduser("~/.kube/config")
+        # In containers, SREGYM_REAL_KUBECONFIG points to the unproxied config.
+        real_kubeconfig = os.environ.get(
+            "SREGYM_REAL_KUBECONFIG",
+            os.path.expanduser("~/.kube/config"),
+        )
         cfg = client.Configuration()
         config.load_kube_config(config_file=real_kubeconfig, client_configuration=cfg)
         return client.ApiClient(configuration=cfg)

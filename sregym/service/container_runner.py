@@ -119,6 +119,13 @@ class ContainerRunner:
             args.extend(["-v", f"{self.config.kubeconfig_path.resolve()}:/root/.kube/config:ro"])
             args.extend(["-e", "KUBECONFIG=/root/.kube/config"])
 
+        # Mount the real (unproxied) kubeconfig so that workload oracles
+        # running inside the container can bypass the filtering proxy.
+        real_kubeconfig = Path(os.path.expanduser("~/.kube/config"))
+        if real_kubeconfig.exists():
+            args.extend(["-v", f"{real_kubeconfig.resolve()}:/root/.kube/real-config:ro"])
+            args.extend(["-e", "SREGYM_REAL_KUBECONFIG=/root/.kube/real-config"])
+
         # Mount AWS credentials directory (read-only) for Bedrock and other AWS services
         aws_dir = Path.home() / ".aws"
         if aws_dir.is_dir():
