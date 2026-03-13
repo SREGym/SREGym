@@ -1,0 +1,52 @@
+version: "2.0"
+scoring:
+  threshold: 0.70
+  weights:
+    D1: 0.33
+    D2: 0.33
+    D3: 0.34
+dimensions:
+  - id: D1
+    name: "Fault Localization"
+    category: "internal_quality"
+    definition: "Does the diagnosis correctly identify the specific component where the fault originated?"
+    questions:
+      - id: D1-Q1
+        text: "Does the diagnosis name the same service, deployment, pod, node, or infrastructure component that the ground-truth identifies as the fault origin?"
+        evaluator_hint: "Compare the component named in the diagnosis against the component named in the ground-truth root cause"
+      - id: D1-Q2
+        text: "Does the diagnosis correctly distinguish the fault origin from any secondary or cascading failure points mentioned in the ground-truth?"
+        evaluator_hint: "Check that the diagnosis points to the root-cause component, not a downstream victim"
+      - id: D1-Q3
+        text: "Does the diagnosis avoid misidentifying a healthy component as the fault origin?"
+        evaluator_hint: "Verify the diagnosed component matches the ground-truth; flag if a different component is blamed"
+
+  - id: D2
+    name: "Fault Characterization"
+    category: "internal_quality"
+    definition: "Does the diagnosis correctly describe what went wrong with the identified component?"
+    questions:
+      - id: D2-Q1
+        text: "Does the diagnosis identify the correct category of fault as described in the ground-truth (e.g., misconfiguration, resource exhaustion, feature flag, image issue, authentication failure, scheduling constraint)?"
+        evaluator_hint: "Match the fault category in the diagnosis against the ground-truth description"
+      - id: D2-Q2
+        text: "Does the diagnosis identify the specific fault mechanism described in the ground-truth (e.g., wrong port, missing env var, wrong image, wrong selector, memory limit, probe misconfiguration)?"
+        evaluator_hint: "Compare the specific fault detail in the diagnosis against the ground-truth"
+      - id: D2-Q3
+        text: "Does the diagnosis avoid attributing the fault to an incorrect or unrelated fault type?"
+        evaluator_hint: "Check that the diagnosis does not describe a different kind of problem than what the ground-truth states"
+
+  - id: D3
+    name: "Scope Precision"
+    category: "external_alignment"
+    definition: "Does the diagnosis correctly scope the fault to the right set of affected components?"
+    questions:
+      - id: D3-Q1
+        text: "Does the diagnosis avoid blaming components that are not identified in the ground-truth as contributing to the fault?"
+        evaluator_hint: "Check for over-attribution — the diagnosis should not blame uninvolved components"
+      - id: D3-Q2
+        text: "Does the diagnosis include all components listed in the ground-truth as contributing to or affected by the fault?"
+        evaluator_hint: "Check for under-attribution — all ground-truth components should be mentioned"
+      - id: D3-Q3
+        text: "Does the diagnosis correctly describe the impact or symptom consistent with what the ground-truth states?"
+        evaluator_hint: "Compare the stated impact (e.g., pods Pending, service unavailable, connection failures) against the ground-truth"
