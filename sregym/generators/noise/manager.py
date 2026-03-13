@@ -87,6 +87,7 @@ class NoiseManager:
             self._background_thread.join(timeout=5)
             self._background_thread = None
         self._cleanup_experiments()
+        self._last_injection_time = 0
         logger.info("Noise injection stopped.")
 
     # ── Background loop ───────────────────────────────────────────────
