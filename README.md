@@ -65,7 +65,8 @@ kubectl cluster-info --context kind-kind
 
 Have a question, bug, or feature request? Let us know! https://kind.sigs.k8s.io/#community 🙂
 ```
-Then you can consider the cluster is ready. Running the suggested command is optional.
+The cluster is ready!
+
 ### 3. Run a problem with the `demo` agent
 To help the reviewer using SREGym, we create a demo SRE agent that deterministically runs a sequence of diagnosis and mitigation commands on the cluster, to avoid incurring high model credit cost. We also made small modifications in the diagnosis oracle to avoid using LLM-as-a-Judge and rely on string comparison, but this is only for a smooth demo experience.
 
