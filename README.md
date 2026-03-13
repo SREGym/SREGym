@@ -68,7 +68,7 @@ Have a question, bug, or feature request? Let us know! https://kind.sigs.k8s.io/
 The cluster is ready!
 
 ### 3. Run a problem with the `demo` agent
-To help the reviewer using SREGym, we create a demo SRE agent that deterministically runs a sequence of diagnosis and mitigation commands on the cluster, to avoid incurring high model credit cost. We also made small modifications in the diagnosis oracle to avoid using LLM-as-a-Judge and rely on string comparison, but this is only for a smooth demo experience.
+To help the reviewer use SREGym, we create a demo SRE agent that deterministically runs a sequence of diagnosis and mitigation commands on the cluster, to avoid incurring high model credit cost. We also made small modifications in the diagnosis oracle to avoid using LLM-as-a-Judge and rely on string comparison, but this is only for a smooth demo experience.
 
 In this demo, three problems are altered for a smooth demo evaluation experience with no LLM model credit cost. Here are their problem IDs and a short description.
 1. `incorrect_image`: The success case problem described in the live demo video. This problem includes a fault where we misconfigured a microservice's container image, failing the pod that runs the service.
