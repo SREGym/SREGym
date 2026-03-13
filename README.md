@@ -13,7 +13,7 @@ Please make sure you have the dependencies below.
 - [brew](https://docs.brew.sh/Homebrew-and-Python)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [uv](https://github.com/astral-sh/uv)
-- [kind](https://kind.sigs.k8s.io/) 
+- [kind](https://kind.sigs.k8s.io/)
 
 After installing `uv` and `python3.12`, please run this command in the artifact root folder (`SREGym`) to install all Python dependencies:
 ```
@@ -51,13 +51,13 @@ kind create cluster --config kind/kind-config-arm.yaml
 Wait until `kind` creates a local Kubernetes cluster on you machine. If you see:
 ```bash
 Creating cluster "kind" ...
- ✓ Ensuring node image (jacksonarthurclark/aiopslab-kind-x86:latest) 🖼 
- ✓ Preparing nodes 📦 📦 📦 📦  
- ✓ Writing configuration 📜 
- ✓ Starting control-plane 🕹️ 
- ✓ Installing CNI 🔌 
- ✓ Installing StorageClass 💾 
- ✓ Joining worker nodes 🚜 
+ ✓ Ensuring node image (jacksonarthurclark/aiopslab-kind-x86:latest) 🖼
+ ✓ Preparing nodes 📦 📦 📦 📦
+ ✓ Writing configuration 📜
+ ✓ Starting control-plane 🕹️
+ ✓ Installing CNI 🔌
+ ✓ Installing StorageClass 💾
+ ✓ Joining worker nodes 🚜
 Set kubectl context to "kind-kind"
 You can now use your cluster with:
 
@@ -88,7 +88,7 @@ For each problem included in the demo, we include a `<problem_name>_kubectl_cmd.
 
 Before we proceed, make sure you run this command under `SREGym/clients/demo`:
 ```bash
-mv incorrect_image_kubectl_cmds.txt kubectl_cmds.txt
+cp incorrect_image_kubectl_cmds.txt kubectl_cmds.txt
 ```
 
 Deploy the problem and the demo agent with this command:
@@ -186,7 +186,7 @@ Before proceeding, please make sure a local Kubernetes cluster is created and re
 
 Please make sure you run this command under `SREGym/clients/demo`:
 ```bash
-mv capacity_decrease_rpc_retry_storm_kubectl_cmds.txt kubectl_cmds.txt
+cp capacity_decrease_rpc_retry_storm_kubectl_cmds.txt kubectl_cmds.txt
 ```
 
 Deploy the problem and the demo agent with this command:
@@ -206,17 +206,16 @@ Before proceeding, please make sure a local Kubernetes cluster is created and re
 
 Please make sure you run this command under `SREGym/clients/demo`:
 ```bash
-mv noisy_problem_kubectl_cmds.txt kubectl_cmds.txt
+cp noisy_problem_kubectl_cmds.txt kubectl_cmds.txt
 ```
 
 Deploy the problem and the demo agent with this command:
 ```bash
-uv run main.py --problem capacity_decrease_rpc_retry_storm --agent demo
+uv run main.py --problem noisy_problem --agent demo
 ```
 
-Same as other two problems, please step through the commands to replay this agent trace. In this problem, with SREGym's modular design, we deploy two faults concurrently. We cause both the `user-service` microservice in the Social Network microservice application and the internal observability service Jaeger tracing to fail. More specifically, we inject a port misconfiguration to fail requests coming to `user-service`, and a scheduler misconfiguration to fail the tracing service. Because the failing `user-service` directly impacts user experience, we expect the SRE agent to prioritize on fixing the `user-service`. 
+Same as other two problems, please step through the commands to replay this agent trace. In this problem, with SREGym's modular design, we deploy two faults concurrently. We cause both the `user-service` microservice in the Social Network microservice application and the internal observability service Jaeger tracing to fail. More specifically, we inject a port misconfiguration to fail requests coming to `user-service`, and a scheduler misconfiguration to fail the tracing service. Because the failing `user-service` directly impacts user experience, we expect the SRE agent to prioritize on fixing the `user-service`.
 
 However, in practice, the agent takes a greedy approach in mitigating incidents. Because the scheduler misconfiguration directly manifests on the pod-level, the agent prioritizes on fixing that and ignores the network misconfiguration fault.
 
 The commands included in `noisy_problem_kubectl_cmds.txt` shows such a failure case and only focus on the scheduler misconfiguration as mitigation. The solution to the scheduler misconfiguration is to downscale the Jaeger tracing deployment to 1 replica. By running through the commands, you will see that in both diagnosis and mitigation evaluation phases, the agent fails.
-
