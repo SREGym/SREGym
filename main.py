@@ -268,23 +268,16 @@ def main(args):
     agent_model = args.model
     judge_model = args.judge_model or args.model
 
-    # Initialize Noise Manager if config is provided or default config exists
+    # Initialize Noise Manager if --noise flag is set
     nm = None
-    noise_config_path = args.noise_config
-    default_noise_config = "sregym/generators/noise/noise_config.yaml"
-
-    if not noise_config_path and os.path.exists(default_noise_config):
-        noise_config_path = default_noise_config
-
-    if noise_config_path:
+    if args.noise:
         try:
             from sregym.generators.noise.manager import get_noise_manager
 
             nm = get_noise_manager()
-            nm.load_config(noise_config_path)
-            logger.info(f"✅ Noise manager initialized with config: {noise_config_path}")
+            logger.info("Noise injection enabled.")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
+            logger.warning(f"Failed to initialize noise manager: {e}")
 
     available_models = list(load_model_config().keys())
 
@@ -423,10 +416,9 @@ if __name__ == "__main__":
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
     )
     parser.add_argument(
-        "--noise-config",
-        type=str,
-        default=None,
-        help="Path to noise configuration YAML file",
+        "--noise",
+        action="store_true",
+        help="Enable transient noise injection via Chaos Mesh during problem runs",
     )
     parser.add_argument(
         "--n-attempts",

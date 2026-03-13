@@ -416,7 +416,7 @@ class Conductor:
                 # We can add more info here if needed, e.g. service list
             }
             nm.set_problem_context(context)
-            nm.start_background_noises()
+            nm.start()
         except Exception as e:
             self.logger.warning(f"Failed to update NoiseManager context: {e}")
 
@@ -461,7 +461,7 @@ class Conductor:
             try:
                 nm = get_noise_manager()
                 self.logger.info("Restarting noise manager for next stage...")
-                nm.start_background_noises()
+                nm.start()
             except Exception as e:
                 self.logger.warning(f"Failed to restart noise manager: {e}")
 
