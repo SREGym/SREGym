@@ -1,0 +1,6 @@
+kubectl -n blueprint-hotel-reservation get configmaps
+kubectl -n blueprint-hotel-reservation describe configmap rpc
+submit("The ConfigMap rpc has misconfigured RPC timeout (50ms) and retry settings (30 retries), causing an RPC retry storm that overwhelms the service. It is a metastable failure.")
+kubectl patch configmap rpc -n blueprint-hotel-reservation -p '{{"data":{{"GRPC_CLIENT_TIMEOUT":"1s","GRPC_CLIENT_RETRIES_ON_ERROR":"1"}}}}'
+kubectl rollout restart deployment -l configmap=rpc -n blueprint-hotel-reservation
+submit("")

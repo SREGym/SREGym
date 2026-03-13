@@ -68,27 +68,58 @@ class Jaeger:
         This ensures traces flow to the shared observability stack regardless of
         whether the app uses the Jaeger agent protocol (port 6831) or OTLP (port 4317).
         """
-        # Delete any app-local Jaeger deployments/statefulsets
-        for resource in ["deployment", "statefulset"]:
-            self.run_cmd(f"kubectl delete {resource} -n {namespace} -l app-name=jaeger --ignore-not-found")
+        logger.info(f"what is namespace? {namespace}, {type(namespace)}")
+        if isinstance(namespace, set):
+            logger.info("its a list")
+            for ns in namespace:
+                logger.info(f"Now processing namespace [{ns}]")
+                # Delete any app-local Jaeger deployments/statefulsets
+                for resource in ["deployment", "statefulset"]:
+                    self.run_cmd(f"kubectl delete {resource} -n {ns} -l app-name=jaeger --ignore-not-found")
 
-        # All jaeger service names that apps might reference.
-        # Route through OTel Collector so traces are converted to span metrics.
-        jaeger_service_names = ["jaeger", "jaeger-agent", "jaeger-collector", "jaeger-query"]
-        external_name = f"otel-collector.{self.namespace}.svc.cluster.local"
+                # All jaeger service names that apps might reference.
+                # Route through OTel Collector so traces are converted to span metrics.
+                jaeger_service_names = ["jaeger", "jaeger-agent", "jaeger-collector", "jaeger-query"]
+                external_name = f"otel-collector.{self.namespace}.svc.cluster.local"
 
-        for svc_name in jaeger_service_names:
-            self.run_cmd(f"kubectl delete svc -n {namespace} {svc_name} --ignore-not-found")
-            self.run_cmd(
-                f"kubectl create service externalname {svc_name} -n {namespace} --external-name {external_name}"
-            )
-            logger.info(f"Created ExternalName service '{svc_name}' in namespace '{namespace}' -> {external_name}")
+                for svc_name in jaeger_service_names:
+                    self.run_cmd(f"kubectl delete svc -n {ns} {svc_name} --ignore-not-found")
+                    self.run_cmd(
+                        f"kubectl create service externalname {svc_name} -n {ns} --external-name {external_name}"
+                    )
+                    logger.info(f"Created ExternalName service '{svc_name}' in namespace '{ns}' -> {external_name}")
 
-        # Restart any OTel collector DaemonSets in the namespace so they
-        # re-resolve DNS and connect to the central collector instead of the
-        # now-deleted local Jaeger.
-        try:
-            self.run_cmd(f"kubectl rollout restart daemonset/otel-collector-agent -n {namespace}")
-            logger.info(f"Restarted otel-collector-agent DaemonSet in namespace '{namespace}'")
-        except Exception:
-            pass  # DaemonSet may not exist in every namespace
+                # Restart any OTel collector DaemonSets in the namespace so they
+                # re-resolve DNS and connect to the central collector instead of the
+                # now-deleted local Jaeger.
+                try:
+                    self.run_cmd(f"kubectl rollout restart daemonset/otel-collector-agent -n {ns}")
+                    logger.info(f"Restarted otel-collector-agent DaemonSet in namespace '{ns}'")
+                except Exception:
+                    pass  # DaemonSet may not exist in every namespace
+        else:
+            logger.info("its a string")
+            # Delete any app-local Jaeger deployments/statefulsets
+            for resource in ["deployment", "statefulset"]:
+                self.run_cmd(f"kubectl delete {resource} -n {namespace} -l app-name=jaeger --ignore-not-found")
+
+            # All jaeger service names that apps might reference.
+            # Route through OTel Collector so traces are converted to span metrics.
+            jaeger_service_names = ["jaeger", "jaeger-agent", "jaeger-collector", "jaeger-query"]
+            external_name = f"otel-collector.{self.namespace}.svc.cluster.local"
+
+            for svc_name in jaeger_service_names:
+                self.run_cmd(f"kubectl delete svc -n {namespace} {svc_name} --ignore-not-found")
+                self.run_cmd(
+                    f"kubectl create service externalname {svc_name} -n {namespace} --external-name {external_name}"
+                )
+                logger.info(f"Created ExternalName service '{svc_name}' in namespace '{namespace}' -> {external_name}")
+
+            # Restart any OTel collector DaemonSets in the namespace so they
+            # re-resolve DNS and connect to the central collector instead of the
+            # now-deleted local Jaeger.
+            try:
+                self.run_cmd(f"kubectl rollout restart daemonset/otel-collector-agent -n {namespace}")
+                logger.info(f"Restarted otel-collector-agent DaemonSet in namespace '{namespace}'")
+            except Exception:
+                pass  # DaemonSet may not exist in every namespace

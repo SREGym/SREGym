@@ -1,0 +1,4 @@
+kubectl -n social-network get pods
+submit("Multiple replicas of the deployment `jaeger` are configured to share a single ReadWriteOnce PVC, causing mount conflicts and preventing pods from starting.")
+kubectl -n social-network patch deployment jaeger --type='strategic' --patch "{\"spec\": {\"replicas\": 1}}"
+submit("")

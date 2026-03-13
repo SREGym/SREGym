@@ -1,0 +1,4 @@
+kubectl -n astronomy-shop get pods
+submit("The product-catalog deployment is mis-configured to pull the non-existent image app-image:latest.")
+kubectl -n astronomy-shop patch deployment product-catalog --type='strategic' --patch "{\"spec\": {\"template\": {\"spec\": {\"containers\": [{\"name\": \"product-catalog\", \"image\": \"ghcr.io/open-telemetry/demo:latest-product-catalog\"}]}}}}"
+submit("")

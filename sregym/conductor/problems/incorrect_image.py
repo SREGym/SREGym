@@ -1,5 +1,6 @@
 from sregym.conductor.oracles.incorrect_image_mitigation import IncorrectImageMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
+from sregym.conductor.oracles.llm_as_a_judge.mock_llm_as_a_judge_oracle import MockLLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -16,10 +17,10 @@ class IncorrectImage(Problem):
         self.faulty_service = ["product-catalog"]
         self.injector = ApplicationFaultInjector(namespace=self.namespace)
         self.root_cause = (
-            "The 'product-catalog' deployment is mis-configured to pull the non-existent image 'app-image:latest'."
+            "The product-catalog deployment is mis-configured to pull the non-existent image app-image:latest."
         )
 
-        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        self.diagnosis_oracle = MockLLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = IncorrectImageMitigationOracle(
             problem=self, actual_images={"product-catalog": "app-image:latest"}
         )

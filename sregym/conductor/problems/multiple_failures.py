@@ -3,7 +3,7 @@
 import time
 
 from sregym.conductor.oracles.compound import CompoundedOracle
-from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
+from sregym.conductor.oracles.llm_as_a_judge.mock_llm_as_a_judge_oracle import MockLLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.composite_app import CompositeApp
 from sregym.utils.decorators import mark_fault_injected
@@ -20,11 +20,11 @@ class MultipleIndependentFailures(Problem):
         # === Attaching problem's oracles ===
         # diagnosis oracles can be statically defined.
         # concat all root causes together.
-        self.root_cause: str = "This problem contains multiple faults.\n"
+        self.root_cause: str = ""
         for p in self.problems:
             root_cause = "" if p.root_cause is None else p.root_cause
             self.root_cause += root_cause
-        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        self.diagnosis_oracle = MockLLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         # mitigation oracle can and should be dynamic
         mitigation_oracles = [p.mitigation_oracle for p in self.problems]

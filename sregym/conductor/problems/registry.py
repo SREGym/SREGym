@@ -22,6 +22,7 @@ from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.khaos_faults import KhaosFaultName, KhaosFaultProblem
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
+from sregym.conductor.problems.latent_sector_error import LatentSectorError
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from sregym.conductor.problems.load_spike_rpc_retry_storm import LoadSpikeRPCRetryStorm
@@ -168,7 +169,7 @@ class ProblemRegistry:
             # ==================== HARDWARE FAULT INJECTOR ====================
             "silent_data_corruption": SilentDataCorruption,
 
-            "latent_sector_error": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error,inject_args=[30]),
+            "latent_sector_error": LatentSectorError,
             "read_error": lambda: KhaosFaultProblem(KhaosFaultName.read_error),
             # "pread_error": lambda: KhaosFaultProblem(KhaosFaultName.pread_error),
             # "write_error": lambda: KhaosFaultProblem(KhaosFaultName.write_error),
@@ -262,6 +263,11 @@ class ProblemRegistry:
             "operator_security_context_fault": K8SOperatorSecurityContextFault,
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
             "operator_wrong_operator_image": K8SOperatorWrongOperatorImage,
+            # ==================== NOISY PROBLEM ==================
+            "noisy_problem": lambda: MultipleIndependentFailures(problems=[
+                DuplicatePVCMounts(app_name="social_network", faulty_service="jaeger"),
+                K8STargetPortMisconfig(faulty_service="user-service")
+            ])
         }
 # fmt: on
         self.kubectl = KubeCtl()

@@ -195,7 +195,7 @@ class Conductor:
                 else:
                     self.logger.info("⏩ Diagnosis oracle is not attached. Skipping diagnosis.")
 
-            elif name == "mitigation":
+            if name == "mitigation":
                 if getattr(self.problem, "mitigation_oracle", None):
                     self.stage_sequence.append(
                         {
