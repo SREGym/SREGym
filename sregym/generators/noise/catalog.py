@@ -3,22 +3,17 @@ Pre-defined catalog of Chaos Mesh experiment templates.
 
 Each template is a dict with:
   - name: human-readable name for logging
-  - kind: Chaos Mesh CRD kind (PodChaos, NetworkChaos, StressChaos, IOChaos, etc.)
+  - kind: Chaos Mesh CRD kind (PodChaos, NetworkChaos, etc.)
   - spec: the CRD spec with {target_namespace} and {duration} placeholders
+
+Only experiments with tangible, observable effects are included.
+Removed: IOChaos (volumePath "/" is a no-op), container-kill (redundant
+with pod-kill), network-duplicate (too subtle), low-intensity stress tests.
 """
 
 EXPERIMENT_CATALOG = [
-    # ── Pod failures ──────────────────────────────────────────────────
-    {
-        "name": "pod-failure",
-        "kind": "PodChaos",
-        "spec": {
-            "action": "pod-failure",
-            "mode": "one",
-            "selector": {"namespaces": ["{target_namespace}"]},
-            "duration": "{duration}",
-        },
-    },
+    # ── Pod disruptions ──────────────────────────────────────────────
+    # Pod-kill: forcefully kills a random pod → visible restart in kubectl
     {
         "name": "pod-kill",
         "kind": "PodChaos",
@@ -30,17 +25,19 @@ EXPERIMENT_CATALOG = [
             "duration": "{duration}",
         },
     },
+    # Pod-failure: makes a pod unavailable (injected pause) → CrashLoopBackOff
     {
-        "name": "container-kill",
+        "name": "pod-failure",
         "kind": "PodChaos",
         "spec": {
-            "action": "container-kill",
+            "action": "pod-failure",
             "mode": "one",
             "selector": {"namespaces": ["{target_namespace}"]},
             "duration": "{duration}",
         },
     },
     # ── Network faults ────────────────────────────────────────────────
+    # High latency: 500ms base + jitter → visible in trace spans
     {
         "name": "network-delay",
         "kind": "NetworkChaos",
@@ -49,13 +46,14 @@ EXPERIMENT_CATALOG = [
             "mode": "one",
             "selector": {"namespaces": ["{target_namespace}"]},
             "delay": {
-                "latency": "200ms",
+                "latency": "500ms",
                 "correlation": "50",
-                "jitter": "50ms",
+                "jitter": "200ms",
             },
             "duration": "{duration}",
         },
     },
+    # Packet loss: 50% → visible as intermittent request failures
     {
         "name": "network-loss",
         "kind": "NetworkChaos",
@@ -63,70 +61,7 @@ EXPERIMENT_CATALOG = [
             "action": "loss",
             "mode": "one",
             "selector": {"namespaces": ["{target_namespace}"]},
-            "loss": {"loss": "25", "correlation": "50"},
-            "duration": "{duration}",
-        },
-    },
-    {
-        "name": "network-duplicate",
-        "kind": "NetworkChaos",
-        "spec": {
-            "action": "duplicate",
-            "mode": "one",
-            "selector": {"namespaces": ["{target_namespace}"]},
-            "duplicate": {"duplicate": "30", "correlation": "50"},
-            "duration": "{duration}",
-        },
-    },
-    # ── Stress ────────────────────────────────────────────────────────
-    {
-        "name": "cpu-stress",
-        "kind": "StressChaos",
-        "spec": {
-            "mode": "one",
-            "selector": {"namespaces": ["{target_namespace}"]},
-            "stressors": {
-                "cpu": {"workers": 1, "load": 50},
-            },
-            "duration": "{duration}",
-        },
-    },
-    {
-        "name": "memory-stress",
-        "kind": "StressChaos",
-        "spec": {
-            "mode": "one",
-            "selector": {"namespaces": ["{target_namespace}"]},
-            "stressors": {
-                "memory": {"workers": 1, "size": "128MB"},
-            },
-            "duration": "{duration}",
-        },
-    },
-    # ── I/O faults ────────────────────────────────────────────────────
-    {
-        "name": "io-delay",
-        "kind": "IOChaos",
-        "spec": {
-            "action": "latency",
-            "mode": "one",
-            "selector": {"namespaces": ["{target_namespace}"]},
-            "delay": "100ms",
-            "percent": 50,
-            "volumePath": "/",
-            "duration": "{duration}",
-        },
-    },
-    {
-        "name": "io-error",
-        "kind": "IOChaos",
-        "spec": {
-            "action": "fault",
-            "mode": "one",
-            "selector": {"namespaces": ["{target_namespace}"]},
-            "errno": 5,  # EIO
-            "percent": 10,
-            "volumePath": "/",
+            "loss": {"loss": "50", "correlation": "50"},
             "duration": "{duration}",
         },
     },
