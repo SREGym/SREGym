@@ -219,3 +219,91 @@ Same as other two problems, please step through the commands to replay this agen
 However, in practice, the agent takes a greedy approach in mitigating incidents. Because the scheduler misconfiguration directly manifests on the pod-level, the agent prioritizes on fixing that and ignores the network misconfiguration fault.
 
 The commands included in `noisy_problem_kubectl_cmds.txt` shows such a failure case and only focus on the scheduler misconfiguration as mitigation. The solution to the scheduler misconfiguration is to downscale the Jaeger tracing deployment to 1 replica. By running through the commands, you will see that in both diagnosis and mitigation evaluation phases, the agent fails.
+
+### (Optional) Using your own keys
+If you would like to try out SREGym with the included
+    [Stratus](https://openreview.net/forum?id=fYW1PKawwJ) agent with your own API keys,
+    you can setup the model access here.
+
+To get started with the included Stratus agent:
+
+1. Create your `.env` file:
+```bash
+mv .env.example .env
+```
+
+2. Open the `.env` file and configure your model and API key.
+
+3. Run the benchmark:
+```bash
+python main.py --agent <agent-name> --model <model-id>
+```
+
+For example, to run the Stratus agent:
+```bash
+python main.py --agent stratus --model gpt-4o
+```
+
+#### Container Isolation
+
+Agents always run in isolated Docker containers, preventing access to SREGym internals like problem definitions and grading logic. The image is built automatically on first run.
+
+Use `--force-build` to rebuild the container image after updating dependencies or agent code:
+
+```bash
+python main.py --agent codex --model gpt-4o --force-build
+```
+
+### Model Selection
+
+SREGym supports multiple LLM providers. Specify your model using the `--model` flag:
+
+```bash
+python main.py --agent <agent-name> --model <model-id>
+```
+
+#### Available Models
+
+| Model ID | Provider | Model Name | Required Environment Variables |
+|----------|----------|------------|-------------------------------|
+| `gpt-5` | OpenAI | GPT-5 | `OPENAI_API_KEY` |
+| `gemini-2.5-pro` | Google | Gemini 2.5 Pro | `GEMINI_API_KEY` |
+| `claude-sonnet-4` | Anthropic | Claude Sonnet 4 | `ANTHROPIC_API_KEY` |
+| `bedrock-claude-sonnet-4.5` | AWS Bedrock | Claude Sonnet 4.5 | `AWS_PROFILE`, `AWS_DEFAULT_REGION` |
+
+**Default:** If no model is specified, `gpt-4o` is used by default.
+
+<details>
+<summary><strong>Provider Examples</strong></summary>
+
+**OpenAI:**
+```bash
+# In .env file
+OPENAI_API_KEY="sk-proj-..."
+
+# Run with GPT-4o
+python main.py --agent stratus --model gpt-4o
+```
+
+**Anthropic:**
+```bash
+# In .env file
+ANTHROPIC_API_KEY="sk-ant-api03-..."
+
+# Run with Claude Sonnet 4
+python main.py --agent stratus --model claude-sonnet-4
+```
+
+**AWS Bedrock:**
+```bash
+# In .env file
+AWS_PROFILE="bedrock"
+AWS_DEFAULT_REGION=us-east-2
+
+# Run with Claude Sonnet 4.5 on Bedrock
+python main.py --agent stratus --model bedrock-claude-sonnet-4.5
+```
+
+**Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.
+
+</details>
