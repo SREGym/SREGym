@@ -267,6 +267,10 @@ class ProblemRegistry:
             "noisy_problem": lambda: MultipleIndependentFailures(problems=[
                 DuplicatePVCMounts(app_name="social_network", faulty_service="jaeger"),
                 K8STargetPortMisconfig(faulty_service="user-service")
+            ]),
+            "unschedule_2": lambda: MultipleIndependentFailures(problems=[
+                DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="checkout"),
+                IncorrectPortAssignment(unschedulable=True)
             ])
         }
 # fmt: on
