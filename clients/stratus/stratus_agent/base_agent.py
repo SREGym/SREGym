@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import END, START
 from langgraph.graph import StateGraph
@@ -12,6 +12,7 @@ from langgraph.graph.state import CompiledStateGraph
 
 from clients.stratus.stratus_agent.state import State
 from clients.stratus.tools.stratus_tool_node import StratusToolNode
+from clients.stratus.tools.submit_tool import manual_submit_tool
 
 logger = logging.getLogger("all.stratus.base")
 logger.propagate = True
@@ -60,11 +61,31 @@ class BaseAgent:
             return "force_submit"
         return "call_model"
 
-    def force_submit(self, state: State):
+    async def force_submit(self, state: State):
         self.logger.warning(f"Agent reached step limit ({self.max_step}), forcing submission.")
-        prompt = HumanMessage("You have reached your step limit. Please submit your results using the submit tool.")
+        prompt = HumanMessage("You have reached your step limit. Please submit your best answer using the submit tool.")
         ai_message = self.llm.inference(messages=state["messages"] + [prompt], tools=[self.submit_tool])
-        return {"messages": [prompt, ai_message]}
+
+        if isinstance(ai_message, AIMessage) and ai_message.tool_calls:
+            tool_call = ai_message.tool_calls[0]
+            if tool_call.get("name") == self.submit_tool.name:
+                ans = tool_call.get("args", {}).get("ans", "")
+            else:
+                self.logger.warning(f"LLM called unexpected tool '{tool_call.get('name')}' during force submit.")
+                ans = None
+        else:
+            ans = None
+
+        if ans is None:
+            # LLM didn't use the submit tool — ask for its best answer as plain text instead.
+            self.logger.warning("LLM did not call the submit tool during force submit. Extracting plain-text answer.")
+            plain_prompt = HumanMessage("Please write out your best answer as plain text.")
+            plain_response = self.llm.inference(messages=state["messages"] + [prompt, ai_message, plain_prompt])
+            ans = plain_response.content if isinstance(plain_response, AIMessage) else ""
+
+        await manual_submit_tool(ans=ans)
+        self.logger.info(f"Force submitted with answer: {ans!r}")
+        return {"submitted": True, "messages": [prompt]}
 
     def post_round_process(self, state: State):
         self.logger.info(f"{'~' * 20} [Step {state['num_steps']}] {'~' * 20}")
@@ -120,20 +141,17 @@ class BaseAgent:
 
     def build_agent(self):
         tool_node = StratusToolNode(sync_tools=self.sync_tools or [], async_tools=self.async_tools or [])
-        force_submit_execute = StratusToolNode(sync_tools=[], async_tools=[self.submit_tool])
 
         self.graph_builder.add_node("call_model", self.call_model)
         self.graph_builder.add_node("tool_node", tool_node)
         self.graph_builder.add_node("post_round_process", self.post_round_process)
         self.graph_builder.add_node("force_submit", self.force_submit)
-        self.graph_builder.add_node("force_submit_execute", force_submit_execute)
 
         self.graph_builder.add_edge(START, "call_model")
         self.graph_builder.add_conditional_edges("call_model", self.should_continue)
         self.graph_builder.add_edge("tool_node", "post_round_process")
         self.graph_builder.add_conditional_edges("post_round_process", self.after_tools)
-        self.graph_builder.add_edge("force_submit", "force_submit_execute")
-        self.graph_builder.add_edge("force_submit_execute", END)
+        self.graph_builder.add_edge("force_submit", END)
 
         self.memory_saver = MemorySaver()
         self.graph = self.graph_builder.compile(checkpointer=self.memory_saver)
