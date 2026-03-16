@@ -271,7 +271,11 @@ class ProblemRegistry:
             "unschedule_2": lambda: MultipleIndependentFailures(problems=[
                 DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="checkout"),
                 IncorrectPortAssignment(unschedulable=True)
-            ])
+            ]),
+            "unschedule_3": lambda: MultipleIndependentFailures(problems=[
+                DuplicatePVCMounts(app_name="hotel_reservation", faulty_service="frontend"),
+                LatentSectorError()
+            ]),
         }
 # fmt: on
         self.kubectl = KubeCtl()

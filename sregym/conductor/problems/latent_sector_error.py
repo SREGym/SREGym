@@ -2,6 +2,7 @@ import random
 from enum import StrEnum
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
+from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_kernel import KernelInjector
 from sregym.service.apps.hotel_reservation import HotelReservation
@@ -54,6 +55,8 @@ class LatentSectorError(Problem):
         self.root_cause = "There's a latent sector error on the hard drive that the mongodb-geo service's data is on."
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        # pod status oracle should suffice.
+        self.mitigation_oracle = MitigationOracle(problem=self)
 
         self.app.create_workload()
 
