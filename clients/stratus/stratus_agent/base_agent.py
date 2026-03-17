@@ -263,6 +263,9 @@ class BaseAgent:
                 if isinstance(msg, AIMessage):
                     if msg.content:
                         self.logger.info(f"[Agent] {msg.content}")
+                    for tc in msg.tool_calls:
+                        args = ", ".join(f"{k}={v!r}" for k, v in tc.get("args", {}).items())
+                        self.logger.info(f"[Tool Call] {tc['name']}({args})")
                 elif isinstance(msg, ToolMessage):
                     self.logger.info(f"[Tool Output] {msg.content}")
             graph_events.append(event)
