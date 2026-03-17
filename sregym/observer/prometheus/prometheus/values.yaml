@@ -775,7 +775,10 @@ serverFiles:
                 description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 1 minute."
 
             - alert: TiDBInstanceNotReady
-              expr: tidb_server_connections == 0 or absent(tidb_server_connections)
+              expr: |
+                (tidb_server_connections == 0 or absent(tidb_server_connections))
+                  and on ()
+                (count(kube_namespace_labels{namespace="tidb-cluster"}) > 0)
               for: 2m
               labels:
                 severity: critical
