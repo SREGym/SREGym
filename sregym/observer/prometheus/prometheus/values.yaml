@@ -907,7 +907,7 @@ serverFiles:
 
             - alert: DeploymentNotReady
               expr: |
-                kube_deployment_status_replicas_available{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"} == 0              for: 2m
+                kube_deployment_status_replicas_available{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"} == 0
               for: 1m
               labels:
                 severity: critical
