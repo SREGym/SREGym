@@ -907,13 +907,12 @@ serverFiles:
 
             - alert: DeploymentNotReady
               expr: |
-                kube_deployment_status_replicas_unavailable{namespace=~"astronomy-shop|hotel-reservation|social-network|tidb-cluster"} > 0
-              for: 2m
+                kube_deployment_status_replicas_available{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"} == 0              for: 2m
+              for: 1m
               labels:
                 severity: critical
               annotations:
-                summary: "Deployment not ready: search"
-                description: "The search deployment in namespace {{ $labels.namespace }} does not have all replicas available."
+                description: "Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }} has 0 available replicas."
         # ---- Messaging / async processing alerts ----
         - name: app.messaging
           rules:
