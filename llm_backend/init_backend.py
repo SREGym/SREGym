@@ -66,6 +66,13 @@ def get_llm_backend(model_id: str) -> LiteLLMBackend:
                 print(f"Setting Azure API version env from config - {model_config['azure_version']}")
                 os.environ["AZURE_API_VERSION"] = model_config["azure_version"]
 
+        # Bearer token auth for Bedrock — used when AWS_PROFILE/access keys are not available.
+        if "api_key" not in config_params and config_params.get("model_name", "").startswith("bedrock/"):
+            bearer_token = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+            if bearer_token:
+                print("Using AWS_BEARER_TOKEN_BEDROCK for Bedrock authentication.")
+                config_params["api_key"] = bearer_token
+
         return LiteLLMBackend(**config_params)
 
     elif model_config["provider"] == "openai":
