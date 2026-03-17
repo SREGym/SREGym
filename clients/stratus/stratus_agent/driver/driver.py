@@ -174,7 +174,7 @@ def validate_oracles(oracles: list[BaseOracle]) -> list[bool | list[OracleResult
     results = []
     attempt_failed = False
     for oracle in oracles:
-        logger.info(f"validating oracle: {oracle}")
+        logger.info(f"[Oracle] validating oracle: {oracle}")
         res: OracleResult = oracle.validate()
         if not res.success:
             attempt_failed = True
@@ -388,9 +388,7 @@ async def mitigation_task_main(diagnosis_summary):
     # oracle
     logger.info("setting up oracles")
     cluster_state_oracle = ClusterStateOracle()
-    # oracles = [cluster_state_oracle]
-    # FIXME: cluster state oracle has trouble connecting to cluster, need repro.
-    oracles = []
+    oracles = [cluster_state_oracle]
 
     # setting up workload oracle, need to interact with benchmark.
     logger.info("getting app info")
@@ -398,13 +396,13 @@ async def mitigation_task_main(diagnosis_summary):
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
-    if app_name not in ["Social Network", "Hotel Reservation"]:
-        logger.info("Current app does not support workload oracle")
-    else:
-        target_app = get_app_class_by_name(app_name)
-        logger.info(f"adding oracle for app [{app_name}]")
-        workload_oracle = WorkloadOracle(target_app)
-        oracles.append(workload_oracle)
+    # if app_name not in ["Social Network", "Hotel Reservation"]:
+    #     logger.info("Current app does not support workload oracle")
+    # else:
+    #     target_app = get_app_class_by_name(app_name)
+    #     logger.info(f"adding oracle for app [{app_name}]")
+    #     workload_oracle = WorkloadOracle(target_app)
+    #     oracles.append(workload_oracle)
 
     logger.info(f"adding alert oracle for namespace [{app_namespace}]")
     oracles.append(AlertOracle(app_namespace))
