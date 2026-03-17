@@ -228,7 +228,7 @@ class WorkloadOracle(BaseOracle):
                     return True
         return False
 
-    async def get_workload_result(self, job_name):
+    def get_workload_result(self, job_name):
         self.kubectl.wait_for_job_completion(job_name=job_name, namespace="default", api_client=self._api_client)
 
         namespace = "default"
@@ -253,7 +253,7 @@ class WorkloadOracle(BaseOracle):
 
         self.wrk.create_wrk_job(job_name=job_name, namespace=namespace, payload_script=payload_script.name, url=url)
 
-    async def validate(self) -> OracleResult:
+    def validate(self) -> OracleResult:
         print("Testing workload generator...", flush=True)
         try:
             self.wrk = Wrk(rate=10, dist="exp", connections=2, duration=10, threads=2)
@@ -277,7 +277,7 @@ class WorkloadOracle(BaseOracle):
 
             try:
                 self.start_workload(payload_script, url, job_name)
-                wrk_result = await self.get_workload_result(job_name)
+                wrk_result = self.get_workload_result(job_name)
             except client.exceptions.ApiException as e:
                 if e.status == 403:
                     logger.warning(

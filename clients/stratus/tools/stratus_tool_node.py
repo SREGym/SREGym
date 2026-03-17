@@ -51,10 +51,6 @@ class StratusToolNode:
             logger.warning("AIMessage does not contain tool_calls.")
             return {"messages": []}
 
-        if len(message.tool_calls) > 1:
-            logger.warning("more than 1 tool call found. Calling in order", extra={"Tool Calls": message.tool_calls})
-            logger.warning("technically, only one tool call allowed")
-
         to_update = dict()
         new_messages = []
         for i, tool_call in enumerate(message.tool_calls):
