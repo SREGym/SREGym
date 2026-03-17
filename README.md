@@ -73,21 +73,30 @@ kind create cluster --config kind/kind-config-arm.yaml
 
 To get started with the included Stratus agent:
 
-1. Create your `.env` file:
+1. Set your LLM API keys in the environment (required for your chosen model provider):
 ```bash
-mv .env.example .env
+# OpenAI
+export OPENAI_API_KEY="sk-proj-..."
+
+# Anthropic
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Google
+export GEMINI_API_KEY="..."
+
+# AWS Bedrock
+export AWS_PROFILE="bedrock"
+export AWS_DEFAULT_REGION="us-east-2"
 ```
 
-2. Open the `.env` file and configure your model and API key.
-
-3. Run the benchmark:
+2. Run the benchmark:
 ```bash
-python main.py --agent <agent-name> --model <model-id>
+python main.py --agent stratus --model gpt-5
 ```
 
-For example, to run the Stratus agent:
+Use `--judge-model` to override the judge model separately (defaults to `--model`):
 ```bash
-python main.py --agent stratus --model gpt-4o
+python main.py --agent stratus --model gpt-5 --judge-model claude-sonnet-4
 ```
 
 #### Container Isolation
@@ -97,16 +106,19 @@ Agents always run in isolated Docker containers, preventing access to SREGym int
 Use `--force-build` to rebuild the container image after updating dependencies or agent code:
 
 ```bash
-python main.py --agent codex --model gpt-4o --force-build
+python main.py --agent codex --model gpt-5 --force-build
 ```
 
 ### Model Selection
 
-SREGym supports multiple LLM providers. Specify your model using the `--model` flag:
+SREGym uses two model roles, both configurable via CLI:
 
-```bash
-python main.py --agent <agent-name> --model <model-id>
-```
+| CLI Flag | Default | Purpose |
+|----------|---------|---------|
+| `--model` | `gpt-5` | Sets both agent and judge model |
+| `--judge-model` | (same as `--model`) | Override just the judge evaluator model |
+
+Make sure the required environment variables for your chosen provider are set before running. See the table below.
 
 #### Available Models
 
@@ -117,36 +129,22 @@ python main.py --agent <agent-name> --model <model-id>
 | `claude-sonnet-4` | Anthropic | Claude Sonnet 4 | `ANTHROPIC_API_KEY` |
 | `bedrock-claude-sonnet-4.5` | AWS Bedrock | Claude Sonnet 4.5 | `AWS_PROFILE`, `AWS_DEFAULT_REGION` |
 
-**Default:** If no model is specified, `gpt-4o` is used by default.
 
 <details>
 <summary><strong>Provider Examples</strong></summary>
 
 **OpenAI:**
 ```bash
-# In .env file
-OPENAI_API_KEY="sk-proj-..."
-
-# Run with GPT-4o
-python main.py --agent stratus --model gpt-4o
+python main.py --agent stratus --model gpt-5
 ```
 
 **Anthropic:**
 ```bash
-# In .env file
-ANTHROPIC_API_KEY="sk-ant-api03-..."
-
-# Run with Claude Sonnet 4
 python main.py --agent stratus --model claude-sonnet-4
 ```
 
 **AWS Bedrock:**
 ```bash
-# In .env file
-AWS_PROFILE="bedrock"
-AWS_DEFAULT_REGION=us-east-2
-
-# Run with Claude Sonnet 4.5 on Bedrock
 python main.py --agent stratus --model bedrock-claude-sonnet-4.5
 ```
 
