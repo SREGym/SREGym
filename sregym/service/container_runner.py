@@ -35,21 +35,90 @@ class ContainerConfig:
 
 
 class ContainerRunner:
-    # API keys and config vars to forward from host environment
+    # Env vars forwarded from host to agent containers.
+    # Sourced from litellm provider source code (llms/<provider>/).
     API_KEY_VARS = [
-        "ANTHROPIC_API_KEY",
+        # OpenAI
         "OPENAI_API_KEY",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+        # DeepSeek
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_API_BASE",
+        # Anthropic
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_API_BASE",
+        # Gemini / Google
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
+        "GEMINI_API_BASE",
+        # Azure OpenAI
+        "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_API_BASE",
+        "AZURE_API_VERSION",
+        "AZURE_AD_TOKEN",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_TENANT_ID",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+        "AZURE_CERTIFICATE_PATH",
+        "AZURE_CERTIFICATE_PASSWORD",
+        "AZURE_CREDENTIAL",
+        "AZURE_SCOPE",
+        "AZURE_AUTHORITY_HOST",
+        "AZURE_FEDERATED_TOKEN_FILE",
+        # AWS Bedrock
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_REGION_NAME",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_SESSION_NAME",
+        "AWS_PROFILE",
+        "AWS_PROFILE_NAME",
+        "AWS_ROLE_NAME",
+        "AWS_ROLE_ARN",
+        "AWS_WEB_IDENTITY_TOKEN",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_STS_ENDPOINT",
+        "AWS_EXTERNAL_ID",
+        "AWS_BEDROCK_RUNTIME_ENDPOINT",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        # WatsonX / IBM
+        "WATSONX_API_KEY",
+        "WATSONX_APIKEY",
+        "WATSONX_API_BASE",
+        "WATSONX_URL",
+        "WATSONX_TOKEN",
+        "WATSONX_PROJECT_ID",
+        "WATSONX_REGION",
+        "WATSONX_SPACE_ID",
+        "WATSONX_DEPLOYMENT_SPACE_ID",
+        "WATSONX_IAM_URL",
+        "WATSONX_ZENAPIKEY",
+        "WX_API_KEY",
+        "WX_PROJECT_ID",
+        "WX_URL",
+        "WX_REGION",
+        "WX_SPACE_ID",
+        "WML_URL",
+        # Vertex AI
+        "VERTEXAI_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEX_LOCATION",
+        "VERTEXAI_CREDENTIALS",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        # Moonshot
+        "MOONSHOT_API_KEY",
+        "MOONSHOT_API_BASE",
+        # GLM
+        "GLM_API_KEY",
+        # SREGym internal
         "AGENT_MODEL_ID",
         "JUDGE_MODEL_ID",
-        "AWS_PROFILE",
-        "AWS_DEFAULT_REGION",
-        "WATSONX_API_BASE",
-        "WX_PROJECT_ID",
-        "WATSONX_API_KEY",
-        "AZURE_API_KEY",
-        "AZURE_API_BASE",
         # Config vars
         "API_HOSTNAME",
         "API_PORT",
