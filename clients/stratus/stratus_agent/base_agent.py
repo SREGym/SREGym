@@ -258,8 +258,13 @@ class BaseAgent:
 
         graph_events = []
         async for event in self.graph.astream(state, config=graph_config, stream_mode="values"):
-            if not graph_events or event["messages"][-1] != graph_events[-1]["messages"][-1]:
-                event["messages"][-1].pretty_print()
+            prev_count = len(graph_events[-1]["messages"]) if graph_events else 0
+            for msg in event["messages"][prev_count:]:
+                if isinstance(msg, AIMessage):
+                    if msg.content:
+                        self.logger.info(f"[Agent] {msg.content}")
+                elif isinstance(msg, ToolMessage):
+                    self.logger.info(f"[Tool Output] {msg.content}")
             graph_events.append(event)
 
         last_state = self.graph.get_state(config={"configurable": {"thread_id": "1"}})
