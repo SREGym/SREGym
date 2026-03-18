@@ -2,10 +2,11 @@ import logging
 from pathlib import Path
 
 import yaml
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import StateSnapshot
 
 from clients.stratus.stratus_agent.base_agent import BaseAgent
+from clients.stratus.stratus_agent.state import State
 from clients.stratus.stratus_utils.str_to_tool import str_to_tool
 from llm_backend.init_backend import get_llm_backend_for_agent
 
@@ -18,6 +19,30 @@ class MitigationAgent(BaseAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.logger = logging.getLogger("all.stratus.mitigation")
+
+    async def force_submit(self, state: State):
+        self.logger.warning(f"Agent reached step limit ({self.max_step}), forcing submission.")
+        prompt = HumanMessage("You have reached your step limit. Please submit your best answer using the submit tool.")
+        ai_message = self.llm.inference(messages=state["messages"] + [prompt], tools=[self.submit_tool])
+
+        if isinstance(ai_message, AIMessage) and ai_message.tool_calls:
+            tool_call = ai_message.tool_calls[0]
+            if tool_call.get("name") == self.submit_tool.name:
+                ans = tool_call.get("args", {}).get("ans", "")
+            else:
+                self.logger.warning(f"LLM called unexpected tool '{tool_call.get('name')}' during force submit.")
+                ans = None
+        else:
+            ans = None
+
+        if ans is None:
+            self.logger.warning("LLM did not call the submit tool during force submit. Extracting plain-text answer.")
+            plain_prompt = HumanMessage("Please write out your best answer as plain text.")
+            plain_response = self.llm.inference(messages=state["messages"] + [prompt, ai_message, plain_prompt])
+            ans = plain_response.content if isinstance(plain_response, AIMessage) else ""
+
+        self.logger.info(f"Force submit: signaling transaction attempt with answer: {ans!r}. Real submission deferred to driver.")
+        return {"submitted": True, "messages": [prompt]}
 
 
 def build_default_mitigation_agent():
