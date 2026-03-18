@@ -774,6 +774,27 @@ serverFiles:
               annotations:
                 description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 1 minute."
 
+            - alert: TiDBInstanceNotReady
+              expr: |
+                (tidb_server_connections == 0 or absent(tidb_server_connections))
+                  and on ()
+                (count(kube_namespace_labels{namespace="tidb-cluster"}) > 0)
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "TiDB instance is not ready"
+                description: "TiDB instance {{ $labels.instance }} has been unreachable or has no connections for more than 2 minutes."
+
+            - alert: TiDBStatefulSetNotReady
+              expr: group by (statefulset) (kube_statefulset_replicas{namespace="tidb-cluster"} - kube_statefulset_status_replicas_ready) > 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "TiDB StatefulSet {{ $labels.statefulset }} not ready"
+                description: "StatefulSet {{ $labels.statefulset }} has {{ $value }} ready replicas but desired is higher"
+
         # ---- Container resource alerts ----
         - name: app.resources
           rules:
@@ -887,6 +908,14 @@ serverFiles:
                 summary: "High latency: {{ $labels.service_name }}"
                 description: "P95 latency for {{ $labels.service_name }} in namespace {{ $labels.namespace }} is above 1500ms (current: {{ $value | printf \"%.0f\" }}ms)."
 
+            - alert: DeploymentNotReady
+              expr: |
+                kube_deployment_status_replicas_available{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"} == 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                description: "Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }} has 0 available replicas."
         # ---- Messaging / async processing alerts ----
         - name: app.messaging
           rules:
@@ -1194,6 +1223,14 @@ extraScrapeConfigs: |
           - otel-collector.observe:8890
         labels:
           namespace: astronomy-shop
+  # ---- Scraping from TiDB Cluster ----
+  - job_name: tidb-cluster
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - basic-tidb.tidb-cluster.svc.cluster.local:10080
+          - basic-pd.tidb-cluster.svc.cluster.local:2379
 
 # Adds option to add alert_relabel_configs to avoid duplicate alerts in alertmanager
 # useful in H/A prometheus with different external labels but the same alerts
