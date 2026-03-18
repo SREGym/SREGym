@@ -268,16 +268,8 @@ def main(args):
     agent_model = args.model
     judge_model = args.judge_model or args.model
 
-    # Initialize Noise Manager if --noise flag is set
-    nm = None
     if args.noise:
-        try:
-            from sregym.generators.noise.manager import get_noise_manager
-
-            nm = get_noise_manager()
-            logger.info("Noise injection enabled.")
-        except Exception as e:
-            logger.warning(f"Failed to initialize noise manager: {e}")
+        logger.info("Noise injection enabled.")
 
     available_models = list(load_model_config().keys())
 
@@ -305,7 +297,7 @@ def main(args):
 
     logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}")
 
-    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness)
+    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
     conductor = Conductor(config=conductor_config)
 
     # Only build/check agent container image if the agent requires it
@@ -345,11 +337,13 @@ def main(args):
         # Stop any remaining agent containers/processes
         LAUNCHER.cleanup_all()
 
-        # Stop noise manager if it was initialized
-        if nm:
+        # Stop noise manager if it was enabled
+        if args.noise:
             try:
+                from sregym.generators.noise.manager import get_noise_manager
+
                 logger.info("Stopping noise manager...")
-                nm.stop()
+                get_noise_manager().stop()
             except Exception as e:
                 logger.error(f"⚠️ Error stopping noise manager: {e}")
 
