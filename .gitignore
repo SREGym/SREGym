@@ -244,3 +244,6 @@ logs/
 docker/agents/build-context/
 
 resolve-values.yaml
+
+# Keep local-only RCA judge test file
+sregym/conductor/oracles/llm_as_a_judge/test_rca_judge.py
