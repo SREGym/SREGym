@@ -124,11 +124,6 @@ def driver_loop(
 
             conductor.problem_id = pid
             
-            agent_dir = base_dir / agent_to_run
-            agent_dir.mkdir(exist_ok=True)
-
-            problem_dir = agent_dir / pid
-            problem_dir.mkdir(exist_ok=True)
 
             # Keep a record of results for this problem in a temp file in case an attempt fails
             tmp_path = f"_running_{pid}_{agent_to_run}_results.csv"
@@ -216,9 +211,13 @@ def driver_loop(
                     writer.writerows(all_results_for_agent)
 
                 current_date_time = get_current_datetime_formatted()
-                attempt_dir = problem_dir / f"attempt{attempt}"
-                attempt_dir.mkdir(exist_ok=True)
-                attempt_path = attempt_dir / f"{current_date_time}_{pid}_{agent_to_run}_attempt_{attempt}_results.csv"
+                agent_dir = base_dir / agent_to_run
+                attempt_dir = agent_dir / f"attempt{attempt}"
+                attempt_dir.mkdir(parents=True, exist_ok=True)
+                problem_dir = attempt_dir / pid
+                problem_dir.mkdir( exist_ok=True)
+                attempt_path = problem_dir / f"{current_date_time}_{pid}_{agent_to_run}_attempt_{attempt}_results.csv"
+
 
                 #write attempts distinctly
                 with open(attempt_path, "w", newline="") as csvfile:
