@@ -141,9 +141,10 @@ class ContainerRunner:
         flags = []
         env_vars = dict(self.config.env_vars)
 
-        # Forward API keys from host
+        # Forward API keys from host (skip empty values to avoid overriding
+        # other auth mechanisms like OAuth subscription tokens)
         for var in self.API_KEY_VARS:
-            if var in os.environ and var not in env_vars:
+            if var in os.environ and var not in env_vars and os.environ[var]:
                 env_vars[var] = os.environ[var]
 
         if extra_env:
@@ -203,10 +204,11 @@ class ContainerRunner:
         if aws_dir.is_dir():
             args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
 
-        # Mount Codex credentials directory (read-only) for subscription-based auth
+        # Mount Codex credentials directory for subscription-based auth
+        # (read-write so the CLI can update its model cache and telemetry)
         codex_dir = Path.home() / ".codex"
         if codex_dir.is_dir():
-            args.extend(["-v", f"{codex_dir.resolve()}:/root/.codex:ro"])
+            args.extend(["-v", f"{codex_dir.resolve()}:/root/.codex"])
 
         # Mount workspace directory for agent output (logs, results, trajectories)
         if self.config.workspace_path:
