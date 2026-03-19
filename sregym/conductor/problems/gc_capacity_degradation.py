@@ -29,9 +29,9 @@ class GCCapacityDegradation(Problem):
             spec=client.V1LimitRangeSpec(limits=[
                 client.V1LimitRangeItem(
                     type="Container",
-                    default={"memory": "512Mi"},
-                    default_request={"memory": "256Mi"},
-                    max={"memory": "512Mi"},
+                    default={"memory": "512Mi", "cpu": "500m"},
+                    default_request={"memory": "256Mi", "cpu": "100m"},
+                    max={"memory": "512Mi", "cpu": "500m"},
                 )
             ]),
         )
@@ -41,7 +41,7 @@ class GCCapacityDegradation(Problem):
             if e.status != 404:
                 raise
         core_v1.create_namespaced_limit_range(self.namespace, limit_range_body)
-        print(f"[Memory Guard] LimitRange applied: 512Mi max per container in {self.namespace}")
+        print(f"[Memory Guard] LimitRange applied: 512Mi memory + 500m CPU max per container in {self.namespace}")
 
     def _remove_memory_limit(self):
         config.load_kube_config()
@@ -59,16 +59,18 @@ class GCCapacityDegradation(Problem):
         self._apply_memory_limit()
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         # GOGC patch triggers a rolling restart — pods come up with the memory LimitRange already in effect
-        injector.inject_gogc_env_variable_patch(gogc_value="5")
+        injector.inject_gogc_env_variable_patch(gogc_value="1")
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
         self.start_workload()
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
+        # Remove LimitRange first so the rolling restart triggered by GOGC recovery
+        # brings pods up without CPU/memory constraints
+        self._remove_memory_limit()
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector.recover_gogc_env_variable_patch()
-        self._remove_memory_limit()
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     def create_workload(self, tput: int = None, duration: str = None, multiplier: int = None):
