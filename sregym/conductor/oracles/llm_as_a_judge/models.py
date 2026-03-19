@@ -1,4 +1,4 @@
-"""Data classes for the RCAJudge evaluation system."""
+"""Data classes for the DiagnosisJudge evaluation system."""
 
 from dataclasses import dataclass, field
 

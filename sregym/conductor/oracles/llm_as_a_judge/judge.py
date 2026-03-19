@@ -8,12 +8,36 @@ from enum import Enum
 from pathlib import Path
 
 import yaml
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from llm_backend.init_backend import get_llm_backend_for_tools
+from llm_backend.get_llm_backend import LiteLLMBackend
+from llm_backend.init_backend import get_llm_backend_for_judge
 
-load_dotenv()
+
+def _create_judge_backend(
+    provider: str | None,
+    model_name: str | None,
+    url: str | None,
+    api_key: str | None,
+    temperature: float,
+    max_tokens: int,
+) -> LiteLLMBackend:
+    """Use SREGym llm_backend directly for judge backend initialization."""
+    if provider or model_name or url or api_key:
+        # If any custom settings are provided in using RCAJudge for evaluation stand-alone, use them to create a LiteLLMBackend directly.
+        if not model_name:
+            raise ValueError("model_name is required when overriding judge backend settings")
+
+        return LiteLLMBackend(
+            provider=provider or "openai",
+            model_name=model_name,
+            url=url,
+            api_key=api_key,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    return get_llm_backend_for_judge()
 
 
 class ChecklistParseError(Exception):
@@ -55,7 +79,14 @@ class LLMJudge:
         """Lazily initialize the LLM backend only when needed."""
         if self._backend is None:
             try:
-                self._backend = get_llm_backend_for_tools()
+                self._backend = _create_judge_backend(
+                    provider=self.provider,
+                    model_name=self.model_name,
+                    url=self.url,
+                    api_key=self.api_key,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                )
             except (SystemExit, Exception) as e:
                 # Catch both SystemExit (from exit(1) calls) and other exceptions
                 print(f"Warning: Failed to initialize LLM backend for judge: {e}")
@@ -160,7 +191,7 @@ Evaluate whether the agent's answer correctly identifies the root cause. Respond
             raise ValueError(f"Could not parse judgment from response: {response_text}")
 
 
-class RCAJudge:
+class DiagnosisJudge:
     """Checklist-based RCA evaluator that scores 5 dimensions in one LLM call."""
 
     _SYSTEM_PROMPT_TEMPLATE = (
@@ -238,7 +269,14 @@ class RCAJudge:
         """Lazily initialize the LLM backend only when needed."""
         if self._backend is None:
             try:
-                self._backend = get_llm_backend_for_tools()
+                self._backend = _create_judge_backend(
+                    provider=self.provider,
+                    model_name=self.model_name,
+                    url=self.url,
+                    api_key=self.api_key,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                )
             except (SystemExit, Exception) as e:
                 print(f"Warning: Failed to initialize LLM backend for judge: {e}")
                 print("Returning None - evaluation will be skipped")
@@ -503,7 +541,7 @@ def main():
 
     # Initialize judge
     # judge = LLMJudge()
-    judge = RCAJudge()
+    judge = DiagnosisJudge()
 
     # Track results
     total_cases = len(test_cases)

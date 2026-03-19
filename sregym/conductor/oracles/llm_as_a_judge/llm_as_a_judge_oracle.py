@@ -1,7 +1,7 @@
 """LLM-as-a-Judge Oracle for evaluating agent solutions using LLM judgment."""
 
 from sregym.conductor.oracles.base import Oracle
-from sregym.conductor.oracles.llm_as_a_judge.judge import JudgmentResult, RCAJudge
+from sregym.conductor.oracles.llm_as_a_judge.judge import DiagnosisJudge, JudgmentResult
 
 
 class LLMAsAJudgeOracle(Oracle):
@@ -22,7 +22,7 @@ class LLMAsAJudgeOracle(Oracle):
         self.expected = expected if expected else ""
 
         # Initialize the LLM judge
-        self.judge = RCAJudge(
+        self.judge = DiagnosisJudge(
             provider=provider,
             model_name=model_name,
             url=url,
@@ -40,7 +40,7 @@ class LLMAsAJudgeOracle(Oracle):
             solution = str(solution)
 
         try:
-            # Get detailed judgment from RCAJudge
+            # Get detailed judgment from DiagnosisJudge
             report = self.judge.judge_detailed(solution=solution, expectation=self.expected)
 
             # Check if judge is not initialized
