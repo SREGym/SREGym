@@ -116,6 +116,8 @@ class ContainerRunner:
         "MOONSHOT_API_BASE",
         # GLM
         "GLM_API_KEY",
+        # Claude Code
+        "CLAUDE_CODE_OAUTH_TOKEN",
         # SREGym internal
         "AGENT_MODEL_ID",
         "JUDGE_MODEL_ID",
