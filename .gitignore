@@ -247,3 +247,6 @@ resolve-values.yaml
 
 # Keep local-only RCA judge test file
 sregym/conductor/oracles/llm_as_a_judge/test_rca_judge.py
+
+# Keep local-only RCA extraction helper
+sregym/conductor/oracles/llm_as_a_judge/extract_root_causes.py
