@@ -35,6 +35,7 @@ class ConductorConfig:
     """Configuration for Conductor deployment options."""
 
     deploy_loki: bool = True
+    enable_noise: bool = False
 
 
 class Conductor:
@@ -285,11 +286,12 @@ class Conductor:
             self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
 
             # Update NoiseManager stage
-            try:
-                nm = get_noise_manager()
-                nm.set_stage(stage_name)
-            except Exception as e:
-                self.logger.warning(f"Failed to set NoiseManager stage: {e}")
+            if self.config.enable_noise:
+                try:
+                    nm = get_noise_manager()
+                    nm.set_stage(stage_name)
+                except Exception as e:
+                    self.logger.warning(f"Failed to set NoiseManager stage: {e}")
         else:
             # No more stages; finish the problem
             self._finish_problem()
@@ -303,12 +305,13 @@ class Conductor:
         self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
 
         # Stop noises
-        try:
-            nm = get_noise_manager()
-            nm.stop()
-            self.logger.info("[CLEANUP] NoiseManager stopped")
-        except Exception as e:
-            self.logger.warning(f"Failed to stop NoiseManager: {e}")
+        if self.config.enable_noise:
+            try:
+                nm = get_noise_manager()
+                nm.stop()
+                self.logger.info("[CLEANUP] NoiseManager stopped")
+            except Exception as e:
+                self.logger.warning(f"Failed to stop NoiseManager: {e}")
 
         # Recover fault
         if self.problem:
@@ -408,17 +411,18 @@ class Conductor:
         self.logger.info("App deployed.")
 
         # Update NoiseManager with problem context
-        try:
-            nm = get_noise_manager()
-            context = {
-                "namespace": self.app.namespace,
-                "app_name": self.app.name,
-                # We can add more info here if needed, e.g. service list
-            }
-            nm.set_problem_context(context)
-            nm.start()
-        except Exception as e:
-            self.logger.warning(f"Failed to update NoiseManager context: {e}")
+        if self.config.enable_noise:
+            try:
+                nm = get_noise_manager()
+                context = {
+                    "namespace": self.app.namespace,
+                    "app_name": self.app.name,
+                    # We can add more info here if needed, e.g. service list
+                }
+                nm.set_problem_context(context)
+                nm.start()
+            except Exception as e:
+                self.logger.warning(f"Failed to update NoiseManager context: {e}")
 
         # After deployment, advance to the first stage
         self._advance_to_next_stage(start_index=0)
@@ -442,12 +446,13 @@ class Conductor:
         self.logger.info(f"Evaluating stage '{stage_name}'", extra={"sol": sol})
 
         # Stop noise before evaluation to ensure clean environment
-        try:
-            nm = get_noise_manager()
-            self.logger.info("Stopping noise manager before evaluation...")
-            nm.stop()
-        except Exception as e:
-            self.logger.warning(f"Failed to stop noise manager: {e}")
+        if self.config.enable_noise:
+            try:
+                nm = get_noise_manager()
+                self.logger.info("Stopping noise manager before evaluation...")
+                nm.stop()
+            except Exception as e:
+                self.logger.warning(f"Failed to stop noise manager: {e}")
 
         # Run the evaluation function for the current stage
         current_stage["evaluation"](sol)
@@ -457,7 +462,7 @@ class Conductor:
         self._advance_to_next_stage(start_index=next_index)
 
         # Restart noise if there are more stages AND not in teardown
-        if self.submission_stage not in ("done", "tearing_down"):
+        if self.config.enable_noise and self.submission_stage not in ("done", "tearing_down"):
             try:
                 nm = get_noise_manager()
                 self.logger.info("Restarting noise manager for next stage...")

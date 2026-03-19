@@ -244,11 +244,12 @@ class ClusterStateManager:
                 if e.status != 404:
                     logger.warning(f"Failed to delete StorageClass {sc}: {e}")
 
-        # 6. Delete unexpected CRDs
+        # 6. Delete unexpected CRDs (strip finalizers from CRs first to prevent hanging)
         current_crds = self._get_crds()
         unexpected_crds = current_crds - self.baseline.crds
         for crd in unexpected_crds:
             logger.info(f"Deleting unexpected CRD: {crd}")
+            self._strip_cr_finalizers(crd)
             try:
                 self.apiextensions_v1.delete_custom_resource_definition(name=crd)
                 changes["crds_deleted"].append(crd)
@@ -339,6 +340,60 @@ class ClusterStateManager:
         except ApiException as e:
             logger.error(f"Failed to list StorageClasses: {e}")
             return set()
+
+    def _strip_cr_finalizers(self, crd_name: str):
+        """Remove finalizers from all custom resources of the given CRD.
+
+        This prevents CRD deletion from hanging when the controller that
+        handles the finalizers (e.g. chaos-mesh) is already gone.
+        """
+        # Extract group and plural from CRD name (e.g. "networkchaos.chaos-mesh.org")
+        parts = crd_name.split(".", 1)
+        if len(parts) < 2:
+            return
+        plural, group = parts[0], parts[1]
+
+        try:
+            crd_obj = self.apiextensions_v1.read_custom_resource_definition(name=crd_name)
+        except ApiException:
+            return
+
+        version = crd_obj.spec.versions[0].name if crd_obj.spec.versions else "v1alpha1"
+        custom_api = client.CustomObjectsApi()
+
+        try:
+            resources = custom_api.list_cluster_custom_object(group=group, version=version, plural=plural)
+        except ApiException:
+            return
+
+        for item in resources.get("items", []):
+            finalizers = (item.get("metadata") or {}).get("finalizers")
+            if not finalizers:
+                continue
+            ns = item["metadata"].get("namespace")
+            name = item["metadata"]["name"]
+            try:
+                if ns:
+                    custom_api.patch_namespaced_custom_object(
+                        group=group,
+                        version=version,
+                        namespace=ns,
+                        plural=plural,
+                        name=name,
+                        body={"metadata": {"finalizers": []}},
+                    )
+                else:
+                    custom_api.patch_cluster_custom_object(
+                        group=group,
+                        version=version,
+                        plural=plural,
+                        name=name,
+                        body={"metadata": {"finalizers": []}},
+                    )
+                logger.info(f"Stripped finalizers from {crd_name} CR {ns}/{name}")
+            except ApiException as e:
+                if e.status != 404:
+                    logger.warning(f"Failed to strip finalizers from {crd_name} CR {ns}/{name}: {e}")
 
     def _get_crds(self) -> set[str]:
         """Get all CustomResourceDefinition names."""

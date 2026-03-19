@@ -6,6 +6,7 @@ No MCP coupling: noise is injected as real Kubernetes CRDs, not by
 intercepting tool responses.
 """
 
+import contextlib
 import copy
 import logging
 import os
@@ -87,6 +88,9 @@ class NoiseManager:
             self._background_thread.join(timeout=5)
             self._background_thread = None
         self._cleanup_experiments()
+        # Strip finalizers from any remaining chaos-mesh CRs so the namespace
+        # can terminate cleanly when reconcile_to_baseline deletes it.
+        self._force_remove_all_chaos_resources()
         self._last_injection_time = 0
         logger.info("Noise injection stopped.")
 
@@ -180,6 +184,60 @@ class NoiseManager:
                     logger.error(f"Failed to clean up noise experiment {exp['name']}: {e}")
             self.active_experiments.clear()
 
+    def _force_remove_all_chaos_resources(self):
+        """Remove finalizers from all chaos-mesh CRs so the namespace can terminate cleanly.
+
+        When the chaos-mesh controller is gone (or being deleted), CRs with
+        finalizers block namespace deletion indefinitely.  This method patches
+        the finalizers away for every CR of every chaos-mesh CRD, then deletes
+        the CRDs themselves.
+        """
+        try:
+            crd_output = self.kubectl.exec_command("kubectl get crd -o name 2>/dev/null | grep chaos-mesh.org || true")
+        except Exception:
+            return
+
+        if not crd_output or "chaos-mesh.org" not in crd_output:
+            return
+
+        crd_names = [
+            line.removeprefix("customresourcedefinition.apiextensions.k8s.io/")
+            for line in crd_output.strip().splitlines()
+            if line.strip()
+        ]
+
+        for crd in crd_names:
+            # The resource plural name is the first segment of the CRD name
+            # e.g.  "networkchaos.chaos-mesh.org" → "networkchaos"
+            resource = crd.split(".")[0]
+            try:
+                items = self.kubectl.exec_command(
+                    f"kubectl get {resource}.chaos-mesh.org --all-namespaces "
+                    f"-o jsonpath='{{range .items}}{{.metadata.namespace}}/{{.metadata.name}} {{end}}' "
+                    f"2>/dev/null || true"
+                )
+            except Exception:
+                continue
+
+            for item in (items or "").split():
+                item = item.strip()
+                if not item or "/" not in item:
+                    continue
+                ns, name = item.split("/", 1)
+                with contextlib.suppress(Exception):
+                    self.kubectl.exec_command(
+                        f"kubectl patch {resource}.chaos-mesh.org {name} -n {ns} "
+                        f'--type merge -p \'{{"metadata":{{"finalizers":[]}}}}\' '
+                        f"2>/dev/null || true"
+                    )
+
+        # Now delete the CRDs (should return quickly with finalizers removed)
+        for crd in crd_names:
+            with contextlib.suppress(Exception):
+                self.kubectl.exec_command(f"kubectl delete crd {crd} --timeout=30s 2>/dev/null || true")
+
+        logger.info("Force-removed all Chaos Mesh CRs and CRDs.")
+
     # ── Chaos Mesh installation ───────────────────────────────────────
 
     def _ensure_chaos_mesh_installed(self):
@@ -200,14 +258,12 @@ class NoiseManager:
             self.kubectl.exec_command("helm repo update")
             self.kubectl.exec_command(f"kubectl create ns {CHAOS_NAMESPACE}")
 
-            # Clean up orphaned CRDs if needed
+            # Clean up orphaned CRDs if needed (strip finalizers first to avoid hanging)
             helm_check = self.kubectl.exec_command(f"helm list -n {CHAOS_NAMESPACE}")
-            crd_check = self.kubectl.exec_command("kubectl get crd | grep chaos-mesh.org")
+            crd_check = self.kubectl.exec_command("kubectl get crd 2>/dev/null | grep chaos-mesh.org || true")
             if "chaos-mesh" not in helm_check and "chaos-mesh.org" in crd_check:
                 logger.info("Cleaning up orphaned Chaos Mesh CRDs...")
-                self.kubectl.exec_command(
-                    "kubectl delete crd $(kubectl get crd | grep chaos-mesh.org | awk '{print $1}')"
-                )
+                self._force_remove_all_chaos_resources()
 
             # Detect container runtime
             runtime, socket_path = "docker", "/var/run/docker.sock"
