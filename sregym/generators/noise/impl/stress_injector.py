@@ -109,6 +109,8 @@ class ChaosInjector:
             command = f"kubectl apply -f {chaos_yaml_path}"
             result = self.kubectl.exec_command(command)
             print(f"Applied {experiment_name} chaos experiment: {result}")
+            if "Error" in result or "error" in result or "denied" in result:
+                raise RuntimeError(f"kubectl apply failed: {result}")
         except Exception as e:
             raise RuntimeError(f"Error applying chaos experiment: {e}") from e
 
