@@ -16,7 +16,7 @@ class ChaosInjector:
             "release_name": "chaos-mesh",
             "chart_path": "chaos-mesh/chaos-mesh",
             "namespace": "chaos-mesh",
-            "version": "2.6.2",
+            "version": "2.8.0",
         }
 
         container_runtime = self.kubectl.get_container_runtime()
