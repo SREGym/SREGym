@@ -203,6 +203,11 @@ class ContainerRunner:
         if aws_dir.is_dir():
             args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
 
+        # Mount Codex credentials directory (read-only) for subscription-based auth
+        codex_dir = Path.home() / ".codex"
+        if codex_dir.is_dir():
+            args.extend(["-v", f"{codex_dir.resolve()}:/root/.codex:ro"])
+
         # Mount workspace directory for agent output (logs, results, trajectories)
         if self.config.workspace_path:
             self.config.workspace_path.mkdir(parents=True, exist_ok=True)
