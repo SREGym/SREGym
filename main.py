@@ -49,6 +49,9 @@ def driver_loop(
 
     async def driver():
         console = Console()
+
+        base_dir = Path("results") / get_current_datetime_formatted()
+        base_dir.mkdir(parents=True, exist_ok=True)
         # give the API a moment to bind
         await asyncio.sleep(1)
 
@@ -90,13 +93,18 @@ def driver_loop(
 
         for pid in problem_ids:
             conductor.problem_id = pid
+            
+            agent_dir = base_dir / agent_to_run
+            agent_dir.mkdir(exist_ok=True)
+
+            problem_dir = agent_dir / pid
+            problem_dir.mkdir(exist_ok=True)
 
             # Keep a record of results for this problem in a temp file in case an attempt fails
             tmp_path = f"_running_{pid}_{agent_to_run}_results.csv"
 
             for attempt in range(1, n_attempts + 1):
                 console.log(f"\n🔍 Starting problem: {pid} (Attempt {attempt} of {n_attempts})")
-
                 result = await conductor.start_problem()
                 if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
                     console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
@@ -157,7 +165,7 @@ def driver_loop(
                         snapshot[stage] = outcome
 
                 all_results_for_agent.append(snapshot)
-
+                
                 fieldnames = sorted({key for row in all_results_for_agent for key in row})
 
                 with open(tmp_path, "w", newline="") as csvfile:
@@ -165,12 +173,22 @@ def driver_loop(
                     writer.writeheader()
                     writer.writerows(all_results_for_agent)
 
+                current_date_time = get_current_datetime_formatted()
+                attempt_dir = problem_dir / f"attempt{attempt}"
+                attempt_dir.mkdir(exist_ok=True)
+                attempt_path = attempt_dir / f"{current_date_time}_{pid}_{agent_to_run}_attempt_{attempt}_results.csv"
+
+                #write attempts distinctly
+                with open(attempt_path, "w", newline="") as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames= fieldnames)
+                    writer.writeheader()
+                    writer.writerow(snapshot)
+
                 logger.info(
                     f"⏳ Attempt {attempt} of {n_attempts} for problem {pid} complete - Intermediate results written to {tmp_path}"
                 )
 
                 if attempt == n_attempts:
-                    current_date_time = get_current_datetime_formatted()
                     csv_path = f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
                     os.replace(tmp_path, csv_path)
                     logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
