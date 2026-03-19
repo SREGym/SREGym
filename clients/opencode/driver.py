@@ -198,8 +198,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default=os.getenv("MODEL_ID", "anthropic/claude-sonnet-4-5"),
-        help="Model to use in format 'provider/model' (default: from MODEL_ID env var or anthropic/claude-sonnet-4-5)",
+        default=os.getenv("AGENT_MODEL_ID", "anthropic/claude-sonnet-4-5"),
+        help="Model to use in format 'provider/model' (default: from AGENT_MODEL_ID env var or anthropic/claude-sonnet-4-5)",
     )
     parser.add_argument(
         "--logs-dir",

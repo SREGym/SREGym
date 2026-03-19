@@ -12,6 +12,9 @@ TARGET_MICROSERVICES = BASE_PARENT_DIR / "SREGym-applications"
 CACHE_DIR = HOME_DIR / "cache_dir"
 LLM_CACHE_FILE = CACHE_DIR / "llm_cache.json"
 
+# Cluster baseline state snapshot (captured from a fresh cluster)
+CLUSTER_BASELINE_STATE_FILE = CACHE_DIR / "cluster_baseline_state.json"
+
 # Fault scripts
 FAULT_SCRIPTS = BASE_DIR / "generators" / "fault" / "script"
 

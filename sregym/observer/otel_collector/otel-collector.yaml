@@ -1,0 +1,134 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observe
+data:
+  config.yaml: |
+    receivers:
+      jaeger:
+        protocols:
+          thrift_compact:
+            endpoint: "0.0.0.0:6831"
+          grpc:
+            endpoint: "0.0.0.0:14250"
+      otlp:
+        protocols:
+          grpc:
+            endpoint: "0.0.0.0:4317"
+
+    connectors:
+      spanmetrics:
+        namespace: traces_span_metrics
+        histogram:
+          explicit:
+            buckets: [5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 1500, 2000, 5000]
+        dimensions: []
+      spanmetrics/otlp:
+        namespace: traces_span_metrics
+        histogram:
+          explicit:
+            buckets: [5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 1500, 2000, 5000]
+        dimensions: []
+
+    exporters:
+      otlp:
+        endpoint: "jaeger-backend:4317"
+        tls:
+          insecure: true
+      prometheus:
+        endpoint: "0.0.0.0:8889"
+      prometheus/otlp:
+        endpoint: "0.0.0.0:8890"
+
+    service:
+      pipelines:
+        traces:
+          receivers: [jaeger]
+          exporters: [otlp, spanmetrics]
+        traces/otlp:
+          receivers: [otlp]
+          exporters: [otlp, spanmetrics/otlp]
+        metrics/spanmetrics:
+          receivers: [spanmetrics]
+          exporters: [prometheus]
+        metrics/spanmetrics-otlp:
+          receivers: [spanmetrics/otlp]
+          exporters: [prometheus/otlp]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  labels:
+    app-name: otel-collector
+  namespace: observe
+spec:
+  ports:
+    - port: 6831
+      name: jaeger-compact
+      protocol: UDP
+    - port: 14250
+      name: jaeger-grpc
+      protocol: TCP
+    - port: 4317
+      name: otlp-grpc
+      protocol: TCP
+    - port: 8889
+      name: prometheus
+      protocol: TCP
+    - port: 8890
+      name: prometheus-otlp
+      protocol: TCP
+  selector:
+    app-name: otel-collector
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  labels:
+    app-name: otel-collector
+  namespace: observe
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app-name: otel-collector
+  template:
+    metadata:
+      labels:
+        app-name: otel-collector
+      name: otel-collector
+    spec:
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: ""
+      tolerations:
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.104.0
+          args:
+            - "--config=/etc/otel/config.yaml"
+          ports:
+            - containerPort: 6831
+              protocol: UDP
+            - containerPort: 14250
+              protocol: TCP
+            - containerPort: 4317
+              protocol: TCP
+            - containerPort: 8889
+              protocol: TCP
+            - containerPort: 8890
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector-config
+      restartPolicy: Always

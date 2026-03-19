@@ -10,13 +10,7 @@ from mcp.client.sse import sse_client
 
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig
 from clients.stratus.stratus_utils.truncate_by_token import truncate_to_tokens
-from clients.stratus.tools.text_editing.flake8_utils import flake8, format_flake8_output  # type: ignore
-from clients.stratus.tools.text_editing.windowed_file import (  # type: ignore
-    FileNotOpened,
-    TextNotFound,
-    WindowedFile,
-)
-from llm_backend.init_backend import get_llm_backend_for_tools
+from llm_backend.init_backend import get_llm_backend_for_agent
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("all.stratus.tools.jaeger")
@@ -84,9 +78,9 @@ def _summarize_traces(traces):
             SUMMARY: <insert summary of traces>
 
             STRICTLY FOLLOW THIS FORMAT
-            
+
             """
-    llm = get_llm_backend_for_tools()
+    llm = get_llm_backend_for_agent()
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=traces),
@@ -104,16 +98,16 @@ def _summarize_operations(operations):
         You are a tool for a Site Reliability Engineering team. Currently, the team faces an incident in the cluster and needs to fix it ASAP.
             Your job is to analyze and summarize given microservice operations, given in format of dictionaries.
             Read the given operations. Summarize the operations. Analyze what could be the root cause of the incident.
-            Be succinct and concise. 
+            Be succinct and concise.
 
             Return your response in this format:
             SERVICE NAME: <insert service name>
             SUMMARY: <insert summary of operations>
 
             STRICTLY FOLLOW THIS FORMAT
-            
+
             """
-    llm = get_llm_backend_for_tools()
+    llm = get_llm_backend_for_agent()
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=operations),
@@ -137,7 +131,7 @@ Retrieve the list of service names from the Grafana instance.
 @tool(description=get_services_docstring)
 async def get_services(tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
 
-    logger.info(f"calling mcp get_services from langchain get_services")
+    logger.info("calling mcp get_services from langchain get_services")
     exit_stack = AsyncExitStack()
     logger.info("Using HTTP, connecting to server.")
     server_url = langgraph_tool_config.jaeger_mcp_url
@@ -221,7 +215,7 @@ async def get_dependency_graph(
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
 
-    logger.info(f"calling mcp get_dependency_graph from langchain get_dependency_graph")
+    logger.info("calling mcp get_dependency_graph from langchain get_dependency_graph")
     exit_stack = AsyncExitStack()
     logger.info("Using HTTP, connecting to server.")
     server_url = langgraph_tool_config.jaeger_mcp_url

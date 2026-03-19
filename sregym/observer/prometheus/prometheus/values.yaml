@@ -375,16 +375,16 @@ server:
   ## Node tolerations for server scheduling to nodes with taints
   ## Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
   ##
-  tolerations: []
-    # - key: "key"
-    #   operator: "Equal|Exists"
-    #   value: "value"
-    #   effect: "NoSchedule|PreferNoSchedule|NoExecute(1.6 only)"
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
 
   ## Node labels for Prometheus server pod assignment
   ## Ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/
   ##
-  nodeSelector: {}
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
 
   ## Pod affinity
   ##
@@ -711,18 +711,284 @@ serverFiles:
   ## Ref: https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/
   alerting_rules.yml:
       groups:
-        - name: opentelemetrydemo.workloads
+        # ---- App namespace pod lifecycle alerts ----
+        # Namespaces: astronomy-shop, hotel-reservation, social-network, blueprint-hotel-reservation, train-ticket, tidb-cluster
+        - name: app.workloads
           rules:
             - alert: PodStatusError
               expr: |
-                sum by (namespace, pod, reason) (kube_pod_container_status_waiting_reason > 0)
-              for: 2m
+                sum by (namespace, pod, reason) (
+                  kube_pod_container_status_waiting_reason{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"} > 0
+                )
+              for: 1m
               labels:
                 severity: critical
               annotations:
                 summary: "Pod startup failure: {{ $labels.pod }}"
-                description: "The pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is stuck in {{ $labels.reason }}. Current failed container count: {{ $value }}."
-  # groups:
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is stuck in {{ $labels.reason }}."
+
+            - alert: FailedPodsDetected
+              expr: |
+                sum by (namespace, pod) (
+                  kube_pod_status_phase{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster", phase="Failed"}
+                ) > 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is in Failed state."
+
+            - alert: PendingPodsDetected
+              expr: |
+                sum by (namespace, pod) (
+                  kube_pod_status_phase{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster", phase="Pending"}
+                ) > 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is stuck in Pending state."
+
+            - alert: PodSchedulingFailure
+              expr: |
+                sum by (namespace, pod) (
+                  kube_pod_status_unschedulable{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"}
+                ) > 0
+              for: 30s
+              labels:
+                severity: critical
+              annotations:
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is unschedulable."
+
+            - alert: KubePodNotReady
+              # Exclude completed/succeeded pods (e.g. finished Jobs).
+              expr: |
+                sum by (namespace, pod) (
+                  kube_pod_status_ready{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster", condition="false"}
+                ) > 0
+                unless on (namespace, pod)
+                (kube_pod_status_phase{phase="Succeeded"} > 0)
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 1 minute."
+
+            - alert: TiDBInstanceNotReady
+              expr: |
+                (tidb_server_connections == 0 or absent(tidb_server_connections))
+                  and on ()
+                (count(kube_namespace_labels{namespace="tidb-cluster"}) > 0)
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "TiDB instance is not ready"
+                description: "TiDB instance {{ $labels.instance }} has been unreachable or has no connections for more than 2 minutes."
+
+            - alert: TiDBStatefulSetNotReady
+              expr: group by (statefulset) (kube_statefulset_replicas{namespace="tidb-cluster"} - kube_statefulset_status_replicas_ready) > 0
+              for: 2m
+              labels:
+                severity: critical
+              annotations:
+                summary: "TiDB StatefulSet {{ $labels.statefulset }} not ready"
+                description: "StatefulSet {{ $labels.statefulset }} has {{ $value }} ready replicas but desired is higher"
+
+        # ---- Container resource alerts ----
+        - name: app.resources
+          rules:
+            - alert: ContainerCPUThrottling
+              # Fires when >25% of CPU periods are throttled (container hitting its limit).
+              expr: |
+                sum by (namespace, pod) (
+                  rate(container_cpu_cfs_throttled_periods_total{
+                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket"
+                  }[5m])
+                )
+                /
+                sum by (namespace, pod) (
+                  rate(container_cpu_cfs_periods_total{
+                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket"
+                  }[5m])
+                ) > 0.25
+              for: 2m
+              labels:
+                severity: warning
+              annotations:
+                summary: "CPU throttling: {{ $labels.pod }}"
+                description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is being CPU throttled ({{ $value | humanizePercentage }} of periods throttled)."
+
+        # ---- Golden signal alerts (from OTel spanmetrics) ----
+        - name: app.goldensignal
+          rules:
+            - alert: HighRequestErrorRate
+              # Fires when >10% of requests are errors, with a minimum request volume.
+              # Excludes infrastructure services (load-generator, flagd, kafka, valkey-cart, postgresql).
+              expr: |
+                (
+                  sum by (service_name, namespace) (
+                    rate(traces_span_metrics_calls_total{
+                      status_code="STATUS_CODE_ERROR",
+                      service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                      namespace=~"astronomy-shop|hotel-reservation|social-network"
+                    }[2m])
+                  )
+                  /
+                  sum by (service_name, namespace) (
+                    rate(traces_span_metrics_calls_total{
+                      service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                      namespace=~"astronomy-shop|hotel-reservation|social-network"
+                    }[2m])
+                  )
+                ) > 0.10
+                  and
+                sum by (service_name, namespace) (
+                  rate(traces_span_metrics_calls_total{
+                    service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                    namespace=~"astronomy-shop|hotel-reservation|social-network"
+                  }[2m])
+                ) > 0.1
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "High error rate: {{ $labels.service_name }}"
+                description: "Service {{ $labels.service_name }} in namespace {{ $labels.namespace }} has an elevated error rate (current: {{ $value | humanizePercentage }})."
+
+            - alert: HighRequestErrorRate
+              # Locust load generator error detection (train-ticket).
+              # Fires when any endpoint has failures and enough requests to be meaningful.
+              expr: |
+                (
+                  locust_requests_num_failures{namespace="train-ticket", name!="Aggregated"}
+                    /
+                  locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"}
+                ) > 0.1
+                  and
+                locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"} > 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "High error rate: {{ $labels.method }} {{ $labels.name }}"
+                description: "Endpoint {{ $labels.method }} {{ $labels.name }} in {{ $labels.namespace }} has an elevated failure ratio (current: {{ $value | printf \"%.2f\" }})."
+
+            - alert: HighRequestRate
+              # Detects abnormal traffic spikes (e.g. load generator flooding).
+              # Fires when a single service receives >50 req/s sustained.
+              expr: |
+                sum by (service_name, namespace) (
+                  rate(traces_span_metrics_calls_total{
+                    service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                    namespace=~"astronomy-shop|hotel-reservation|social-network"
+                  }[2m])
+                ) > 50
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "Abnormal request rate: {{ $labels.service_name }}"
+                description: "Service {{ $labels.service_name }} in namespace {{ $labels.namespace }} is receiving an unusually high request rate (current: {{ $value | printf \"%.1f\" }} req/s)."
+
+            - alert: HighRequestLatency
+              expr: |
+                histogram_quantile(0.95,
+                  sum by (le, service_name, namespace) (
+                    rate(traces_span_metrics_duration_milliseconds_bucket{
+                      service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                      namespace=~"astronomy-shop|hotel-reservation|social-network"
+                    }[2m])
+                  )
+                ) > 1500
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "High latency: {{ $labels.service_name }}"
+                description: "P95 latency for {{ $labels.service_name }} in namespace {{ $labels.namespace }} is above 1500ms (current: {{ $value | printf \"%.0f\" }}ms)."
+
+            - alert: DeploymentNotReady
+              expr: |
+                kube_deployment_status_replicas_available{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"} == 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                description: "Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }} has 0 available replicas."
+        # ---- Messaging / async processing alerts ----
+        - name: app.messaging
+          rules:
+            - alert: MessageConsumerLag
+              # Detects when individual message consumers fall behind producers.
+              # Compares per-consumer "receive" rate to producer "publish" rate.
+              # Normal: each consumer keeps pace with the producer (ratio ≈ 1.0).
+              # Under lag: consumer falls behind (ratio > 1.5).
+              expr: |
+                (
+                  sum by (namespace) (
+                    rate(traces_span_metrics_calls_total{
+                      service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                      namespace=~"astronomy-shop|hotel-reservation|social-network",
+                      span_name=~"publish .*"
+                    }[5m])
+                  )
+                  /
+                  clamp_min(
+                    min by (namespace) (
+                      sum by (namespace, service_name) (
+                        rate(traces_span_metrics_calls_total{
+                          service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                          namespace=~"astronomy-shop|hotel-reservation|social-network",
+                          span_name=~"receive .*"
+                        }[5m])
+                      )
+                    ),
+                    0.001
+                  )
+                ) > 1.5
+              for: 2m
+              labels:
+                severity: warning
+              annotations:
+                summary: "Message consumer lag detected in {{ $labels.namespace }}"
+                description: "Producers are outpacing the slowest consumer in {{ $labels.namespace }} by {{ $value | printf \"%.1f\" }}x. Messages may be accumulating in the queue."
+
+        # ---- Blackbox endpoint probe alerts ----
+        # Apps: astronomy-shop (16 endpoints), hotel-reservation (8 endpoints), social-network (13 endpoints)
+        - name: app.endpoints
+          rules:
+            - alert: ServiceEndpointDown
+              # Only fires if the deployment for that service has ready pods.
+              expr: |
+                label_replace(
+                  probe_success{job=~"blackbox-(astronomy-shop|hotel-reservation|social-network)"} == 0,
+                  "deployment", "$1", "instance", "([^.]+)\\..*"
+                )
+                  and on (namespace, deployment)
+                (kube_deployment_status_replicas_available > 0)
+
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                description: "Service endpoint {{ $labels.instance }} in {{ $labels.namespace }} is unreachable."
+
+            - alert: HTTPProbeFailure
+              # Only fires when the nginx ingress controller is running
+              # (deployed exclusively by the ingress_misroute problem).
+              expr: |
+                probe_success{job=~"blackbox-ingress-.*"} == 0
+                  and on ()
+                (kube_deployment_status_replicas_available{namespace="ingress-nginx", deployment="ingress-nginx-controller"} > 0)
+              for: 30s
+              labels:
+                severity: critical
+              annotations:
+                summary: "HTTP probe failed in {{ $labels.namespace }}"
+                description: "HTTP probe to {{ $labels.instance }} in {{ $labels.namespace }} is failing."
+
+
   #   - name: Instances
   #     rules:
   #       - alert: InstanceDown
@@ -760,7 +1026,7 @@ serverFiles:
           - source_labels: [__meta_kubernetes_endpoints_name]
             action: keep
             regex: .*kube-state-metrics.*
-      - job_name: prometheus
+      - job_name: prometheus-self
         static_configs:
           - targets:
             - localhost:9090
@@ -806,7 +1072,7 @@ serverFiles:
           - action: labelmap
             regex: __meta_kubernetes_node_label_(.+)
 
-      - job_name: 'kubernetes-nodes'
+      - job_name: 'node-exporter'
         kubernetes_sd_configs:
           - role: endpoints
         relabel_configs:
@@ -817,21 +1083,154 @@ serverFiles:
 # adds additional scrape configs to prometheus.yml
 # must be a string so you have to add a | after extraScrapeConfigs:
 # example adds prometheus-blackbox-exporter scrape config
-extraScrapeConfigs: ""
-  # - job_name: 'prometheus-blackbox-exporter'
-  #   metrics_path: /probe
-  #   params:
-  #     module: [http_2xx]
-  #   static_configs:
-  #     - targets:
-  #       - https://example.com
-  #   relabel_configs:
-  #     - source_labels: [__address__]
-  #       target_label: __param_target
-  #     - source_labels: [__param_target]
-  #       target_label: instance
-  #     - target_label: __address__
-  #       replacement: prometheus-blackbox-exporter:9115
+extraScrapeConfigs: |
+  # ---- Blackbox TCP probes for app service endpoints ----
+  # Probes each service's ClusterIP:port via the blackbox exporter.
+
+  - job_name: 'blackbox-astronomy-shop'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - ad.astronomy-shop:8080
+          - cart.astronomy-shop:8080
+          - checkout.astronomy-shop:8080
+          - currency.astronomy-shop:8080
+          - email.astronomy-shop:8080
+          - frontend.astronomy-shop:8080
+          - frontend-proxy.astronomy-shop:8080
+          - image-provider.astronomy-shop:8081
+          - payment.astronomy-shop:8080
+          - product-catalog.astronomy-shop:8080
+          - product-reviews.astronomy-shop:3551
+          - quote.astronomy-shop:8080
+          - recommendation.astronomy-shop:8080
+          - shipping.astronomy-shop:8080
+          - flagd.astronomy-shop:8013
+          - kafka.astronomy-shop:9092
+        labels:
+          namespace: astronomy-shop
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  - job_name: 'blackbox-hotel-reservation'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - frontend.hotel-reservation:5000
+          - search.hotel-reservation:8082
+          - profile.hotel-reservation:8081
+          - geo.hotel-reservation:8083
+          - rate.hotel-reservation:8084
+          - recommendation.hotel-reservation:8085
+          - user.hotel-reservation:8086
+          - reservation.hotel-reservation:8087
+        labels:
+          namespace: hotel-reservation
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  - job_name: 'blackbox-social-network'
+    metrics_path: /probe
+    params:
+      module: [tcp_connect]
+    static_configs:
+      - targets:
+          - nginx-thrift.social-network:8080
+          - media-frontend.social-network:8081
+          - user-service.social-network:9090
+          - compose-post-service.social-network:9090
+          - social-graph-service.social-network:9090
+          - post-storage-service.social-network:9090
+          - user-timeline-service.social-network:9090
+          - url-shorten-service.social-network:9090
+          - text-service.social-network:9090
+          - unique-id-service.social-network:9090
+          - user-mention-service.social-network:9090
+          - home-timeline-service.social-network:9090
+          - media-service.social-network:9090
+        labels:
+          namespace: social-network
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+  # ---- Ingress HTTP probes ----
+  - job_name: 'blackbox-ingress-hotel-reservation'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - http://ingress-nginx-controller.ingress-nginx/api/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=38.0235&lon=-122.095
+        labels:
+          namespace: hotel-reservation
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  # ---- Locust load generator metrics (train-ticket) ----
+  - job_name: 'locust-train-ticket'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - load-generator.train-ticket:9646
+        labels:
+          namespace: train-ticket
+
+  # ---- OTel Collector spanmetrics (Jaeger traces — hotel-reservation, social-network) ----
+  - job_name: 'otel-spanmetrics'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - otel-collector.observe:8889
+    metric_relabel_configs:
+      # Default namespace for hotel-reservation services
+      - target_label: namespace
+        replacement: hotel-reservation
+      # Override for social-network services
+      - source_labels: [service_name]
+        regex: 'nginx-thrift|compose-post-service|social-graph-service|post-storage-service|user-timeline-service|url-shorten-service|text-service|unique-id-service|user-mention-service|home-timeline-service|media-service|media-frontend|user-service'
+        target_label: namespace
+        replacement: social-network
+
+  # ---- OTel Collector spanmetrics (OTLP traces — astronomy-shop) ----
+  - job_name: 'otel-spanmetrics-otlp'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - otel-collector.observe:8890
+        labels:
+          namespace: astronomy-shop
+  # ---- Scraping from TiDB Cluster ----
+  - job_name: tidb-cluster
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - basic-tidb.tidb-cluster.svc.cluster.local:10080
+          - basic-pd.tidb-cluster.svc.cluster.local:2379
 
 # Adds option to add alert_relabel_configs to avoid duplicate alerts in alertmanager
 # useful in H/A prometheus with different external labels but the same alerts
@@ -873,6 +1272,14 @@ alertmanager:
   persistence:
     size: 2Gi
 
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+
   podSecurityContext:
     runAsUser: 65534
     runAsNonRoot: true
@@ -886,6 +1293,14 @@ kube-state-metrics:
   ## If false, kube-state-metrics sub-chart will not be installed
   ##
   enabled: true
+
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
 
 ## prometheus-node-exporter sub-chart configurable values
 ## Please see https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus-node-exporter
@@ -909,9 +1324,38 @@ prometheus-pushgateway:
   ##
   enabled: true
 
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+
   # Optional service annotations
   serviceAnnotations:
     prometheus.io/probe: pushgateway
 
 prometheus-blackbox-exporter:
-  enabled: false
+  enabled: true
+
+  nodeSelector:
+    node-role.kubernetes.io/control-plane: ""
+
+  tolerations:
+    - key: "node-role.kubernetes.io/control-plane"
+      operator: "Exists"
+      effect: "NoSchedule"
+
+  config:
+    modules:
+      http_2xx:
+        prober: http
+        timeout: 5s
+        http:
+          valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+          follow_redirects: true
+          preferred_ip_protocol: "ip4"
+      tcp_connect:
+        prober: tcp
+        timeout: 5s

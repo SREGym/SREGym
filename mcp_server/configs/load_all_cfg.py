@@ -1,11 +1,7 @@
 import os
 
-from dotenv import load_dotenv
-
 from mcp_server.configs.kubectl_session_cfg import KubectlSessionCfg
 from mcp_server.configs.mcp_server_cfg import McpServerCfg
-
-load_dotenv()
 
 
 def str_to_bool(s: str) -> bool:

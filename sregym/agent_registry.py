@@ -15,6 +15,7 @@ class AgentRegistration:
     kickoff_env: dict[str, str] | None = None
     install_script: str | None = None
     agent_version: str | None = None
+    container_isolation: bool = True
 
 
 def _ensure_file(path: Path):
@@ -34,6 +35,7 @@ def list_agents(path: Path = DEFAULT_REG_PATH) -> dict[str, AgentRegistration]:
             kickoff_env=a.get("kickoff_env") or {},
             install_script=a.get("install_script"),
             agent_version=a.get("agent_version"),
+            container_isolation=a.get("container_isolation", True),
         )
     return out
 

@@ -1,19 +1,14 @@
 """LLM-as-a-Judge Oracle for evaluating agent solutions against expected root causes."""
 
 import json
-import os
 import re
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import yaml
-from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from llm_backend.init_backend import get_llm_backend_for_tools
-
-load_dotenv()
+from llm_backend.init_backend import get_llm_backend_for_judge
 
 
 class JudgmentResult(str, Enum):
@@ -24,10 +19,10 @@ class JudgmentResult(str, Enum):
 class LLMJudge:
     def __init__(
         self,
-        provider: Optional[str] = None,
-        model_name: Optional[str] = None,
-        url: Optional[str] = None,
-        api_key: Optional[str] = None,
+        provider: str | None = None,
+        model_name: str | None = None,
+        url: str | None = None,
+        api_key: str | None = None,
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ):
@@ -47,7 +42,7 @@ class LLMJudge:
         """Lazily initialize the LLM backend only when needed."""
         if self._backend is None:
             try:
-                self._backend = get_llm_backend_for_tools()
+                self._backend = get_llm_backend_for_judge()
             except (SystemExit, Exception) as e:
                 # Catch both SystemExit (from exit(1) calls) and other exceptions
                 print(f"Warning: Failed to initialize LLM backend for judge: {e}")
@@ -55,12 +50,12 @@ class LLMJudge:
                 return None
         return self._backend
 
-    def judge(self, solution: str, expectation: str) -> tuple[JudgmentResult, str]:
+    def judge(self, solution: str, expectation: str) -> tuple[JudgmentResult | None, str]:
         """
         Judge whether a solution matches the expectation.
 
         Returns:
-            tuple[JudgmentResult, str]: A tuple of (judgment, reasoning)
+            tuple[JudgmentResult | None, str]: A tuple of (judgment, reasoning)
             Returns (None, error_message) if backend is not initialized
         """
         # Check if backend is initialized
@@ -153,7 +148,7 @@ Evaluate whether the agent's answer correctly identifies the root cause. Respond
 
 
 def load_test_data(yaml_path: str) -> list[dict]:
-    with open(yaml_path, "r") as f:
+    with open(yaml_path) as f:
         data = yaml.safe_load(f)
     return data
 
@@ -186,7 +181,7 @@ def main():
         answer = test_case.get("answer", "")
         expected_judgment = test_case.get("oracle", "")
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print(f"Test Case {i}/{total_cases}")
         print(
             f"Expected Root Cause: {description[:100]}..."
@@ -239,13 +234,13 @@ def main():
             )
 
     # Print summary
-    print(f"\n{'='*80}")
+    print(f"\n{'=' * 80}")
     print("SUMMARY")
-    print(f"{'='*80}")
+    print(f"{'=' * 80}")
     print(f"Total test cases: {total_cases}")
-    print(f"Correct: {correct} ({correct/total_cases*100:.1f}%)")
-    print(f"Incorrect: {incorrect} ({incorrect/total_cases*100:.1f}%)")
-    print(f"\nDetailed Results:")
+    print(f"Correct: {correct} ({correct / total_cases * 100:.1f}%)")
+    print(f"Incorrect: {incorrect} ({incorrect / total_cases * 100:.1f}%)")
+    print("\nDetailed Results:")
 
     for result in results:
         status_symbol = "✅" if result["correct"] else "❌"

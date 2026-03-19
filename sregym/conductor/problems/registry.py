@@ -11,8 +11,8 @@ from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import Capacity
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
-from sregym.conductor.problems.email_memory_leak import EmailMemoryLeak
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
+from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
@@ -21,10 +21,9 @@ from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAss
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.khaos_faults import KhaosFaultName, KhaosFaultProblem
+from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
-from sregym.conductor.problems.llm_inaccurate_response import LlmInaccurateResponse
-from sregym.conductor.problems.llm_rate_limit_error import LlmRateLimitError
 from sregym.conductor.problems.load_spike_rpc_retry_storm import LoadSpikeRPCRetryStorm
 from sregym.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
 from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
@@ -50,7 +49,6 @@ from sregym.conductor.problems.product_catalog_failure import ProductCatalogServ
 from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
 from sregym.conductor.problems.readiness_probe_misconfiguration import ReadinessProbeMisconfiguration
-from sregym.conductor.problems.recommendation_service_cache_failure import RecommendationServiceCacheFailure
 from sregym.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
 from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
@@ -63,9 +61,6 @@ from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.target_port import K8STargetPortMisconfig
-from sregym.conductor.problems.top_of_rack_router_failure_hotel_reservation import (
-    TopOfRackRouterPartitionHotelReservation,
-)
 from sregym.conductor.problems.train_ticket_f22 import TrainTicketF22
 from sregym.conductor.problems.trainticket_f17 import TrainTicketF17
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
@@ -89,6 +84,7 @@ class ProblemRegistry:
             # --- REGULAR APPLICATION PROBLEMS ---
             "incorrect_image": IncorrectImage,
             "incorrect_port_assignment": IncorrectPortAssignment,
+            "unschedulable_incorrect_port_assignment": lambda: IncorrectPortAssignment(unschedulable=True),
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
             "missing_env_variable_astronomy_shop": lambda: MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend" ),
             "revoke_auth_mongodb-1": lambda: MongoDBRevokeAuth(faulty_service="mongodb-geo"),
@@ -146,7 +142,7 @@ class ProblemRegistry:
             "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
             "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
-            "top_of_rack_router_failure_hotel_reservation": lambda: TopOfRackRouterPartitionHotelReservation(app_name="hotel_reservation", faulty_service="frontend"),
+            # "top_of_rack_router_failure_hotel_reservation": lambda: TopOfRackRouterPartitionHotelReservation(app_name="hotel_reservation", faulty_service="frontend"),
             "wrong_bin_usage": WrongBinUsage,
             "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_dns_policy_hotel_reservation": lambda: WrongDNSPolicy(app_name="hotel_reservation", faulty_service="profile"),
@@ -160,13 +156,10 @@ class ProblemRegistry:
             "astronomy_shop_ad_service_image_slow_load": ImageSlowLoad,
             "astronomy_shop_ad_service_manual_gc": AdServiceManualGc,
             "astronomy_shop_cart_service_failure": CartServiceFailure,
-            "astronomy_shop_email_memory_leak": EmailMemoryLeak,
-            "astronomy_shop_llm_inaccurate_response": LlmInaccurateResponse,
-            "astronomy_shop_llm_rate_limit_error": LlmRateLimitError,
+            "astronomy_shop_failed_readiness_probe": FailedReadinessProbe,
             "astronomy_shop_payment_service_failure": PaymentServiceFailure,
             "astronomy_shop_payment_service_unreachable": PaymentServiceUnreachable,
             "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
-            "astronomy_shop_recommendation_service_cache_failure": RecommendationServiceCacheFailure,
             "kafka_queue_problems": KafkaQueueProblems,
             "loadgenerator_flood_homepage": LoadGeneratorFloodHomepage,
             # ==================== TRAIN TICKET FAULT INJECTOR ====================
@@ -260,7 +253,7 @@ class ProblemRegistry:
             #     LivenessProbeTooAggressive(app_name="social_network"),
             # ]),
             # ad hoc:
-            # "kubelet_crash": KubeletCrash,
+            "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
             # ==================== K8S OPERATOR MISOPERATION ==================
             "operator_overload_replicas": K8SOperatorOverloadReplicasFault,

@@ -1,9 +1,6 @@
 import os
 
-from dotenv import load_dotenv
 from pydantic import BaseModel, Field
-
-load_dotenv()
 
 
 # FIXME: name of class is misleading for now

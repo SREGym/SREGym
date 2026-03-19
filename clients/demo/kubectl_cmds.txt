@@ -1,0 +1,4 @@
+kubectl scale deployment user-service --replicas=1 -n social-network
+submit("Root cause")
+kubectl patch deployment user-service -n social-network -p '{"spec":{"replicas":1}}'
+submit("end")

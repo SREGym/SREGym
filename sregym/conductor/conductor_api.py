@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import threading
@@ -38,11 +39,18 @@ async def submit_via_conductor(ans: str) -> dict[str, str]:
         return {"status": "error", "text": f"Cannot submit at stage: {stage!r}"}
 
     wrapped = f"```\nsubmit({repr(ans)})\n```"
-    try:
-        await _conductor.submit(wrapped)
-        return {"status": "200", "text": "Submission received"}
-    except Exception as e:
-        return {"status": "error", "text": f"Grading error: {e}"}
+    max_wait = 60
+    for attempt in range(max_wait):
+        try:
+            await _conductor.submit(wrapped)
+            return {"status": "200", "text": "Submission received"}
+        except RuntimeError:
+            if attempt < max_wait - 1:
+                await asyncio.sleep(1)
+                continue
+            return {"status": "error", "text": "Previous stage is still being evaluated. Try again later."}
+        except Exception as e:
+            return {"status": "error", "text": f"Grading error: {e}"}
 
 
 app = FastAPI(
@@ -70,9 +78,7 @@ class _ShutdownNoiseFilter(logging.Filter):
         # Case 2: uvicorn formats the traceback as a plain string message
         # (e.g. logger.error(traceback.format_exc())) with no exc_info.
         # The string will end with "asyncio.exceptions.CancelledError".
-        if "CancelledError" in record.getMessage():
-            return False
-        return True
+        return "CancelledError" not in record.getMessage()
 
 
 def request_shutdown():
@@ -123,13 +129,27 @@ async def submit_solution(req: SubmitRequest):
     wrapped = f"```\nsubmit({repr(req.solution)})\n```"
     logger.debug(f"Wrapped submit content: {wrapped}")
 
-    try:
-        await _conductor.submit(wrapped)
-    except Exception as e:
-        logger.error(f"Grading error: {e}")
-        raise HTTPException(status_code=400, detail=f"Grading error: {e}") from e
-
-    return {"status": "200", "message": "Submission received"}
+    # The conductor evaluates submissions asynchronously. If a previous stage
+    # is still being evaluated, waiting_for_agent will be False and submit()
+    # raises RuntimeError.  Retry for up to 60s to handle this race.
+    max_wait = 60
+    for attempt in range(max_wait):
+        try:
+            await _conductor.submit(wrapped)
+            return {"status": "200", "message": "Submission received"}
+        except RuntimeError:
+            if attempt < max_wait - 1:
+                logger.debug("Conductor not ready for submission yet, retrying in 1s...")
+                await asyncio.sleep(1)
+                continue
+            logger.error("Conductor did not become ready for submission within timeout")
+            raise HTTPException(
+                status_code=503,
+                detail="Previous stage is still being evaluated. Try again later.",
+            ) from None
+        except Exception as e:
+            logger.error(f"Grading error: {e}")
+            raise HTTPException(status_code=400, detail=f"Grading error: {e}") from e
 
 
 @app.get("/status")
