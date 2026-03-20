@@ -97,7 +97,6 @@ class ProblemRegistry:
             # --- METASTABLE FAILURES ---
             "capacity_decrease_rpc_retry_storm": CapacityDecreaseRPCRetryStorm,
             "gc_capacity_degradation": GCCapacityDegradation,
-            "load_spike_rpc_retry_storm": LoadSpikeRPCRetryStorm,
             # --- REGULAR VIRTUALIZATION PROBLEMS ---
             "assign_to_non_existent_node": AssignNonExistentNode,
             "auth_miss_mongodb": MongoDBAuthMissing,

@@ -16,7 +16,7 @@ class ChaosInjector:
             "release_name": "chaos-mesh",
             "chart_path": "chaos-mesh/chaos-mesh",
             "namespace": "chaos-mesh",
-            "version": "2.6.2",
+            "version": "2.8.0",
         }
 
         container_runtime = self.kubectl.get_container_runtime()
@@ -109,6 +109,8 @@ class ChaosInjector:
             command = f"kubectl apply -f {chaos_yaml_path}"
             result = self.kubectl.exec_command(command)
             print(f"Applied {experiment_name} chaos experiment: {result}")
+            if "Error" in result or "error" in result or "denied" in result:
+                raise RuntimeError(f"kubectl apply failed: {result}")
         except Exception as e:
             raise RuntimeError(f"Error applying chaos experiment: {e}") from e
 

@@ -46,6 +46,8 @@ class LoadSpikeRPCRetryStorm(Problem):
             multiplier = 6
         self.wrk = BHotelWrkWorkloadManager(
             wrk=BHotelWrk(tput=tput, duration=duration, multiplier=multiplier),
+            namespace=self.namespace,
+            continuous=True,
         )
 
     def start_workload(self):

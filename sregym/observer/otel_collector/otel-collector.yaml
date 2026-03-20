@@ -11,6 +11,8 @@ data:
         protocols:
           thrift_compact:
             endpoint: "0.0.0.0:6831"
+          thrift_http:
+            endpoint: "0.0.0.0:14268"
           grpc:
             endpoint: "0.0.0.0:14250"
       otlp:
@@ -23,7 +25,9 @@ data:
         namespace: traces_span_metrics
         histogram:
           explicit:
-            buckets: [5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 1500, 2000, 5000]
+            # Jaeger spans are in microseconds; divide by 1e6 → seconds in Prometheus.
+            # Bucket values = desired_ms * 1e6 so histogram_quantile returns milliseconds.
+            buckets: [1000000, 2500000, 5000000, 10000000, 25000000, 50000000, 100000000, 250000000, 500000000, 1000000000, 2500000000, 5000000000, 10000000000]
         dimensions: []
       spanmetrics/otlp:
         namespace: traces_span_metrics
@@ -69,6 +73,9 @@ spec:
     - port: 6831
       name: jaeger-compact
       protocol: UDP
+    - port: 14268
+      name: jaeger-thrift-http
+      protocol: TCP
     - port: 14250
       name: jaeger-grpc
       protocol: TCP
@@ -116,6 +123,8 @@ spec:
           ports:
             - containerPort: 6831
               protocol: UDP
+            - containerPort: 14268
+              protocol: TCP
             - containerPort: 14250
               protocol: TCP
             - containerPort: 4317
