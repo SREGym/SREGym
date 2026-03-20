@@ -21,8 +21,9 @@ from clients.stratus.tools.wait_tool import wait_tool
 logger = get_logger()
 
 
-def get_client():
-    session_id = str(uuid.uuid4())
+def get_client(session_id: str | None = None):
+    if session_id is None:
+        session_id = str(uuid.uuid4())
     # Set SSE read timeout to None for unlimited, or a large value in seconds
     sse_timeout = float(os.getenv("SSE_READ_TIMEOUT", "3600"))  # Default 1 hour
     if sse_timeout < 0:
@@ -64,8 +65,9 @@ def str_to_tool(tool_struct: dict[str, str]):
         exec_read_only_kubectl_cmd = ExecReadOnlyKubectlCmd(client)
         return exec_read_only_kubectl_cmd
     elif tool_struct["name"] == "exec_kubectl_cmd_safely":
-        client = get_client()
-        exec_kubectl_cmd_safely = ExecKubectlCmdSafely(client)
+        session_id = str(uuid.uuid4())
+        client = get_client(session_id)
+        exec_kubectl_cmd_safely = ExecKubectlCmdSafely(client, session_id=session_id)
         return exec_kubectl_cmd_safely
     elif tool_struct["name"] == "rollback_command":
         client = get_client()

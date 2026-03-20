@@ -5,11 +5,14 @@ from pathlib import Path
 
 from langchain_core.callbacks import UsageMetadataCallbackHandler
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.constants import END, START
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
 from clients.stratus.stratus_agent.state import State
 from clients.stratus.tools.stratus_tool_node import StratusToolNode
+from clients.stratus.tools.submit_tool import manual_submit_tool
 
 logger = logging.getLogger("all.stratus.base")
 logger.propagate = True
@@ -17,104 +20,77 @@ logger.setLevel(logging.DEBUG)
 
 
 class BaseAgent:
-    def __init__(self, llm, max_step, sync_tools, async_tools, submit_tool, tool_descs):
+    def __init__(self, llm, max_step, sync_tools, async_tools, submit_tool):
         self.graph_builder = StateGraph(State)
         self.graph: CompiledStateGraph | None = None
         self.max_step = max_step
         self.async_tools = async_tools
         self.sync_tools = sync_tools
         self.llm = llm
-        self.tool_descs = tool_descs
         self.submit_tool = submit_tool
-        self.force_submit_prompt_inject_node = "force_submit_thinking_step"
-        self.force_submit_tool_call_node = "force_submit_tool_call"
-        self.force_submit_tool_execute_node = "force_submit_tool_execute"
-        self.llm_force_submit_tool_execute_node = StratusToolNode(sync_tools=[], async_tools=[submit_tool])
-        self.thinking_prompt_inject_node = "pre_thinking_step"
-        self.thinking_node = "thinking_step"
-        self.tool_calling_prompt_inject_node = "pre_tool_calling_step"
-        self.tool_calling_node = "tool_calling_step"
-        self.process_tool_call_node = "process_tool_call"
-        self.post_round_process_node = "post_round_process"
         self.callback = UsageMetadataCallbackHandler()
-        self.loop_count = 0
+        self.logger = logging.getLogger("all.stratus.base")
 
-    def llm_inference_step(self, messages, tools):
-        return self.llm.inference(messages=messages, tools=tools)
+    def _all_tools(self):
+        tools = []
+        if self.sync_tools:
+            tools.extend(self.sync_tools)
+        if self.async_tools:
+            tools.extend(self.async_tools)
+        if not tools:
+            raise ValueError("Agent must have at least one tool!")
+        return tools
 
-    def llm_thinking_prompt_inject_step(self, state: State):
-        # Only include full tool descriptions on the first iteration to save context
-        if self.loop_count == 0:
-            content = (
-                "You are now in the thinking stage. Here are all the tools you can use:\n"
-                + self.tool_descs
-                + "Choose a tool from the list and output the tool name. Justify your tool choice. In the next step, you will generate a tool call for this tool"
-            )
-            self.logger.debug(f"[Loop {self.loop_count}] Inject framework prompt: \n {content}")
-        else:
-            content = (
-                "You are now in the thinking stage. Choose a tool from the available tools and justify your choice."
-            )
-            self.logger.debug(f"[Loop {self.loop_count}] Inject short thinking prompt to save context")
-
-        human_prompt = HumanMessage(content=content)
-        return {
-            "messages": [human_prompt],
-        }
-
-    def llm_thinking_step(self, state: State):
-        # planning step, not providing tool
-        ai_message = self.llm_inference_step(state["messages"], tools=None)
-        self.logger.debug(
-            f"[Loop {self.loop_count}] Ask, and LLM responds: \n {ai_message.content}",
-            extra={"Full Prompt": state["messages"]},
-        )
+    def call_model(self, state: State):
+        ai_message = self.llm.inference(messages=state["messages"], tools=self._all_tools())
+        self.logger.debug(f"[Step {state['num_steps']}] LLM response: {ai_message.content}")
         if ai_message.content == "Server side error":
-            return {
-                "messages": [],
-            }
-        return {
-            "messages": [ai_message],
-        }
+            return {"messages": []}
+        return {"messages": [ai_message]}
 
-    def llm_tool_call_prompt_inject_step(self, state: State):
-        human_prompt = HumanMessage(content="Now generate a tool call according to your last chosen tool.")
-        if self.loop_count == 0:
-            self.logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt: \n {human_prompt.content}")
-        else:
-            self.logger.debug(f"[Loop {self.loop_count}] Inject tool call prompt (repeated)")
-        return {
-            "messages": [human_prompt],
-        }
+    def should_continue(self, state: State):
+        last_message = state["messages"][-1]
+        if not isinstance(last_message, AIMessage) or not last_message.tool_calls:
+            return END
+        return "tool_node"
 
-    def llm_tool_call_step(self, state: State):
-        if self.sync_tools is None:
-            if self.async_tools is not None:
-                ai_message = self.llm_inference_step(state["messages"], tools=self.async_tools)
+    def after_tools(self, state: State):
+        if state["submitted"]:
+            return END
+        if state["num_steps"] >= self.max_step:
+            return "force_submit"
+        return "call_model"
+
+    async def force_submit(self, state: State):
+        self.logger.warning(f"Agent reached step limit ({self.max_step}), forcing submission.")
+        prompt = HumanMessage("You have reached your step limit. Please submit your best answer using the submit tool.")
+        ai_message = self.llm.inference(messages=state["messages"] + [prompt], tools=[self.submit_tool])
+
+        if isinstance(ai_message, AIMessage) and ai_message.tool_calls:
+            tool_call = ai_message.tool_calls[0]
+            if tool_call.get("name") == self.submit_tool.name:
+                ans = tool_call.get("args", {}).get("ans", "")
             else:
-                raise ValueError("the agent must have at least 1 tool!")
+                self.logger.warning(f"LLM called unexpected tool '{tool_call.get('name')}' during force submit.")
+                ans = None
         else:
-            if self.async_tools is None:
-                ai_message = self.llm_inference_step(state["messages"], tools=self.sync_tools)
-            else:
-                ai_message = self.llm_inference_step(state["messages"], tools=[*self.sync_tools, *self.async_tools])
+            ans = None
 
-        self.logger.debug(
-            f"[Loop {self.loop_count}] Tool call",
-            extra={"Full Prompt": state["messages"]},
-        )
-        if ai_message.content == "Server side error":
-            return {
-                "messages": [],
-            }
-        return {
-            "messages": [ai_message],
-        }
+        if ans is None:
+            # LLM didn't use the submit tool — ask for its best answer as plain text instead.
+            self.logger.warning("LLM did not call the submit tool during force submit. Extracting plain-text answer.")
+            plain_prompt = HumanMessage("Please write out your best answer as plain text.")
+            plain_response = self.llm.inference(messages=state["messages"] + [prompt, ai_message, plain_prompt])
+            ans = plain_response.content if isinstance(plain_response, AIMessage) else ""
 
-    def should_submit_router(self, state: State):
-        should_submit = state["num_steps"] == self.max_step and not state["submitted"]
-        self.logger.info(f"Should we force the agent submit? {'Yes!' if should_submit else 'No!'}")
-        return self.force_submit_prompt_inject_node if should_submit else self.post_round_process_node
+        await manual_submit_tool(ans=ans)
+        self.logger.info(f"Force submitted with answer: {ans!r}")
+        return {"submitted": True, "messages": [prompt]}
+
+    def post_round_process(self, state: State):
+        self.logger.info(f"{'~' * 20} [Step {state['num_steps']}] {'~' * 20}")
+        filtered_messages = self._filter_rejected_command_errors(state["messages"])
+        return {"num_steps": state["num_steps"] + 1, "messages": filtered_messages}
 
     def _filter_rejected_command_errors(self, messages: list) -> list:
         """
@@ -122,47 +98,31 @@ class BaseAgent:
 
         This prevents wasted context window from keeping rejection error messages after
         Stratus successfully generates a correct command.
-
-        Args:
-            messages: List of messages in the conversation history
-
-        Returns:
-            Filtered list of messages with rejected command errors removed if appropriate
         """
         if len(messages) < 2:
             return messages
 
-        # Check if the last message is a successful ToolMessage (not a rejection)
         last_message = messages[-1]
         if not isinstance(last_message, ToolMessage):
             return messages
 
-        # If the last tool message contains "Command Rejected", keep all messages
-        # (the error is still relevant)
         if "Command Rejected" in last_message.content:
             return messages
 
-        # Last tool call was successful - now remove previous "Command Rejected" messages
-        # We'll look backwards through messages and remove ToolMessages with rejections
         filtered_messages = []
         removed_count = 0
 
         for i, msg in enumerate(messages):
-            # Keep the last message (successful tool result)
             if i == len(messages) - 1:
                 filtered_messages.append(msg)
                 continue
 
-            # Remove ToolMessages containing "Command Rejected"
             if isinstance(msg, ToolMessage) and "Command Rejected" in msg.content:
                 removed_count += 1
                 self.logger.debug(f"Removing rejected command error message: {msg.content[:100]}...")
                 continue
 
-            # Also remove the AIMessage that triggered the rejected command
-            # (it contains the tool_call that was rejected)
             if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
-                # Check if the next message is a rejection we're filtering out
                 if i + 1 < len(messages) and isinstance(messages[i + 1], ToolMessage):
                     if "Command Rejected" in messages[i + 1].content:
                         removed_count += 1
@@ -179,31 +139,22 @@ class BaseAgent:
 
         return filtered_messages
 
-    def post_round_process(self, state: State):
-        self.logger.debug("agent finished a round")
-        self.logger.debug("currently only incrementing step")
-        self.logger.info(f"{'^' * 20} [Loop {self.loop_count}] {'^' * 20}")
-        self.logger.info("[SPLIT]")
+    def build_agent(self):
+        tool_node = StratusToolNode(sync_tools=self.sync_tools or [], async_tools=self.async_tools or [])
 
-        # Filter out rejected command errors if a successful command was executed
-        filtered_messages = self._filter_rejected_command_errors(state["messages"])
+        self.graph_builder.add_node("call_model", self.call_model)
+        self.graph_builder.add_node("tool_node", tool_node)
+        self.graph_builder.add_node("post_round_process", self.post_round_process)
+        self.graph_builder.add_node("force_submit", self.force_submit)
 
-        return {
-            "num_steps": state["num_steps"] + 1,
-            "messages": filtered_messages,
-        }
+        self.graph_builder.add_edge(START, "call_model")
+        self.graph_builder.add_conditional_edges("call_model", self.should_continue)
+        self.graph_builder.add_edge("tool_node", "post_round_process")
+        self.graph_builder.add_conditional_edges("post_round_process", self.after_tools)
+        self.graph_builder.add_edge("force_submit", END)
 
-    def llm_force_submit_thinking_step(self, state: State):
-        human_prompt = HumanMessage(
-            content="You have reached your step limit, please submit your results by generating a `submit` tool's tool call."
-        )
-        self.logger.warning("Agent has not solved the problem until the step limit, force submission.")
-        return {"messages": [human_prompt]}
-
-    def llm_force_submit_tool_call_step(self, state: State):
-        result = self.llm_inference_step(state["messages"], tools=[self.submit_tool])
-        # self.logger.info(f"[Loop {self.loop_count}] Force submit, and LLM responds: \n {result.content}")
-        return {"messages": result}
+        self.memory_saver = MemorySaver()
+        self.graph = self.graph_builder.compile(checkpointer=self.memory_saver)
 
     def clear_memory(self):
         if not hasattr(self, "memory_saver"):
@@ -229,10 +180,8 @@ class BaseAgent:
             "type": message.__class__.__name__,
             "content": message.content,
         }
-        # Add tool calls if present (for AIMessage)
         if hasattr(message, "tool_calls") and message.tool_calls:
             msg_dict["tool_calls"] = message.tool_calls
-        # Add additional kwargs if present
         if hasattr(message, "additional_kwargs") and message.additional_kwargs:
             msg_dict["additional_kwargs"] = message.additional_kwargs
         return msg_dict
@@ -253,7 +202,6 @@ class BaseAgent:
         trajectory_file = output_dir / f"{agent_name}_trajectory_{timestamp}.jsonl"
 
         with open(trajectory_file, "w", encoding="utf-8") as f:
-            # Write metadata
             metadata = {
                 "type": "metadata",
                 "agent_name": agent_name,
@@ -263,7 +211,6 @@ class BaseAgent:
             }
             f.write(json.dumps(metadata) + "\n")
 
-            # Write each graph event
             for idx, event in enumerate(graph_events):
                 event_data = {
                     "type": "event",
@@ -273,10 +220,8 @@ class BaseAgent:
                     "rollback_stack": event.get("rollback_stack", ""),
                 }
 
-                # Serialize messages
                 if "messages" in event and event["messages"]:
                     event_data["messages"] = [self._serialize_message(msg) for msg in event["messages"]]
-                    # Also include just the last message for easier inspection
                     event_data["last_message"] = self._serialize_message(event["messages"][-1])
 
                 f.write(json.dumps(event_data) + "\n")
@@ -284,19 +229,19 @@ class BaseAgent:
         logger.info(f"Saved trajectory to {trajectory_file}")
         return trajectory_file
 
-    def run(self, starting_prompts):
-        """Running an agent
+    async def arun(self, starting_prompts):
+        """
+        Run the agent asynchronously.
 
         Args:
-            starting_prompts (list[SystemMessage | HumanMessage]): The data inside the dict will be filled into the prompts.
+            starting_prompts (list[SystemMessage | HumanMessage]): Initial conversation prompts.
 
         Returns:
-            final state of the agent running, including messages and other state values.
+            (last_state, graph_events): Final StateSnapshot and list of all graph state events.
         """
         if not self.graph:
             raise ValueError("Agent graph is None. Have you built the agent?")
-
-        if len(starting_prompts) == 0:
+        if not starting_prompts:
             raise ValueError("No prompts used to start the conversation!")
 
         state = {
@@ -304,86 +249,27 @@ class BaseAgent:
             "num_steps": 0,
             "submitted": False,
             "rollback_stack": "",
+            "executed_commands": [],
+        }
+        graph_config = {
+            "recursion_limit": 10000,
+            "configurable": {"thread_id": "1"},
+            "callbacks": [self.callback],
         }
 
-        return list(
-            self.graph.stream(
-                state,
-                # recursion_limit could be as large as possible as we have our own limit.
-                config={"recursion_limit": 10000, "configurable": {"thread_id": "1"}, "callbacks": [self.callback]},
-                stream_mode="values",
-            )
-        )[-1]
-
-    async def arun(self, starting_prompts):
-        """
-        Async running an agent
-
-        Args:
-            starting_prompts (dict): The data inside the dict will be filled into the prompts.
-
-        Returns:
-            final state of the agent running, including messages and other state values.
-        """
-        if not self.graph:
-            raise ValueError("Agent graph is None. Have you built the agent?")
-
-        if len(starting_prompts) == 0:
-            raise ValueError("No prompts used to start the conversation!")
-
         graph_events = []
-        while True:
-            graph_config = {"configurable": {"thread_id": "1"}}
-            logger.info(f"{'-' * 20} [Loop {self.loop_count}] {'-' * 20}")
-            last_state = self.graph.get_state(config=graph_config)
-            if len(last_state.values) != 0:
-                logger.debug(f"[Loop {self.loop_count}] There were last {len(last_state.values)} states.")
-                # this is all the previous msgs the agent had, we just inherit them in the next graph traversal
-                state = last_state.values
-            else:
-                logger.debug(f"[Loop {self.loop_count}] There were no states.")
-                # fresh agent start, init state here
-                state = {
-                    "messages": starting_prompts,
-                    # "workdir": "",
-                    # "curr_file": "",
-                    # "curr_line": 0,
-                    "num_steps": 0,
-                    # "rec_submission_rounds": 0,
-                    # "submit_tried": False,
-                    "submitted": False,
-                    # "ans": dict(),
-                    "rollback_stack": "",
-                }
+        async for event in self.graph.astream(state, config=graph_config, stream_mode="values"):
+            prev_count = len(graph_events[-1]["messages"]) if graph_events else 0
+            for msg in event["messages"][prev_count:]:
+                if isinstance(msg, AIMessage):
+                    if msg.content:
+                        self.logger.info(f"[Agent] {msg.content}")
+                    for tc in msg.tool_calls:
+                        args = ", ".join(f"{k}={v!r}" for k, v in tc.get("args", {}).items())
+                        self.logger.info(f"[Tool Call] {tc['name']}({args})")
+                elif isinstance(msg, ToolMessage):
+                    self.logger.info(f"[Tool Output] {msg.content}")
+            graph_events.append(event)
 
-            async for event in self.graph.astream(
-                state,
-                # recursion_limit could be as large as possible as we have our own limit.
-                config={"recursion_limit": 10000, "configurable": {"thread_id": "1"}, "callbacks": [self.callback]},
-                stream_mode="values",
-            ):
-                if (not graph_events) or event["messages"] != graph_events[-1]["messages"]:
-                    event["messages"][-1].pretty_print()
-                graph_events.append(event)
-            last_state = self.graph.get_state(config=graph_config)
-            if last_state.values["submitted"]:
-                logger.info(f"[Loop {self.loop_count}] Agent submitted, breaking loop from base_agent")
-                # Ensure the final state is included in graph_events
-                if not graph_events or last_state.values["messages"] != graph_events[-1]["messages"]:
-                    graph_events.append(last_state.values)
-                break
-
-            # Break if agent hit its step limit without submitting — prevents infinite retry loop.
-            # This happens when force submit is triggered but the LLM fails to call the submit tool,
-            # leaving submitted=False and num_steps=max_step, which causes the router to re-trigger
-            # force submit on every subsequent iteration.
-            if last_state.values.get("num_steps", 0) >= self.max_step:
-                logger.error(
-                    f"[Loop {self.loop_count}] Agent reached step limit ({self.max_step}) without submitting. "
-                    "Exiting to prevent infinite retry loop. This benchmark problem is marked as failed."
-                )
-                break
-
-            self.loop_count += 1
-
+        last_state = self.graph.get_state(config={"configurable": {"thread_id": "1"}})
         return last_state, graph_events

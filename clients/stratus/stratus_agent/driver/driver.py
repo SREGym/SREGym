@@ -36,8 +36,9 @@ from clients.stratus.stratus_agent.mitigation_agent import retry_run_with_feedba
 from clients.stratus.stratus_agent.mitigation_agent import (
     single_run_with_predefined_prompts as mitigation_agent_single_run,
 )
-from clients.stratus.stratus_agent.rollback_agent import main as rollback_agent_main
+from clients.stratus.stratus_agent.rollback_agent import perform_rollback
 from clients.stratus.tools.submit_tool import manual_submit_tool
+from clients.stratus.weak_oracles.alert_oracle import AlertOracle
 from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
 from clients.stratus.weak_oracles.cluster_state_oracle import ClusterStateOracle
 from clients.stratus.weak_oracles.workload_oracle import WorkloadOracle
@@ -169,12 +170,12 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
         return None
 
 
-async def validate_oracles(oracles: list[BaseOracle]) -> list[bool | list[OracleResult]]:
+def validate_oracles(oracles: list[BaseOracle]) -> list[bool | list[OracleResult]]:
     results = []
     attempt_failed = False
     for oracle in oracles:
-        logger.info(f"validating oracle: {oracle}")
-        res: OracleResult = await oracle.validate()
+        logger.info(f"[Oracle] validating oracle: {oracle}")
+        res: OracleResult = oracle.validate()
         if not res.success:
             attempt_failed = True
             results.append(res)
@@ -375,11 +376,6 @@ async def mitigation_task_main(diagnosis_summary):
     mitigation_agent_max_retry_attempts = mitigation_agent_config["max_retry_attempts"]
     mitigation_agent_retry_mode = mitigation_agent_config["retry_mode"]
 
-    rollback_agent_config_path = file_parent_dir.parent / "configs" / "rollback_agent_config.yaml"
-    rollback_agent_config = yaml.safe_load(open(rollback_agent_config_path))
-    rollback_agent_max_step = rollback_agent_config["max_step"]
-    rollback_agent_prompt_path = file_parent_dir.parent / "configs" / rollback_agent_config["prompts_path"]
-
     llm_summarization_prompt_file = file_parent_dir.parent / "configs" / "llm_summarization_prompt.yaml"
     llm_summarization_prompt = yaml.safe_load(open(llm_summarization_prompt_file))["mitigation_retry_prompt"]
     mitigation_agent_prompts = yaml.safe_load(open(mitigation_agent_prompt_path))
@@ -387,10 +383,7 @@ async def mitigation_task_main(diagnosis_summary):
     # oracle
     logger.info("setting up oracles")
     cluster_state_oracle = ClusterStateOracle()
-    # oracles = [cluster_state_oracle]
-    # FIXME: cluster state oracle has trouble connecting to cluster, need repro.
-    oracles = []
-
+    oracles = [cluster_state_oracle]
 
     # setting up workload oracle, need to interact with benchmark.
     logger.info("getting app info")
@@ -398,13 +391,16 @@ async def mitigation_task_main(diagnosis_summary):
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
-    if app_name not in ["Social Network", "Hotel Reservation"]:
-        logger.info("Current app does not support workload oracle")
-    else:
-        target_app = get_app_class_by_name(app_name)
-        logger.info(f"adding oracle for app [{app_name}]")
-        workload_oracle = WorkloadOracle(target_app)
-        oracles.append(workload_oracle)
+    # if app_name not in ["Social Network", "Hotel Reservation"]:
+    #     logger.info("Current app does not support workload oracle")
+    # else:
+    #     target_app = get_app_class_by_name(app_name)
+    #     logger.info(f"adding oracle for app [{app_name}]")
+    #     workload_oracle = WorkloadOracle(target_app)
+    #     oracles.append(workload_oracle)
+
+    logger.info(f"adding alert oracle for namespace [{app_namespace}]")
+    oracles.append(AlertOracle(app_namespace))
 
     # defining the first set of messages that all retry mode share
     first_run_initial_messages = [
@@ -482,7 +478,7 @@ async def mitigation_task_main(diagnosis_summary):
 
             # getting oracle result
             try:
-                oracle_results = await validate_oracles(oracles)
+                oracle_results = validate_oracles(oracles)
                 oracle_results_lst.append(str(oracle_results))
                 logger.info(f"oracle results: {oracle_results}")
                 has_succeeded = oracle_results[0] is True
@@ -582,7 +578,7 @@ async def mitigation_task_main(diagnosis_summary):
 
             # getting oracle result
             try:
-                oracle_results = await validate_oracles(oracles)
+                oracle_results = validate_oracles(oracles)
                 oracle_results_lst.append(str(oracle_results))
                 has_succeeded = oracle_results[0]
             except Exception as e:
@@ -599,34 +595,31 @@ async def mitigation_task_main(diagnosis_summary):
                 # return agent_exec_stats
             else:
                 # here the agent fails, we make decision if we should retry
-                should_retry = curr_attempt + 1 < mitigation_agent_max_retry_attempts
+                logger.info(f"current attempt: {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}, agent failed the validation oracles.")
+                should_retry = (curr_attempt + 1) < mitigation_agent_max_retry_attempts
                 logger.info(f"agent failed, should we retry? {'Yes!' if should_retry else 'No!'}")
                 if should_retry:
                     # we should retry as we have more trials left
                     logger.info(
                         f"we should retry as we have more attempts left. attempts left: {(mitigation_agent_max_retry_attempts - 1) - (curr_attempt + 1)}"
                     )
-                    # rollback all changes
-                    # rollback agent is stateless and "best effort" idempotent, just rollback
-                    # memory is cleared in the retry_run() method, so the agent can start anew.
                     logger.info(f"agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
-                    logger.info("running rollback agent to reverse progress")
+                    logger.info("running deterministic rollback to reverse progress")
                     rollback_start_time = time.perf_counter()
-                    rollback_agent, rollback_agent_last_state, rollback_graph_events = await rollback_agent_main()
-                    all_graph_events.append(
-                        {"stage": f"rollback_attempt_{curr_attempt}", "events": rollback_graph_events}
-                    )
+                    executed_commands = mitigation_agent_last_state.values.get("executed_commands", [])
+                    exec_tool = next((t for t in agent.async_tools if t.name == "exec_kubectl_cmd_safely"), None)
+                    mcp_session_id = exec_tool.session_id if exec_tool is not None else None
+                    rollback_result = await perform_rollback(executed_commands, session_id=mcp_session_id)
                     rollback_end_time = time.perf_counter() - rollback_start_time
-                    agent_names_lst.append("rollback_agent")
-                    usage_metadata = next(iter(rollback_agent.callback.usage_metadata.items()))[1]
-                    input_tokens_lst.append(usage_metadata["input_tokens"])
-                    output_tokens_lst.append(usage_metadata["output_tokens"])
-                    total_tokens_lst.append(usage_metadata["total_tokens"])
+                    agent_names_lst.append("deterministic_rollback")
+                    input_tokens_lst.append(0)
+                    output_tokens_lst.append(0)
+                    total_tokens_lst.append(0)
                     time_lst.append(str(rollback_end_time))
-                    steps_lst.append(rollback_agent_last_state.values["num_steps"])
+                    steps_lst.append(rollback_result.steps)
                     num_retry_attempts_lst.append(str(curr_attempt))
-                    rollback_stack_lst.append(rollback_agent_last_state.values["rollback_stack"])
-                    oracle_results_lst.append("N/A, rollback agent")
+                    rollback_stack_lst.append(rollback_result.rollback_stack)
+                    oracle_results_lst.append("N/A, deterministic rollback")
                     curr_attempt += 1
                 else:
                     logger.info("we shouldn't retry as we don't have more attempts left.")
