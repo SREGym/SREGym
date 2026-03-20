@@ -1,5 +1,6 @@
 from kubernetes import client, config
 
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
@@ -20,6 +21,7 @@ class GCCapacityDegradation(Problem):
         self.root_cause = "All deployments have the GOGC environment variable set to 10 (instead of the default 100), causing aggressive garbage collection that degrades service capacity and performance. This is a metastable failure."
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        self.mitigation_oracle = AlertOracle(problem=self)
 
     def _apply_memory_limit(self):
         config.load_kube_config()
