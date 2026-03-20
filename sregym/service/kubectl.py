@@ -16,13 +16,10 @@ except ModuleNotFoundError:
     exit(1)
 import os
 
-import dotenv
 from kubernetes import dynamic
 from kubernetes.client import api_client
 from kubernetes.client.rest import ApiException
 from rich.console import Console
-
-dotenv.load_dotenv(override=True)
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
 
@@ -315,9 +312,24 @@ class KubeCtl:
             console.log(f"[red]Unexpected error deleting job '{job_name}': {e}")
             return False
 
-    def wait_for_job_completion(self, job_name: str, namespace: str = "default", timeout: int = 600):
-        """Wait for a Kubernetes Job to complete successfully within a specified timeout."""
-        api_instance = client.BatchV1Api()
+    def wait_for_job_completion(
+        self,
+        job_name: str,
+        namespace: str = "default",
+        timeout: int = 600,
+        api_client: "client.ApiClient | None" = None,
+    ):
+        """Wait for a Kubernetes Job to complete successfully within a specified timeout.
+
+        Args:
+            job_name: Name of the job to wait for.
+            namespace: Kubernetes namespace.
+            timeout: Maximum seconds to wait.
+            api_client: Optional explicit ApiClient to use. If provided, bypasses the
+                default (proxy-pointed) kubeconfig — useful for the workload oracle which
+                needs to access workload-generator jobs that are hidden from the agent.
+        """
+        api_instance = client.BatchV1Api(api_client=api_client) if api_client else client.BatchV1Api()
         console = Console()
         start_time = time.time()
 

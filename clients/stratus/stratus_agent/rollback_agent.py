@@ -11,7 +11,7 @@ from clients.stratus.stratus_agent.base_agent import BaseAgent
 from clients.stratus.stratus_utils.get_starting_prompt import get_starting_prompts
 from clients.stratus.stratus_utils.str_to_tool import str_to_tool
 from clients.stratus.tools.stratus_tool_node import StratusToolNode
-from llm_backend.init_backend import get_llm_backend_for_tools
+from llm_backend.init_backend import get_llm_backend_for_agent
 
 logger = logging.getLogger("all.stratus.rollback")
 logger.propagate = True
@@ -63,7 +63,7 @@ class RollbackAgent(BaseAgent):
 async def main():
     file_parent_dir = Path(__file__).resolve().parent
     rollback_agent_config_path = file_parent_dir.parent / "configs" / "rollback_agent_config.yaml"
-    rollback_agent_config = yaml.safe_load(open(rollback_agent_config_path, "r"))
+    rollback_agent_config = yaml.safe_load(open(rollback_agent_config_path))
     max_step = rollback_agent_config["max_step"]
     prompt_path = file_parent_dir.parent / "configs" / rollback_agent_config["prompts_path"]
     sync_tools = []
@@ -105,7 +105,7 @@ async def main():
     )
 
     agent = RollbackAgent(
-        llm=get_llm_backend_for_tools(),
+        llm=get_llm_backend_for_agent(),
         max_step=max_step,
         sync_tools=sync_tools,
         async_tools=async_tools,

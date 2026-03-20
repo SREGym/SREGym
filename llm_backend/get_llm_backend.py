@@ -8,7 +8,6 @@ from typing import Any
 
 import litellm
 import openai
-from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_ibm import ChatWatsonx
 from langchain_litellm import ChatLiteLLM
@@ -19,8 +18,6 @@ from llm_backend.trim_util import trim_messages_conservative
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-load_dotenv()
 
 LLM_QUERY_MAX_RETRIES = int(os.getenv("LLM_QUERY_MAX_RETRIES", "5"))  # Maximum number of retries for rate-limiting
 LLM_QUERY_INIT_RETRY_DELAY = int(os.getenv("LLM_QUERY_INIT_RETRY_DELAY", "1"))  # Initial delay in seconds

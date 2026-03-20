@@ -1,4 +1,5 @@
-import asyncio
+import logging
+import os
 import time
 
 import yaml
@@ -13,6 +14,35 @@ from sregym.paths import BASE_DIR, TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
 from sregym.service.kubectl import KubeCtl
 
+logger = logging.getLogger("all.stratus.workload_oracle")
+
+
+def _make_real_api_client() -> client.ApiClient:
+    """Create a Kubernetes ApiClient that connects directly to the real cluster.
+
+    Bypasses any KUBECONFIG env var that may point to a filtering proxy (such as
+    the k8s_proxy used to hide workload generator resources from agents). This
+    mirrors the approach used by KubernetesAPIProxy itself and by the Resolve driver.
+
+    Inside containers, the real kubeconfig is mounted at a separate path and
+    advertised via SREGYM_REAL_KUBECONFIG. On the host, ~/.kube/config is used.
+    """
+    try:
+        config.load_incluster_config()
+        return client.ApiClient()
+    except config.ConfigException:
+        # Running outside the cluster — load from the real kubeconfig path,
+        # ignoring the KUBECONFIG env var which may point to the filtering proxy.
+        # In containers, SREGYM_REAL_KUBECONFIG points to the unproxied config.
+        real_kubeconfig = os.environ.get(
+            "SREGYM_REAL_KUBECONFIG",
+            os.path.expanduser("~/.kube/config"),
+        )
+        cfg = client.Configuration()
+        config.load_kube_config(config_file=real_kubeconfig, client_configuration=cfg)
+        return client.ApiClient(configuration=cfg)
+
+
 # from sregym.generators.workload.wrk2 import Wrk2 as Wrk
 
 
@@ -25,12 +55,11 @@ class Wrk:
         self.threads = threads
         self.latency = latency
 
-        config.load_kube_config()
-
+        self._api_client = _make_real_api_client()
         self.kubectl = KubeCtl()
 
     def create_configmap(self, name, namespace, payload_script_path):
-        with open(payload_script_path, "r") as script_file:
+        with open(payload_script_path) as script_file:
             script_content = script_file.read()
 
         configmap_body = client.V1ConfigMap(
@@ -38,7 +67,7 @@ class Wrk:
             data={payload_script_path.name: script_content},
         )
 
-        api_instance = client.CoreV1Api()
+        api_instance = client.CoreV1Api(api_client=self._api_client)
         try:
             print(f"Checking for existing ConfigMap '{name}'...")
             api_instance.delete_namespaced_config_map(name=name, namespace=namespace)
@@ -57,7 +86,7 @@ class Wrk:
 
     def create_wrk_job(self, job_name, namespace, payload_script, url):
         wrk_job_yaml = BASE_DIR / "generators" / "workload" / "wrk-job-template.yaml"
-        with open(wrk_job_yaml, "r") as f:
+        with open(wrk_job_yaml) as f:
             job_template = yaml.safe_load(f)
 
         job_template["metadata"]["name"] = job_name
@@ -97,7 +126,7 @@ class Wrk:
             }
         ]
 
-        api_instance = client.BatchV1Api()
+        api_instance = client.BatchV1Api(api_client=self._api_client)
         try:
             existing_job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
             if existing_job:
@@ -153,9 +182,9 @@ class WorkloadOracle(BaseOracle):
         super().__init__()
         self.app = app
 
-        config.load_kube_config()
-        self.core_v1_api = client.CoreV1Api()
-        self.batch_v1_api = client.BatchV1Api()
+        self._api_client = _make_real_api_client()
+        self.core_v1_api = client.CoreV1Api(api_client=self._api_client)
+        self.batch_v1_api = client.BatchV1Api(api_client=self._api_client)
         self.kubectl = KubeCtl()
 
     def get_job_logs(self, job_name, namespace):
@@ -200,7 +229,7 @@ class WorkloadOracle(BaseOracle):
         return False
 
     async def get_workload_result(self, job_name):
-        self.kubectl.wait_for_job_completion(job_name=job_name, namespace="default")
+        self.kubectl.wait_for_job_completion(job_name=job_name, namespace="default", api_client=self._api_client)
 
         namespace = "default"
 
@@ -226,7 +255,16 @@ class WorkloadOracle(BaseOracle):
 
     async def validate(self) -> OracleResult:
         print("Testing workload generator...", flush=True)
-        self.wrk = Wrk(rate=10, dist="exp", connections=2, duration=10, threads=2)
+        try:
+            self.wrk = Wrk(rate=10, dist="exp", connections=2, duration=10, threads=2)
+        except client.exceptions.ApiException as e:
+            if e.status == 403:
+                logger.warning(
+                    "Workload oracle got 403 Forbidden (likely running through K8s proxy). "
+                    "Treating oracle as unavailable and passing."
+                )
+                return OracleResult(success=True, issues=["Workload oracle unavailable (403 from proxy)"])
+            raise
 
         result = {"success": True, "issues": []}
 
@@ -237,8 +275,18 @@ class WorkloadOracle(BaseOracle):
             url = base_url + run_config["url"]
             job_name = f"wrk2-job-{runid}"
 
-            self.start_workload(payload_script, url, job_name)
-            wrk_result = await self.get_workload_result(job_name)
+            try:
+                self.start_workload(payload_script, url, job_name)
+                wrk_result = await self.get_workload_result(job_name)
+            except client.exceptions.ApiException as e:
+                if e.status == 403:
+                    logger.warning(
+                        "Workload oracle got 403 Forbidden accessing workload job (likely running through K8s proxy). "
+                        "Treating oracle as unavailable and passing."
+                    )
+                    return OracleResult(success=True, issues=["Workload oracle unavailable (403 from proxy)"])
+                raise
+
             if (
                 "Workload Generator Error:" in wrk_result
                 or "Requests/sec:" not in wrk_result

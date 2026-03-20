@@ -35,20 +35,92 @@ class ContainerConfig:
 
 
 class ContainerRunner:
-    # API keys and config vars to forward from host environment
+    # Env vars forwarded from host to agent containers.
+    # Sourced from litellm provider source code (llms/<provider>/).
     API_KEY_VARS = [
-        "ANTHROPIC_API_KEY",
+        # OpenAI
         "OPENAI_API_KEY",
+        "OPENAI_API_BASE",
+        "OPENAI_BASE_URL",
+        # DeepSeek
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_API_BASE",
+        # Anthropic
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_API_BASE",
+        # Gemini / Google
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
-        "MODEL_ID",
-        "AWS_PROFILE",
-        "AWS_DEFAULT_REGION",
-        "WATSONX_API_BASE",
-        "WX_PROJECT_ID",
-        "WATSONX_API_KEY",
+        "GEMINI_API_BASE",
+        # Azure OpenAI
         "AZURE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
         "AZURE_API_BASE",
+        "AZURE_API_VERSION",
+        "AZURE_AD_TOKEN",
+        "AZURE_CLIENT_ID",
+        "AZURE_CLIENT_SECRET",
+        "AZURE_TENANT_ID",
+        "AZURE_USERNAME",
+        "AZURE_PASSWORD",
+        "AZURE_CERTIFICATE_PATH",
+        "AZURE_CERTIFICATE_PASSWORD",
+        "AZURE_CREDENTIAL",
+        "AZURE_SCOPE",
+        "AZURE_AUTHORITY_HOST",
+        "AZURE_FEDERATED_TOKEN_FILE",
+        # AWS Bedrock
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN",
+        "AWS_REGION_NAME",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "AWS_SESSION_NAME",
+        "AWS_PROFILE",
+        "AWS_PROFILE_NAME",
+        "AWS_ROLE_NAME",
+        "AWS_ROLE_ARN",
+        "AWS_WEB_IDENTITY_TOKEN",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_STS_ENDPOINT",
+        "AWS_EXTERNAL_ID",
+        "AWS_BEDROCK_RUNTIME_ENDPOINT",
+        "AWS_BEARER_TOKEN_BEDROCK",
+        # WatsonX / IBM
+        "WATSONX_API_KEY",
+        "WATSONX_APIKEY",
+        "WATSONX_API_BASE",
+        "WATSONX_URL",
+        "WATSONX_TOKEN",
+        "WATSONX_PROJECT_ID",
+        "WATSONX_REGION",
+        "WATSONX_SPACE_ID",
+        "WATSONX_DEPLOYMENT_SPACE_ID",
+        "WATSONX_IAM_URL",
+        "WATSONX_ZENAPIKEY",
+        "WX_API_KEY",
+        "WX_PROJECT_ID",
+        "WX_URL",
+        "WX_REGION",
+        "WX_SPACE_ID",
+        "WML_URL",
+        # Vertex AI
+        "VERTEXAI_PROJECT",
+        "VERTEXAI_LOCATION",
+        "VERTEX_LOCATION",
+        "VERTEXAI_CREDENTIALS",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        # Moonshot
+        "MOONSHOT_API_KEY",
+        "MOONSHOT_API_BASE",
+        # GLM
+        "GLM_API_KEY",
+        # Claude Code
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        # SREGym internal
+        "AGENT_MODEL_ID",
+        "JUDGE_MODEL_ID",
         # Config vars
         "API_HOSTNAME",
         "API_PORT",
@@ -69,9 +141,10 @@ class ContainerRunner:
         flags = []
         env_vars = dict(self.config.env_vars)
 
-        # Forward API keys from host
+        # Forward API keys from host (skip empty values to avoid overriding
+        # other auth mechanisms like OAuth subscription tokens)
         for var in self.API_KEY_VARS:
-            if var in os.environ and var not in env_vars:
+            if var in os.environ and var not in env_vars and os.environ[var]:
                 env_vars[var] = os.environ[var]
 
         if extra_env:
@@ -119,10 +192,23 @@ class ContainerRunner:
             args.extend(["-v", f"{self.config.kubeconfig_path.resolve()}:/root/.kube/config:ro"])
             args.extend(["-e", "KUBECONFIG=/root/.kube/config"])
 
+        # Mount the real (unproxied) kubeconfig so that workload oracles
+        # running inside the container can bypass the filtering proxy.
+        real_kubeconfig = Path(os.path.expanduser("~/.kube/config"))
+        if real_kubeconfig.exists():
+            args.extend(["-v", f"{real_kubeconfig.resolve()}:/root/.kube/real-config:ro"])
+            args.extend(["-e", "SREGYM_REAL_KUBECONFIG=/root/.kube/real-config"])
+
         # Mount AWS credentials directory (read-only) for Bedrock and other AWS services
         aws_dir = Path.home() / ".aws"
         if aws_dir.is_dir():
             args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
+
+        # Mount Codex credentials directory for subscription-based auth
+        # (read-write so the CLI can update its model cache and telemetry)
+        codex_dir = Path.home() / ".codex"
+        if codex_dir.is_dir():
+            args.extend(["-v", f"{codex_dir.resolve()}:/root/.codex"])
 
         # Mount workspace directory for agent output (logs, results, trajectories)
         if self.config.workspace_path:
