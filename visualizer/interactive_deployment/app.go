@@ -46,6 +46,16 @@ func (i item) Description() string { return "" }
 func (i item) FilterValue() string { return i.title }
 
 //
+// MESSAGES
+//
+
+type operationDoneMsg struct {
+	action  string
+	subject string
+	err     error
+}
+
+//
 // MODEL
 //
 
@@ -144,6 +154,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 
+	case operationDoneMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("[ERROR] %s %s failed: %v", msg.action, msg.subject, msg.err)
+		} else {
+			m.status = fmt.Sprintf("[DONE] %s %s completed", msg.action, msg.subject)
+		}
+		return m, nil
+
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -184,11 +202,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				app := m.appList.SelectedItem().(item).Title()
 
 				m.selectedApp = app
-				m.status = "Deploying application: " + app
+				m.status = "Deploying application: " + app + "..."
 
-				go deployApp(app)
-
-				return m, nil
+				return m, func() tea.Msg {
+					deployApp(app)
+					return operationDoneMsg{action: "Deploy", subject: app}
+				}
 
 			case "p":
 
@@ -215,21 +234,23 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				problem := m.problemList.SelectedItem().(item).Title()
 
-				m.status = "Running problem: " + problem
+				m.status = "Injecting fault: " + problem + "..."
 
-				go runProblem(problem)
-
-				return m, nil
+				return m, func() tea.Msg {
+					err := runProblem(problem)
+					return operationDoneMsg{action: "Inject", subject: problem, err: err}
+				}
 
 			case "r":
 
 				problem := m.problemList.SelectedItem().(item).Title()
 
-				m.status = "Recovering problem: " + problem
+				m.status = "Recovering fault: " + problem + "..."
 
-				go recoverProblem(problem)
-
-				return m, nil
+				return m, func() tea.Msg {
+					err := recoverProblem(problem)
+					return operationDoneMsg{action: "Recover", subject: problem, err: err}
+				}
 
 			case "i":
 
@@ -261,13 +282,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				problem := m.answer.Value()
 
-				m.status = "Running problem: " + problem
-
-				go runProblem(problem)
-
+				m.status = "Injecting fault: " + problem + "..."
 				m.mode = "problems"
 
-				return m, nil
+				return m, func() tea.Msg {
+					err := runProblem(problem)
+					return operationDoneMsg{action: "Inject", subject: problem, err: err}
+				}
 
 			case "esc":
 
@@ -379,25 +400,18 @@ func deployApp(app string) {
 	cmd.Run()
 }
 
-func runProblem(problem string) {
+func runProblem(problem string) error {
 
 	cmd := exec.Command("uv", "run", "deploy.py", "run", "--problem", problem)
 
-	cmd.Run()
+	return cmd.Run()
 }
 
-func recoverProblem(problem string) {
+func recoverProblem(problem string) error {
 
 	cmd := exec.Command("uv", "run", "deploy.py", "recover", "--problem", problem)
 
-	output, err := cmd.CombinedOutput()
-
-	if err != nil {
-		fmt.Println("Recovery error:", err)
-		return
-	}
-
-	fmt.Println(string(output))
+	return cmd.Run()
 }
 
 //
