@@ -9,7 +9,6 @@ server_url = f"http://{api_hostname}:{api_port}"
 
 def automatic_submit():
     ctr = 0
-    sleep(36000)
     while ctr < 10000:
         subprocess.run(
             [
