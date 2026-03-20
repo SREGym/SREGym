@@ -134,7 +134,6 @@ class DiagnosisAgent(BaseAgent):
                     "Exiting to prevent infinite retry loop. This benchmark problem is marked as failed."
                 )
                 from clients.stratus.tools.submit_tool import manual_submit_tool
-
                 await manual_submit_tool(ans="Agent failed to submit within step limit. Marking benchmark as failed.")
                 break
 
@@ -146,8 +145,7 @@ class DiagnosisAgent(BaseAgent):
 def build_default_diagnosis_agent():
     file_parent_dir = Path(__file__).resolve().parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    with open(diagnosis_agent_config_path) as f:
-        diagnosis_agent_config = yaml.safe_load(f)
+    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
     max_step = diagnosis_agent_config["max_step"]
     prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
     sync_tools = []
@@ -157,9 +155,9 @@ def build_default_diagnosis_agent():
         for sync_tool_struct in diagnosis_agent_config["sync_tools"]:
             sync_tools.append(str_to_tool(sync_tool_struct))
             tool_descriptions += (
-                f"tool name: {sync_tool_struct['name']}"
+                f"tool name: {sync_tool_struct["name"]}"
                 + "\n\n"
-                + f"tool descriptions {sync_tool_struct['description']}"
+                + f"tool descriptions {sync_tool_struct["description"]}"
                 + "\n\n"
             )
     else:
@@ -168,9 +166,9 @@ def build_default_diagnosis_agent():
         for async_tool_struct in diagnosis_agent_config["async_tools"]:
             async_tools.append(str_to_tool(async_tool_struct))
             tool_descriptions += (
-                f"tool name: {async_tool_struct['name']}"
+                f"tool name: {async_tool_struct["name"]}"
                 + "\n\n"
-                + f"tool description: {async_tool_struct['description']}"
+                + f"tool description: {async_tool_struct["description"]}"
                 + "\n\n"
             )
     else:
