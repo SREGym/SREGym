@@ -774,27 +774,6 @@ serverFiles:
               annotations:
                 description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} has been not ready for more than 1 minute."
 
-            - alert: TiDBInstanceNotReady
-              expr: |
-                (tidb_server_connections == 0 or absent(tidb_server_connections))
-                  and on ()
-                (count(kube_namespace_labels{namespace="tidb-cluster"}) > 0)
-              for: 2m
-              labels:
-                severity: critical
-              annotations:
-                summary: "TiDB instance is not ready"
-                description: "TiDB instance {{ $labels.instance }} has been unreachable or has no connections for more than 2 minutes."
-
-            - alert: TiDBStatefulSetNotReady
-              expr: group by (statefulset) (kube_statefulset_replicas{namespace="tidb-cluster"} - kube_statefulset_status_replicas_ready) > 0
-              for: 2m
-              labels:
-                severity: critical
-              annotations:
-                summary: "TiDB StatefulSet {{ $labels.statefulset }} not ready"
-                description: "StatefulSet {{ $labels.statefulset }} has {{ $value }} ready replicas but desired is higher"
-
         # ---- Container resource alerts ----
         - name: app.resources
           rules:
@@ -831,14 +810,14 @@ serverFiles:
                     rate(traces_span_metrics_calls_total{
                       status_code="STATUS_CODE_ERROR",
                       service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                      namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
+                      namespace=~"astronomy-shop|hotel-reservation|social-network"
                     }[2m])
                   )
                   /
                   sum by (service_name, namespace) (
                     rate(traces_span_metrics_calls_total{
                       service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                      namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
+                      namespace=~"astronomy-shop|hotel-reservation|social-network"
                     }[2m])
                   )
                 ) > 0.10
@@ -846,7 +825,7 @@ serverFiles:
                 sum by (service_name, namespace) (
                   rate(traces_span_metrics_calls_total{
                     service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                    namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
+                    namespace=~"astronomy-shop|hotel-reservation|social-network"
                   }[2m])
                 ) > 0.1
               for: 1m
@@ -881,11 +860,9 @@ serverFiles:
                 sum by (service_name, namespace) (
                   rate(traces_span_metrics_calls_total{
                     service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                    namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
+                    namespace=~"astronomy-shop|hotel-reservation|social-network"
                   }[2m])
                 ) > 50
-                unless on()
-                count(kube_namespace_labels{namespace="blueprint-hotel-reservation"}) > 0
               for: 1m
               labels:
                 severity: critical
@@ -899,7 +876,7 @@ serverFiles:
                   sum by (le, service_name, namespace) (
                     rate(traces_span_metrics_duration_milliseconds_bucket{
                       service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                      namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
+                      namespace=~"astronomy-shop|hotel-reservation|social-network"
                     }[2m])
                   )
                 ) > 1500
@@ -910,14 +887,6 @@ serverFiles:
                 summary: "High latency: {{ $labels.service_name }}"
                 description: "P95 latency for {{ $labels.service_name }} in namespace {{ $labels.namespace }} is above 1500ms (current: {{ $value | printf \"%.0f\" }}ms)."
 
-            - alert: DeploymentNotReady
-              expr: |
-                kube_deployment_status_replicas_available{namespace=~"astronomy-shop|hotel-reservation|social-network|blueprint-hotel-reservation|train-ticket|tidb-cluster"} == 0
-              for: 1m
-              labels:
-                severity: critical
-              annotations:
-                description: "Deployment {{ $labels.deployment }} in namespace {{ $labels.namespace }} has 0 available replicas."
         # ---- Messaging / async processing alerts ----
         - name: app.messaging
           rules:
@@ -931,7 +900,7 @@ serverFiles:
                   sum by (namespace) (
                     rate(traces_span_metrics_calls_total{
                       service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                      namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network",
+                      namespace=~"astronomy-shop|hotel-reservation|social-network",
                       span_name=~"publish .*"
                     }[5m])
                   )
@@ -941,7 +910,7 @@ serverFiles:
                       sum by (namespace, service_name) (
                         rate(traces_span_metrics_calls_total{
                           service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                          namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network",
+                          namespace=~"astronomy-shop|hotel-reservation|social-network",
                           span_name=~"receive .*"
                         }[5m])
                       )
@@ -1201,26 +1170,16 @@ extraScrapeConfigs: |
         labels:
           namespace: train-ticket
 
-  # ---- OTel Collector spanmetrics (Jaeger traces — blueprint-hotel-reservation, social-network) ----
+  # ---- OTel Collector spanmetrics (Jaeger traces — hotel-reservation, social-network) ----
   - job_name: 'otel-spanmetrics'
     scrape_interval: 15s
     static_configs:
       - targets:
           - otel-collector.observe:8889
     metric_relabel_configs:
-      # Strip "unknown_service:" prefix and "_process" suffix from blueprint-hotel-reservation service names
-      # e.g. unknown_service:frontend_service_process -> frontend_service
-      - source_labels: [service_name]
-        regex: 'unknown_service:(.+)_process'
-        target_label: service_name
-        replacement: '$1'
-      # Drop wlgen metrics — not a real service
-      - source_labels: [service_name]
-        regex: 'unknown_service:wlgen_proc'
-        action: drop
-      # Default namespace for blueprint-hotel-reservation services
+      # Default namespace for hotel-reservation services
       - target_label: namespace
-        replacement: blueprint-hotel-reservation
+        replacement: hotel-reservation
       # Override for social-network services
       - source_labels: [service_name]
         regex: 'nginx-thrift|compose-post-service|social-graph-service|post-storage-service|user-timeline-service|url-shorten-service|text-service|unique-id-service|user-mention-service|home-timeline-service|media-service|media-frontend|user-service'
@@ -1235,14 +1194,6 @@ extraScrapeConfigs: |
           - otel-collector.observe:8890
         labels:
           namespace: astronomy-shop
-  # ---- Scraping from TiDB Cluster ----
-  - job_name: tidb-cluster
-    scrape_interval: 15s
-    metrics_path: /metrics
-    static_configs:
-      - targets:
-          - basic-tidb.tidb-cluster.svc.cluster.local:10080
-          - basic-pd.tidb-cluster.svc.cluster.local:2379
 
 # Adds option to add alert_relabel_configs to avoid duplicate alerts in alertmanager
 # useful in H/A prometheus with different external labels but the same alerts
