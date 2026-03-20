@@ -790,7 +790,8 @@ async def main():
     agent_output_df["num_retry_attempts"] = agent_retry_attempts
     agent_output_df["rollback_stack"] = agent_rollback_stack
     agent_output_df["oracle_results"] = agent_oracle_results
-    base_dir = Path("results") / timestamp
+    project_root = Path(__file__).resolve().parents[4]
+    base_dir = project_root / "results" / timestamp
     problem_dir = base_dir / current_problem
 
     problem_dir.mkdir(parents=True, exist_ok=True)
