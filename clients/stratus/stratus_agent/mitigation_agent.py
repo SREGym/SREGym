@@ -2,14 +2,12 @@ import logging
 from pathlib import Path
 
 import yaml
-from langchain_core.messages import HumanMessage, SystemMessage
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.constants import END, START
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.types import StateSnapshot
 
 from clients.stratus.stratus_agent.base_agent import BaseAgent
+from clients.stratus.stratus_agent.state import State
 from clients.stratus.stratus_utils.str_to_tool import str_to_tool
-from clients.stratus.tools.stratus_tool_node import StratusToolNode
 from llm_backend.init_backend import get_llm_backend_for_agent
 
 logger = logging.getLogger("all.stratus.mitigation")
@@ -20,130 +18,42 @@ logger.setLevel(logging.DEBUG)
 class MitigationAgent(BaseAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.tool_node = None
-        self.max_step = kwargs.get("max_step", 20)
-        self.loop_count = 0
         self.logger = logging.getLogger("all.stratus.mitigation")
 
-    def build_agent(self):
-        self.tool_node = StratusToolNode(async_tools=self.async_tools, sync_tools=self.sync_tools)
+    async def force_submit(self, state: State):
+        self.logger.warning(f"Agent reached step limit ({self.max_step}), forcing submission.")
+        prompt = HumanMessage("You have reached your step limit. Please submit your best answer using the submit tool.")
+        ai_message = self.llm.inference(messages=state["messages"] + [prompt], tools=[self.submit_tool])
 
-        self.graph_builder.add_node(self.thinking_prompt_inject_node, self.llm_thinking_prompt_inject_step)
-        self.graph_builder.add_node(self.tool_calling_prompt_inject_node, self.llm_tool_call_prompt_inject_step)
-        self.graph_builder.add_node(self.thinking_node, self.llm_thinking_step)
-        self.graph_builder.add_node(self.tool_calling_node, self.llm_tool_call_step)
-        self.graph_builder.add_node(self.process_tool_call_node, self.tool_node)
-        self.graph_builder.add_node(self.post_round_process_node, self.post_round_process)
-        self.graph_builder.add_node(self.force_submit_prompt_inject_node, self.llm_force_submit_thinking_step)
-        self.graph_builder.add_node(self.force_submit_tool_call_node, self.llm_force_submit_tool_call_step)
-        self.graph_builder.add_node(self.force_submit_tool_execute_node, self.llm_force_submit_tool_execute_node)
-
-        self.graph_builder.add_edge(START, self.thinking_prompt_inject_node)
-        self.graph_builder.add_edge(self.thinking_prompt_inject_node, self.thinking_node)
-        self.graph_builder.add_edge(self.thinking_node, self.tool_calling_prompt_inject_node)
-        self.graph_builder.add_edge(self.tool_calling_prompt_inject_node, self.tool_calling_node)
-        self.graph_builder.add_edge(self.tool_calling_node, self.process_tool_call_node)
-        self.graph_builder.add_edge(self.process_tool_call_node, self.post_round_process_node)
-        self.graph_builder.add_conditional_edges(
-            self.process_tool_call_node,
-            self.should_submit_router,
-            {
-                self.force_submit_prompt_inject_node: self.force_submit_prompt_inject_node,
-                self.post_round_process_node: self.post_round_process_node,
-            },
-        )
-        # TODO: Before submitting, run oracle to see if really mitigated.
-        self.graph_builder.add_edge(self.force_submit_prompt_inject_node, self.force_submit_tool_call_node)
-        self.graph_builder.add_edge(self.force_submit_tool_call_node, self.force_submit_tool_execute_node)
-        self.graph_builder.add_edge(self.force_submit_tool_execute_node, END)
-        self.graph_builder.add_edge(self.post_round_process_node, END)
-
-        self.memory_saver = MemorySaver()
-        self.graph = self.graph_builder.compile(checkpointer=self.memory_saver)
-
-    async def arun(self, starting_prompts):
-        """
-        Async running an agent
-
-        Args:
-            starting_prompts (dict): The data inside the dict will be filled into the prompts.
-
-        Returns:
-            final state of the agent running, including messages and other state values.
-        """
-        if not self.graph:
-            raise ValueError("Agent graph is None. Have you built the agent?")
-
-        if len(starting_prompts) == 0:
-            raise ValueError("No prompts used to start the conversation!")
-
-        # Log starting prompts
-        all_init_prompts = ""
-        for prompt in starting_prompts:
-            all_init_prompts += prompt.content + "\n"
-
-        graph_events = []
-        while True:
-            graph_config = {"configurable": {"thread_id": "1"}}
-            logger.info(f"{'-' * 20} [Loop {self.loop_count}] {'-' * 20}")
-            last_state = self.graph.get_state(config=graph_config)
-            if len(last_state.values) != 0:
-                logger.debug(f"[Loop {self.loop_count}] There were last {len(last_state.values)} states.")
-                # this is all the previous msgs the agent had, we just inherit them in the next graph traversal
-                state = last_state.values
+        if isinstance(ai_message, AIMessage) and ai_message.tool_calls:
+            tool_call = ai_message.tool_calls[0]
+            if tool_call.get("name") == self.submit_tool.name:
+                ans = tool_call.get("args", {}).get("ans", "")
             else:
-                logger.debug(f"[Loop {self.loop_count}] There were no states.")
-                # fresh agent start, init state here
-                state = {
-                    "messages": starting_prompts,
-                    # "workdir": "",
-                    # "curr_file": "",
-                    # "curr_line": 0,
-                    "num_steps": 0,
-                    # "rec_submission_rounds": 0,
-                    # "submit_tried": False,
-                    "submitted": False,
-                    # "ans": dict(),
-                    "rollback_stack": "",
-                }
+                self.logger.warning(f"LLM called unexpected tool '{tool_call.get('name')}' during force submit.")
+                ans = None
+        else:
+            ans = None
 
-            async for event in self.graph.astream(
-                state,
-                # recursion_limit could be as large as possible as we have our own limit.
-                config={"recursion_limit": 10000, "configurable": {"thread_id": "1"}, "callbacks": [self.callback]},
-                stream_mode="values",
-            ):
-                if (not graph_events) or event["messages"] != graph_events[-1]["messages"]:
-                    event["messages"][-1].pretty_print()
-                graph_events.append(event)
-            last_state = self.graph.get_state(config=graph_config)
-            if last_state.values["submitted"]:
-                logger.info(f"[Loop {self.loop_count}] Agent submitted, breaking loop.")
-                # Ensure the final state is included in graph_events
-                if not graph_events or last_state.values["messages"] != graph_events[-1]["messages"]:
-                    graph_events.append(last_state.values)
-                break
+        if ans is None:
+            self.logger.warning("LLM did not call the submit tool during force submit. Extracting plain-text answer.")
+            plain_prompt = HumanMessage("Please write out your best answer as plain text.")
+            # Strip tool_calls from ai_message before using it in the next inference.
+            # The Bedrock/Claude API requires every tool_use block to be immediately
+            # followed by a tool_result block; including an ai_message with tool_calls
+            # here (without results) causes a BadRequestError.
+            if isinstance(ai_message, AIMessage) and ai_message.tool_calls:
+                ai_message_no_tools = AIMessage(content=ai_message.content)
+            else:
+                ai_message_no_tools = ai_message
+            plain_response = self.llm.inference(messages=state["messages"] + [prompt, ai_message_no_tools, plain_prompt])
+            ans = plain_response.content if isinstance(plain_response, AIMessage) else ""
 
-            # Break if agent hit its step limit without submitting — prevents infinite retry loop.
-            # This happens when force submit is triggered but the LLM fails to call the submit tool,
-            # leaving submitted=False and num_steps=max_step, which causes the router to re-trigger
-            # force submit on every subsequent iteration.
-            if last_state.values.get("num_steps", 0) >= self.max_step:
-                logger.error(
-                    f"[Loop {self.loop_count}] Agent reached step limit ({self.max_step}) without submitting. "
-                    "Exiting to prevent infinite retry loop. This benchmark problem is marked as failed."
-                )
-                from clients.stratus.tools.submit_tool import manual_submit_tool
-                await manual_submit_tool(ans="Agent failed to submit within step limit. Marking benchmark as failed.")
-                break
-
-            self.loop_count += 1
-
-        return last_state, graph_events
+        self.logger.info(f"Force submit: signaling transaction attempt with answer: {ans!r}. Real submission deferred to driver.")
+        return {"submitted": True, "messages": [prompt]}
 
 
 def build_default_mitigation_agent():
-    # agent config and init setup
     file_parent_dir = Path(__file__).resolve().parent
     mitigation_agent_config_path = file_parent_dir.parent / "configs" / "mitigation_agent_config.yaml"
     mitigation_agent_config = yaml.safe_load(open(mitigation_agent_config_path))
@@ -152,27 +62,14 @@ def build_default_mitigation_agent():
 
     mitigation_agent_sync_tools = []
     mitigation_agent_async_tools = []
-    mitigation_agent_tool_descriptions = ""
     if mitigation_agent_config["sync_tools"] is not None:
         for sync_tool_struct in mitigation_agent_config["sync_tools"]:
             mitigation_agent_sync_tools.append(str_to_tool(sync_tool_struct))
-            mitigation_agent_tool_descriptions += (
-                f"tool name: {sync_tool_struct["name"]}"
-                + "\n\n"
-                + f"tool descriptions {sync_tool_struct["description"]}"
-                + "\n\n"
-            )
     else:
         mitigation_agent_sync_tools = None
     if mitigation_agent_config["async_tools"] is not None:
         for async_tool_struct in mitigation_agent_config["async_tools"]:
             mitigation_agent_async_tools.append(str_to_tool(async_tool_struct))
-            mitigation_agent_tool_descriptions += (
-                f"tool name: {async_tool_struct["name"]}"
-                + "\n\n"
-                + f"tool description: {async_tool_struct["description"]}"
-                + "\n\n"
-            )
     else:
         mitigation_agent_async_tools = None
 
@@ -188,14 +85,12 @@ def build_default_mitigation_agent():
         }
     )
 
-    # defining mitigation agent
     mitigation_agent = MitigationAgent(
         llm=get_llm_backend_for_agent(),
         max_step=mitigation_agent_max_step,
         sync_tools=mitigation_agent_sync_tools,
         async_tools=mitigation_agent_async_tools,
         submit_tool=submit_tool,
-        tool_descs=mitigation_agent_tool_descriptions,
     )
     mitigation_agent.build_agent()
     return mitigation_agent, mitigation_agent_prompt_path, mitigation_agent_max_step
@@ -203,27 +98,24 @@ def build_default_mitigation_agent():
 
 def generate_run_summary(last_state: StateSnapshot, summary_system_prompt) -> str:
     """
-    Returns a SystemMessage and a HumanMessage as a list. They are summaries and reflections of a given last run
-    `last_state`.
-    Ideally, we only need to summarize the last 20 (or all of them if less than 20) messages from the agent
+    Returns a summary and reflection of the given last run state.
 
-        Args:
-            last_state (State): the state from last run
-        Returns:
-            a list of SystemMessage and HumanMessage representing the reflections
+    Args:
+        last_state (StateSnapshot): the state from last run
+    Returns:
+        a string representing the LLM's summary and reflection
     """
     llm = get_llm_backend_for_agent()
     logger.info("asking LLM to summarize and reflect last run")
     last_run_msgs = last_state.values.get("messages", None)
+    if last_run_msgs is None:
+        raise RuntimeError("StateSnapshot must contain messages!")
     summary_input_messages = [
         SystemMessage(summary_system_prompt),
         HumanMessage(f"Here are the list of messages happened in the last conversation. \n\n {last_run_msgs}"),
     ]
-    if last_run_msgs is None:
-        raise RuntimeError("StateSnapshot must contain messages!")
     res = llm.inference(summary_input_messages)
-    res = res.content
-    return res
+    return res.content
 
 
 async def single_run_with_predefined_prompts(init_prompts):
