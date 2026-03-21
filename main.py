@@ -29,6 +29,7 @@ def get_current_datetime_formatted():
     formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
 
+current_date_time = get_current_datetime_formatted()
 
 def driver_loop(
     conductor: Conductor,
@@ -55,7 +56,7 @@ def driver_loop(
     async def driver():
         console = Console()
 
-        base_dir = Path("results") / get_current_datetime_formatted()
+        base_dir = Path("results") / current_date_time
         base_dir.mkdir(parents=True, exist_ok=True)
         # give the API a moment to bind
         await asyncio.sleep(1)
@@ -126,7 +127,7 @@ def driver_loop(
             
 
             # Keep a record of results for this problem in a temp file in case an attempt fails
-            tmp_path = f"_running_{pid}_{agent_to_run}_results.csv"
+            tmp_path =  f"_running_{pid}_{agent_to_run}_results.csv"
 
             for attempt in range(1, n_attempts + 1):
                 console.log(f"\n🔍 Starting problem: {pid} (Attempt {attempt} of {n_attempts})")
@@ -210,7 +211,6 @@ def driver_loop(
                     writer.writeheader()
                     writer.writerows(all_results_for_agent)
 
-                current_date_time = get_current_datetime_formatted()
                 agent_dir = base_dir / agent_to_run
                 attempt_dir = agent_dir / f"attempt{attempt}"
                 attempt_dir.mkdir(parents=True, exist_ok=True)
@@ -230,7 +230,7 @@ def driver_loop(
                 )
 
                 if attempt == n_attempts:
-                    csv_path = f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
+                    csv_path = agent_dir /f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
                     os.replace(tmp_path, csv_path)
                     logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
 
@@ -375,11 +375,12 @@ def main(args):
         for entry in results:
             for agent_name, agent_rows in entry.items():
                 aggregated.setdefault(agent_name, []).extend(agent_rows)
-
+        base_dir = Path("results") / current_date_time
         for agent_name, agent_results in aggregated.items():
             fieldnames = sorted({key for row in agent_results for key in row})
-            current_date_time = get_current_datetime_formatted()
-            csv_path = f"{current_date_time}_{agent_name}_ALL_results.csv"
+            agent_dir = base_dir / agent_name
+            agent_dir.mkdir(parents=True, exist_ok=True)  
+            csv_path = agent_dir / f"{current_date_time}_{agent_name}_ALL_results.csv"
             with open(csv_path, "w", newline="") as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
