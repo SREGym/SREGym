@@ -52,6 +52,8 @@ def get_current_datetime_formatted():
     formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
 
+timestamp = get_current_datetime_formatted()
+
 
 def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
     """
@@ -70,7 +72,6 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = get_current_datetime_formatted()
     trajectory_file = output_dir / f"{timestamp}_{problem_id}_stratus_agent_trajectory.jsonl"
 
     def serialize_message(message):
@@ -789,10 +790,19 @@ async def main():
     agent_output_df["num_retry_attempts"] = agent_retry_attempts
     agent_output_df["rollback_stack"] = agent_rollback_stack
     agent_output_df["oracle_results"] = agent_oracle_results
-    current_datetime = get_current_datetime_formatted()
-    agent_output_df.to_csv(f"./{current_datetime}_{current_problem}_stratus_output.csv", index=False, header=True)
 
-    save_combined_trajectory(all_trajectories, current_problem)
+    agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
+    if agent_logs_dir:
+        problem_dir = Path(agent_logs_dir)
+    else:
+        project_root = Path(__file__).resolve().parents[4]
+        problem_dir = project_root / "results" / timestamp / current_problem
+
+    problem_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_path = problem_dir / f"{current_problem}_stratus_output.csv"
+    agent_output_df.to_csv(csv_path, index=False, header=True)
+    save_combined_trajectory(all_trajectories, current_problem, output_dir=problem_dir)
 
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)

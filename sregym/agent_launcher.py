@@ -112,8 +112,11 @@ class AgentLauncher:
             self._container_runner.config.kubeconfig_path = Path(self._agent_kubeconfig_path)
 
         # Set per-agent logs path — also used as the container working directory.
-        # No separate workspace mount; agents write everything into /logs.
-        self._container_runner.config.logs_path = Path(f"./logs/{reg.name}")
+        # If AGENT_LOGS_DIR is set by the orchestrator (e.g. run_1/), mount that
+        # host directory to /logs so the agent writes into the right run folder.
+        # Otherwise fall back to the default per-agent logs directory.
+        agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
+        self._container_runner.config.logs_path = Path(agent_logs_dir) if agent_logs_dir else Path(f"./logs/{reg.name}")
         self._container_runner.config.workspace_path = None
 
         composite_cmd = self._container_runner.build_composite_command(
