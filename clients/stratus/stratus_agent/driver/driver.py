@@ -790,14 +790,18 @@ async def main():
     agent_output_df["num_retry_attempts"] = agent_retry_attempts
     agent_output_df["rollback_stack"] = agent_rollback_stack
     agent_output_df["oracle_results"] = agent_oracle_results
-    project_root = Path(__file__).resolve().parents[4]
-    base_dir = project_root / "results" / timestamp
-    problem_dir = base_dir / current_problem
+
+    agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
+    if agent_logs_dir:
+        problem_dir = Path(agent_logs_dir)
+    else:
+        project_root = Path(__file__).resolve().parents[4]
+        problem_dir = project_root / "results" / timestamp / current_problem
 
     problem_dir.mkdir(parents=True, exist_ok=True)
 
     csv_path = problem_dir / f"{current_problem}_stratus_output.csv"
-    agent_output_df.to_csv(csv_path, index=False, header=True)   
+    agent_output_df.to_csv(csv_path, index=False, header=True)
     save_combined_trajectory(all_trajectories, current_problem, output_dir=problem_dir)
 
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)

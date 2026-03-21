@@ -22,6 +22,7 @@ from sregym.conductor.constants import StartProblemResult
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
+_driver_base_dir: Path | None = None
 
 
 def get_current_datetime_formatted():
@@ -29,7 +30,6 @@ def get_current_datetime_formatted():
     formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
 
-current_date_time = get_current_datetime_formatted()
 
 def driver_loop(
     conductor: Conductor,
@@ -56,8 +56,10 @@ def driver_loop(
     async def driver():
         console = Console()
 
-        base_dir = Path("results") / current_date_time
+        base_dir = Path("results") / get_current_datetime_formatted()
         base_dir.mkdir(parents=True, exist_ok=True)
+        global _driver_base_dir
+        _driver_base_dir = base_dir
         # give the API a moment to bind
         await asyncio.sleep(1)
 
@@ -127,7 +129,7 @@ def driver_loop(
             
 
             # Keep a record of results for this problem in a temp file in case an attempt fails
-            tmp_path =  f"_running_{pid}_{agent_to_run}_results.csv"
+            tmp_path = f"_running_{pid}_{agent_to_run}_results.csv"
 
             for attempt in range(1, n_attempts + 1):
                 console.log(f"\n🔍 Starting problem: {pid} (Attempt {attempt} of {n_attempts})")
@@ -142,6 +144,11 @@ def driver_loop(
                     return []
 
                 assert agent_to_run is not None
+
+                # Create the run directory and point the agent at it before launch
+                run_dir = base_dir / agent_to_run / pid / f"run_{attempt}"
+                run_dir.mkdir(parents=True, exist_ok=True)
+                os.environ["AGENT_LOGS_DIR"] = str(run_dir.resolve())
 
                 reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
                 if reg:
@@ -211,17 +218,10 @@ def driver_loop(
                     writer.writeheader()
                     writer.writerows(all_results_for_agent)
 
-                agent_dir = base_dir / agent_to_run
-                attempt_dir = agent_dir / f"attempt{attempt}"
-                attempt_dir.mkdir(parents=True, exist_ok=True)
-                problem_dir = attempt_dir / pid
-                problem_dir.mkdir( exist_ok=True)
-                attempt_path = problem_dir / f"{current_date_time}_{pid}_{agent_to_run}_attempt_{attempt}_results.csv"
-
-
-                #write attempts distinctly
+                # run_dir was created above before agent launch; write per-attempt CSV into it
+                attempt_path = run_dir / f"{pid}_results.csv"
                 with open(attempt_path, "w", newline="") as csvfile:
-                    writer = csv.DictWriter(csvfile, fieldnames= fieldnames)
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                     writer.writeheader()
                     writer.writerow(snapshot)
 
@@ -230,9 +230,9 @@ def driver_loop(
                 )
 
                 if attempt == n_attempts:
-                    csv_path = agent_dir /f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
-                    os.replace(tmp_path, csv_path)
-                    logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
+                    final_csv_path = base_dir / agent_to_run / pid / f"{pid}_{agent_to_run}_results.csv"
+                    os.replace(tmp_path, final_csv_path)
+                    logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {final_csv_path}")
 
                 # Cleanup agent process so a fresh one can be started for the next problem
                 if not use_external_harness:
@@ -375,12 +375,11 @@ def main(args):
         for entry in results:
             for agent_name, agent_rows in entry.items():
                 aggregated.setdefault(agent_name, []).extend(agent_rows)
-        base_dir = Path("results") / current_date_time
+
         for agent_name, agent_results in aggregated.items():
             fieldnames = sorted({key for row in agent_results for key in row})
-            agent_dir = base_dir / agent_name
-            agent_dir.mkdir(parents=True, exist_ok=True)  
-            csv_path = agent_dir / f"{current_date_time}_{agent_name}_ALL_results.csv"
+            out_dir = _driver_base_dir if _driver_base_dir else Path("results")
+            csv_path = out_dir / f"{agent_name}_ALL_results.csv"
             with open(csv_path, "w", newline="") as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
