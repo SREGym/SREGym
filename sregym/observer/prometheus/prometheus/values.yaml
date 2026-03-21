@@ -831,14 +831,14 @@ serverFiles:
                     rate(traces_span_metrics_calls_total{
                       status_code="STATUS_CODE_ERROR",
                       service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                      namespace=~"astronomy-shop|hotel-reservation|social-network"
+                      namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
                     }[2m])
                   )
                   /
                   sum by (service_name, namespace) (
                     rate(traces_span_metrics_calls_total{
                       service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                      namespace=~"astronomy-shop|hotel-reservation|social-network"
+                      namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
                     }[2m])
                   )
                 ) > 0.10
@@ -846,7 +846,7 @@ serverFiles:
                 sum by (service_name, namespace) (
                   rate(traces_span_metrics_calls_total{
                     service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                    namespace=~"astronomy-shop|hotel-reservation|social-network"
+                    namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
                   }[2m])
                 ) > 0.1
               for: 1m
@@ -881,9 +881,11 @@ serverFiles:
                 sum by (service_name, namespace) (
                   rate(traces_span_metrics_calls_total{
                     service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                    namespace=~"astronomy-shop|hotel-reservation|social-network"
+                    namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
                   }[2m])
                 ) > 50
+                unless on()
+                count(kube_namespace_labels{namespace="blueprint-hotel-reservation"}) > 0
               for: 1m
               labels:
                 severity: critical
@@ -897,7 +899,7 @@ serverFiles:
                   sum by (le, service_name, namespace) (
                     rate(traces_span_metrics_duration_milliseconds_bucket{
                       service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                      namespace=~"astronomy-shop|hotel-reservation|social-network"
+                      namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
                     }[2m])
                   )
                 ) > 1500
@@ -929,7 +931,7 @@ serverFiles:
                   sum by (namespace) (
                     rate(traces_span_metrics_calls_total{
                       service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                      namespace=~"astronomy-shop|hotel-reservation|social-network",
+                      namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network",
                       span_name=~"publish .*"
                     }[5m])
                   )
@@ -939,7 +941,7 @@ serverFiles:
                       sum by (namespace, service_name) (
                         rate(traces_span_metrics_calls_total{
                           service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
-                          namespace=~"astronomy-shop|hotel-reservation|social-network",
+                          namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network",
                           span_name=~"receive .*"
                         }[5m])
                       )
@@ -1199,16 +1201,26 @@ extraScrapeConfigs: |
         labels:
           namespace: train-ticket
 
-  # ---- OTel Collector spanmetrics (Jaeger traces — hotel-reservation, social-network) ----
+  # ---- OTel Collector spanmetrics (Jaeger traces — blueprint-hotel-reservation, social-network) ----
   - job_name: 'otel-spanmetrics'
     scrape_interval: 15s
     static_configs:
       - targets:
           - otel-collector.observe:8889
     metric_relabel_configs:
-      # Default namespace for hotel-reservation services
+      # Strip "unknown_service:" prefix and "_process" suffix from blueprint-hotel-reservation service names
+      # e.g. unknown_service:frontend_service_process -> frontend_service
+      - source_labels: [service_name]
+        regex: 'unknown_service:(.+)_process'
+        target_label: service_name
+        replacement: '$1'
+      # Drop wlgen metrics — not a real service
+      - source_labels: [service_name]
+        regex: 'unknown_service:wlgen_proc'
+        action: drop
+      # Default namespace for blueprint-hotel-reservation services
       - target_label: namespace
-        replacement: hotel-reservation
+        replacement: blueprint-hotel-reservation
       # Override for social-network services
       - source_labels: [service_name]
         regex: 'nginx-thrift|compose-post-service|social-graph-service|post-storage-service|user-timeline-service|url-shorten-service|text-service|unique-id-service|user-mention-service|home-timeline-service|media-service|media-frontend|user-service'

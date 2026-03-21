@@ -1,5 +1,4 @@
 import logging
-import threading
 import time
 from datetime import datetime
 
@@ -58,6 +57,47 @@ class BHotelWrk:
             logger.info(f"ConfigMap '{config_name}' created successfully.")
         except client.exceptions.ApiException as e:
             logger.error(f"Error creating ConfigMap '{config_name}': {e}")
+
+    def create_bhotelwrk_deployment(self, deployment_name, namespace):
+        bhotelwrk_deployment_yaml = (
+            TARGET_MICROSERVICES / "BlueprintHotelReservation" / "wlgen" / "wlgen_proc-deployment.yaml"
+        )
+        with open(bhotelwrk_deployment_yaml, "r") as f:
+            deployment_template = yaml.safe_load(f)
+
+        api_instance = client.AppsV1Api()
+        try:
+            existing = api_instance.read_namespaced_deployment(name=deployment_name, namespace=namespace)
+            if existing:
+                logger.info(f"Deployment '{deployment_name}' already exists. Deleting it...")
+                api_instance.delete_namespaced_deployment(
+                    name=deployment_name,
+                    namespace=namespace,
+                    body=client.V1DeleteOptions(propagation_policy="Foreground"),
+                )
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                logger.error(f"Error checking for existing deployment: {e}")
+                return
+
+        try:
+            response = api_instance.create_namespaced_deployment(namespace=namespace, body=deployment_template)
+            logger.info(f"Deployment created: {response.metadata.name}")
+        except client.exceptions.ApiException as e:
+            logger.error(f"Error creating deployment: {e}")
+
+    def delete_bhotelwrk_deployment(self, deployment_name, namespace):
+        api_instance = client.AppsV1Api()
+        try:
+            api_instance.delete_namespaced_deployment(
+                name=deployment_name,
+                namespace=namespace,
+                body=client.V1DeleteOptions(propagation_policy="Foreground"),
+            )
+            logger.info(f"Deployment '{deployment_name}' deleted.")
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                logger.error(f"Error deleting deployment '{deployment_name}': {e}")
 
     def create_bhotelwrk_job(self, job_name, namespace):
         bhotelwrk_job_yaml = TARGET_MICROSERVICES / "BlueprintHotelReservation" / "wlgen" / "wlgen_proc-job.yaml"
@@ -139,12 +179,18 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
         namespace: str = "default",
         job_name: str = "bhotelwrk-wlgen-job",
         CPU_containment: bool = False,
+        continuous: bool = False,
+        deployment_name: str = "bhotelwrk-wlgen",
+        apply_capacity_restraint: bool = True,
     ):
         super().__init__()
         self.wrk = wrk
         self.job_name = job_name
         self.namespace = namespace
         self.CPU_containment = CPU_containment
+        self.continuous = continuous
+        self.deployment_name = deployment_name
+        self.apply_capacity_restraint = apply_capacity_restraint
         config.load_kube_config()
         self.core_v1_api = client.CoreV1Api()
         self.batch_v1_api = client.BatchV1Api()
@@ -163,10 +209,16 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
             namespace=namespace,
         )
 
-        self.wrk.create_bhotelwrk_job(
-            job_name=self.job_name,
-            namespace=namespace,
-        )
+        if self.continuous:
+            self.wrk.create_bhotelwrk_deployment(
+                deployment_name=self.deployment_name,
+                namespace=namespace,
+            )
+        else:
+            self.wrk.create_bhotelwrk_job(
+                job_name=self.job_name,
+                namespace=namespace,
+            )
 
     def _parse_log(self, logs: list[str]) -> WorkloadEntry:
         # -----------------------------------------------------------------------
@@ -228,83 +280,220 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
 
         return []
 
-    def _schedule_cpu_containment(self):
+    def _run_cpu_containment_sequence(self):
         """
-        Schedule CPU containment injection and recovery based on workload start time.
+        Synchronously execute the full capacity-decrease trigger sequence:
+          t+0s  : workload already running
+          t+60s : inject NetworkChaos + CPU stress DaemonSet (trigger)
+          t+90s : remove trigger, apply permanent capacity restraint
+        Blocks until the metastable state is fully established.
         """
         if not self.CPU_containment:
             return
 
-        # Initialize fault injector
         self.cpu_containment_injector = ChaosInjector(self.namespace)
 
-        # Schedule CPU stress injection after 60 seconds
-        self.cpu_stress_timer = threading.Timer(60.0, self._inject_cpu_stress)
-        self.cpu_stress_timer.start()
-        logger.info("CPU stress injection scheduled for 60 seconds after workload start")
+        logger.info("Waiting 60s before injecting capacity-decrease trigger...")
+        time.sleep(60)
+        self._inject_cpu_stress()
 
-        # Schedule CPU stress recovery after 90 seconds
-        self.cpu_recovery_timer = threading.Timer(90.0, self._recover_cpu_stress)
-        self.cpu_recovery_timer.start()
-        logger.info("CPU stress recovery scheduled for 90 seconds after workload start")
+        logger.info("Waiting 30s before removing trigger and applying capacity restraint...")
+        time.sleep(30)
+        self._recover_cpu_stress()
 
     def _inject_cpu_stress(self):
         """
-        Inject CPU stress using the symptom fault injector.
+        Inject both network latency and CPU stress to trigger and sustain the retry storm.
+        - NetworkChaos (100ms): pushes gRPC calls above the 50ms timeout → triggers retries → 31x request flood
+        - StressChaos (CPU): saturates server capacity so the flood causes queueing → latency spike visible in Prometheus
         """
         try:
-            logger.info("Injecting CPU stress...")
-            # You may need to adjust deployment_name and microservice based on your setup
-            experiment_name = f"cpu-stress-all-pods"
-            chaos_experiment = {
+            print("[Step 3a] Injecting 100ms network latency — gRPC calls will exceed 50ms timeout, triggering retries → 31x request flood...")
+            logger.info("Injecting network latency...")
+            network_experiment_name = "network-latency-all-pods"
+            network_chaos = {
                 "apiVersion": "chaos-mesh.org/v1alpha1",
-                "kind": "StressChaos",
+                "kind": "NetworkChaos",
                 "metadata": {
-                    "name": experiment_name,
-                    "namespace": "chaos-mesh",
+                    "name": network_experiment_name,
+                    "namespace": self.namespace,
                 },
                 "spec": {
+                    "action": "delay",
                     "mode": "all",
                     "selector": {
                         "namespaces": [self.namespace],
                     },
-                    "stressors": {
-                        "cpu": {
-                            "workers": 30,
-                            "load": 90,
-                        }
+                    "delay": {
+                        "latency": "100ms",
+                        "correlation": "0",
+                        "jitter": "0ms",
                     },
+                    "direction": "to",
                 },
             }
-            self.cpu_containment_injector.create_chaos_experiment(chaos_experiment, experiment_name)
+            self.cpu_containment_injector.create_chaos_experiment(network_chaos, network_experiment_name)
+
+            print("[Step 3a] Deploying CPU stress DaemonSet on all nodes — one stress pod per node regardless of scheduling...")
+            logger.info("Deploying CPU stress DaemonSet...")
+            self._deploy_cpu_stress_daemonset()
+
             start_time = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-            logger.info(f"[{start_time}] Injecting CPU stress...")
-            self.current_experiment_name = experiment_name  # Save the current experiment name
-            logger.info("CPU stress injection completed")
+            self.current_experiment_names = [network_experiment_name]
+            logger.info(f"[{start_time}] Network latency + CPU stress DaemonSet injection completed")
+            print(f"[Step 3a] Done — network latency + CPU stress active on all nodes at {start_time}. Watch Prometheus p99 latency for spike above 50ms.")
         except Exception as e:
-            logger.error(f"Error injecting CPU stress: {e}")
+            logger.error(f"Error injecting chaos experiments: {e}")
+
+    def _deploy_cpu_stress_daemonset(self):
+        apps_v1 = client.AppsV1Api()
+        daemonset_name = "cpu-stress-daemon"
+
+        try:
+            apps_v1.delete_namespaced_daemon_set(
+                name=daemonset_name,
+                namespace=self.namespace,
+                body=client.V1DeleteOptions(propagation_policy="Foreground"),
+            )
+            logger.info(f"Deleted existing DaemonSet '{daemonset_name}'")
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                logger.warning(f"Error deleting existing stress DaemonSet: {e}")
+
+        daemonset_body = {
+            "apiVersion": "apps/v1",
+            "kind": "DaemonSet",
+            "metadata": {
+                "name": daemonset_name,
+                "namespace": self.namespace,
+            },
+            "spec": {
+                "selector": {"matchLabels": {"app": daemonset_name}},
+                "template": {
+                    "metadata": {"labels": {"app": daemonset_name}},
+                    "spec": {
+                        "tolerations": [{"operator": "Exists"}],
+                        "containers": [{
+                            "name": "stress",
+                            "image": "polinux/stress",
+                            "command": ["/bin/sh", "-c"],
+                            "args": ["stress --cpu $(nproc)"],
+                        }],
+                    },
+                },
+            },
+        }
+        apps_v1.create_namespaced_daemon_set(namespace=self.namespace, body=daemonset_body)
+        self.cpu_stress_daemonset_name = daemonset_name
+        logger.info(f"CPU stress DaemonSet '{daemonset_name}' deployed — one stress pod per node")
+
+    def _delete_cpu_stress_daemonset(self):
+        if not hasattr(self, "cpu_stress_daemonset_name"):
+            return
+        apps_v1 = client.AppsV1Api()
+        try:
+            apps_v1.delete_namespaced_daemon_set(
+                name=self.cpu_stress_daemonset_name,
+                namespace=self.namespace,
+                body=client.V1DeleteOptions(propagation_policy="Foreground"),
+            )
+            logger.info(f"CPU stress DaemonSet '{self.cpu_stress_daemonset_name}' deleted")
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                logger.error(f"Error deleting CPU stress DaemonSet: {e}")
 
     def _recover_cpu_stress(self):
         """
-        Recover from CPU stress by deleting the ChaosMesh experiment.
+        Remove the external trigger (NetworkChaos + CPU stress DaemonSet), then apply a
+        permanent capacity restraint via ResourceQuota + LimitRange so the retry-amplified
+        load (31x) continues to exceed service capacity — sustaining the metastable storm
+        until a hard reboot (recover_fault) removes the restraint.
         """
         try:
-            logger.info("Recovering from CPU stress...")
+            print("[Step 3b] Removing network latency + CPU stress DaemonSet (trigger)...")
+            logger.info("Recovering chaos experiments...")
 
-            if hasattr(self, "current_experiment_name"):
-                self.cpu_containment_injector.delete_chaos_experiment(self.current_experiment_name)
-                logger.info("CPU stress recovery completed for all pods")
-            else:
-                logger.error("No active CPU stress experiment found")
+            if hasattr(self, "current_experiment_names"):
+                for experiment_name in self.current_experiment_names:
+                    self.cpu_containment_injector.delete_chaos_experiment(experiment_name)
+                    logger.info(f"Deleted chaos experiment: {experiment_name}")
+            self._delete_cpu_stress_daemonset()
+
+            if self.apply_capacity_restraint:
+                print("[Step 3b] Trigger removed — applying permanent capacity restraint to sustain metastable storm...")
+                self._apply_capacity_restraint()
+
+            recover_time = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
+            print(f"[Step 3b] Done at {recover_time}. Trigger removed; capacity constrained. "
+                  "Retry storm (31x amplification) will sustain latency > 50ms until hard reboot.")
 
         except Exception as e:
-            logger.error(f"Error recovering from CPU stress: {e}")
+            logger.error(f"Error in _recover_cpu_stress: {e}")
+
+    def _apply_capacity_restraint(self):
+        """
+        Apply a namespace ResourceQuota + LimitRange that caps per-container CPU to 200m,
+        then rolling-restart all deployments so pods inherit the limit.
+
+        After the trigger is removed, the 31x retry-amplified load still exceeds the
+        constrained capacity (200m/container), keeping response times above the 50ms
+        gRPC timeout and sustaining the retry storm indefinitely.
+
+        Hard reboot (recover_fault) must delete these objects and restart pods to recover.
+        """
+        # 1. ResourceQuota — caps total CPU requestable in the namespace
+        quota_body = client.V1ResourceQuota(
+            metadata=client.V1ObjectMeta(name="capacity-restraint"),
+            spec=client.V1ResourceQuotaSpec(hard={"requests.cpu": "4", "limits.cpu": "8"}),
+        )
+        try:
+            self.core_v1_api.delete_namespaced_resource_quota("capacity-restraint", self.namespace)
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                logger.warning(f"Error deleting existing ResourceQuota: {e}")
+        self.core_v1_api.create_namespaced_resource_quota(self.namespace, quota_body)
+        logger.info("ResourceQuota 'capacity-restraint' applied")
+
+        # 2. LimitRange — assigns default CPU limit of 200m to containers without explicit limits
+        limit_range_body = client.V1LimitRange(
+            metadata=client.V1ObjectMeta(name="capacity-restraint"),
+            spec=client.V1LimitRangeSpec(limits=[
+                client.V1LimitRangeItem(
+                    type="Container",
+                    default={"cpu": "200m"},
+                    default_request={"cpu": "100m"},
+                )
+            ]),
+        )
+        try:
+            self.core_v1_api.delete_namespaced_limit_range("capacity-restraint", self.namespace)
+        except client.exceptions.ApiException as e:
+            if e.status != 404:
+                logger.warning(f"Error deleting existing LimitRange: {e}")
+        self.core_v1_api.create_namespaced_limit_range(self.namespace, limit_range_body)
+        logger.info("LimitRange 'capacity-restraint' applied")
+
+        # 3. Rolling restart all deployments so pods come up with the 200m CPU limit
+        apps_v1 = client.AppsV1Api()
+        deployments = apps_v1.list_namespaced_deployment(self.namespace)
+        restart_ts = datetime.now().isoformat()
+        for dep in deployments.items:
+            patch = {"spec": {"template": {"metadata": {"annotations": {
+                "kubectl.kubernetes.io/restartedAt": restart_ts
+            }}}}}
+            apps_v1.patch_namespaced_deployment(dep.metadata.name, self.namespace, patch)
+        logger.info(f"Rolling restart triggered for all deployments in {self.namespace}")
+        print(f"[Step 3b] {len(deployments.items)} deployments restarted with 200m CPU limit — "
+              "capacity permanently restrained.")
 
     def start(self):
-        logger.info("Start Workload with Blueprint Hotel Worklnload Manager")
+        logger.info("Start Workload with Blueprint Hotel Workload Manager")
         self.create_task()
-        self._schedule_cpu_containment()
+        self._run_cpu_containment_sequence()
 
     def stop(self):
         logger.info("Stop Workload with Blueprint Hotel Workload Manager")
-        self.wrk.stop_workload(job_name=self.job_name, namespace=self.namespace)
+        if self.continuous:
+            self.wrk.delete_bhotelwrk_deployment(deployment_name=self.deployment_name, namespace=self.namespace)
+        else:
+            self.wrk.stop_workload(job_name=self.job_name, namespace=self.namespace)
