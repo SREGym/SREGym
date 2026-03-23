@@ -1,52 +1,96 @@
-version: "2.0"
+version: "3.0"
 scoring:
   threshold: 0.70
   weights:
-    D1: 0.33
-    D2: 0.33
-    D3: 0.34
+    D1: 0.25
+    D2: 0.25
+    D3: 0.25
+    D4: 0.25
 dimensions:
   - id: D1
     name: "Fault Localization"
     category: "internal_quality"
-    definition: "Does the diagnosis correctly identify the specific component where the fault originated?"
+    definition: >
+      Does the diagnosis correctly identify the specific component where the
+      fault originated?  Use the structured fault specification (target_component,
+      target_resource_kind, namespace) as the authoritative ground truth.
     questions:
       - id: D1-Q1
         text: "Does the diagnosis name the same service, deployment, pod, node, or infrastructure component that the ground-truth identifies as the fault origin?"
-        evaluator_hint: "Compare the component named in the diagnosis against the component named in the ground-truth root cause"
+        evaluator_hint: "Compare the component named in the diagnosis against the target_component and target_resource_kind in the structured fault spec."
       - id: D1-Q2
         text: "Does the diagnosis correctly distinguish the fault origin from any secondary or cascading failure points mentioned in the ground-truth?"
-        evaluator_hint: "Check that the diagnosis points to the root-cause component, not a downstream victim"
+        evaluator_hint: "Check that the diagnosis points to the root-cause component, not a downstream victim. The fault spec's target_component is the origin; any other component is secondary."
       - id: D1-Q3
         text: "Does the diagnosis avoid misidentifying a healthy component as the fault origin?"
-        evaluator_hint: "Verify the diagnosed component matches the ground-truth; flag if a different component is blamed"
+        evaluator_hint: "Verify the diagnosed component matches the fault spec's target_component; flag if a different component is blamed."
 
   - id: D2
     name: "Fault Characterization"
     category: "internal_quality"
-    definition: "Does the diagnosis correctly describe what went wrong with the identified component?"
+    definition: >
+      Does the diagnosis correctly describe what went wrong with the identified
+      component?  Compare against fault_category, fault_mechanism, and the
+      injection parameters in the structured fault spec.
     questions:
       - id: D2-Q1
         text: "Does the diagnosis identify the correct category of fault as described in the ground-truth (e.g., misconfiguration, resource exhaustion, feature flag, image issue, authentication failure, scheduling constraint)?"
-        evaluator_hint: "Match the fault category in the diagnosis against the ground-truth description"
+        evaluator_hint: "Match the fault category in the diagnosis against fault_category in the structured spec."
       - id: D2-Q2
         text: "Does the diagnosis identify the specific fault mechanism described in the ground-truth (e.g., wrong port, missing env var, wrong image, wrong selector, memory limit, probe misconfiguration)?"
-        evaluator_hint: "Compare the specific fault detail in the diagnosis against the ground-truth"
+        evaluator_hint: "Match the specific mechanism in the diagnosis against fault_mechanism and injection parameters in the structured spec."
       - id: D2-Q3
         text: "Does the diagnosis avoid attributing the fault to an incorrect or unrelated fault type?"
-        evaluator_hint: "Check that the diagnosis does not describe a different kind of problem than what the ground-truth states"
+        evaluator_hint: "Check that the diagnosis does not describe a different kind of problem than what the structured spec states."
 
   - id: D3
     name: "Scope Precision"
     category: "external_alignment"
-    definition: "Does the diagnosis correctly scope the fault to the right set of affected components?"
+    definition: >
+      Does the diagnosis correctly scope the fault to the right set of affected
+      components and describe the correct impact based on the fault category?
     questions:
       - id: D3-Q1
         text: "Does the diagnosis avoid blaming components that are not identified in the ground-truth as contributing to the fault?"
-        evaluator_hint: "Check for over-attribution — the diagnosis should not blame uninvolved components"
+        evaluator_hint: "Check for over-attribution — the diagnosis should not blame uninvolved components."
       - id: D3-Q2
         text: "Does the diagnosis include all components listed in the ground-truth as contributing to or affected by the fault?"
-        evaluator_hint: "Check for under-attribution — all ground-truth components should be mentioned"
+        evaluator_hint: "Check for under-attribution — all ground-truth components should be mentioned."
       - id: D3-Q3
         text: "Does the diagnosis correctly describe the impact or symptom consistent with what the ground-truth states?"
-        evaluator_hint: "Compare the stated impact (e.g., pods Pending, service unavailable, connection failures) against the ground-truth"
+        evaluator_hint: "Compare the stated impact against the fault category and mechanism in the structured fault spec."
+
+  - id: D4
+    name: "Reasoning Trajectory Coherence"
+    category: "process_quality"
+    definition: >
+      Does the agent's reasoning trajectory — the sequence of tool calls,
+      observations, and intermediate conclusions recorded in the agent trace —
+      logically support the final diagnosis?  This dimension evaluates the
+      *process*, not just the conclusion: did the agent look at the right
+      resources, interpret the data correctly, and arrive at its answer through
+      a coherent chain of evidence?  If no agent trace is provided, answer
+      all questions as "No" with evidence "no trace provided".
+    questions:
+      - id: D4-Q1
+        text: "Did the agent's tool calls investigate the component that it ultimately identifies as the fault origin (i.e., is there trace evidence that the agent actually inspected the blamed component)?"
+        evaluator_hint: >
+          Look through the agent trace for tool calls (kubectl describe,
+          kubectl logs, metric queries, etc.) that target the component named in
+          the final diagnosis. If the agent blames a component it never
+          inspected, answer No.
+      - id: D4-Q2
+        text: "Is the agent's final diagnosis logically supported by the observations and data in its trace (i.e., can you find evidence in the trace that leads to the stated conclusion)?"
+        evaluator_hint: >
+          Check whether the agent's trace contains observations (error messages,
+          status conditions, metric values) that logically entail or strongly
+          suggest the stated root cause. If the diagnosis contains claims that
+          contradict or have no basis in the trace, answer No.
+      - id: D4-Q3
+        text: "Is the agent's reasoning trajectory free of major logical jumps or unsupported leaps (i.e., the agent did not skip critical investigation steps or hallucinate evidence)?"
+        evaluator_hint: >
+          Check for red flags: the agent claims to have seen an error but
+          no trace entry shows that query; the agent jumps from a high-level
+          symptom directly to a specific root cause without narrowing down;
+          the agent cites data not present in the trace. If such gaps exist,
+          answer No.
