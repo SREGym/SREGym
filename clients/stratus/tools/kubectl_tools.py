@@ -31,10 +31,16 @@ class ExecKubectlCmdSafely(BaseTool):
     args_schema: Optional[ArgsSchema] = ExecKubectlCmdSafelyInput
 
     _client: Client = PrivateAttr()
+    _session_id: str = PrivateAttr()
 
-    def __init__(self, client: Client, **kwargs: Any):
+    def __init__(self, client: Client, session_id: str, **kwargs: Any):
         super().__init__(**kwargs)
         self._client = client
+        self._session_id = session_id
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
 
     def _run(self):
         assert False, f"{self.name} is an async method, you are running it as a sync method!"
@@ -56,13 +62,10 @@ class ExecKubectlCmdSafely(BaseTool):
             text_result = "\n".join([part.text for part in result])
         finally:
             await exit_stack.aclose()
-        return Command(
-            update={
-                "messages": [
-                    ToolMessage(content=text_result, tool_call_id=tool_call_id),
-                ]
-            }
-        )
+        update: dict = {"messages": [ToolMessage(content=text_result, tool_call_id=tool_call_id)]}
+        if "Command Rejected" not in text_result:
+            update["executed_commands"] = [command]
+        return Command(update=update)
 
 
 kubectl_read_only_cmds = [
