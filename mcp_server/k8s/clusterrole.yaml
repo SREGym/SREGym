@@ -39,6 +39,14 @@ rules:
       - replicasets
     verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
 
+  # Scale subresources
+  - apiGroups: ["apps"]
+    resources:
+      - deployments/scale
+      - statefulsets/scale
+      - replicasets/scale
+    verbs: ["get", "patch", "update"]
+
   # Batch API group
   - apiGroups: ["batch"]
     resources:
