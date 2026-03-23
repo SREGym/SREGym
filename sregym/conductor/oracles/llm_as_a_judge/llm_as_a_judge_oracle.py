@@ -83,6 +83,7 @@ class LLMAsAJudgeOracle(Oracle):
                 results["reasoning"] = report.reasoning
                 results["success"] = None
                 results["accuracy"] = None
+                results["checklist"] = []
                 return results
 
             # Use composite score (0.0-1.0) scaled to 0-100
@@ -113,6 +114,16 @@ class LLMAsAJudgeOracle(Oracle):
                 }
                 for dim in report.dimensions
             }
+            results["checklist"] = [
+                {
+                    "id": q.question_id,
+                    "answer": "Yes" if q.answer else "No",
+                    "evidence": q.evidence,
+                    "confidence": q.confidence,
+                }
+                for dim in report.dimensions
+                for q in dim.questions
+            ]
 
         except Exception as e:
             print(f"❌ Error during LLM judgment: {e}")
@@ -120,6 +131,7 @@ class LLMAsAJudgeOracle(Oracle):
             results["reasoning"] = f"Error: {str(e)}"
             results["success"] = False
             results["accuracy"] = 0.0
+            results["checklist"] = []
             results["error"] = str(e)
 
         return results

@@ -688,7 +688,7 @@ fences, no preamble, no commentary.
 
         return JudgmentReport(
             verdict=JudgmentResult.FALSE,
-            reasoning="Verdict: False (composite=0.00). Empty or missing diagnosis.",
+            reasoning=self._build_reasoning(JudgmentResult.FALSE, 0.0, dimensions),
             composite_score=0.0,
             dimensions=dimensions,
             checklist_version=self._checklist_version,
@@ -705,14 +705,25 @@ fences, no preamble, no commentary.
         dim_strs = []
         weakest = None
         weakest_score = float("inf")
+        checklist_items: list[dict[str, str]] = []
         for d in dimensions:
             dim_strs.append(f"{d.dimension_id} {d.dimension_name}: {d.score:.2f}")
             if d.score < weakest_score:
                 weakest_score = d.score
                 weakest = d
+            for q in d.questions:
+                checklist_items.append(
+                    {
+                        "id": q.question_id,
+                        "answer": "Yes" if q.answer else "No",
+                        "evidence": q.evidence or "",
+                        "confidence": q.confidence or "Low",
+                    }
+                )
         parts.append(" | ".join(dim_strs) + ".")
         if weakest:
             parts.append(f"Weakest dimension: {weakest.dimension_name} ({weakest.score:.2f}).")
+        parts.append("Checklist details: " + json.dumps(checklist_items, ensure_ascii=True))
         return " ".join(parts)
 
 
