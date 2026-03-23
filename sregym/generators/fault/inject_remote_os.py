@@ -1,16 +1,9 @@
-"""Inject faults at the OS layer via SSH (remote clusters) or docker exec (Kind)."""
+"""Inject faults at the OS layer via kubectl debug node (remote clusters) or docker exec (Kind)."""
 
-import os
-import re
 import subprocess
 import time
 
-import paramiko
-import yaml
-from paramiko.client import AutoAddPolicy
-
 from sregym.generators.fault.base import FaultInjector
-from sregym.paths import BASE_DIR
 from sregym.service.kubectl import KubeCtl
 
 NODE_NOT_READY_TIMEOUT = 120  # seconds
@@ -20,7 +13,6 @@ NODE_NOT_READY_POLL_INTERVAL = 5  # seconds
 class RemoteOSFaultInjector(FaultInjector):
     def __init__(self):
         self.kubectl = KubeCtl()
-        self.worker_info = None
         self._is_kind = None
 
     def _check_is_kind(self):
@@ -30,61 +22,24 @@ class RemoteOSFaultInjector(FaultInjector):
             self._is_kind = "kind-worker" in out
         return self._is_kind
 
-    def _check_remote_host(self):
-        """Verify the remote cluster has an inventory file."""
-        if not os.path.exists(f"{BASE_DIR}/../scripts/ansible/inventory.yml"):
-            print("Inventory file not found: " + f"{BASE_DIR}/../scripts/ansible/inventory.yml")
-            return False
-        return True
+    def _get_worker_node_names(self) -> list[str]:
+        """Return the names of all worker (non-control-plane) nodes via kubectl."""
+        output = self.kubectl.exec_command("kubectl get nodes --no-headers")
+        names = []
+        for line in output.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and "control-plane" not in parts[2]:
+                names.append(parts[0])
+        return names
 
-    def _get_remote_worker_info(self):
-        """Read worker node SSH info from the Ansible inventory."""
-        if self.worker_info:
-            return self.worker_info
+    def _node_exec(self, node_name: str, command: str):
+        """Run a command on a node's host OS using ``kubectl debug node``.
 
-        worker_info = {}
-        with open(f"{BASE_DIR}/../scripts/ansible/inventory.yml") as f:
-            inventory = yaml.safe_load(f)
-
-        variables = inventory.get("all", {}).get("vars", {})
-        children = inventory.get("all", {}).get("children", {})
-        workers = children.get("worker_nodes", {}).get("hosts", {})
-
-        if not workers:
-            print("No worker nodes found in inventory.")
-            return None
-
-        for name, info in workers.items():
-            host = info["ansible_host"]
-            user = self._replace_variables(info["ansible_user"], variables)
-            if "{{" in user:
-                print(f"Warning: Unresolved variables in {name} user: {user}")
-                continue
-            worker_info[host] = user
-
-        self.worker_info = worker_info
-        return self.worker_info
-
-    def _replace_variables(self, text: str, variables: dict) -> str:
-        """Replace {{ variable_name }} with actual values from variables dict."""
-
-        def replace_var(match):
-            var_name = match.group(1).strip()
-            return str(variables[var_name]) if var_name in variables else match.group(0)
-
-        return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace_var, text)
-
-    def _ssh_exec(self, host: str, user: str, command: str):
-        """Run a command on a remote host via SSH."""
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(AutoAddPolicy())
-        try:
-            ssh.connect(host, username=user)
-            stdin, stdout, stderr = ssh.exec_command(command)
-            stdout.channel.recv_exit_status()
-            return stdout.read().decode()
-        finally:
-            ssh.close()
+        Creates an ephemeral privileged container, runs the command via
+        ``chroot /host``, and cleans up automatically (--rm).
+        """
+        cmd = f"kubectl debug node/{node_name} -it --rm --image=busybox -- chroot /host sh -c {_shell_quote(command)}"
+        return self.kubectl.exec_command(cmd)
 
     def _docker_exec(self, container: str, command: str):
         """Run a command inside a Docker container (for Kind nodes)."""
@@ -114,12 +69,7 @@ class RemoteOSFaultInjector(FaultInjector):
 
     def _wait_for_worker_nodes(self, target_status="NotReady", timeout=NODE_NOT_READY_TIMEOUT):
         """Poll until all worker nodes reach the target status ('Ready' or 'NotReady')."""
-        output = self.kubectl.exec_command("kubectl get nodes --no-headers")
-        worker_node_names = set()
-        for line in output.strip().splitlines():
-            parts = line.split()
-            if len(parts) >= 3 and "control-plane" not in parts[2]:
-                worker_node_names.add(parts[0])
+        worker_node_names = set(self._get_worker_node_names())
 
         if not worker_node_names:
             print("No worker nodes found in cluster.")
@@ -154,15 +104,14 @@ class RemoteOSFaultInjector(FaultInjector):
                 self._docker_exec(container, "kill -9 $(pgrep -x kubelet) 2>/dev/null; systemctl stop kubelet")
                 print(f"Kubelet stopped in {container}")
         else:
-            if not self._check_remote_host():
+            worker_nodes = self._get_worker_node_names()
+            if not worker_nodes:
+                print("No worker nodes found.")
                 return
-            worker_info = self._get_remote_worker_info()
-            if not worker_info:
-                return
-            for host, user in worker_info.items():
-                print(f"Killing kubelet on {host}...")
-                self._ssh_exec(host, user, "sudo kill -9 $(pgrep -x kubelet) 2>/dev/null; sudo systemctl stop kubelet")
-                print(f"Kubelet stopped on {host}")
+            for node in worker_nodes:
+                print(f"Killing kubelet on {node}...")
+                self._node_exec(node, "kill -9 $(pgrep -x kubelet) 2>/dev/null; systemctl stop kubelet")
+                print(f"Kubelet stopped on {node}")
 
         self._wait_for_worker_nodes("NotReady")
 
@@ -177,17 +126,21 @@ class RemoteOSFaultInjector(FaultInjector):
                 self._docker_exec(container, "systemctl start kubelet")
                 print(f"Kubelet started in {container}")
         else:
-            if not self._check_remote_host():
+            worker_nodes = self._get_worker_node_names()
+            if not worker_nodes:
+                print("No worker nodes found.")
                 return
-            worker_info = self._get_remote_worker_info()
-            if not worker_info:
-                return
-            for host, user in worker_info.items():
-                print(f"Starting kubelet on {host}...")
-                self._ssh_exec(host, user, "sudo systemctl start kubelet")
-                print(f"Kubelet started on {host}")
+            for node in worker_nodes:
+                print(f"Starting kubelet on {node}...")
+                self._node_exec(node, "systemctl start kubelet")
+                print(f"Kubelet started on {node}")
 
         self._wait_for_worker_nodes("Ready")
+
+
+def _shell_quote(s: str) -> str:
+    """Single-quote a string for safe shell interpolation."""
+    return "'" + s.replace("'", "'\"'\"'") + "'"
 
 
 def main():
