@@ -1,4 +1,4 @@
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
 
 from clients.stratus.stratus_utils.get_logger import get_logger
 from mcp_server.utils import ObservabilityClient
@@ -10,7 +10,7 @@ mcp = FastMCP("Loki MCP Server")
 
 
 @mcp.tool(name="get_logs")
-def get_logs(query: str, last_n_minutes: int = 15, ctx: Context = None) -> str:
+def get_logs(query: str, last_n_minutes: int = 15) -> str:
     """Query logs from Loki using LogQL.
 
     Args:
@@ -72,7 +72,7 @@ def get_logs(query: str, last_n_minutes: int = 15, ctx: Context = None) -> str:
 
 
 @mcp.tool(name="get_labels")
-def get_labels(ctx: Context = None) -> str:
+def get_labels() -> str:
     """Get all available label names from Loki.
 
     Returns:
@@ -103,7 +103,7 @@ def get_labels(ctx: Context = None) -> str:
 
 
 @mcp.tool(name="get_label_values")
-def get_label_values(label: str, ctx: Context = None) -> str:
+def get_label_values(label: str) -> str:
     """Get all values for a specific label from Loki.
 
     Args:

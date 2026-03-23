@@ -62,7 +62,10 @@ async def get_metrics(
     logger.info(f"Result: {result}")
     # metrics = result.content[0].text
     logger.info(f"Metrics received: {result}")
-    await exit_stack.aclose()
+    try:
+        await exit_stack.aclose()
+    except Exception as e:
+        logger.debug(f"{type(e).__name__} ignored, as it's expected")
 
     # if langgraph_tool_config.use_summaries and len(metrics) >= langgraph_tool_config.min_len_to_sum:
     #     metrics = _summarize_metrics(result)

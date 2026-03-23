@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
 
 from mcp_server.utils import ObservabilityClient
 
@@ -11,7 +11,7 @@ mcp = FastMCP("Jaeger MCP Server")
 
 
 @mcp.tool(name="get_services")
-def get_services(ctx: Context) -> str:
+def get_services() -> str:
     """Retrieve the list of service names from the Grafana instance.
 
     Returns:
@@ -39,7 +39,7 @@ def get_services(ctx: Context) -> str:
 
 
 @mcp.tool(name="get_operations")
-def get_operations(service: str, ctx: Context) -> str:
+def get_operations(service: str) -> str:
     """Query available operations for a specific service from the Grafana instance.
 
     Args:
@@ -69,7 +69,7 @@ def get_operations(service: str, ctx: Context) -> str:
 
 
 @mcp.tool(name="get_traces")
-def get_traces(service: str, last_n_minutes: int, ctx: Context) -> str:
+def get_traces(service: str, last_n_minutes: int) -> str:
     """Get Jaeger traces for a given service in the last n minutes.
 
     Args:
@@ -109,7 +109,7 @@ def get_traces(service: str, last_n_minutes: int, ctx: Context) -> str:
 
 
 @mcp.tool(name="get_dependency_graph")
-def get_dependency_graph(ctx: Context, last_n_minutes: int = 30) -> str:
+def get_dependency_graph(last_n_minutes: int = 30) -> str:
     """
     Get service dependency graph from Jaeger's native dependencies API.
     Args:

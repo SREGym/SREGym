@@ -33,7 +33,7 @@ EXPERIMENT_CATALOG = [
             "action": "pod-failure",
             "mode": "one",
             "selector": {"namespaces": ["{target_namespace}"]},
-            "duration": "{duration}",
+            "duration": "45s",
         },
     },
     # ── Network faults ────────────────────────────────────────────────
