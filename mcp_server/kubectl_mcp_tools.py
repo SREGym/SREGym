@@ -27,10 +27,12 @@ def extract_session_id(ctx: Context):
     First use custom session id.
     """
     ssid = ctx.request_context.request.headers.get("sregym_ssid")
+    fallback_used = ssid is None
     if ssid is None:
         str_url = str(ctx.request_context.request.url)
         url = URL(str_url)
         ssid = url.query.get("session_id")
+    logger.info(f"[SESSION] extracted ssid={ssid!r} (fallback_to_url={fallback_used})")
     return ssid
 
 
@@ -65,7 +67,7 @@ def exec_kubectl_cmd_safely(cmd: str, ctx: Context) -> str:
 
     result = kubctl_tool.cmd_runner.exec_kubectl_cmd_safely(cmd)
     assert isinstance(result, str)
-
+    logger.info(f"[ACTION_STACK] after exec ssid={ssid!r}: {kubctl_tool.action_stack}")
     return result
 
 
