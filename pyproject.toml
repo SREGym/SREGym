@@ -195,6 +195,11 @@ ignore = [
     "SIM102", # nested if statements
 ]
 
+[tool.ruff.lint.per-file-ignores]
+# These files must manipulate sys.path before importing project modules
+"clients/*/driver.py" = ["E402"]
+"clients/stratus/stratus_agent/driver/driver.py" = ["E402"]
+
 [tool.ruff.lint.isort]
 known-first-party = ["sregym", "clients", "provisioner", "scripts"]
 

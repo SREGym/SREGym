@@ -36,12 +36,15 @@ from clients.stratus.stratus_agent.mitigation_agent import retry_run_with_feedba
 from clients.stratus.stratus_agent.mitigation_agent import (
     single_run_with_predefined_prompts as mitigation_agent_single_run,
 )
+from clients.stratus.stratus_agent.resolution_agent import retry_run_with_feedback as resolution_agent_retry_run
+from clients.stratus.stratus_agent.resolution_agent import (
+    single_run_with_predefined_prompts as resolution_agent_single_run,
+)
 from clients.stratus.stratus_agent.rollback_agent import perform_rollback
 from clients.stratus.tools.submit_tool import manual_submit_tool
 from clients.stratus.weak_oracles.alert_oracle import AlertOracle
 from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
 from clients.stratus.weak_oracles.cluster_state_oracle import ClusterStateOracle
-from clients.stratus.weak_oracles.workload_oracle import WorkloadOracle
 
 logger = logging.getLogger("all.stratus.driver")
 logger.propagate = True
@@ -52,6 +55,7 @@ def get_current_datetime_formatted():
     now = datetime.now()
     formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
+
 
 timestamp = get_current_datetime_formatted()
 
@@ -103,7 +107,7 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
             # Convert to dict and handle non-serializable objects
             try:
                 msg_dict["additional_kwargs"] = json.loads(json.dumps(message.additional_kwargs, default=str))
-            except:
+            except Exception:
                 msg_dict["additional_kwargs"] = str(message.additional_kwargs)
 
         return msg_dict
@@ -123,7 +127,7 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
             f.write(json.dumps(metadata) + "\n")
 
             # Write each stage
-            for stage_idx, stage_data in enumerate(all_trajectories):
+            for _stage_idx, stage_data in enumerate(all_trajectories):
                 stage_name = stage_data.get("stage", "unknown")
                 events = stage_data.get("events", [])
 
@@ -220,7 +224,7 @@ def get_curr_problem():
 def get_benchmark_status():
     """
     Check the current status of the benchmark.
-    Returns the status string (e.g., "diagnosis", "mitigation", "done") or "error" on failure.
+    Returns the status string (e.g., "diagnosis", "mitigation", "resolution", "done") or "error" on failure.
     """
     try:
         # Construct the status URL from the benchmark API (not the MCP URL)
@@ -276,10 +280,10 @@ async def diagnosis_task_main():
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
+    diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
     diagnosis_agent_max_step = diagnosis_agent_config["max_step"]
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path))
+    diagnosis_agent_prompts = yaml.safe_load(diagnosis_agent_prompt_path.read_text())
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
@@ -321,10 +325,10 @@ async def diagnosis_with_localization_task_main():
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
+    diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
     diagnosis_agent_max_step = diagnosis_agent_config["max_step"]
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path))
+    diagnosis_agent_prompts = yaml.safe_load(diagnosis_agent_prompt_path.read_text())
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
@@ -371,15 +375,15 @@ async def mitigation_task_main(diagnosis_summary):
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     mitigation_agent_config_path = file_parent_dir.parent / "configs" / "mitigation_agent_config.yaml"
-    mitigation_agent_config = yaml.safe_load(open(mitigation_agent_config_path))
+    mitigation_agent_config = yaml.safe_load(mitigation_agent_config_path.read_text())
     mitigation_agent_max_step = mitigation_agent_config["max_step"]
     mitigation_agent_prompt_path = file_parent_dir.parent / "configs" / mitigation_agent_config["prompts_path"]
     mitigation_agent_max_retry_attempts = mitigation_agent_config["max_retry_attempts"]
     mitigation_agent_retry_mode = mitigation_agent_config["retry_mode"]
 
     llm_summarization_prompt_file = file_parent_dir.parent / "configs" / "llm_summarization_prompt.yaml"
-    llm_summarization_prompt = yaml.safe_load(open(llm_summarization_prompt_file))["mitigation_retry_prompt"]
-    mitigation_agent_prompts = yaml.safe_load(open(mitigation_agent_prompt_path))
+    llm_summarization_prompt = yaml.safe_load(llm_summarization_prompt_file.read_text())["mitigation_retry_prompt"]
+    mitigation_agent_prompts = yaml.safe_load(mitigation_agent_prompt_path.read_text())
 
     # oracle
     logger.info("setting up oracles")
@@ -512,7 +516,6 @@ async def mitigation_task_main(diagnosis_summary):
         # and some reflections as input
         curr_attempt = 0
         mitigation_agent_last_state = ""
-        rollback_agent_last_state = ""
         oracle_results = OracleResult(
             success=False, issues=["This is the beginning of mitigation, please observe the cluster for issues."]
         )
@@ -596,7 +599,9 @@ async def mitigation_task_main(diagnosis_summary):
                 # return agent_exec_stats
             else:
                 # here the agent fails, we make decision if we should retry
-                logger.info(f"current attempt: {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}, agent failed the validation oracles.")
+                logger.info(
+                    f"current attempt: {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}, agent failed the validation oracles."
+                )
                 should_retry = (curr_attempt + 1) < mitigation_agent_max_retry_attempts
                 logger.info(f"agent failed, should we retry? {'Yes!' if should_retry else 'No!'}")
                 if should_retry:
@@ -628,6 +633,255 @@ async def mitigation_task_main(diagnosis_summary):
                     await manual_submit_tool("")
                     break
                     # return agent_exec_stats
+
+        agent_exec_stats["agent_name"] = agent_names_lst
+        agent_exec_stats["input_tokens"] = input_tokens_lst
+        agent_exec_stats["output_tokens"] = output_tokens_lst
+        agent_exec_stats["total_tokens"] = total_tokens_lst
+        agent_exec_stats["time"] = time_lst
+        agent_exec_stats["steps"] = steps_lst
+        agent_exec_stats["num_retry_attempts"] = num_retry_attempts_lst
+        agent_exec_stats["rollback_stack"] = rollback_stack_lst
+        agent_exec_stats["oracle_results"] = oracle_results_lst
+        return agent_exec_stats, all_graph_events
+
+
+async def resolution_task_main(mitigation_summary):
+    # Resolution stage: fix the underlying root cause after mitigation has addressed immediate symptoms.
+    # Mirrors the mitigation_task_main structure with rollback, reflect, and retry.
+
+    logger.info("loading configs")
+    file_parent_dir = Path(__file__).resolve().parent.parent
+    resolution_agent_config_path = file_parent_dir.parent / "configs" / "resolution_agent_config.yaml"
+    resolution_agent_config = yaml.safe_load(resolution_agent_config_path.read_text())
+    resolution_agent_max_step = resolution_agent_config["max_step"]
+    resolution_agent_prompt_path = file_parent_dir.parent / "configs" / resolution_agent_config["prompts_path"]
+    resolution_agent_max_retry_attempts = resolution_agent_config["max_retry_attempts"]
+    resolution_agent_retry_mode = resolution_agent_config["retry_mode"]
+
+    llm_summarization_prompt_file = file_parent_dir.parent / "configs" / "llm_summarization_prompt.yaml"
+    llm_summarization_prompt = yaml.safe_load(llm_summarization_prompt_file.read_text())["mitigation_retry_prompt"]
+    resolution_agent_prompts = yaml.safe_load(resolution_agent_prompt_path.read_text())
+
+    # oracle
+    logger.info("setting up oracles for resolution")
+    cluster_state_oracle = ClusterStateOracle()
+    oracles = [cluster_state_oracle]
+
+    logger.info("getting app info")
+    app_info = get_app_info()
+    app_name = app_info["app_name"]
+    app_description = app_info["descriptions"]
+    app_namespace = app_info["namespace"]
+
+    logger.info(f"adding alert oracle for namespace [{app_namespace}]")
+    oracles.append(AlertOracle(app_namespace))
+
+    first_run_initial_messages = [
+        SystemMessage(resolution_agent_prompts["system"]),
+        HumanMessage(
+            resolution_agent_prompts["user"].format(
+                max_step=resolution_agent_max_step,
+                mitigation_summary=mitigation_summary,
+                app_name=app_name,
+                app_description=app_description,
+                app_namespace=app_namespace,
+            )
+        ),
+    ]
+    start_time = time.perf_counter()
+    logger.info(f"running in retry mode: [{resolution_agent_retry_mode}]")
+    all_graph_events = []
+
+    if resolution_agent_retry_mode == "none":
+        agent, last_state, graph_events = await resolution_agent_single_run(first_run_initial_messages)
+        all_graph_events.extend([{"stage": "resolution", "events": graph_events}])
+        agent_time = time.perf_counter() - start_time
+        agent_exec_stats = dict()
+        agent_exec_stats["agent_name"] = ["resolution_agent_none"]
+        usage_metadata = next(iter(agent.callback.usage_metadata.items()))[1]
+        agent_exec_stats["input_tokens"] = [usage_metadata["input_tokens"]]
+        agent_exec_stats["output_tokens"] = [usage_metadata["output_tokens"]]
+        agent_exec_stats["total_tokens"] = [usage_metadata["total_tokens"]]
+        agent_exec_stats["time"] = [str(agent_time)]
+        agent_exec_stats["steps"] = [last_state.values["num_steps"]]
+        agent_exec_stats["num_retry_attempts"] = ["N/A"]
+        agent_exec_stats["rollback_stack"] = ["N/A"]
+        agent_exec_stats["oracle_results"] = ["N/A"]
+        logger.info(f"Finished resolution agent run, output dict: {agent_exec_stats}")
+        return agent_exec_stats, all_graph_events
+
+    elif resolution_agent_retry_mode == "naive":
+        curr_attempt = 0
+        oracle_results = OracleResult(
+            success=False, issues=["This is the beginning of resolution, please observe the cluster for issues."]
+        )
+        agent_exec_stats = dict()
+        agent_names_lst = []
+        input_tokens_lst = []
+        output_tokens_lst = []
+        total_tokens_lst = []
+        time_lst = []
+        steps_lst = []
+        num_retry_attempts_lst = []
+        rollback_stack_lst = []
+        oracle_results_lst = []
+        while curr_attempt < resolution_agent_max_retry_attempts:
+            logger.info(f"current attempt: {curr_attempt + 1}/{resolution_agent_max_retry_attempts}")
+            agent, last_state, graph_events = await resolution_agent_single_run(first_run_initial_messages)
+            all_graph_events.append({"stage": f"resolution_attempt_{curr_attempt}", "events": graph_events})
+
+            agent_time = time.perf_counter() - start_time
+            agent_names_lst.append("resolution_agent_naive")
+            usage_metadata = next(iter(agent.callback.usage_metadata.items()))[1]
+            input_tokens_lst.append(usage_metadata["input_tokens"])
+            output_tokens_lst.append(usage_metadata["output_tokens"])
+            total_tokens_lst.append(usage_metadata["total_tokens"])
+            time_lst.append(str(agent_time))
+            steps_lst.append(last_state.values["num_steps"])
+            num_retry_attempts_lst.append(str(curr_attempt))
+            rollback_stack_lst.append("N/A, naive retry")
+
+            try:
+                oracle_results = validate_oracles(oracles)
+                oracle_results_lst.append(str(oracle_results))
+                logger.info(f"oracle results: {oracle_results}")
+                has_succeeded = oracle_results[0] is True
+            except Exception as e:
+                logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
+                oracle_results = [False, []]
+                oracle_results_lst.append(f"Oracle error: {str(e)}")
+                has_succeeded = False
+            if has_succeeded:
+                logger.info("agent succeeds, breaking!")
+                break
+            logger.info(f"agent failed, retrying... {curr_attempt + 1}/{resolution_agent_max_retry_attempts}")
+            curr_attempt += 1
+        agent_exec_stats["agent_name"] = agent_names_lst
+        agent_exec_stats["input_tokens"] = input_tokens_lst
+        agent_exec_stats["output_tokens"] = output_tokens_lst
+        agent_exec_stats["total_tokens"] = total_tokens_lst
+        agent_exec_stats["time"] = time_lst
+        agent_exec_stats["steps"] = steps_lst
+        agent_exec_stats["num_retry_attempts"] = num_retry_attempts_lst
+        agent_exec_stats["rollback_stack"] = rollback_stack_lst
+        agent_exec_stats["oracle_results"] = oracle_results_lst
+        return agent_exec_stats, all_graph_events
+
+    elif resolution_agent_retry_mode == "validate":
+        logger.info(f"retry mode: [{resolution_agent_retry_mode}]")
+        curr_attempt = 0
+        resolution_agent_last_state = ""
+        oracle_results = OracleResult(
+            success=False, issues=["This is the beginning of resolution, please observe the cluster for issues."]
+        )
+
+        agent_exec_stats = dict()
+        agent_names_lst = []
+        input_tokens_lst = []
+        output_tokens_lst = []
+        total_tokens_lst = []
+        time_lst = []
+        steps_lst = []
+        num_retry_attempts_lst = []
+        rollback_stack_lst = []
+        oracle_results_lst = []
+
+        while curr_attempt < resolution_agent_max_retry_attempts:
+            if curr_attempt == 0:
+                logger.info("running first try")
+                agent, resolution_agent_last_state, graph_events = await resolution_agent_single_run(
+                    first_run_initial_messages
+                )
+                all_graph_events.append({"stage": f"resolution_attempt_{curr_attempt}", "events": graph_events})
+            else:
+                logger.info(
+                    f"running retries. current attempt: {curr_attempt + 1}/{resolution_agent_max_retry_attempts}"
+                )
+                last_run_summary = generate_run_summary(resolution_agent_last_state, llm_summarization_prompt)
+                retry_run_initial_messages = [
+                    SystemMessage(resolution_agent_prompts["system"]),
+                    HumanMessage(
+                        resolution_agent_prompts["user"].format(
+                            max_step=resolution_agent_max_step,
+                            mitigation_summary=mitigation_summary,
+                            app_name=app_name,
+                            app_description=app_description,
+                            app_namespace=app_namespace,
+                        )
+                        + "\n\n"
+                        + resolution_agent_prompts["retry_user"].format(
+                            last_result=str(oracle_results),
+                            reflection=last_run_summary,
+                        )
+                    ),
+                ]
+                logger.info(f"composed retry prompts: {retry_run_initial_messages}")
+                agent, resolution_agent_last_state, graph_events = await resolution_agent_retry_run(
+                    retry_run_initial_messages
+                )
+                all_graph_events.append({"stage": f"resolution_attempt_{curr_attempt}", "events": graph_events})
+
+            # recording post-run data
+            agent_time = time.perf_counter() - start_time
+            agent_names_lst.append("resolution_agent_validate")
+            usage_metadata = next(iter(agent.callback.usage_metadata.items()))[1]
+            input_tokens_lst.append(usage_metadata["input_tokens"])
+            output_tokens_lst.append(usage_metadata["output_tokens"])
+            total_tokens_lst.append(usage_metadata["total_tokens"])
+            time_lst.append(str(agent_time))
+            steps_lst.append(resolution_agent_last_state.values["num_steps"])
+            num_retry_attempts_lst.append(str(curr_attempt))
+            rollback_stack_lst.append("N/A, resolution agent")
+
+            # getting oracle result
+            try:
+                oracle_results = validate_oracles(oracles)
+                oracle_results_lst.append(str(oracle_results))
+                has_succeeded = oracle_results[0]
+            except Exception as e:
+                logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
+                oracle_results = [False, []]
+                oracle_results_lst.append(f"Oracle error: {str(e)}")
+                has_succeeded = False
+            if has_succeeded:
+                logger.info("agent succeeds! manually submitting for the agent")
+                await manual_submit_tool("")
+                logger.info("breaking the retry loop")
+                break
+            else:
+                logger.info(
+                    f"current attempt: {curr_attempt + 1}/{resolution_agent_max_retry_attempts}, agent failed the validation oracles."
+                )
+                should_retry = (curr_attempt + 1) < resolution_agent_max_retry_attempts
+                logger.info(f"agent failed, should we retry? {'Yes!' if should_retry else 'No!'}")
+                if should_retry:
+                    logger.info(
+                        f"we should retry as we have more attempts left. attempts left: {(resolution_agent_max_retry_attempts - 1) - (curr_attempt + 1)}"
+                    )
+                    logger.info(f"agent failed, retrying... {curr_attempt + 1}/{resolution_agent_max_retry_attempts}")
+                    logger.info("running deterministic rollback to reverse progress")
+                    rollback_start_time = time.perf_counter()
+                    executed_commands = resolution_agent_last_state.values.get("executed_commands", [])
+                    exec_tool = next((t for t in agent.async_tools if t.name == "exec_kubectl_cmd_safely"), None)
+                    mcp_session_id = exec_tool.session_id if exec_tool is not None else None
+                    rollback_result = await perform_rollback(executed_commands, session_id=mcp_session_id)
+                    rollback_end_time = time.perf_counter() - rollback_start_time
+                    agent_names_lst.append("deterministic_rollback")
+                    input_tokens_lst.append(0)
+                    output_tokens_lst.append(0)
+                    total_tokens_lst.append(0)
+                    time_lst.append(str(rollback_end_time))
+                    steps_lst.append(rollback_result.steps)
+                    num_retry_attempts_lst.append(str(curr_attempt))
+                    rollback_stack_lst.append(rollback_result.rollback_stack)
+                    oracle_results_lst.append("N/A, deterministic rollback")
+                    curr_attempt += 1
+                else:
+                    logger.info("we shouldn't retry as we don't have more attempts left.")
+                    logger.info("making a real submission for the agent.")
+                    await manual_submit_tool("")
+                    break
 
         agent_exec_stats["agent_name"] = agent_names_lst
         agent_exec_stats["input_tokens"] = input_tokens_lst
@@ -714,9 +968,9 @@ async def main():
 
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
+    diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path))
+    diagnosis_agent_prompts = yaml.safe_load(diagnosis_agent_prompt_path.read_text())
 
     # Check if diagnosis prompts have the summary prompt, otherwise use a default key
     summary_prompt_key = (
@@ -760,6 +1014,40 @@ async def main():
             f"Unexpected benchmark status: {benchmark_status}. Expected 'mitigation' or 'done'. "
             "Skipping mitigation agent to be safe."
         )
+
+    # Check if the benchmark has moved to the resolution stage
+    benchmark_status = get_benchmark_status()
+    logger.info(f"Benchmark status after mitigation: {benchmark_status}")
+
+    if benchmark_status == "resolution":
+        # Pass the diagnosis summary plus a note that mitigation has completed
+        # as context for the resolution agent.
+        mitigation_summary = (
+            diagnosis_fault_summary
+            + "\n\nNote: The mitigation stage has completed and immediate symptoms have been addressed. "
+            "Please verify the system is fully resolved and fix any remaining root cause issues."
+        )
+
+        logger.info("*" * 25 + " Starting [resolution agent] for [resolution] " + "*" * 25)
+        resolution_agent_exec_stats, resolution_graph_events = await resolution_task_main(mitigation_summary)
+        all_trajectories.extend(resolution_graph_events)
+        agent_names.extend(resolution_agent_exec_stats["agent_name"])
+        agent_in_tokens.extend(resolution_agent_exec_stats["input_tokens"])
+        agent_out_tokens.extend(resolution_agent_exec_stats["output_tokens"])
+        agent_total_tokens.extend(resolution_agent_exec_stats["total_tokens"])
+        agent_times.extend(resolution_agent_exec_stats["time"])
+        agent_steps.extend(resolution_agent_exec_stats["steps"])
+        agent_retry_attempts.extend(resolution_agent_exec_stats["num_retry_attempts"])
+        agent_rollback_stack.extend(resolution_agent_exec_stats["rollback_stack"])
+        agent_oracle_results.extend(resolution_agent_exec_stats["oracle_results"])
+        logger.info("*" * 25 + " Finished [resolution agent] " + "*" * 25)
+    elif benchmark_status == "done":
+        logger.info(
+            "Benchmark is already in 'done' status after mitigation. "
+            "No resolution stage needed (problem may not have a resolution oracle)."
+        )
+    else:
+        logger.warning(f"Unexpected benchmark status after mitigation: {benchmark_status}")
 
     for lst in [
         agent_names,

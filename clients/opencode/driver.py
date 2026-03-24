@@ -83,7 +83,7 @@ def wait_for_ready_stage(timeout: int = 300) -> str:
     import time
 
     api_url = f"{get_api_base_url()}/status"
-    allowed_stages = {"diagnosis", "mitigation"}
+    allowed_stages = {"diagnosis", "mitigation", "resolution"}
     start_time = time.time()
 
     logger.info("Waiting for conductor to reach submission-ready stage...")
@@ -132,7 +132,7 @@ Namespace: {namespace}
 
 CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
 
-WORKFLOW: You will perform TWO tasks in sequence:
+WORKFLOW: You will perform up to THREE tasks in sequence:
 
 TASK 1: DIAGNOSIS
 - Investigate the application to detect any anomalies or issues
@@ -145,6 +145,11 @@ TASK 2: MITIGATION
 - After applying the fix, YOU MUST submit with an empty string to trigger validation
 - The submission is REQUIRED - do not exit without submitting
 
+TASK 3: RESOLUTION (if applicable)
+- After mitigation is validated, the system may enter a resolution stage
+- This validates that the system has fully recovered and the root cause is fixed
+- Verify the system is healthy, then submit with an EMPTY STRING to trigger resolution validation
+
 HOW TO SUBMIT:
 
 The submission endpoint is: {get_api_base_url()}/submit
@@ -153,7 +158,7 @@ For DIAGNOSIS stage:
 - Submit with a natural language description of the issue
 - Example: POST {get_api_base_url()}/submit with JSON: {{"solution": "The frontend service is crashing due to missing environment variable"}}
 
-For MITIGATION stage:
+For MITIGATION and RESOLUTION stages:
 - After applying your fix, YOU MUST submit with an EMPTY STRING
 - POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
 - This submission is MANDATORY - the conductor needs it to validate your fix
