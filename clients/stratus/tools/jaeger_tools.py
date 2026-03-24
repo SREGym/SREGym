@@ -45,7 +45,10 @@ async def get_traces(service: str, last_n_minutes: int, tool_call_id: Annotated[
             "last_n_minutes": last_n_minutes,
         },
     )
-    await exit_stack.aclose()
+    try:
+        await exit_stack.aclose()
+    except Exception as e:
+        logger.debug(f"{type(e).__name__} ignored, as it's expected")
     result = result.content[0].text
     # if langgraph_tool_config.use_summaries and len(traces) >= langgraph_tool_config.min_len_to_sum:
     #     logger.info("Using summaries for traces.")
@@ -141,7 +144,10 @@ async def get_services(tool_call_id: Annotated[str, InjectedToolCallId]) -> Comm
     await session.initialize()
 
     result = await session.call_tool("get_services")
-    await exit_stack.aclose()
+    try:
+        await exit_stack.aclose()
+    except Exception as e:
+        logger.debug(f"{type(e).__name__} ignored, as it's expected")
     # services = result.content[0].text
     logger.debug(f"Result from get_services mcp tools: f{result}")
     return Command(
@@ -186,7 +192,10 @@ async def get_operations(
         "get_operations",
         arguments={"service": service},
     )
-    await exit_stack.aclose()
+    try:
+        await exit_stack.aclose()
+    except Exception as e:
+        logger.debug(f"{type(e).__name__} ignored, as it's expected")
     # operations = result.content[0].text
     # if langgraph_tool_config.use_summaries and len(operations) >= langgraph_tool_config.min_len_to_sum:
     #     logger.info("Using summaries for operations.")
@@ -228,7 +237,10 @@ async def get_dependency_graph(
         "get_dependency_graph",
         arguments={"last_n_minutes": last_n_minutes},
     )
-    await exit_stack.aclose()
+    try:
+        await exit_stack.aclose()
+    except Exception as e:
+        logger.debug(f"{type(e).__name__} ignored, as it's expected")
     # operations = result.content[0].text
     # if langgraph_tool_config.use_summaries and len(operations) >= langgraph_tool_config.min_len_to_sum:
     #     logger.info("Using summaries for operations.")

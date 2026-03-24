@@ -1,3 +1,5 @@
+import operator
+
 from langgraph.graph import add_messages
 from typing_extensions import Annotated, TypedDict
 
@@ -19,3 +21,5 @@ class State(TypedDict):
     # submit_tried: bool
     # ans: dict
     rollback_stack: str
+    # stack of state-changing kubectl commands executed by the mitigation agent
+    executed_commands: Annotated[list[str], operator.add]

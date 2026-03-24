@@ -26,20 +26,24 @@ class KubectlCmdRunner:
 
     def exec_kubectl_cmd_safely(self, command: str) -> str:
         try:
+            logger.info(f"[EXEC] start: {command!r}")
             if not command.strip().startswith("kubectl"):
                 return "Command Rejected: Only kubectl commands are allowed. Please check the command and try again."
 
+            logger.info(f"[EXEC] checking command syntax")
             self._check_kubectl_command(command)
 
+            logger.info(f"[EXEC] running dry-run")
             dry_run_result = KubeCtl.dry_run_json_output(command)
+            logger.info(f"[EXEC] dry-run done: status={dry_run_result.status}, description={dry_run_result.description!r}")
 
             if self.config.forbid_unsafe_commands and not self._is_kubectl_command_safe(command):
                 return "Command Rejected: Unsafe command detected. Please check the command and try again."
 
-            logger.debug(f"Dry-run result: {dry_run_result.status}, description: {dry_run_result.description}")
-
             if dry_run_result.status == DryRunStatus.NOEFFECT:
+                logger.info(f"[EXEC] NOEFFECT — executing directly")
                 result = self._execute_kubectl_command(command)
+                logger.info(f"[EXEC] NOEFFECT done")
             elif dry_run_result.status == DryRunStatus.ERROR:
                 result = dry_run_result.description
 
@@ -57,8 +61,11 @@ class KubectlCmdRunner:
                 return result
             elif dry_run_result.status == DryRunStatus.SUCCESS:
                 if self.config.use_rollback_stack:
+                    logger.info(f"[EXEC] generating rollback commands")
                     rollback_command = self._gen_rollback_commands(command, dry_run_result)
+                    logger.info(f"[EXEC] rollback commands generated: {rollback_command}")
 
+                logger.info(f"[EXEC] executing command")
                 if self.config.verify_dry_run:
                     try:
                         result = self._execute_kubectl_command(command)
@@ -67,11 +74,14 @@ class KubectlCmdRunner:
                         raise e
                 else:
                     result = self._execute_kubectl_command(command)
+                logger.info(f"[EXEC] command done")
 
                 if self.config.use_rollback_stack:
                     self.action_stack.push(rollback_command)
+                    logger.info(f"[EXEC] pushed to action stack, stack size now: {len(self.action_stack.stack)}")
             else:
                 raise ValueError(f"Unknown dry run status: {dry_run_result.status}")
+            logger.info(f"[EXEC] complete: {command!r}")
             return parse_text(result)
         except ValueError as ve:
             logger.error(f"Command Rejected (ValueError): {ve}")
@@ -150,6 +160,9 @@ class KubectlCmdRunner:
         return False
 
     def _execute_kubectl_command(self, command: str):
+        if command.strip().startswith("kubectl delete") and "--wait" not in command:
+            command = KubeCtl.insert_flags(command, "--wait=false")
+            logger.info(f"[EXEC] injected --wait=false: {command!r}")
         logger.debug(f"Executing command: {command}")
         result = KubeCtl.exec_command(command)
         if result.returncode == 0:
