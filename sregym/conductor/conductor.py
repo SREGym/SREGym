@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import shutil
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,7 +75,6 @@ class Conductor:
         # submission_stage reflects the current stage (e.g., "diagnosis", "mitigation") or "done"
         self.submission_stage = None
         self.results = {}
-        self._cleanup_thread: threading.Thread | None = None
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
@@ -368,8 +366,8 @@ class Conductor:
     def _cleanup_sync(self):
         """
         Blocking cleanup operations (fault recovery, app teardown, reconciliation).
-        Intended to be run in a background thread so the event loop
-        is not blocked and HTTP responses can return immediately.
+        Called synchronously from _finish_problem() so that cleanup always completes
+        before the next problem can start.
         """
         self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
 
@@ -410,19 +408,14 @@ class Conductor:
 
     def _finish_problem(self):
         """
-        Initiates problem teardown by transitioning to 'tearing_down' state
-        and scheduling cleanup in a background thread. Returns immediately without blocking.
+        Runs problem teardown synchronously: transitions to 'tearing_down', performs
+        cleanup (fault recovery, undeploy, reconcile), then transitions to 'done'.
+        Blocks until all cleanup is complete, ensuring the next problem cannot start
+        before the current one is fully torn down.
         """
-        self.logger.info("[STAGE] Done, initiating teardown")
-        # Set stage to "tearing_down" immediately so the HTTP response can return
+        self.logger.info("[STAGE] Done, starting teardown")
         self.submission_stage = "tearing_down"
-
-        # Run cleanup in a background thread — works whether called from
-        # the event loop or from a thread pool (run_in_executor)
-        self._cleanup_thread = threading.Thread(target=self._cleanup_sync, name="cleanup", daemon=True)
-        self._cleanup_thread.start()
-
-        self.logger.info("[STAGE] Teardown initiated, cleanup running in background")
+        self._cleanup_sync()
 
     async def start_problem(self) -> StartProblemResult:
         """
@@ -434,18 +427,6 @@ class Conductor:
         """
         if self.problem_id is None:
             raise RuntimeError("Cannot start problem: problem_id is not set")
-
-        # Wait for any in-progress cleanup thread from a previous attempt to finish
-        # before starting a new problem. This prevents a race condition where the
-        # background cleanup sets submission_stage="done" after the new problem starts.
-        if self._cleanup_thread is not None and self._cleanup_thread.is_alive():
-            self.logger.info("[WAIT] Waiting for previous cleanup thread to finish...")
-            self._cleanup_thread.join(timeout=300)
-            if self._cleanup_thread.is_alive():
-                self.logger.warning("[WAIT] Cleanup thread did not finish within 300s, proceeding anyway")
-            else:
-                self.logger.info("[WAIT] Previous cleanup thread finished")
-            self._cleanup_thread = None
 
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
