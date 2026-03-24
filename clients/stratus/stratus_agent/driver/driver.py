@@ -771,7 +771,7 @@ async def resolution_task_main(mitigation_summary):
     elif resolution_agent_retry_mode == "validate":
         logger.info(f"retry mode: [{resolution_agent_retry_mode}]")
         curr_attempt = 0
-        resolution_agent_last_state = ""
+        resolution_agent_last_state = None
         oracle_results = OracleResult(
             success=False, issues=["This is the beginning of resolution, please observe the cluster for issues."]
         )
