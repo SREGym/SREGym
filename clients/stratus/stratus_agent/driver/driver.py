@@ -1018,8 +1018,18 @@ async def main():
             "Skipping mitigation agent to be safe."
         )
 
-    # Check if the benchmark has moved to the resolution stage
+    # Poll for the conductor to advance past mitigation.
+    # The conductor evaluates submissions asynchronously (e.g. AlertOracle takes ~2min),
+    # so the stage may still be "mitigation" immediately after the submit call returns.
+    poll_timeout = 300  # seconds
+    poll_start = time.perf_counter()
     benchmark_status = get_benchmark_status()
+    while benchmark_status == "mitigation" and (time.perf_counter() - poll_start) < poll_timeout:
+        logger.info(
+            f"Stage still 'mitigation', waiting for conductor to advance... ({int(time.perf_counter() - poll_start)}s elapsed)"
+        )
+        await asyncio.sleep(5)
+        benchmark_status = get_benchmark_status()
     logger.info(f"Benchmark status after mitigation: {benchmark_status}")
 
     if benchmark_status == "resolution":
