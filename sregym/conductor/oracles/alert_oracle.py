@@ -53,6 +53,8 @@ class AlertOracle(Oracle):
             "-n",
             "observe",
             "deploy/prometheus-server",
+            "-c",
+            "prometheus-server",
             "--",
             "wget",
             "-qO-",
