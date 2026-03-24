@@ -1,10 +1,8 @@
-from sregym.conductor.oracles.compound import CompoundedOracle
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
-from sregym.conductor.oracles.workload import WorkloadOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
-from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
@@ -34,7 +32,8 @@ class ReadinessProbeMisconfiguration(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
-        self.mitigation_oracle = MitigationOracle(problem=self)
+        self.resolution_oracle = MitigationOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

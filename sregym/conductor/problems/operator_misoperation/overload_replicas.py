@@ -5,15 +5,11 @@
 # Only a few pods (e.g., 4 out of 100,000 replicas requested) are created successfully.
 
 
-import time
-from datetime import datetime, timedelta
-from typing import Any
-
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.operator_misoperation.overload_replicas_mitigation import OverloadReplicasMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_operator import K8SOperatorFaultInjector
-from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.apps.fleet_cast import FleetCast
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -29,7 +25,8 @@ class K8SOperatorOverloadReplicasFault(Problem):
         self.root_cause = "The TiDBCluster custom resource is configured with an excessive number of replicas (100,000), overwhelming the cluster and causing only a few pods to be created successfully."
         self.app.create_workload()
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = OverloadReplicasMitigationOracle(problem=self, deployment_name="basic")
+        self.resolution_oracle = OverloadReplicasMitigationOracle(problem=self, deployment_name="basic")
+        self.mitigation_oracle = AlertOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

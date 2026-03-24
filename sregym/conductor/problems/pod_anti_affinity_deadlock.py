@@ -2,6 +2,7 @@
 
 import time
 
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -25,7 +26,8 @@ class PodAntiAffinityDeadlock(Problem):
 
         # Create workload for evaluation
         self.app.create_workload()
-        self.mitigation_oracle = MitigationOracle(problem=self)
+        self.resolution_oracle = MitigationOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):
@@ -42,8 +44,8 @@ class PodAntiAffinityDeadlock(Problem):
         # Wait for the deadlock to manifest
         time.sleep(30)
 
-        print(f"Expected effect: Pods should be in Pending state with:")
-        print(f"  '0/X nodes are available: X node(s) didn't match pod anti-affinity rules'")
+        print("Expected effect: Pods should be in Pending state with:")
+        print("  '0/X nodes are available: X node(s) didn't match pod anti-affinity rules'")
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected

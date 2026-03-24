@@ -4,7 +4,7 @@ from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
 
 
 class ClusterStateOracle(BaseOracle):
-    async def validate(self, namespace="default", **kwargs) -> OracleResult:
+    def validate(self, namespace="default", **kwargs) -> OracleResult:
         """
         Validates the Kubernetes cluster status.
 

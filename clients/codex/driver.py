@@ -18,11 +18,11 @@ sregym_root = Path(__file__).resolve().parents[2]
 if str(sregym_root) not in sys.path:
     sys.path.insert(0, str(sregym_root))
 
-from logger import init_logger
+from logger import init_logger  # noqa: E402
 
 init_logger()
 
-from clients.codex.codex_agent import CodexAgent
+from clients.codex.codex_agent import CodexAgent  # noqa: E402
 
 logger = logging.getLogger("all.codex.driver")
 
@@ -133,17 +133,25 @@ Namespace: {namespace}
 
 CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
 
-WORKFLOW: You will perform TWO tasks in sequence:
+WORKFLOW: You will perform THREE tasks in sequence:
 
 TASK 1: DIAGNOSIS
 - Investigate the application to detect any anomalies or issues
 - Analyze metrics, logs, and traces
 - When ready, submit a natural language description of the issue you found
+- Your diagnosis is evaluated on whether you correctly identify the faulty components and root cause
 
 TASK 2: MITIGATION
 - Identify the root cause of the issue
 - Implement a fix to resolve the problem autonomously (do not ask for confirmation)
 - After applying the fix, YOU MUST submit with an empty string to trigger validation
+- The submission is REQUIRED - do not exit without submitting
+- Your mitigation is evaluated on whether the application is healthy after your changes
+
+TASK 3: RESOLUTION
+- After mitigation, the system verifies that the application has sustainably recovered to a healthy state
+- Your fixes must not only address immediate symptoms but ensure the system remains stable
+- YOU MUST submit with an empty string once you are confident the system is fully healthy
 - The submission is REQUIRED - do not exit without submitting
 
 HOW TO SUBMIT:
@@ -158,6 +166,11 @@ For MITIGATION stage:
 - After applying your fix, YOU MUST submit with an EMPTY STRING
 - POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
 - This submission is MANDATORY - the conductor needs it to validate your fix
+
+For RESOLUTION stage:
+- Verify the application is sustainably healthy, then YOU MUST submit with an EMPTY STRING
+- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
+- This submission is MANDATORY - the conductor needs it to complete the evaluation
 
 Important:
 - You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'

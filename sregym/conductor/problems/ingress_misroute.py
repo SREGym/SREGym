@@ -1,5 +1,6 @@
 from kubernetes import client
 
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.ingress_misroute_oracle import IngressMisrouteMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
@@ -23,7 +24,8 @@ class IngressMisroute(Problem):
         self.networking_v1 = client.NetworkingV1Api()
         self.faulty_service = [correct_service, wrong_service]
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = IngressMisrouteMitigationOracle(problem=self)
+        self.resolution_oracle = IngressMisrouteMitigationOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self)
 
     def _ensure_proxy_services(self):
         """Create proxy services that map the ingress backend names to the real app services."""

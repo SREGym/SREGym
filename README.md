@@ -25,7 +25,7 @@ SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architecture
 ### Requirements
 - Python >= 3.12
 - [Docker](https://docs.docker.com/get-docker/)
-- [Helm](https://helm.sh/)
+- [Helm](https://helm.sh/) >= 4.0
 - [brew](https://docs.brew.sh/Homebrew-and-Python)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [uv](https://github.com/astral-sh/uv)

@@ -1,5 +1,6 @@
 import logging
 
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_tt import TrainTicketFaultInjector
@@ -23,6 +24,7 @@ class TrainTicketF22(Problem):
         self.root_cause = f"The deployment `{self.faulty_service}` has a SQL column name mismatch error in its database queries, causing database operation failures."
         self.kubectl = KubeCtl()
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        self.mitigation_oracle = AlertOracle(problem=self)
 
         self.app.create_workload()
 

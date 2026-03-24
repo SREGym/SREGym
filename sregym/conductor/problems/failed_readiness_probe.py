@@ -1,5 +1,6 @@
 """Otel demo failedReadinessProbe feature flag fault."""
 
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_otel import OtelFaultInjector
@@ -23,6 +24,7 @@ class FailedReadinessProbe(Problem):
         )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        self.mitigation_oracle = AlertOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):
