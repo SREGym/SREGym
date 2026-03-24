@@ -13,16 +13,16 @@ from pathlib import Path
 
 import requests
 
+from clients.claudecode.claudecode_agent import ClaudeCodeAgent
+from logger import init_logger
+
 # Add SREGym root to path
 sregym_root = Path(__file__).resolve().parents[2]
 if str(sregym_root) not in sys.path:
     sys.path.insert(0, str(sregym_root))
 
-from logger import init_logger
 
 init_logger()
-
-from clients.claudecode.claudecode_agent import ClaudeCodeAgent
 
 logger = logging.getLogger("all.claudecode.driver")
 
@@ -133,22 +133,24 @@ Namespace: {namespace}
 
 CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
 
-WORKFLOW: You will perform up to THREE tasks in sequence:
+WORKFLOW: You will perform THREE tasks in sequence:
 
 TASK 1: DIAGNOSIS
 - Investigate the application to detect any anomalies or issues
 - Analyze metrics, logs, and traces
 - When ready, submit a natural language description of the issue you found
+- Your diagnosis is evaluated on whether you correctly identify the faulty components and root cause
 
 TASK 2: MITIGATION
 - Identify the root cause of the issue
 - Implement a fix to resolve the problem
 - When the fix is applied, submit to trigger validation
+- Your mitigation is evaluated on whether the application is healthy after your changes
 
-TASK 3: RESOLUTION (if applicable)
-- After mitigation is validated, the system may enter a resolution stage
-- This validates that the system has fully recovered
-- Submit with an EMPTY STRING to trigger resolution validation
+TASK 3: RESOLUTION
+- After mitigation, the system verifies that the application has sustainably recovered to a healthy state
+- Your fixes must not only address immediate symptoms but ensure the system remains stable
+- Submit with an empty string once you are confident the system is fully healthy
 
 HOW TO SUBMIT:
 

@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import shutil
-import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -76,7 +75,7 @@ class Conductor:
         # submission_stage reflects the current stage (e.g., "diagnosis", "mitigation") or "done"
         self.submission_stage = None
         self.results = {}
-        self._cleanup_thread: threading.Thread | None = None
+        self._submit_future = None  # Future for the executor running _submit_evaluate_and_advance
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
@@ -368,9 +367,13 @@ class Conductor:
     def _cleanup_sync(self):
         """
         Blocking cleanup operations (fault recovery, app teardown, reconciliation).
-        Intended to be run in a background thread so the event loop
-        is not blocked and HTTP responses can return immediately.
+        Captures self.problem at entry so that start_problem() can safely replace
+        self.problem/self.app for the next problem without affecting this cleanup.
         """
+        # Snapshot the problem reference immediately so that any concurrent
+        # replacement of self.problem by start_problem() does not affect this cleanup.
+        problem = self.problem
+
         self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
 
         # Stop noises
@@ -382,15 +385,16 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to stop NoiseManager: {e}")
 
-        # Recover fault
-        if self.problem:
+        # Recover fault using the captured problem reference
+        if problem:
             self.logger.info("[CLEANUP] Recovering fault...")
-            self.problem.recover_fault()
+            problem.recover_fault()
             self.logger.info("[CLEANUP] Fault recovered")
 
-        # Undeploy app
+        # Undeploy app using the captured problem reference
         self.logger.info("[CLEANUP] Undeploying app...")
-        self.undeploy_app()
+        if problem:
+            problem.app.cleanup()
         self.logger.info("[CLEANUP] App undeployed")
 
         # Reconcile cluster state to baseline
@@ -410,19 +414,17 @@ class Conductor:
 
     def _finish_problem(self):
         """
-        Initiates problem teardown by transitioning to 'tearing_down' state
-        and scheduling cleanup in a background thread. Returns immediately without blocking.
+        Runs problem teardown synchronously: fault recovery, app undeploy, and cluster
+        reconciliation all complete before this method returns.
+
+        When called from _submit_evaluate_and_advance() (which runs in an executor
+        thread), start_problem() awaits self._submit_future to ensure the executor —
+        and therefore this cleanup — has fully finished before the next problem starts.
         """
-        self.logger.info("[STAGE] Done, initiating teardown")
-        # Set stage to "tearing_down" immediately so the HTTP response can return
+        self.logger.info("[STAGE] Done, starting teardown")
         self.submission_stage = "tearing_down"
-
-        # Run cleanup in a background thread — works whether called from
-        # the event loop or from a thread pool (run_in_executor)
-        self._cleanup_thread = threading.Thread(target=self._cleanup_sync, name="cleanup", daemon=True)
-        self._cleanup_thread.start()
-
-        self.logger.info("[STAGE] Teardown initiated, cleanup running in background")
+        self._cleanup_sync()
+        self.logger.info("[STAGE] Teardown complete")
 
     async def start_problem(self) -> StartProblemResult:
         """
@@ -435,17 +437,15 @@ class Conductor:
         if self.problem_id is None:
             raise RuntimeError("Cannot start problem: problem_id is not set")
 
-        # Wait for any in-progress cleanup thread from a previous attempt to finish
-        # before starting a new problem. This prevents a race condition where the
-        # background cleanup sets submission_stage="done" after the new problem starts.
-        if self._cleanup_thread is not None and self._cleanup_thread.is_alive():
-            self.logger.info("[WAIT] Waiting for previous cleanup thread to finish...")
-            self._cleanup_thread.join(timeout=300)
-            if self._cleanup_thread.is_alive():
-                self.logger.warning("[WAIT] Cleanup thread did not finish within 300s, proceeding anyway")
-            else:
-                self.logger.info("[WAIT] Previous cleanup thread finished")
-            self._cleanup_thread = None
+        # Wait for the previous problem's executor (evaluation + cleanup) to finish
+        # before starting a new problem. _finish_problem() is called synchronously
+        # from within _submit_evaluate_and_advance(), so awaiting the future here
+        # guarantees that fault recovery, undeploy, and reconciliation are all done.
+        if self._submit_future is not None and not self._submit_future.done():
+            self.logger.info("[WAIT] Waiting for previous problem's cleanup to finish...")
+            await self._submit_future
+            self.logger.info("[WAIT] Previous problem's cleanup finished")
+        self._submit_future = None
 
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
@@ -578,9 +578,12 @@ class Conductor:
         # Mark that we're no longer waiting so duplicate submits are rejected
         self.waiting_for_agent = False
 
-        # Run evaluation and stage advancement in a background thread
-        # so the HTTP response returns immediately
-        asyncio.get_event_loop().run_in_executor(None, self._submit_evaluate_and_advance, sol, current_stage)
+        # Run evaluation and stage advancement in an executor thread so the HTTP
+        # response returns immediately.  Store the future so start_problem() can
+        # await it and guarantee cleanup is fully done before the next problem starts.
+        self._submit_future = asyncio.get_event_loop().run_in_executor(
+            None, self._submit_evaluate_and_advance, sol, current_stage
+        )
 
         return {"status": "ok", "message": "Submission received"}
 
