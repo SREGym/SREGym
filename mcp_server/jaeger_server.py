@@ -1,11 +1,9 @@
-import contextlib
 import logging
 from datetime import datetime, timedelta
 
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
 
 from mcp_server.utils import ObservabilityClient
-from sregym.generators.noise.manager import get_noise_manager
 
 logger = logging.getLogger("all.mcp.jaeger_server")
 logger.info("Starting Jaeger MCP Server")
@@ -13,7 +11,7 @@ mcp = FastMCP("Jaeger MCP Server")
 
 
 @mcp.tool(name="get_services")
-def get_services(ctx: Context) -> str:
+def get_services() -> str:
     """Retrieve the list of service names from the Grafana instance.
 
     Returns:
@@ -21,13 +19,6 @@ def get_services(ctx: Context) -> str:
     """
 
     logger.debug("[ob_mcp] get_services called, getting jaeger services")
-
-    # Noise Injection Hook (Pre-execution)
-    noise_manager = get_noise_manager()
-    ssid = None
-    with contextlib.suppress(BaseException):
-        ssid = ctx.request_context.request.headers.get("sregym_ssid")
-    noise_manager.on_tool_call("jaeger", "get_services", ssid)
 
     jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
     jaeger_client = ObservabilityClient(jaeger_url)
@@ -40,9 +31,6 @@ def get_services(ctx: Context) -> str:
         services = str(response.json()["data"])
         result = services if services else "None"
 
-        # Noise Injection Hook (Post-execution)
-        result = noise_manager.on_tool_result("jaeger", "get_services", result, ssid)
-
         return result
     except Exception as e:
         err_str = f"[ob_mcp] Error querying get_services: {str(e)}"
@@ -51,7 +39,7 @@ def get_services(ctx: Context) -> str:
 
 
 @mcp.tool(name="get_operations")
-def get_operations(service: str, ctx: Context) -> str:
+def get_operations(service: str) -> str:
     """Query available operations for a specific service from the Grafana instance.
 
     Args:
@@ -63,13 +51,6 @@ def get_operations(service: str, ctx: Context) -> str:
 
     logger.debug("[ob_mcp] get_operations called, getting jaeger operations")
 
-    # Noise Injection Hook (Pre-execution)
-    noise_manager = get_noise_manager()
-    ssid = None
-    with contextlib.suppress(BaseException):
-        ssid = ctx.request_context.request.headers.get("sregym_ssid")
-    noise_manager.on_tool_call("jaeger", f"get_operations {service}", ssid)
-
     jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
     jaeger_client = ObservabilityClient(jaeger_url)
     try:
@@ -80,9 +61,6 @@ def get_operations(service: str, ctx: Context) -> str:
         operations = str(response.json()["data"])
         result = operations if operations else "None"
 
-        # Noise Injection Hook (Post-execution)
-        result = noise_manager.on_tool_result("jaeger", f"get_operations {service}", result, ssid)
-
         return result
     except Exception as e:
         err_str = f"[ob_mcp] Error querying get_operations: {str(e)}"
@@ -91,7 +69,7 @@ def get_operations(service: str, ctx: Context) -> str:
 
 
 @mcp.tool(name="get_traces")
-def get_traces(service: str, last_n_minutes: int, ctx: Context) -> str:
+def get_traces(service: str, last_n_minutes: int) -> str:
     """Get Jaeger traces for a given service in the last n minutes.
 
     Args:
@@ -103,13 +81,6 @@ def get_traces(service: str, last_n_minutes: int, ctx: Context) -> str:
     """
 
     logger.debug("[ob_mcp] get_traces called, getting jaeger traces")
-
-    # Noise Injection Hook (Pre-execution)
-    noise_manager = get_noise_manager()
-    ssid = None
-    with contextlib.suppress(BaseException):
-        ssid = ctx.request_context.request.headers.get("sregym_ssid")
-    noise_manager.on_tool_call("jaeger", f"get_traces {service}", ssid)
 
     jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
     jaeger_client = ObservabilityClient(jaeger_url)
@@ -130,9 +101,6 @@ def get_traces(service: str, last_n_minutes: int, ctx: Context) -> str:
         traces = str(response.json()["data"])
         result = traces if traces else "None"
 
-        # Noise Injection Hook (Post-execution)
-        result = noise_manager.on_tool_result("jaeger", f"get_traces {service}", result, ssid)
-
         return result
     except Exception as e:
         err_str = f"[ob_mcp] Error querying get_traces: {str(e)}"
@@ -141,7 +109,7 @@ def get_traces(service: str, last_n_minutes: int, ctx: Context) -> str:
 
 
 @mcp.tool(name="get_dependency_graph")
-def get_dependency_graph(ctx: Context, last_n_minutes: int = 30) -> str:
+def get_dependency_graph(last_n_minutes: int = 30) -> str:
     """
     Get service dependency graph from Jaeger's native dependencies API.
     Args:
@@ -149,13 +117,6 @@ def get_dependency_graph(ctx: Context, last_n_minutes: int = 30) -> str:
     Returns:
         str: JSON object representing the dependency graph.
     """
-
-    # Noise Injection Hook (Pre-execution)
-    noise_manager = get_noise_manager()
-    ssid = None
-    with contextlib.suppress(BaseException):
-        ssid = ctx.request_context.request.headers.get("sregym_ssid")
-    noise_manager.on_tool_call("jaeger", "get_dependency_graph", ssid)
 
     jaeger_url = "http://jaeger-out.observe.svc.cluster.local:16686"
     client = ObservabilityClient(jaeger_url)
@@ -167,8 +128,5 @@ def get_dependency_graph(ctx: Context, last_n_minutes: int = 30) -> str:
     response = client.make_request("GET", url, params=params)
     logger.info(f"[ob_mcp] get_dependency_graph: {response.status_code}")
     result = str(response.json())
-
-    # Noise Injection Hook (Post-execution)
-    result = noise_manager.on_tool_result("jaeger", "get_dependency_graph", result, ssid)
 
     return result

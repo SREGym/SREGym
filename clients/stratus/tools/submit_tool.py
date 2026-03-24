@@ -78,7 +78,10 @@ async def submit_tool(
     result = result.content[0].text
     result = ast.literal_eval(result)
 
-    await exit_stack.aclose()
+    try:
+        await exit_stack.aclose()
+    except Exception as e:
+        logger.debug(f"{type(e).__name__} ignored, as it's expected")
     if result["status"] != "200":
         logger.info(f"HTTP submission failed: {result}")
 
@@ -168,6 +171,9 @@ async def manual_submit_tool(ans: str) -> str:
             "ans": ans,
         },
     )
-    await exit_stack.aclose()
+    try:
+        await exit_stack.aclose()
+    except Exception as e:
+        logger.debug(f"{type(e).__name__} ignored, as it's expected")
     logger.info("Submission complete. No further action is needed.")
     return "Submitted"

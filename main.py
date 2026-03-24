@@ -22,6 +22,7 @@ from sregym.conductor.constants import StartProblemResult
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
+_driver_base_dir: Path | None = None
 
 
 def get_current_datetime_formatted():
@@ -54,6 +55,11 @@ def driver_loop(
 
     async def driver():
         console = Console()
+
+        base_dir = Path("results") / get_current_datetime_formatted()
+        base_dir.mkdir(parents=True, exist_ok=True)
+        global _driver_base_dir
+        _driver_base_dir = base_dir
         # give the API a moment to bind
         await asyncio.sleep(1)
 
@@ -120,13 +126,13 @@ def driver_loop(
                 continue
 
             conductor.problem_id = pid
+            
 
             # Keep a record of results for this problem in a temp file in case an attempt fails
             tmp_path = f"_running_{pid}_{agent_to_run}_results.csv"
 
             for attempt in range(1, n_attempts + 1):
                 console.log(f"\n🔍 Starting problem: {pid} (Attempt {attempt} of {n_attempts})")
-
                 result = await conductor.start_problem()
                 if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
                     console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
@@ -138,6 +144,11 @@ def driver_loop(
                     return []
 
                 assert agent_to_run is not None
+
+                # Create the run directory and point the agent at it before launch
+                run_dir = base_dir / agent_to_run / pid / f"run_{attempt}"
+                run_dir.mkdir(parents=True, exist_ok=True)
+                os.environ["AGENT_LOGS_DIR"] = str(run_dir.resolve())
 
                 reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
                 if reg:
@@ -199,7 +210,7 @@ def driver_loop(
                         snapshot[stage] = outcome
 
                 all_results_for_agent.append(snapshot)
-
+                
                 fieldnames = sorted({key for row in all_results_for_agent for key in row})
 
                 with open(tmp_path, "w", newline="") as csvfile:
@@ -207,15 +218,21 @@ def driver_loop(
                     writer.writeheader()
                     writer.writerows(all_results_for_agent)
 
+                # run_dir was created above before agent launch; write per-attempt CSV into it
+                attempt_path = run_dir / f"{pid}_results.csv"
+                with open(attempt_path, "w", newline="") as csvfile:
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerow(snapshot)
+
                 logger.info(
                     f"⏳ Attempt {attempt} of {n_attempts} for problem {pid} complete - Intermediate results written to {tmp_path}"
                 )
 
                 if attempt == n_attempts:
-                    current_date_time = get_current_datetime_formatted()
-                    csv_path = f"{current_date_time}_{pid}_{agent_to_run}_results.csv"
-                    os.replace(tmp_path, csv_path)
-                    logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {csv_path}")
+                    final_csv_path = base_dir / agent_to_run / pid / f"{pid}_{agent_to_run}_results.csv"
+                    os.replace(tmp_path, final_csv_path)
+                    logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {final_csv_path}")
 
                 # Cleanup agent process so a fresh one can be started for the next problem
                 if not use_external_harness:
@@ -268,23 +285,8 @@ def main(args):
     agent_model = args.model
     judge_model = args.judge_model or args.model
 
-    # Initialize Noise Manager if config is provided or default config exists
-    nm = None
-    noise_config_path = args.noise_config
-    default_noise_config = "sregym/generators/noise/noise_config.yaml"
-
-    if not noise_config_path and os.path.exists(default_noise_config):
-        noise_config_path = default_noise_config
-
-    if noise_config_path:
-        try:
-            from sregym.generators.noise.manager import get_noise_manager
-
-            nm = get_noise_manager()
-            nm.load_config(noise_config_path)
-            logger.info(f"✅ Noise manager initialized with config: {noise_config_path}")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to initialize noise manager: {e}")
+    if args.noise:
+        logger.info("Noise injection enabled.")
 
     available_models = list(load_model_config().keys())
 
@@ -312,7 +314,7 @@ def main(args):
 
     logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}")
 
-    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness)
+    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
     conductor = Conductor(config=conductor_config)
 
     # Only build/check agent container image if the agent requires it
@@ -352,11 +354,13 @@ def main(args):
         # Stop any remaining agent containers/processes
         LAUNCHER.cleanup_all()
 
-        # Stop noise manager if it was initialized
-        if nm:
+        # Stop noise manager if it was enabled
+        if args.noise:
             try:
+                from sregym.generators.noise.manager import get_noise_manager
+
                 logger.info("Stopping noise manager...")
-                nm.stop()
+                get_noise_manager().stop()
             except Exception as e:
                 logger.error(f"⚠️ Error stopping noise manager: {e}")
 
@@ -374,8 +378,8 @@ def main(args):
 
         for agent_name, agent_results in aggregated.items():
             fieldnames = sorted({key for row in agent_results for key in row})
-            current_date_time = get_current_datetime_formatted()
-            csv_path = f"{current_date_time}_{agent_name}_ALL_results.csv"
+            out_dir = _driver_base_dir if _driver_base_dir else Path("results")
+            csv_path = out_dir / f"{agent_name}_ALL_results.csv"
             with open(csv_path, "w", newline="") as csvfile:
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
@@ -423,10 +427,9 @@ if __name__ == "__main__":
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
     )
     parser.add_argument(
-        "--noise-config",
-        type=str,
-        default=None,
-        help="Path to noise configuration YAML file",
+        "--noise",
+        action="store_true",
+        help="Enable transient noise injection via Chaos Mesh during problem runs",
     )
     parser.add_argument(
         "--n-attempts",

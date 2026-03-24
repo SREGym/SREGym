@@ -249,6 +249,7 @@ class BaseAgent:
             "num_steps": 0,
             "submitted": False,
             "rollback_stack": "",
+            "executed_commands": [],
         }
         graph_config = {
             "recursion_limit": 10000,

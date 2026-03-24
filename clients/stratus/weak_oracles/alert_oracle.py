@@ -10,7 +10,6 @@ from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
 
 logger = logging.getLogger("all.stratus.alert_oracle")
 
-_PROMETHEUS_URL = "http://prometheus-server.observe.svc:80"
 _SUSTAINED_SILENCE_SECONDS = 120
 _POLL_INTERVAL_SECONDS = 10
 _BUFFER_SECONDS = 30
@@ -45,20 +44,24 @@ class AlertOracle(BaseOracle):
 
     def _query_firing_alerts(self) -> list[dict] | None:
         """Returns list of firing alerts, or None if the cluster is being torn down."""
-        url = f"{_PROMETHEUS_URL}/api/v1/alerts"
-        cmd = ["kubectl", "exec", "-n", "observe", "deploy/prometheus-server", "--", "wget", "-qO-", url]
+        # Use kubectl get --raw to proxy through the API server (plain HTTP, no WebSockets).
+        proxy_path = "/api/v1/namespaces/observe/services/prometheus-server:80/proxy/api/v1/alerts"
+        cmd = ["kubectl", "get", "--raw", proxy_path]
         try:
-            raw = subprocess.check_output(cmd, text=True, stderr=subprocess.PIPE, timeout=15)
-            payload = json.loads(raw)
-        except subprocess.CalledProcessError as exc:
-            stderr = exc.stderr or ""
-            if "NotFound" in stderr:
-                logger.info(f"[AlertOracle] Prometheus not found (cluster teardown detected), stopping poll.")
-                return None
+            result = subprocess.run(cmd, text=True, capture_output=True, timeout=15)
+            stderr = result.stderr or ""
+            if result.returncode != 0:
+                if "NotFound" in stderr or "not found" in stderr.lower():
+                    logger.info(f"[AlertOracle] Prometheus not found (cluster teardown detected), stopping poll.")
+                    return None
+                logger.warning(f"Failed to query Prometheus alerts: exit {result.returncode}; stderr: {stderr!r}")
+                return []
+            payload = json.loads(result.stdout)
+        except subprocess.TimeoutExpired as exc:
             logger.warning(f"Failed to query Prometheus alerts: {exc}")
             return []
-        except (subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-            logger.warning(f"Failed to query Prometheus alerts: {exc}")
+        except json.JSONDecodeError as exc:
+            logger.warning(f"Failed to parse Prometheus alerts response: {exc}")
             return []
 
         return [

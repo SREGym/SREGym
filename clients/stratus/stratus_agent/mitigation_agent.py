@@ -38,7 +38,15 @@ class MitigationAgent(BaseAgent):
         if ans is None:
             self.logger.warning("LLM did not call the submit tool during force submit. Extracting plain-text answer.")
             plain_prompt = HumanMessage("Please write out your best answer as plain text.")
-            plain_response = self.llm.inference(messages=state["messages"] + [prompt, ai_message, plain_prompt])
+            # Strip tool_calls from ai_message before using it in the next inference.
+            # The Bedrock/Claude API requires every tool_use block to be immediately
+            # followed by a tool_result block; including an ai_message with tool_calls
+            # here (without results) causes a BadRequestError.
+            if isinstance(ai_message, AIMessage) and ai_message.tool_calls:
+                ai_message_no_tools = AIMessage(content=ai_message.content)
+            else:
+                ai_message_no_tools = ai_message
+            plain_response = self.llm.inference(messages=state["messages"] + [prompt, ai_message_no_tools, plain_prompt])
             ans = plain_response.content if isinstance(plain_response, AIMessage) else ""
 
         self.logger.info(f"Force submit: signaling transaction attempt with answer: {ans!r}. Real submission deferred to driver.")

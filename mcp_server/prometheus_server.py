@@ -1,10 +1,7 @@
-import contextlib
-
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
 
 from clients.stratus.stratus_utils.get_logger import get_logger
 from mcp_server.utils import ObservabilityClient
-from sregym.generators.noise.manager import get_noise_manager
 
 logger = get_logger()
 logger.info("Starting Prometheus MCP Server")
@@ -12,8 +9,11 @@ logger.info("Starting Prometheus MCP Server")
 mcp = FastMCP("Prometheus MCP Server")
 
 
+PROMETHEUS_URL = "http://prometheus-server.observe.svc.cluster.local:80"
+
+
 @mcp.tool(name="get_metrics")
-def get_metrics(query: str, ctx: Context) -> str:
+def get_metrics(query: str) -> str:
     """Query real-time metrics data from the Prometheus instance.
 
     Args:
@@ -25,19 +25,9 @@ def get_metrics(query: str, ctx: Context) -> str:
 
     logger.info("[prom_mcp] get_metrics called, getting prometheus metrics")
 
-    # Noise Injection Hook (Pre-execution)
-    noise_manager = get_noise_manager()
-    # Try to get session ID if possible, otherwise None
-    ssid = None
-    with contextlib.suppress(BaseException):
-        ssid = ctx.request_context.request.headers.get("sregym_ssid")
-
-    noise_manager.on_tool_call("prometheus", query, ssid)
-
-    prometheus_url = "http://prometheus-server.observe.svc.cluster.local:80"
-    observability_client = ObservabilityClient(prometheus_url)
+    observability_client = ObservabilityClient(PROMETHEUS_URL)
     try:
-        url = f"{prometheus_url}/api/v1/query"
+        url = f"{PROMETHEUS_URL}/api/v1/query"
         param = {"query": query}
         response = observability_client.make_request("GET", url, params=param)
         logger.info(f"[prom_mcp] get_metrics status code: {response.status_code}")
@@ -45,11 +35,41 @@ def get_metrics(query: str, ctx: Context) -> str:
         metrics = str(response.json()["data"])
         result = metrics if metrics else "None"
 
-        # Noise Injection Hook (Post-execution)
-        result = noise_manager.on_tool_result("prometheus", query, result, ssid)
-
         return result
     except Exception as e:
         err_str = f"[prom_mcp] Error querying get_metrics: {str(e)}"
+        logger.error(err_str)
+        return err_str
+
+
+@mcp.tool(name="get_alerts")
+def get_alerts() -> str:
+    """Get all currently firing alerts from the Prometheus instance.
+
+    Returns a list of firing alerts with their labels (alertname, severity,
+    namespace, service_name, etc.) and annotations (summary, description).
+
+    Returns:
+        str: String of firing alert data including alert names, labels,
+             and annotations, or "No firing alerts" if none are active.
+    """
+
+    logger.info("[prom_mcp] get_alerts called")
+
+    observability_client = ObservabilityClient(PROMETHEUS_URL)
+    try:
+        url = f"{PROMETHEUS_URL}/api/v1/alerts"
+        response = observability_client.make_request("GET", url)
+        logger.info(f"[prom_mcp] get_alerts status code: {response.status_code}")
+
+        alerts = response.json().get("data", {}).get("alerts", [])
+        firing = [a for a in alerts if a.get("state") == "firing"]
+
+        if not firing:
+            return "No firing alerts"
+
+        return str(firing)
+    except Exception as e:
+        err_str = f"[prom_mcp] Error querying get_alerts: {str(e)}"
         logger.error(err_str)
         return err_str

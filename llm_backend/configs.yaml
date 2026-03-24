@@ -84,6 +84,13 @@
   temperature: 0.0
   top_p: 0.95
 
+"claude-haiku-4.5":
+  provider: "litellm"
+  model_name: "anthropic/claude-haiku-4-5-20251001"
+  api_key: "$ANTHROPIC_API_KEY"
+  temperature: 0.0
+  top_p: 0.95
+
 "moonshot":
   provider: "litellm"
   model_name: "moonshot/moonshot"

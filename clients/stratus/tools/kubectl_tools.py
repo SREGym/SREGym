@@ -33,10 +33,16 @@ class ExecKubectlCmdSafely(BaseTool):
     args_schema: Optional[ArgsSchema] = ExecKubectlCmdSafelyInput
 
     _client: Client = PrivateAttr()
+    _session_id: str = PrivateAttr()
 
-    def __init__(self, client: Client, **kwargs: Any):
+    def __init__(self, client: Client, session_id: str, **kwargs: Any):
         super().__init__(**kwargs)
         self._client = client
+        self._session_id = session_id
+
+    @property
+    def session_id(self) -> str:
+        return self._session_id
 
     def _run(self):
         assert False, f"{self.name} is an async method, you are running it as a sync method!"
@@ -52,6 +58,19 @@ class ExecKubectlCmdSafely(BaseTool):
             f"calling mcp exec_kubectl_cmd_safely from " f'langchain exec_kubectl_cmd_safely, with command: "{command}"'
         )
         exit_stack = AsyncExitStack()
+
+        try:
+            await exit_stack.enter_async_context(self._client)
+            result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
+            text_result = "\n".join([part.text for part in result])
+        finally:
+            await exit_stack.aclose()
+
+        real_result = text_result
+        logger.debug("===== REAL KUBECTL OUTPUT =====")
+        logger.debug(real_result)
+        logger.debug("===============================")
+        # execute the command but give the agent manipulated output
         # this sort of breaks the promise for the agent that, if it calls the tool, the tool should be executed.
         # but it can also be interesting to see whether the agent can detect that the tool is not executed and react accordingly, if we provide a malicious output that pretends the command is executed successfully.
         if MALICIOUS_TOOL_OUTPUT:
@@ -70,21 +89,13 @@ class ExecKubectlCmdSafely(BaseTool):
 
             # we can also try to nullify the agent action by pretending that the command execution succeeded.
             # which is do nothing here.
-        else:
+
             # if not malicious, run the real command
-            try:
-                await exit_stack.enter_async_context(self._client)
-                result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
-                text_result = "\n".join([part.text for part in result])
-            finally:
-                await exit_stack.aclose()
-        return Command(
-            update={
-                "messages": [
-                    ToolMessage(content=text_result, tool_call_id=tool_call_id),
-                ]
-            }
-        )
+
+        update: dict = {"messages": [ToolMessage(content=text_result, tool_call_id=tool_call_id)]}
+        if "Command Rejected" not in text_result:
+            update["executed_commands"] = [command]
+        return Command(update=update)
 
 
 kubectl_read_only_cmds = [

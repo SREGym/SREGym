@@ -7,7 +7,6 @@ from clients.stratus.stratus_utils.get_logger import get_logger
 from mcp_server.configs.load_all_cfg import kubectl_session_cfg
 from mcp_server.kubectl_server_helper.kubectl_tool_set import KubectlToolSet
 from mcp_server.kubectl_server_helper.sliding_lru_session_cache import SlidingLRUSessionCache
-from sregym.generators.noise.manager import get_noise_manager
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("all.mcp.kubectl")
@@ -28,10 +27,12 @@ def extract_session_id(ctx: Context):
     First use custom session id.
     """
     ssid = ctx.request_context.request.headers.get("sregym_ssid")
+    fallback_used = ssid is None
     if ssid is None:
         str_url = str(ctx.request_context.request.url)
         url = URL(str_url)
         ssid = url.query.get("session_id")
+    logger.info(f"[SESSION] extracted ssid={ssid!r} (fallback_to_url={fallback_used})")
     return ssid
 
 
@@ -64,16 +65,9 @@ def exec_kubectl_cmd_safely(cmd: str, ctx: Context) -> str:
     kubctl_tool = get_tools(ssid)
     logger.debug(f'session {ssid} is using tool "exec_kubectl_cmd_safely"; Command: {cmd}.')
 
-    # Noise Injection Hook (Pre-execution)
-    noise_manager = get_noise_manager()
-    noise_manager.on_tool_call("kubectl", cmd, ssid)
-
     result = kubctl_tool.cmd_runner.exec_kubectl_cmd_safely(cmd)
     assert isinstance(result, str)
-
-    # Noise Injection Hook (Post-execution)
-    result = noise_manager.on_tool_result("kubectl", cmd, result, ssid)
-
+    logger.info(f"[ACTION_STACK] after exec ssid={ssid!r}: {kubctl_tool.action_stack}")
     return result
 
 

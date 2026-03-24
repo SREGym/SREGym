@@ -1,10 +1,7 @@
-import contextlib
-
-from fastmcp import Context, FastMCP
+from fastmcp import FastMCP
 
 from clients.stratus.stratus_utils.get_logger import get_logger
 from mcp_server.utils import ObservabilityClient
-from sregym.generators.noise.manager import get_noise_manager
 
 logger = get_logger()
 logger.info("Starting Loki MCP Server")
@@ -13,7 +10,7 @@ mcp = FastMCP("Loki MCP Server")
 
 
 @mcp.tool(name="get_logs")
-def get_logs(query: str, last_n_minutes: int = 15, ctx: Context = None) -> str:
+def get_logs(query: str, last_n_minutes: int = 15) -> str:
     """Query logs from Loki using LogQL.
 
     Args:
@@ -24,15 +21,6 @@ def get_logs(query: str, last_n_minutes: int = 15, ctx: Context = None) -> str:
         str: Log entries matching the query, or error information.
     """
     logger.info(f"[loki_mcp] get_logs called with query: {query}")
-
-    # Noise Injection Hook (Pre-execution)
-    noise_manager = get_noise_manager()
-    ssid = None
-    with contextlib.suppress(BaseException):
-        if ctx:
-            ssid = ctx.request_context.request.headers.get("sregym_ssid")
-
-    noise_manager.on_tool_call("loki", query, ssid)
 
     loki_url = "http://loki.observe.svc.cluster.local:3100"
     observability_client = ObservabilityClient(loki_url)
@@ -76,9 +64,6 @@ def get_logs(query: str, last_n_minutes: int = 15, ctx: Context = None) -> str:
 
         result = "\n".join(log_lines) if log_lines else "No log entries found."
 
-        # Noise Injection Hook (Post-execution)
-        result = noise_manager.on_tool_result("loki", query, result, ssid)
-
         return result
     except Exception as e:
         err_str = f"[loki_mcp] Error querying get_logs: {str(e)}"
@@ -87,22 +72,13 @@ def get_logs(query: str, last_n_minutes: int = 15, ctx: Context = None) -> str:
 
 
 @mcp.tool(name="get_labels")
-def get_labels(ctx: Context = None) -> str:
+def get_labels() -> str:
     """Get all available label names from Loki.
 
     Returns:
         str: List of available label names for filtering logs.
     """
     logger.info("[loki_mcp] get_labels called")
-
-    # Noise Injection Hook (Pre-execution)
-    noise_manager = get_noise_manager()
-    ssid = None
-    with contextlib.suppress(BaseException):
-        if ctx:
-            ssid = ctx.request_context.request.headers.get("sregym_ssid")
-
-    noise_manager.on_tool_call("loki", "get_labels", ssid)
 
     loki_url = "http://loki.observe.svc.cluster.local:3100"
     observability_client = ObservabilityClient(loki_url)
@@ -119,9 +95,6 @@ def get_labels(ctx: Context = None) -> str:
         labels = data.get("data", [])
         result = "Available labels:\n" + "\n".join(f"  - {label}" for label in labels)
 
-        # Noise Injection Hook (Post-execution)
-        result = noise_manager.on_tool_result("loki", "get_labels", result, ssid)
-
         return result
     except Exception as e:
         err_str = f"[loki_mcp] Error querying get_labels: {str(e)}"
@@ -130,7 +103,7 @@ def get_labels(ctx: Context = None) -> str:
 
 
 @mcp.tool(name="get_label_values")
-def get_label_values(label: str, ctx: Context = None) -> str:
+def get_label_values(label: str) -> str:
     """Get all values for a specific label from Loki.
 
     Args:
@@ -140,15 +113,6 @@ def get_label_values(label: str, ctx: Context = None) -> str:
         str: List of values for the specified label.
     """
     logger.info(f"[loki_mcp] get_label_values called for label: {label}")
-
-    # Noise Injection Hook (Pre-execution)
-    noise_manager = get_noise_manager()
-    ssid = None
-    with contextlib.suppress(BaseException):
-        if ctx:
-            ssid = ctx.request_context.request.headers.get("sregym_ssid")
-
-    noise_manager.on_tool_call("loki", f"get_label_values:{label}", ssid)
 
     loki_url = "http://loki.observe.svc.cluster.local:3100"
     observability_client = ObservabilityClient(loki_url)
@@ -167,9 +131,6 @@ def get_label_values(label: str, ctx: Context = None) -> str:
             return f"No values found for label '{label}'."
 
         result = f"Values for label '{label}':\n" + "\n".join(f"  - {value}" for value in values)
-
-        # Noise Injection Hook (Post-execution)
-        result = noise_manager.on_tool_result("loki", f"get_label_values:{label}", result, ssid)
 
         return result
     except Exception as e:

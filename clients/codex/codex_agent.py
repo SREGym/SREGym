@@ -6,12 +6,11 @@ Based on Harbor's Codex agent implementation for parity experiments.
 import json
 import logging
 import os
-import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger("all.codex.agent")
 
@@ -79,13 +78,13 @@ class CodexAgent:
                 "Please install it manually using:\n"
                 "  pip install codex-cli\n"
                 "Or visit: https://github.com/anthropics/codex"
-            )
+            ) from e
 
     def __init__(
         self,
         logs_dir: Path,
         model_name: str,
-        codex_home: Optional[Path] = None,
+        codex_home: Path | None = None,
     ):
         """
         Initialize the Codex agent.
@@ -193,20 +192,33 @@ class CodexAgent:
 
         return metrics
 
-    def _setup_auth(self) -> None:
-        """Create auth.json file for Codex."""
-        auth_file = self.codex_home / "auth.json"
+    def _setup_auth(self) -> bool:
+        """Set up authentication for Codex.
 
+        Checks subscription credentials first (mounted ~/.codex/auth.json),
+        then falls back to OPENAI_API_KEY env var.
+
+        Returns:
+            True if API key auth was set up, False if using subscription auth.
+        """
+        # Prefer subscription auth (OAuth tokens in mounted ~/.codex)
+        mounted_auth = Path("/root/.codex/auth.json")
+        if mounted_auth.exists():
+            logger.info("Using subscription credentials from /root/.codex/auth.json")
+            return False
+
+        # Fall back to API key
         api_key = os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
-            logger.warning("OPENAI_API_KEY not set in environment")
+        if api_key:
+            auth_file = self.codex_home / "auth.json"
+            auth_data = {"OPENAI_API_KEY": api_key}
+            with open(auth_file, "w") as f:
+                json.dump(auth_data, f)
+            logger.info(f"Created auth file at {auth_file}")
+            return True
 
-        auth_data = {"OPENAI_API_KEY": api_key}
-
-        with open(auth_file, "w") as f:
-            json.dump(auth_data, f)
-
-        logger.info(f"Created auth file at {auth_file}")
+        logger.warning("No subscription auth file and no OPENAI_API_KEY found")
+        return False
 
     def _cleanup_auth(self) -> None:
         """Remove auth.json file after execution."""
@@ -232,7 +244,7 @@ class CodexAgent:
         logger.info(f"Using model: {model}")
 
         # Setup authentication
-        self._setup_auth()
+        using_api_key = self._setup_auth()
 
         try:
             # Build Codex command
@@ -256,7 +268,15 @@ class CodexAgent:
 
             # Set environment variables
             env = os.environ.copy()
-            env["CODEX_HOME"] = str(self.codex_home)
+            if using_api_key:
+                # Use logs_dir as CODEX_HOME for API key auth (auth.json written there).
+                env["CODEX_HOME"] = str(self.codex_home)
+            else:
+                # For subscription auth, use the mounted ~/.codex dir so the CLI finds
+                # the cached OAuth credentials. Remove OPENAI_API_KEY so the CLI
+                # doesn't try to use an empty/invalid key instead of OAuth.
+                env["CODEX_HOME"] = "/root/.codex"
+                env.pop("OPENAI_API_KEY", None)
 
             # Run Codex and capture output
             with open(self.output_path, "w") as out_file:
@@ -283,5 +303,6 @@ class CodexAgent:
             return process.returncode
 
         finally:
-            # Always cleanup auth file
-            self._cleanup_auth()
+            # Only cleanup auth file if we created one (API key auth)
+            if using_api_key:
+                self._cleanup_auth()

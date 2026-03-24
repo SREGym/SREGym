@@ -36,7 +36,7 @@ from clients.stratus.stratus_agent.mitigation_agent import retry_run_with_feedba
 from clients.stratus.stratus_agent.mitigation_agent import (
     single_run_with_predefined_prompts as mitigation_agent_single_run,
 )
-from clients.stratus.stratus_agent.rollback_agent import main as rollback_agent_main
+from clients.stratus.stratus_agent.rollback_agent import perform_rollback
 from clients.stratus.tools.submit_tool import manual_submit_tool
 from clients.stratus.weak_oracles.alert_oracle import AlertOracle
 from clients.stratus.weak_oracles.base_oracle import BaseOracle, OracleResult
@@ -52,6 +52,8 @@ def get_current_datetime_formatted():
     now = datetime.now()
     formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
+
+timestamp = get_current_datetime_formatted()
 
 
 def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
@@ -71,7 +73,6 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    timestamp = get_current_datetime_formatted()
     trajectory_file = output_dir / f"{timestamp}_{problem_id}_stratus_agent_trajectory.jsonl"
 
     def serialize_message(message):
@@ -376,11 +377,6 @@ async def mitigation_task_main(diagnosis_summary):
     mitigation_agent_max_retry_attempts = mitigation_agent_config["max_retry_attempts"]
     mitigation_agent_retry_mode = mitigation_agent_config["retry_mode"]
 
-    rollback_agent_config_path = file_parent_dir.parent / "configs" / "rollback_agent_config.yaml"
-    rollback_agent_config = yaml.safe_load(open(rollback_agent_config_path))
-    rollback_agent_max_step = rollback_agent_config["max_step"]
-    rollback_agent_prompt_path = file_parent_dir.parent / "configs" / rollback_agent_config["prompts_path"]
-
     llm_summarization_prompt_file = file_parent_dir.parent / "configs" / "llm_summarization_prompt.yaml"
     llm_summarization_prompt = yaml.safe_load(open(llm_summarization_prompt_file))["mitigation_retry_prompt"]
     mitigation_agent_prompts = yaml.safe_load(open(mitigation_agent_prompt_path))
@@ -600,34 +596,31 @@ async def mitigation_task_main(diagnosis_summary):
                 # return agent_exec_stats
             else:
                 # here the agent fails, we make decision if we should retry
-                should_retry = curr_attempt + 1 < mitigation_agent_max_retry_attempts
+                logger.info(f"current attempt: {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}, agent failed the validation oracles.")
+                should_retry = (curr_attempt + 1) < mitigation_agent_max_retry_attempts
                 logger.info(f"agent failed, should we retry? {'Yes!' if should_retry else 'No!'}")
                 if should_retry:
                     # we should retry as we have more trials left
                     logger.info(
                         f"we should retry as we have more attempts left. attempts left: {(mitigation_agent_max_retry_attempts - 1) - (curr_attempt + 1)}"
                     )
-                    # rollback all changes
-                    # rollback agent is stateless and "best effort" idempotent, just rollback
-                    # memory is cleared in the retry_run() method, so the agent can start anew.
                     logger.info(f"agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
-                    logger.info("running rollback agent to reverse progress")
+                    logger.info("running deterministic rollback to reverse progress")
                     rollback_start_time = time.perf_counter()
-                    rollback_agent, rollback_agent_last_state, rollback_graph_events = await rollback_agent_main()
-                    all_graph_events.append(
-                        {"stage": f"rollback_attempt_{curr_attempt}", "events": rollback_graph_events}
-                    )
+                    executed_commands = mitigation_agent_last_state.values.get("executed_commands", [])
+                    exec_tool = next((t for t in agent.async_tools if t.name == "exec_kubectl_cmd_safely"), None)
+                    mcp_session_id = exec_tool.session_id if exec_tool is not None else None
+                    rollback_result = await perform_rollback(executed_commands, session_id=mcp_session_id)
                     rollback_end_time = time.perf_counter() - rollback_start_time
-                    agent_names_lst.append("rollback_agent")
-                    usage_metadata = next(iter(rollback_agent.callback.usage_metadata.items()))[1]
-                    input_tokens_lst.append(usage_metadata["input_tokens"])
-                    output_tokens_lst.append(usage_metadata["output_tokens"])
-                    total_tokens_lst.append(usage_metadata["total_tokens"])
+                    agent_names_lst.append("deterministic_rollback")
+                    input_tokens_lst.append(0)
+                    output_tokens_lst.append(0)
+                    total_tokens_lst.append(0)
                     time_lst.append(str(rollback_end_time))
-                    steps_lst.append(rollback_agent_last_state.values["num_steps"])
+                    steps_lst.append(rollback_result.steps)
                     num_retry_attempts_lst.append(str(curr_attempt))
-                    rollback_stack_lst.append(rollback_agent_last_state.values["rollback_stack"])
-                    oracle_results_lst.append("N/A, rollback agent")
+                    rollback_stack_lst.append(rollback_result.rollback_stack)
+                    oracle_results_lst.append("N/A, deterministic rollback")
                     curr_attempt += 1
                 else:
                     logger.info("we shouldn't retry as we don't have more attempts left.")
@@ -790,10 +783,19 @@ async def main():
     agent_output_df["num_retry_attempts"] = agent_retry_attempts
     agent_output_df["rollback_stack"] = agent_rollback_stack
     agent_output_df["oracle_results"] = agent_oracle_results
-    current_datetime = get_current_datetime_formatted()
-    agent_output_df.to_csv(f"./{current_datetime}_{current_problem}_stratus_output.csv", index=False, header=True)
 
-    save_combined_trajectory(all_trajectories, current_problem)
+    agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
+    if agent_logs_dir:
+        problem_dir = Path(agent_logs_dir)
+    else:
+        project_root = Path(__file__).resolve().parents[4]
+        problem_dir = project_root / "results" / timestamp / current_problem
+
+    problem_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_path = problem_dir / f"{current_problem}_stratus_output.csv"
+    agent_output_df.to_csv(csv_path, index=False, header=True)
+    save_combined_trajectory(all_trajectories, current_problem, output_dir=problem_dir)
 
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)

@@ -14,8 +14,8 @@ class TaintNoToleration(Problem):
         self.kubectl = KubeCtl()
         super().__init__(app=self.app, namespace=self.namespace)
 
-        # ── pick all real worker nodes dynamically ───────────────────────
-        self.faulty_nodes = self._pick_worker_nodes()
+        # ── pick all nodes so the control-plane cannot be used as fallback ──
+        self.faulty_nodes = self._pick_all_nodes()
         self.faulty_service = "user-service"
         self.root_cause = f"Worker nodes are tainted with sre-fault=blocked:NoSchedule, but the deployment `{self.faulty_service}` has a toleration for a different key (dummy-key), causing pods to be unschedulable and remain in Pending state."
 
@@ -28,18 +28,10 @@ class TaintNoToleration(Problem):
 
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)
 
-    def _pick_worker_nodes(self) -> list[str]:
-        """Return the names of all nodes that are *not* control-plane."""
+    def _pick_all_nodes(self) -> list[str]:
+        """Return the names of all nodes in the cluster."""
         nodes = self.kubectl.core_v1_api.list_node().items
-        worker_names = []
-        for n in nodes:
-            labels = n.metadata.labels or {}
-            if "node-role.kubernetes.io/control-plane" not in labels:
-                worker_names.append(n.metadata.name)
-        if not worker_names:
-            # fallback to first node if somehow all are control-plane
-            return [nodes[0].metadata.name]
-        return worker_names
+        return [n.metadata.name for n in nodes]
 
     @mark_fault_injected
     def inject_fault(self):

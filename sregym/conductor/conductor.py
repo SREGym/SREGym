@@ -9,6 +9,7 @@ from pathlib import Path
 import yaml
 
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
 from sregym.conductor.problems.registry import ProblemRegistry
@@ -35,6 +36,7 @@ class ConductorConfig:
     """Configuration for Conductor deployment options."""
 
     deploy_loki: bool = True
+    enable_noise: bool = False
 
 
 class Conductor:
@@ -227,6 +229,43 @@ class Conductor:
             problem.diagnosis_oracle.load_diagnosis_checkpoint()
             self.logger.info("Diagnosis checkpoint loaded after fault injection.")
 
+    def _wait_for_alerts(self, timeout_seconds: int = 600, poll_interval_seconds: int = 10):
+        """Wait for at least one Prometheus alert to fire in the problem's namespace.
+
+        Called after fault injection so the agent only starts once alerts are
+        visible.  Reuses the AlertOracle query helper to check firing alerts.
+        """
+        problem = self.current_problem
+        namespace = problem.namespace
+
+        self.logger.info(f"[WAIT] Waiting for alerts to fire in namespace '{namespace}' (timeout={timeout_seconds}s)…")
+
+        alert_oracle = AlertOracle(problem=problem)
+        start = time.monotonic()
+        last_log_second = -1
+
+        while True:
+            elapsed = time.monotonic() - start
+            if elapsed >= timeout_seconds:
+                self.logger.warning(
+                    f"[WAIT] Timed out after {timeout_seconds}s waiting for alerts in '{namespace}'. "
+                    "Proceeding without firing alerts."
+                )
+                return
+
+            firing = alert_oracle._query_firing_alerts(namespace)
+            if firing:
+                names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
+                self.logger.info(f"[WAIT] 🔔 Alerts firing in '{namespace}': {names}")
+                return
+
+            elapsed_int = int(elapsed)
+            if elapsed_int >= last_log_second + 30:
+                self.logger.info(f"[WAIT] No alerts yet — {elapsed_int}/{timeout_seconds}s elapsed")
+                last_log_second = elapsed_int
+
+            time.sleep(poll_interval_seconds)
+
     def _evaluate_diagnosis(self, solution):
         """Evaluation logic for diagnosis stage."""
         problem = self.current_problem
@@ -274,6 +313,7 @@ class Conductor:
         # Inject fault before the first stage if not already done
         if start_index == 0 and not self.fault_injected:
             self._inject_fault()
+            self._wait_for_alerts()
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
@@ -285,11 +325,12 @@ class Conductor:
             self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
 
             # Update NoiseManager stage
-            try:
-                nm = get_noise_manager()
-                nm.set_stage(stage_name)
-            except Exception as e:
-                self.logger.warning(f"Failed to set NoiseManager stage: {e}")
+            if self.config.enable_noise:
+                try:
+                    nm = get_noise_manager()
+                    nm.set_stage(stage_name)
+                except Exception as e:
+                    self.logger.warning(f"Failed to set NoiseManager stage: {e}")
         else:
             # No more stages; finish the problem
             self._finish_problem()
@@ -303,12 +344,13 @@ class Conductor:
         self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
 
         # Stop noises
-        try:
-            nm = get_noise_manager()
-            nm.stop()
-            self.logger.info("[CLEANUP] NoiseManager stopped")
-        except Exception as e:
-            self.logger.warning(f"Failed to stop NoiseManager: {e}")
+        if self.config.enable_noise:
+            try:
+                nm = get_noise_manager()
+                nm.stop()
+                self.logger.info("[CLEANUP] NoiseManager stopped")
+            except Exception as e:
+                self.logger.warning(f"Failed to stop NoiseManager: {e}")
 
         # Recover fault
         if self.problem:
@@ -408,17 +450,18 @@ class Conductor:
         self.logger.info("App deployed.")
 
         # Update NoiseManager with problem context
-        try:
-            nm = get_noise_manager()
-            context = {
-                "namespace": self.app.namespace,
-                "app_name": self.app.name,
-                # We can add more info here if needed, e.g. service list
-            }
-            nm.set_problem_context(context)
-            nm.start_background_noises()
-        except Exception as e:
-            self.logger.warning(f"Failed to update NoiseManager context: {e}")
+        if self.config.enable_noise:
+            try:
+                nm = get_noise_manager()
+                context = {
+                    "namespace": self.app.namespace,
+                    "app_name": self.app.name,
+                    # We can add more info here if needed, e.g. service list
+                }
+                nm.set_problem_context(context)
+                nm.start()
+            except Exception as e:
+                self.logger.warning(f"Failed to update NoiseManager context: {e}")
 
         # After deployment, advance to the first stage
         self._advance_to_next_stage(start_index=0)
@@ -442,12 +485,13 @@ class Conductor:
         self.logger.info(f"Evaluating stage '{stage_name}'", extra={"sol": sol})
 
         # Stop noise before evaluation to ensure clean environment
-        try:
-            nm = get_noise_manager()
-            self.logger.info("Stopping noise manager before evaluation...")
-            nm.stop()
-        except Exception as e:
-            self.logger.warning(f"Failed to stop noise manager: {e}")
+        if self.config.enable_noise:
+            try:
+                nm = get_noise_manager()
+                self.logger.info("Stopping noise manager before evaluation...")
+                nm.stop()
+            except Exception as e:
+                self.logger.warning(f"Failed to stop noise manager: {e}")
 
         # Run the evaluation function for the current stage
         current_stage["evaluation"](sol)
@@ -457,11 +501,11 @@ class Conductor:
         self._advance_to_next_stage(start_index=next_index)
 
         # Restart noise if there are more stages AND not in teardown
-        if self.submission_stage not in ("done", "tearing_down"):
+        if self.config.enable_noise and self.submission_stage not in ("done", "tearing_down"):
             try:
                 nm = get_noise_manager()
                 self.logger.info("Restarting noise manager for next stage...")
-                nm.start_background_noises()
+                nm.start()
             except Exception as e:
                 self.logger.warning(f"Failed to restart noise manager: {e}")
 

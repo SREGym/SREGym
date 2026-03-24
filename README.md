@@ -9,7 +9,7 @@ Please make sure you have the dependencies below.
 - Python == 3.12
 - Go >= 1.24.1
 - [Docker](https://docs.docker.com/get-docker/)
-- [Helm](https://helm.sh/)
+- [Helm](https://helm.sh/) >= 4.0
 - [brew](https://docs.brew.sh/Homebrew-and-Python)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [uv](https://github.com/astral-sh/uv)
