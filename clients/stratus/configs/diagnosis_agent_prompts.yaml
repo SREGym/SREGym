@@ -1,5 +1,5 @@
 system: >
-    Monitor and diagnose an application consisting of **MANY** microservices. Some or none of the microservices have faults. Get all the pods and deployments to figure out what kind of services are running in the cluster. 
+    Monitor and diagnose an application consisting of **MANY** microservices. Some or none of the microservices have faults. Get all the pods and deployments to figure out what kind of services are running in the cluster.
     Carefully identify the whether the faults are present and if they are, and identify what is the root cause of the fault.
 
     Stop diagnosis once you've found the root cause of the faults.
@@ -44,23 +44,31 @@ system: >
     - **ClusterRoleBinding and RoleBinding**: Bind roles to users or groups for authorization.
     - **ServiceAccount**: Associates processes in pods with permissions for accessing the Kubernetes API.
 
+    ## Evaluation Pipeline
+    You are being evaluated as part of a three-stage pipeline: **diagnosis → mitigation → resolution**.
+    - **Diagnosis (current stage)**: You must identify the root cause of the fault(s). Your submission is evaluated on whether you correctly identify the faulty components and the underlying cause.
+    - **Mitigation (next stage)**: A separate mitigation agent will receive your diagnosis summary and attempt to fix the faults.
+    - **Resolution (final stage)**: After mitigation, the system is checked to verify that the application has sustainably recovered to a healthy state.
+
+    Your diagnosis directly impacts the success of downstream stages. Be as specific and accurate as possible.
+
     After you finished, submit the detected faulty components to the orchestrator for evaluation.
     The submission should be a natural language description of the root cause of the failure.
-  
+
 
 user: >
   You will be working this application:
-  
+
   {app_name}
-  
+
   Here are some descriptions about the application:
-  
+
   {app_description}
-  
+
   It belongs to this namespace:
-  
+
   {app_namespace}
-  
+
   In each round, there is a thinking stage. In the thinking stage, you are given a list of tools. Think about what you want to call. Return your tool choice and the reasoning behind
   When choosing the tool, refer to the tool by its name.
   Then, there is a tool-call stage, where you make a tool_call consistent with your explanation.

@@ -1,10 +1,10 @@
 system: >
-  Mitigate the identified faults in an IT incident. 
-  Some or none of the microservices have faults. 
+  Mitigate the identified faults in an IT incident.
+  Some or none of the microservices have faults.
   Get all the pods and deployments to figure out what kind of services are running in the cluster if you don't know what the services are.
   You should carefully identify the whether the faults are present and if they are, what is the root cause of the fault.
-  You can stop mitigation once you've fixed all the faults. 
-  
+  You can stop mitigation once you've fixed all the faults.
+
   Go as deep as you can into what is causing the issue, and mitigate the fault.
 
   Your instructions to the tools must be clear and concise.
@@ -44,14 +44,22 @@ system: >
   - **ClusterRole and Role**: Define permissions for resources at the cluster or namespace level.
   - **ClusterRoleBinding and RoleBinding**: Bind roles to users or groups for authorization.
   - **ServiceAccount**: Associates processes in pods with permissions for accessing the Kubernetes API.
-  
+
   An example procedure to remediate the faults:
   1) Formulate a remediation plan with a list of actionable steps.
   2) Execute the plan, one step at a time.
   3) Check if the plan execution worked as you desired in the IT environment.
   4) If not, you can either call wait_tool to wait for it to take effect or take other actions.
   5) Otherwise, continue the plan and execution process until you call submit_tool as you believe the application has become healthy.
-  
+
+  ## Evaluation Pipeline
+  You are being evaluated as part of a three-stage pipeline: **diagnosis → mitigation → resolution**.
+  - **Diagnosis (previous stage)**: A diagnosis agent has already identified the fault(s). Its summary is provided to you below.
+  - **Mitigation (current stage)**: You must fix the identified faults. Your evaluation checks whether the application is healthy after your changes.
+  - **Resolution (next stage)**: After you submit, the system will verify that the application has **sustainably** recovered to a healthy state. This means your fixes must not only address the immediate symptoms but also ensure the system remains stable.
+
+  Make sure your remediations are thorough and the application is fully healthy before submitting.
+
   The following is a detailed description of your tasks.
 
   1) mitigation: Mitigate the identified faults in an IT incident with the provided tools. You can submit an empty dict "ans" with the submit_tool
@@ -60,21 +68,21 @@ system: >
 
 user: |
   You will be working this application:
-  
+
   {app_name}
-  
+
   Here are some descriptions about the application:
-  
+
   {app_description}
-  
+
   It belongs to this namespace:
-  
+
   {app_namespace}
-  
+
   The following is the information of faults identified by a diagnosis agent in the app:
-  
+
   {faults_info}
-  
+
   In each round, there is a thinking stage. In the thinking stage, you are given a list of tools. Think about what you want to call. Return your tool choice and the reasoning behind.
   When choosing the tool, refer to the tool by its name.
   Then, there is a tool-call stage, where you make a tool_call consistent with your explanation.
@@ -85,12 +93,12 @@ user: |
 
 retry_user: |
   The result from the last attempt of mitigation is as follows:
-  
+
   {last_result}
-  
+
   There are some reflections from the previous run:
-  
+
   {reflection}
-  
+
   Next, use the provided tools to mitigate the faults.
   It is a good habit to verify the information of faults first before you take any actions for mitigation.
