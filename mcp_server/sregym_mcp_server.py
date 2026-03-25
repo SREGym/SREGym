@@ -13,6 +13,7 @@ from mcp_server.jaeger_server import mcp as observability_mcp
 from mcp_server.kubectl_mcp_tools import kubectl_mcp
 from mcp_server.loki_server import mcp as loki_mcp
 from mcp_server.prometheus_server import mcp as prometheus_mcp
+from mcp_server.submit_server import mcp as submit_mcp
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -23,15 +24,8 @@ routes = [
     Mount("/jaeger", app=create_sse_app(observability_mcp, "/messages/", "/sse")),
     Mount("/loki", app=create_sse_app(loki_mcp, "/messages/", "/sse")),
     Mount("/prometheus", app=create_sse_app(prometheus_mcp, "/messages/", "/sse")),
+    Mount("/submit", app=create_sse_app(submit_mcp, "/messages/", "/sse")),
 ]
-
-# Submit proxy is only available when a conductor API endpoint is configured
-# (e.g. by the Resolve agent via kubectl set env)
-if os.getenv("API_HOSTNAME"):
-    from mcp_server.submit_server import mcp as submit_mcp
-
-    routes.append(Mount("/submit", app=create_sse_app(submit_mcp, "/messages/", "/sse")))
-    logger.info("Submit proxy enabled (API_HOSTNAME=%s)", os.getenv("API_HOSTNAME"))
 
 app = Starlette(
     middleware=[
