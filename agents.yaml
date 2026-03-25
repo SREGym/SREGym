@@ -41,6 +41,11 @@ agents:
     agent_version: null
   - name: resolve
     kickoff_command: python -m clients.resolve.driver
+    kickoff_workdir: .
+    kickoff_env: null
+    install_script: null
+    agent_version: null
+    container_isolation: false
   - name: demo
     kickoff_command: python -m clients.demo.driver
     kickoff_workdir: .
