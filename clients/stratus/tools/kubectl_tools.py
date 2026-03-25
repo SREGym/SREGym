@@ -149,7 +149,10 @@ class ExecReadOnlyKubectlCmd(BaseTool):
                 result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
                 text_result = "\n".join([part.text for part in result])
             finally:
-                await exit_stack.aclose()
+                try:
+                    await exit_stack.aclose()
+                except Exception:
+                    pass
         return Command(
             update={
                 "messages": [
@@ -193,7 +196,10 @@ class RollbackCommand(BaseTool):
             result = await self._client.call_tool("rollback_command")
             text_result = "\n".join([part.text for part in result])
         finally:
-            await exit_stack.aclose()
+            try:
+                await exit_stack.aclose()
+            except Exception as e:
+                logger.debug(f"{type(e).__name__} ignored, as it's expected")
         return Command(
             update={
                 "rollback_stack": str(text_result),
@@ -244,7 +250,10 @@ class GetPreviousRollbackableCmd(BaseTool):
             else:
                 text_result = "\n".join([part.text for part in result])
         finally:
-            await exit_stack.aclose()
+            try:
+                await exit_stack.aclose()
+            except Exception as e:
+                logger.debug(f"{type(e).__name__} ignored, as it's expected")
         return Command(
             update={
                 "messages": [
