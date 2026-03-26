@@ -272,6 +272,13 @@ class Conductor:
             if firing:
                 names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
                 self.logger.info(f"[WAIT] 🔔 Alerts firing in '{namespace}': {names}")
+                max_for = alert_oracle._query_max_alert_for_duration()
+                settle_seconds = max_for + 10
+                self.logger.info(
+                    f"[WAIT] Longest alert 'for' period is {max_for}s — "
+                    f"settling for {settle_seconds}s to let transient alerts clear…"
+                )
+                time.sleep(settle_seconds)
                 return
 
             elapsed_int = int(elapsed)
