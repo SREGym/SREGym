@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import logging
 import shutil
 import time
@@ -442,7 +443,7 @@ class Conductor:
         # guarantees that fault recovery, undeploy, and reconciliation are all done.
         if self._submit_future is not None and not self._submit_future.done():
             self.logger.info("[WAIT] Waiting for previous problem's cleanup to finish...")
-            await self._submit_future
+            await asyncio.wrap_future(self._submit_future)
             self.logger.info("[WAIT] Previous problem's cleanup finished")
         self._submit_future = None
 
@@ -580,9 +581,14 @@ class Conductor:
         # Run evaluation and stage advancement in an executor thread so the HTTP
         # response returns immediately.  Store the future so start_problem() can
         # await it and guarantee cleanup is fully done before the next problem starts.
-        self._submit_future = asyncio.get_event_loop().run_in_executor(
-            None, self._submit_evaluate_and_advance, sol, current_stage
-        )
+        # Use concurrent.futures directly (not asyncio's run_in_executor) so the
+        # future is loop-independent.  submit() is called from the uvicorn API thread
+        # which has its own event loop; start_problem() runs in the main driver loop.
+        # asyncio.wrap_future() in start_problem() binds the future to whichever loop
+        # is running at await time, avoiding "Future attached to a different loop".
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self._submit_future = executor.submit(self._submit_evaluate_and_advance, sol, current_stage)
+        executor.shutdown(wait=False)
 
         return {"status": "ok", "message": "Submission received"}
 
