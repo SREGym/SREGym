@@ -23,38 +23,7 @@ from pathlib import Path
 import yaml
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from llm_backend.get_llm_backend import LiteLLMBackend
 from llm_backend.init_backend import get_llm_backend_for_judge
-
-# ---------------------------------------------------------------------------
-# Backend helpers
-# ---------------------------------------------------------------------------
-
-
-def _create_judge_backend(
-    provider: str | None,
-    model_name: str | None,
-    url: str | None,
-    api_key: str | None,
-    temperature: float,
-    max_tokens: int,
-) -> LiteLLMBackend:
-    """Use SREGym llm_backend directly for judge backend initialization."""
-    if provider or model_name or url or api_key:
-        if not model_name:
-            raise ValueError("model_name is required when overriding judge backend settings")
-
-        return LiteLLMBackend(
-            provider=provider or "openai",
-            model_name=model_name,
-            url=url,
-            api_key=api_key,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-
-    return get_llm_backend_for_judge()
-
 
 # ---------------------------------------------------------------------------
 # Exceptions and enums
@@ -99,18 +68,13 @@ class LLMJudge:
 
     @property
     def backend(self):
+        """Lazily initialize the LLM backend only when needed."""
         if self._backend is None:
             try:
-                self._backend = _create_judge_backend(
-                    provider=self.provider,
-                    model_name=self.model_name,
-                    url=self.url,
-                    api_key=self.api_key,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                )
+                self._backend = get_llm_backend_for_judge()
             except (SystemExit, Exception) as e:
                 print(f"Warning: Failed to initialize LLM backend for judge: {e}")
+                print("Returning None - evaluation will be skipped")
                 return None
         return self._backend
 
@@ -319,16 +283,10 @@ fences, no preamble, no commentary.
         """Lazily initialize the LLM backend only when needed."""
         if self._backend is None:
             try:
-                self._backend = _create_judge_backend(
-                    provider=self.provider,
-                    model_name=self.model_name,
-                    url=self.url,
-                    api_key=self.api_key,
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                )
+                self._backend = get_llm_backend_for_judge()
             except (SystemExit, Exception) as e:
                 print(f"Warning: Failed to initialize LLM backend for judge: {e}")
+                print("Returning None - evaluation will be skipped")
                 return None
         return self._backend
 
