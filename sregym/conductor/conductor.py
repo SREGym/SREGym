@@ -130,10 +130,8 @@ class Conductor:
 
         # If tasklist file doesn't exist, default to running diagnosis + mitigation
         if not tasklist_path.exists():
-            self.logger.info(
-                "No tasklist.yml found. Defaulting to running diagnosis, mitigation, and resolution for this problem."
-            )
-            self.tasklist = ["diagnosis", "mitigation", "resolution"]
+            self.logger.info("No tasklist.yml found. Defaulting to running diagnosis and mitigation for this problem.")
+            self.tasklist = ["diagnosis", "mitigation"]
             return
 
         with open(tasklist_path) as f:
@@ -145,10 +143,8 @@ class Conductor:
             problems = tasklist["all"]["problems"]
 
         if self.problem_id not in (problems if problems else []):
-            self.logger.warning(
-                "problem_id not found in tasklist. Defaulting to running diagnosis, mitigation, and resolution."
-            )
-            self.tasklist = ["diagnosis", "mitigation", "resolution"]
+            self.logger.warning("problem_id not found in tasklist. Defaulting to running diagnosis and mitigation.")
+            self.tasklist = ["diagnosis", "mitigation"]
         else:
             problem_tasklist = problems[self.problem_id]
             if not problem_tasklist:
@@ -156,8 +152,8 @@ class Conductor:
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
-            if not is_ordered_subset(problem_tasklist, ["diagnosis", "mitigation", "resolution"]):
-                msg = f"Task list for {self.problem_id} is either out of order or has an unknown step (allowed: diagnosis, mitigation, resolution)"
+            if not is_ordered_subset(problem_tasklist, ["diagnosis", "mitigation"]):
+                msg = f"Task list for {self.problem_id} is either out of order or has an unknown step (allowed: diagnosis, mitigation)"
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
@@ -181,7 +177,6 @@ class Conductor:
         stage_definitions = {
             "diagnosis": self._evaluate_diagnosis,
             "mitigation": self._evaluate_mitigation,
-            "resolution": self._evaluate_resolution,
         }
 
         # Determine which stages are actually available (oracle attached)
@@ -211,17 +206,6 @@ class Conductor:
                     )
                 else:
                     self.logger.info("⏩ Mitigation oracle is not attached. Skipping mitigation.")
-
-            elif name == "resolution":
-                if getattr(self.problem, "resolution_oracle", None):
-                    self.stage_sequence.append(
-                        {
-                            "name": name,
-                            "evaluation": stage_definitions[name],
-                        }
-                    )
-                else:
-                    self.logger.info("⏩ Resolution oracle is not attached. Skipping resolution.")
 
         if not self.stage_sequence:
             self.logger.warning(
@@ -297,7 +281,11 @@ class Conductor:
         return r
 
     def _evaluate_mitigation(self, solution):
-        """Evaluation logic for mitigation stage."""
+        """Evaluation logic for mitigation stage.
+
+        Also evaluates the resolution oracle (if attached) alongside mitigation
+        so that both scores come from a single agent submission.
+        """
         problem = self.current_problem
         # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
         self.logger.info("Start Eval for Mitigation", extra={"sol": solution})
@@ -309,20 +297,17 @@ class Conductor:
             f"{'Succeed' if self.results['Mitigation']['success'] else 'Failed'}\n "
             f"TTM: {self.results['TTM']}"
         )
-        return r
 
-    def _evaluate_resolution(self, solution):
-        """Evaluation logic for resolution stage."""
-        problem = self.current_problem
-        self.logger.info("Start Eval for Resolution", extra={"sol": solution})
-        r = problem.resolution_oracle.evaluate()
-        self.results["Resolution"] = r
-        self.results["TTR"] = time.time() - self.execution_start_time
-        self.logger.info(
-            f"[EVAL] Resolution "
-            f"{'Succeed' if self.results['Resolution']['success'] else 'Failed'}\n "
-            f"TTR: {self.results['TTR']}"
-        )
+        # Evaluate resolution oracle alongside mitigation if attached
+        if getattr(problem, "resolution_oracle", None):
+            self.logger.info("Evaluating resolution oracle alongside mitigation...")
+            res_r = problem.resolution_oracle.evaluate()
+            self.results["Resolution"] = res_r
+            self.results["TTR"] = time.time() - self.execution_start_time
+            self.logger.info(
+                f"[EVAL] Resolution {'Succeed' if res_r['success'] else 'Failed'}\n TTR: {self.results['TTR']}"
+            )
+
         return r
 
     def _advance_to_next_stage(self, start_index: int = 0):

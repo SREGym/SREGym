@@ -29,7 +29,7 @@ async def submit_via_conductor(ans: str) -> dict[str, str]:
     Returns:
         dict[str]: acknowledgment of submission status
     """
-    if _conductor is None or _conductor.submission_stage not in {"diagnosis", "mitigation", "resolution"}:
+    if _conductor is None or _conductor.submission_stage not in {"diagnosis", "mitigation"}:
         stage = _conductor.submission_stage if _conductor else None
         if stage == "done" and _conductor is not None:
             return {
@@ -113,7 +113,7 @@ class SubmitRequest(BaseModel):
 
 @app.post("/submit")
 async def submit_solution(req: SubmitRequest):
-    allowed = {"diagnosis", "mitigation", "resolution"}
+    allowed = {"diagnosis", "mitigation"}
     if _conductor is None or _conductor.submission_stage not in allowed:
         stage = _conductor.submission_stage if _conductor else None
         if stage == "done" and _conductor is not None:
@@ -204,7 +204,7 @@ def run_api(conductor):
             """
 **Available Endpoints**
 - **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage
-- **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "resolution" | "tearing_down" | "done" }`
+- **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "tearing_down" | "done" }`
 """
         )
     )
