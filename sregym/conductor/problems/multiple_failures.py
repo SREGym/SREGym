@@ -26,10 +26,15 @@ class MultipleIndependentFailures(Problem):
             self.root_cause += root_cause
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
-        # mitigation oracle can and should be dynamic
-        mitigation_oracles = [p.mitigation_oracle for p in self.problems]
-        if len(mitigation_oracles) > 0:
+        # mitigation oracle: compound of all sub-problem AlertOracles
+        mitigation_oracles = [p.mitigation_oracle for p in self.problems if p.mitigation_oracle]
+        if mitigation_oracles:
             self.mitigation_oracle = CompoundedOracle(self, *mitigation_oracles)
+
+        # resolution oracle: compound of all sub-problem resolution oracles
+        resolution_oracles = [p.resolution_oracle for p in self.problems if p.resolution_oracle]
+        if resolution_oracles:
+            self.resolution_oracle = CompoundedOracle(self, *resolution_oracles)
 
     @mark_fault_injected
     def inject_fault(self):

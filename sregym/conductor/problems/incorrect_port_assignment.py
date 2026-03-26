@@ -1,9 +1,9 @@
+from sregym.conductor.oracles.alert_oracle import AlertOracle
+from sregym.conductor.oracles.assign_non_existent_node_mitigation import AssignNonExistentNodeMitigationOracle
+from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.incorrect_port import IncorrectPortAssignmentMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.compound import CompoundedOracle
-from sregym.conductor.oracles.assign_non_existent_node_mitigation import AssignNonExistentNodeMitigationOracle
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -28,21 +28,25 @@ class IncorrectPortAssignment(Problem):
             self.unscheduable = unscheduable
             self.injectors = {
                 "incorrect_port_assignment": self.injector,
-                "assign_to_non_existent_node": VirtualizationFaultInjector(namespace=self.namespace)
+                "assign_to_non_existent_node": VirtualizationFaultInjector(namespace=self.namespace),
             }
-            self.root_cause = f"Two simultaneous faults: 1) The deployment `{self.faulty_service}` has the environment variable `{self.env_var}` configured with an incorrect port `{self.incorrect_port}` instead of `{self.correct_port}`." + f"The deployment `{self.faulty_service}` is configured with a nodeSelector pointing to a non-existent node (extra-node), causing pods to remain in Pending state."
+            self.root_cause = (
+                f"Two simultaneous faults: 1) The deployment `{self.faulty_service}` has the environment variable `{self.env_var}` configured with an incorrect port `{self.incorrect_port}` instead of `{self.correct_port}`."
+                + f"The deployment `{self.faulty_service}` is configured with a nodeSelector pointing to a non-existent node (extra-node), causing pods to remain in Pending state."
+            )
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = IncorrectPortAssignmentMitigationOracle(problem=self)
+        self.resolution_oracle = IncorrectPortAssignmentMitigationOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self)
 
         if unscheduable := kwargs.get("unschedulable", False):
-            mitigation_oracles = [
-                IncorrectPortAssignmentMitigationOracle(problem=self), 
+            resolution_oracles = [
+                IncorrectPortAssignmentMitigationOracle(problem=self),
                 # for duplicated pvc mount, its just standard pod-status mitigation oracle.
                 AssignNonExistentNodeMitigationOracle(problem=self),
             ]
-            self.mitigation_oracle = CompoundedOracle(self, *mitigation_oracles)
+            self.resolution_oracle = CompoundedOracle(self, *resolution_oracles)
 
         self.app.create_workload()
 
@@ -55,7 +59,9 @@ class IncorrectPortAssignment(Problem):
                 fault_type="assign_to_non_existent_node",
                 microservices=[self.faulty_service],
             )
-            print(f"Injected additional fault: duplicate PVC mounts for service {self.faulty_service} in namespace {self.namespace}\n")
+            print(
+                f"Injected additional fault: duplicate PVC mounts for service {self.faulty_service} in namespace {self.namespace}\n"
+            )
 
             self.injectors["incorrect_port_assignment"].inject_incorrect_port_assignment(
                 deployment_name=self.faulty_service,
@@ -80,7 +86,9 @@ class IncorrectPortAssignment(Problem):
                 fault_type="assign_to_non_existent_node",
                 microservices=[self.faulty_service],
             )
-            print(f"Recovered additional fault: duplicate PVC mounts for service {self.faulty_service} in namespace {self.namespace}\n")
+            print(
+                f"Recovered additional fault: duplicate PVC mounts for service {self.faulty_service} in namespace {self.namespace}\n"
+            )
             self.injectors["incorrect_port_assignment"].recover_incorrect_port_assignment(
                 deployment_name="checkout", env_var=self.env_var, correct_port="8080"
             )

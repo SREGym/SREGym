@@ -16,5 +16,5 @@ class OracleResult:
 
 class BaseOracle(ABC):
     @abstractmethod
-    async def validate(self, **kwargs) -> OracleResult:
+    def validate(self, **kwargs) -> OracleResult:
         pass

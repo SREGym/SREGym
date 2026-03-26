@@ -1,6 +1,6 @@
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
-from sregym.conductor.oracles.workload import WorkloadOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -11,7 +11,6 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class DuplicatePVCMounts(Problem):
-
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "mongodb-rate"):
         self.app_name = app_name
         self.faulty_service = faulty_service
@@ -30,7 +29,8 @@ class DuplicatePVCMounts(Problem):
         self.namespace = self.app.namespace
         self.root_cause = f"Multiple replicas of the deployment `{self.faulty_service}` are configured to share a single ReadWriteOnce PVC, causing mount conflicts and preventing pods from starting."
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = MitigationOracle(problem=self)
+        self.resolution_oracle = MitigationOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self)
 
         self.app.create_workload()
 

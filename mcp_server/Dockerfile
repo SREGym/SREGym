@@ -21,6 +21,8 @@ COPY mcp_server/ ./mcp_server/
 COPY sregym/ ./sregym/
 COPY clients/ ./clients/
 COPY scripts/ ./scripts/
+COPY llm_backend/ ./llm_backend/
+COPY logger/ ./logger/
 
 # Install dependencies with uv
 RUN uv sync --frozen --no-dev
