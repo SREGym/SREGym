@@ -76,6 +76,43 @@ class AlertOracle(Oracle):
                 firing.append(alert)
         return firing
 
+    def _query_max_alert_for_duration(self) -> float:
+        """Return the longest *for* duration (seconds) across all Prometheus alert rules.
+
+        Queries ``/api/v1/rules`` via ``kubectl exec``.  Falls back to 0 if the
+        query fails or no rules are found.
+        """
+        url = f"{_PROMETHEUS_URL}/api/v1/rules"
+        cmd = [
+            "kubectl",
+            "exec",
+            "-n",
+            "observe",
+            "deploy/prometheus-server",
+            "-c",
+            "prometheus-server",
+            "--",
+            "wget",
+            "-qO-",
+            url,
+        ]
+        try:
+            raw = subprocess.check_output(cmd, text=True, timeout=15)
+            payload = json.loads(raw)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            print(f"⚠️  Failed to query Prometheus rules: {exc}")
+            return 0.0
+
+        max_duration = 0.0
+        for group in payload.get("data", {}).get("groups", []):
+            for rule in group.get("rules", []):
+                if rule.get("type") != "alerting":
+                    continue
+                duration = rule.get("duration", 0) or 0
+                if duration > max_duration:
+                    max_duration = duration
+        return max_duration
+
     @staticmethod
     def _fmt_alert(alert: dict) -> str:
         labels = alert.get("labels", {})
