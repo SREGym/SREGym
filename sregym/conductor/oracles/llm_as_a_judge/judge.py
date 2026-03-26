@@ -4,12 +4,10 @@ v3.0 improvements over v2.0
 ---------------------------
 1. **Fault-spec-aware ground truth** – The judge now receives a structured
    ``FaultSpec`` (fault category, mechanism, target component, injection
-   parameters, expected symptoms) extracted directly from the Problem's
+    parameters) extracted directly from the Problem's
    fault-injection logic, instead of relying solely on a short natural-language
    ``root_cause`` string.
-2. **Reasoning Trajectory Coherence (D4)** – A new evaluation dimension checks
-   whether the agent's tool-call trace logically supports its final answer.
-3. **Chain-of-thought + in-context learning** – The system prompt now instructs
+2. **Chain-of-thought + in-context learning** – The system prompt now instructs
    the judge to reason step-by-step *per dimension* before answering, and
    includes a worked example for every dimension so the judge sees the expected
    reasoning depth and format.
@@ -177,7 +175,6 @@ class DiagnosisJudge:
 
     Key improvements over v2.0:
     - Accepts an optional ``problem`` reference to extract a rich FaultSpec.
-    - Accepts an optional ``agent_trace`` string for D4 evaluation.
     - Uses chain-of-thought reasoning with in-context examples per dimension.
     """
 
@@ -190,13 +187,10 @@ You are an expert SRE evaluator assessing an AI agent's root cause analysis.
 You will be given:
   1. A **structured fault specification** extracted from the fault-injection
      framework (what actually happened — including fault category, mechanism,
-     target component, injection parameters, and expected symptoms).
+      target component, and injection parameters).
   2. The **ground-truth root cause** in natural language.
   3. The agent's **diagnosis** (what the agent claims happened).
-  4. The agent's **reasoning trace** — the chronological log of tool calls,
-     observations, and intermediate reasoning the agent produced while
-     investigating.  (This may be absent; if so, mark all D4 questions "No".)
-  5. A checklist of {{num_questions}} Yes/No questions grouped across
+  4. A checklist of {{num_questions}} Yes/No questions grouped across
      {{num_dimensions}} evaluation dimensions.
 
 ## How to evaluate (chain-of-thought)
@@ -206,16 +200,15 @@ For EACH dimension, follow these steps **in order**:
   **Step 1 — Understand the dimension.**  Re-read the dimension definition and
   its evaluator hints.
 
-  **Step 2 — Gather evidence.**  For D1–D3, scan the agent's *diagnosis text*
-  for claims relevant to this dimension.  For D4, scan the *agent trace* for
-  tool calls and observations.
+    **Step 2 — Gather evidence.**  Scan the agent's *diagnosis text* for
+    claims relevant to each dimension.
 
   **Step 3 — Compare against ground truth.**  Use the *structured fault spec*
   (not just the natural-language root cause) as the authoritative reference.
   Pay special attention to:
     - `target_component` and `target_resource_kind` for localization (D1)
     - `fault_category`, `fault_mechanism`, and `parameters` for characterization (D2)
-    - The trace's tool-call targets vs. the diagnosed component (D4)
+        - Fault impact and affected components for scope precision (D3)
 
   **Step 4 — Answer each question.**  For every question produce:
     - id: the question ID exactly as given
@@ -224,8 +217,7 @@ For EACH dimension, follow these steps **in order**:
     - confidence: "High", "Medium", or "Low"
 
 ## Rules
-  - Answer based ONLY on what is explicitly stated in the diagnosis and/or
-    the agent trace.
+    - Answer based ONLY on what is explicitly stated in the diagnosis.
   - Do NOT infer information not present in the provided texts.
   - "Yes" always means the positive/correct outcome is present.
   - Treat each question independently.
@@ -266,37 +258,6 @@ Reasoning: The agent correctly identifies the root cause on frontend but
 over-attributes the impact (cart and recommendation are victims, not
 direct causes). The underlying fault type matches (misconfiguration).
 → D3-Q1: No (blames extra components), D3-Q2: Yes, D3-Q3: Yes.
-
-### Example — D4 Reasoning Trajectory Coherence
-
-Agent diagnosis says: "The payment-service deployment has a CrashLoopBackOff
-due to a missing SECRET_KEY env var."
-Agent trace shows:
-  [1] kubectl get pods -n shop → saw payment-service in CrashLoopBackOff
-  [2] kubectl describe pod payment-service-abc -n shop → saw "Error: env
-      variable SECRET_KEY not set"
-  [3] kubectl get deployment payment-service -n shop -o yaml → confirmed no
-      SECRET_KEY in env list
-
-Reasoning: The agent inspected the blamed component (payment-service) via
-describe and get [D4-Q1 Yes].  The trace shows CrashLoopBackOff + explicit
-error about SECRET_KEY, which directly supports the diagnosis [D4-Q2 Yes].
-The investigation is methodical: pods → describe → deployment spec, no
-jumps [D4-Q3 Yes].
-
-### Example — D4 Reasoning Trajectory Coherence (negative)
-
-Agent diagnosis says: "The cart-service has an incorrect image tag causing
-ImagePullBackOff."
-Agent trace shows:
-  [1] kubectl get pods -n shop → saw frontend in CrashLoopBackOff
-  [2] kubectl logs frontend-xyz -n shop → got OOMKilled message
-  (no further tool calls)
-
-Reasoning: The agent never inspected cart-service in the trace [D4-Q1 No].
-The trace shows OOMKilled on frontend, which does not support an ImagePullBackOff
-diagnosis on cart-service [D4-Q2 No].  The agent jumped from a frontend OOM
-to a cart-service image issue with no connecting investigation [D4-Q3 No].
 
 ---
 
@@ -380,7 +341,6 @@ fences, no preamble, no commentary.
         expectation: str,
         *,
         problem=None,
-        agent_trace: str | None = None,
     ) -> tuple[JudgmentResult, str]:
         """Drop-in replacement for ``LLMJudge.judge()``.
 
@@ -393,10 +353,8 @@ fences, no preamble, no commentary.
         problem : Problem, optional
             If provided, a structured FaultSpec is extracted and included in the
             judge prompt.
-        agent_trace : str, optional
-            The agent's tool-call trace log for D4 evaluation.
         """
-        report = self.judge_detailed(solution, expectation, problem=problem, agent_trace=agent_trace)
+        report = self.judge_detailed(solution, expectation, problem=problem)
         return report.verdict, report.reasoning
 
     def judge_detailed(
@@ -405,7 +363,6 @@ fences, no preamble, no commentary.
         expectation: str,
         *,
         problem=None,
-        agent_trace: str | None = None,
     ):
         """Evaluate solution against expectation using the full checklist.
 
@@ -433,7 +390,7 @@ fences, no preamble, no commentary.
             return self._empty_report()
 
         # Build and send prompt
-        user_msg = self._build_user_message(solution, expectation, problem=problem, agent_trace=agent_trace)
+        user_msg = self._build_user_message(solution, expectation, problem=problem)
         raw_results = self._call_llm_with_retry(user_msg)
 
         # Build question lookup from config
@@ -517,7 +474,6 @@ fences, no preamble, no commentary.
         expectation: str,
         *,
         problem=None,
-        agent_trace: str | None = None,
     ) -> str:
         lines: list[str] = []
 
@@ -542,23 +498,7 @@ fences, no preamble, no commentary.
         lines.append(solution)
         lines.append("")
 
-        # ---- Section 3: Agent trace (for D4) ----
-        lines.append("## Agent Reasoning Trace")
-        if agent_trace and agent_trace.strip():
-            # Truncate very long traces to keep the prompt within limits
-            max_trace_chars = 12_000
-            trace_text = agent_trace.strip()
-            if len(trace_text) > max_trace_chars:
-                half = max_trace_chars // 2
-                trace_text = trace_text[:half] + "\n\n... [trace truncated for length] ...\n\n" + trace_text[-half:]
-            lines.append(trace_text)
-        else:
-            lines.append(
-                "(No agent trace provided. For all D4 questions, answer 'No' with evidence 'no trace provided'.)"
-            )
-        lines.append("")
-
-        # ---- Section 4: Evaluation checklist ----
+        # ---- Section 3: Evaluation checklist ----
         lines.append("## Evaluation Checklist")
         for dim in self._config["dimensions"]:
             lines.append(f"\n### {dim['id']} — {dim['name']}")
@@ -570,7 +510,7 @@ fences, no preamble, no commentary.
                     lines.append(f"  Hint: {hint}")
         lines.append("")
 
-        # ---- Section 5: Required output format ----
+        # ---- Section 4: Required output format ----
         lines.append(f"## Required JSON Response (exactly {self._num_questions} objects)")
         lines.append(
             "Apply chain-of-thought reasoning internally for each dimension "

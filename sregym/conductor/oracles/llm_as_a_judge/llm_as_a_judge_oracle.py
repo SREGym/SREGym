@@ -2,11 +2,8 @@
 
 v3.0 changes:
 - Passes the ``Problem`` object to ``DiagnosisJudge`` so the judge can extract
-  a structured ``FaultSpec`` from the fault-injection logic.
-- Accepts an optional ``agent_trace`` in ``evaluate()`` for D4 (Reasoning
-  Trajectory Coherence) scoring.
-- Remains backward-compatible: ``evaluate(solution)`` still works without a
-  trace — D4 questions will simply default to "No".
+    a structured ``FaultSpec`` from the fault-injection logic.
+- Uses a diagnosis-only checklist.
 """
 
 from sregym.conductor.oracles.base import Oracle
@@ -40,17 +37,13 @@ class LLMAsAJudgeOracle(Oracle):
             max_tokens=max_tokens,
         )
 
-    def evaluate(self, solution, trace=None, duration=None) -> dict:
+    def evaluate(self, solution, duration=None) -> dict:
         """Evaluate the agent's diagnosis.
 
         Parameters
         ----------
         solution : str
             The agent's submitted diagnosis text.
-        trace : str, optional
-            The agent's chronological tool-call / reasoning trace.  When
-            provided the judge uses it to score the D4 *Reasoning Trajectory
-            Coherence* dimension.  When absent D4 defaults to 0.
         duration : float, optional
             Wall-clock time the agent took (currently unused by the judge but
             accepted for interface compatibility with the base ``Oracle``).
@@ -62,18 +55,12 @@ class LLMAsAJudgeOracle(Oracle):
         if not isinstance(solution, str):
             solution = str(solution)
 
-        # Normalize trace to string or None
-        agent_trace = None
-        if trace is not None:
-            agent_trace = str(trace) if not isinstance(trace, str) else trace
-
         try:
-            # Get detailed judgment from DiagnosisJudge — now with problem + trace
+            # Get detailed judgment from DiagnosisJudge with structured problem context
             report = self.judge.judge_detailed(
                 solution=solution,
                 expectation=self.expected,
                 problem=self.problem,
-                agent_trace=agent_trace,
             )
 
             # Check if judge is not initialized

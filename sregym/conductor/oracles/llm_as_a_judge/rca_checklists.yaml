@@ -2,10 +2,9 @@ version: "3.0"
 scoring:
   threshold: 0.70
   weights:
-    D1: 0.25
-    D2: 0.25
-    D3: 0.25
-    D4: 0.25
+    D1: 0.33
+    D2: 0.33
+    D3: 0.34
 dimensions:
   - id: D1
     name: "Fault Localization"
@@ -59,38 +58,3 @@ dimensions:
       - id: D3-Q3
         text: "Does the diagnosis correctly describe the impact or symptom consistent with what the ground-truth states?"
         evaluator_hint: "Compare the stated impact against the fault category and mechanism in the structured fault spec."
-
-  - id: D4
-    name: "Reasoning Trajectory Coherence"
-    category: "process_quality"
-    definition: >
-      Does the agent's reasoning trajectory — the sequence of tool calls,
-      observations, and intermediate conclusions recorded in the agent trace —
-      logically support the final diagnosis?  This dimension evaluates the
-      *process*, not just the conclusion: did the agent look at the right
-      resources, interpret the data correctly, and arrive at its answer through
-      a coherent chain of evidence?  If no agent trace is provided, answer
-      all questions as "No" with evidence "no trace provided".
-    questions:
-      - id: D4-Q1
-        text: "Did the agent's tool calls investigate the component that it ultimately identifies as the fault origin (i.e., is there trace evidence that the agent actually inspected the blamed component)?"
-        evaluator_hint: >
-          Look through the agent trace for tool calls (kubectl describe,
-          kubectl logs, metric queries, etc.) that target the component named in
-          the final diagnosis. If the agent blames a component it never
-          inspected, answer No.
-      - id: D4-Q2
-        text: "Is the agent's final diagnosis logically supported by the observations and data in its trace (i.e., can you find evidence in the trace that leads to the stated conclusion)?"
-        evaluator_hint: >
-          Check whether the agent's trace contains observations (error messages,
-          status conditions, metric values) that logically entail or strongly
-          suggest the stated root cause. If the diagnosis contains claims that
-          contradict or have no basis in the trace, answer No.
-      - id: D4-Q3
-        text: "Is the agent's reasoning trajectory free of major logical jumps or unsupported leaps (i.e., the agent did not skip critical investigation steps or hallucinate evidence)?"
-        evaluator_hint: >
-          Check for red flags: the agent claims to have seen an error but
-          no trace entry shows that query; the agent jumps from a high-level
-          symptom directly to a specific root cause without narrowing down;
-          the agent cites data not present in the trace. If such gaps exist,
-          answer No.
