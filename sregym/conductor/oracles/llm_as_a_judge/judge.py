@@ -3,7 +3,7 @@
 v3.0 improvements over v2.0
 ---------------------------
 1. **Fault-spec-aware ground truth** – The judge now receives a structured
-   ``FaultSpec`` (fault category, mechanism, target component, injection
+    ``FaultSpec`` (mechanism, target component, injector metadata, injection
     parameters) extracted directly from the Problem's
    fault-injection logic, instead of relying solely on a short natural-language
    ``root_cause`` string.
@@ -186,8 +186,8 @@ You are an expert SRE evaluator assessing an AI agent's root cause analysis.
 
 You will be given:
   1. A **structured fault specification** extracted from the fault-injection
-     framework (what actually happened — including fault category, mechanism,
-      target component, and injection parameters).
+    framework (what actually happened — including mechanism, target component,
+    injector metadata, and injection parameters).
   2. The **ground-truth root cause** in natural language.
   3. The agent's **diagnosis** (what the agent claims happened).
   4. A checklist of {{num_questions}} Yes/No questions grouped across
@@ -207,7 +207,7 @@ For EACH dimension, follow these steps **in order**:
   (not just the natural-language root cause) as the authoritative reference.
   Pay special attention to:
     - `target_component` and `target_resource_kind` for localization (D1)
-    - `fault_category`, `fault_mechanism`, and `parameters` for characterization (D2)
+        - `fault_mechanism`, `injector_method`, and `parameters` for characterization (D2)
         - Fault impact and affected components for scope precision (D3)
 
   **Step 4 — Answer each question.**  For every question produce:
@@ -239,18 +239,19 @@ The agent does not blame any other component.  → D1-Q1: Yes, D1-Q2: Yes, D1-Q3
 
 ### Example — D2 Fault Characterization
 
-Ground-truth spec says: `fault_category=misconfiguration`,
-`fault_mechanism=incorrect_port_assignment`, `parameters={env_var: PRODUCT_CATALOG_ADDR, incorrect_port: 8082, correct_port: 8080}`.
+Ground-truth spec says: `fault_mechanism=incorrect_port_assignment`,
+`injector_method=inject_incorrect_port_assignment`, `parameters={env_var: PRODUCT_CATALOG_ADDR, incorrect_port: 8082, correct_port: 8080}`.
 Agent diagnosis says: "checkout can't reach product-catalog because the
 PRODUCT_CATALOG_ADDR env var points to port 8082 instead of 8080."
 
-Reasoning: Category is misconfiguration ✓.  Mechanism is incorrect port ✓.
-Specific detail (env var name, wrong port value) matches parameters ✓.
+Reasoning: Mechanism aligns with incorrect port assignment ✓.
+Specific detail (env var name, wrong port value) matches injected parameters ✓.
+Diagnosis does not conflict with injector operation ✓.
 → D2-Q1: Yes, D2-Q2: Yes, D2-Q3: Yes.
 
 ### Example — D3 Scope Precision
 
-Ground-truth spec says: `target_component=frontend`, `fault_category=misconfiguration`.
+Ground-truth spec says: `target_component=frontend`, `fault_mechanism=missing_env_variable`.
 Agent diagnosis says: "frontend, cart, and recommendation services are all
 failing because of a missing environment variable on the frontend."
 

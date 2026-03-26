@@ -29,25 +29,25 @@ dimensions:
     category: "internal_quality"
     definition: >
       Does the diagnosis correctly describe what went wrong with the identified
-      component?  Compare against fault_category, fault_mechanism, and the
-      injection parameters in the structured fault spec.
+      component? Compare against the fault mechanism, injector operation,
+      and injection parameters in the structured fault spec.
     questions:
       - id: D2-Q1
-        text: "Does the diagnosis identify the correct category of fault as described in the ground-truth (e.g., misconfiguration, resource exhaustion, feature flag, image issue, authentication failure, scheduling constraint)?"
-        evaluator_hint: "Match the fault category in the diagnosis against fault_category in the structured spec."
+        text: "Does the diagnosis identify the same injected mechanism described in the ground-truth (e.g., wrong port, missing env var, wrong image, wrong selector, memory limit, probe misconfiguration)?"
+        evaluator_hint: "Match the diagnosis against fault_mechanism and injector_method in the structured spec."
       - id: D2-Q2
-        text: "Does the diagnosis identify the specific fault mechanism described in the ground-truth (e.g., wrong port, missing env var, wrong image, wrong selector, memory limit, probe misconfiguration)?"
-        evaluator_hint: "Match the specific mechanism in the diagnosis against fault_mechanism and injection parameters in the structured spec."
+        text: "Does the diagnosis include concrete mutated details from the injection logic (e.g., env var/key, wrong value, port, selector, image tag, resource limit)?"
+        evaluator_hint: "Compare concrete claims in the diagnosis against parameters and the target mutation implied by injector_method."
       - id: D2-Q3
         text: "Does the diagnosis avoid attributing the fault to an incorrect or unrelated fault type?"
-        evaluator_hint: "Check that the diagnosis does not describe a different kind of problem than what the structured spec states."
+        evaluator_hint: "Check that the diagnosis does not conflict with problem_class, injector_method, or the injected parameter values."
 
   - id: D3
     name: "Scope Precision"
     category: "external_alignment"
     definition: >
       Does the diagnosis correctly scope the fault to the right set of affected
-      components and describe the correct impact based on the fault category?
+      components and describe impact consistent with the injected mutation?
     questions:
       - id: D3-Q1
         text: "Does the diagnosis avoid blaming components that are not identified in the ground-truth as contributing to the fault?"
@@ -57,4 +57,4 @@ dimensions:
         evaluator_hint: "Check for under-attribution — all ground-truth components should be mentioned."
       - id: D3-Q3
         text: "Does the diagnosis correctly describe the impact or symptom consistent with what the ground-truth states?"
-        evaluator_hint: "Compare the stated impact against the fault category and mechanism in the structured fault spec."
+        evaluator_hint: "Compare the stated impact against mechanism, parameters, and target component in the structured fault spec."

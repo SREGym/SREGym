@@ -27,7 +27,6 @@ class FaultSpec:
     """Structured representation of a single injected fault."""
 
     # What was broken
-    fault_category: str = ""  # e.g. "misconfiguration", "resource_exhaustion", "auth_failure"
     fault_mechanism: str = ""  # e.g. "incorrect_port", "missing_env_var", "revoked_auth"
     fault_description: str = ""  # Human-readable summary (from root_cause)
 
@@ -50,7 +49,6 @@ class FaultSpec:
             "### Structured Fault Specification",
             "",
             f"**Problem class:** `{self.problem_class}`",
-            f"**Fault category:** {self.fault_category}",
             f"**Fault mechanism:** {self.fault_mechanism}",
             f"**Target component:** `{self.target_component}` ({self.target_resource_kind})",
             f"**Namespace:** `{self.namespace}`",
@@ -64,70 +62,6 @@ class FaultSpec:
         lines.append("### Ground-Truth Root Cause (natural language)")
         lines.append(self.fault_description)
         return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# Fault taxonomy  – maps fault_mechanism names to category + default symptoms
-# ---------------------------------------------------------------------------
-
-_FAULT_TAXONOMY: dict[str, dict[str, Any]] = {
-    # --- Misconfiguration ---
-    "incorrect_port": {"category": "misconfiguration"},
-    "incorrect_port_assignment": {"category": "misconfiguration"},
-    "incorrect_image": {"category": "misconfiguration"},
-    "misconfig_app": {"category": "misconfiguration"},
-    "missing_env_variable": {"category": "misconfiguration"},
-    "env_variable_shadowing": {"category": "misconfiguration"},
-    "wrong_service_selector": {"category": "misconfiguration"},
-    "wrong_dns_policy": {"category": "misconfiguration"},
-    "wrong_bin_usage": {"category": "misconfiguration"},
-    "configmap_drift": {"category": "misconfiguration"},
-    "missing_configmap": {"category": "misconfiguration"},
-    "target_port": {"category": "misconfiguration"},
-    "k8s_target_port": {"category": "misconfiguration"},
-    "sidecar_port_conflict": {"category": "misconfiguration"},
-    "service_port_conflict": {"category": "misconfiguration"},
-    "ingress_misroute": {"category": "misconfiguration"},
-    "rolling_update_misconfigured": {"category": "misconfiguration"},
-    "stale_coredns_config": {"category": "misconfiguration"},
-    # --- Scheduling / Resource ---
-    "assign_to_non_existent_node": {"category": "scheduling"},
-    "taint_no_toleration": {"category": "scheduling"},
-    "resource_request": {"category": "resource_exhaustion"},
-    "namespace_memory_limit": {"category": "resource_exhaustion"},
-    "duplicate_pvc_mounts": {"category": "scheduling"},
-    "pvc_claim_mismatch": {"category": "scheduling"},
-    "persistent_volume_affinity_violation": {"category": "scheduling"},
-    "pod_anti_affinity_deadlock": {"category": "scheduling"},
-    "scale_pod": {"category": "resource_exhaustion"},
-    "overload_replicas": {"category": "resource_exhaustion"},
-    # --- Authentication / Authorization ---
-    "revoke_auth": {"category": "auth_failure"},
-    "storage_user_unregistered": {"category": "auth_failure"},
-    "auth_miss_mongodb": {"category": "auth_failure"},
-    "valkey_auth_disruption": {"category": "auth_failure"},
-    "rbac_misconfiguration": {"category": "auth_failure"},
-    # --- Network ---
-    "network_policy_block": {"category": "network"},
-    "service_dns_resolution_failure": {"category": "network"},
-    # --- Feature flag / Application logic ---
-    "feature_flag": {"category": "feature_flag"},
-    "manual_gc": {"category": "resource_exhaustion"},
-    # --- Metastable ---
-    "rpc_retry_storm": {"category": "metastable_failure"},
-    "gc_capacity_degradation": {"category": "metastable_failure"},
-    # --- Memory / Storage ---
-    "valkey_memory_disruption": {"category": "resource_exhaustion"},
-    # --- Operator misoperation ---
-    "invalid_affinity_toleration": {"category": "scheduling"},
-    "non_existent_storage": {"category": "scheduling"},
-    "security_context_fault": {"category": "misconfiguration"},
-    "wrong_update_strategy": {"category": "misconfiguration"},
-    "wrong_operator_image": {"category": "misconfiguration"},
-    # --- Hardware / Kernel (Khaos) ---
-    "kubelet_crash": {"category": "infrastructure"},
-    "workload_imbalance": {"category": "infrastructure"},
-}
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +147,7 @@ def _infer_fault_mechanism(problem) -> str:
 
 
 def _infer_target_resource_kind(problem) -> str:
-    """Guess the Kubernetes resource kind from problem attributes."""
+    """Infer the Kubernetes resource kind from problem attributes."""
     root = getattr(problem, "root_cause", "") or ""
     lower = root.lower()
 
@@ -293,12 +227,10 @@ def extract_fault_spec(problem) -> FaultSpec:
         prompt_text = spec.to_prompt_section()
     """
     mechanism = _infer_fault_mechanism(problem)
-    taxonomy = _FAULT_TAXONOMY.get(mechanism, {})
 
     injector_cls, inject_method = _infer_injector_info(problem)
 
     return FaultSpec(
-        fault_category=taxonomy.get("category", "unknown"),
         fault_mechanism=mechanism,
         fault_description=getattr(problem, "root_cause", "") or "",
         target_component=getattr(problem, "faulty_service", "") or "",
