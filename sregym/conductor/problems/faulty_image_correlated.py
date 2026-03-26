@@ -1,8 +1,8 @@
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.incorrect_image_mitigation import IncorrectImageMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
-from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -20,10 +20,11 @@ class FaultyImageCorrelated(Problem):
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         # not really the incorrect image problem, just reuse the incorrect image function
-        self.mitigation_oracle = IncorrectImageMitigationOracle(
+        self.resolution_oracle = IncorrectImageMitigationOracle(
             problem=self,
             actual_images={service: "jackcuii/hotel-reservation:latest" for service in self.faulty_service},
         )
+        self.mitigation_oracle = AlertOracle(problem=self)
 
         self.app.create_workload()
 

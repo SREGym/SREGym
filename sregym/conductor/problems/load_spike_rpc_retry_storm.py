@@ -1,4 +1,4 @@
-from sregym.conductor.oracles.detection import DetectionOracle
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.rpc_retry_storm_mitigation import RPCRetryStormMitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -20,7 +20,8 @@ class LoadSpikeRPCRetryStorm(Problem):
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
-        self.mitigation_oracle = RPCRetryStormMitigationOracle(problem=self)
+        self.resolution_oracle = RPCRetryStormMitigationOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):
@@ -28,7 +29,7 @@ class LoadSpikeRPCRetryStorm(Problem):
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injector.inject_rpc_timeout_retries_misconfiguration(configmap=self.faulty_service)
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
-        self.mitigation_oracle.run_workload(problem=self, kubectl=self.kubectl)
+        self.resolution_oracle.run_workload(problem=self, kubectl=self.kubectl)
 
     @mark_fault_injected
     def recover_fault(self):

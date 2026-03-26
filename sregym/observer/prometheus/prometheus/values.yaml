@@ -874,6 +874,24 @@ serverFiles:
                 summary: "High error rate: {{ $labels.method }} {{ $labels.name }}"
                 description: "Endpoint {{ $labels.method }} {{ $labels.name }} in {{ $labels.namespace }} has an elevated failure ratio (current: {{ $value | printf \"%.2f\" }})."
 
+            - alert: HighRequestErrorRate
+              # Locust load generator error detection (astronomy-shop).
+              # Fires when any endpoint has failures and enough requests to be meaningful.
+              expr: |
+                (
+                  locust_requests_num_failures{namespace="astronomy-shop", name!="Aggregated"}
+                    /
+                  locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}
+                ) > 0.1
+                  and
+                locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"} > 0
+              for: 1m
+              labels:
+                severity: critical
+              annotations:
+                summary: "High error rate: {{ $labels.method }} {{ $labels.name }}"
+                description: "Endpoint {{ $labels.method }} {{ $labels.name }} in {{ $labels.namespace }} has an elevated failure ratio (current: {{ $value | printf \"%.2f\" }})."
+
             - alert: HighRequestRate
               # Detects abnormal traffic spikes (e.g. load generator flooding).
               # Fires when a single service receives >50 req/s sustained.
@@ -1192,7 +1210,15 @@ extraScrapeConfigs: |
       - target_label: __address__
         replacement: prometheus-prometheus-blackbox-exporter:9115
 
-  # ---- Locust load generator metrics (train-ticket) ----
+  # ---- Locust load generator metrics ----
+  - job_name: 'locust-astronomy-shop'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - load-generator.astronomy-shop:9646
+        labels:
+          namespace: astronomy-shop
+
   - job_name: 'locust-train-ticket'
     scrape_interval: 15s
     static_configs:

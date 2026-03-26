@@ -1,3 +1,4 @@
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.incorrect_image_mitigation import IncorrectImageMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
@@ -20,9 +21,10 @@ class IncorrectImage(Problem):
         )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = IncorrectImageMitigationOracle(
+        self.resolution_oracle = IncorrectImageMitigationOracle(
             problem=self, actual_images={"product-catalog": "app-image:latest"}
         )
+        self.mitigation_oracle = AlertOracle(problem=self)
 
         self.app.create_workload()
 

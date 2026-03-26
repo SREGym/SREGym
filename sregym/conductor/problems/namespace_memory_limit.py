@@ -1,3 +1,4 @@
+from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.namespace_memory_limit_mitigation import NamespaceMemoryLimitMitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -18,7 +19,8 @@ class NamespaceMemoryLimit(Problem):
         self.root_cause = f"The namespace has a ResourceQuota with a memory limit (1Gi) that is too restrictive, preventing the deployment `{self.faulty_service}` from scheduling new pods or causing existing pods to be evicted."
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = NamespaceMemoryLimitMitigationOracle(problem=self)
+        self.resolution_oracle = NamespaceMemoryLimitMitigationOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self)
 
         self.app.create_workload()
 
