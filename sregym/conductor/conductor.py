@@ -279,7 +279,14 @@ class Conductor:
                     f"settling for {settle_seconds}s to let transient alerts clear…"
                 )
                 time.sleep(settle_seconds)
-                return
+                firing = alert_oracle._query_firing_alerts(namespace)
+                if firing:
+                    names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
+                    self.logger.info(f"[WAIT] 🔔 Alerts still firing after settle: {names}")
+                    return
+                else:
+                    self.logger.info("[WAIT] All alerts cleared during settle period — continuing to poll")
+                    continue
 
             elapsed_int = int(elapsed)
             if elapsed_int >= last_log_second + 30:
