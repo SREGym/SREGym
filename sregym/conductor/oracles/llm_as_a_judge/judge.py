@@ -1,16 +1,7 @@
 """LLM-as-a-Judge Oracle for evaluating agent solutions against expected root causes.
 
-v3.0 improvements over v2.0
----------------------------
-1. **Fault-spec-aware ground truth** – The judge now receives a structured
-    ``FaultSpec`` (mechanism, target component, injector metadata, injection
-    parameters) extracted directly from the Problem's
-   fault-injection logic, instead of relying solely on a short natural-language
-   ``root_cause`` string.
-2. **Chain-of-thought + in-context learning** – The system prompt now instructs
-   the judge to reason step-by-step *per dimension* before answering, and
-   includes a worked example for every dimension so the judge sees the expected
-   reasoning depth and format.
+The checklist evaluator compares agent diagnosis text against the ground-truth
+root cause in natural language.
 """
 
 from __future__ import annotations
@@ -137,9 +128,7 @@ class LLMJudge:
 class DiagnosisJudge:
     """Checklist-based RCA evaluator that scores dimensions via chain-of-thought.
 
-    Key improvements over v2.0:
-    - Accepts an optional ``problem`` reference to extract a rich FaultSpec.
-    - Uses chain-of-thought reasoning with in-context examples per dimension.
+    Uses chain-of-thought reasoning with in-context examples per dimension.
     """
 
     # ------------------------------------------------------------------
@@ -149,12 +138,9 @@ class DiagnosisJudge:
 You are an expert SRE evaluator assessing an AI agent's root cause analysis.
 
 You will be given:
-  1. A **structured fault specification** extracted from the fault-injection
-    framework (what actually happened — including mechanism, target component,
-    injector metadata, and injection parameters).
-  2. The **ground-truth root cause** in natural language.
-  3. The agent's **diagnosis** (what the agent claims happened).
-  4. A checklist of {{num_questions}} Yes/No questions grouped across
+    1. The **ground-truth root cause** in natural language.
+    2. The agent's **diagnosis** (what the agent claims happened).
+    3. A checklist of {{num_questions}} Yes/No questions grouped across
      {{num_dimensions}} evaluation dimensions.
 
 ## How to evaluate (chain-of-thought)
@@ -167,12 +153,12 @@ For EACH dimension, follow these steps **in order**:
     **Step 2 — Gather evidence.**  Scan the agent's *diagnosis text* for
     claims relevant to each dimension.
 
-  **Step 3 — Compare against ground truth.**  Use the *structured fault spec*
-  (not just the natural-language root cause) as the authoritative reference.
+    **Step 3 — Compare against ground truth.**  Use the ground-truth root cause
+    as the authoritative reference.
   Pay special attention to:
-    - `target_component` and `target_resource_kind` for localization (D1)
-        - `fault_mechanism`, `injector_method`, and `parameters` for characterization (D2)
-        - Fault impact and affected components for scope precision (D3)
+        - the named target component/workload and resource context for localization (D1)
+        - concrete root-cause details (misconfig, value mismatch, policy, auth, etc.) for characterization (D2)
+        - direct vs secondary impact scope for precision (D3)
 
   **Step 4 — Answer each question.**  For every question produce:
     - id: the question ID exactly as given
@@ -194,28 +180,27 @@ chain-of-thought reasoning happens internally before you produce each answer.
 
 ### Example — D1 Fault Localization
 
-Ground-truth spec says: `target_component=checkout`, `target_resource_kind=Deployment`.
+Ground-truth root cause says: "The checkout deployment has a misconfigured port."
 Agent diagnosis says: "The checkout deployment has a misconfigured port."
 
 Reasoning (internal): The agent names "checkout deployment" which matches the
-ground-truth target_component ("checkout") and resource kind ("Deployment").
+ground-truth component and resource context.
 The agent does not blame any other component.  → D1-Q1: Yes, D1-Q2: Yes, D1-Q3: Yes.
 
 ### Example — D2 Fault Characterization
 
-Ground-truth spec says: `fault_mechanism=incorrect_port_assignment`,
-`injector_method=inject_incorrect_port_assignment`, `parameters={env_var: PRODUCT_CATALOG_ADDR, incorrect_port: 8082, correct_port: 8080}`.
+Ground-truth root cause says: "checkout cannot reach product-catalog because
+PRODUCT_CATALOG_ADDR points to port 8082 instead of 8080."
 Agent diagnosis says: "checkout can't reach product-catalog because the
 PRODUCT_CATALOG_ADDR env var points to port 8082 instead of 8080."
 
-Reasoning: Mechanism aligns with incorrect port assignment ✓.
-Specific detail (env var name, wrong port value) matches injected parameters ✓.
-Diagnosis does not conflict with injector operation ✓.
+Reasoning: Specific detail (env var name, wrong port value) matches the root cause ✓.
+Diagnosis explains the same configuration fault ✓.
 → D2-Q1: Yes, D2-Q2: Yes, D2-Q3: Yes.
 
 ### Example — D3 Scope Precision
 
-Ground-truth spec says: `target_component=frontend`, `fault_mechanism=missing_env_variable`.
+Ground-truth root cause says: "frontend has a missing environment variable."
 Agent diagnosis says: "frontend, cart, and recommendation services are all
 failing because of a missing environment variable on the frontend."
 
@@ -298,8 +283,6 @@ fences, no preamble, no commentary.
         self,
         solution: str,
         expectation: str,
-        *,
-        problem=None,
     ) -> tuple[JudgmentResult, str]:
         """Drop-in replacement for ``LLMJudge.judge()``.
 
@@ -309,19 +292,14 @@ fences, no preamble, no commentary.
             The agent's diagnosis text.
         expectation : str
             Natural-language root-cause description.
-        problem : Problem, optional
-            If provided, a structured FaultSpec is extracted and included in the
-            judge prompt.
         """
-        report = self.judge_detailed(solution, expectation, problem=problem)
+        report = self.judge_detailed(solution, expectation)
         return report.verdict, report.reasoning
 
     def judge_detailed(
         self,
         solution: str,
         expectation: str,
-        *,
-        problem=None,
     ):
         """Evaluate solution against expectation using the full checklist.
 
@@ -349,7 +327,7 @@ fences, no preamble, no commentary.
             return self._empty_report()
 
         # Build and send prompt
-        user_msg = self._build_user_message(solution, expectation, problem=problem)
+        user_msg = self._build_user_message(solution, expectation)
         raw_results = self._call_llm_with_retry(user_msg)
 
         # Build question lookup from config
@@ -414,41 +392,15 @@ fences, no preamble, no commentary.
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _build_fault_spec_section(self, problem) -> str:
-        """Extract a structured fault spec from the Problem object."""
-        try:
-            from sregym.conductor.oracles.llm_as_a_judge.fault_spec_extractor import (
-                extract_fault_spec,
-            )
-
-            spec = extract_fault_spec(problem)
-            return spec.to_prompt_section()
-        except Exception as e:
-            print(f"Warning: Could not extract fault spec from problem: {e}")
-            return ""
-
     def _build_user_message(
         self,
         solution: str,
         expectation: str,
-        *,
-        problem=None,
     ) -> str:
         lines: list[str] = []
 
-        # ---- Section 1: Ground-truth fault specification ----
-        lines.append("## Ground-Truth Fault Specification")
-        lines.append("")
-
-        # If a Problem object is available, extract a structured spec
-        if problem is not None:
-            fault_spec_text = self._build_fault_spec_section(problem)
-            if fault_spec_text:
-                lines.append(fault_spec_text)
-                lines.append("")
-
-        # Always include the natural-language root cause as a fallback
-        lines.append("### Natural-Language Root Cause")
+        # ---- Section 1: Ground-truth root cause ----
+        lines.append("## Ground-Truth Root Cause")
         lines.append(expectation if expectation else "(No fault - system is operating normally)")
         lines.append("")
 

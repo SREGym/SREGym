@@ -17,7 +17,18 @@ class AdServiceHighCpu(Problem):
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "ad"
-        self.root_cause = f"The `{self.faulty_service}` service has a feature flag enabled that causes high CPU usage, resulting in performance degradation."
+        self.feature_flag = "adHighCpu"
+        self.cpu_limit = "200m"
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The `{self.faulty_service}` deployment is degraded because the flagd feature flag "
+                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, and a tight CPU limit "
+                f"(`{self.cpu_limit}`) is applied to the ad container, causing CPU throttling and performance "
+                "degradation."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -25,9 +36,12 @@ class AdServiceHighCpu(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector.inject_fault("adHighCpu")
+        self.injector.inject_fault(self.feature_flag)
         # Set a tight CPU limit so the high-CPU flag causes observable throttling.
-        patch = '{"spec":{"template":{"spec":{"containers":[{"name":"ad","resources":{"limits":{"cpu":"200m"}}}]}}}}'
+        patch = (
+            '{"spec":{"template":{"spec":{"containers":[{"name":"ad",'
+            f'"resources":{{"limits":{{"cpu":"{self.cpu_limit}"}}}}}}]}}}}'
+        )
         self.kubectl.exec_command(
             f"kubectl patch deployment {self.faulty_service} -n {self.namespace} --type=strategic -p '{patch}'"
         )
@@ -36,7 +50,7 @@ class AdServiceHighCpu(Problem):
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector.recover_fault("adHighCpu")
+        self.injector.recover_fault(self.feature_flag)
         # Remove the CPU limit added during injection.
         patch = '[{"op":"remove","path":"/spec/template/spec/containers/0/resources/limits/cpu"}]'
         self.kubectl.exec_command(

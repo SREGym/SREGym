@@ -1,8 +1,8 @@
 """LLM-as-a-Judge Oracle for evaluating agent solutions using LLM judgment.
 
 v3.0 changes:
-- Passes the ``Problem`` object to ``DiagnosisJudge`` so the judge can extract
-    a structured ``FaultSpec`` from the fault-injection logic.
+- Uses the Problem's natural-language ``root_cause`` as the ground-truth
+    reference for checklist evaluation.
 - Uses a diagnosis-only checklist.
 """
 
@@ -56,11 +56,10 @@ class LLMAsAJudgeOracle(Oracle):
             solution = str(solution)
 
         try:
-            # Get detailed judgment from DiagnosisJudge with structured problem context
+            # Get detailed judgment from DiagnosisJudge using root-cause-only ground truth
             report = self.judge.judge_detailed(
                 solution=solution,
                 expectation=self.expected,
-                problem=self.problem,
             )
 
             # Check if judge is not initialized
