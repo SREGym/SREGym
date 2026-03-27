@@ -17,7 +17,17 @@ class PaymentServiceUnreachable(Problem):
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "checkout"
-        self.root_cause = f"The `{self.faulty_service}` service has a feature flag enabled that makes the payment service unreachable, causing checkout failures."
+        self.feature_flag = "paymentUnreachable"
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The `{self.faulty_service}` deployment is degraded because the flagd feature flag "
+                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, making payment-service calls "
+                "unreachable from checkout. Checkout retries and eventually times out when creating payments, "
+                "causing order placement failures. Users can browse and add items but fail consistently at payment."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -25,10 +35,10 @@ class PaymentServiceUnreachable(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector.inject_fault("paymentUnreachable")
+        self.injector.inject_fault(self.feature_flag)
         print(f"Fault: paymentServiceUnreachable | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector.recover_fault("paymentUnreachable")
+        self.injector.recover_fault(self.feature_flag)

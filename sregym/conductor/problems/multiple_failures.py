@@ -19,11 +19,21 @@ class MultipleIndependentFailures(Problem):
 
         # === Attaching problem's oracles ===
         # diagnosis oracles can be statically defined.
-        # concat all root causes together.
-        self.root_cause: str = "This problem contains multiple faults.\n"
-        for p in self.problems:
-            root_cause = "" if p.root_cause is None else p.root_cause
-            self.root_cause += root_cause
+        # Build an explicit multi-fault narrative with clear per-fault boundaries.
+        fault_sections: list[str] = []
+        for idx, p in enumerate(self.problems, start=1):
+            root_cause = (p.root_cause or "").strip()
+            if not root_cause:
+                continue
+            fault_sections.append(f"Fault {idx} ({p.__class__.__name__}):\n{root_cause}")
+
+        if fault_sections:
+            self.root_cause = (
+                "This scenario contains multiple independent injected faults across different components. "
+                "Each fault and its symptoms are listed below.\n\n" + "\n\n".join(fault_sections)
+            )
+        else:
+            self.root_cause = "This scenario contains multiple independent injected faults, but no sub-fault root causes were provided."
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         # mitigation oracle: compound of all sub-problem AlertOracles

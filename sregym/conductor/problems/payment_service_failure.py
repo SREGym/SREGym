@@ -17,7 +17,17 @@ class PaymentServiceFailure(Problem):
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "payment"
-        self.root_cause = f"The `{self.faulty_service}` service has a feature flag enabled that causes it to fail, resulting in service unavailability."
+        self.feature_flag = "paymentFailure"
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The `{self.faulty_service}` deployment is failing because the flagd feature flag "
+                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, causing payment requests to "
+                "consistently error. Checkout requests reach the payment step but fail authorization/charge flow "
+                "with retries and eventual cancellation. Users experience failed purchases despite valid cart state."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -25,10 +35,10 @@ class PaymentServiceFailure(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector.inject_fault("paymentFailure")
+        self.injector.inject_fault(self.feature_flag)
         print(f"Fault: paymentServiceFailure | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector.recover_fault("paymentFailure")
+        self.injector.recover_fault(self.feature_flag)

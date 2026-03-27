@@ -26,7 +26,16 @@ class WrongServiceSelector(Problem):
         self.namespace = self.app.namespace
         super().__init__(app=self.app, namespace=self.namespace)
         self.kubectl = KubeCtl()
-        self.root_cause = f"The service `{self.faulty_service}` has a misconfigured selector that includes an additional incorrect label, preventing it from matching the intended pods."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The service `{self.faulty_service}` has a misconfigured selector that adds an incorrect label, "
+                "so it no longer matches the intended backing pods. The service has zero or insufficient endpoints "
+                "despite healthy-looking deployments, causing routing failures at the service layer. Users observe "
+                "connection resets/timeouts and partial outages when requests are sent through this service."
+            ),
+        )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

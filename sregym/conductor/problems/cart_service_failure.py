@@ -17,7 +17,17 @@ class CartServiceFailure(Problem):
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "cart"
-        self.root_cause = f"The `{self.faulty_service}` service has a feature flag enabled that causes it to fail, resulting in service unavailability."
+        self.feature_flag = "cartFailure"
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The `{self.faulty_service}` deployment is failing because the flagd feature flag "
+                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, causing cart-service request "
+                "handling to fail. Cart reads and updates return errors, and downstream checkout paths that require "
+                "cart state become unreliable. Users observe empty carts, failed cart updates, and checkout blocking."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -25,10 +35,10 @@ class CartServiceFailure(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector.inject_fault("cartFailure")
+        self.injector.inject_fault(self.feature_flag)
         print(f"Fault: cartServiceFailure | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector.recover_fault("cartFailure")
+        self.injector.recover_fault(self.feature_flag)

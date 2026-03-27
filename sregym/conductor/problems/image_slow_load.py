@@ -17,7 +17,17 @@ class ImageSlowLoad(Problem):
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "frontend"
-        self.root_cause = f"The `{self.faulty_service}` service has a feature flag enabled that causes slow image loading, resulting in degraded user experience and performance issues."
+        self.feature_flag = "imageSlowLoad"
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The `{self.faulty_service}` deployment is degraded because the flagd feature flag "
+                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, forcing slow image-response "
+                "behavior. Image-dependent pages show elevated latency and partial rendering while requests wait "
+                "for delayed asset responses. Users observe sluggish page loads and visibly delayed product imagery."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -25,10 +35,10 @@ class ImageSlowLoad(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector.inject_fault("imageSlowLoad")
+        self.injector.inject_fault(self.feature_flag)
         print(f"Fault: imageSlowLoad | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector.recover_fault("imageSlowLoad")
+        self.injector.recover_fault(self.feature_flag)

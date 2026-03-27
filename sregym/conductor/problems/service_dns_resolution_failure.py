@@ -28,7 +28,16 @@ class ServiceDNSResolutionFailure(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
 
         self.kubectl = KubeCtl()
-        self.root_cause = f"CoreDNS is configured with an NXDOMAIN template for the service `{self.faulty_service}.{self.namespace}.svc.cluster.local`, causing DNS resolution to fail for this service."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"CoreDNS is configured with an NXDOMAIN template for `{self.faulty_service}.{self.namespace}.svc.cluster.local`, "
+                "so in-cluster lookups for this service name fail at DNS resolution time. Dependent services cannot "
+                "resolve or connect to the target even though pods may be healthy and listening. Users observe request "
+                "timeouts and cascading failures on flows that depend on this service endpoint."
+            ),
+        )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

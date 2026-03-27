@@ -17,7 +17,17 @@ class AdServiceFailure(Problem):
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "ad"
-        self.root_cause = f"The `{self.faulty_service}` service has a feature flag enabled that causes it to fail, resulting in service unavailability."
+        self.feature_flag = "adFailure"
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The `{self.faulty_service}` deployment is failing because the flagd feature flag "
+                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, forcing ad-service failures. "
+                "The service returns repeated errors and requests depending on ad responses experience intermittent "
+                "timeouts. Users see missing or delayed ad content while other storefront paths may still respond."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -25,10 +35,10 @@ class AdServiceFailure(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector.inject_fault("adFailure")
+        self.injector.inject_fault(self.feature_flag)
         print(f"Fault: adServiceFailure | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector.recover_fault("adFailure")
+        self.injector.recover_fault(self.feature_flag)
