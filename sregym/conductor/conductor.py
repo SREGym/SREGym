@@ -85,6 +85,9 @@ class Conductor:
         self.waiting_for_agent: bool = False
         self.fault_injected: bool = False
 
+        from sregym.conductor.event_bus import get_event_bus
+        self._bus = get_event_bus()
+
     @property
     def current_problem(self):
         """Return the current problem, raising if none is loaded."""
@@ -303,6 +306,12 @@ class Conductor:
         r = problem.diagnosis_oracle.evaluate(solution)
         self.results["Diagnosis"] = r
         self.results["TTL"] = time.time() - self.execution_start_time
+        self._bus.emit("oracle_result", {
+            "stage": "diagnosis",
+            "success": r.get("success"),
+            "accuracy": r.get("accuracy"),
+            "ttl": self.results["TTL"],
+        })
         self.logger.info(
             f"[EVAL] Diagnosis "
             f"{'Succeed' if self.results['Diagnosis']['success'] else 'Failed'}\n "
@@ -318,6 +327,11 @@ class Conductor:
         r = problem.mitigation_oracle.evaluate()
         self.results["Mitigation"] = r
         self.results["TTM"] = time.time() - self.execution_start_time
+        self._bus.emit("oracle_result", {
+            "stage": "mitigation",
+            "success": r.get("success"),
+            "ttm": self.results["TTM"],
+        })
         self.logger.info(
             f"[EVAL] Mitigation "
             f"{'Succeed' if self.results['Mitigation']['success'] else 'Failed'}\n "
@@ -365,6 +379,11 @@ class Conductor:
             self.logger.debug(f"Advancing to stage '{stage_name}' and waiting for agent.")
             self.waiting_for_agent = True
             self.submission_stage = stage_name
+            self._bus.emit("stage_change", {
+                "stage": stage_name,
+                "stage_index": start_index,
+                "total_stages": len(self.stage_sequence),
+            })
             self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
 
             # Update NoiseManager stage
@@ -424,6 +443,7 @@ class Conductor:
 
         # Set to "done" after all cleanup is complete
         self.submission_stage = "done"
+        self._bus.emit("problem_done", {"problem_id": self.problem_id, "results": dict(self.results)})
         self.logger.info("[CLEANUP] Cleanup complete, stage set to 'done'")
 
     def _finish_problem(self):
@@ -437,6 +457,15 @@ class Conductor:
         """
         self.logger.info("[STAGE] Done, starting teardown")
         self.submission_stage = "tearing_down"
+        
+        self._bus.emit("teardown", {"problem_id": self.problem_id, "results": dict(self.results)})
+
+        # Run cleanup in a background thread — works whether called from
+        # the event loop or from a thread pool (run_in_executor)
+        self._cleanup_thread = threading.Thread(target=self._cleanup_sync, name="cleanup", daemon=True)
+        self._cleanup_thread.start()
+
+        self.logger.info("[STAGE] Teardown initiated, cleanup running in background")
         self._cleanup_sync()
         self.logger.info("[STAGE] Teardown complete")
 
@@ -466,6 +495,7 @@ class Conductor:
         self.app = self.problem.app
         self.detection_oracle = DetectionOracle(self.problem)
         self.results = {}
+        self._bus.emit("problem_start", {"problem_id": self.problem_id})
 
         self.dependency_check(["kubectl", "helm", "docker"])
         self.logger.debug("Dependency check passed: kubectl, helm")
@@ -492,6 +522,11 @@ class Conductor:
         self.logger.info("Deploying app...")
         self.deploy_app()
         self.logger.info("App deployed.")
+        self._bus.emit("app_deployed", {
+            "problem_id": self.problem_id,
+            "app_name": self.app.app_name,
+            "namespace": self.app.namespace,
+        })
 
         # Update NoiseManager with problem context
         if self.config.enable_noise:
@@ -511,6 +546,13 @@ class Conductor:
         self._advance_to_next_stage(start_index=0)
 
         self.execution_start_time = time.time()  # Reset: measure agent time only
+        self._bus.emit("problem_ready", {
+            "problem_id": self.problem_id,
+            "app_name": self.app.app_name if self.app else None,
+            "namespace": self.app.namespace if self.app else None,
+            "stages": [s["name"] for s in self.stage_sequence],
+            "stage": self.submission_stage,
+        })
 
         if self.submission_stage and self.submission_stage != "done":
             self.logger.info(f"✅ Deployment complete. Ready for submission. Current stage is: {self.submission_stage}")
@@ -598,6 +640,14 @@ class Conductor:
         self._submit_future = asyncio.get_event_loop().run_in_executor(
             None, self._submit_evaluate_and_advance, sol, current_stage
         )
+        self._bus.emit("submission_received", {
+            "stage": current_stage["name"],
+            "solution": sol,
+        })
+
+        # Run evaluation and stage advancement in a background thread
+        # so the HTTP response returns immediately
+        asyncio.get_event_loop().run_in_executor(None, self._submit_evaluate_and_advance, sol, current_stage)
 
         return {"status": "ok", "message": "Submission received"}
 
