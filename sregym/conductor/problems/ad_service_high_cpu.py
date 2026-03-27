@@ -26,7 +26,9 @@ class AdServiceHighCpu(Problem):
                 f"The `{self.faulty_service}` deployment is degraded because the flagd feature flag "
                 f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, and a tight CPU limit "
                 f"(`{self.cpu_limit}`) is applied to the ad container, causing CPU throttling and performance "
-                "degradation."
+                "degradation. Pods for the ad service show sustained high CPU usage, increased request latency, "
+                "and intermittent timeouts under normal storefront traffic. This appears as slower page loads and "
+                "ad content delays even when other services remain healthy."
             ),
         )
         # === Attach evaluation oracles ===

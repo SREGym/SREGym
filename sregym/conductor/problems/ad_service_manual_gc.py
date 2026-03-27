@@ -25,7 +25,9 @@ class AdServiceManualGc(Problem):
                 f"The `{self.faulty_service}` deployment is affected because the flagd feature flag "
                 f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, which triggers manual garbage "
                 "collection behavior and causes elevated CPU/latency with performance degradation and potential "
-                "service interruptions."
+                "service interruptions. The workload exhibits periodic latency spikes and unstable response times "
+                "as aggressive garbage collection cycles pause request handling. Users may observe slow or missing "
+                "ad responses and occasional transient failures while traffic is otherwise normal."
             ),
         )
         # === Attach evaluation oracles ===
