@@ -17,10 +17,14 @@ class FailedReadinessProbe(Problem):
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "cart"
-        self.root_cause = (
-            "The `cart` service has the `failedReadinessProbe` feature flag enabled, "
-            "causing its readiness probe to fail. Kubernetes removes the pod from "
-            "service endpoints, leading to request failures for the cart functionality."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The failedReadinessProbe fault forces cart readiness checks to fail, so Kubernetes marks pods "
+                "NotReady and removes them from service endpoints, breaking cart-dependent request paths. "
+                "Symptoms include repeated readiness probe failures and the cart endpoint disappearing from service discovery."
+            ),
         )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

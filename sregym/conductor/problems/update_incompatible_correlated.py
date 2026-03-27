@@ -22,7 +22,14 @@ class UpdateIncompatibleCorrelated(Problem):
             "mongodb-user",
         ]
         super().__init__(app=self.app, namespace=self.namespace)
-        self.root_cause = "The MongoDB deployments (mongodb-geo, mongodb-profile, mongodb-rate, and mongodb-recommendation) are updated to use an incompatible image version 'mongo:8.0.14-rc0'."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployments/{', '.join(self.faulty_service)}",
+            namespace=self.namespace,
+            description=(
+                "Multiple MongoDB backends are upgraded to an incompatible image version (mongo:8.0.14-rc0), "
+                "creating broad database incompatibility and cross-service persistence failures during runtime."
+            ),
+        )
         self.injector = ApplicationFaultInjector(namespace=self.namespace)
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

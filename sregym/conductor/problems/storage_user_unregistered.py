@@ -20,7 +20,14 @@ class MongoDBUserUnregistered(Problem):
         self.faulty_service = faulty_service
         # NOTE: change the faulty service to mongodb-rate to create another scenario
         # self.faulty_service = "mongodb-rate"
-        self.root_cause = f"The MongoDB service `{self.faulty_service}` has an unregistered user, causing authentication failures for the associated service."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"service/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The expected database user credentials are missing from MongoDB, so the dependent microservice cannot "
+                "authenticate and all storage-backed operations fail with authorization errors."
+            ),
+        )
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )

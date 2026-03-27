@@ -18,7 +18,14 @@ class MongoDBRevokeAuth(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = faulty_service
-        self.root_cause = f"The service `{self.faulty_service}-db` is configured to revoke the access to the database for the service `{self.faulty_service}`."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"service/{self.faulty_service}-db",
+            namespace=self.namespace,
+            description=(
+                f"Database access for {self.faulty_service} is explicitly revoked, so the service can start but fails on "
+                "database-backed operations due to authorization errors from MongoDB."
+            ),
+        )
         # NOTE: change the faulty service to mongodb-rate to create another scenario
         # self.faulty_service = "mongodb-rate"
         self.app.payload_script = (

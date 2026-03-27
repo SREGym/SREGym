@@ -17,7 +17,14 @@ class K8STargetPortMisconfig(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
-        self.root_cause = f"The service `{self.faulty_service}` has a misconfigured target port (9999 instead of 9090), causing connection failures."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"service/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The Service points traffic to an incorrect targetPort, so cluster requests reach no listening process "
+                "inside backend pods and callers observe connection failures and upstream timeouts."
+            ),
+        )
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

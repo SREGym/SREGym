@@ -19,7 +19,17 @@ class IngressMisroute(Problem):
         self.correct_service = correct_service
         self.wrong_service = wrong_service
         self.ingress_name = "hotel-reservation-ingress"
-        self.root_cause = f"The ingress `{self.ingress_name}` has a misconfigured routing rule for path `{self.path}`, routing traffic to the wrong service (`{self.wrong_service}` instead of `{self.correct_service}`)."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.ingress_name,
+            namespace=self.namespace,
+            description=(
+                f"Ingress `{self.ingress_name}` has a misconfigured backend rule for path `{self.path}`, routing "
+                f"requests to `{self.wrong_service}` instead of `{self.correct_service}`. Traffic reaches a valid "
+                "service, but the response semantics are incorrect for the requested endpoint, causing functional "
+                "errors rather than hard connectivity failures. Users observe wrong API behavior, inconsistent results, "
+                "or failures on routes that previously worked."
+            ),
+        )
         self.namespace = self.app.namespace
         self.networking_v1 = client.NetworkingV1Api()
         self.faulty_service = [correct_service, wrong_service]

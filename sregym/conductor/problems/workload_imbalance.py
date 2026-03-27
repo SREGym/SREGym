@@ -19,7 +19,14 @@ class WorkloadImbalance(Problem):
         self.faulty_service = ["frontend"]
         self.injector = VirtualizationFaultInjector(namespace="kube-system")
         self.injector_for_scale = VirtualizationFaultInjector(namespace=self.namespace)
-        self.root_cause = "The kube-proxy daemonset is using a buggy image version, and the frontend deployment is scaled to 5 replicas with a high workload surge, causing workload imbalance across pods."
+        self.root_cause = self.build_structured_root_cause(
+            component="daemonset/kube-proxy + deployment/frontend",
+            namespace=self.namespace,
+            description=(
+                "A buggy kube-proxy image is combined with frontend replica scaling and workload surge, creating uneven "
+                "traffic distribution where some pods are overloaded while others remain underutilized, degrading end-user latency."
+            ),
+        )
 
         # not so precise here by now
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

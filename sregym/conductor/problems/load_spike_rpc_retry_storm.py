@@ -16,7 +16,14 @@ class LoadSpikeRPCRetryStorm(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = "rpc"
-        self.root_cause = f"The ConfigMap `{self.faulty_service}` has misconfigured RPC timeout (50ms) and retry settings (30 retries), combined with a load spike, causing an RPC retry storm that overwhelms the service."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"configmap/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "RPC timeout and retry parameters are misconfigured to 50ms and 30 retries, and when workload spikes these "
+                "settings trigger retry amplification that overwhelms the service and dramatically increases error rates."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

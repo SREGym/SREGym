@@ -18,7 +18,16 @@ class TaintNoToleration(Problem):
         # ── pick all nodes so the control-plane cannot be used as fallback ──
         self.faulty_nodes = self._pick_all_nodes()
         self.faulty_service = "user-service"
-        self.root_cause = f"Worker nodes are tainted with sre-fault=blocked:NoSchedule, but the deployment `{self.faulty_service}` has a toleration for a different key (dummy-key), causing pods to be unschedulable and remain in Pending state."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"Cluster nodes are tainted with `sre-fault=blocked:NoSchedule`, but deployment `{self.faulty_service}` "
+                "only has a non-matching toleration (`dummy-key`), so new pods cannot be scheduled onto any valid node. "
+                "Pods remain in Pending with scheduler taint/toleration mismatch events instead of becoming Ready. "
+                "Users observe sustained request failures or degraded responses because replacement capacity never starts."
+            ),
+        )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         # TODO: support more precise diagnosis oracle: Nodes or DeploymentConfiguration

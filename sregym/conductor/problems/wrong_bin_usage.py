@@ -18,7 +18,14 @@ class WrongBinUsage(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = faulty_service
-        self.root_cause = f"The deployment `{self.faulty_service}` is configured to use the wrong binary (geo instead of profile), causing the service to malfunction."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The container entrypoint points to the wrong service binary, so the deployment starts an unintended process "
+                "and profile-service APIs malfunction or fail."
+            ),
+        )
 
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"

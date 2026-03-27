@@ -1,7 +1,6 @@
 from kubernetes import client, config
 
 from sregym.conductor.oracles.alert_oracle import AlertOracle
-from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -18,7 +17,15 @@ class GCCapacityDegradation(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = "garbage collection"
-        self.root_cause = "All deployments have the GOGC environment variable set to 10 (instead of the default 100), causing aggressive garbage collection that degrades service capacity and performance. This is a metastable failure."
+        self.root_cause = self.build_structured_root_cause(
+            component="deployments/all",
+            namespace=self.namespace,
+            description=(
+                "All workloads run with an aggressively low GOGC setting, forcing frequent garbage collection cycles that "
+                "consume CPU, reduce effective throughput, and keep the system in a degraded high-latency capacity regime "
+                "under sustained load."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -28,14 +35,16 @@ class GCCapacityDegradation(Problem):
         core_v1 = client.CoreV1Api()
         limit_range_body = client.V1LimitRange(
             metadata=client.V1ObjectMeta(name="gc-memory-guard"),
-            spec=client.V1LimitRangeSpec(limits=[
-                client.V1LimitRangeItem(
-                    type="Container",
-                    default={"memory": "512Mi", "cpu": "500m"},
-                    default_request={"memory": "256Mi", "cpu": "100m"},
-                    max={"memory": "512Mi", "cpu": "500m"},
-                )
-            ]),
+            spec=client.V1LimitRangeSpec(
+                limits=[
+                    client.V1LimitRangeItem(
+                        type="Container",
+                        default={"memory": "512Mi", "cpu": "500m"},
+                        default_request={"memory": "256Mi", "cpu": "100m"},
+                        max={"memory": "512Mi", "cpu": "500m"},
+                    )
+                ]
+            ),
         )
         try:
             core_v1.delete_namespaced_limit_range("gc-memory-guard", self.namespace)

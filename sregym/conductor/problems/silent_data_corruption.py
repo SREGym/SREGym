@@ -42,8 +42,15 @@ class SilentDataCorruption(Problem):
 
         super().__init__(app=self.app, namespace=self.app.namespace)
 
-        self.root_cause = (
-            "There's a silent data corruption on the hard drive that the mongodb-geo service's data is on."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.deploy}",
+            namespace=self.namespace,
+            description=(
+                "dm-flakey corruption is injected on the underlying storage path used by this MongoDB workload, "
+                "so reads and/or writes can be silently corrupted without immediate hard I/O errors, leading to latent "
+                "data integrity issues. Symptoms include inconsistent query results, mismatched records, or "
+                "intermittent application anomalies that do not map cleanly to obvious storage failures."
+            ),
         )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

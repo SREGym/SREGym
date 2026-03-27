@@ -20,7 +20,14 @@ class K8SOperatorInvalidAffinityTolerationFault(Problem):
         super().__init__(app=self.app, namespace="tidb-cluster")
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
-        self.root_cause = "The TiDBCluster custom resource specifies an invalid toleration effect, causing pods to be unschedulable and remain in Pending state."
+        self.root_cause = self.build_structured_root_cause(
+            component="customresource/tidbcluster/basic",
+            namespace="tidb-cluster",
+            description=(
+                "The TiDBCluster spec contains an invalid toleration effect value, so scheduler constraints cannot be "
+                "satisfied and TiDB pods remain Pending with unschedulable events."
+            ),
+        )
         self.app.create_workload()
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

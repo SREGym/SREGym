@@ -25,7 +25,16 @@ class MissingConfigMap(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
 
         self.kubectl = KubeCtl()
-        self.root_cause = f"The ConfigMap required by the deployment `{self.faulty_service}` has been deleted, causing the pods to fail to start or malfunction."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"A required ConfigMap for deployment `{self.faulty_service}` has been deleted, so pods lose required "
+                "runtime configuration during startup and reload. Affected pods fail to initialize correctly or run "
+                "with invalid defaults, leading to NotReady/CrashLoop behavior and unstable service operation. "
+                "Users observe request failures and degraded functionality for features backed by this component."
+            ),
+        )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
