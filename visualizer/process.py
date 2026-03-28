@@ -188,10 +188,7 @@ def last_message_preview(rec: dict[str, Any], max_len: int = 160) -> str:
     if isinstance(lm, dict):
         t = as_str(lm.get("type") or lm.get("role") or "")
         c = lm.get("content")
-        if isinstance(c, list):
-            c_str = as_str(pretty_json(c), max_len=max_len)
-        else:
-            c_str = as_str(c, max_len=max_len)
+        c_str = as_str(pretty_json(c), max_len=max_len) if isinstance(c, list) else as_str(c, max_len=max_len)
         out = f"{t}: {c_str}".strip(": ").strip()
         return out
 
@@ -200,10 +197,7 @@ def last_message_preview(rec: dict[str, Any], max_len: int = 160) -> str:
         last = msgs[-1]
         t = as_str(last.get("type") or last.get("role") or "")
         c = last.get("content")
-        if isinstance(c, list):
-            c_str = as_str(pretty_json(c), max_len=max_len)
-        else:
-            c_str = as_str(c, max_len=max_len)
+        c_str = as_str(pretty_json(c), max_len=max_len) if isinstance(c, list) else as_str(c, max_len=max_len)
         out = f"{t}: {c_str}".strip(": ").strip()
         return out
 
@@ -1024,10 +1018,7 @@ def render_kv(rec: dict[str, Any], exclude_keys: set) -> str:
     for k, v in rec.items():
         if k in exclude_keys:
             continue
-        if isinstance(v, (dict, list)):
-            v_str = as_str(v, 300)
-        else:
-            v_str = as_str(v, 500)
+        v_str = as_str(v, 300) if isinstance(v, (dict, list)) else as_str(v, 500)
         items.append((str(k), v_str))
 
     if not items:
@@ -1284,11 +1275,6 @@ def main():
     ap.add_argument("inputs", nargs="+", help="Input .jsonl file(s) or directories containing .jsonl")
     ap.add_argument("-o", "--out", default="html_reports", help="Output directory")
     args = ap.parse_args()
-
-    # Root selection: use the first input as the root if it's a directory,
-    # otherwise use its parent directory.
-    first = Path(args.inputs[0]).expanduser().resolve()
-    root = first if first.is_dir() else first.parent
 
     # Load results.csv from the provided root (NOT the script directory)
     # global all_results_csv

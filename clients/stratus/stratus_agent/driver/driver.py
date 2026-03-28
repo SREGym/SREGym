@@ -107,7 +107,7 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
             # Convert to dict and handle non-serializable objects
             try:
                 msg_dict["additional_kwargs"] = json.loads(json.dumps(message.additional_kwargs, default=str))
-            except:
+            except Exception:
                 msg_dict["additional_kwargs"] = str(message.additional_kwargs)
 
         return msg_dict
@@ -127,7 +127,7 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
             f.write(json.dumps(metadata) + "\n")
 
             # Write each stage
-            for stage_idx, stage_data in enumerate(all_trajectories):
+            for _stage_idx, stage_data in enumerate(all_trajectories):
                 stage_name = stage_data.get("stage", "unknown")
                 events = stage_data.get("events", [])
 
@@ -280,10 +280,12 @@ async def diagnosis_task_main():
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
+    with open(diagnosis_agent_config_path) as f:
+        diagnosis_agent_config = yaml.safe_load(f)
     diagnosis_agent_max_step = diagnosis_agent_config["max_step"]
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path))
+    with open(diagnosis_agent_prompt_path) as f:
+        diagnosis_agent_prompts = yaml.safe_load(f)
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
@@ -325,10 +327,12 @@ async def diagnosis_with_localization_task_main():
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
+    with open(diagnosis_agent_config_path) as f:
+        diagnosis_agent_config = yaml.safe_load(f)
     diagnosis_agent_max_step = diagnosis_agent_config["max_step"]
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path))
+    with open(diagnosis_agent_prompt_path) as f:
+        diagnosis_agent_prompts = yaml.safe_load(f)
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
@@ -375,15 +379,18 @@ async def mitigation_task_main(diagnosis_summary):
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     mitigation_agent_config_path = file_parent_dir.parent / "configs" / "mitigation_agent_config.yaml"
-    mitigation_agent_config = yaml.safe_load(open(mitigation_agent_config_path))
+    with open(mitigation_agent_config_path) as f:
+        mitigation_agent_config = yaml.safe_load(f)
     mitigation_agent_max_step = mitigation_agent_config["max_step"]
     mitigation_agent_prompt_path = file_parent_dir.parent / "configs" / mitigation_agent_config["prompts_path"]
     mitigation_agent_max_retry_attempts = mitigation_agent_config["max_retry_attempts"]
     mitigation_agent_retry_mode = mitigation_agent_config["retry_mode"]
 
     llm_summarization_prompt_file = file_parent_dir.parent / "configs" / "llm_summarization_prompt.yaml"
-    llm_summarization_prompt = yaml.safe_load(open(llm_summarization_prompt_file))["mitigation_retry_prompt"]
-    mitigation_agent_prompts = yaml.safe_load(open(mitigation_agent_prompt_path))
+    with open(llm_summarization_prompt_file) as f:
+        llm_summarization_prompt = yaml.safe_load(f)["mitigation_retry_prompt"]
+    with open(mitigation_agent_prompt_path) as f:
+        mitigation_agent_prompts = yaml.safe_load(f)
 
     # oracle
     logger.info("setting up oracles")
@@ -516,7 +523,6 @@ async def mitigation_task_main(diagnosis_summary):
         # and some reflections as input
         curr_attempt = 0
         mitigation_agent_last_state = ""
-        rollback_agent_last_state = ""
         oracle_results = OracleResult(
             success=False, issues=["This is the beginning of mitigation, please observe the cluster for issues."]
         )
@@ -720,9 +726,11 @@ async def main():
 
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
+    with open(diagnosis_agent_config_path) as f:
+        diagnosis_agent_config = yaml.safe_load(f)
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(open(diagnosis_agent_prompt_path))
+    with open(diagnosis_agent_prompt_path) as f:
+        diagnosis_agent_prompts = yaml.safe_load(f)
 
     # Check if diagnosis prompts have the summary prompt, otherwise use a default key
     summary_prompt_key = (

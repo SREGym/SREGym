@@ -164,7 +164,7 @@ async def manual_submit_tool(ans: str) -> str:
 
     await session.initialize()
 
-    result = await session.call_tool(
+    await session.call_tool(
         "submit",
         arguments={
             "ans": ans,
