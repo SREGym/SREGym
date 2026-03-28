@@ -56,6 +56,7 @@ def get_current_datetime_formatted():
     formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
 
+
 timestamp = get_current_datetime_formatted()
 
 
@@ -599,7 +600,9 @@ async def mitigation_task_main(diagnosis_summary):
                 # return agent_exec_stats
             else:
                 # here the agent fails, we make decision if we should retry
-                logger.info(f"current attempt: {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}, agent failed the validation oracles.")
+                logger.info(
+                    f"current attempt: {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}, agent failed the validation oracles."
+                )
                 should_retry = (curr_attempt + 1) < mitigation_agent_max_retry_attempts
                 logger.info(f"agent failed, should we retry? {'Yes!' if should_retry else 'No!'}")
                 if should_retry:
