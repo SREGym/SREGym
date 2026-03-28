@@ -2,7 +2,7 @@
 
 import json
 import re
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 import yaml
@@ -11,7 +11,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from llm_backend.init_backend import get_llm_backend_for_judge
 
 
-class JudgmentResult(str, Enum):
+class JudgmentResult(StrEnum):
     TRUE = "True"  # Correct diagnosis - agent identified the root cause
     FALSE = "False"  # Incorrect diagnosis - agent did not identify the root cause
 

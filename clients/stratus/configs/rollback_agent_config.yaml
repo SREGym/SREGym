@@ -1,11 +1,11 @@
 # each step is defined as one tool call
 max_step: 20
-sync_tools: 
+sync_tools:
   - name: wait_tool
     description: |
-      Use this tool to wait for you action to take effect. The upper limit is 120 seconds. 
+      Use this tool to wait for you action to take effect. The upper limit is 120 seconds.
           Any value above 120 seconds will be truncated to 120 seconds. If you call this tool
-          along with other tools in your tool_calls list, this tool will be scheduled to the 
+          along with other tools in your tool_calls list, this tool will be scheduled to the
           last for execution.
 
           Args:

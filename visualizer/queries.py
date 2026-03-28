@@ -1346,10 +1346,7 @@ def main():
 
     results_root = Path(args.results_root).expanduser().resolve()
 
-    if args.csv:
-        csv_path = Path(args.csv).expanduser().resolve()
-    else:
-        csv_path = pick_results_csv_with_most_rows(results_root)
+    csv_path = Path(args.csv).expanduser().resolve() if args.csv else pick_results_csv_with_most_rows(results_root)
 
     all_results_csv = load_results_csv(csv_path)
 

@@ -17,7 +17,7 @@ class ProblemSubclass extends Class {
 class AppAssignment extends AssignStmt {
   AppAssignment() {
     exists(Attribute attr |
-      attr = this.getATarget() and 
+      attr = this.getATarget() and
       attr.getObject().(Name).getId() = "self" and
       attr.getName() = "app"
     )

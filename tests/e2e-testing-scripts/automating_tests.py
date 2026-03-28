@@ -1,10 +1,7 @@
-import json
 import os
-import re
 import shlex
 import subprocess
 import sys
-import tempfile
 from datetime import date
 from pathlib import Path
 from time import sleep
@@ -173,14 +170,14 @@ def comment_out_problems():
         mapping[node] = problems[start:end]
     # comment out agent run too
     agent_run_lines = ["reg = get_agent(agent_name)", "if reg:", "await LAUNCHER.ensure_started(reg)"]
-    for node, probs in mapping.items():
+    for node, _probs in mapping.items():
         for prob in problems:
             if prob not in mapping[node]:
                 print(f"On node {node}, comment out line: {prob.strip()}")
                 cmd = f'ssh -o StrictHostKeyChecking=no {node} "sed -i \'/\\"{prob}\\":/s/^/#/\' ~/SREGym/sregym/conductor/problems/registry.py"'
                 subprocess.run(cmd, shell=True, check=True)
-        for l in agent_run_lines:
-            cmd = f"ssh -o StrictHostKeyChecking=no {node} \"sed -i '/{l}/ s/^/#/' ~/SREGym/main.py\""
+        for line in agent_run_lines:
+            cmd = f"ssh -o StrictHostKeyChecking=no {node} \"sed -i '/{line}/ s/^/#/' ~/SREGym/main.py\""
             subprocess.run(cmd, shell=True, check=True)
 
 
@@ -253,9 +250,11 @@ def clone(nodes_file: str = "nodes.txt", repo: str = "https://github.com/SREGym/
     """
     env = os.environ.copy()
     if "SSH_AUTH_SOCK" not in env or not env["SSH_AUTH_SOCK"]:
-        raise EnvironmentError("No SSH agent detected. Run `ssh-add -l` to confirm your key is loaded.")
+        raise OSError("No SSH agent detected. Run `ssh-add -l` to confirm your key is loaded.")
 
-    remote_cmd = f'GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone --recurse-submodules {repo} && cd SREGym'
+    remote_cmd = (
+        f'GIT_SSH_COMMAND="ssh -o StrictHostKeyChecking=accept-new" git clone --recurse-submodules {repo} && cd SREGym'
+    )
 
     with open(nodes_file) as f:
         nodes = [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
@@ -370,7 +369,6 @@ def _resolve_kind_config() -> str | None:
 def create_cluster(user):
     for node in _read_nodes("nodes.txt"):
         print(f"\n=== [Create Kind Cluster] {node} ===")
-        TMUX_SESSION = "cluster_setup"
 
         cmd = f'ssh -o StrictHostKeyChecking=no {node} "bash -ic \\"tmux new-session -d -s cluster_setup \'kind create cluster --config /users/{user}/SREGym/kind/kind-config-x86.yaml; sleep infinity\'\\""'
 
@@ -411,7 +409,7 @@ def copy_env():
 def install_kubectl():
     _install_brew_if_needed()
     print("installed brew")
-    SCRIPTS_DIR = Path.home() / "e2e-testing-scripts"
+    Path.home() / "e2e-testing-scripts"
 
     for node in _read_nodes("nodes.txt"):
         print(f"\n=== [Install kubectl] {node} ===")
@@ -437,9 +435,9 @@ def set_up_environment():
         )
     except Exception:
         pass
-    nodes = _read_nodes("nodes.txt")
+    _read_nodes("nodes.txt")
     commands = [
-        f"cd ~/SREGym",
+        "cd ~/SREGym",
         'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"',
         "command -v uv >/dev/null 2>&1 || brew install uv",
         'uv venv -p "$(command -v python3.12 || command -v python3)"',
@@ -475,8 +473,7 @@ def collect_logs(user, nodes_file: str = "nodes.txt"):
     """
     local_dir = Path("./node_logs")
     local_dir.mkdir(exist_ok=True)
-    today = date.today().strftime("%Y-%m-%d")
-    day = "$(date +%Y-%m-%d)"
+    date.today().strftime("%Y-%m-%d")
     remote_log = f"/users/{user}/SREGym/global_benchmark_*.txt"
 
     nodes = _read_nodes(nodes_file)

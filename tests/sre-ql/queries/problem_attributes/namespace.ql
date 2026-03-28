@@ -17,7 +17,7 @@ class ProblemSubclass extends Class {
 class NamespaceAssignment extends AssignStmt {
   NamespaceAssignment() {
     exists(Attribute attr |
-      attr = this.getATarget() and 
+      attr = this.getATarget() and
       attr.getObject().(Name).getId() = "self" and
       attr.getName() = "namespace"
     )
@@ -38,7 +38,7 @@ predicate shouldIgnore(ProblemSubclass c) {
     exists(string filename |
       filename = m.getFile().getBaseName() and
       (
-        filename = "multiple_failures.py" 
+        filename = "multiple_failures.py"
       )
     )
   )
@@ -56,7 +56,7 @@ string getMessage(ProblemSubclass c) {
 }
 
 from ProblemSubclass c, string msg
-where 
+where
   msg = getMessage(c) and
   not shouldIgnore(c)
 select c, msg

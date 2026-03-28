@@ -8,9 +8,7 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
-from typing import Any, Optional
 
 logger = logging.getLogger("all.claudecode.agent")
 
@@ -70,7 +68,9 @@ class ClaudeCodeAgent:
 
             # Verify installation
             if not ClaudeCodeAgent.check_installation():
-                raise RuntimeError("Claude Code CLI installation appeared to succeed but command is still not available")
+                raise RuntimeError(
+                    "Claude Code CLI installation appeared to succeed but command is still not available"
+                )
 
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             error_msg = f"Failed to auto-install Claude Code CLI: {e}\n"
@@ -81,7 +81,7 @@ class ClaudeCodeAgent:
                 "  npm install -g @anthropic-ai/claude-code\n"
                 "Or visit: https://docs.claude.ai/claude-code"
             )
-            raise RuntimeError(error_msg)
+            raise RuntimeError(error_msg) from None
 
     ALLOWED_TOOLS = [
         "Bash",
@@ -107,7 +107,7 @@ class ClaudeCodeAgent:
         self,
         logs_dir: Path,
         model_name: str,
-        sessions_dir: Optional[Path] = None,
+        sessions_dir: Path | None = None,
     ):
         """
         Initialize the Claude Code agent.
@@ -158,7 +158,7 @@ class ClaudeCodeAgent:
         if len(candidate_dirs) == 1:
             return candidate_dirs[0]
 
-        logger.warning("Multiple Claude Code session directories found; " "could not identify the correct one")
+        logger.warning("Multiple Claude Code session directories found; could not identify the correct one")
         return None
 
     def get_usage_metrics(self) -> dict[str, int]:
@@ -189,7 +189,7 @@ class ClaudeCodeAgent:
         total_output_tokens = 0
 
         for session_file in session_files:
-            with open(session_file, "r") as handle:
+            with open(session_file) as handle:
                 for line in handle:
                     stripped = line.strip()
                     if not stripped:
@@ -242,8 +242,7 @@ class ClaudeCodeAgent:
         invalid_patterns = ["bedrock", "litellm", "azure", "openai", "watsonx", "gemini"]
         if any(pattern in model.lower() for pattern in invalid_patterns):
             logger.warning(
-                f"Model '{model}' appears to be for a non-Anthropic provider. "
-                f"Defaulting to 'sonnet' for Claude Code."
+                f"Model '{model}' appears to be for a non-Anthropic provider. Defaulting to 'sonnet' for Claude Code."
             )
             model = "sonnet"
 

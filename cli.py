@@ -8,10 +8,7 @@ setup and grading, but still gives you the PromptToolkit+Rich UI.
 
 import asyncio
 import json
-import logging
 import sys
-from multiprocessing import Process, set_start_method
-from threading import Thread
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter
@@ -20,6 +17,7 @@ from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+
 from logger import init_logger
 from sregym.conductor.conductor import Conductor
 from sregym.conductor.constants import StartProblemResult
@@ -128,6 +126,7 @@ class HumanAgent:
                 )
             except (KeyboardInterrupt, EOFError):
                 sys.exit(0)
+
 
 async def main():
     init_logger()

@@ -156,7 +156,7 @@ spec:
       {{- if eq "string" (printf "%T" .Values.extraInitContainers) }}
 {{ tpl .Values.extraInitContainers . | indent 6 }}
       {{- else }}
-{{ toYaml .Values.extraInitContainers | indent 6 }}      
+{{ toYaml .Values.extraInitContainers | indent 6 }}
       {{- end }}
       {{- end }}
       containers:
@@ -233,5 +233,5 @@ spec:
 {{ tpl .Values.extraContainers . | indent 6 }}
       {{- else }}
 {{ toYaml .Values.extraContainers | indent 6 }}
-      {{- end }}      
+      {{- end }}
       {{- end }}

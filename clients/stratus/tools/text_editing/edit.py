@@ -22,7 +22,7 @@ else:
     sys.path.append(str(TOOLS_DIR / "registry" / "lib"))
 
 from flake8_utils import flake8, format_flake8_output  # type: ignore
-from windowed_file import FileNotOpened, TextNotFound, WindowedFile  # type: ignore
+from windowed_file import TextNotFound, WindowedFile  # type: ignore
 
 RETRY_WITH_OUTPUT_TOKEN = "###SWE-AGENT-RETRY-WITH-OUTPUT###"
 
@@ -130,7 +130,7 @@ def edit(
     3. Explain how the edit does not break existing functionality
     """
     if not isinstance(state["curr_file"], str):
-        logger.error("INTERNAL: state curr file should be a string")
+        logger.error("INTERNAL: state curr file should be a string")  # noqa: F821
         exit(1)
     if len(state["curr_file"]) == 0:
         msg_txt = "No file opened. Either `open` or `create` a file first."

@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field, field_validator
-from pathlib import Path
-import os
 import logging
+import os
+from pathlib import Path
+
+from pydantic import BaseModel, Field, field_validator
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("all.mcp.kubectl_tool_cfg")
@@ -11,11 +12,7 @@ output_parent_dir = parent_parent_dir / "data"
 
 
 class KubectlToolCfg(BaseModel):
-    retry_wait_time: float = Field(
-        default=60,
-        description="Seconds to wait between retries.",
-        gt=0
-    )
+    retry_wait_time: float = Field(default=60, description="Seconds to wait between retries.", gt=0)
 
     forbid_unsafe_commands: bool = Field(
         default=False,
@@ -30,8 +27,7 @@ class KubectlToolCfg(BaseModel):
     # Update "default" with session id if using remote mcp server
     # If you see default dir, something went wrong.
     output_dir: str = Field(
-        default=str(output_parent_dir / "default"),
-        description="Directory to store some data used by kubectl server."
+        default=str(output_parent_dir / "default"), description="Directory to store some data used by kubectl server."
     )
 
     namespace: str = Field(

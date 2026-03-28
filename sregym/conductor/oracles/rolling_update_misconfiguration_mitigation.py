@@ -1,7 +1,10 @@
 import json
-import yaml
 import tempfile
+
+import yaml
+
 from sregym.conductor.oracles.base import Oracle
+
 
 class RollingUpdateMitigationOracle(Oracle):
     def __init__(self, problem, deployment_name: str):
@@ -19,28 +22,23 @@ class RollingUpdateMitigationOracle(Oracle):
             )
             deployment = yaml.safe_load(output)
 
-            new_init = [ {"name":    "hang-init", "image":   "busybox", "command": ["/bin/sh", "-c", "sleep 15"]}]
+            new_init = [{"name": "hang-init", "image": "busybox", "command": ["/bin/sh", "-c", "sleep 15"]}]
 
             deployment["spec"]["template"]["spec"]["initContainers"] = new_init
             with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tmp:
                 yaml.dump(deployment, tmp)
                 tmp_path = tmp.name
-            patch_cmd = (
-                f"kubectl patch deployment {self.deployment_name} -n {self.namespace} --patch-file {tmp_path}"
-            )
+            patch_cmd = f"kubectl patch deployment {self.deployment_name} -n {self.namespace} --patch-file {tmp_path}"
             patch_out = self.kubectl.exec_command(patch_cmd)
             print(f"Patched initContainers: {patch_out}")
-            
+
             self.kubectl.wait_for_ready(self.namespace)
 
             print("🔄 Triggering test rollout…")
-            self.kubectl.exec_command(
-                f"kubectl rollout restart deployment {self.deployment_name} -n {self.namespace}"
-            )
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {self.deployment_name} -n {self.namespace}")
 
             deploy_json = self.kubectl.exec_command(
-                f"kubectl get deployment {self.deployment_name}"
-                f" -n {self.namespace} -o json"
+                f"kubectl get deployment {self.deployment_name} -n {self.namespace} -o json"
             )
             deploy = json.loads(deploy_json)
             avail = deploy["status"].get("availableReplicas", 0)

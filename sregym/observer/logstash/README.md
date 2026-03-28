@@ -1,4 +1,4 @@
-* Install ElasticSearch 
+* Install ElasticSearch
 * Get the Elastic password:
 ```shell
 sudo /usr/share/elasticsearch/bin/elasticsearch-reset-password -u elastic

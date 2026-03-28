@@ -107,7 +107,7 @@ where
   or
   // Check 5: Mismatched fault identifiers between inject and recover
   (hasMismatchedFaultIdentifiers(c) and
-   msg = "inject_fault() and recover_fault() use different fault identifiers: '" + 
-         getFaultIdentifiers(c, "inject_fault") + "' vs '" + 
+   msg = "inject_fault() and recover_fault() use different fault identifiers: '" +
+         getFaultIdentifiers(c, "inject_fault") + "' vs '" +
          getFaultIdentifiers(c, "recover_fault") + "'")
 select c, msg

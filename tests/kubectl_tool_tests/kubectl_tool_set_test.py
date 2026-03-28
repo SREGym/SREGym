@@ -13,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 KUBECTL_TOOL_TEST_DIR = Path(__file__).resolve().parent
 PRECONDITIONS_FILE = KUBECTL_TOOL_TEST_DIR / "tests" / "preconditions.yaml"
-PRECONDITION_SETTINGS = yaml.safe_load(open(PRECONDITIONS_FILE))
+with open(PRECONDITIONS_FILE) as _f:
+    PRECONDITION_SETTINGS = yaml.safe_load(_f)
 
 TEST_SETTINGS = [
     KUBECTL_TOOL_TEST_DIR / "tests" / "create_del_test.yaml",
@@ -51,7 +52,7 @@ def get_agent(is_mock):
 
 
 def validate_condition(validate_cmd, validator):
-    opt = exec_shell_cmd(validate_cmd)
+    exec_shell_cmd(validate_cmd)
     return eval(validator)
 
 
@@ -107,7 +108,8 @@ class TestKubectlTools:
         agent = get_agent(is_mock=True)
         logger.info(f"agent msg switch branch: {agent.test_tool_or_ai_response}")
         agent.test_campaign_setter(test_campaign_file)
-        test_campaign = yaml.safe_load(open(test_campaign_file))
+        with open(test_campaign_file) as f:
+            test_campaign = yaml.safe_load(f)
 
         set_up_preconditions(test_campaign["preconditions"])
         running_test(test_campaign["test"], agent)

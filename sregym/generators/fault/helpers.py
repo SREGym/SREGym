@@ -55,8 +55,7 @@ def get_pids_by_name_contain(search_term):
         result = subprocess.run(
             ["ps", "-e", "-o", "pid,comm"],
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
 
         if result.returncode != 0:
@@ -90,8 +89,7 @@ def get_pids_by_name(search_term):
         result = subprocess.run(
             ["ps", "-e", "-o", "pid,comm"],
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
         )
 
         if result.returncode != 0:

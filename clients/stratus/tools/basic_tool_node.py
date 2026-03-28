@@ -1,4 +1,3 @@
-import asyncio
 import logging
 
 from langchain_core.messages import ToolMessage
@@ -25,7 +24,7 @@ class BasicToolNode:
         for tool_call in message.tool_calls:
             # tool_call["args"]["tool_call_id"] = tool_call["id"]
             # tool_call["args"].pop("id", None)
-            logger.info(f"invoking tool: {tool_call["name"]}, tool_call: {tool_call}")
+            logger.info(f"invoking tool: {tool_call['name']}, tool_call: {tool_call}")
             if self.is_async:
                 tool_call["args"].update({"state": inputs})
                 tool_result = await self.tools_by_name[tool_call["name"]].ainvoke(tool_call)

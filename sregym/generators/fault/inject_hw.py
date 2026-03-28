@@ -1,7 +1,6 @@
 import json
 import shlex
 import subprocess
-from typing import List, Tuple
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.kubectl import KubeCtl
@@ -20,9 +19,9 @@ class HWFaultInjector(FaultInjector):
 
     def inject(
         self,
-        microservices: List[str],
+        microservices: list[str],
         fault_type: str,
-        params: List[str | int] | None = None,
+        params: list[str | int] | None = None,
     ):
         for pod_ref in microservices:
             ns, pod = self._split_ns_pod(pod_ref)
@@ -36,9 +35,8 @@ class HWFaultInjector(FaultInjector):
         namespace: str,
         fault_type: str,
         target_node: str = None,
-        params: List[str | int] | None = None,
+        params: list[str | int] | None = None,
     ):
-
         if target_node:
             selected_node = self._find_node_starting_with(target_node)
             if not selected_node:
@@ -46,15 +44,15 @@ class HWFaultInjector(FaultInjector):
                 selected_node = self._find_node_with_most_pods(namespace)
         else:
             selected_node = self._find_node_with_most_pods(namespace)
-        
+
         print(f"Selected target node: {selected_node}")
-        
+
         target_pods = self._get_pods_on_node(namespace, selected_node)
         if not target_pods:
             raise RuntimeError(f"No running pods found on node '{selected_node}' in namespace '{namespace}'")
-        
+
         print(f"Found {len(target_pods)} pods on node {selected_node}: {', '.join(target_pods)}")
-        
+
         self.inject(target_pods, fault_type, params)
         return selected_node
 
@@ -63,10 +61,10 @@ class HWFaultInjector(FaultInjector):
         if not target_pods:
             print(f"[warn] No pods found on node {target_node}; attempting best-effort recovery.")
             target_pods = []
-        
+
         self.recover(target_pods, fault_type)
 
-    def recover(self, microservices: List[str], fault_type: str):
+    def recover(self, microservices: list[str], fault_type: str):
         touched = set()
         for pod_ref in microservices:
             ns, pod = self._split_ns_pod(pod_ref)
@@ -76,7 +74,7 @@ class HWFaultInjector(FaultInjector):
             self._exec_khaos_recover_on_node(node, fault_type)
             touched.add(node)
 
-    def _split_ns_pod(self, ref: str) -> Tuple[str, str]:
+    def _split_ns_pod(self, ref: str) -> tuple[str, str]:
         if "/" in ref:
             ns, pod = ref.split("/", 1)
         else:
@@ -236,7 +234,7 @@ class HWFaultInjector(FaultInjector):
         node: str,
         fault_type: str,
         host_pid: int,
-        params: List[str | int] | None = None,
+        params: list[str | int] | None = None,
     ):
         pod_name = self._get_khaos_pod_on_node(node)
         cmd = [
@@ -259,7 +257,7 @@ class HWFaultInjector(FaultInjector):
         cmd = ["kubectl", "-n", self.khaos_ns, "exec", pod_name, "--", "/khaos/khaos", "--recover", fault_type]
         subprocess.run(cmd, check=True)
 
-    def _get_all_nodes(self) -> List[str]:
+    def _get_all_nodes(self) -> list[str]:
         """Get all node names in the cluster."""
         cmd = "kubectl get nodes -o jsonpath='{.items[*].metadata.name}'"
         out = self.kubectl.exec_command(cmd)
@@ -279,7 +277,7 @@ class HWFaultInjector(FaultInjector):
     def _find_node_with_most_pods(self, namespace: str) -> str:
         """Find the node with the most pods in the namespace."""
         node_pod_count = {}
-        
+
         cmd = f"kubectl -n {namespace} get pods -o json"
         out = self.kubectl.exec_command(cmd)
         if isinstance(out, tuple):
@@ -294,17 +292,17 @@ class HWFaultInjector(FaultInjector):
         except Exception as e:
             print(f"Error getting pods: {e}")
             return None
-        
+
         if not node_pod_count:
             raise RuntimeError(f"No running pods found in namespace '{namespace}'")
-        
+
         selected_node = max(node_pod_count, key=node_pod_count.get)
         print(f"Node {selected_node} has {node_pod_count[selected_node]} pods")
         return selected_node
 
-    def _get_pods_on_node(self, namespace: str, target_node: str) -> List[str]:
+    def _get_pods_on_node(self, namespace: str, target_node: str) -> list[str]:
         """Get all pods in namespace on the target node."""
-        pods: List[str] = []
+        pods: list[str] = []
 
         cmd = f"kubectl -n {namespace} get pods -o json"
         out = self.kubectl.exec_command(cmd)
