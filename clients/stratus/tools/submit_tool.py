@@ -35,7 +35,7 @@ langgraph_tool_config = LanggraphToolConfig()
 def get_benchmark_status() -> str:
     """
     Check the current status of the benchmark.
-    Returns the status string (e.g., "diagnosis", "mitigation", "resolution", "done") or "error" on failure.
+    Returns the status string (e.g., "diagnosis", "mitigation", "done") or "error" on failure.
     """
     try:
         api_hostname = os.getenv("API_HOSTNAME", "localhost")

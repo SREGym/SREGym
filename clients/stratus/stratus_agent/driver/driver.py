@@ -224,7 +224,7 @@ def get_curr_problem():
 def get_benchmark_status():
     """
     Check the current status of the benchmark.
-    Returns the status string (e.g., "diagnosis", "mitigation", "resolution", "done") or "error" on failure.
+    Returns the status string (e.g., "diagnosis", "mitigation", "done") or "error" on failure.
     """
     try:
         # Construct the status URL from the benchmark API (not the MCP URL)
