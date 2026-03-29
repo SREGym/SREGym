@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 
 from sregym.paths import TARGET_MICROSERVICES
 
@@ -7,8 +8,15 @@ from sregym.paths import TARGET_MICROSERVICES
 class Application:
     """Base class for all microservice applications."""
 
+    def _validated_path(self, path, label: str) -> Path:
+        """Resolve *path* and raise FileNotFoundError with a clear message if it doesn't exist."""
+        resolved = Path(path).expanduser().resolve()
+        if not resolved.exists():
+            raise FileNotFoundError(f"{label} does not exist: {resolved}")
+        return resolved
+
     def __init__(self, config_file: str):
-        self.config_file = config_file
+        self.config_file = self._validated_path(config_file, "config_file")
         self.name = None
         self.namespace = None
         self.helm_deploy = True
@@ -33,10 +41,14 @@ class Application:
             chart_path = self.helm_configs.get("chart_path")
 
             if chart_path and not self.helm_configs.get("remote_chart", False):
-                self.helm_configs["chart_path"] = str(TARGET_MICROSERVICES / chart_path)
+                self.helm_configs["chart_path"] = str(
+                    self._validated_path(TARGET_MICROSERVICES / chart_path, "Helm chart_path")
+                )
 
         if "K8S Deploy Path" in metadata:
-            self.k8s_deploy_path = TARGET_MICROSERVICES / metadata["K8S Deploy Path"]
+            self.k8s_deploy_path = self._validated_path(
+                TARGET_MICROSERVICES / metadata["K8S Deploy Path"], "K8S deploy path"
+            )
 
     def get_app_json(self) -> dict:
         """Get application metadata in JSON format.
