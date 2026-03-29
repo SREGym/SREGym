@@ -280,12 +280,10 @@ async def diagnosis_task_main():
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    with open(diagnosis_agent_config_path) as f:
-        diagnosis_agent_config = yaml.safe_load(f)
+    diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
     diagnosis_agent_max_step = diagnosis_agent_config["max_step"]
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    with open(diagnosis_agent_prompt_path) as f:
-        diagnosis_agent_prompts = yaml.safe_load(f)
+    diagnosis_agent_prompts = yaml.safe_load(diagnosis_agent_prompt_path.read_text())
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
@@ -327,12 +325,10 @@ async def diagnosis_with_localization_task_main():
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    with open(diagnosis_agent_config_path) as f:
-        diagnosis_agent_config = yaml.safe_load(f)
+    diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
     diagnosis_agent_max_step = diagnosis_agent_config["max_step"]
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    with open(diagnosis_agent_prompt_path) as f:
-        diagnosis_agent_prompts = yaml.safe_load(f)
+    diagnosis_agent_prompts = yaml.safe_load(diagnosis_agent_prompt_path.read_text())
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
@@ -379,18 +375,15 @@ async def mitigation_task_main(diagnosis_summary):
     logger.info("loading configs")
     file_parent_dir = Path(__file__).resolve().parent.parent
     mitigation_agent_config_path = file_parent_dir.parent / "configs" / "mitigation_agent_config.yaml"
-    with open(mitigation_agent_config_path) as f:
-        mitigation_agent_config = yaml.safe_load(f)
+    mitigation_agent_config = yaml.safe_load(mitigation_agent_config_path.read_text())
     mitigation_agent_max_step = mitigation_agent_config["max_step"]
     mitigation_agent_prompt_path = file_parent_dir.parent / "configs" / mitigation_agent_config["prompts_path"]
     mitigation_agent_max_retry_attempts = mitigation_agent_config["max_retry_attempts"]
     mitigation_agent_retry_mode = mitigation_agent_config["retry_mode"]
 
     llm_summarization_prompt_file = file_parent_dir.parent / "configs" / "llm_summarization_prompt.yaml"
-    with open(llm_summarization_prompt_file) as f:
-        llm_summarization_prompt = yaml.safe_load(f)["mitigation_retry_prompt"]
-    with open(mitigation_agent_prompt_path) as f:
-        mitigation_agent_prompts = yaml.safe_load(f)
+    llm_summarization_prompt = yaml.safe_load(llm_summarization_prompt_file.read_text())["mitigation_retry_prompt"]
+    mitigation_agent_prompts = yaml.safe_load(mitigation_agent_prompt_path.read_text())
 
     # oracle
     logger.info("setting up oracles")
@@ -726,11 +719,9 @@ async def main():
 
     file_parent_dir = Path(__file__).resolve().parent.parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    with open(diagnosis_agent_config_path) as f:
-        diagnosis_agent_config = yaml.safe_load(f)
+    diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
     diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    with open(diagnosis_agent_prompt_path) as f:
-        diagnosis_agent_prompts = yaml.safe_load(f)
+    diagnosis_agent_prompts = yaml.safe_load(diagnosis_agent_prompt_path.read_text())
 
     # Check if diagnosis prompts have the summary prompt, otherwise use a default key
     summary_prompt_key = (

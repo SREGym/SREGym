@@ -60,8 +60,7 @@ class MitigationAgent(BaseAgent):
 def build_default_mitigation_agent():
     file_parent_dir = Path(__file__).resolve().parent
     mitigation_agent_config_path = file_parent_dir.parent / "configs" / "mitigation_agent_config.yaml"
-    with open(mitigation_agent_config_path) as f:
-        mitigation_agent_config = yaml.safe_load(f)
+    mitigation_agent_config = yaml.safe_load(mitigation_agent_config_path.read_text())
     mitigation_agent_max_step = mitigation_agent_config["max_step"]
     mitigation_agent_prompt_path = file_parent_dir.parent / "configs" / mitigation_agent_config["prompts_path"]
 
