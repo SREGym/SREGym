@@ -13,6 +13,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("all.stratus.tools")
 
 
+async def _close_mcp_client(exit_stack: AsyncExitStack, tool_name: str) -> None:
+    """Ignore transport teardown failures after a tool call has already completed."""
+    try:
+        await exit_stack.aclose()
+    except Exception as e:
+        logger.warning("Ignoring %s while closing MCP client for %s", type(e).__name__, tool_name)
+
+
 class ExecKubectlCmdSafelyInput(BaseModel):
     command: str = Field(
         description="The command you want to execute in a CLI to manage a k8s cluster. "
@@ -61,7 +69,7 @@ class ExecKubectlCmdSafely(BaseTool):
             result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
             text_result = "\n".join([part.text for part in result])
         finally:
-            await exit_stack.aclose()
+            await _close_mcp_client(exit_stack, self.name)
         update: dict = {"messages": [ToolMessage(content=text_result, tool_call_id=tool_call_id)]}
         if "Command Rejected" not in text_result:
             update["executed_commands"] = [command]
@@ -149,10 +157,7 @@ class ExecReadOnlyKubectlCmd(BaseTool):
                 result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
                 text_result = "\n".join([part.text for part in result])
             finally:
-                try:
-                    await exit_stack.aclose()
-                except Exception:
-                    pass
+                await _close_mcp_client(exit_stack, self.name)
         return Command(
             update={
                 "messages": [
@@ -196,10 +201,7 @@ class RollbackCommand(BaseTool):
             result = await self._client.call_tool("rollback_command")
             text_result = "\n".join([part.text for part in result])
         finally:
-            try:
-                await exit_stack.aclose()
-            except Exception as e:
-                logger.debug(f"{type(e).__name__} ignored, as it's expected")
+            await _close_mcp_client(exit_stack, self.name)
         return Command(
             update={
                 "rollback_stack": str(text_result),
@@ -250,10 +252,7 @@ class GetPreviousRollbackableCmd(BaseTool):
             else:
                 text_result = "\n".join([part.text for part in result])
         finally:
-            try:
-                await exit_stack.aclose()
-            except Exception as e:
-                logger.debug(f"{type(e).__name__} ignored, as it's expected")
+            await _close_mcp_client(exit_stack, self.name)
         return Command(
             update={
                 "messages": [
