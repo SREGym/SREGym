@@ -21,8 +21,7 @@ class DiagnosisAgent(BaseAgent):
 def build_default_diagnosis_agent():
     file_parent_dir = Path(__file__).resolve().parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    with open(diagnosis_agent_config_path) as f:
-        diagnosis_agent_config = yaml.safe_load(f)
+    diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
     max_step = diagnosis_agent_config["max_step"]
     prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
 
