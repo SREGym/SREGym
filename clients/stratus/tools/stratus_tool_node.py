@@ -93,8 +93,6 @@ class StratusToolNode:
                     f"Tool {tool_call['name']} should return a Command object, but return {type(tool_result)}"
                 )
                 logger.debug(f"[STRATUS_TOOLNODE] tool_result: {tool_result}")
-                if tool_result.update["messages"]:
-                    "\n".join([message.content for message in tool_result.update["messages"]])
                 new_messages += tool_result.update["messages"]
                 to_update = {
                     **to_update,

@@ -218,8 +218,8 @@ class TrainTicketUser(HttpUser):
 
             if response.status_code == 200:
                 data = response.json()
-                len(data.get("data", [])) if isinstance(data.get("data"), list) else 0
-                # print(f"[Routes] Successfully retrieved {routes_count} routes")
+                routes_count = len(data.get("data", [])) if isinstance(data.get("data"), list) else 0  # noqa: F841
+                print(f"[Routes] Successfully retrieved {routes_count} routes")
             else:
                 print(f"[Routes] Failed to get routes: {response.status_code}")
 
@@ -245,8 +245,8 @@ class TrainTicketUser(HttpUser):
 
             if response.status_code == 200:
                 data = response.json()
-                len(data.get("data", [])) if isinstance(data.get("data"), list) else 0
-                # print(f"[Stations] Successfully retrieved {stations_count} stations")
+                stations_count = len(data.get("data", [])) if isinstance(data.get("data"), list) else 0  # noqa: F841
+                print(f"[Stations] Successfully retrieved {stations_count} stations")
             else:
                 print(f"[Stations] Failed to get stations: {response.status_code}")
 
