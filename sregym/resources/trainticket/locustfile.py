@@ -1,6 +1,7 @@
 import time
-from locust import HttpUser, task, between
+
 import requests
+from locust import HttpUser, between, task
 
 
 class TrainTicketUser(HttpUser):
@@ -13,10 +14,9 @@ class TrainTicketUser(HttpUser):
         self._login()
 
     def _login(self):
-
         current_time = time.time()
         self.last_login_time = current_time
-        
+
         response = self.client.post(
             "/api/v1/users/login",
             json={"username": "fdse_microservice", "password": "111111"},
@@ -104,7 +104,9 @@ class TrainTicketUser(HttpUser):
                     response.success()
                 else:
                     print(f"[F17] FAILURE: Status {response.status_code} in {elapsed:.2f}s")
-                    response.failure(f"[F17] Voucher service failed to retrieve voucher. Error: {response.text}. Elapsed: {elapsed:.2f}s")
+                    response.failure(
+                        f"[F17] Voucher service failed to retrieve voucher. Error: {response.text}. Elapsed: {elapsed:.2f}s"
+                    )
 
         except requests.exceptions.ReadTimeout as e:
             # F-17 ON: Voucher service sleeps for 10s, causing >5s timeout
@@ -129,15 +131,16 @@ class TrainTicketUser(HttpUser):
         self._check_and_refresh_token()
 
         import uuid
+
         unique_name = f"TestContact_{uuid.uuid4().hex[:8]}"
-        
+
         # Create contact payload
         contact_payload = {
             "name": unique_name,
             "accountId": self.user_id,
             "documentType": 1,
             "documentNumber": unique_name,
-            "phoneNumber": f"555-{unique_name[-4:]}"
+            "phoneNumber": f"555-{unique_name[-4:]}",
         }
 
         print(f"[F22] Testing contact creation: {unique_name}")
@@ -151,16 +154,15 @@ class TrainTicketUser(HttpUser):
                 name="/contacts/create (F22)",
                 catch_response=True,
             ) as response:
-
                 if response.status_code == 201:
                     data = response.json()
                     status = data.get("status", -1)
                     msg = data.get("msg", "")
-                    
+
                     if status == 1:
                         print(f"[F22] SUCCESS: Contact created successfully | status: {status} | msg: {msg}")
                         print(f"[F22] Contact data: {data.get('data', {})}")
-                        
+
                         # Clean up: Delete the contact to avoid crowding the list
                         contact_id = data.get("data", {}).get("id")
                         if contact_id:
@@ -173,19 +175,21 @@ class TrainTicketUser(HttpUser):
                                 if delete_response.status_code == 200:
                                     print(f"[F22] Cleanup: Contact {contact_id} deleted successfully")
                                 else:
-                                    print(f"[F22] Cleanup: Failed to delete contact {contact_id}, status: {delete_response.status_code}")
+                                    print(
+                                        f"[F22] Cleanup: Failed to delete contact {contact_id}, status: {delete_response.status_code}"
+                                    )
                             except Exception as e:
                                 print(f"[F22] Cleanup: Error deleting contact {contact_id}: {e}")
-                        
+
                         response.success()
-                        
+
                     elif status == 0:
                         print(f"[F22] FAILURE: Contact creation failed | status: {status} | msg: {msg}")
                         response.failure(f"[F22] Contact creation failed: {msg}")
                     else:
                         print(f"[F22] UNKNOWN: Unexpected status {status} | msg: {msg}")
                         response.failure(f"[F22] Contact creation returned unexpected status: {status}")
-                        
+
                 else:
                     print(f"[F22] HTTP ERROR: Status {response.status_code} | Response: {response.text}")
                     response.failure(f"[F22] Contact creation HTTP error: {response.status_code}")
@@ -211,11 +215,11 @@ class TrainTicketUser(HttpUser):
                 headers=self.headers,
                 name="/routes/get",
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
-                routes_count = len(data.get("data", [])) if isinstance(data.get("data"), list) else 0
-                # print(f"[Routes] Successfully retrieved {routes_count} routes")
+                routes_count = len(data.get("data", [])) if isinstance(data.get("data"), list) else 0  # noqa: F841
+                print(f"[Routes] Successfully retrieved {routes_count} routes")
             else:
                 print(f"[Routes] Failed to get routes: {response.status_code}")
 
@@ -238,11 +242,11 @@ class TrainTicketUser(HttpUser):
                 headers=self.headers,
                 name="/stations/get",
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
-                stations_count = len(data.get("data", [])) if isinstance(data.get("data"), list) else 0
-                # print(f"[Stations] Successfully retrieved {stations_count} stations")
+                stations_count = len(data.get("data", [])) if isinstance(data.get("data"), list) else 0  # noqa: F841
+                print(f"[Stations] Successfully retrieved {stations_count} stations")
             else:
                 print(f"[Stations] Failed to get stations: {response.status_code}")
 

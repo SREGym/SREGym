@@ -2,7 +2,6 @@ from sregym.conductor.oracles.base import Oracle
 
 
 class MissingEnvVariableMitigationOracle(Oracle):
-
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation ==")
 
@@ -22,24 +21,28 @@ class MissingEnvVariableMitigationOracle(Oracle):
 
             # check if env var exists in deployment
             for container in deployment.spec.template.spec.containers:
-                if hasattr(container, 'env') and container.env:
+                if hasattr(container, "env") and container.env:
                     for env in container.env:
                         if env.name == env_var and env.value == env_var_value:
-                            print(f"✅ Found environment variable {env_var}={env_var_value} in container {container.name}")
+                            print(
+                                f"✅ Found environment variable {env_var}={env_var_value} in container {container.name}"
+                            )
                             env_var_found = True
                             break
                     if env_var_found:
                         break
-            
+
             if not env_var_found:
-                print(f"❌ Failed to find environment variable {env_var}={env_var_value} in deployment {faulty_service}")
+                print(
+                    f"❌ Failed to find environment variable {env_var}={env_var_value} in deployment {faulty_service}"
+                )
 
             all_normal = env_var_found
 
         except Exception as e:
             print(f"❌ Failed to get deployment {faulty_service}: {e}")
             all_normal = False
-            
+
         if all_normal:
             pod_list = kubectl.list_pods(namespace)
 
@@ -51,7 +54,9 @@ class MissingEnvVariableMitigationOracle(Oracle):
 
                 for container_status in pod.status.container_statuses:
                     if container_status.state.waiting and container_status.state.waiting.reason:
-                        print(f"❌ Container {container_status.name} is waiting: {container_status.state.waiting.reason}")
+                        print(
+                            f"❌ Container {container_status.name} is waiting: {container_status.state.waiting.reason}"
+                        )
                         all_normal = False
                     elif container_status.state.terminated and container_status.state.terminated.reason != "Completed":
                         print(

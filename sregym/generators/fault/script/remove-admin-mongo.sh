@@ -2,7 +2,7 @@
 
 
 ROOT_USER="root"
-ROOT_PWD="root" 
+ROOT_PWD="root"
 
 echo "Removing admin user..."
 

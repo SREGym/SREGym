@@ -35,7 +35,7 @@ class BHotelWrk:
         bhotelwrk_job_configmap = (
             TARGET_MICROSERVICES / "BlueprintHotelReservation" / "wlgen" / "wlgen_proc-configmap.yaml"
         )
-        with open(bhotelwrk_job_configmap, "r", encoding="utf-8") as f:
+        with open(bhotelwrk_job_configmap, encoding="utf-8") as f:
             configmap_template = yaml.safe_load(f)
 
         configmap_template["data"]["TPUT"] = str(self.tput)
@@ -62,7 +62,7 @@ class BHotelWrk:
         bhotelwrk_deployment_yaml = (
             TARGET_MICROSERVICES / "BlueprintHotelReservation" / "wlgen" / "wlgen_proc-deployment.yaml"
         )
-        with open(bhotelwrk_deployment_yaml, "r") as f:
+        with open(bhotelwrk_deployment_yaml) as f:
             deployment_template = yaml.safe_load(f)
 
         api_instance = client.AppsV1Api()
@@ -101,7 +101,7 @@ class BHotelWrk:
 
     def create_bhotelwrk_job(self, job_name, namespace):
         bhotelwrk_job_yaml = TARGET_MICROSERVICES / "BlueprintHotelReservation" / "wlgen" / "wlgen_proc-job.yaml"
-        with open(bhotelwrk_job_yaml, "r") as f:
+        with open(bhotelwrk_job_yaml) as f:
             job_template = yaml.safe_load(f)
 
         api_instance = client.BatchV1Api()
@@ -127,13 +127,11 @@ class BHotelWrk:
             logger.error(f"Error creating job: {e}")
 
     def start_workload(self, namespace, configmap_name="bhotelwrk-wlgen-env", job_name="bhotelwrk-wlgen-job"):
-
         self.create_configmap(config_name=configmap_name, namespace=namespace)
 
         self.create_bhotelwrk_job(job_name=job_name, namespace=namespace)
 
     def stop_workload(self, namespace, job_name="bhotelwrk-wlgen-proc"):
-
         api_instance = client.BatchV1Api()
         try:
             existing_job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
@@ -308,7 +306,9 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
         - StressChaos (CPU): saturates server capacity so the flood causes queueing → latency spike visible in Prometheus
         """
         try:
-            print("[Step 3a] Injecting 100ms network latency — gRPC calls will exceed 50ms timeout, triggering retries → 31x request flood...")
+            print(
+                "[Step 3a] Injecting 100ms network latency — gRPC calls will exceed 50ms timeout, triggering retries → 31x request flood..."
+            )
             logger.info("Injecting network latency...")
             network_experiment_name = "network-latency-all-pods"
             network_chaos = {
@@ -334,14 +334,18 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
             }
             self.cpu_containment_injector.create_chaos_experiment(network_chaos, network_experiment_name)
 
-            print("[Step 3a] Deploying CPU stress DaemonSet on all nodes — one stress pod per node regardless of scheduling...")
+            print(
+                "[Step 3a] Deploying CPU stress DaemonSet on all nodes — one stress pod per node regardless of scheduling..."
+            )
             logger.info("Deploying CPU stress DaemonSet...")
             self._deploy_cpu_stress_daemonset()
 
             start_time = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
             self.current_experiment_names = [network_experiment_name]
             logger.info(f"[{start_time}] Network latency + CPU stress DaemonSet injection completed")
-            print(f"[Step 3a] Done — network latency + CPU stress active on all nodes at {start_time}. Watch Prometheus p99 latency for spike above 50ms.")
+            print(
+                f"[Step 3a] Done — network latency + CPU stress active on all nodes at {start_time}. Watch Prometheus p99 latency for spike above 50ms."
+            )
         except Exception as e:
             logger.error(f"Error injecting chaos experiments: {e}")
 
@@ -373,12 +377,14 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
                     "metadata": {"labels": {"app": daemonset_name}},
                     "spec": {
                         "tolerations": [{"operator": "Exists"}],
-                        "containers": [{
-                            "name": "stress",
-                            "image": "polinux/stress",
-                            "command": ["/bin/sh", "-c"],
-                            "args": ["stress --cpu $(nproc)"],
-                        }],
+                        "containers": [
+                            {
+                                "name": "stress",
+                                "image": "polinux/stress",
+                                "command": ["/bin/sh", "-c"],
+                                "args": ["stress --cpu $(nproc)"],
+                            }
+                        ],
                     },
                 },
             },
@@ -420,12 +426,16 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
             self._delete_cpu_stress_daemonset()
 
             if self.apply_capacity_restraint:
-                print("[Step 3b] Trigger removed — applying permanent capacity restraint to sustain metastable storm...")
+                print(
+                    "[Step 3b] Trigger removed — applying permanent capacity restraint to sustain metastable storm..."
+                )
                 self._apply_capacity_restraint()
 
             recover_time = datetime.now().strftime("%Y/%m/%d %H:%M:%S")
-            print(f"[Step 3b] Done at {recover_time}. Trigger removed; capacity constrained. "
-                  "Retry storm (31x amplification) will sustain latency > 50ms until hard reboot.")
+            print(
+                f"[Step 3b] Done at {recover_time}. Trigger removed; capacity constrained. "
+                "Retry storm (31x amplification) will sustain latency > 50ms until hard reboot."
+            )
 
         except Exception as e:
             logger.error(f"Error in _recover_cpu_stress: {e}")
@@ -457,13 +467,15 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
         # 2. LimitRange — assigns default CPU limit of 200m to containers without explicit limits
         limit_range_body = client.V1LimitRange(
             metadata=client.V1ObjectMeta(name="capacity-restraint"),
-            spec=client.V1LimitRangeSpec(limits=[
-                client.V1LimitRangeItem(
-                    type="Container",
-                    default={"cpu": "200m"},
-                    default_request={"cpu": "100m"},
-                )
-            ]),
+            spec=client.V1LimitRangeSpec(
+                limits=[
+                    client.V1LimitRangeItem(
+                        type="Container",
+                        default={"cpu": "200m"},
+                        default_request={"cpu": "100m"},
+                    )
+                ]
+            ),
         )
         try:
             self.core_v1_api.delete_namespaced_limit_range("capacity-restraint", self.namespace)
@@ -478,13 +490,15 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
         deployments = apps_v1.list_namespaced_deployment(self.namespace)
         restart_ts = datetime.now().isoformat()
         for dep in deployments.items:
-            patch = {"spec": {"template": {"metadata": {"annotations": {
-                "kubectl.kubernetes.io/restartedAt": restart_ts
-            }}}}}
+            patch = {
+                "spec": {"template": {"metadata": {"annotations": {"kubectl.kubernetes.io/restartedAt": restart_ts}}}}
+            }
             apps_v1.patch_namespaced_deployment(dep.metadata.name, self.namespace, patch)
         logger.info(f"Rolling restart triggered for all deployments in {self.namespace}")
-        print(f"[Step 3b] {len(deployments.items)} deployments restarted with 200m CPU limit — "
-              "capacity permanently restrained.")
+        print(
+            f"[Step 3b] {len(deployments.items)} deployments restarted with 200m CPU limit — "
+            "capacity permanently restrained."
+        )
 
     def start(self):
         logger.info("Start Workload with Blueprint Hotel Workload Manager")

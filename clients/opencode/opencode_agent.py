@@ -102,7 +102,7 @@ class OpenCodeAgent:
                 "  npm install -g opencode-ai\n"
                 "Or visit: https://github.com/opencode-ai/opencode"
             )
-            raise RuntimeError(error_msg)
+            raise RuntimeError(error_msg) from None
 
     @staticmethod
     def get_provider_from_model(model_name: str) -> str:

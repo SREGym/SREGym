@@ -104,7 +104,7 @@ spec:
               mountPropagation: "HostToContainer"
             - mountPath: /mnt/monitoring
               name: local-monitoring
-              mountPropagation: "HostToContainer"            
+              mountPropagation: "HostToContainer"
       volumes:
         - name: provisioner-config
           configMap:

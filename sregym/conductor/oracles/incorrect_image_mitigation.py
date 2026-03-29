@@ -4,7 +4,9 @@ from sregym.conductor.oracles.base import Oracle
 class IncorrectImageMitigationOracle(Oracle):
     importance = 1.0
 
-    def __init__(self, problem, actual_images: dict = {}):
+    def __init__(self, problem, actual_images: dict = None):
+        if actual_images is None:
+            actual_images = {}
         super().__init__(problem)
         self.actual_images = actual_images
 

@@ -10,7 +10,7 @@ def list_problems():
     from sregym.conductor.problems.registry import ProblemRegistry
 
     registry = ProblemRegistry()
-    for name in registry.PROBLEM_REGISTRY.keys():
+    for name in registry.PROBLEM_REGISTRY:
         print(name)
 
 
@@ -83,7 +83,7 @@ def recover(problem):
     try:
         conductor.problem.recover_fault()
         print("[RECOVER] Fault recovered")
-    except:
+    except Exception:
         print("[RECOVER] Failed")
     if conductor._baseline_captured:
         print("[CLEANUP] Reconciling cluster state to baseline...")

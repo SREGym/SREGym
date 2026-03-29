@@ -14,12 +14,12 @@ try:
 except ModuleNotFoundError:
     logger.error("Your Kubeconfig is missing. Please set up a cluster.")
     exit(1)
-import os
+import os  # noqa: E402
 
-from kubernetes import dynamic
-from kubernetes.client import api_client
-from kubernetes.client.rest import ApiException
-from rich.console import Console
+from kubernetes import dynamic  # noqa: E402
+from kubernetes.client import api_client  # noqa: E402
+from kubernetes.client.rest import ApiException  # noqa: E402
+from rich.console import Console  # noqa: E402
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
 
@@ -171,7 +171,7 @@ class KubeCtl:
 
         console.log(f"[bold yellow]Waiting for all pods in {display_name} to be ready...")
 
-        with console.status("[bold green]Waiting for pods to be ready...") as status:
+        with console.status("[bold green]Waiting for pods to be ready..."):
             wait = 0
 
             while wait < max_wait:
@@ -257,7 +257,7 @@ class KubeCtl:
         console = Console()
         console.log(f"[bold yellow]Waiting for namespace '{namespace}' to be stable...")
 
-        with console.status("[bold yellow]Waiting for pods to be stable...") as status:
+        with console.status("[bold yellow]Waiting for pods to be stable..."):
             wait = 0
 
             while wait < max_wait:
@@ -265,7 +265,6 @@ class KubeCtl:
                     pod_list = self.list_pods(namespace)
 
                     if pod_list.items:
-
                         if all(self.is_ready(pod) for pod in pod_list.items):
                             console.log(f"[bold green]All pods in namespace '{namespace}' are stable.")
                             return
@@ -334,7 +333,7 @@ class KubeCtl:
         start_time = time.time()
 
         console.log(f"[yellow]Waiting for job '{job_name}' to complete...")
-        with console.status("[bold green]Waiting for job to be done...") as status:
+        with console.status("[bold green]Waiting for job to be done..."):
             while time.time() - start_time < timeout:
                 try:
                     job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
@@ -628,10 +627,9 @@ class KubeCtl:
             )
             logger.info(f"✅ Deleted ReplicaSet '{name}' in namespace '{namespace}'")
         except client.exceptions.ApiException as e:
-            raise RuntimeError(f"Failed to delete ReplicaSet {name} in {namespace}: {e}")
+            raise RuntimeError(f"Failed to delete ReplicaSet {name} in {namespace}: {e}") from e
 
     def apply_resource(self, manifest: dict):
-
         dyn_client = dynamic.DynamicClient(api_client.ApiClient())
 
         gvk = {
@@ -647,7 +645,7 @@ class KubeCtl:
         namespace = manifest["metadata"].get("namespace")
 
         try:
-            existing = resource.get(name=manifest["metadata"]["name"], namespace=namespace)
+            resource.get(name=manifest["metadata"]["name"], namespace=namespace)
             # If exists, patch it
             resource.patch(body=manifest, name=manifest["metadata"]["name"], namespace=namespace)
             logger.info(f"✅ Patched existing {manifest['kind']} '{manifest['metadata']['name']}'")
@@ -660,7 +658,7 @@ class KubeCtl:
             response = self.core_v1_api.list_namespaced_resource_quota(namespace=namespace)
             return response.items
         except client.exceptions.ApiException as e:
-            raise RuntimeError(f"Failed to get resource quotas in namespace '{namespace}': {e}")
+            raise RuntimeError(f"Failed to get resource quotas in namespace '{namespace}': {e}") from e
 
     def delete_resource_quota(self, name: str, namespace: str):
         try:
@@ -669,7 +667,7 @@ class KubeCtl:
             )
             logger.info(f"✅ Deleted resource quota '{name}' in namespace '{namespace}'")
         except client.exceptions.ApiException as e:
-            raise RuntimeError(f"❌ Failed to delete resource quota '{name}' in namespace '{namespace}': {e}")
+            raise RuntimeError(f"❌ Failed to delete resource quota '{name}' in namespace '{namespace}': {e}") from e
 
     def scale_deployment(self, name: str, namespace: str, replicas: int):
         try:
@@ -677,7 +675,7 @@ class KubeCtl:
             self.apps_v1_api.patch_namespaced_deployment(name=name, namespace=namespace, body=body)
             logger.info(f"✅ Scaled deployment '{name}' in namespace '{namespace}' to {replicas} replicas.")
         except client.exceptions.ApiException as e:
-            raise RuntimeError(f"❌ Failed to scale deployment '{name}' in namespace '{namespace}': {e}")
+            raise RuntimeError(f"❌ Failed to scale deployment '{name}' in namespace '{namespace}': {e}") from e
 
     def get_pod_cpu_usage(self, namespace: str):
         cmd = f"kubectl top pod -n {namespace} --no-headers"

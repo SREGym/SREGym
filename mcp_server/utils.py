@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -17,12 +17,12 @@ RETRY_BACKOFF_FACTOR = float(os.getenv("RETRY_BACKOFF_FACWTOR", 0.3))
 
 
 class ObservabilityClient:
-    observability_server_url: Optional[str] = None
-    jaeger_service_account_token: Optional[str] = None
-    headers: Optional[Dict] = None
-    session: Optional[Any] = None
+    observability_server_url: str | None = None
+    jaeger_service_account_token: str | None = None
+    headers: dict | None = None
+    session: Any | None = None
 
-    def __init__(self, observability_url: Optional[str] = None):
+    def __init__(self, observability_url: str | None = None):
         # FIXME: this is always None because we don't use this env var anymore
         #   refactor this logic.
         self.observability_server_url = os.environ.get("JAEGER_URL", None)
@@ -37,9 +37,7 @@ class ObservabilityClient:
         # This is almost always NOP because we don't have such setting
         self.jaeger_service_account_token = os.environ.get("GRAFANA_SERVICE_ACCOUNT_TOKEN", "NOP")
 
-        logger.debug(
-            "url: {g}, token: {t}".format(g=self.observability_server_url, t=self.jaeger_service_account_token)
-        )
+        logger.debug(f"url: {self.observability_server_url}, token: {self.jaeger_service_account_token}")
 
         self.headers = {
             "Content-Type": "application/json",

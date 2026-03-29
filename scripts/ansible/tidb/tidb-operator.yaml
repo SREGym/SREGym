@@ -127,7 +127,7 @@ controllerManager:
   # - k1==v1
   # - k2!=v2
   ## Env define environments for the controller manager.
-  ## NOTE that the following env names is reserved: 
+  ## NOTE that the following env names is reserved:
   ##  - NAMESPACE
   ##  - TZ
   ##  - HELM_RELEASE
@@ -302,5 +302,3 @@ admissionWebhook:
   #   value: tidb-operator
   #   effect: "NoSchedule"
   #
-
-

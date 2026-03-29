@@ -1,8 +1,7 @@
 import http.server
+import random
 import socketserver
 import time
-import random
-
 
 INIT_SECONDS = 15
 _START = time.time()
@@ -13,19 +12,17 @@ def _initialized() -> bool:
 
 
 class MainHandler(http.server.SimpleHTTPRequestHandler):
-
     def _write(self, status: int, body: str):
         self.send_response(status)
         self.end_headers()
         self.wfile.write(body.encode())
 
     def do_GET(self):
-        path = self.path.rstrip('/')
+        path = self.path.rstrip("/")
         if path in {"/health", "/ready"}:
             if _initialized():
                 self._write(200, "OK")
             else:
-
                 time.sleep(random.uniform(0.05, 0.2))
                 self._write(503, "Initializing")
         else:
@@ -37,6 +34,6 @@ class MainHandler(http.server.SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print("[service] starting on :8080 (init {}s)".format(INIT_SECONDS))
+    print(f"[service] starting on :8080 (init {INIT_SECONDS}s)")
     with socketserver.TCPServer(("", 8080), MainHandler) as httpd:
-        httpd.serve_forever() 
+        httpd.serve_forever()

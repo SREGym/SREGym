@@ -619,7 +619,7 @@
                 "nodePort": {
                     "description": "Specific nodePort to force when service type is NodePort.",
                     "type": "integer"
-                }        
+                }
             }
         },
         "ingress": {

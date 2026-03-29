@@ -2,7 +2,6 @@ from sregym.conductor.oracles.base import Oracle
 
 
 class DNSResolutionMitigationOracle(Oracle):
-
     importance = 1.0
 
     def evaluate(self) -> dict:
@@ -14,7 +13,7 @@ class DNSResolutionMitigationOracle(Oracle):
 
         service_names = [svc.metadata.name for svc in kubectl.list_services(namespace).items]
 
-        if faulty_service == None:
+        if faulty_service is None:
             faulty_service = service_names[0]
 
         # Get the service's selector
@@ -35,7 +34,6 @@ class DNSResolutionMitigationOracle(Oracle):
             print("❌ No running pod found for the faulty service(s).")
             return {"success": False}
         else:
-
             failing = []
 
             for svc in service_names:

@@ -16,10 +16,10 @@ class OtelFaultInjector(FaultInjector):
         try:
             output = self.kubectl.exec_command(command)
             configmap = json.loads(output)
-        except subprocess.CalledProcessError:
-            raise ValueError(f"ConfigMap '{self.configmap_name}' not found in namespace '{self.namespace}'.")
-        except json.JSONDecodeError:
-            raise ValueError(f"Error decoding JSON for ConfigMap '{self.configmap_name}'.")
+        except subprocess.CalledProcessError as e:
+            raise ValueError(f"ConfigMap '{self.configmap_name}' not found in namespace '{self.namespace}'.") from e
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error decoding JSON for ConfigMap '{self.configmap_name}'.") from e
 
         flagd_data = json.loads(configmap["data"]["demo.flagd.json"])
 
@@ -43,10 +43,10 @@ class OtelFaultInjector(FaultInjector):
         try:
             output = self.kubectl.exec_command(command)
             configmap = json.loads(output)
-        except subprocess.CalledProcessError:
-            raise ValueError(f"ConfigMap '{self.configmap_name}' not found in namespace '{self.namespace}'.")
-        except json.JSONDecodeError:
-            raise ValueError(f"Error decoding JSON for ConfigMap '{self.configmap_name}'.")
+        except subprocess.CalledProcessError as e:
+            raise ValueError(f"ConfigMap '{self.configmap_name}' not found in namespace '{self.namespace}'.") from e
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error decoding JSON for ConfigMap '{self.configmap_name}'.") from e
 
         flagd_data = json.loads(configmap["data"]["demo.flagd.json"])
 

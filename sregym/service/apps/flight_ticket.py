@@ -2,7 +2,7 @@
 
 import time
 
-from sregym.paths import FLIGHT_TICKET_METADATA, TARGET_MICROSERVICES
+from sregym.paths import FLIGHT_TICKET_METADATA
 from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl

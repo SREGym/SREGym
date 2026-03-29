@@ -33,7 +33,6 @@ async def get_metrics(
     query: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
-
     logger.info(f"get_metrics called with query: {query}")
     logger.info("Calling MCP get_metrics from langchain get_metrics")
     exit_stack = AsyncExitStack()

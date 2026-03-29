@@ -3,7 +3,7 @@
 ### Set up local PVs for TiDB cluster
 
 ```shell
-ansible-playbook -i ../cloudlab_inventory.yml tidb_pv_setup.yml 
+ansible-playbook -i ../cloudlab_inventory.yml tidb_pv_setup.yml
 ```
 
 This will set up the local PVs for TiDB cluster to use in the self-managed Kubernetes cluster.
@@ -12,7 +12,7 @@ It will create a loop device with four directories mounted on it under `agent-op
 ### Deploy TiDB Operator and Cluster
 
 ```shell
-ansible-playbook -i ../cloudlab_inventory.yml tidb_operator_cluster.yml 
+ansible-playbook -i ../cloudlab_inventory.yml tidb_operator_cluster.yml
 ```
 
 This will deploy the TiDB Operator and a TiDB cluster with dashboard and monitor.
