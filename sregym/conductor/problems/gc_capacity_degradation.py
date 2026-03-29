@@ -1,7 +1,6 @@
 from kubernetes import client, config
 
 from sregym.conductor.oracles.alert_oracle import AlertOracle
-from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -28,14 +27,16 @@ class GCCapacityDegradation(Problem):
         core_v1 = client.CoreV1Api()
         limit_range_body = client.V1LimitRange(
             metadata=client.V1ObjectMeta(name="gc-memory-guard"),
-            spec=client.V1LimitRangeSpec(limits=[
-                client.V1LimitRangeItem(
-                    type="Container",
-                    default={"memory": "512Mi", "cpu": "500m"},
-                    default_request={"memory": "256Mi", "cpu": "100m"},
-                    max={"memory": "512Mi", "cpu": "500m"},
-                )
-            ]),
+            spec=client.V1LimitRangeSpec(
+                limits=[
+                    client.V1LimitRangeItem(
+                        type="Container",
+                        default={"memory": "512Mi", "cpu": "500m"},
+                        default_request={"memory": "256Mi", "cpu": "100m"},
+                        max={"memory": "512Mi", "cpu": "500m"},
+                    )
+                ]
+            ),
         )
         try:
             core_v1.delete_namespaced_limit_range("gc-memory-guard", self.namespace)

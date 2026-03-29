@@ -1,7 +1,5 @@
 """LLM-as-a-Judge Oracle for evaluating agent solutions using LLM judgment."""
 
-from typing import Optional
-
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.llm_as_a_judge.judge import JudgmentResult, LLMJudge
 
@@ -13,10 +11,10 @@ class LLMAsAJudgeOracle(Oracle):
         self,
         problem,
         expected: str,
-        provider: Optional[str] = None,
-        model_name: Optional[str] = None,
-        url: Optional[str] = None,
-        api_key: Optional[str] = None,
+        provider: str | None = None,
+        model_name: str | None = None,
+        url: str | None = None,
+        api_key: str | None = None,
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ):

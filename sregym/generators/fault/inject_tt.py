@@ -1,8 +1,9 @@
 import json
 import logging
-import yaml
-from typing import Dict, List, Any, Optional
 import time
+from typing import Any
+
+import yaml
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.kubectl import KubeCtl
@@ -11,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 
 class TrainTicketFaultInjector(FaultInjector):
-
     def __init__(self, namespace: str = "train-ticket"):
         super().__init__(namespace)
         self.namespace = namespace
@@ -52,7 +52,7 @@ class TrainTicketFaultInjector(FaultInjector):
         print(f"[TrainTicket] Recovering from fault: {fault_type}")
         return self._set_fault_state(fault_type, "off")
 
-    def _get_configmap(self) -> Dict[str, Any]:
+    def _get_configmap(self) -> dict[str, Any]:
         try:
             result = self.kubectl.exec_command(
                 f"kubectl get configmap {self.configmap_name} -n {self.namespace} -o json"
@@ -122,7 +122,7 @@ class TrainTicketFaultInjector(FaultInjector):
             return False
 
     def _restart_flagd(self):
-        print(f"[TrainTicket] Restarting flagd deployment...")
+        print("[TrainTicket] Restarting flagd deployment...")
 
         try:
             result = self.kubectl.exec_command(
@@ -152,10 +152,10 @@ class TrainTicketFaultInjector(FaultInjector):
 
         return "unknown"
 
-    def list_available_faults(self) -> List[str]:
+    def list_available_faults(self) -> list[str]:
         return list(self.fault_mapping.keys())
 
-    def get_fault_description(self, fault_name: str) -> Optional[str]:
+    def get_fault_description(self, fault_name: str) -> str | None:
         return self.fault_mapping.get(fault_name)
 
     # Override base class methods to use feature flag-based fault injection

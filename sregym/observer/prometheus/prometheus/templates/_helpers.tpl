@@ -231,4 +231,3 @@ Define prometheus.server.remoteRead producing a list of remoteRead configuration
 {{- end -}}
 {{ toYaml $remoteReads }}
 {{- end -}}
-

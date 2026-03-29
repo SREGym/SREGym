@@ -1,3 +1,4 @@
+import contextlib
 import json
 import logging
 import math
@@ -58,7 +59,7 @@ class LocustWorkloadManager(StreamWorkloadManager):
         self.remove_fetcher()
 
         wrk_job_yaml = BASE_DIR / "generators" / "workload" / "locust-fetcher-template.yaml"
-        with open(wrk_job_yaml, "r") as f:
+        with open(wrk_job_yaml) as f:
             job_template = yaml.safe_load(f)
         envs = job_template["spec"]["containers"][0]["env"]
         for i, env in enumerate(envs):
@@ -67,7 +68,7 @@ class LocustWorkloadManager(StreamWorkloadManager):
                 break
 
         try:
-            response = self.core_v1_api.create_namespaced_pod(
+            self.core_v1_api.create_namespaced_pod(
                 namespace=self.namespace,
                 body=job_template,
             )
@@ -82,7 +83,7 @@ class LocustWorkloadManager(StreamWorkloadManager):
                 if ready:
                     break
                 time.sleep(5)
-            print(f"Pod locust-fetcher created.")
+            print("Pod locust-fetcher created.")
         except client.exceptions.ApiException as e:
             print(f"Error creating pod: {e}")
             return
@@ -120,7 +121,7 @@ class LocustWorkloadManager(StreamWorkloadManager):
         )
 
     def retrievelog(self, start_time: float | None = None) -> list[WorkloadEntry]:
-        pods = self.core_v1_api.list_namespaced_pod(self.namespace, label_selector=f"app=locust-fetcher")
+        pods = self.core_v1_api.list_namespaced_pod(self.namespace, label_selector="app=locust-fetcher")
 
         if len(pods.items) == 0:
             raise Exception(f"No load-generator found in namespace {self.namespace}")
@@ -168,11 +169,9 @@ class LocustWorkloadManager(StreamWorkloadManager):
         last_end = 0
         for i, log in enumerate(self.log_pool):
             if "Running Locust on round #" in log["content"]:
-                try:
-                    grouped_logs.append(self._parse_log(self.log_pool[last_end:i]))
-                except Exception as e:
+                with contextlib.suppress(Exception):
                     # Skip initialization logs and json parsing errors
-                    pass
+                    grouped_logs.append(self._parse_log(self.log_pool[last_end:i]))
                 last_end = i
 
         self.log_pool = self.log_pool[last_end:]

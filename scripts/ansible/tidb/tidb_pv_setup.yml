@@ -7,7 +7,7 @@
   # Step 1: Install necessary tools
   - name: Ensure necessary packages are installed
     apt:
-      name: 
+      name:
         - e2fsprogs  # For mkfs.ext4
         - util-linux # For losetup
       state: present
@@ -146,7 +146,7 @@
       - backup_vol10
     # when: inventory_hostname in groups['worker_nodes']
 
-####################################################### 
+#######################################################
 - name: Apply Kubernetes Configuration for Provisioner
   hosts: control_nodes
   become: true

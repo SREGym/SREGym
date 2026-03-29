@@ -29,9 +29,9 @@ class DiagnosisOracle(Oracle):
         self.checkpoint = self.expect()
 
     def compare_truth(self, expectation, reality):
-        if type(expectation) == str and type(reality) == str:
+        if isinstance(expectation, str) and isinstance(reality, str):
             return expectation == reality  # both string, just compare the string
-        elif type(expectation) == list and type(reality) == list:
+        elif isinstance(expectation, list) and isinstance(reality, list):
             if len(expectation) != len(set(reality)):
                 return False  # TODO: support fp and fn
             return all(e in set(reality) for e in expectation)
@@ -113,7 +113,7 @@ class DiagnosisOracle(Oracle):
             return f"Error retrieving UID for {resource_type}/{resource_name} in {namespace}: {e.reason}"
 
     def checkpoint_comparison(self, new_expectation):
-        if type(self.checkpoint) == str:
+        if isinstance(self.checkpoint, str):
             return self.checkpoint == new_expectation
 
     def safe_parse_solution(self, solution):
@@ -158,7 +158,7 @@ class DiagnosisOracle(Oracle):
         correctness = self.compare_truth(new_expectation, solution)
 
         logger.info(
-            f"Eval Diagnosis: new_expectation: {new_expectation}, solution: {solution} | {"✅" if correctness else "❌"}"
+            f"Eval Diagnosis: new_expectation: {new_expectation}, solution: {solution} | {'✅' if correctness else '❌'}"
         )
 
         return {
@@ -210,7 +210,9 @@ class DiagnosisOracle(Oracle):
                 )
             return pods[0].metadata.uid, pods[0].metadata.name
         except Exception as e:
-            raise ValueError(f"Error retrieving pod UID for deployment {deployment_name} in namespace {namespace}: {e}")
+            raise ValueError(
+                f"Error retrieving pod UID for deployment {deployment_name} in namespace {namespace}: {e}"
+            ) from e
 
     def all_pods_of_deployment_uids(self, deployment_name: str, namespace: str) -> (list[str], list[str]):
         """Return the UIDs and names of all pods of a deployment."""
@@ -231,7 +233,9 @@ class DiagnosisOracle(Oracle):
                 pods = pods_list.items
             return [pod.metadata.uid for pod in pods], [pod.metadata.name for pod in pods]
         except Exception as e:
-            raise ValueError(f"Error retrieving pods for deployment {deployment_name} in namespace {namespace}: {e}")
+            raise ValueError(
+                f"Error retrieving pods for deployment {deployment_name} in namespace {namespace}: {e}"
+            ) from e
 
     def all_pods_of_daemonset_uids(self, daemonset_name: str, namespace: str) -> (list[str], list[str]):
         """Return the UIDs and names of all pods of a daemonset."""
@@ -257,7 +261,9 @@ class DiagnosisOracle(Oracle):
                 pods = pods_list.items
             return [pod.metadata.uid for pod in pods], [pod.metadata.name for pod in pods]
         except Exception as e:
-            raise ValueError(f"Error retrieving pods for daemonset {daemonset_name} in namespace {namespace}: {e}")
+            raise ValueError(
+                f"Error retrieving pods for daemonset {daemonset_name} in namespace {namespace}: {e}"
+            ) from e
 
     def deployment_uid(self, deployment_name: str, namespace: str) -> str:
         """Return the UID of a deployment."""
@@ -335,7 +341,7 @@ class DiagnosisOracle(Oracle):
             except ConfigException:
                 config.load_kube_config()
         except Exception as e:
-            raise RuntimeError(f"Failed to load kube config: {e}")
+            raise RuntimeError(f"Failed to load kube config: {e}") from e
 
         core_v1 = client.CoreV1Api()
         apps_v1 = client.AppsV1Api()
@@ -461,7 +467,7 @@ class DiagnosisOracle(Oracle):
             except ConfigException:
                 config.load_kube_config()
         except Exception as e:
-            raise RuntimeError(f"Failed to load kube config: {e}")
+            raise RuntimeError(f"Failed to load kube config: {e}") from e
 
         core_v1 = client.CoreV1Api()
         apps_v1 = client.AppsV1Api()

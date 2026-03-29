@@ -2,10 +2,10 @@
 
 
 ROOT_USER="root"
-ROOT_PWD="root"  
+ROOT_PWD="root"
 
 ADMIN_USER="admin"
-ADMIN_PWD="admin"  
+ADMIN_PWD="admin"
 READ_WRITE_ROLE="readWrite"
 TARGET_DB="rate-db"
 # TARGET_DB="geo-db"

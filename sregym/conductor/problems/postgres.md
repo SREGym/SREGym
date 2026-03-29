@@ -49,6 +49,6 @@ export PATH=$HOME/pgsql/bin:$PATH
 initdb -D $HOME/pgsql/data
 pg_ctl -D $HOME/pgsql/data -l logfile start
 createdb test
-psql test 
+psql test
 
 ```

@@ -46,17 +46,21 @@ class MitigationAgent(BaseAgent):
                 ai_message_no_tools = AIMessage(content=ai_message.content)
             else:
                 ai_message_no_tools = ai_message
-            plain_response = self.llm.inference(messages=state["messages"] + [prompt, ai_message_no_tools, plain_prompt])
+            plain_response = self.llm.inference(
+                messages=state["messages"] + [prompt, ai_message_no_tools, plain_prompt]
+            )
             ans = plain_response.content if isinstance(plain_response, AIMessage) else ""
 
-        self.logger.info(f"Force submit: signaling transaction attempt with answer: {ans!r}. Real submission deferred to driver.")
+        self.logger.info(
+            f"Force submit: signaling transaction attempt with answer: {ans!r}. Real submission deferred to driver."
+        )
         return {"submitted": True, "messages": [prompt]}
 
 
 def build_default_mitigation_agent():
     file_parent_dir = Path(__file__).resolve().parent
     mitigation_agent_config_path = file_parent_dir.parent / "configs" / "mitigation_agent_config.yaml"
-    mitigation_agent_config = yaml.safe_load(open(mitigation_agent_config_path))
+    mitigation_agent_config = yaml.safe_load(mitigation_agent_config_path.read_text())
     mitigation_agent_max_step = mitigation_agent_config["max_step"]
     mitigation_agent_prompt_path = file_parent_dir.parent / "configs" / mitigation_agent_config["prompts_path"]
 

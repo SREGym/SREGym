@@ -30,20 +30,22 @@ class KubectlCmdRunner:
             if not command.strip().startswith("kubectl"):
                 return "Command Rejected: Only kubectl commands are allowed. Please check the command and try again."
 
-            logger.info(f"[EXEC] checking command syntax")
+            logger.info("[EXEC] checking command syntax")
             self._check_kubectl_command(command)
 
-            logger.info(f"[EXEC] running dry-run")
+            logger.info("[EXEC] running dry-run")
             dry_run_result = KubeCtl.dry_run_json_output(command)
-            logger.info(f"[EXEC] dry-run done: status={dry_run_result.status}, description={dry_run_result.description!r}")
+            logger.info(
+                f"[EXEC] dry-run done: status={dry_run_result.status}, description={dry_run_result.description!r}"
+            )
 
             if self.config.forbid_unsafe_commands and not self._is_kubectl_command_safe(command):
                 return "Command Rejected: Unsafe command detected. Please check the command and try again."
 
             if dry_run_result.status == DryRunStatus.NOEFFECT:
-                logger.info(f"[EXEC] NOEFFECT — executing directly")
+                logger.info("[EXEC] NOEFFECT — executing directly")
                 result = self._execute_kubectl_command(command)
-                logger.info(f"[EXEC] NOEFFECT done")
+                logger.info("[EXEC] NOEFFECT done")
             elif dry_run_result.status == DryRunStatus.ERROR:
                 result = dry_run_result.description
 
@@ -61,11 +63,11 @@ class KubectlCmdRunner:
                 return result
             elif dry_run_result.status == DryRunStatus.SUCCESS:
                 if self.config.use_rollback_stack:
-                    logger.info(f"[EXEC] generating rollback commands")
+                    logger.info("[EXEC] generating rollback commands")
                     rollback_command = self._gen_rollback_commands(command, dry_run_result)
                     logger.info(f"[EXEC] rollback commands generated: {rollback_command}")
 
-                logger.info(f"[EXEC] executing command")
+                logger.info("[EXEC] executing command")
                 if self.config.verify_dry_run:
                     try:
                         result = self._execute_kubectl_command(command)
@@ -74,7 +76,7 @@ class KubectlCmdRunner:
                         raise e
                 else:
                     result = self._execute_kubectl_command(command)
-                logger.info(f"[EXEC] command done")
+                logger.info("[EXEC] command done")
 
                 if self.config.use_rollback_stack:
                     self.action_stack.push(rollback_command)
@@ -135,8 +137,8 @@ class KubectlCmdRunner:
                 )
             if command.startswith("kubectl logs -f"):
                 raise ValueError(
-                    f"Interactive flag detected: -f. Such commands are not supported. "
-                    f"Try to use the command non-interactively."
+                    "Interactive flag detected: -f. Such commands are not supported. "
+                    "Try to use the command non-interactively."
                 )
 
             if part in ["-f", "--filename"] and i + 1 < len(parts) and parts[i + 1] == "-":
@@ -147,17 +149,11 @@ class KubectlCmdRunner:
                 break
 
     def _is_kubectl_command_safe(self, command: str) -> bool:
-        for c in kubectl_safe_commands:
-            if command.startswith(c):
-                return True
-        return False
+        return any(command.startswith(c) for c in kubectl_safe_commands)
 
     def _is_kubectl_monitoring_command(self, command: str) -> bool:
         """Check if a command is a monitoring command that may timeout with informational output."""
-        for c in kubectl_monitoring_commands:
-            if command.startswith(c):
-                return True
-        return False
+        return any(command.startswith(c) for c in kubectl_monitoring_commands)
 
     def _execute_kubectl_command(self, command: str):
         if command.strip().startswith("kubectl delete") and "--wait" not in command:
@@ -217,11 +213,7 @@ class KubectlCmdRunner:
             rollback_commands = [
                 RollbackCommand(
                     "command",
-                    "kubectl delete {resource_type} {resource_name} {nsp_flag_ctnt}".format(
-                        resource_type=result.result[0],
-                        resource_name=result.result[1],
-                        nsp_flag_ctnt=nsp_flag_ctnt,
-                    ),
+                    f"kubectl delete {result.result[0]} {result.result[1]} {nsp_flag_ctnt}",
                 )
             ]
         elif "deleted (server dry run)" in dry_run_stdout:
@@ -243,11 +235,7 @@ class KubectlCmdRunner:
             rollback_commands = [
                 RollbackCommand(
                     "command",
-                    "kubectl delete {resource_type} {resource_name} {nsp_flag_ctnt}".format(
-                        resource_type=hpa.result[0],
-                        resource_name=hpa.result[1],
-                        nsp_flag_ctnt=nsp_flag_ctnt,
-                    ),
+                    f"kubectl delete {hpa.result[0]} {hpa.result[1]} {nsp_flag_ctnt}",
                 ),
                 self._store_resource_state(
                     state_file,

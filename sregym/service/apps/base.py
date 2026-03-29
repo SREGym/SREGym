@@ -23,7 +23,7 @@ class Application:
 
         # NOTE: override this method to load additional attributes!
         """
-        with open(self.config_file, "r") as file:
+        with open(self.config_file) as file:
             metadata = json.load(file)
 
         self.name = metadata["Name"]
@@ -44,7 +44,7 @@ class Application:
         Returns:
             dict: application metadata
         """
-        with open(self.config_file, "r") as file:
+        with open(self.config_file) as file:
             app_json = json.load(file)
         return app_json
 

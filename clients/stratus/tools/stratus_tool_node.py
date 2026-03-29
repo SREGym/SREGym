@@ -43,7 +43,7 @@ class StratusToolNode:
 
         if not isinstance(message, AIMessage):
             logger.warning(
-                f"Expected last message to be an AIMessage, but got {type(message)}.\n" f"{inputs.get('messages', [])}"
+                f"Expected last message to be an AIMessage, but got {type(message)}.\n{inputs.get('messages', [])}"
             )
             raise ValueError("Last message is not an AIMessage; skipping tool invocation.")
 
@@ -53,7 +53,7 @@ class StratusToolNode:
 
         to_update = dict()
         new_messages = []
-        for i, tool_call in enumerate(message.tool_calls):
+        for _i, tool_call in enumerate(message.tool_calls):
             try:
                 # logger.info(f"[STRATUS_TOOLNODE] invoking tool: {tool_call['name']}, tool_call: {tool_call}")
                 arg_list = [f"{key} = {value}" for key, value in tool_call["args"].items()]
@@ -89,12 +89,10 @@ class StratusToolNode:
                         }
                     )
 
-                assert isinstance(
-                    tool_result, Command
-                ), f"Tool {tool_call['name']} should return a Command object, but return {type(tool_result)}"
+                assert isinstance(tool_result, Command), (
+                    f"Tool {tool_call['name']} should return a Command object, but return {type(tool_result)}"
+                )
                 logger.debug(f"[STRATUS_TOOLNODE] tool_result: {tool_result}")
-                if tool_result.update["messages"]:
-                    combined_content = "\n".join([message.content for message in tool_result.update["messages"]])
                 new_messages += tool_result.update["messages"]
                 to_update = {
                     **to_update,

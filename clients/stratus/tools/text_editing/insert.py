@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
-from typing import Annotated, Union
+from typing import Annotated
 
 from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.prebuilt import InjectedState
@@ -45,7 +45,7 @@ def insert(
     state: Annotated[dict, InjectedState],
     tool_call_id: Annotated[str, InjectedToolCallId],
     text: str,
-    line: Union[int, None] = None,
+    line: int | None = None,
 ):
     """
     Insert <text> at the end of the currently opened file or after <line> if specified.
@@ -53,15 +53,15 @@ def insert(
     if len(state["curr_file"]) == 0:
         msg_txt = "No file opened. Either `open` or `create` a file first."
         return Command(update=update_file_vars_in_state(state, msg_txt, tool_call_id))
-    wf = WindowedFile(state["curr_file"])
+    wf = WindowedFile(state["curr_file"])  # noqa: F821
 
-    pre_edit_lint = flake8(wf.path)
+    pre_edit_lint = flake8(wf.path)  # noqa: F821
     insert_info = wf.insert(text, line=line - 1 if line is not None else None)
-    post_edit_lint = flake8(wf.path)
+    post_edit_lint = flake8(wf.path)  # noqa: F821
 
     # Try to filter out pre-existing errors
     replacement_window = (insert_info.first_inserted_line, insert_info.first_inserted_line)
-    new_flake8_output = format_flake8_output(
+    new_flake8_output = format_flake8_output(  # noqa: F821
         post_edit_lint,
         previous_errors_string=pre_edit_lint,
         replacement_window=replacement_window,

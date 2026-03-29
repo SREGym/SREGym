@@ -1,13 +1,11 @@
 import json
 
-from sregym.paths import *
+from sregym.paths import *  # noqa: F403
 from sregym.service.apps.astronomy_shop import AstronomyShop
+from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
 from sregym.service.apps.fleet_cast import FleetCast
-from sregym.service.apps.flight_ticket import FlightTicket
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.apps.social_network import SocialNetwork
-from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
-from sregym.service.helm import Helm
 
 # from sregym.service.apps.train_ticket import TrainTicket
 
@@ -21,17 +19,17 @@ class AppRegistry:
             "Social Network": SocialNetwork,
             # "Train Ticket": TrainTicket
             "Fleet Cast": FleetCast,
-            "Blueprint Hotel Reservation": BlueprintHotelReservation
+            "Blueprint Hotel Reservation": BlueprintHotelReservation,
         }
 
         self.APP_PATH = {
-            "Astronomy Shop": ASTRONOMY_SHOP_METADATA,
+            "Astronomy Shop": ASTRONOMY_SHOP_METADATA,  # noqa: F405
             # "Flight Ticket": FLIGHT_TICKET_METADATA,
-            "Hotel Reservation": HOTEL_RES_METADATA,
-            "Social Network": SOCIAL_NETWORK_METADATA,
+            "Hotel Reservation": HOTEL_RES_METADATA,  # noqa: F405
+            "Social Network": SOCIAL_NETWORK_METADATA,  # noqa: F405
             # "Train Ticket": TRAIN_TICKET_METADATA
-            "Fleet Cast": FLEET_CAST_METADATA,
-            "Blueprint Hotel Reservation": BLUEPRINT_HOTEL_RES_METADATA
+            "Fleet Cast": FLEET_CAST_METADATA,  # noqa: F405
+            "Blueprint Hotel Reservation": BLUEPRINT_HOTEL_RES_METADATA,  # noqa: F405
         }
 
     def get_app_instance(self, app_name: str):
@@ -51,7 +49,7 @@ class AppRegistry:
 
     def get_app_metadata(self, app_name: str):
         config_file = self.get_app_config_file(app_name)
-        with open(config_file, "r") as file:
+        with open(config_file) as file:
             metadata = json.load(file)
 
         return metadata

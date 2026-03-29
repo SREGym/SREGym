@@ -2,7 +2,6 @@
 
 import os
 import tempfile
-import time
 from pathlib import Path
 
 from sregym.generators.workload.locust import LocustWorkloadManager
@@ -53,7 +52,6 @@ class TrainTicket(Application):
     def _is_train_ticket_deployed(self):
         """Check if the train-ticket app is currently deployed."""
         try:
-
             # Check if the namespace exists
             namespace_exists = self.kubectl.exec_command(f"kubectl get namespace {self.namespace}")
             if "not found" in namespace_exists or "No resources found" in namespace_exists:
@@ -61,10 +59,7 @@ class TrainTicket(Application):
 
             # Check if train-ticket deployment exists
             deployment_exists = self.kubectl.exec_command(f"kubectl get deployment -n {self.namespace}")
-            if "No resources found" in deployment_exists or not deployment_exists.strip():
-                return False
-
-            return True
+            return not ("No resources found" in deployment_exists or not deployment_exists.strip())
         except Exception as e:
             print(f"[TrainTicket] Warning: Failed to check deployment status: {e}")
             return False
@@ -106,14 +101,13 @@ class TrainTicket(Application):
                 result = self.kubectl.exec_command(f"kubectl apply -f {flagd_templates_path / 'flagd-config.yaml'}")
                 print(f"[TrainTicket] Deployed flagd ConfigMap: {result}")
 
-            print(f"[TrainTicket] flagd infrastructure deployed successfully")
+            print("[TrainTicket] flagd infrastructure deployed successfully")
 
         except Exception as e:
             print(f"[TrainTicket] Warning: Failed to deploy flagd infrastructure: {e}")
 
     def _deploy_load_generator(self):
         try:
-
             locustfile_path = Path(__file__).parent.parent.parent / "resources" / "trainticket" / "locustfile.py"
 
             if locustfile_path.exists():
@@ -127,7 +121,7 @@ class TrainTicket(Application):
             )
 
             if deployment_path.exists():
-                with open(deployment_path, "r") as f:
+                with open(deployment_path) as f:
                     content = f.read()
 
                 with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as tmp:

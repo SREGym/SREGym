@@ -17,7 +17,7 @@ class ProblemSubclass extends Class {
 class DiagnosisOracleAssignment extends AssignStmt {
   DiagnosisOracleAssignment() {
     exists(Attribute attr |
-      attr = this.getATarget() and 
+      attr = this.getATarget() and
       attr.getObject().(Name).getId() = "self" and
       attr.getName() = "diagnosis_oracle"
     )
@@ -39,8 +39,8 @@ predicate shouldIgnore(ProblemSubclass c) {
       filename = m.getFile().getBaseName() and
       (
         filename = "resource_request.py"  or
-        filename = "kubelet_crash.py" 
-        
+        filename = "kubelet_crash.py"
+
       )
     )
   )
@@ -57,7 +57,7 @@ string getMessage(ProblemSubclass c) {
 }
 
 from ProblemSubclass c, string msg
-where 
+where
   msg = getMessage(c) and
   not shouldIgnore(c)
 select c, msg
