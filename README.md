@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>SREGym: A Benchmarking Platform for SRE Agents</h1>
+<h1>SREGym: Can AI resolve production incidents?</h1>
 
 [🔍Overview](#🤖overview) |
 [📦Installation](#📦installation) |
