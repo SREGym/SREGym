@@ -23,9 +23,9 @@ class LoadGeneratorFloodHomepage(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                "The load generator is sending a sustained burst of homepage requests against the frontend "
-                "deployment, saturating frontend capacity. This leads to queueing, high latency, and timeout "
-                "spikes during normal user flows. Users observe intermittent homepage errors and degraded "
+                f"The `{self.faulty_service}` deployment is experiencing a sustained traffic surge on the "
+                "homepage endpoint, saturating frontend capacity. This leads to queueing, high latency, and "
+                "timeout spikes during normal user flows. Users observe intermittent homepage errors and degraded "
                 "responsiveness across storefront interactions."
             ),
         )
