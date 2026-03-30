@@ -23,11 +23,10 @@ class LoadGeneratorFloodHomepage(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                "The load-generator behavior is altered because the flagd feature flag "
-                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, causing sustained homepage request "
-                "flooding against the frontend deployment. Frontend capacity is saturated, leading to queueing, "
-                "high latency, and timeout spikes during normal user flows. Users observe intermittent homepage "
-                "errors and degraded responsiveness across storefront interactions."
+                "The load generator is sending a sustained burst of homepage requests against the frontend "
+                "deployment, saturating frontend capacity. This leads to queueing, high latency, and timeout "
+                "spikes during normal user flows. Users observe intermittent homepage errors and degraded "
+                "responsiveness across storefront interactions."
             ),
         )
         # === Attach evaluation oracles ===

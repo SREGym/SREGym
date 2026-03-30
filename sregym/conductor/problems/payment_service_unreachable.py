@@ -22,10 +22,10 @@ class PaymentServiceUnreachable(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                f"The `{self.faulty_service}` deployment is degraded because the flagd feature flag "
-                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, making payment-service calls "
-                "unreachable from checkout. Checkout retries and eventually times out when creating payments, "
-                "causing order placement failures. Users can browse and add items but fail consistently at payment."
+                f"The `{self.faulty_service}` deployment cannot reach the payment service, causing all "
+                "payment-dependent operations to time out. Checkout retries and eventually times out when creating "
+                "payments, causing order placement failures. Users can browse and add items but fail consistently "
+                "at payment."
             ),
         )
         # === Attach evaluation oracles ===

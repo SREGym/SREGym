@@ -22,10 +22,9 @@ class PaymentServiceFailure(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                f"The `{self.faulty_service}` deployment is failing because the flagd feature flag "
-                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, causing payment requests to "
-                "consistently error. Checkout requests reach the payment step but fail authorization/charge flow "
-                "with retries and eventual cancellation. Users experience failed purchases despite valid cart state."
+                f"The `{self.faulty_service}` deployment is returning persistent errors on payment processing "
+                "requests. Checkout requests reach the payment step but fail authorization/charge flow with retries "
+                "and eventual cancellation. Users experience failed purchases despite valid cart state."
             ),
         )
         # === Attach evaluation oracles ===

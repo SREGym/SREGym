@@ -21,7 +21,7 @@ class MongoDBAuthMissing(Problem):
             component=f"service/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "The MongoDB service requires TLS authentication but the injected certificate setup is invalid, "
+                "The MongoDB service requires TLS authentication but the certificate setup is invalid, "
                 "so database clients cannot complete the TLS handshake and application requests fail on "
                 "database-dependent paths."
             ),

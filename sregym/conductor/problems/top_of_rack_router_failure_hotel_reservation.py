@@ -23,7 +23,7 @@ class TopOfRackRouterPartitionHotelReservation(Problem):
             component=f"network-group/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "A simulated top-of-rack partition isolates the selected node group from the rest of the cluster network, "
+                "A top-of-rack switch failure isolates the selected node group from the rest of the cluster network, "
                 "breaking east-west connectivity for affected microservices and causing cross-service timeouts. "
                 "Symptoms include partial reachability where some services remain healthy while calls crossing "
                 "the partition repeatedly fail or hang."

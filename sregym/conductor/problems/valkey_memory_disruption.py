@@ -18,7 +18,7 @@ class ValkeyMemoryDisruption(Problem):
             component=f"service/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "An injected workload floods valkey-cart with very large payloads, exhausting memory and pushing the "
+                "A workload is flooding valkey-cart with very large payloads, exhausting memory and pushing the "
                 "cache service into OOM behavior that disrupts request processing."
             ),
         )

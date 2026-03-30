@@ -21,7 +21,7 @@ class CapacityDecreaseRPCRetryStorm(Problem):
             component=f"configmap/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "The RPC configuration is deliberately set to an unrealistically low timeout (50ms) with very high retries "
+                "The RPC configuration has an unrealistically low timeout (50ms) with very high retries "
                 "(30), so calls quickly cascade into retry amplification under latency and push the system into a self-sustaining "
                 "metastable retry storm."
             ),

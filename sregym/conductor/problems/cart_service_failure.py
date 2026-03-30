@@ -22,10 +22,10 @@ class CartServiceFailure(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                f"The `{self.faulty_service}` deployment is failing because the flagd feature flag "
-                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, causing cart-service request "
-                "handling to fail. Cart reads and updates return errors, and downstream checkout paths that require "
-                "cart state become unreliable. Users observe empty carts, failed cart updates, and checkout blocking."
+                f"The `{self.faulty_service}` deployment is experiencing persistent internal errors in its "
+                "request handling path, causing cart operations to fail. Cart reads and updates return errors, and "
+                "downstream checkout paths that require cart state become unreliable. Users observe empty carts, "
+                "failed cart updates, and checkout blocking."
             ),
         )
         # === Attach evaluation oracles ===

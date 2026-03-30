@@ -22,9 +22,8 @@ class AdServiceManualGc(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                f"The `{self.faulty_service}` deployment is affected because the flagd feature flag "
-                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, which triggers manual garbage "
-                "collection behavior and causes elevated CPU/latency with performance degradation and potential "
+                f"The `{self.faulty_service}` deployment is experiencing excessive manual garbage collection "
+                "cycles that consume CPU and cause elevated latency with performance degradation and potential "
                 "service interruptions. The workload exhibits periodic latency spikes and unstable response times "
                 "as aggressive garbage collection cycles pause request handling. Users may observe slow or missing "
                 "ad responses and occasional transient failures while traffic is otherwise normal."

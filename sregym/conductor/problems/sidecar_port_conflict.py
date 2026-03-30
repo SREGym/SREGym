@@ -32,7 +32,7 @@ class SidecarPortConflict(Problem):
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "An injected sidecar container binds the same listening port as the primary application container, "
+                "A sidecar container binds the same listening port as the primary application container, "
                 "causing startup-time port binding conflicts that prevent pods from becoming Ready."
             ),
         )

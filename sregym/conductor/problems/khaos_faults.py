@@ -271,7 +271,7 @@ _FAULT_CONFIG_ENTRIES: Sequence[tuple[KhaosFaultName, str, list[int | str]]] = [
     # kprobe faults
     (KhaosFaultName.read_error, "read() returns EIO, leading to application I/O failures.", []),
     (KhaosFaultName.pread_error, "pread64() returns EIO, breaking file reads.", []),
-    (KhaosFaultName.write_error, "write() returns ENOSPC-like errors, simulating full disk.", []),
+    (KhaosFaultName.write_error, "write() returns ENOSPC-like errors, as if the disk is full.", []),
     (KhaosFaultName.pwrite_error, "pwrite64() fails as if the target storage is full.", []),
     (KhaosFaultName.fsync_error, "fsync() fails, so writes are not persisted.", []),
     (KhaosFaultName.open_error, "openat() is denied, preventing files from opening.", []),
@@ -281,7 +281,7 @@ _FAULT_CONFIG_ENTRIES: Sequence[tuple[KhaosFaultName, str, list[int | str]]] = [
     (KhaosFaultName.gettimeofday_fail, "gettimeofday() returns errors, disrupting time reads.", []),
     (KhaosFaultName.ioctl_fail, "ioctl() returns errors (e.g., ENOTTY), blocking control calls.", []),
     (KhaosFaultName.cuda_malloc_fail, "ioctl()-based GPU alloc requests behave as ENOMEM.", []),
-    (KhaosFaultName.getaddrinfo_fail, "recvfrom() path fails, emulating getaddrinfo resolution issues.", []),
+    (KhaosFaultName.getaddrinfo_fail, "DNS name resolution fails, causing address lookup errors.", []),
     (KhaosFaultName.nanosleep_throttle, "nanosleep() errors cause sleeps to be throttled.", []),
     (KhaosFaultName.nanosleep_interrupt, "nanosleep() returns EINTR-like interruptions.", []),
     (KhaosFaultName.fork_fail, "fork() fails as under EAGAIN/ENOMEM pressure.", []),
@@ -291,7 +291,7 @@ _FAULT_CONFIG_ENTRIES: Sequence[tuple[KhaosFaultName, str, list[int | str]]] = [
     (KhaosFaultName.socket_block, "socket() creation fails with generic errors.", []),
     (KhaosFaultName.mmap_fail, "mmap() returns ENOMEM, blocking new mappings.", []),
     (KhaosFaultName.mmap_oom, "mmap() behaves as OOM, rejecting new mappings.", []),
-    (KhaosFaultName.brk_fail, "brk() cannot grow the heap, simulating ENOMEM.", []),
+    (KhaosFaultName.brk_fail, "brk() cannot grow the heap, as if memory is exhausted.", []),
     (KhaosFaultName.mlock_fail, "mlock() returns ENOMEM/EPERM, blocking page pinning.", []),
     (KhaosFaultName.bind_enetdown, "bind() fails with ENETDOWN, as if the interface is down.", []),
     (KhaosFaultName.mount_io_error, "mount() returns I/O errors similar to EIO.", []),
@@ -305,11 +305,15 @@ _FAULT_CONFIG_ENTRIES: Sequence[tuple[KhaosFaultName, str, list[int | str]]] = [
     (KhaosFaultName.force_mprotect_eacces, "mprotect() returns EACCES, blocking permission changes.", []),
     (KhaosFaultName.force_swapon_einval, "swapon() returns EINVAL, blocking swap activation.", []),
     # memory corruption faults
-    (KhaosFaultName.oom_memchunk, "mmap() returns ENOMEM, simulating chunk allocation OOM.", []),
+    (KhaosFaultName.oom_memchunk, "Memory chunk allocation fails with ENOMEM, causing out-of-memory pressure.", []),
     (KhaosFaultName.oom_heapspace, "brk() returns ENOMEM, exhausting heap space.", []),
     (KhaosFaultName.oom_nonswap, "mlock() returns ENOMEM, preventing swap-backed growth.", []),
-    (KhaosFaultName.hfrag_memchunk, "mmap() returns EAGAIN, emulating heavy fragmentation.", []),
-    (KhaosFaultName.hfrag_heapspace, "brk() returns EAGAIN, emulating fragmented heap.", []),
+    (
+        KhaosFaultName.hfrag_memchunk,
+        "Memory chunk allocation fails with EAGAIN under heavy fragmentation pressure.",
+        [],
+    ),
+    (KhaosFaultName.hfrag_heapspace, "Heap growth fails with EAGAIN under heap fragmentation pressure.", []),
     (KhaosFaultName.ptable_permit, "mlock() returns EPERM, blocking page table pinning.", []),
     (KhaosFaultName.stack_rndsegfault, "mprotect() returns EACCES, leading to stack faults.", []),
     (KhaosFaultName.thrash_swapon, "swapon() returns EINVAL/EPERM, preventing swap use.", []),
@@ -318,24 +322,18 @@ _FAULT_CONFIG_ENTRIES: Sequence[tuple[KhaosFaultName, str, list[int | str]]] = [
     # network packet loss
     (
         KhaosFaultName.packet_loss_sendto,
-        "Outbound sendto() calls drop packets based on drop rate and return errno.",
+        "Outbound network packets are dropped at the specified rate, causing transmission failures.",
         [30],
     ),
     (
         KhaosFaultName.packet_loss_recvfrom,
-        "Inbound recvfrom() calls drop packets based on drop rate and return errno.",
+        "Inbound network packets are dropped at the specified rate, causing receive failures.",
         [30],
     ),
     # disk faults
     (
         KhaosFaultName.latent_sector_error,
-        "Disk read/write operations hit latent sector errors at the specified failure rate, simulating bad disk sectors.",
-        [30],
-    ),
-    # disk faults
-    (
-        KhaosFaultName.latent_sector_error,
-        "Disk read/write operations hit latent sector errors at the specified failure rate, simulating bad disk sectors.",
+        "Disk read/write operations hit latent sector errors at the specified failure rate, causing I/O failures on affected storage regions.",
         [30],
     ),
 ]

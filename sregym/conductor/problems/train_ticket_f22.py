@@ -25,7 +25,7 @@ class TrainTicketF22(Problem):
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "Injected SQL statements reference an incorrect column name, so database queries in the contacts service "
+                "SQL statements in the contacts service reference an incorrect column name, so database queries "
                 "fail at execution time and related API operations return errors."
             ),
         )

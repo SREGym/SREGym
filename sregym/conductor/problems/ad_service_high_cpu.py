@@ -23,12 +23,11 @@ class AdServiceHighCpu(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                f"The `{self.faulty_service}` deployment is degraded because the flagd feature flag "
-                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, and a tight CPU limit "
-                f"(`{self.cpu_limit}`) is applied to the ad container, causing CPU throttling and performance "
-                "degradation. Pods for the ad service show sustained high CPU usage, increased request latency, "
-                "and intermittent timeouts under normal storefront traffic. This appears as slower page loads and "
-                "ad content delays even when other services remain healthy."
+                f"The `{self.faulty_service}` deployment is CPU-throttled due to a tight CPU limit "
+                f"(`{self.cpu_limit}`) on the ad container, causing sustained high CPU usage and performance "
+                "degradation. Pods for the ad service show increased request latency and intermittent timeouts "
+                "under normal storefront traffic. This appears as slower page loads and ad content delays even "
+                "when other services remain healthy."
             ),
         )
         # === Attach evaluation oracles ===

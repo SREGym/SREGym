@@ -22,11 +22,10 @@ class KafkaQueueProblems(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                f"The `{self.faulty_service}` path is disrupted because the flagd feature flag "
-                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, introducing queue-processing "
-                "instability. Message production/consumption becomes inconsistent, creating backlog growth and "
-                "delivery delays across dependent workflows. Users observe delayed state updates and intermittent "
-                "operation failures tied to event processing."
+                f"The `{self.faulty_service}` path is experiencing queue-processing instability, with "
+                "inconsistent message production and consumption. This creates backlog growth and delivery delays "
+                "across dependent workflows. Users observe delayed state updates and intermittent operation "
+                "failures tied to event processing."
             ),
         )
         # === Attach evaluation oracles ===

@@ -46,7 +46,7 @@ class SilentDataCorruption(Problem):
             component=f"deployment/{self.deploy}",
             namespace=self.namespace,
             description=(
-                "dm-flakey corruption is injected on the underlying storage path used by this MongoDB workload, "
+                "The underlying storage used by this MongoDB workload exhibits latent sector-level corruption, "
                 "so reads and/or writes can be silently corrupted without immediate hard I/O errors, leading to latent "
                 "data integrity issues. Symptoms include inconsistent query results, mismatched records, or "
                 "intermittent application anomalies that do not map cleanly to obvious storage failures."

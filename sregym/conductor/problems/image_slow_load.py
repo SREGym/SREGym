@@ -22,10 +22,10 @@ class ImageSlowLoad(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                f"The `{self.faulty_service}` deployment is degraded because the flagd feature flag "
-                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, forcing slow image-response "
-                "behavior. Image-dependent pages show elevated latency and partial rendering while requests wait "
-                "for delayed asset responses. Users observe sluggish page loads and visibly delayed product imagery."
+                f"The `{self.faulty_service}` deployment is serving image responses with abnormally high "
+                "latency, causing slow page renders and degraded user experience. Image-dependent pages show "
+                "elevated latency and partial rendering while requests wait for delayed asset responses. Users "
+                "observe sluggish page loads and visibly delayed product imagery."
             ),
         )
         # === Attach evaluation oracles ===

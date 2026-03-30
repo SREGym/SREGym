@@ -27,7 +27,7 @@ class ScalePodSocialNet(Problem):
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "The deployment is intentionally scaled to zero replicas, removing all serving pods for this dependency "
+                "The deployment is scaled to zero replicas, removing all serving pods for this dependency "
                 "and producing immediate request failures for traffic that requires this service."
             ),
         )

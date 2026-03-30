@@ -24,7 +24,7 @@ class EnvVariableShadowing(Problem):
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "Injected environment variables shadow expected configuration values (for example FRONTEND_HOST), "
+                "Duplicate environment variables shadow expected configuration values (for example FRONTEND_HOST), "
                 "so the service resolves dependency endpoints incorrectly and user-facing request flows fail or route "
                 "to the wrong backend."
             ),

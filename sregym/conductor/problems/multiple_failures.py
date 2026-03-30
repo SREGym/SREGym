@@ -29,11 +29,13 @@ class MultipleIndependentFailures(Problem):
 
         if fault_sections:
             self.root_cause = (
-                "This scenario contains multiple independent injected faults across different components. "
+                "This scenario contains multiple independent faults across different components. "
                 "Each fault and its symptoms are listed below.\n\n" + "\n\n".join(fault_sections)
             )
         else:
-            self.root_cause = "This scenario contains multiple independent injected faults, but no sub-fault root causes were provided."
+            self.root_cause = (
+                "This scenario contains multiple independent faults, but no sub-fault root causes were provided."
+            )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         # mitigation oracle: compound of all sub-problem AlertOracles

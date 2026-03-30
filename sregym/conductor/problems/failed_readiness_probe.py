@@ -21,7 +21,7 @@ class FailedReadinessProbe(Problem):
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "The failedReadinessProbe fault forces cart readiness checks to fail, so Kubernetes marks pods "
+                "The cart deployment's readiness probe is consistently failing, so Kubernetes marks pods "
                 "NotReady and removes them from service endpoints, breaking cart-dependent request paths. "
                 "Symptoms include repeated readiness probe failures and the cart endpoint disappearing from service discovery."
             ),

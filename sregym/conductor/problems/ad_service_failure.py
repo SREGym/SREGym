@@ -22,10 +22,10 @@ class AdServiceFailure(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                f"The `{self.faulty_service}` deployment is failing because the flagd feature flag "
-                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, forcing ad-service failures. "
-                "The service returns repeated errors and requests depending on ad responses experience intermittent "
-                "timeouts. Users see missing or delayed ad content while other storefront paths may still respond."
+                f"The `{self.faulty_service}` deployment is experiencing persistent internal errors in its "
+                "ad-serving path, causing repeated request failures. Requests depending on ad responses experience "
+                "intermittent timeouts. Users see missing or delayed ad content while other storefront paths may "
+                "still respond."
             ),
         )
         # === Attach evaluation oracles ===

@@ -22,10 +22,9 @@ class ProductCatalogServiceFailure(Problem):
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
-                f"The `{self.faulty_service}` deployment is failing because the flagd feature flag "
-                f"`{self.feature_flag}` is enabled in ConfigMap `flagd-config`, causing catalog lookups to fail. "
-                "Product listing and detail retrieval return errors, which degrades browse and search flows. Users "
-                "see missing product data, empty results, or repeated errors when loading product pages."
+                f"The `{self.faulty_service}` deployment is returning persistent errors on catalog queries, "
+                "causing product listing and detail retrieval to fail. This degrades browse and search flows. "
+                "Users see missing product data, empty results, or repeated errors when loading product pages."
             ),
         )
         # === Attach evaluation oracles ===
