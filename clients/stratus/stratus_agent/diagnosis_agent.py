@@ -2,7 +2,6 @@ import logging
 from pathlib import Path
 
 import yaml
-from langgraph.checkpoint.memory import MemorySaver
 
 from clients.stratus.stratus_agent.base_agent import BaseAgent
 from clients.stratus.stratus_utils.str_to_tool import str_to_tool
@@ -22,7 +21,7 @@ class DiagnosisAgent(BaseAgent):
 def build_default_diagnosis_agent():
     file_parent_dir = Path(__file__).resolve().parent
     diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(open(diagnosis_agent_config_path))
+    diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
     max_step = diagnosis_agent_config["max_step"]
     prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
 

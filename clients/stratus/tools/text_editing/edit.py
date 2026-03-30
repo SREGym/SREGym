@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import logging
 from typing import Annotated
 
 from langchain_core.tools import InjectedToolCallId, tool
@@ -22,7 +23,10 @@ else:
     sys.path.append(str(TOOLS_DIR / "registry" / "lib"))
 
 from flake8_utils import flake8, format_flake8_output  # type: ignore
-from windowed_file import FileNotOpened, TextNotFound, WindowedFile  # type: ignore
+from windowed_file import TextNotFound, WindowedFile  # type: ignore
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 RETRY_WITH_OUTPUT_TOKEN = "###SWE-AGENT-RETRY-WITH-OUTPUT###"
 

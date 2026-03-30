@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 import re
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 import yaml
@@ -29,14 +29,9 @@ class JudgeParseError(Exception):
     """Raised after all retries are exhausted when parsing checklist results."""
 
 
-class JudgmentResult(str, Enum):
-    TRUE = "True"  # Correct diagnosis
-    FALSE = "False"  # Incorrect diagnosis
-
-
-# ===================================================================
-# LLMJudge  (simple binary judge – kept for backward compatibility)
-# ===================================================================
+class JudgmentResult(StrEnum):
+    TRUE = "True"  # Correct diagnosis - agent identified the root cause
+    FALSE = "False"  # Incorrect diagnosis - agent did not identify the root cause
 
 
 class LLMJudge:

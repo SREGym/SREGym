@@ -1,5 +1,6 @@
 """Adopted from previous project"""
 
+import contextlib
 import json
 import logging
 import os
@@ -24,7 +25,6 @@ LLM_QUERY_INIT_RETRY_DELAY = int(os.getenv("LLM_QUERY_INIT_RETRY_DELAY", "1"))  
 
 
 class LiteLLMBackend:
-
     def __init__(
         self,
         provider: str,
@@ -100,7 +100,6 @@ class LiteLLMBackend:
                 model_config["top_p"] = self.top_p
             llm = ChatOpenAI(**model_config)
         elif self.provider == "watsonx":
-
             model_config = {
                 "model_id": self.model_name,
             }
@@ -118,7 +117,6 @@ class LiteLLMBackend:
             llm = ChatWatsonx(**model_config)
 
         elif self.provider == "litellm":
-
             model_config = {
                 "model": self.model_name,
             }
@@ -292,10 +290,8 @@ def _extract_retry_delay_seconds_from_exception(exc: BaseException) -> float | N
             if isinstance(arg, (dict, list)):
                 candidates.append(arg)
             elif isinstance(arg, (str, bytes)):
-                try:
+                with contextlib.suppress(Exception):
                     candidates.append(json.loads(arg))
-                except Exception:
-                    pass
     except Exception:
         pass
 

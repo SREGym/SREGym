@@ -23,15 +23,19 @@ async def perform_rollback(commands: list[str], session_id: str | None = None) -
 
     logger.info(f"[ROLLBACK] Using MCP session_id: {session_id}")
     logger.info(f"[ROLLBACK] Rolling back {n} command(s): {commands}")
-    client = get_client(session_id)
     results = []
-    async with client:
-        for i, cmd in enumerate(reversed(commands)):
-            logger.info(f"[ROLLBACK] Step {i + 1}/{n}: reversing '{cmd}'")
-            result = await client.call_tool("rollback_command")
+    for i, cmd in enumerate(reversed(commands)):
+        logger.info(f"[ROLLBACK] Step {i + 1}/{n}: reversing '{cmd}'")
+        client = get_client(session_id)
+        try:
+            async with client:
+                result = await client.call_tool("rollback_command")
             result_text = "\n".join(part.text for part in result)
-            logger.info(f"[ROLLBACK] Step {i + 1}/{n} result: {result_text}")
-            results.append(result_text)
+        except Exception as e:
+            result_text = f"Error during rollback step {i + 1}: {e}"
+            logger.error(f"[ROLLBACK] Step {i + 1}/{n} error: {e}")
+        logger.info(f"[ROLLBACK] Step {i + 1}/{n} result: {result_text}")
+        results.append(result_text)
 
     logger.info(f"[ROLLBACK] Done. Rolled back {n} command(s).")
     return RollbackResult(steps=n, rollback_stack="\n".join(results))

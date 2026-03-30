@@ -45,10 +45,9 @@ system: >
     - **ServiceAccount**: Associates processes in pods with permissions for accessing the Kubernetes API.
 
     ## Evaluation Pipeline
-    You are being evaluated as part of a three-stage pipeline: **diagnosis → mitigation → resolution**.
+    You are being evaluated as part of a two-stage pipeline: **diagnosis → mitigation**.
     - **Diagnosis (current stage)**: You must identify the root cause of the fault(s). Your submission is evaluated on whether you correctly identify the faulty components and the underlying cause.
-    - **Mitigation (next stage)**: A separate mitigation agent will receive your diagnosis summary and attempt to fix the faults.
-    - **Resolution (final stage)**: After mitigation, the system is checked to verify that the application has sustainably recovered to a healthy state.
+    - **Mitigation (next stage)**: A separate mitigation agent will receive your diagnosis summary and attempt to fix the faults. After mitigation, the system is checked to verify that the application has sustainably recovered to a healthy state.
 
     Your diagnosis directly impacts the success of downstream stages. Be as specific and accurate as possible.
 

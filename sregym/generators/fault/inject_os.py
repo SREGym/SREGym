@@ -1,20 +1,14 @@
 """Inject faults at the OS layer."""
 
 # TODO: replace with khaos
-import json
 import subprocess
-
-import yaml
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.generators.fault.helpers import (
     get_pids_by_name,
     hr_mongod_process_names,
-    hr_svc_process_names,
-    sn_svc_process_names,
 )
 from sregym.paths import BASE_DIR
-from sregym.service.kubectl import KubeCtl
 
 
 class OSFaultInjector(FaultInjector):

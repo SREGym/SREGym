@@ -1,4 +1,5 @@
 import logging
+
 import yaml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -39,7 +40,7 @@ def cleanup_kubernetes_yaml(cluster_state: str) -> str:
                 if k == "ownerReferences":
                     continue
                 # Should not modify the last-applied-configuration string
-                if isinstance(v, dict) or isinstance(v, list):
+                if isinstance(v, (dict, list)):
                     recursive_remove(v)
         elif isinstance(obj, list):
             for item in obj:

@@ -11,7 +11,7 @@ system: >
   the previous round may negatively impact your current round of mitigation.
 
   ## Evaluation Pipeline
-  You are part of a three-stage evaluation pipeline: **diagnosis → mitigation → resolution**.
+  You are part of a two-stage evaluation pipeline: **diagnosis → mitigation**.
   Your role is to rollback changes between mitigation retry attempts so the system returns to its
   initial faulty state before the next mitigation attempt.
 

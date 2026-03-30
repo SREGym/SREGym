@@ -2,14 +2,14 @@
 
 WORKERS_FILE="hosts.txt"
 
-# Read the file line by line, 
-# including the last line 
+# Read the file line by line,
+# including the last line
 # even if it doesn't have a newline
 while IFS= read -r host_ip || [[ -n "$host_ip" ]]; do
   echo "Generating SSH key on $host_ip..."
-  
+
   ssh "$host_ip" "[ -f ~/.ssh/id_rsa.pub ] || (echo 'Creating SSH key on $host_ip'; ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa -N '' -q)"
-  
+
   ssh "$host_ip" "[ -f ~/.ssh/id_rsa.pub ]" && echo "Key successfully created on $host_ip" || echo "Failed to create SSH key on $host_ip. Please check connection or permissions."
 done < "$WORKERS_FILE"
 
@@ -18,7 +18,7 @@ ALL_KEYS_FILE="all_worker_keys.tmp"
 
 while IFS= read -r host_ip || [[ -n "$host_ip" ]]; do
   echo "Collecting public key from $host_ip..."
-  
+
   # Retrieve the public key and append to the temporary file
   ssh "$host_ip" "cat ~/.ssh/id_rsa.pub" >> "$ALL_KEYS_FILE" 2>/dev/null
   if [[ $? -ne 0 ]]; then

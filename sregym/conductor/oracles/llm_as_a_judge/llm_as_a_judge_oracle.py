@@ -1,10 +1,4 @@
-"""LLM-as-a-Judge Oracle for evaluating agent solutions using LLM judgment.
-
-v3.0 changes:
-- Uses the Problem's natural-language ``root_cause`` as the ground-truth
-    reference for checklist evaluation.
-- Uses a diagnosis-only checklist.
-"""
+"""LLM-as-a-Judge Oracle for evaluating agent solutions using LLM judgment."""
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.llm_as_a_judge.judge import DiagnosisJudge, JudgmentResult

@@ -11,7 +11,7 @@ logstashPipeline:
   uptime.conf: |
     output {
       stdout {
-        codec => rubydebug   
+        codec => rubydebug
       }
       elasticsearch {
         hosts => ["http://10.0.0.4:9200"]
@@ -33,7 +33,7 @@ extraEnvs:
         name: es-password
         key: password
 
-# secretMounts: 
+# secretMounts:
 #   - name: ca-config
 #     secretName: ca-config
 #     path: /usr/share/logstash/config/certs
@@ -50,4 +50,3 @@ service:
       targetPort: 5044
   selector:
     app: logstash-logstash
-

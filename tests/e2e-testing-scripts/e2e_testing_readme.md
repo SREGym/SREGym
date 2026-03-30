@@ -1,4 +1,4 @@
-## End-to-End Testing Automation 
+## End-to-End Testing Automation
 
 The script will:
 - Clone the SREGym repo on each node
@@ -17,9 +17,9 @@ Before running the script, make sure:
 
 ## Required Files:
 1. Make sure you have a nodes.txt file in this directory, with each line being a cloudlab node hostname
-    ex: 
+    ex:
     lilygn@c220g2-010810.wisc.cloudlab.us
-    lilygn@c220g2-010812.wisc.cloudlab.us  
+    lilygn@c220g2-010812.wisc.cloudlab.us
 2. Make sure registry.txt is up to date with all of the problems you want to test
 
 ### How to use:
@@ -31,5 +31,3 @@ Before running the script, make sure:
 ## Log files:
 
 You will be able to see the output from each node in the node_logs directory.
-
-

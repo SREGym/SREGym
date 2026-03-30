@@ -1,6 +1,6 @@
 import logging
 from contextlib import AsyncExitStack
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 from fastmcp import Client
 from langchain_core.messages import ToolMessage
@@ -11,6 +11,14 @@ from pydantic import BaseModel, Field, PrivateAttr
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("all.stratus.tools")
+
+
+async def _close_mcp_client(exit_stack: AsyncExitStack, tool_name: str) -> None:
+    """Ignore transport teardown failures after a tool call has already completed."""
+    try:
+        await exit_stack.aclose()
+    except Exception as e:
+        logger.warning("Ignoring %s while closing MCP client for %s", type(e).__name__, tool_name)
 
 
 class ExecKubectlCmdSafelyInput(BaseModel):
@@ -28,7 +36,7 @@ class ExecKubectlCmdSafelyInput(BaseModel):
 class ExecKubectlCmdSafely(BaseTool):
     name: str = "exec_kubectl_cmd_safely"
     description: str = "this is a tool used to safely execute kubectl commands."
-    args_schema: Optional[ArgsSchema] = ExecKubectlCmdSafelyInput
+    args_schema: ArgsSchema | None = ExecKubectlCmdSafelyInput
 
     _client: Client = PrivateAttr()
     _session_id: str = PrivateAttr()
@@ -43,7 +51,7 @@ class ExecKubectlCmdSafely(BaseTool):
         return self._session_id
 
     def _run(self):
-        assert False, f"{self.name} is an async method, you are running it as a sync method!"
+        raise AssertionError(f"{self.name} is an async method, you are running it as a sync method!")
         pass
 
     async def _arun(
@@ -53,7 +61,7 @@ class ExecKubectlCmdSafely(BaseTool):
     ) -> Command:
         logger.debug(f"tool_call_id in {self.name}: {tool_call_id}")
         logger.debug(
-            f"calling mcp exec_kubectl_cmd_safely from " f'langchain exec_kubectl_cmd_safely, with command: "{command}"'
+            f'calling mcp exec_kubectl_cmd_safely from langchain exec_kubectl_cmd_safely, with command: "{command}"'
         )
         exit_stack = AsyncExitStack()
         try:
@@ -61,7 +69,7 @@ class ExecKubectlCmdSafely(BaseTool):
             result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
             text_result = "\n".join([part.text for part in result])
         finally:
-            await exit_stack.aclose()
+            await _close_mcp_client(exit_stack, self.name)
         update: dict = {"messages": [ToolMessage(content=text_result, tool_call_id=tool_call_id)]}
         if "Command Rejected" not in text_result:
             update["executed_commands"] = [command]
@@ -102,7 +110,7 @@ class ExecReadOnlyKubectlCmdInput(BaseModel):
 class ExecReadOnlyKubectlCmd(BaseTool):
     name: str = "exec_read_only_kubectl_cmd"
     description: str = "this is a tool used to execute read-only kubectl commands."
-    args_schema: Optional[ArgsSchema] = ExecReadOnlyKubectlCmdInput
+    args_schema: ArgsSchema | None = ExecReadOnlyKubectlCmdInput
 
     _client: Client = PrivateAttr()
 
@@ -111,7 +119,7 @@ class ExecReadOnlyKubectlCmd(BaseTool):
         self._client = client
 
     def _run(self):
-        assert False, f"{self.name} is an async method, you are running it as a sync method!"
+        raise AssertionError(f"{self.name} is an async method, you are running it as a sync method!")
         pass
 
     async def _arun(
@@ -127,17 +135,15 @@ class ExecReadOnlyKubectlCmd(BaseTool):
                 break
         if not is_read_only:
             logger.debug(
-                f"Agent is trying to exec a non read-only command {command} " f"with tool exec_read_only_kubectl_cmd"
+                f"Agent is trying to exec a non read-only command {command} with tool exec_read_only_kubectl_cmd"
             )
             text_result = (
                 f"Your command {command} is not a read-only kubectl command. "
                 f"Available Read-only Commands: {kubectl_read_only_cmds}."
             )
         elif command.startswith("kubectl logs -f"):
-            logger.debug(f"agent calling interactive read-only command")
-            text_result = (
-                f"Your command {command} is an _interactive_ read-only kubectl command. " f"It is not supported!"
-            )
+            logger.debug("agent calling interactive read-only command")
+            text_result = f"Your command {command} is an _interactive_ read-only kubectl command. It is not supported!"
         else:
             logger.debug(
                 f"calling mcp exec_kubectl_cmd_safely from "
@@ -149,10 +155,7 @@ class ExecReadOnlyKubectlCmd(BaseTool):
                 result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
                 text_result = "\n".join([part.text for part in result])
             finally:
-                try:
-                    await exit_stack.aclose()
-                except Exception:
-                    pass
+                await _close_mcp_client(exit_stack, self.name)
         return Command(
             update={
                 "messages": [
@@ -172,7 +175,7 @@ class RollbackCommand(BaseTool):
         "Use this function to roll back the last kubectl command "
         'you successfully executed with the "exec_kubectl_cmd_safely" tool.'
     )
-    args_schema: Optional[ArgsSchema] = RollbackCommandCmdInput
+    args_schema: ArgsSchema | None = RollbackCommandCmdInput
 
     _client: Client = PrivateAttr()
 
@@ -181,7 +184,7 @@ class RollbackCommand(BaseTool):
         self._client = client
 
     def _run(self):
-        assert False, f"{self.name} is an async method, you are running it as a sync method!"
+        raise AssertionError(f"{self.name} is an async method, you are running it as a sync method!")
         pass
 
     async def _arun(
@@ -189,17 +192,14 @@ class RollbackCommand(BaseTool):
         tool_call_id: Annotated[str, InjectedToolCallId],
     ) -> Command:
         logger.debug(f"tool_call_id in {self.name}: {tool_call_id}")
-        logger.debug(f"calling langchain rollback_command")
+        logger.debug("calling langchain rollback_command")
         exit_stack = AsyncExitStack()
         try:
             await exit_stack.enter_async_context(self._client)
             result = await self._client.call_tool("rollback_command")
             text_result = "\n".join([part.text for part in result])
         finally:
-            try:
-                await exit_stack.aclose()
-            except Exception as e:
-                logger.debug(f"{type(e).__name__} ignored, as it's expected")
+            await _close_mcp_client(exit_stack, self.name)
         return Command(
             update={
                 "rollback_stack": str(text_result),
@@ -223,7 +223,7 @@ class GetPreviousRollbackableCmd(BaseTool):
         "you will roll-back previous commands in the order "
         "of the returned list."
     )
-    args_schema: Optional[ArgsSchema] = GetPreviousRollbackableCmdInput
+    args_schema: ArgsSchema | None = GetPreviousRollbackableCmdInput
 
     _client: Client = PrivateAttr()
 
@@ -232,7 +232,7 @@ class GetPreviousRollbackableCmd(BaseTool):
         self._client = client
 
     def _run(self):
-        assert False, f"{self.name} is an async method, you are running it as a sync method!"
+        raise AssertionError(f"{self.name} is an async method, you are running it as a sync method!")
         pass
 
     async def _arun(
@@ -240,7 +240,7 @@ class GetPreviousRollbackableCmd(BaseTool):
         tool_call_id: Annotated[str, InjectedToolCallId],
     ) -> Command:
         logger.debug(f"tool_call_id in {self.name}: {tool_call_id}")
-        logger.debug(f"calling langchain get_previous_rollbackable_cmd")
+        logger.debug("calling langchain get_previous_rollbackable_cmd")
         exit_stack = AsyncExitStack()
         try:
             await exit_stack.enter_async_context(self._client)
@@ -250,10 +250,7 @@ class GetPreviousRollbackableCmd(BaseTool):
             else:
                 text_result = "\n".join([part.text for part in result])
         finally:
-            try:
-                await exit_stack.aclose()
-            except Exception as e:
-                logger.debug(f"{type(e).__name__} ignored, as it's expected")
+            await _close_mcp_client(exit_stack, self.name)
         return Command(
             update={
                 "messages": [

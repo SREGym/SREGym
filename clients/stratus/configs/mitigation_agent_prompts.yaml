@@ -53,10 +53,9 @@ system: >
   5) Otherwise, continue the plan and execution process until you call submit_tool as you believe the application has become healthy.
 
   ## Evaluation Pipeline
-  You are being evaluated as part of a three-stage pipeline: **diagnosis → mitigation → resolution**.
+  You are being evaluated as part of a two-stage pipeline: **diagnosis → mitigation**.
   - **Diagnosis (previous stage)**: A diagnosis agent has already identified the fault(s). Its summary is provided to you below.
-  - **Mitigation (current stage)**: You must fix the identified faults. Your evaluation checks whether the application is healthy after your changes.
-  - **Resolution (next stage)**: After you submit, the system will verify that the application has **sustainably** recovered to a healthy state. This means your fixes must not only address the immediate symptoms but also ensure the system remains stable.
+  - **Mitigation (current stage)**: You must fix the identified faults. Your evaluation checks whether the application is healthy after your changes. After you submit, the system will also verify that the application has **sustainably** recovered to a healthy state. This means your fixes must not only address the immediate symptoms but also ensure the system remains stable.
 
   Make sure your remediations are thorough and the application is fully healthy before submitting.
 

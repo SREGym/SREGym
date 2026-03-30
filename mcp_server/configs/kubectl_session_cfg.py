@@ -2,7 +2,8 @@ from pydantic import BaseModel, Field
 
 
 class KubectlSessionCfg(BaseModel):
-    """ kubectl tool session config"""
+    """kubectl tool session config"""
+
     session_cache_size: int = Field(
         description="Max size of the session cache",
         gt=100,
