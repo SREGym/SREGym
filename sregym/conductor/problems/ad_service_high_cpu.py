@@ -18,13 +18,13 @@ class AdServiceHighCpu(Problem):
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "ad"
         self.feature_flag = "adHighCpu"
-        self.cpu_limit = "200m"
+        self.cpu_limit = "100m"
         self.root_cause = self.build_structured_root_cause(
             component=self.faulty_service,
             namespace=self.namespace,
             description=(
                 f"The `{self.faulty_service}` deployment is CPU-throttled due to a tight CPU limit "
-                f"(`{self.cpu_limit}`) on the ad container, causing sustained high CPU usage and performance "
+                f"(`{self.cpu_limit}`) combined with artificially elevated CPU usage, causing sustained high CPU usage and performance "
                 "degradation. Pods for the ad service show increased request latency and intermittent timeouts "
                 "under normal storefront traffic. This appears as slower page loads and ad content delays even "
                 "when other services remain healthy."

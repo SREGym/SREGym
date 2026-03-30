@@ -801,23 +801,25 @@ serverFiles:
             - alert: ContainerCPUThrottling
               # Fires when >25% of CPU periods are throttled (container hitting its limit).
               expr: |
-                sum by (namespace, pod) (
+                sum by (namespace, pod, container) (
                   rate(container_cpu_cfs_throttled_periods_total{
-                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket"
+                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
+                    container!=""
                   }[5m])
                 )
                 /
-                sum by (namespace, pod) (
+                sum by (namespace, pod, container) (
                   rate(container_cpu_cfs_periods_total{
-                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket"
+                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
+                    container!=""
                   }[5m])
                 ) > 0.25
               for: 2m
               labels:
                 severity: warning
               annotations:
-                summary: "CPU throttling: {{ $labels.pod }}"
-                description: "Pod {{ $labels.pod }} in {{ $labels.namespace }} is being CPU throttled ({{ $value | humanizePercentage }} of periods throttled)."
+                summary: "CPU throttling: {{ $labels.pod }}/{{ $labels.container }}"
+                description: "Container {{ $labels.container }} in pod {{ $labels.pod }} ({{ $labels.namespace }}) is being CPU throttled ({{ $value | humanizePercentage }} of periods throttled)."
 
         # ---- Golden signal alerts (from OTel spanmetrics) ----
         - name: app.goldensignal
