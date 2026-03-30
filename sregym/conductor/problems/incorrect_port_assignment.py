@@ -22,7 +22,15 @@ class IncorrectPortAssignment(Problem):
         self.incorrect_port = "8082"
         self.correct_port = "8080"
         self.injector = ApplicationFaultInjector(namespace=self.namespace)
-        self.root_cause = f"The deployment `{self.faulty_service}` has the environment variable `{self.env_var}` configured with an incorrect port `{self.incorrect_port}` instead of `{self.correct_port}`."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                f"The {self.env_var} environment variable points to the wrong backend port ({self.incorrect_port} instead of "
+                f"{self.correct_port}), so checkout cannot reach product-catalog and related requests fail. "
+                "Symptoms include connection-refused errors and elevated failed request rates on checkout endpoints."
+            ),
+        )
 
         if unscheduable := kwargs.get("unschedulable", False):
             self.unscheduable = unscheduable
@@ -30,9 +38,15 @@ class IncorrectPortAssignment(Problem):
                 "incorrect_port_assignment": self.injector,
                 "assign_to_non_existent_node": VirtualizationFaultInjector(namespace=self.namespace),
             }
-            self.root_cause = (
-                f"Two simultaneous faults: 1) The deployment `{self.faulty_service}` has the environment variable `{self.env_var}` configured with an incorrect port `{self.incorrect_port}` instead of `{self.correct_port}`."
-                + f"The deployment `{self.faulty_service}` is configured with a nodeSelector pointing to a non-existent node (extra-node), causing pods to remain in Pending state."
+            self.root_cause = self.build_structured_root_cause(
+                component=f"deployment/{self.faulty_service}",
+                namespace=self.namespace,
+                description=(
+                    f"Two faults are active at the same time: (1) {self.env_var} points to the wrong backend port "
+                    f"({self.incorrect_port} instead of {self.correct_port}), and (2) the deployment is pinned to a "
+                    "non-existent node via nodeSelector, keeping pods Pending. Symptoms include both routing failures "
+                    "from bad service endpoints and unschedulable pod events from node selector mismatch."
+                ),
             )
 
         # === Attach evaluation oracles ===

@@ -17,7 +17,17 @@ class KafkaQueueProblems(Problem):
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "kafka"
-        self.root_cause = f"The `{self.faulty_service}` service has a feature flag enabled that causes queue problems, resulting in message processing failures."
+        self.feature_flag = "kafkaQueueProblems"
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The `{self.faulty_service}` path is experiencing queue-processing instability, with "
+                "inconsistent message production and consumption. This creates backlog growth and delivery delays "
+                "across dependent workflows. Users observe delayed state updates and intermittent operation "
+                "failures tied to event processing."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -25,10 +35,10 @@ class KafkaQueueProblems(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector.inject_fault("kafkaQueueProblems")
+        self.injector.inject_fault(self.feature_flag)
         print(f"Fault: kafkaQueueProblems | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector.recover_fault("kafkaQueueProblems")
+        self.injector.recover_fault(self.feature_flag)

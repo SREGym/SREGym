@@ -21,8 +21,14 @@ class MissingEnvVariable(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
         self.env_var = "CART_ADDR"
         self.env_var_value = "cart:8080"
-        self.root_cause = (
-            f"The deployment `{self.faulty_service}` is missing the environment variable `{self.env_var}`."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                f"The required environment variable {self.env_var} is removed from the deployment, so the application "
+                "cannot resolve the cart dependency endpoint and frontend flows fail. "
+                "Symptoms include runtime configuration errors and partial frontend outages for cart-related actions."
+            ),
         )
 
         self.kubectl = KubeCtl()

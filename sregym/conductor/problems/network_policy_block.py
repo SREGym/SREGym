@@ -24,7 +24,16 @@ class NetworkPolicyBlock(Problem):
         )
         self.app.create_workload()
 
-        self.root_cause = f"A NetworkPolicy `{self.policy_name}` is configured to block all ingress and egress traffic to/from pods labeled with `app={self.faulty_service}`, causing complete network isolation and service unavailability."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"A NetworkPolicy `{self.policy_name}` blocks all ingress and egress traffic for pods labeled "
+                f"`app={self.faulty_service}`, creating complete network isolation for the target workload. "
+                "Service-to-service communication to and from the component fails, so dependent request paths break "
+                "even if pods remain Running. Users observe hard failures/timeouts on flows that require this service."
+            ),
+        )
         self.networking_v1 = client.NetworkingV1Api()
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

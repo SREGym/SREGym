@@ -23,7 +23,14 @@ class ScalePodSocialNet(Problem):
         # Choose a very front service to test - this will directly cause an exception
         # TODO: We should create more problems with this using different faulty services
         # self.faulty_service = "nginx-thrift"
-        self.root_cause = f"The deployment `{self.faulty_service}` is scaled down to 0 replicas, causing the service to be unavailable."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The deployment is scaled to zero replicas, removing all serving pods for this dependency "
+                "and producing immediate request failures for traffic that requires this service."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

@@ -16,8 +16,14 @@ class IncorrectImage(Problem):
         self.kubectl = KubeCtl()
         self.faulty_service = ["product-catalog"]
         self.injector = ApplicationFaultInjector(namespace=self.namespace)
-        self.root_cause = (
-            "The 'product-catalog' deployment is mis-configured to pull the non-existent image 'app-image:latest'."
+        self.root_cause = self.build_structured_root_cause(
+            component="deployment/product-catalog",
+            namespace=self.namespace,
+            description=(
+                "The product-catalog deployment is configured to pull a non-existent image tag (app-image:latest), "
+                "so pods fail with image pull errors and the catalog path becomes unavailable. "
+                "Symptoms typically include ImagePullBackOff events and upstream checkout calls timing out or failing."
+            ),
         )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

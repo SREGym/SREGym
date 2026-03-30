@@ -19,7 +19,16 @@ class AssignNonExistentNode(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = "user-service"
-        self.root_cause = f"The deployment `{self.faulty_service}` is configured with a nodeSelector pointing to a non-existent node (extra-node), causing pods to remain in Pending state."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"Deployment `{self.faulty_service}` has a `nodeSelector` targeting a non-existent node label/value "
+                "(`extra-node`), so the scheduler cannot find any eligible placement target. Pods remain Pending with "
+                "node-selector mismatch events and never become Ready. Users experience sustained service degradation "
+                "or outage because replacement replicas cannot start."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

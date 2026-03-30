@@ -17,7 +17,15 @@ class GCCapacityDegradation(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = "garbage collection"
-        self.root_cause = "All deployments have the GOGC environment variable set to 10 (instead of the default 100), causing aggressive garbage collection that degrades service capacity and performance. This is a metastable failure."
+        self.root_cause = self.build_structured_root_cause(
+            component="deployments/all",
+            namespace=self.namespace,
+            description=(
+                "All workloads run with an aggressively low GOGC setting, forcing frequent garbage collection cycles that "
+                "consume CPU, reduce effective throughput, and keep the system in a degraded high-latency capacity regime "
+                "under sustained load."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)

@@ -22,7 +22,14 @@ class TrainTicketF17(Problem):
 
         self.namespace = self.app.namespace
         super().__init__(app=self.app, namespace=self.namespace)
-        self.root_cause = f"The deployment `{self.faulty_service}` has a nested SQL SELECT clause error in its database queries, causing database operation failures."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The voucher service executes malformed nested SQL SELECT logic, which causes query execution failures "
+                "in the database layer and breaks voucher-related request handling."
+            ),
+        )
 
         self.kubectl = KubeCtl()
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

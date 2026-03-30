@@ -16,7 +16,14 @@ class KubeletCrash(Problem):
         self.rollout_services = ["frontend", "frontend-proxy", "currency"]
         self.injector = RemoteOSFaultInjector()
 
-        self.root_cause = "The kubelet daemon on a node has crashed, preventing pod scheduling, updates, and management on that node, causing services to become unavailable or stuck."
+        self.root_cause = self.build_structured_root_cause(
+            component="node/kubelet",
+            namespace=self.namespace,
+            description=(
+                "A node-level kubelet crash prevents normal pod lifecycle management on the affected node, so rescheduled "
+                "or restarted workloads fail to come up cleanly and dependent services become partially unavailable."
+            ),
+        )
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

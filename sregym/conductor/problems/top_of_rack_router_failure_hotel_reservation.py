@@ -19,9 +19,15 @@ class TopOfRackRouterPartitionHotelReservation(Problem):
         self.namespace = self.app.namespace
         self.faulty_service = faulty_service
         self.fault_type = "tor_network_partition"
-        self.root_cause = (
-            f"A Top-of-Rack router partition is simulated by isolating nodes matching `{self.faulty_service}` "
-            f"from the rest of the application in namespace `{self.namespace}`."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"network-group/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "A top-of-rack switch failure isolates the selected node group from the rest of the cluster network, "
+                "breaking east-west connectivity for affected microservices and causing cross-service timeouts. "
+                "Symptoms include partial reachability where some services remain healthy while calls crossing "
+                "the partition repeatedly fail or hang."
+            ),
         )
 
         self.app.payload_script = (

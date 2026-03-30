@@ -65,7 +65,15 @@ class ResourceRequest(Problem):
 class ResourceRequestTooLarge(ResourceRequest):
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "frontend"):
         super().__init__(app_name, faulty_service)
-        self.root_cause = f"The deployment `{self.faulty_service}` has a memory request that exceeds the node's memory capacity, causing pods to be unschedulable and remain in Pending state."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"Deployment `{self.faulty_service}` requests more memory than any available node can satisfy, so the "
+                "scheduler cannot place new pods. Pods remain Pending with insufficient-memory scheduling events instead "
+                "of becoming Ready. Users experience reduced capacity and request failures as replicas cannot scale or recover."
+            ),
+        )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
     def set_memory_limit(self, deployment_yaml):
@@ -80,7 +88,15 @@ class ResourceRequestTooLarge(ResourceRequest):
 class ResourceRequestTooSmall(ResourceRequest):
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "frontend"):
         super().__init__(app_name, faulty_service)
-        self.root_cause = f"The deployment `{self.faulty_service}` has a memory limit that is too small (10Mi), causing pods to be killed due to OOM (Out of Memory) errors."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"Deployment `{self.faulty_service}` has an extremely low memory limit (`10Mi`), so normal runtime usage "
+                "quickly exceeds cgroup limits and triggers OOM kills. Pods restart repeatedly and exhibit unstable uptime "
+                "with CrashLoop-like behavior under ordinary traffic. Users observe intermittent outages, latency spikes, and failed requests."
+            ),
+        )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
     def set_memory_limit(self, deployment_yaml):

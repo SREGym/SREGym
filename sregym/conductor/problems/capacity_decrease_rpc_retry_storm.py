@@ -17,7 +17,15 @@ class CapacityDecreaseRPCRetryStorm(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = "rpc"
-        self.root_cause = f"The ConfigMap `{self.faulty_service}` has misconfigured RPC timeout (50ms) and retry settings (30 retries), causing an RPC retry storm that overwhelms the service. It is a metastable failure."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"configmap/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The RPC configuration has an unrealistically low timeout (50ms) with very high retries "
+                "(30), so calls quickly cascade into retry amplification under latency and push the system into a self-sustaining "
+                "metastable retry storm."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

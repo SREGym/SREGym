@@ -27,7 +27,16 @@ class WrongDNSPolicy(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
 
         self.kubectl = KubeCtl()
-        self.root_cause = f"The deployment `{self.faulty_service}` has a misconfigured DNS policy (set to None with external nameserver 8.8.8.8), causing DNS resolution failures for cluster-internal services."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"Deployment `{self.faulty_service}` is configured with an invalid DNS policy (`dnsPolicy: None`) and "
+                "external resolver (`8.8.8.8`), so it cannot reliably resolve cluster-internal service names. Calls "
+                "to `*.svc.cluster.local` dependencies fail with name resolution errors even when target services are "
+                "healthy. Users see request timeouts and cascading failures on dependent application paths."
+            ),
+        )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

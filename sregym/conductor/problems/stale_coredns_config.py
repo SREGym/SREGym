@@ -28,7 +28,16 @@ class StaleCoreDNSConfig(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
 
         self.kubectl = KubeCtl()
-        self.root_cause = "CoreDNS is configured with a stale NXDOMAIN template for all .svc.cluster.local domains, causing DNS resolution to fail for all cluster-internal services."
+        self.root_cause = self.build_structured_root_cause(
+            component="coredns",
+            namespace=self.namespace,
+            description=(
+                "CoreDNS has a stale NXDOMAIN rewrite/template for `.svc.cluster.local`, causing valid in-cluster "
+                "service names to resolve as non-existent. This introduces cluster-wide service discovery failures "
+                "even when application workloads are healthy and running. Users observe widespread timeouts, broken "
+                "cross-service calls, and multi-service degradation across normal traffic flows."
+            ),
+        )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

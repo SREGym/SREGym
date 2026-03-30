@@ -19,7 +19,16 @@ class PodAntiAffinityDeadlock(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = faulty_service
-        self.root_cause = f"The deployment `{self.faulty_service}` has strict pod anti-affinity rules (requiredDuringSchedulingIgnoredDuringExecution) that prevent multiple replicas from being scheduled on the same node, but with insufficient nodes, causing a scheduling deadlock where pods remain in Pending state."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"Deployment `{self.faulty_service}` uses strict `requiredDuringSchedulingIgnoredDuringExecution` pod "
+                "anti-affinity, but the cluster has insufficient eligible nodes to satisfy replica placement rules. "
+                "As replicas increase or pods restart, scheduling reaches a deadlock where pods stay Pending with "
+                "anti-affinity constraint violations. Users experience reduced capacity, intermittent failures, and prolonged degradation."
+            ),
+        )
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

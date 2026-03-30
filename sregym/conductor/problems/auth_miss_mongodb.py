@@ -17,7 +17,15 @@ class MongoDBAuthMissing(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = "url-shorten-mongodb"
-        self.root_cause = f"The MongoDB service `{self.faulty_service}` is configured to require TLS authentication, but the certificates are not properly configured, causing connection failures."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"service/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The MongoDB service requires TLS authentication but the certificate setup is invalid, "
+                "so database clients cannot complete the TLS handshake and application requests fail on "
+                "database-dependent paths."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

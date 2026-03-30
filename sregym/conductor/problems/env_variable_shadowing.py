@@ -20,7 +20,15 @@ class EnvVariableShadowing(Problem):
         self.namespace = self.app.namespace
         super().__init__(app=self.app, namespace=self.namespace)
         self.kubectl = KubeCtl()
-        self.root_cause = f"The deployment `{self.faulty_service}` has environment variables (e.g., FRONTEND_HOST) that shadow expected values, causing incorrect service configuration."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "Duplicate environment variables shadow expected configuration values (for example FRONTEND_HOST), "
+                "so the service resolves dependency endpoints incorrectly and user-facing request flows fail or route "
+                "to the wrong backend."
+            ),
+        )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()

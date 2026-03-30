@@ -16,7 +16,16 @@ class PersistentVolumeAffinityViolation(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = faulty_service
-        self.root_cause = f"The deployment `{self.faulty_service}` is configured with a PersistentVolume (temp-pv) that has node affinity to node A, but the deployment has a nodeSelector pointing to node B, causing a volume affinity violation and pods to remain in Pending state."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"Deployment `{self.faulty_service}` requests storage from a PersistentVolume with node affinity on one "
+                "node set, while its pod `nodeSelector` targets a different node set, creating an unsatisfiable placement. "
+                "The scheduler reports volume node affinity conflicts and pods remain Pending rather than attaching storage. "
+                "Users experience service unavailability or severe degradation because stateful pods never become Running."
+            ),
+        )
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

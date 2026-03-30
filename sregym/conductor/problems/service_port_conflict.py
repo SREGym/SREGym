@@ -38,7 +38,14 @@ class ServicePortConflict(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
 
         self.kubectl = KubeCtl()
-        self.root_cause = f"The deployment `{self.faulty_service}` is configured with hostPort {self.conflicting_port}, which conflicts with another service in a different namespace, causing pods to get stuck in Pending state with FailedScheduling error."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                f"The pod template binds hostPort {self.conflicting_port}, which collides with an already occupied node port, "
+                "so new pods fail scheduling with host port conflict events and the service loses available replicas."
+            ),
+        )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
