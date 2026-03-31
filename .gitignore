@@ -229,6 +229,7 @@ kubeconfig.yaml
 # Ignore IDE relatedfiles/folders
 
 CLAUDE.md
+AGENTS.md
 .cursor/
 .kiro/
 
