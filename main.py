@@ -160,6 +160,16 @@ def driver_loop(
                     if time.time() - agent_start_time > agent_timeout:
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
                         LAUNCHER.cleanup_agent(agent_to_run)
+
+                        # Record timeout in results so downstream CSV captures the failure
+                        conductor.results["timed_out"] = True
+                        conductor.results["agent_timeout_seconds"] = agent_timeout
+
+                        # Trigger conductor cleanup (fault recovery, teardown) so the
+                        # next problem starts from a clean state.
+                        console.log("🧹 Running conductor cleanup after agent timeout...")
+                        conductor._finish_problem()
+
                         break
 
                     # Check if agent process has exited
