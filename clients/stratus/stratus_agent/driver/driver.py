@@ -813,18 +813,6 @@ async def main():
             "Skipping mitigation agent to be safe."
         )
 
-    for lst in [
-        agent_names,
-        agent_in_tokens,
-        agent_out_tokens,
-        agent_total_tokens,
-        agent_times,
-        agent_steps,
-        agent_retry_attempts,
-        agent_rollback_stack,
-        agent_oracle_results,
-    ]:
-        logger.info("list length: " + str(len(lst)))
 
     agent_output_df["agent_name"] = agent_names
     agent_output_df["input_tokens"] = agent_in_tokens
