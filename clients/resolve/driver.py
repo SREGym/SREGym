@@ -1,13 +1,12 @@
 """Resolve AI agent driver for SREGym.
 
-Sets up the Resolve satellite and ktunnel, fires a webhook alert to
-trigger Resolve AI, then waits for it to complete via MCP tools.
+Sets up the Resolve satellite, fires a webhook alert to trigger
+Resolve AI, then waits for it to complete via MCP tools.
 """
 
 import json
 import logging
 import os
-import shutil
 import signal
 import sys
 import time
@@ -107,26 +106,19 @@ def main():
     logger.info("Resolve AI agent driver starting")
 
     # The agent launcher sets KUBECONFIG to a filtering proxy, but the
-    # Resolve driver manages cluster infrastructure (ktunnel, helm, kubectl
-    # patches) that must talk to the real K8s API server.
+    # Resolve driver manages cluster infrastructure (helm, kubectl patches)
+    # that must talk to the real K8s API server.
     os.environ.pop("KUBECONFIG", None)
 
-    # Check that ktunnel is installed
-    if not shutil.which("ktunnel"):
-        logger.error("ktunnel is not installed. Install it from https://github.com/omrikiei/ktunnel")
-        sys.exit(1)
-
-    # Register cleanup handler so ktunnel + satellite are torn down
+    # Register cleanup handler so satellite is torn down
     # when main.py terminates this process
     signal.signal(signal.SIGTERM, _shutdown_handler)
     signal.signal(signal.SIGINT, _shutdown_handler)
 
-    # Get app info from conductor BEFORE starting ktunnel, because ktunnel
-    # binds to local port 8000 and intercepts connections to the conductor.
     app_info = get_app_info()
     logger.info(f"App info: {app_info}")
 
-    # Set up ktunnel and install Resolve satellite
+    # Set up submit proxy and install Resolve satellite
     resolve_setup.start()
 
     # Fire the alert
