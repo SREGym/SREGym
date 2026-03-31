@@ -96,7 +96,7 @@ python main.py --agent stratus --model gpt-5
 
 Use `--judge-model` to override the judge model separately (defaults to `--model`):
 ```bash
-python main.py --agent stratus --model gpt-5 --judge-model claude-sonnet-4
+python main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627
 ```
 
 #### Container Isolation
@@ -111,24 +111,22 @@ python main.py --agent codex --model gpt-5 --force-build
 
 ### Model Selection
 
-SREGym uses two model roles, both configurable via CLI:
+SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings directly -- no config file needed. Just pass any supported model string via `--model`:
 
 | CLI Flag | Default | Purpose |
 |----------|---------|---------|
 | `--model` | `gpt-5` | Sets both agent and judge model |
 | `--judge-model` | (same as `--model`) | Override just the judge evaluator model |
 
-Make sure the required environment variables for your chosen provider are set before running. See the table below.
+Set the required environment variable for your provider before running:
 
-#### Available Models
-
-| Model ID | Provider | Model Name | Required Environment Variables |
-|----------|----------|------------|-------------------------------|
-| `gpt-5` | OpenAI | GPT-5 | `OPENAI_API_KEY` |
-| `gemini-2.5-pro` | Google | Gemini 2.5 Pro | `GEMINI_API_KEY` |
-| `claude-sonnet-4` | Anthropic | Claude Sonnet 4 | `ANTHROPIC_API_KEY` |
-| `bedrock-claude-sonnet-4.5` | AWS Bedrock | Claude Sonnet 4.5 | `AWS_PROFILE`, `AWS_DEFAULT_REGION` |
-
+| Provider | Model String Examples | Required Environment Variables |
+|----------|----------------------|-------------------------------|
+| OpenAI | `gpt-5`, `gpt-4o` | `OPENAI_API_KEY` |
+| Anthropic | `anthropic/claude-sonnet-4-6-20250627` | `ANTHROPIC_API_KEY` |
+| Google | `gemini/gemini-2.5-pro` | `GEMINI_API_KEY` |
+| AWS Bedrock | `bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0` | `AWS_PROFILE`, `AWS_DEFAULT_REGION` |
+| Azure | `azure/gpt-4o` | `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION` |
 
 <details>
 <summary><strong>Provider Examples</strong></summary>
@@ -140,15 +138,22 @@ python main.py --agent stratus --model gpt-5
 
 **Anthropic:**
 ```bash
-python main.py --agent stratus --model claude-sonnet-4
+python main.py --agent stratus --model anthropic/claude-sonnet-4-6-20250627
+```
+
+**Google:**
+```bash
+python main.py --agent stratus --model gemini/gemini-2.5-pro
 ```
 
 **AWS Bedrock:**
 ```bash
-python main.py --agent stratus --model bedrock-claude-sonnet-4.5
+python main.py --agent stratus --model bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
 ```
 
 **Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.
+
+See the full list of supported providers and model strings in the [LiteLLM docs](https://docs.litellm.ai/docs/providers).
 
 </details>
 
