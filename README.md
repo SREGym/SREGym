@@ -138,7 +138,7 @@ python main.py --agent stratus --model gpt-5
 
 **Anthropic:**
 ```bash
-python main.py --agent stratus --model anthropic/claude-sonnet-4-6-20250627
+python main.py --agent stratus --model anthropic/claude-sonnet-4-6
 ```
 
 **Google:**
