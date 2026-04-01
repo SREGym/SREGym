@@ -28,11 +28,21 @@ class MCPServer:
         # so only treat a purely numeric positive value as "running".
         return value.isdigit() and int(value) > 0
 
+    def _ensure_rbac(self):
+        """Ensure RBAC resources exist even if the MCP server pod is already running."""
+        rbac_dir = MCP_SERVER_K8S
+        for resource in ["clusterrole.yaml", "clusterrolebinding.yaml"]:
+            self.kubectl.exec_command(f"kubectl apply -f {rbac_dir / resource}")
+        logger.info("MCP server RBAC resources ensured.")
+
     def deploy(self):
         """Deploy the MCP server into the cluster via kustomize.
 
         Skips redeployment if the MCP server is already running to avoid disrupting existing connections.
+        Always ensures RBAC resources exist regardless of pod state.
         """
+        self._ensure_rbac()
+
         if self._is_running():
             logger.info("MCP server already running, skipping redeploy.")
             if not self.is_port_in_use(self.port):
