@@ -69,7 +69,6 @@ class ServicePortMismatch(Problem):
             name=self.faulty_service,
             namespace=self.namespace,
             body=patch,
-            _content_type="application/json-patch+json",
         )
 
     @mark_fault_injected

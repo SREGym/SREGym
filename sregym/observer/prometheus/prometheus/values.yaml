@@ -1033,20 +1033,44 @@ serverFiles:
         rules:
           - record: sregym:user_request_success_ratio_1m
             expr: |
-              avg by (namespace) (
-                avg_over_time(probe_success{safety_target="user_request"}[1m])
+              (
+                avg by (namespace) (
+                  avg_over_time(probe_success{safety_target="user_request"}[1m])
+                )
+              )
+              and on(namespace)
+              (
+                sum by (namespace) (
+                  kube_deployment_status_replicas_available
+                ) > 0
               )
 
           - record: sregym:user_request_latency_p95_seconds_1m
             expr: |
-              max by (namespace) (
-                quantile_over_time(0.95, probe_duration_seconds{safety_target="user_request"}[1m])
+              (
+                max by (namespace) (
+                  quantile_over_time(0.95, probe_duration_seconds{safety_target="user_request"}[1m])
+                )
+              )
+              and on(namespace)
+              (
+                sum by (namespace) (
+                  kube_deployment_status_replicas_available
+                ) > 0
               )
 
           - record: sregym:user_request_http_200_ratio_1m
             expr: |
-              avg by (namespace) (
-                avg_over_time((probe_http_status_code{safety_target="user_request"} == 200)[1m:])
+              (
+                avg by (namespace) (
+                  avg_over_time((probe_http_status_code{safety_target="user_request"} == bool 200)[1m:])
+                )
+              )
+              and on(namespace)
+              (
+                sum by (namespace) (
+                  kube_deployment_status_replicas_available
+                ) > 0
               )
   ## DEPRECATED DEFAULT VALUE, unless explicitly naming your files, please use recording_rules.yml
   rules: {}
