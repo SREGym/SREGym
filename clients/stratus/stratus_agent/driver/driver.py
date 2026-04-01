@@ -245,6 +245,44 @@ def get_benchmark_status():
         return "error"
 
 
+async def wait_for_stage_switch(
+    *,
+    current_stage: str,
+    target_stages: set[str],
+    timeout: int = 300,
+    poll_interval: float = 1.0,
+) -> str:
+    """
+    Poll conductor status until the benchmark leaves the current stage and enters a target stage.
+
+    This avoids racing the asynchronous grader immediately after a submission.
+    """
+    deadline = time.monotonic() + timeout
+    last_stage = current_stage
+    logger.info(
+        "Waiting for benchmark stage switch from %r to one of %s",
+        current_stage,
+        sorted(target_stages),
+    )
+
+    while time.monotonic() < deadline:
+        stage = get_benchmark_status()
+        if stage in target_stages:
+            logger.info("Benchmark stage switched to %r", stage)
+            return stage
+
+        if stage != last_stage:
+            logger.info("Benchmark stage is now %r; still waiting for %s", stage, sorted(target_stages))
+            last_stage = stage
+
+        await asyncio.sleep(poll_interval)
+
+    raise TimeoutError(
+        f"Benchmark did not switch from {current_stage!r} to one of {sorted(target_stages)!r} "
+        f"within {timeout} seconds"
+    )
+
+
 def get_app_class_by_name(app_name):
     target_app = ""
     if app_name == "Social Network":
@@ -733,11 +771,17 @@ async def main():
         diagnosis_agent_last_state, diagnosis_agent_prompts[summary_prompt_key]
     )
 
-    # Check benchmark status before attempting to run mitigation
-    # If the benchmark is already done (e.g., no mitigation oracle configured),
-    # we should skip mitigation to avoid the race condition
-    benchmark_status = get_benchmark_status()
-    logger.info(f"Benchmark status after diagnosis: {benchmark_status}")
+    # Diagnosis submission is graded asynchronously, so poll for the next stage
+    # instead of sampling status once and racing the stage transition.
+    try:
+        benchmark_status = await wait_for_stage_switch(
+            current_stage="diagnosis",
+            target_stages={"mitigation", "done"},
+        )
+    except TimeoutError as e:
+        logger.warning("Timed out waiting for post-diagnosis stage switch: %s", e)
+        benchmark_status = get_benchmark_status()
+    logger.info(f"Benchmark status after diagnosis polling: {benchmark_status}")
 
     mitigation_last_state = None
     if benchmark_status == "done":
@@ -769,18 +813,6 @@ async def main():
             "Skipping mitigation agent to be safe."
         )
 
-    for lst in [
-        agent_names,
-        agent_in_tokens,
-        agent_out_tokens,
-        agent_total_tokens,
-        agent_times,
-        agent_steps,
-        agent_retry_attempts,
-        agent_rollback_stack,
-        agent_oracle_results,
-    ]:
-        logger.info("list length: " + str(len(lst)))
 
     agent_output_df["agent_name"] = agent_names
     agent_output_df["input_tokens"] = agent_in_tokens

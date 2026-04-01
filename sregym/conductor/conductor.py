@@ -243,6 +243,7 @@ class Conductor:
         alert_oracle = AlertOracle(problem=problem)
         start = time.monotonic()
         last_log_second = -1
+        settled = False
 
         while True:
             elapsed = time.monotonic() - start
@@ -257,21 +258,25 @@ class Conductor:
             if firing:
                 names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
                 self.logger.info(f"[WAIT] 🔔 Alerts firing in '{namespace}': {names}")
-                max_for = alert_oracle._query_max_alert_for_duration()
-                settle_seconds = max_for + 10
-                self.logger.info(
-                    f"[WAIT] Longest alert 'for' period is {max_for}s — "
-                    f"settling for {settle_seconds}s to let transient alerts clear…"
-                )
-                time.sleep(settle_seconds)
-                firing = alert_oracle._query_firing_alerts(namespace)
-                if firing:
-                    names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
-                    self.logger.info(f"[WAIT] 🔔 Alerts still firing after settle: {names}")
-                    return
+                if not settled:
+                    max_for = alert_oracle._query_max_alert_for_duration()
+                    settle_seconds = max_for + 10
+                    self.logger.info(
+                        f"[WAIT] Longest alert 'for' period is {max_for}s — "
+                        f"settling for {settle_seconds}s to let transient alerts clear…"
+                    )
+                    time.sleep(settle_seconds)
+                    settled = True
+                    firing = alert_oracle._query_firing_alerts(namespace)
+                    if firing:
+                        names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
+                        self.logger.info(f"[WAIT] 🔔 Alerts still firing after settle: {names}")
+                        return
+                    else:
+                        self.logger.info("[WAIT] All alerts cleared during settle period — continuing to poll")
+                        continue
                 else:
-                    self.logger.info("[WAIT] All alerts cleared during settle period — continuing to poll")
-                    continue
+                    return
 
             elapsed_int = int(elapsed)
             if elapsed_int >= last_log_second + 30:
