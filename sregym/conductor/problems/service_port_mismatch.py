@@ -15,8 +15,12 @@ class ServicePortMismatch(Problem):
             "app_factory": HotelReservation,
             "services": {
                 "geo": {
-                    "original_port": 8083,
-                    "wrong_port": 18083,
+                    "original_service_port": 8083,
+                    "original_target_port": 8083,
+                    "wrong_target_port": 18083,
+                    "deployment_name": "geo",
+                    "pod_label_selector": "io.kompose.service=geo",
+                    "config_path": "/go/src/github.com/harlow/go-micro-services/config.json",
                 }
             },
         }
@@ -36,8 +40,12 @@ class ServicePortMismatch(Problem):
 
         self.app = app_config["app_factory"]()
         self.namespace = self.app.namespace
-        self.original_port = service_config["original_port"]
-        self.wrong_port = service_config["wrong_port"]
+        self.original_service_port = service_config["original_service_port"]
+        self.original_target_port = service_config["original_target_port"]
+        self.wrong_target_port = service_config["wrong_target_port"]
+        self.deployment_name = service_config["deployment_name"]
+        self.pod_label_selector = service_config["pod_label_selector"]
+        self.config_path = service_config["config_path"]
 
         super().__init__(app=self.app, namespace=self.namespace)
 
@@ -47,10 +55,11 @@ class ServicePortMismatch(Problem):
             component=f"service/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                f"Service `{self.faulty_service}` exposes the wrong cluster-facing port ({self.wrong_port} instead of "
-                f"{self.original_port}), so callers that still connect to `{self.faulty_service}:{self.original_port}` "
-                "hit a service-layer connection failure even though the backing pods remain healthy and continue "
-                "listening on the original container port."
+                f"Service `{self.faulty_service}` forwards traffic to the wrong backend port "
+                f"(`targetPort {self.wrong_target_port}` instead of `{self.original_target_port}`). "
+                f"Clients still call `{self.faulty_service}:{self.original_service_port}`, but the Service now maps "
+                "those requests to a port where the healthy geo pods are not listening, creating a service-to-pod "
+                "port mismatch."
             ),
         )
 
@@ -60,10 +69,11 @@ class ServicePortMismatch(Problem):
 
         self.app.create_workload()
 
-    def _patch_service_port(self, port: int):
+    def _patch_service_target_port(self, target_port: int):
         patch = [
-            {"op": "replace", "path": "/spec/ports/0/port", "value": port},
-            {"op": "replace", "path": "/spec/ports/0/name", "value": str(port)},
+            {"op": "replace", "path": "/spec/ports/0/port", "value": self.original_service_port},
+            {"op": "replace", "path": "/spec/ports/0/name", "value": str(self.original_service_port)},
+            {"op": "replace", "path": "/spec/ports/0/targetPort", "value": target_port},
         ]
         self.core_v1.patch_namespaced_service(
             name=self.faulty_service,
@@ -73,8 +83,8 @@ class ServicePortMismatch(Problem):
 
     @mark_fault_injected
     def inject_fault(self):
-        self._patch_service_port(self.wrong_port)
+        self._patch_service_target_port(self.wrong_target_port)
 
     @mark_fault_injected
     def recover_fault(self):
-        self._patch_service_port(self.original_port)
+        self._patch_service_target_port(self.original_target_port)
