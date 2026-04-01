@@ -54,6 +54,7 @@ from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdate
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from sregym.conductor.problems.service_port_conflict import ServicePortConflict
+from sregym.conductor.problems.service_port_mismatch import ServicePortMismatch
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
@@ -216,6 +217,7 @@ class ProblemRegistry:
             # ==================== DIRECT K8S API ====================
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
+            "service_port_mismatch_hotel_reservation": lambda: ServicePortMismatch(app_name="hotel_reservation", faulty_service="geo"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[

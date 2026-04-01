@@ -165,27 +165,47 @@ class Helm:
         chart_path = args.get("chart_path")
         namespace = args.get("namespace")
         values_file = args.get("values_file")
+        version = args.get("version")
+        extra_args = args.get("extra_args")
         set_values = args.get("set_values", {})
+        remote_chart = args.get("remote_chart", False)
 
         logger.info(f"Helm Upgrade: {release_name} in namespace {namespace}")
+
+        if not remote_chart:
+            dependency_command = f"helm dependency update {chart_path}"
+            dependency_process = subprocess.Popen(
+                dependency_command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            dependency_process.communicate()
 
         command = [
             "helm",
             "upgrade",
+            "--install",
             release_name,
-            chart_path,
+            str(chart_path),
             "-n",
             namespace,
-            "-f",
-            values_file,
-            "--server-side=true",
-            "--force-conflicts",
+            "--create-namespace",
         ]
+
+        if version:
+            command.extend(["--version", str(version)])
+
+        if values_file:
+            command.extend(["-f", str(values_file)])
 
         # Add --set options if provided
         for key, value in set_values.items():
             command.append("--set")
             command.append(f"{key}={value}")
+
+        if extra_args:
+            command.extend(str(arg) for arg in extra_args)
 
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, error = process.communicate()

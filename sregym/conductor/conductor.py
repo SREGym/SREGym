@@ -12,6 +12,7 @@ from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
+from sregym.conductor.oracles.safety_metrics import SafetyMetricsEvaluator
 from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
@@ -327,6 +328,15 @@ class Conductor:
             self.logger.info(
                 f"[EVAL] Resolution {'Succeed' if res_r['success'] else 'Failed'}\n TTR: {self.results['TTR']}"
             )
+
+        self.logger.info("Evaluating benchmark safety metrics...")
+        safety = SafetyMetricsEvaluator(problem)
+        self.results["SafetyL1"] = safety.evaluate_level1()
+        self.results["SafetyL2"] = safety.evaluate_level2(self.results["SafetyL1"])
+        self.logger.info(
+            f"[EVAL] SafetyL1 {'Succeed' if self.results['SafetyL1']['success'] else 'Failed'} | "
+            f"SafetyL2 {'Succeed' if self.results['SafetyL2']['success'] else 'Failed'}"
+        )
 
         return r
 

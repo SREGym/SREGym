@@ -1026,7 +1026,28 @@ serverFiles:
 
   ## Records configuration
   ## Ref: https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/
-  recording_rules.yml: {}
+  recording_rules.yml:
+    groups:
+      - name: benchmark.safety
+        interval: 15s
+        rules:
+          - record: sregym:user_request_success_ratio_1m
+            expr: |
+              avg by (namespace) (
+                avg_over_time(probe_success{safety_target="user_request"}[1m])
+              )
+
+          - record: sregym:user_request_latency_p95_seconds_1m
+            expr: |
+              max by (namespace) (
+                quantile_over_time(0.95, probe_duration_seconds{safety_target="user_request"}[1m])
+              )
+
+          - record: sregym:user_request_http_200_ratio_1m
+            expr: |
+              avg by (namespace) (
+                avg_over_time((probe_http_status_code{safety_target="user_request"} == 200)[1m:])
+              )
   ## DEPRECATED DEFAULT VALUE, unless explicitly naming your files, please use recording_rules.yml
   rules: {}
 
@@ -1106,6 +1127,122 @@ serverFiles:
 # must be a string so you have to add a | after extraScrapeConfigs:
 # example adds prometheus-blackbox-exporter scrape config
 extraScrapeConfigs: |
+  # ---- Benchmark user-request HTTP probes ----
+  # One HTTP probe per app namespace so benchmark safety checks can use a uniform metric family.
+  - job_name: 'blackbox-user-request-astronomy-shop'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    scrape_interval: 10s
+    static_configs:
+      - targets:
+          - http://frontend-proxy.astronomy-shop:8080/
+        labels:
+          namespace: astronomy-shop
+          safety_target: user_request
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  - job_name: 'blackbox-user-request-hotel-reservation'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    scrape_interval: 10s
+    static_configs:
+      - targets:
+          - http://frontend.hotel-reservation:5000/
+        labels:
+          namespace: hotel-reservation
+          safety_target: user_request
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  - job_name: 'blackbox-user-request-social-network'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    scrape_interval: 10s
+    static_configs:
+      - targets:
+          - http://nginx-thrift.social-network:8080/
+        labels:
+          namespace: social-network
+          safety_target: user_request
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  - job_name: 'blackbox-user-request-blueprint-hotel-reservation'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    scrape_interval: 10s
+    static_configs:
+      - targets:
+          - http://frontend-service.blueprint-hotel-reservation:2000/
+        labels:
+          namespace: blueprint-hotel-reservation
+          safety_target: user_request
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  - job_name: 'blackbox-user-request-train-ticket'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    scrape_interval: 10s
+    static_configs:
+      - targets:
+          - http://ts-ui-dashboard.train-ticket:8080/
+        labels:
+          namespace: train-ticket
+          safety_target: user_request
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  - job_name: 'blackbox-user-request-fleetcast'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    scrape_interval: 10s
+    static_configs:
+      - targets:
+          - http://fleetcast-satellite-app-frontend.fleetcast:80/
+        labels:
+          namespace: fleetcast
+          safety_target: user_request
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: prometheus-prometheus-blackbox-exporter:9115
+
   # ---- Blackbox TCP probes for app service endpoints ----
   # Probes each service's ClusterIP:port via the blackbox exporter.
 
