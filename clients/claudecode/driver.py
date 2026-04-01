@@ -27,6 +27,22 @@ init_logger()
 logger = logging.getLogger("all.claudecode.driver")
 
 
+def run_preflight() -> None:
+    """Validate model + credentials by making a minimal Claude Code CLI call."""
+    import subprocess
+
+    m = os.environ["AGENT_MODEL_ID"].split("/")[-1]
+    r = subprocess.run(
+        ["claude", "-p", "say ok", "--model", m, "--max-turns", "1"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if r.returncode:
+        print(r.stdout or r.stderr)
+    sys.exit(r.returncode)
+
+
 def get_api_base_url() -> str:
     """Get the conductor API base URL."""
     host = os.getenv("API_HOSTNAME", "localhost")
