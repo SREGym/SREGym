@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import csv
+import importlib
 import logging
 import os
 import sys
@@ -9,7 +10,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-import litellm
 from rich.console import Console
 
 from logger import init_logger
@@ -18,6 +18,7 @@ from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
+from sregym.service.container_runner import ContainerRunner, ExecInput
 
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
@@ -25,32 +26,47 @@ _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
 
 
-def validate_model_config(agent_model: str, judge_model: str) -> None:
-    """Validate model strings using LiteLLM before deployment.
+def run_preflight_check(
+    agent_name: str,
+    container_runner: ContainerRunner | None = None,
+    install_script: str | None = None,
+) -> None:
+    """Run the agent's pre-flight check inside the container."""
 
-    Uses litellm.get_valid_models() to check that each model string corresponds
-    to an accessible model (i.e., the model is recognised and its provider's API
-    key is present in the environment).  Exits with a non-zero status code if
-    either model fails validation so the user is notified before any Kubernetes
-    resources are deployed.
-    """
-    errors_found = False
-    for model_type, model_name in [("agent", agent_model), ("judge", judge_model)]:
-        try:
-            _, provider, _, _ = litellm.get_llm_provider(model_name)
-            logger.info(f"✅ {model_type.capitalize()} model '{model_name}' validated (provider: {provider}).")
-        except Exception:
-            logger.error(
-                f"❌ {model_type.capitalize()} model '{model_name}' is not a valid LiteLLM model string.\n"
-                f"   Please check the model string. Valid examples: 'gpt-4o', "
-                f"'anthropic/claude-sonnet-4-6-20250627', 'gemini/gemini-2.5-pro', "
-                f"'bedrock/anthropic.claude-3-sonnet-20240229-v1:0'."
-            )
-            errors_found = True
+    # Agents that need pre-flight check
+    agent_driver_modules: dict[str, str] = {
+        "stratus": "clients.stratus.stratus_agent.driver.driver",
+        "claudecode": "clients.claudecode.driver",
+        "codex": "clients.codex.driver",
+    }
 
-    if errors_found:
-        logger.error("Model validation failed. Fix the model string(s) and try again.")
+    module_path = agent_driver_modules.get(agent_name)
+    if not module_path:
+        return
+
+    driver_mod = importlib.import_module(module_path)
+    if not hasattr(driver_mod, "run_preflight"):
+        return
+
+    if container_runner is None:
+        logger.warning(f"⚠️  No container runner — skipping pre-flight check for '{agent_name}'")
+        return
+
+    check_cmd = f"python3 -c 'from {module_path} import run_preflight; run_preflight()'"
+    if install_script:
+        check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
+
+    logger.info(f"🔍 Running pre-flight check for '{agent_name}'...")
+    result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+    if result.returncode != 0:
+        if result.stdout:
+            print(result.stdout.strip())
+        if result.stderr:
+            print(result.stderr.strip())
+        logger.error(f"❌ Pre-flight check failed for '{agent_name}'")
         sys.exit(1)
+
+    logger.info(f"✅ Pre-flight check passed for '{agent_name}'")
 
 
 def get_current_datetime_formatted():
@@ -345,13 +361,6 @@ def main(args):
 
     logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}")
 
-    # Sanity-check model strings before any Kubernetes resources are deployed so
-    # the user gets immediate feedback on invalid models or missing API keys.
-    validate_model_config(agent_model, judge_model)
-
-    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
-    conductor = Conductor(config=conductor_config)
-
     # Only build/check agent container image if the agent requires it
     agent_reg = (
         get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
@@ -360,6 +369,17 @@ def main(args):
     )
     if not agent_reg or agent_reg.container_isolation:
         LAUNCHER.enable_container_isolation(force_build=args.force_build)
+
+    # Pre-flight check — makes a real (minimal) API call inside the agent
+    # container to validate model and credentials in one shot.
+    run_preflight_check(
+        args.agent,
+        container_runner=LAUNCHER._container_runner,
+        install_script=agent_reg.install_script if agent_reg else None,
+    )
+
+    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
+    conductor = Conductor(config=conductor_config)
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
