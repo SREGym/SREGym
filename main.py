@@ -11,7 +11,6 @@ from pathlib import Path
 
 from rich.console import Console
 
-from llm_backend.init_backend import load_model_config
 from logger import init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
@@ -307,22 +306,6 @@ def main(args):
     if args.noise:
         logger.info("Noise injection enabled.")
 
-    available_models = list(load_model_config().keys())
-
-    # Always validate judge model
-    if judge_model not in available_models:
-        logger.error(
-            f"❌ Judge model '{judge_model}' not found in llm_backend/configs.yaml. Available: {available_models}"
-        )
-        sys.exit(1)
-
-    # Validate agent model for stratus
-    if args.agent in ["stratus"] and agent_model not in available_models:
-        logger.error(
-            f"❌ Agent model '{agent_model}' not found in llm_backend/configs.yaml. Available: {available_models}"
-        )
-        sys.exit(1)
-
     # Push to env so downstream code picks it up
     os.environ["AGENT_MODEL_ID"] = agent_model
     os.environ["JUDGE_MODEL_ID"] = judge_model
@@ -434,7 +417,7 @@ if __name__ == "__main__":
         "--model",
         type=str,
         default="gpt-5",
-        help="Model for both agent and judge (default: gpt-5)",
+        help="LiteLLM model string (e.g. anthropic/claude-sonnet-4-6-20250627, gpt-5, gemini/gemini-2.5-pro)",
     )
     parser.add_argument(
         "--judge-model",
