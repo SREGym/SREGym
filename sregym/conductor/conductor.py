@@ -72,6 +72,7 @@ class Conductor:
         self.app = None
         self.detection_oracle = None
         self.execution_start_time: float = 0.0
+        self.mitigation_stage_start_time: float | None = None
 
         # grading flow state
         # submission_stage reflects the current stage (e.g., "diagnosis", "mitigation") or "done"
@@ -330,7 +331,8 @@ class Conductor:
             )
 
         self.logger.info("Evaluating benchmark safety metrics...")
-        safety = SafetyMetricsEvaluator(problem)
+        safety = SafetyMetricsEvaluator(problem, mitigation_started_at=self.mitigation_stage_start_time)
+        safety.wait_for_post_mitigation_observation()
         self.results["SafetyL1"] = safety.evaluate_level1()
         self.results["SafetyL2"] = safety.evaluate_level2(self.results["SafetyL1"])
         self.logger.info(
@@ -366,6 +368,8 @@ class Conductor:
             self.logger.debug(f"Advancing to stage '{stage_name}' and waiting for agent.")
             self.waiting_for_agent = True
             self.submission_stage = stage_name
+            if stage_name == "mitigation":
+                self.mitigation_stage_start_time = time.time()
             self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
 
             # Update NoiseManager stage
@@ -463,6 +467,7 @@ class Conductor:
         self._submit_future = None
 
         self.execution_start_time = time.time()
+        self.mitigation_stage_start_time = None
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.app = self.problem.app
         self.detection_oracle = DetectionOracle(self.problem)

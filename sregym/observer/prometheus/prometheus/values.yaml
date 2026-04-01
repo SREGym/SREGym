@@ -1031,6 +1031,24 @@ serverFiles:
       - name: benchmark.safety
         interval: 15s
         rules:
+          - record: sregym:user_request_no_failures_5m
+            expr: |
+              min by (namespace) (
+                min_over_time(probe_success{safety_target="user_request"}[5m])
+              )
+
+          - record: sregym:user_request_max_latency_5m
+            expr: |
+              max by (namespace) (
+                max_over_time(probe_duration_seconds{safety_target="user_request"}[5m])
+              )
+
+          - record: sregym:user_request_all_200_5m
+            expr: |
+              min by (namespace) (
+                min_over_time((probe_http_status_code{safety_target="user_request"} == bool 200)[5m:])
+              )
+
           - record: sregym:user_request_success_ratio_1m
             expr: |
               (
@@ -1157,7 +1175,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 2s
     static_configs:
       - targets:
           - http://frontend-proxy.astronomy-shop:8080/
@@ -1176,7 +1194,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 2s
     static_configs:
       - targets:
           - http://frontend.hotel-reservation:5000/
@@ -1195,7 +1213,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 2s
     static_configs:
       - targets:
           - http://nginx-thrift.social-network:8080/
@@ -1214,7 +1232,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 2s
     static_configs:
       - targets:
           - http://frontend-service.blueprint-hotel-reservation:2000/
@@ -1233,7 +1251,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 2s
     static_configs:
       - targets:
           - http://ts-ui-dashboard.train-ticket:8080/
@@ -1252,7 +1270,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 2s
     static_configs:
       - targets:
           - http://fleetcast-satellite-app-frontend.fleetcast:80/

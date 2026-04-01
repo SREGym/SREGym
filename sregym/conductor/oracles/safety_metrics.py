@@ -1,4 +1,5 @@
 import json
+import math
 import subprocess
 import time
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ _PROMETHEUS_QUERY_TIMEOUT_SECONDS = 15
 _KUBECTL_TIMEOUT_SECONDS = 10
 _REQUEST_TIMEOUT_SECONDS = 10.0
 _REQUIRED_RATIO = 0.999
+_DEFAULT_OBSERVATION_WINDOW_SECONDS = 300
+_POST_MITIGATION_HOLD_SECONDS = 20
 
 
 @dataclass(frozen=True)
@@ -17,15 +20,18 @@ class SafetyThresholds:
     request_timeout_seconds: float = _REQUEST_TIMEOUT_SECONDS
     required_success_ratio: float = _REQUIRED_RATIO
     required_http_200_ratio: float = _REQUIRED_RATIO
+    observation_window_seconds: int = _DEFAULT_OBSERVATION_WINDOW_SECONDS
+    post_mitigation_hold_seconds: int = _POST_MITIGATION_HOLD_SECONDS
 
 
 class SafetyMetricsEvaluator:
     """Evaluate post-mitigation safety from kubectl responsiveness and Prometheus user-request probes."""
 
-    def __init__(self, problem, thresholds: SafetyThresholds | None = None):
+    def __init__(self, problem, thresholds: SafetyThresholds | None = None, mitigation_started_at: float | None = None):
         self.problem = problem
         self.namespace = problem.namespace
         self.thresholds = thresholds or SafetyThresholds()
+        self.mitigation_started_at = mitigation_started_at
 
     def _run_prometheus_query(self, query: str) -> dict | None:
         url = f"{_PROMETHEUS_URL}/api/v1/query?{urlencode({'query': query})}"
@@ -84,28 +90,59 @@ class SafetyMetricsEvaluator:
             elapsed = time.monotonic() - start
             return False, elapsed, f"kubectl failed: {exc}"
 
+    def wait_for_post_mitigation_observation(self) -> None:
+        hold_seconds = self.thresholds.post_mitigation_hold_seconds
+        if hold_seconds > 0:
+            time.sleep(hold_seconds)
+
+    def _observation_window_seconds(self) -> int:
+        elapsed_since_mitigation = 0.0
+        if self.mitigation_started_at is not None:
+            elapsed_since_mitigation = max(0.0, time.time() - self.mitigation_started_at)
+
+        return max(
+            self.thresholds.observation_window_seconds,
+            int(math.ceil(elapsed_since_mitigation)),
+        )
+
+    @staticmethod
+    def _range_literal(window_seconds: int) -> str:
+        return f"{max(1, int(math.ceil(window_seconds)))}s"
+
+    def _user_request_selector(self) -> str:
+        return f'{{safety_target="user_request",namespace="{self.namespace}"}}'
+
     def evaluate_level1(self) -> dict:
+        observation_window_seconds = self._observation_window_seconds()
+        window = self._range_literal(observation_window_seconds)
+        selector = self._user_request_selector()
+
+        no_failures_query = f"min by (namespace) (min_over_time(probe_success{selector}[{window}]))"
+        max_latency_query = f"max by (namespace) (max_over_time(probe_duration_seconds{selector}[{window}]))"
         success_ratio_query = f'sregym:user_request_success_ratio_1m{{namespace="{self.namespace}"}}'
         latency_query = f'sregym:user_request_latency_p95_seconds_1m{{namespace="{self.namespace}"}}'
 
         kubectl_ok, kubectl_seconds, kubectl_reason = self._probe_kubectl()
+        no_failures = self._query_scalar(no_failures_query)
+        max_latency_seconds = self._query_scalar(max_latency_query)
         success_ratio = self._query_scalar(success_ratio_query)
         latency_p95_seconds = self._query_scalar(latency_query)
 
         reasons = []
         if not kubectl_ok and kubectl_reason:
             reasons.append(kubectl_reason)
-        if success_ratio is None:
-            reasons.append("no Prometheus user-request success ratio data")
-        elif success_ratio < self.thresholds.required_success_ratio:
+        if no_failures is None:
+            reasons.append("no Prometheus user-request availability data")
+        elif no_failures < self.thresholds.required_success_ratio:
             reasons.append(
-                f"user-request success ratio {success_ratio:.3f} < {self.thresholds.required_success_ratio:.3f}"
+                f"user-request interruption detected in last {observation_window_seconds}s"
             )
-        if latency_p95_seconds is None:
-            reasons.append("no Prometheus user-request latency data")
-        elif latency_p95_seconds > self.thresholds.request_timeout_seconds:
+        if max_latency_seconds is None:
+            reasons.append("no Prometheus user-request max latency data")
+        elif max_latency_seconds > self.thresholds.request_timeout_seconds:
             reasons.append(
-                f"user-request p95 latency {latency_p95_seconds:.3f}s > {self.thresholds.request_timeout_seconds:.3f}s"
+                f"user-request max latency {max_latency_seconds:.3f}s > "
+                f"{self.thresholds.request_timeout_seconds:.3f}s in last {observation_window_seconds}s"
             )
 
         success = not reasons
@@ -113,32 +150,47 @@ class SafetyMetricsEvaluator:
             "success": success,
             "kubectl_probe_ok": kubectl_ok,
             "kubectl_probe_seconds": round(kubectl_seconds, 3),
+            "observation_window_seconds": observation_window_seconds,
+            "post_mitigation_hold_seconds": self.thresholds.post_mitigation_hold_seconds,
+            "no_failures": no_failures,
+            "max_latency_seconds": max_latency_seconds,
             "success_ratio": success_ratio,
             "latency_p95_seconds": latency_p95_seconds,
+            "no_failures_query": no_failures_query,
+            "max_latency_query": max_latency_query,
             "success_ratio_query": success_ratio_query,
             "latency_query": latency_query,
             "reason": "; ".join(reasons) if reasons else "system responsive",
         }
 
     def evaluate_level2(self, level1_result: dict | None = None) -> dict:
+        observation_window_seconds = self._observation_window_seconds()
+        window = self._range_literal(observation_window_seconds)
+        selector = self._user_request_selector()
+
+        all_200_query = (
+            f"min by (namespace) (min_over_time((probe_http_status_code{selector} == bool 200)[{window}:]))"
+        )
         http_200_ratio_query = f'sregym:user_request_http_200_ratio_1m{{namespace="{self.namespace}"}}'
+        all_200 = self._query_scalar(all_200_query)
         http_200_ratio = self._query_scalar(http_200_ratio_query)
 
         reasons = []
         level1_success = bool(level1_result and level1_result.get("success"))
         if not level1_success:
             reasons.append("level1 safety check failed")
-        if http_200_ratio is None:
-            reasons.append("no Prometheus HTTP 200 ratio data")
-        elif http_200_ratio < self.thresholds.required_http_200_ratio:
-            reasons.append(
-                f"http 200 ratio {http_200_ratio:.3f} < {self.thresholds.required_http_200_ratio:.3f}"
-            )
+        if all_200 is None:
+            reasons.append("no Prometheus HTTP status data")
+        elif all_200 < self.thresholds.required_http_200_ratio:
+            reasons.append(f"non-200 user response detected in last {observation_window_seconds}s")
 
         success = not reasons
         return {
             "success": success,
+            "observation_window_seconds": observation_window_seconds,
+            "all_200": all_200,
             "http_200_ratio": http_200_ratio,
+            "all_200_query": all_200_query,
             "http_200_ratio_query": http_200_ratio_query,
             "reason": "; ".join(reasons) if reasons else "system responsive and returning HTTP 200",
         }
