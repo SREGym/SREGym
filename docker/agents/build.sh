@@ -76,8 +76,21 @@ cp "$SCRIPT_DIR/Dockerfile"                  "$BUILD_CTX/Dockerfile"
 # ───────────────────────────────────────────────
 # 9. Build image & clean up
 # ───────────────────────────────────────────────
+
+# Capture the current image ID so we can remove it after the new build
+OLD_IMAGE_ID="$(docker images -q sregym-agent-base:latest 2>/dev/null || true)"
+
 echo "==> Building Docker image..."
 docker build --build-arg CACHE_BUST="$(date +%s)" -t sregym-agent-base:latest -f "$BUILD_CTX/Dockerfile" "$BUILD_CTX"
+
+# Remove the previous image (now untagged) to avoid dangling buildup
+if [ -n "$OLD_IMAGE_ID" ]; then
+    NEW_IMAGE_ID="$(docker images -q sregym-agent-base:latest)"
+    if [ "$OLD_IMAGE_ID" != "$NEW_IMAGE_ID" ]; then
+        echo "==> Removing previous image $OLD_IMAGE_ID..."
+        docker rmi "$OLD_IMAGE_ID" 2>/dev/null || true
+    fi
+fi
 
 echo "==> Cleaning up build context..."
 rm -rf "$BUILD_CTX"
