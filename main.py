@@ -34,37 +34,22 @@ def validate_model_config(agent_model: str, judge_model: str) -> None:
     either model fails validation so the user is notified before any Kubernetes
     resources are deployed.
     """
-    valid_models = litellm.utils.get_valid_models()
-
     errors_found = False
     for model_type, model_name in [("agent", agent_model), ("judge", judge_model)]:
-        if model_name in valid_models:
-            logger.info(f"✅ {model_type.capitalize()} model '{model_name}' validated successfully.")
-            continue
-
-        # Model not in valid list — try to determine whether the model string is
-        # unrecognised or whether the API key for its provider is simply missing.
         try:
-            provider, _, _, _ = litellm.get_llm_provider(model_name)
-            logger.error(
-                f"❌ {model_type.capitalize()} model '{model_name}' is not available.\n"
-                f"   LiteLLM identified the provider as '{provider}', but no valid API key was found.\n"
-                f"   Make sure the appropriate API key environment variable is set (e.g. OPENAI_API_KEY, "
-                f"ANTHROPIC_API_KEY, GEMINI_API_KEY, …).\n"
-                f"   Run `python -c \"import litellm; print(litellm.utils.get_valid_models())\"` to see "
-                f"which models are currently accessible."
-            )
+            _, provider, _, _ = litellm.get_llm_provider(model_name)
+            logger.info(f"✅ {model_type.capitalize()} model '{model_name}' validated (provider: {provider}).")
         except Exception:
             logger.error(
                 f"❌ {model_type.capitalize()} model '{model_name}' is not a valid LiteLLM model string.\n"
-                f"   LiteLLM could not determine the provider from this string.\n"
                 f"   Please check the model string. Valid examples: 'gpt-4o', "
-                f"'anthropic/claude-sonnet-4-6-20250627', 'gemini/gemini-2.5-pro'."
+                f"'anthropic/claude-sonnet-4-6-20250627', 'gemini/gemini-2.5-pro', "
+                f"'bedrock/anthropic.claude-3-sonnet-20240229-v1:0'."
             )
-        errors_found = True
+            errors_found = True
 
     if errors_found:
-        logger.error("Model validation failed. Fix the model string(s) or set the missing API key(s) and try again.")
+        logger.error("Model validation failed. Fix the model string(s) and try again.")
         sys.exit(1)
 
 
