@@ -84,6 +84,7 @@ class Conductor:
         self.stage_sequence: list[dict] = []
         self.current_stage_index: int = 0
         self.waiting_for_agent: bool = False
+        self._evaluating: bool = False  # True while a submission is being evaluated
         self.fault_injected: bool = False
 
     @property
@@ -168,6 +169,7 @@ class Conductor:
         self.stage_sequence = []
         self.current_stage_index = 0
         self.waiting_for_agent = False
+        self._evaluating = False
         self.fault_injected = False
 
         if not self.tasklist:
@@ -528,8 +530,11 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to stop noise manager: {e}")
 
-        # Run the evaluation function for the current stage
-        current_stage["evaluation"](sol)
+        try:
+            # Run the evaluation function for the current stage
+            current_stage["evaluation"](sol)
+        finally:
+            self._evaluating = False
 
         # After evaluation, advance to the next stage (if any)
         next_index = self.current_stage_index + 1
@@ -572,6 +577,12 @@ class Conductor:
             return dict(self.results)
 
         if not self.waiting_for_agent:
+            if self._evaluating:
+                self.logger.info(
+                    "submit() called while evaluation is already in progress for "
+                    f"stage '{self.submission_stage}'. Submission was already accepted."
+                )
+                return {"status": "ok", "message": "Submission already accepted; evaluation in progress."}
             self.logger.error(
                 "submit() called when conductor is not waiting for a submission. "
                 f"Current submission_stage={self.submission_stage}"
@@ -582,6 +593,7 @@ class Conductor:
 
         # Mark that we're no longer waiting so duplicate submits are rejected
         self.waiting_for_agent = False
+        self._evaluating = True
 
         # Run evaluation and stage advancement in an executor thread so the HTTP
         # response returns immediately.  Store the future so start_problem() can
