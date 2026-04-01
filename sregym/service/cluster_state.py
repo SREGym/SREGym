@@ -17,7 +17,7 @@ logger.setLevel(logging.DEBUG)
 
 
 # Namespaces that should never be deleted during reconciliation
-PROTECTED_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease", "default"})
+PROTECTED_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease", "default", "sregym"})
 
 
 @dataclass
