@@ -4,6 +4,8 @@ import socket
 import subprocess
 import time
 
+import requests
+
 from sregym.paths import MCP_SERVER_K8S
 from sregym.service.kubectl import KubeCtl
 
@@ -45,7 +47,8 @@ class MCPServer:
 
         if self._is_running():
             logger.info("MCP server already running, skipping redeploy.")
-            if not self.is_port_in_use(self.port):
+            if not self._is_port_forward_healthy():
+                logger.info("Port-forward is absent or stale, restarting.")
                 self.start_port_forward()
             return
 
@@ -59,15 +62,39 @@ class MCPServer:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(("127.0.0.1", port)) == 0
 
-    def start_port_forward(self):
-        """Starts port-forwarding to access the MCP server."""
-        # Always kill a stale port-forward and restart. The old process may still
-        # be running but forwarding to a now-deleted pod (e.g. after namespace
-        # cleanup between attempts), which silently breaks MCP connectivity.
+    def _is_port_forward_healthy(self) -> bool:
+        """Check if the port-forward is actually serving traffic, not just bound."""
+        try:
+            resp = requests.get(f"http://127.0.0.1:{self.port}/kubectl/sse", stream=True, timeout=5)
+            resp.close()
+            # SSE endpoint returns 200 with text/event-stream
+            return resp.status_code == 200
+        except Exception:
+            return False
+
+    def _kill_stale_port_forward(self):
+        """Kill any existing kubectl port-forward process on our port."""
         if self.port_forward_process and self.port_forward_process.poll() is None:
             logger.info("Killing existing port-forward process to re-establish fresh connection.")
             self.stop_port_forward()
             self.port_forward_process = None
+
+        # Also kill orphaned port-forward processes from previous runs that we
+        # don't hold a handle to (e.g. the process survived a previous crash).
+        if self.is_port_in_use(self.port):
+            try:
+                result = subprocess.run(f"lsof -ti tcp:{self.port}", shell=True, capture_output=True, text=True)
+                for pid in result.stdout.strip().split():
+                    if pid.isdigit():
+                        logger.info(f"Killing orphaned process {pid} on port {self.port}")
+                        subprocess.run(f"kill {pid}", shell=True)
+                time.sleep(1)
+            except Exception as e:
+                logger.warning(f"Failed to kill stale port-forward: {e}")
+
+    def start_port_forward(self):
+        """Starts port-forwarding to access the MCP server."""
+        self._kill_stale_port_forward()
 
         for attempt in range(3):
             if self.is_port_in_use(self.port):
