@@ -18,8 +18,27 @@ class MCPServer:
         self.port_forward_process = None
         self.kubectl = KubeCtl()
 
+    def _is_running(self) -> bool:
+        """Check if the MCP server deployment already exists and is ready."""
+        result = self.kubectl.exec_command(
+            f"kubectl get deployment {self.service_name} -n {self.namespace} -o jsonpath='{{.status.readyReplicas}}'"
+        )
+        value = result.strip().strip("'")
+        # exec_command returns stderr on failure (e.g. "Error from server (NotFound)"),
+        # so only treat a purely numeric positive value as "running".
+        return value.isdigit() and int(value) > 0
+
     def deploy(self):
-        """Deploy the MCP server into the cluster via kustomize."""
+        """Deploy the MCP server into the cluster via kustomize.
+
+        Skips redeployment if the MCP server is already running to avoid disrupting existing connections.
+        """
+        if self._is_running():
+            logger.info("MCP server already running, skipping redeploy.")
+            if not self.is_port_in_use(self.port):
+                self.start_port_forward()
+            return
+
         self.kubectl.exec_command(f"kubectl apply -k {MCP_SERVER_K8S}")
         self.kubectl.wait_for_ready(self.namespace)
         self.start_port_forward()
