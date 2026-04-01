@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import litellm
 from rich.console import Console
 
 from logger import init_logger
@@ -22,6 +23,49 @@ LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
+
+
+def validate_model_config(agent_model: str, judge_model: str) -> None:
+    """Validate model strings using LiteLLM before deployment.
+
+    Uses litellm.get_valid_models() to check that each model string corresponds
+    to an accessible model (i.e., the model is recognised and its provider's API
+    key is present in the environment).  Exits with a non-zero status code if
+    either model fails validation so the user is notified before any Kubernetes
+    resources are deployed.
+    """
+    valid_models = litellm.utils.get_valid_models()
+
+    errors_found = False
+    for model_type, model_name in [("agent", agent_model), ("judge", judge_model)]:
+        if model_name in valid_models:
+            logger.info(f"✅ {model_type.capitalize()} model '{model_name}' validated successfully.")
+            continue
+
+        # Model not in valid list — try to determine whether the model string is
+        # unrecognised or whether the API key for its provider is simply missing.
+        try:
+            provider, _, _, _ = litellm.get_llm_provider(model_name)
+            logger.error(
+                f"❌ {model_type.capitalize()} model '{model_name}' is not available.\n"
+                f"   LiteLLM identified the provider as '{provider}', but no valid API key was found.\n"
+                f"   Make sure the appropriate API key environment variable is set (e.g. OPENAI_API_KEY, "
+                f"ANTHROPIC_API_KEY, GEMINI_API_KEY, …).\n"
+                f"   Run `python -c \"import litellm; print(litellm.utils.get_valid_models())\"` to see "
+                f"which models are currently accessible."
+            )
+        except Exception:
+            logger.error(
+                f"❌ {model_type.capitalize()} model '{model_name}' is not a valid LiteLLM model string.\n"
+                f"   LiteLLM could not determine the provider from this string.\n"
+                f"   Please check the model string. Valid examples: 'gpt-4o', "
+                f"'anthropic/claude-sonnet-4-6-20250627', 'gemini/gemini-2.5-pro'."
+            )
+        errors_found = True
+
+    if errors_found:
+        logger.error("Model validation failed. Fix the model string(s) or set the missing API key(s) and try again.")
+        sys.exit(1)
 
 
 def get_current_datetime_formatted():
@@ -315,6 +359,10 @@ def main(args):
     os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
 
     logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}")
+
+    # Sanity-check model strings before any Kubernetes resources are deployed so
+    # the user gets immediate feedback on invalid models or missing API keys.
+    validate_model_config(agent_model, judge_model)
 
     conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
     conductor = Conductor(config=conductor_config)
