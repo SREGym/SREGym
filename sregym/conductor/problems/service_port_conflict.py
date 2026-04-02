@@ -40,9 +40,10 @@ class ServicePortConflict(Problem):
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",
-            namespace=self.namespace,
+            namespace=f"{self.namespace}",
             description=(
-                f"The pod template binds hostPort {self.conflicting_port}, which collides with an already occupied node port, "
+                f"The pod template binds hostPort {self.conflicting_port}, which collides with the prometheus-node-exporter "
+                f"DaemonSet (prometheus-node-exporter) is already occupying port {self.conflicting_port} on all nodes, "
                 "so new pods fail scheduling with host port conflict events and the service loses available replicas."
             ),
         )

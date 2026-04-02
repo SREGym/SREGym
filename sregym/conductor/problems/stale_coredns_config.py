@@ -29,8 +29,8 @@ class StaleCoreDNSConfig(Problem):
 
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
-            component="coredns",
-            namespace=self.namespace,
+            component="configmap/coredns",
+            namespace="kube-system",
             description=(
                 "CoreDNS has a stale NXDOMAIN rewrite/template for `.svc.cluster.local`, causing valid in-cluster "
                 "service names to resolve as non-existent. This introduces cluster-wide service discovery failures "
