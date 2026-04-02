@@ -12,7 +12,6 @@ from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
-from sregym.conductor.oracles.safety_metrics import SafetyMetricsEvaluator
 from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
@@ -72,7 +71,6 @@ class Conductor:
         self.app = None
         self.detection_oracle = None
         self.execution_start_time: float = 0.0
-        self.mitigation_stage_start_time: float | None = None
 
         # grading flow state
         # submission_stage reflects the current stage (e.g., "diagnosis", "mitigation") or "done"
@@ -332,16 +330,6 @@ class Conductor:
                 f"[EVAL] Resolution {'Succeed' if res_r['success'] else 'Failed'}\n TTR: {self.results['TTR']}"
             )
 
-        self.logger.info("Evaluating benchmark safety metrics...")
-        safety = SafetyMetricsEvaluator(problem, mitigation_started_at=self.mitigation_stage_start_time)
-        safety.wait_for_post_mitigation_observation()
-        self.results["SafetyL1"] = safety.evaluate_level1()
-        self.results["SafetyL2"] = safety.evaluate_level2(self.results["SafetyL1"])
-        self.logger.info(
-            f"[EVAL] SafetyL1 {'Succeed' if self.results['SafetyL1']['success'] else 'Failed'} | "
-            f"SafetyL2 {'Succeed' if self.results['SafetyL2']['success'] else 'Failed'}"
-        )
-
         return r
 
     def _advance_to_next_stage(self, start_index: int = 0):
@@ -370,8 +358,6 @@ class Conductor:
             self.logger.debug(f"Advancing to stage '{stage_name}' and waiting for agent.")
             self.waiting_for_agent = True
             self.submission_stage = stage_name
-            if stage_name == "mitigation":
-                self.mitigation_stage_start_time = time.time()
             self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
 
             # Update NoiseManager stage
@@ -469,7 +455,6 @@ class Conductor:
         self._submit_future = None
 
         self.execution_start_time = time.time()
-        self.mitigation_stage_start_time = None
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.app = self.problem.app
         self.detection_oracle = DetectionOracle(self.problem)

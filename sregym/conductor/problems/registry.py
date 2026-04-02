@@ -14,7 +14,6 @@ from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
-from sregym.conductor.problems.frontend_geo_port_rollout import FrontendGeoPortRollout
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.incorrect_image import IncorrectImage
@@ -55,7 +54,6 @@ from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdate
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from sregym.conductor.problems.service_port_conflict import ServicePortConflict
-from sregym.conductor.problems.service_port_mismatch import ServicePortMismatch
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
@@ -218,8 +216,6 @@ class ProblemRegistry:
             # ==================== DIRECT K8S API ====================
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
-            "service_port_mismatch_hotel_reservation": lambda: ServicePortMismatch(app_name="hotel_reservation", faulty_service="geo"),
-            "frontend_geo_port_rollout_hotel_reservation": FrontendGeoPortRollout,
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[

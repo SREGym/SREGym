@@ -68,9 +68,7 @@ class Prometheus:
     def deploy(self):
         """Deploy the metric collector using Helm."""
         if self._is_prometheus_running():
-            self.logger.info("Prometheus is already running. Upgrading release to refresh scrape and recording rules.")
-            Helm.upgrade(**self.helm_configs)
-            Helm.assert_if_deployed(self.namespace)
+            self.logger.warning("Prometheus is already running. Skipping redeployment.")
             return
 
         # Wait for namespace to be fully terminated before attempting fresh install
