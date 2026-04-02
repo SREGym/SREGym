@@ -209,6 +209,10 @@ def validate_oracles(oracles: list[BaseOracle]) -> list[bool | list[OracleResult
     return [True, results]
 
 
+def mitigation_submission_requested(last_state) -> bool:
+    return bool(getattr(last_state, "values", {}).get("submitted", False))
+
+
 def get_app_info():
     ltc = LanggraphToolConfig()
     url = ltc.benchmark_app_info_url
@@ -538,6 +542,10 @@ async def mitigation_task_main(diagnosis_summary):
             num_retry_attempts_lst.append(str(curr_attempt))
             rollback_stack_lst.append("N/A, naive retry")
 
+            if mitigation_submission_requested(last_state):
+                logger.info("mitigation agent called submit tool; breaking retry loop.")
+                break
+
             # getting oracle result
             try:
                 oracle_results = validate_oracles(oracles)
@@ -636,6 +644,10 @@ async def mitigation_task_main(diagnosis_summary):
             steps_lst.append(mitigation_agent_last_state.values["num_steps"])
             num_retry_attempts_lst.append(str(curr_attempt))
             rollback_stack_lst.append("N/A, mitigation agent")
+
+            if mitigation_submission_requested(mitigation_agent_last_state):
+                logger.info("mitigation agent called submit tool; breaking retry loop.")
+                break
 
             # getting oracle result
             try:
