@@ -51,6 +51,26 @@ logger.propagate = True
 logger.setLevel(logging.DEBUG)
 
 
+def run_preflight() -> None:
+    """Validate model + credentials by making a minimal litellm call."""
+    import litellm
+
+    litellm.drop_params = True
+    litellm.modify_params = True
+    litellm.suppress_debug_info = True  # ty:ignore[invalid-assignment]
+    try:
+        litellm.completion(
+            model=os.environ["AGENT_MODEL_ID"],
+            messages=[{"role": "user", "content": "say ok"}],
+            max_tokens=3,
+            num_retries=0,
+        )
+        print("ok")
+    except Exception as e:
+        print(f"preflight failed: {e}")
+        sys.exit(1)
+
+
 def get_current_datetime_formatted():
     now = datetime.now()
     formatted_datetime = now.strftime("%m%d_%H%M")
@@ -278,8 +298,7 @@ async def wait_for_stage_switch(
         await asyncio.sleep(poll_interval)
 
     raise TimeoutError(
-        f"Benchmark did not switch from {current_stage!r} to one of {sorted(target_stages)!r} "
-        f"within {timeout} seconds"
+        f"Benchmark did not switch from {current_stage!r} to one of {sorted(target_stages)!r} within {timeout} seconds"
     )
 
 
@@ -812,7 +831,6 @@ async def main():
             f"Unexpected benchmark status: {benchmark_status}. Expected 'mitigation' or 'done'. "
             "Skipping mitigation agent to be safe."
         )
-
 
     agent_output_df["agent_name"] = agent_names
     agent_output_df["input_tokens"] = agent_in_tokens

@@ -1,31 +1,84 @@
-Follow these steps to diagnose and fix the incident:
+## Time Constraint
 
-1. Investigate the root cause. Get all the pods and deployments in the affected namespace to understand what services are running and which are unhealthy. Use kubectl, prometheus, loki, and jaeger to gather information. Go as deep as you can into what is causing the issue.
+You have a **strict 30-minute time limit** for the entire workflow. If you do not submit within this window, you receive zero credit. Budget your time:
 
-2. Once you have identified the root cause, submit your diagnosis using the submit MCP tool. The submission should be a natural language description of the root cause of the failure. You must pass your diagnosis as the `ans` argument, e.g. submit(ans="The frontend pod is crash-looping due to a misconfigured environment variable").
+- **Diagnosis: aim to submit within 8–10 minutes.** An imperfect diagnosis submitted on time is worth far more than a perfect one that never arrives.
+- **Remediation + mitigation submission: use the remaining time.**
 
-3. After submitting your diagnosis, wait a moment for it to be processed before proceeding with remediation.
+Do NOT spend all your time investigating. Once you have a reasonable hypothesis, submit it and move on to fixing.
 
-4. Formulate a remediation plan with actionable steps. You have the ability to fix the issue using the kubectl tool — execute your remediation plan one step at a time using the MCP. Aim to fix the root cause, not just the symptoms — for example, fix the misconfigured value rather than just restarting the pod.
+## Workflow
 
-5. After each step, verify that your changes took effect (e.g. check pod status, wait for rollouts). Continue until the application is healthy.
+### Step 1: Investigate (budget: 8–10 minutes max)
 
-6. Once all pods are running and the application is healthy, submit your mitigation using the submit MCP tool. For mitigation, the grading is based on the final state of the application, not the content of your answer — just pass a short string like "done" to the submit tool, e.g. submit(ans="done"). Your fix is evaluated both on whether the application is healthy (mitigation) and whether the underlying root cause was addressed (resolution).
+Start with the highest-signal sources first:
 
+1. **Pod & deployment status** — `kubectl get pods -n <namespace>`, `kubectl get deployments -n <namespace>`. Look for CrashLoopBackOff, ImagePullBackOff, Pending, or unhealthy pods.
+2. **Describe unhealthy resources** — `kubectl describe pod <pod> -n <namespace>` for events, conditions, and scheduling failures.
+3. **Recent logs** — Use Loki (`get_logs`) for crash logs, error messages, and stack traces from unhealthy pods.
+4. **Metrics** — Use Prometheus (`get_metrics`) for resource pressure, error rates, or latency spikes if the issue is performance-related rather than a hard crash.
+5. **Traces** — Use Jaeger only if the issue involves cross-service request failures and logs/metrics are inconclusive.
 
-## How SREGym Works
+Stop investigating as soon as you can identify: (a) which component is broken, and (b) why it is broken. You do not need to be 100% certain — a strong hypothesis is sufficient.
 
-SREGym deploys a Kubernetes application, injects a fault, and then evaluates an agent's ability to:
+### Step 2: Submit diagnosis
 
-1. **Diagnose** the root cause (evaluated by an LLM judge comparing against the known answer)
-2. **Mitigate** the issue by applying a fix via kubectl (evaluated by checking alerts have been resolved)
-3. **Resolve** the underlying root cause (evaluated alongside mitigation by checking the system is fully recovered — e.g. all pods Running, correct configuration, stable readiness)
+Call the `submit` MCP tool with a natural language description of the root cause. Be specific about:
+- The **affected component** (e.g., deployment name, pod, configmap, service)
+- The **fault mechanism** (e.g., wrong image tag, missing env var, misconfigured port, resource limit)
+- The **concrete details** (e.g., the specific wrong value, the specific missing variable name)
 
-The benchmark provides MCP (Model Context Protocol) tools that agents use to interact with the cluster:
+Example:
+```
+submit(ans="The frontend deployment is crash-looping because the CART_ADDR environment variable was removed from the container spec, causing the frontend to fail on cart-related requests.")
+```
 
-| MCP Endpoint | Tools |
-|---|---|
-| `/kubectl/sse` | `exec_kubectl_cmd_safely`, `rollback_command`, `get_previous_rollbackable_cmd` |
-| `/prometheus/sse` | `get_metrics` |
-| `/jaeger/sse` | `get_services`, `get_operations`, `get_traces`, `get_dependency_graph` |
-| `/loki/sse` | `get_logs`, `get_labels`, `get_label_values` |
+After submitting, wait briefly for the submission to be processed before proceeding.
+
+### Step 3: Remediate
+
+Fix the root cause using `kubectl` (via the kubectl MCP tools). Aim to correct the underlying misconfiguration, not just restart pods. For example:
+
+- Wrong image → patch the deployment with the correct image
+- Missing env var → add it back with `kubectl set env`
+- Misconfigured configmap → edit or replace the configmap and restart affected pods
+- Scheduling issue → fix node selectors, affinities, or resource requests
+
+After each change, verify with `kubectl get pods -n <namespace>` that pods are recovering.
+
+### Step 4: Submit mitigation
+
+Once all pods are running and healthy, call the `submit` MCP tool again:
+```
+submit(ans="done")
+```
+
+This triggers evaluation of both mitigation (are alerts resolved?) and resolution (is the root cause fixed?). The content of this submission does not matter — only the cluster state at the time of submission is evaluated.
+
+## Available MCP Tools
+
+| MCP Endpoint | Tools | Use For |
+|---|---|---|
+| `/kubectl/sse` | `exec_kubectl_cmd_safely` | Run any kubectl command (get, describe, patch, apply, delete, set, scale, etc.) |
+| `/prometheus/sse` | `get_metrics` | Query metrics (CPU, memory, error rates, latency) |
+| `/jaeger/sse` | `get_services`, `get_operations`, `get_traces`, `get_dependency_graph` | Distributed tracing for cross-service issues |
+| `/loki/sse` | `get_logs`, `get_labels`, `get_label_values` | Application and system logs |
+| `/submit_mcp/sse` | `submit` | Submit diagnosis and mitigation results |
+
+### kubectl tool usage
+
+The primary kubectl tool is `exec_kubectl_cmd_safely`. Pass any valid kubectl command as the `cmd` argument:
+```
+exec_kubectl_cmd_safely(cmd="kubectl get pods -n astronomy-shop")
+exec_kubectl_cmd_safely(cmd="kubectl patch deployment frontend -n astronomy-shop --type=json -p='[{\"op\": \"remove\", \"path\": \"/spec/template/spec/affinity\"}]'")
+```
+
+The endpoint also exposes `rollback_command` and `get_previous_rollbackable_cmd` — these are optional utilities to undo previous kubectl changes. You do not need to use them for normal remediation.
+
+## Key Rules
+
+- **Submit early.** A partial diagnosis submitted in time beats a perfect one that times out. You get zero credit if you don't submit.
+- **Two submissions required.** First `submit()` = diagnosis. Second `submit()` = mitigation. You must submit diagnosis before you can submit mitigation.
+- **Fix root causes, not symptoms.** Restarting a pod without fixing the underlying misconfiguration will pass mitigation but fail resolution.
+- **Be specific in diagnosis.** Name the exact component, the exact fault, and the exact wrong value when possible. Vague descriptions like "a service is down" score poorly.
+- **You have full kubectl permissions.** The kubectl MCP tool has cluster-admin-level access to all namespaces. You can get, create, patch, delete, and update any resource (deployments, configmaps, services, pods, secrets, etc.) in any namespace. Do not assume you lack permissions — if a command fails, check the error message and fix the command syntax rather than giving up. Common mutation commands that work: `kubectl patch`, `kubectl set env`, `kubectl set image`, `kubectl apply`, `kubectl delete`, `kubectl scale`, `kubectl rollout undo`, `kubectl label`, `kubectl create`.

@@ -27,6 +27,48 @@ from clients.codex.codex_agent import CodexAgent  # noqa: E402
 logger = logging.getLogger("all.codex.driver")
 
 
+def run_preflight() -> None:
+    """Validate model + credentials by making a minimal Codex CLI call."""
+    import subprocess
+
+    home = Path("/root/.codex")
+    auth = home / "auth.json"
+    key = os.environ.get("OPENAI_API_KEY", "")
+
+    if not auth.exists() and not key:
+        print("missing ~/.codex/auth.json and OPENAI_API_KEY")
+        sys.exit(1)
+
+    if not auth.exists():
+        home.mkdir(parents=True, exist_ok=True)
+        auth.write_text(json.dumps({"OPENAI_API_KEY": key}))
+
+    m = os.environ["AGENT_MODEL_ID"].split("/")[-1]
+    env = dict(os.environ)
+    env["CODEX_HOME"] = str(home)
+
+    r = subprocess.run(
+        [
+            "codex",
+            "exec",
+            "--model",
+            m,
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "--",
+            "say ok",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
+    if r.returncode:
+        print(r.stdout or r.stderr)
+    sys.exit(r.returncode)
+
+
 def get_api_base_url() -> str:
     """Get the conductor API base URL."""
     host = os.getenv("API_HOSTNAME", "localhost")

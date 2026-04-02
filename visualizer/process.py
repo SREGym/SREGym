@@ -1277,13 +1277,7 @@ def render_file_report(
                 "<small>Showing up to first 50 items.</small></div>"
             )
 
-        parts.append("</div>")
-
-        parts.append(
-            "<div class='card'><details><summary>Raw JSON</summary>"
-            "<pre><code class='language-json'>" + escape(pretty_json(rec)) + "</code></pre>"
-            "</details></div></div>"
-        )
+        parts.append("</div></div>")
 
     return "\n".join(parts)
 

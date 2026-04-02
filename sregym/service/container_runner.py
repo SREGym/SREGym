@@ -267,6 +267,28 @@ class ContainerRunner:
 
         return " && ".join(parts)
 
+    def run_sync(self, exec_input: ExecInput) -> subprocess.CompletedProcess:
+        """Run a short-lived command in a container and wait for it to finish.
+
+        Unlike run_async, this blocks until the container exits and returns the
+        CompletedProcess with captured stdout/stderr.  Useful for pre-flight
+        checks (e.g. model validation) that must complete before the main
+        agent container is launched.
+        """
+        cmd = self.build_docker_command(exec_input)
+
+        try:
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=exec_input.timeout,
+            )
+        except (KeyboardInterrupt, subprocess.TimeoutExpired):
+            if exec_input.container_name:
+                ContainerRunner.stop_container(exec_input.container_name, timeout=5)
+            raise
+
     def run_async(self, exec_input: ExecInput) -> subprocess.Popen:
         """Start an agent in a container asynchronously. Returns Popen handle."""
         cmd = self.build_docker_command(exec_input)
