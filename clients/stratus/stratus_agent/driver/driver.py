@@ -195,6 +195,23 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
         return None
 
 
+def extract_submission_from_state(last_state) -> str:
+    """Extract the submitted answer from the agent's last state messages.
+
+    Searches message history in reverse for an AIMessage that called submit_tool,
+    and returns the 'ans' argument. Returns 'N/A' if not found (e.g. force-submit path).
+    """
+    messages = last_state.values.get("messages", [])
+    for message in reversed(messages):
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            for tool_call in message.tool_calls:
+                name = tool_call.get("name") if isinstance(tool_call, dict) else None
+                if name in ("submit_tool", "f_submit_tool"):
+                    args = tool_call.get("args", {}) if isinstance(tool_call, dict) else {}
+                    return args.get("ans", "N/A")
+    return "N/A"
+
+
 def validate_oracles(oracles: list[BaseOracle]) -> list[bool | list[OracleResult]]:
     results = []
     attempt_failed = False
@@ -419,6 +436,7 @@ async def diagnosis_with_localization_task_main():
     agent_exec_stats["num_retry_attempts"] = "N/A"
     agent_exec_stats["rollback_stack"] = "N/A"
     agent_exec_stats["oracle_results"] = "N/A"
+    agent_exec_stats["submission"] = extract_submission_from_state(last_state)
     # agent_exec_stats["last_state"] = last_state
     logger.info(f"Finished diagnosis agent run, output dict: {agent_exec_stats}")
     return agent_exec_stats, last_state, graph_events
@@ -736,6 +754,7 @@ async def main():
     agent_retry_attempts = []
     agent_rollback_stack = []
     agent_oracle_results = []
+    agent_submissions = []
     # logger.info("*" * 25 + " Starting [diagnosis agent] for [NOOP detection] " + "*" * 25)
     # diagnosis_agent_exec_stats = await diagnosis_task_main()
     # agent_names.append("diagnosis_agent_noop")
@@ -786,6 +805,7 @@ async def main():
     agent_retry_attempts.append(diagnosis_agent_exec_stats["num_retry_attempts"])
     agent_rollback_stack.append(diagnosis_agent_exec_stats["rollback_stack"])
     agent_oracle_results.append(diagnosis_agent_exec_stats["oracle_results"])
+    agent_submissions.append(diagnosis_agent_exec_stats.get("submission", "N/A"))
     logger.info("*" * 25 + " Finished [diagnosis agent] " + "*" * 25)
 
     file_parent_dir = Path(__file__).resolve().parent.parent
@@ -839,6 +859,7 @@ async def main():
         agent_retry_attempts.extend(mitigation_agent_exec_stats["num_retry_attempts"])
         agent_rollback_stack.extend(mitigation_agent_exec_stats["rollback_stack"])
         agent_oracle_results.extend(mitigation_agent_exec_stats["oracle_results"])
+        agent_submissions.extend(["N/A"] * len(mitigation_agent_exec_stats["oracle_results"]))
         logger.info("*" * 25 + " Finished [mitigation agent] " + "*" * 25)
     else:
         logger.warning(
@@ -855,6 +876,7 @@ async def main():
     agent_output_df["num_retry_attempts"] = agent_retry_attempts
     agent_output_df["rollback_stack"] = agent_rollback_stack
     agent_output_df["oracle_results"] = agent_oracle_results
+    agent_output_df["submission"] = agent_submissions
 
     agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
     if agent_logs_dir:
