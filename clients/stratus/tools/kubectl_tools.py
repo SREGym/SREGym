@@ -21,6 +21,57 @@ async def _close_mcp_client(exit_stack: AsyncExitStack, tool_name: str) -> None:
         logger.warning("Ignoring %s while closing MCP client for %s", type(e).__name__, tool_name)
 
 
+async def _connect_client(client: Client, exit_stack: AsyncExitStack) -> None:
+    """Enter the client context and verify the session is actually connected.
+
+    fastmcp's Client._connect can return without error even when the underlying
+    SSE transport failed, leaving _session as None.  Detect this and raise early
+    so callers can retry with a fresh client.
+    """
+    await exit_stack.enter_async_context(client)
+    if not client.is_connected():
+        raise RuntimeError("MCP client entered context but session is not connected")
+
+
+async def _call_mcp_with_retry(
+    tool: "BaseTool",
+    mcp_tool_name: str,
+    arguments: dict | None = None,
+    *,
+    session_id: str | None = None,
+    max_retries: int = 1,
+) -> str:
+    """Call an MCP tool via the tool's client, retrying with a fresh client on connection failure."""
+    from clients.stratus.stratus_utils.str_to_tool import get_client
+
+    client = tool._client
+    last_error: Exception | None = None
+
+    for attempt in range(1 + max_retries):
+        exit_stack = AsyncExitStack()
+        try:
+            await _connect_client(client, exit_stack)
+            kwargs = {"arguments": arguments} if arguments else {}
+            result = await client.call_tool(mcp_tool_name, **kwargs)
+            return "\n".join([part.text for part in result])
+        except (RuntimeError, ConnectionError, OSError) as e:
+            last_error = e
+            logger.warning(
+                "MCP connection failed for %s (attempt %d/%d): %s",
+                tool.name,
+                attempt + 1,
+                1 + max_retries,
+                e,
+            )
+            # Replace the client with a fresh one for the retry
+            client = get_client(session_id)
+            tool._client = client
+        finally:
+            await _close_mcp_client(exit_stack, tool.name)
+
+    raise last_error
+
+
 class ExecKubectlCmdSafelyInput(BaseModel):
     command: str = Field(
         description="The command you want to execute in a CLI to manage a k8s cluster. "
@@ -63,13 +114,9 @@ class ExecKubectlCmdSafely(BaseTool):
         logger.debug(
             f'calling mcp exec_kubectl_cmd_safely from langchain exec_kubectl_cmd_safely, with command: "{command}"'
         )
-        exit_stack = AsyncExitStack()
-        try:
-            await exit_stack.enter_async_context(self._client)
-            result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
-            text_result = "\n".join([part.text for part in result])
-        finally:
-            await _close_mcp_client(exit_stack, self.name)
+        text_result = await _call_mcp_with_retry(
+            self, "exec_kubectl_cmd_safely", {"cmd": command}, session_id=self._session_id
+        )
         update: dict = {"messages": [ToolMessage(content=text_result, tool_call_id=tool_call_id)]}
         if "Command Rejected" not in text_result:
             update["executed_commands"] = [command]
@@ -149,13 +196,7 @@ class ExecReadOnlyKubectlCmd(BaseTool):
                 f"calling mcp exec_kubectl_cmd_safely from "
                 f'langchain exec_read_only_kubectl_cmd, with command: "{command}"'
             )
-            exit_stack = AsyncExitStack()
-            try:
-                await exit_stack.enter_async_context(self._client)
-                result = await self._client.call_tool("exec_kubectl_cmd_safely", arguments={"cmd": command})
-                text_result = "\n".join([part.text for part in result])
-            finally:
-                await _close_mcp_client(exit_stack, self.name)
+            text_result = await _call_mcp_with_retry(self, "exec_kubectl_cmd_safely", {"cmd": command})
         return Command(
             update={
                 "messages": [
@@ -193,13 +234,7 @@ class RollbackCommand(BaseTool):
     ) -> Command:
         logger.debug(f"tool_call_id in {self.name}: {tool_call_id}")
         logger.debug("calling langchain rollback_command")
-        exit_stack = AsyncExitStack()
-        try:
-            await exit_stack.enter_async_context(self._client)
-            result = await self._client.call_tool("rollback_command")
-            text_result = "\n".join([part.text for part in result])
-        finally:
-            await _close_mcp_client(exit_stack, self.name)
+        text_result = await _call_mcp_with_retry(self, "rollback_command")
         return Command(
             update={
                 "rollback_stack": str(text_result),
@@ -241,16 +276,9 @@ class GetPreviousRollbackableCmd(BaseTool):
     ) -> Command:
         logger.debug(f"tool_call_id in {self.name}: {tool_call_id}")
         logger.debug("calling langchain get_previous_rollbackable_cmd")
-        exit_stack = AsyncExitStack()
-        try:
-            await exit_stack.enter_async_context(self._client)
-            result = await self._client.call_tool("get_previous_rollbackable_cmd")
-            if len(result) == 0:
-                text_result = "There is no previous rollbackable command."
-            else:
-                text_result = "\n".join([part.text for part in result])
-        finally:
-            await _close_mcp_client(exit_stack, self.name)
+        text_result = await _call_mcp_with_retry(self, "get_previous_rollbackable_cmd")
+        if not text_result:
+            text_result = "There is no previous rollbackable command."
         return Command(
             update={
                 "messages": [
