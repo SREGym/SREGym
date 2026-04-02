@@ -14,6 +14,7 @@ from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
+from sregym.conductor.problems.frontend_geo_port_rollout import FrontendGeoPortRollout
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.incorrect_image import IncorrectImage
@@ -218,6 +219,7 @@ class ProblemRegistry:
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
             "service_port_mismatch_hotel_reservation": lambda: ServicePortMismatch(app_name="hotel_reservation", faulty_service="geo"),
+            "frontend_geo_port_rollout_hotel_reservation": FrontendGeoPortRollout,
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[
