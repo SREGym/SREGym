@@ -4,8 +4,11 @@ import time
 
 from sregym.conductor.oracles.base import Oracle
 
-# Prometheus service endpoint inside the cluster.
-_PROMETHEUS_URL = "http://prometheus-server.observe.svc:80"
+# Prometheus endpoint used from *inside* the prometheus-server pod via
+# ``kubectl exec``.  We use localhost so the request doesn't depend on
+# cluster DNS (which may be broken by fault-injection scenarios such as
+# stale_coredns_config).
+_PROMETHEUS_URL = "http://localhost:9090"
 
 # How long to monitor for sustained alert silence.
 _SUSTAINED_SILENCE_SECONDS = 120
@@ -43,8 +46,9 @@ class AlertOracle(Oracle):
     def _query_firing_alerts(self, namespace: str) -> list[dict]:
         """Return currently firing alerts for *namespace* via the Prometheus API.
 
-        Uses ``kubectl exec`` into the prometheus-server pod so we don't
-        need port-forwarding or external access.
+        Uses ``kubectl exec`` into the prometheus-server pod with localhost
+        so we don't depend on cluster DNS (which may be broken by fault
+        injection, e.g. stale_coredns_config).
         """
         url = f"{_PROMETHEUS_URL}/api/v1/alerts"
         cmd = [
