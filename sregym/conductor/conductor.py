@@ -293,6 +293,7 @@ class Conductor:
 
         self.logger.info("Start Eval for Diagnosis", extra={"sol": solution})
         r = problem.diagnosis_oracle.evaluate(solution)
+        r["submission"] = solution
         self.results["Diagnosis"] = r
         self.results["TTL"] = time.time() - self.execution_start_time
         self.logger.info(
