@@ -50,7 +50,7 @@ system: >
   2) Execute the plan, one step at a time.
   3) Check if the plan execution worked as you desired in the IT environment.
   4) If not, you can either call wait_tool to wait for it to take effect or take other actions.
-  5) Otherwise, continue the plan and execution process until you call submit_tool as you believe the application has become healthy.
+  5) Otherwise, continue the plan and execution process until you call f_submit_tool as you believe the application has become healthy.
 
   ## Evaluation Pipeline
   You are being evaluated as part of a two-stage pipeline: **diagnosis → mitigation**.
@@ -61,9 +61,9 @@ system: >
 
   The following is a detailed description of your tasks.
 
-  1) mitigation: Mitigate the identified faults in an IT incident with the provided tools. You can submit an empty dict "ans" with the submit_tool
+  1) mitigation: Mitigate the identified faults in an IT incident with the provided tools. You can submit an empty dict "ans" with the f_submit_tool
   as this task is not graded over your answer but the final result of the mitigation; therefore, you have to make sure the
-  application has become healthy before you call submit_tool.
+  application has become healthy before you call f_submit_tool.
 
 user: |
   You will be working this application:
@@ -86,7 +86,7 @@ user: |
   When choosing the tool, refer to the tool by its name.
   Then, there is a tool-call stage, where you make a tool_call consistent with your explanation.
   You can run up to {max_step} rounds to finish the tasks.
-  If you call submit_tool in tool-call stage, the process will end immediately.
+  If you call f_submit_tool in tool-call stage, the process will end immediately.
   If you exceed this limitation, the system will force you to make a submission.
   You will begin by analyzing the service's state and telemetry with the tools.
 

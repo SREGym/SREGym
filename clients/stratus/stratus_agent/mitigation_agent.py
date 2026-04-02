@@ -66,6 +66,7 @@ def build_default_mitigation_agent():
 
     mitigation_agent_sync_tools = []
     mitigation_agent_async_tools = []
+    mitigation_submit_tool = None
     if mitigation_agent_config["sync_tools"] is not None:
         for sync_tool_struct in mitigation_agent_config["sync_tools"]:
             mitigation_agent_sync_tools.append(str_to_tool(sync_tool_struct))
@@ -73,28 +74,22 @@ def build_default_mitigation_agent():
         mitigation_agent_sync_tools = None
     if mitigation_agent_config["async_tools"] is not None:
         for async_tool_struct in mitigation_agent_config["async_tools"]:
-            mitigation_agent_async_tools.append(str_to_tool(async_tool_struct))
+            tool = str_to_tool(async_tool_struct)
+            mitigation_agent_async_tools.append(tool)
+            if async_tool_struct["name"] in {"submit_tool", "f_submit_tool"}:
+                mitigation_submit_tool = tool
     else:
         mitigation_agent_async_tools = None
 
-    submit_tool = str_to_tool(
-        {
-            "name": "submit_tool",
-            "description": """
-                    The tool to submit benchmark results
-
-                        Args:
-                            ans (str): the answer you would like to submit to the benchmark
-            """,
-        }
-    )
+    if mitigation_submit_tool is None:
+        raise ValueError("Mitigation agent config must include either submit_tool or f_submit_tool.")
 
     mitigation_agent = MitigationAgent(
         llm=get_llm_backend_for_agent(),
         max_step=mitigation_agent_max_step,
         sync_tools=mitigation_agent_sync_tools,
         async_tools=mitigation_agent_async_tools,
-        submit_tool=submit_tool,
+        submit_tool=mitigation_submit_tool,
     )
     mitigation_agent.build_agent()
     return mitigation_agent, mitigation_agent_prompt_path, mitigation_agent_max_step
