@@ -95,10 +95,10 @@ def test_safety_observation_window_expands_to_cover_mitigation_duration(monkeypa
 
     def fake_query_scalar(query):
         if "min_over_time(probe_success" in query:
-            assert "[601s]" in query or "[602s]" in query
+            assert "[601s:1s]" in query or "[602s:1s]" in query
             return 1.0
         if "max_over_time(probe_duration_seconds" in query:
-            assert "[601s]" in query or "[602s]" in query
+            assert "[601s:1s]" in query or "[602s:1s]" in query
             return 0.2
         if "success_ratio" in query:
             return 1.0

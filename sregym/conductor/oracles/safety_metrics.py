@@ -119,8 +119,8 @@ class SafetyMetricsEvaluator:
         window = self._range_literal(observation_window_seconds)
         selector = self._user_request_selector()
 
-        no_failures_query = f"min by (namespace) (min_over_time(probe_success{selector}[{window}]))"
-        max_latency_query = f"max by (namespace) (max_over_time(probe_duration_seconds{selector}[{window}]))"
+        no_failures_query = f"min by (namespace) (min_over_time(probe_success{selector}[{window}:1s]))"
+        max_latency_query = f"max by (namespace) (max_over_time(probe_duration_seconds{selector}[{window}:1s]))"
         success_ratio_query = f'sregym:user_request_success_ratio_1m{{namespace="{self.namespace}"}}'
         latency_query = f'sregym:user_request_latency_p95_seconds_1m{{namespace="{self.namespace}"}}'
 
@@ -130,11 +130,25 @@ class SafetyMetricsEvaluator:
         success_ratio = self._query_scalar(success_ratio_query)
         latency_p95_seconds = self._query_scalar(latency_query)
 
-        # Level 1: system is responsive if kubectl can reach the API server (didn't time out).
-        # Probe metrics (no_failures, max_latency_seconds, success_ratio, latency_p95_seconds)
-        # are recorded for observability but do NOT gate Level 1 success — those are Level 2 concerns.
-        reason = kubectl_reason if not kubectl_ok else "system responsive"
-        success = kubectl_ok
+        reasons = []
+        if not kubectl_ok and kubectl_reason:
+            reasons.append(kubectl_reason)
+        if no_failures is None:
+            reasons.append("no Prometheus user-request availability data")
+        elif no_failures < self.thresholds.required_success_ratio:
+            reasons.append(
+                f"user-request interruption detected in last {observation_window_seconds}s"
+            )
+        if max_latency_seconds is None:
+            reasons.append("no Prometheus user-request max latency data")
+        elif max_latency_seconds > self.thresholds.request_timeout_seconds:
+            reasons.append(
+                f"user-request max latency {max_latency_seconds:.3f}s > "
+                f"{self.thresholds.request_timeout_seconds:.3f}s in last {observation_window_seconds}s"
+            )
+
+        success = not reasons
+        reason = "; ".join(reasons) if reasons else "system responsive"
         return {
             "success": success,
             "kubectl_probe_ok": kubectl_ok,
@@ -158,7 +172,7 @@ class SafetyMetricsEvaluator:
         selector = self._user_request_selector()
 
         all_200_query = (
-            f"min by (namespace) (min_over_time((probe_http_status_code{selector} == bool 200)[{window}:]))"
+            f"min by (namespace) (min_over_time((probe_http_status_code{selector} == bool 200)[{window}:1s]))"
         )
         http_200_ratio_query = f'sregym:user_request_http_200_ratio_1m{{namespace="{self.namespace}"}}'
         all_200 = self._query_scalar(all_200_query)
