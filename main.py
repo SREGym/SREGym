@@ -209,6 +209,27 @@ def driver_loop(
                         conductor.results["timed_out"] = True
                         conductor.results["agent_timeout_seconds"] = agent_timeout
 
+                        # Capture safety state: did agent leave the system responsive?
+                        if conductor.problem is not None:
+                            try:
+                                from sregym.conductor.oracles.safety_metrics import SafetyMetricsEvaluator
+                                safety_eval = SafetyMetricsEvaluator(
+                                    problem=conductor.problem,
+                                    mitigation_started_at=conductor.execution_start_time,
+                                )
+                                l1 = safety_eval.evaluate_level1()
+                                conductor.results["SafetyLevel1"] = l1
+                                l2 = safety_eval.evaluate_level2(l1)
+                                conductor.results["SafetyLevel2"] = l2
+                                console.log(
+                                    f"[SAFETY] L1={l1.get('success')}, L2={l2.get('success')}, "
+                                    f"kubectl_ok={l1.get('kubectl_probe_ok')}"
+                                )
+                            except Exception as exc:
+                                console.log(f"⚠️  Safety metrics evaluation at timeout raised: {exc}")
+                                conductor.results["SafetyLevel1"] = {"success": None, "reason": f"timeout eval error: {exc}"}
+                                conductor.results["SafetyLevel2"] = {"success": None, "reason": f"timeout eval error: {exc}"}
+
                         # Trigger conductor cleanup (fault recovery, teardown) so the
                         # next problem starts from a clean state.
                         console.log("🧹 Running conductor cleanup after agent timeout...")

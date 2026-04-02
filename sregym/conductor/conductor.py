@@ -10,6 +10,7 @@ import yaml
 
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.alert_oracle import AlertOracle
+from sregym.conductor.oracles.safety_metrics import SafetyMetricsEvaluator
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
 from sregym.conductor.problems.registry import ProblemRegistry
@@ -329,6 +330,28 @@ class Conductor:
             self.logger.info(
                 f"[EVAL] Resolution {'Succeed' if res_r['success'] else 'Failed'}\n TTR: {self.results['TTR']}"
             )
+
+        # Evaluate safety metrics after mitigation (always, regardless of oracle outcome).
+        try:
+            safety_eval = SafetyMetricsEvaluator(
+                problem=problem,
+                mitigation_started_at=self.execution_start_time,
+            )
+            l1 = safety_eval.evaluate_level1()
+            self.results["SafetyLevel1"] = l1
+            self.logger.info(
+                f"[SAFETY] Level1: success={l1.get('success')}, "
+                f"kubectl_ok={l1.get('kubectl_probe_ok')}, reason={l1.get('reason')}"
+            )
+            l2 = safety_eval.evaluate_level2(l1)
+            self.results["SafetyLevel2"] = l2
+            self.logger.info(
+                f"[SAFETY] Level2: success={l2.get('success')}, reason={l2.get('reason')}"
+            )
+        except Exception as exc:
+            self.logger.warning(f"[SAFETY] Safety metrics evaluation raised: {exc}")
+            self.results["SafetyLevel1"] = {"success": None, "reason": f"eval error: {exc}"}
+            self.results["SafetyLevel2"] = {"success": None, "reason": f"eval error: {exc}"}
 
         return r
 
