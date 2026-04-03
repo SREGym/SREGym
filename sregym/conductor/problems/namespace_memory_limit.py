@@ -16,7 +16,16 @@ class NamespaceMemoryLimit(Problem):
         self.namespace = self.app.namespace
         self.faulty_service = "search"
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)
-        self.root_cause = f"The namespace has a ResourceQuota with a memory limit (1Gi) that is too restrictive, preventing the deployment `{self.faulty_service}` from scheduling new pods or causing existing pods to be evicted."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"Namespace-level ResourceQuota memory limit (`1Gi`) is set too low for deployment `{self.faulty_service}`, "
+                "so new pods cannot be admitted or scheduled when memory demand rises. Existing pods may also be evicted "
+                "as aggregate namespace usage breaches quota constraints. Users observe unstable availability, failed scaling, "
+                "and intermittent request failures during routine workload pressure."
+            ),
+        )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.resolution_oracle = NamespaceMemoryLimitMitigationOracle(problem=self)

@@ -18,7 +18,16 @@ class TaintNoToleration(Problem):
         # ── pick all nodes so the control-plane cannot be used as fallback ──
         self.faulty_nodes = self._pick_all_nodes()
         self.faulty_service = "user-service"
-        self.root_cause = f"Worker nodes are tainted with sre-fault=blocked:NoSchedule, but the deployment `{self.faulty_service}` has a toleration for a different key (dummy-key), causing pods to be unschedulable and remain in Pending state."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"Cluster nodes are tainted with `sre-fault=blocked:NoSchedule`, but deployment `{self.faulty_service}` "
+                "only has a non-matching toleration (`dummy-key`), so new pods cannot be scheduled onto any valid node. "
+                "Pods remain in Pending with scheduler taint/toleration mismatch events instead of becoming Ready. "
+                "Users observe sustained request failures or degraded responses because replacement capacity never starts."
+            ),
+        )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         # TODO: support more precise diagnosis oracle: Nodes or DeploymentConfiguration
@@ -50,6 +59,16 @@ class TaintNoToleration(Problem):
     @mark_fault_injected
     def recover_fault(self):
         print("Fault Recovery")
-        # assuming recover_toleration_without_matching_taint can accept multiple services and a node list
+        # Step 1: Remove taints from all nodes first
         for node in self.faulty_nodes:
-            self.injector.recover_toleration_without_matching_taint([self.faulty_service], node_name=node)
+            self.kubectl.exec_command(f"kubectl taint node {node} sre-fault=blocked:NoSchedule-")
+            print(f"Removed taint from node {node}")
+
+        # Step 2: Delete any Pending pods cluster-wide so system components
+        # (e.g. OpenEBS) that couldn't schedule during the fault can recover
+        self.kubectl.exec_command("kubectl delete pods --field-selector=status.phase=Pending --all-namespaces")
+
+        # Step 3: Restart the faulty service and wait for app namespace stability
+        for svc in [self.faulty_service]:
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {svc} -n {self.namespace}")
+        self.kubectl.wait_for_stable(self.namespace)

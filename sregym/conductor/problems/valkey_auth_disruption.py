@@ -15,7 +15,14 @@ class ValkeyAuthDisruption(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
         self.faulty_service = "valkey-cart"
         self.kubectl = KubeCtl()
-        self.root_cause = "The valkey-cart service has an invalid password configured, causing authentication failures for dependent services."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"service/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "Valkey authentication is broken by an invalid password configuration, so dependent services cannot "
+                "establish cache sessions and cart-related operations fail."
+            ),
+        )
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

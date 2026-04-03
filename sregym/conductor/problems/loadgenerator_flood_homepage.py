@@ -18,7 +18,17 @@ class LoadGeneratorFloodHomepage(Problem):
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "frontend"  # This fault technically gets injected into the load generator, but the loadgenerator just spams the frontend
         # We can discuss more and see if we think we should change it, but loadgenerator isn't a "real" service.
-        self.root_cause = "The load generator has a feature flag enabled that causes it to flood the homepage with excessive requests, overwhelming the frontend service."
+        self.feature_flag = "loadGeneratorFloodHomepage"
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The `{self.faulty_service}` deployment is experiencing a sustained traffic surge on the "
+                "homepage endpoint, saturating frontend capacity. This leads to queueing, high latency, and "
+                "timeout spikes during normal user flows. Users observe intermittent homepage errors and degraded "
+                "responsiveness across storefront interactions."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -26,10 +36,10 @@ class LoadGeneratorFloodHomepage(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector.inject_fault("loadGeneratorFloodHomepage")
+        self.injector.inject_fault(self.feature_flag)
         print(f"Fault: loadgeneratorFloodHomepage | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector.recover_fault("loadGeneratorFloodHomepage")
+        self.injector.recover_fault(self.feature_flag)

@@ -19,7 +19,16 @@ class ConfigMapDrift(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
 
         self.kubectl = KubeCtl()
-        self.root_cause = f"The ConfigMap `{self.faulty_service}-config` is missing critical configuration keys (e.g., GeoMongoAddress), causing the deployment `{self.faulty_service}` to malfunction."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"ConfigMap `{self.faulty_service}-config` has drifted and is missing required keys (for example "
+                "`GeoMongoAddress`), so deployment `{self.faulty_service}` starts with incomplete runtime config. "
+                "The service may run but fails dependency initialization and request handling for paths requiring the "
+                "missing settings. Users observe intermittent errors, degraded responses, and feature-level failures."
+            ),
+        )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.configmap_name = f"{self.faulty_service}-config"
 

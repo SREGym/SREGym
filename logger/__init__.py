@@ -1,7 +1,6 @@
 import logging
 import os
 from datetime import datetime
-from logging import Formatter
 
 from .handler import ColorFormatter, ExhaustInfoFormatter
 

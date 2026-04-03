@@ -141,7 +141,7 @@ class ResponseParser:
                         args.append(
                             {
                                 self.eval_ast_node(key): self.eval_ast_node(value)
-                                for key, value in zip(arg.keys, arg.values)
+                                for key, value in zip(arg.keys, arg.values, strict=False)
                             }
                         )
                     else:
@@ -159,7 +159,7 @@ class ResponseParser:
                 else:
                     self.logger.error(f"Error parsing response: {str(e)} content to be parsed: func()")
 
-                raise ResponseParsingError(f"Error parsing response: {str(e)}")
+                raise ResponseParsingError(f"Error parsing response: {str(e)}") from e
 
         self.logger.error("No API call found!")
         raise ResponseParsingError("No API call found!")
@@ -171,7 +171,10 @@ class ResponseParser:
         elif isinstance(node, ast.List):
             return [self.eval_ast_node(elt) for elt in node.elts]
         elif isinstance(node, ast.Dict):
-            return {self.eval_ast_node(key): self.eval_ast_node(value) for key, value in zip(node.keys, node.values)}
+            return {
+                self.eval_ast_node(key): self.eval_ast_node(value)
+                for key, value in zip(node.keys, node.values, strict=False)
+            }
         elif isinstance(node, ast.Name):
             if node.id == "True":
                 return True

@@ -1,4 +1,5 @@
 import asyncio
+import concurrent.futures
 import logging
 import shutil
 import time
@@ -83,6 +84,7 @@ class Conductor:
         self.stage_sequence: list[dict] = []
         self.current_stage_index: int = 0
         self.waiting_for_agent: bool = False
+        self._evaluating: bool = False  # True while a submission is being evaluated
         self.fault_injected: bool = False
 
     @property
@@ -130,10 +132,8 @@ class Conductor:
 
         # If tasklist file doesn't exist, default to running diagnosis + mitigation
         if not tasklist_path.exists():
-            self.logger.info(
-                "No tasklist.yml found. Defaulting to running diagnosis, mitigation, and resolution for this problem."
-            )
-            self.tasklist = ["diagnosis", "mitigation", "resolution"]
+            self.logger.info("No tasklist.yml found. Defaulting to running diagnosis and mitigation for this problem.")
+            self.tasklist = ["diagnosis", "mitigation"]
             return
 
         with open(tasklist_path) as f:
@@ -145,10 +145,8 @@ class Conductor:
             problems = tasklist["all"]["problems"]
 
         if self.problem_id not in (problems if problems else []):
-            self.logger.warning(
-                "problem_id not found in tasklist. Defaulting to running diagnosis, mitigation, and resolution."
-            )
-            self.tasklist = ["diagnosis", "mitigation", "resolution"]
+            self.logger.warning("problem_id not found in tasklist. Defaulting to running diagnosis and mitigation.")
+            self.tasklist = ["diagnosis", "mitigation"]
         else:
             problem_tasklist = problems[self.problem_id]
             if not problem_tasklist:
@@ -156,8 +154,8 @@ class Conductor:
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
-            if not is_ordered_subset(problem_tasklist, ["diagnosis", "mitigation", "resolution"]):
-                msg = f"Task list for {self.problem_id} is either out of order or has an unknown step (allowed: diagnosis, mitigation, resolution)"
+            if not is_ordered_subset(problem_tasklist, ["diagnosis", "mitigation"]):
+                msg = f"Task list for {self.problem_id} is either out of order or has an unknown step (allowed: diagnosis, mitigation)"
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
@@ -171,6 +169,7 @@ class Conductor:
         self.stage_sequence = []
         self.current_stage_index = 0
         self.waiting_for_agent = False
+        self._evaluating = False
         self.fault_injected = False
 
         if not self.tasklist:
@@ -181,7 +180,6 @@ class Conductor:
         stage_definitions = {
             "diagnosis": self._evaluate_diagnosis,
             "mitigation": self._evaluate_mitigation,
-            "resolution": self._evaluate_resolution,
         }
 
         # Determine which stages are actually available (oracle attached)
@@ -211,17 +209,6 @@ class Conductor:
                     )
                 else:
                     self.logger.info("⏩ Mitigation oracle is not attached. Skipping mitigation.")
-
-            elif name == "resolution":
-                if getattr(self.problem, "resolution_oracle", None):
-                    self.stage_sequence.append(
-                        {
-                            "name": name,
-                            "evaluation": stage_definitions[name],
-                        }
-                    )
-                else:
-                    self.logger.info("⏩ Resolution oracle is not attached. Skipping resolution.")
 
         if not self.stage_sequence:
             self.logger.warning(
@@ -258,6 +245,7 @@ class Conductor:
         alert_oracle = AlertOracle(problem=problem)
         start = time.monotonic()
         last_log_second = -1
+        settled = False
 
         while True:
             elapsed = time.monotonic() - start
@@ -272,21 +260,25 @@ class Conductor:
             if firing:
                 names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
                 self.logger.info(f"[WAIT] 🔔 Alerts firing in '{namespace}': {names}")
-                max_for = alert_oracle._query_max_alert_for_duration()
-                settle_seconds = max_for + 10
-                self.logger.info(
-                    f"[WAIT] Longest alert 'for' period is {max_for}s — "
-                    f"settling for {settle_seconds}s to let transient alerts clear…"
-                )
-                time.sleep(settle_seconds)
-                firing = alert_oracle._query_firing_alerts(namespace)
-                if firing:
-                    names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
-                    self.logger.info(f"[WAIT] 🔔 Alerts still firing after settle: {names}")
-                    return
+                if not settled:
+                    max_for = alert_oracle._query_max_alert_for_duration()
+                    settle_seconds = max_for + 10
+                    self.logger.info(
+                        f"[WAIT] Longest alert 'for' period is {max_for}s — "
+                        f"settling for {settle_seconds}s to let transient alerts clear…"
+                    )
+                    time.sleep(settle_seconds)
+                    settled = True
+                    firing = alert_oracle._query_firing_alerts(namespace)
+                    if firing:
+                        names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
+                        self.logger.info(f"[WAIT] 🔔 Alerts still firing after settle: {names}")
+                        return
+                    else:
+                        self.logger.info("[WAIT] All alerts cleared during settle period — continuing to poll")
+                        continue
                 else:
-                    self.logger.info("[WAIT] All alerts cleared during settle period — continuing to poll")
-                    continue
+                    return
 
             elapsed_int = int(elapsed)
             if elapsed_int >= last_log_second + 30:
@@ -301,6 +293,7 @@ class Conductor:
 
         self.logger.info("Start Eval for Diagnosis", extra={"sol": solution})
         r = problem.diagnosis_oracle.evaluate(solution)
+        r["submission"] = solution
         self.results["Diagnosis"] = r
         self.results["TTL"] = time.time() - self.execution_start_time
         self.logger.info(
@@ -311,7 +304,11 @@ class Conductor:
         return r
 
     def _evaluate_mitigation(self, solution):
-        """Evaluation logic for mitigation stage."""
+        """Evaluation logic for mitigation stage.
+
+        Also evaluates the resolution oracle (if attached) alongside mitigation
+        so that both scores come from a single agent submission.
+        """
         problem = self.current_problem
         # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
         self.logger.info("Start Eval for Mitigation", extra={"sol": solution})
@@ -323,20 +320,17 @@ class Conductor:
             f"{'Succeed' if self.results['Mitigation']['success'] else 'Failed'}\n "
             f"TTM: {self.results['TTM']}"
         )
-        return r
 
-    def _evaluate_resolution(self, solution):
-        """Evaluation logic for resolution stage."""
-        problem = self.current_problem
-        self.logger.info("Start Eval for Resolution", extra={"sol": solution})
-        r = problem.resolution_oracle.evaluate()
-        self.results["Resolution"] = r
-        self.results["TTR"] = time.time() - self.execution_start_time
-        self.logger.info(
-            f"[EVAL] Resolution "
-            f"{'Succeed' if self.results['Resolution']['success'] else 'Failed'}\n "
-            f"TTR: {self.results['TTR']}"
-        )
+        # Evaluate resolution oracle alongside mitigation if attached
+        if getattr(problem, "resolution_oracle", None):
+            self.logger.info("Evaluating resolution oracle alongside mitigation...")
+            res_r = problem.resolution_oracle.evaluate()
+            self.results["Resolution"] = res_r
+            self.results["TTR"] = time.time() - self.execution_start_time
+            self.logger.info(
+                f"[EVAL] Resolution {'Succeed' if res_r['success'] else 'Failed'}\n TTR: {self.results['TTR']}"
+            )
+
         return r
 
     def _advance_to_next_stage(self, start_index: int = 0):
@@ -457,7 +451,7 @@ class Conductor:
         # guarantees that fault recovery, undeploy, and reconciliation are all done.
         if self._submit_future is not None and not self._submit_future.done():
             self.logger.info("[WAIT] Waiting for previous problem's cleanup to finish...")
-            await self._submit_future
+            await asyncio.wrap_future(self._submit_future)
             self.logger.info("[WAIT] Previous problem's cleanup finished")
         self._submit_future = None
 
@@ -537,8 +531,11 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to stop noise manager: {e}")
 
-        # Run the evaluation function for the current stage
-        current_stage["evaluation"](sol)
+        try:
+            # Run the evaluation function for the current stage
+            current_stage["evaluation"](sol)
+        finally:
+            self._evaluating = False
 
         # After evaluation, advance to the next stage (if any)
         next_index = self.current_stage_index + 1
@@ -581,6 +578,12 @@ class Conductor:
             return dict(self.results)
 
         if not self.waiting_for_agent:
+            if self._evaluating:
+                self.logger.info(
+                    "submit() called while evaluation is already in progress for "
+                    f"stage '{self.submission_stage}'. Submission was already accepted."
+                )
+                return {"status": "ok", "message": "Submission already accepted; evaluation in progress."}
             self.logger.error(
                 "submit() called when conductor is not waiting for a submission. "
                 f"Current submission_stage={self.submission_stage}"
@@ -591,13 +594,19 @@ class Conductor:
 
         # Mark that we're no longer waiting so duplicate submits are rejected
         self.waiting_for_agent = False
+        self._evaluating = True
 
         # Run evaluation and stage advancement in an executor thread so the HTTP
         # response returns immediately.  Store the future so start_problem() can
         # await it and guarantee cleanup is fully done before the next problem starts.
-        self._submit_future = asyncio.get_event_loop().run_in_executor(
-            None, self._submit_evaluate_and_advance, sol, current_stage
-        )
+        # Use concurrent.futures directly (not asyncio's run_in_executor) so the
+        # future is loop-independent.  submit() is called from the uvicorn API thread
+        # which has its own event loop; start_problem() runs in the main driver loop.
+        # asyncio.wrap_future() in start_problem() binds the future to whichever loop
+        # is running at await time, avoiding "Future attached to a different loop".
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self._submit_future = executor.submit(self._submit_evaluate_and_advance, sol, current_stage)
+        executor.shutdown(wait=False)
 
         return {"status": "ok", "message": "Submission received"}
 

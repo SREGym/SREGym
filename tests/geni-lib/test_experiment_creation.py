@@ -6,7 +6,7 @@ import random
 
 import geni.portal as portal
 import geni.util
-from geni.aggregate.cloudlab import Clemson, Utah, Wisconsin
+from geni.aggregate.cloudlab import Wisconsin
 
 context = geni.util.loadContext()
 
@@ -51,7 +51,7 @@ except Exception as e:
 print(f"Creating sliver in slice: {SLICE_NAME}")
 try:
     igm = AGGREGATE.createsliver(context, SLICE_NAME, request)
-    print(f"Sliver created\n")
+    print("Sliver created\n")
 except Exception as e:
     print(f"Error creating sliver: {e}")
     exit(1)
@@ -71,7 +71,7 @@ with open(f"{SLICE_NAME}.login.info.txt", "a") as f:
     f.write(f"OS type: {OS_TYPE}\n")
     f.write(login_info)
     f.write("\n")
-    f.write(f"To delete the experiment, run the following command:\n")
+    f.write("To delete the experiment, run the following command:\n")
     f.write(f"python3 genictl.py delete-sliver {SLICE_NAME} --site wisconsin\n")
 print(f"\nSSH info saved to {SLICE_NAME}.login.info.txt\n")
 

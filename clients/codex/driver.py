@@ -27,6 +27,48 @@ from clients.codex.codex_agent import CodexAgent  # noqa: E402
 logger = logging.getLogger("all.codex.driver")
 
 
+def run_preflight() -> None:
+    """Validate model + credentials by making a minimal Codex CLI call."""
+    import subprocess
+
+    home = Path("/root/.codex")
+    auth = home / "auth.json"
+    key = os.environ.get("OPENAI_API_KEY", "")
+
+    if not auth.exists() and not key:
+        print("missing ~/.codex/auth.json and OPENAI_API_KEY")
+        sys.exit(1)
+
+    if not auth.exists():
+        home.mkdir(parents=True, exist_ok=True)
+        auth.write_text(json.dumps({"OPENAI_API_KEY": key}))
+
+    m = os.environ["AGENT_MODEL_ID"].split("/")[-1]
+    env = dict(os.environ)
+    env["CODEX_HOME"] = str(home)
+
+    r = subprocess.run(
+        [
+            "codex",
+            "exec",
+            "--model",
+            m,
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "--",
+            "say ok",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
+    if r.returncode:
+        print(r.stdout or r.stderr)
+    sys.exit(r.returncode)
+
+
 def get_api_base_url() -> str:
     """Get the conductor API base URL."""
     host = os.getenv("API_HOSTNAME", "localhost")
@@ -133,7 +175,7 @@ Namespace: {namespace}
 
 CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
 
-WORKFLOW: You will perform THREE tasks in sequence:
+WORKFLOW: You will perform TWO tasks in sequence:
 
 TASK 1: DIAGNOSIS
 - Investigate the application to detect any anomalies or issues
@@ -147,12 +189,7 @@ TASK 2: MITIGATION
 - After applying the fix, YOU MUST submit with an empty string to trigger validation
 - The submission is REQUIRED - do not exit without submitting
 - Your mitigation is evaluated on whether the application is healthy after your changes
-
-TASK 3: RESOLUTION
-- After mitigation, the system verifies that the application has sustainably recovered to a healthy state
-- Your fixes must not only address immediate symptoms but ensure the system remains stable
-- YOU MUST submit with an empty string once you are confident the system is fully healthy
-- The submission is REQUIRED - do not exit without submitting
+- Your fix is also evaluated on whether it addresses the root cause, not just the symptoms
 
 HOW TO SUBMIT:
 
@@ -166,11 +203,6 @@ For MITIGATION stage:
 - After applying your fix, YOU MUST submit with an EMPTY STRING
 - POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
 - This submission is MANDATORY - the conductor needs it to validate your fix
-
-For RESOLUTION stage:
-- Verify the application is sustainably healthy, then YOU MUST submit with an EMPTY STRING
-- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
-- This submission is MANDATORY - the conductor needs it to complete the evaluation
 
 Important:
 - You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'

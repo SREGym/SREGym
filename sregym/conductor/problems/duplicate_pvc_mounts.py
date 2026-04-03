@@ -27,7 +27,15 @@ class DuplicatePVCMounts(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-        self.root_cause = f"Multiple replicas of the deployment `{self.faulty_service}` are configured to share a single ReadWriteOnce PVC, causing mount conflicts and preventing pods from starting."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The deployment is scaled to multiple replicas while all replicas reference one ReadWriteOnce PVC, "
+                "which triggers multi-attach mount conflicts and leaves replacement pods in Pending or ContainerCreating "
+                "instead of reaching Ready."
+            ),
+        )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.resolution_oracle = MitigationOracle(problem=self)
         self.mitigation_oracle = AlertOracle(problem=self)

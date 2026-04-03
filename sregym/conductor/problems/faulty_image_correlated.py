@@ -16,7 +16,15 @@ class FaultyImageCorrelated(Problem):
         self.kubectl = KubeCtl()
         self.faulty_service = ["frontend", "geo", "profile", "rate", "recommendation", "reservation", "user", "search"]
         self.injector = ApplicationFaultInjector(namespace=self.namespace)
-        self.root_cause = "The deployment `frontend`, `geo`, `profile`, `rate`, `recommendation`, `reservation`, `user`, and `search` are configured to use a faulty image 'jackcuii/hotel-reservation:latest'."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployments/{', '.join(self.faulty_service)}",
+            namespace=self.namespace,
+            description=(
+                "A correlated bad rollout pins multiple core services to a faulty image tag "
+                "(jackcuii/hotel-reservation:latest), causing widespread startup failures and multi-service request errors "
+                "across the application path."
+            ),
+        )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         # not really the incorrect image problem, just reuse the incorrect image function

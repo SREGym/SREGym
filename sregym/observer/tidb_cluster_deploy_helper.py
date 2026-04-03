@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 from sregym.service.apps.tidb_cluster_operator import TiDBClusterDeployer

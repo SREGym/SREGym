@@ -1,0 +1,60 @@
+version: "3.0"
+scoring:
+  threshold: 0.70
+  weights:
+    D1: 0.33
+    D2: 0.33
+    D3: 0.34
+dimensions:
+  - id: D1
+    name: "Fault Localization"
+    category: "internal_quality"
+    definition: >
+      Does the diagnosis correctly identify the specific component where the
+      fault originated?  Use the structured fault specification (target_component,
+      target_resource_kind, namespace) as the authoritative ground truth.
+    questions:
+      - id: D1-Q1
+        text: "Does the diagnosis name the same service, deployment, pod, node, or infrastructure component that the ground-truth identifies as the fault origin?"
+        evaluator_hint: "Compare the component named in the diagnosis against the target_component and target_resource_kind in the structured fault spec."
+      - id: D1-Q2
+        text: "Does the diagnosis correctly distinguish the fault origin from any secondary or cascading failure points mentioned in the ground-truth?"
+        evaluator_hint: "Check that the diagnosis points to the root-cause component, not a downstream victim. The fault spec's target_component is the origin; any other component is secondary."
+      - id: D1-Q3
+        text: "Does the diagnosis avoid misidentifying a healthy component as the fault origin?"
+        evaluator_hint: "Verify the diagnosed component matches the fault spec's target_component; flag if a different component is blamed."
+
+  - id: D2
+    name: "Fault Characterization"
+    category: "internal_quality"
+    definition: >
+      Does the diagnosis correctly describe what went wrong with the identified
+      component? Compare against the fault mechanism, injector operation,
+      and injection parameters in the structured fault spec.
+    questions:
+      - id: D2-Q1
+        text: "Does the diagnosis identify the same injected mechanism described in the ground-truth (e.g., wrong port, missing env var, wrong image, wrong selector, memory limit, probe misconfiguration)?"
+        evaluator_hint: "Match the diagnosis against fault_mechanism and injector_method in the structured spec."
+      - id: D2-Q2
+        text: "Does the diagnosis include concrete mutated details from the injection logic (e.g., env var/key, wrong value, port, selector, image tag, resource limit)?"
+        evaluator_hint: "Compare concrete claims in the diagnosis against parameters and the target mutation implied by injector_method."
+      - id: D2-Q3
+        text: "Does the diagnosis avoid attributing the fault to an incorrect or unrelated fault type?"
+        evaluator_hint: "Check that the diagnosis does not conflict with problem_class, injector_method, or the injected parameter values."
+
+  - id: D3
+    name: "Scope Precision"
+    category: "external_alignment"
+    definition: >
+      Does the diagnosis correctly scope the fault to the right set of affected
+      components and describe impact consistent with the injected mutation?
+    questions:
+      - id: D3-Q1
+        text: "Does the diagnosis avoid blaming components that are not identified in the ground-truth as contributing to the fault?"
+        evaluator_hint: "Check for over-attribution — the diagnosis should not blame uninvolved components."
+      - id: D3-Q2
+        text: "Does the diagnosis include all components listed in the ground-truth as contributing to or affected by the fault?"
+        evaluator_hint: "Check for under-attribution — all ground-truth components should be mentioned."
+      - id: D3-Q3
+        text: "Does the diagnosis correctly describe the impact or symptom consistent with what the ground-truth states?"
+        evaluator_hint: "Compare the stated impact against mechanism, parameters, and target component in the structured fault spec."

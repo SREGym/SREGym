@@ -28,7 +28,14 @@ class SidecarPortConflict(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
 
         self.kubectl = KubeCtl()
-        self.root_cause = f"The deployment `{self.faulty_service}` has a sidecar container that binds to the same port as the main container, causing port conflicts and preventing the service from starting properly."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "A sidecar container binds the same listening port as the primary application container, "
+                "causing startup-time port binding conflicts that prevent pods from becoming Ready."
+            ),
+        )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()

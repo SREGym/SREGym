@@ -91,8 +91,7 @@ async def submit_tool(
 
         if benchmark_status == "done":
             logger.warning(
-                "Benchmark is in 'done' status. Cannot submit anymore. "
-                "Setting submitted=True to exit agent gracefully."
+                "Benchmark is in 'done' status. Cannot submit anymore. Setting submitted=True to exit agent gracefully."
             )
             return Command(
                 update={
@@ -120,7 +119,7 @@ async def submit_tool(
     return Command(
         update={
             "submitted": True,
-            "messages": [ToolMessage(f"Submission complete. No further action is needed.", tool_call_id=tool_call_id)],
+            "messages": [ToolMessage("Submission complete. No further action is needed.", tool_call_id=tool_call_id)],
         }
     )
 
@@ -129,13 +128,13 @@ async def submit_tool(
 async def fake_submit_tool(ans: str, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
     # makes http call to benchmark submission server
     logging.info(f"_NOT_ submitting to benchmark, answer: {ans}")
-    logger.info(f"This method is to only change the state[submitted] value.")
-    logger.info(f"mitigation submission is done out side of agent logic, for retry")
+    logger.info("This method is to only change the state[submitted] value.")
+    logger.info("mitigation submission is done out side of agent logic, for retry")
 
     return Command(
         update={
             "submitted": True,
-            "messages": [ToolMessage(f"Submission complete. No further action is needed.", tool_call_id=tool_call_id)],
+            "messages": [ToolMessage("Submission complete. No further action is needed.", tool_call_id=tool_call_id)],
         }
     )
 
@@ -143,12 +142,12 @@ async def fake_submit_tool(ans: str, tool_call_id: Annotated[str, InjectedToolCa
 @tool("r_submit_tool", description=rollback_submit_tool_docstring)
 async def rollback_submit_tool(tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
     logger.info("rollback agent submits")
-    logger.info(f"This method is to only change the state[submitted] value.")
+    logger.info("This method is to only change the state[submitted] value.")
 
     return Command(
         update={
             "submitted": True,
-            "messages": [ToolMessage(f"Submission complete. No further action is needed.", tool_call_id=tool_call_id)],
+            "messages": [ToolMessage("Submission complete. No further action is needed.", tool_call_id=tool_call_id)],
         }
     )
 
@@ -165,7 +164,7 @@ async def manual_submit_tool(ans: str) -> str:
 
     await session.initialize()
 
-    result = await session.call_tool(
+    await session.call_tool(
         "submit",
         arguments={
             "ans": ans,

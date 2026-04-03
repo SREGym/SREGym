@@ -20,6 +20,24 @@ class Problem(ABC):
         """Override this method to return True if the problem requires Khaos for fault injection."""
         return False
 
+    @classmethod
+    def build_structured_root_cause(
+        cls,
+        *,
+        component: str,
+        namespace: str,
+        description: str,
+    ) -> str:
+        """Return canonical structured root_cause text for judge-side parsing.
+
+        Format:
+        [fault_spec] component=<...>; namespace=<...> || <human-readable-description>
+        """
+        kv = [("component", component), ("namespace", namespace)]
+        meta = "; ".join(f"{k}={str(v).strip()}" for k, v in kv)
+
+        return f"[fault_spec] {meta} || {description.strip()}"
+
     @abstractmethod
     def inject_fault(self):
         pass

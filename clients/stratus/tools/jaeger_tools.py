@@ -27,7 +27,6 @@ get_traces_docstring = """Get Jaeger traces for a given service in the last n mi
 
 @tool(description=get_traces_docstring)
 async def get_traces(service: str, last_n_minutes: int, tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
-
     logging.info(f"Getting traces for service {service} in the last {last_n_minutes} minutes")
 
     exit_stack = AsyncExitStack()
@@ -133,7 +132,6 @@ Retrieve the list of service names from the Grafana instance.
 
 @tool(description=get_services_docstring)
 async def get_services(tool_call_id: Annotated[str, InjectedToolCallId]) -> Command:
-
     logger.info("calling mcp get_services from langchain get_services")
     exit_stack = AsyncExitStack()
     logger.info("Using HTTP, connecting to server.")
@@ -178,7 +176,6 @@ async def get_operations(
     service: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
-
     logger.info(f"calling mcp get_operations from langchain get_operations with service {service}")
     exit_stack = AsyncExitStack()
     logger.info("Using HTTP, connecting to server.")
@@ -223,7 +220,6 @@ async def get_dependency_graph(
     last_n_minutes: int,
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> Command:
-
     logger.info("calling mcp get_dependency_graph from langchain get_dependency_graph")
     exit_stack = AsyncExitStack()
     logger.info("Using HTTP, connecting to server.")

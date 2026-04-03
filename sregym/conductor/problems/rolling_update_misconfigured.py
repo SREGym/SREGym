@@ -25,7 +25,15 @@ class RollingUpdateMisconfigured(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
 
         self.kubectl = KubeCtl()
-        self.root_cause = f"The deployment `{self.faulty_service}` has a misconfigured rolling update strategy (maxUnavailable=100%, maxSurge=0%) with an init container that hangs indefinitely, causing the deployment to be stuck during updates."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The rollout strategy is set to maxUnavailable=100% and maxSurge=0 while an init container hangs, "
+                "so an update drains all old replicas before new ones become Ready and the deployment remains stuck with "
+                "prolonged service unavailability."
+            ),
+        )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()

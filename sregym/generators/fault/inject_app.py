@@ -148,7 +148,7 @@ class ApplicationFaultInjector(FaultInjector):
             if deployment:
                 for container in deployment.spec.template.spec.containers:
                     if container.name == f"hotel-reserv-{service}":
-                        container.image = f"yinfangchen/hotelreservation:latest"
+                        container.image = "yinfangchen/hotelreservation:latest"
                 self.kubectl.update_deployment(service, self.namespace, deployment)
 
     # A.4 valkey_auth_disruption: Invalidate the password in valkey so dependent services cannot work
@@ -383,7 +383,6 @@ class ApplicationFaultInjector(FaultInjector):
             },
         )
 
-
     def inject_missing_env_variable(self, deployment_name: str, env_var: str):
         """
         Patch the deployment to delete a specific environment variable.
@@ -394,8 +393,8 @@ class ApplicationFaultInjector(FaultInjector):
             container = deployment.spec.template.spec.containers[0]
             current_env = container.env
         except Exception as e:
-            raise ValueError(f"Failed to get deployment '{deployment_name}': {e}")
-        
+            raise ValueError(f"Failed to get deployment '{deployment_name}': {e}") from e
+
         # Remove the target env var
         updated_env = []
         found = False
@@ -409,10 +408,10 @@ class ApplicationFaultInjector(FaultInjector):
 
         if not found:
             raise ValueError(f"Environment variable '{env_var}' not found in deployment '{deployment_name}'")
-        
+
         # Update the container's env list
         container.env = updated_env
-        
+
         # Use update_deployment instead of patch_deployment
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
         print(f"Deleted environment variable '{env_var}' from deployment '{deployment_name}'.")
@@ -428,8 +427,8 @@ class ApplicationFaultInjector(FaultInjector):
             container_name = container.name
             current_env = container.env
         except Exception as e:
-            raise ValueError(f"Failed to get deployment '{deployment_name}': {e}")
-        
+            raise ValueError(f"Failed to get deployment '{deployment_name}': {e}") from e
+
         # Check if env var already exists
         for e in current_env:
             if e.name == env_var:

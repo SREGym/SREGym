@@ -21,7 +21,14 @@ class TrainTicketF22(Problem):
         self.namespace = self.app.namespace
         super().__init__(app=self.app, namespace=self.namespace)
 
-        self.root_cause = f"The deployment `{self.faulty_service}` has a SQL column name mismatch error in its database queries, causing database operation failures."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "SQL statements in the contacts service reference an incorrect column name, so database queries "
+                "fail at execution time and related API operations return errors."
+            ),
+        )
         self.kubectl = KubeCtl()
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)

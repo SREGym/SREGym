@@ -29,7 +29,16 @@ class PVCClaimMismatch(Problem):
             "mongodb-user",
         ]
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)
-        self.root_cause = "Multiple MongoDB deployments are configured with PVC claim names that do not exist (claimName-broken), causing pods to remain in Pending state."
+        self.root_cause = self.build_structured_root_cause(
+            component="mongodb",
+            namespace=self.namespace,
+            description=(
+                "Multiple MongoDB deployments reference non-existent PVC claim names (`claimName-broken`), so Kubernetes "
+                "cannot bind required PersistentVolumeClaims during pod scheduling. Affected stateful pods remain Pending "
+                "with volume claim binding errors instead of initializing databases. Users observe cascading failures in "
+                "data-backed features because dependent services cannot reach healthy MongoDB backends."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

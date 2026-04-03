@@ -17,7 +17,14 @@ class MisconfigAppHotelRes(Problem):
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
         self.faulty_service = ["geo"]
-        self.root_cause = "The 'geo' deployment is configured to use a buggy container image 'yinfangchen/geo:app3', this causes the pod keep restarting and entering the 'Error' state."
+        self.root_cause = self.build_structured_root_cause(
+            component="deployment/geo",
+            namespace=self.namespace,
+            description=(
+                "The geo deployment is rolled to a buggy image tag (yinfangchen/geo:app3), which crashes at runtime and "
+                "drives repeated restart loops, leaving the service unhealthy and breaking geo-dependent request paths."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

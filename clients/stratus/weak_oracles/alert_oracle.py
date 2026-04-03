@@ -52,7 +52,7 @@ class AlertOracle(BaseOracle):
             stderr = result.stderr or ""
             if result.returncode != 0:
                 if "NotFound" in stderr or "not found" in stderr.lower():
-                    logger.info(f"[AlertOracle] Prometheus not found (cluster teardown detected), stopping poll.")
+                    logger.info("[AlertOracle] Prometheus not found (cluster teardown detected), stopping poll.")
                     return None
                 logger.warning(f"Failed to query Prometheus alerts: exit {result.returncode}; stderr: {stderr!r}")
                 return []
@@ -96,5 +96,7 @@ class AlertOracle(BaseOracle):
 
             time.sleep(self.poll_interval_seconds)
 
-        logger.info(f"[AlertOracle] PASS — no firing alerts detected in namespace '{self.namespace}' for {self.sustained_silence_seconds}s")
+        logger.info(
+            f"[AlertOracle] PASS — no firing alerts detected in namespace '{self.namespace}' for {self.sustained_silence_seconds}s"
+        )
         return OracleResult(success=True, issues=[])

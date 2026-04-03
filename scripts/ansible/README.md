@@ -8,7 +8,7 @@ This is the instruction to use Ansible to build a remote cluster for SREGym. We 
 cp inventory.yml.example inventory.yml
 ```
 
-Modify the IPs and user names in the inventory file accordingly, `inventory.yml`. 
+Modify the IPs and user names in the inventory file accordingly, `inventory.yml`.
 
 ### 2) Run the Ansible playbook
 ```shell

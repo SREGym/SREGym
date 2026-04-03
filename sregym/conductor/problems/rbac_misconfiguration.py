@@ -20,7 +20,15 @@ class RBACMisconfiguration(Problem):
         self.namespace = self.app.namespace
         self.faulty_service = faulty_service
 
-        self.root_cause = f"The deployment `{self.faulty_service}` uses a ServiceAccount with a ClusterRole that lacks ConfigMap permissions, but an init container tries to access a ConfigMap, causing the init container to fail and pods to remain in Init state."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "The ServiceAccount and RBAC role bindings remove required ConfigMap read permissions while an init "
+                "container still depends on ConfigMap access, causing init failures and keeping pods stuck before Ready. "
+                "Symptoms include Forbidden authorization errors in init logs and pods remaining in Init or CrashLoop phases."
+            ),
+        )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 

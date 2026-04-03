@@ -17,7 +17,18 @@ class AdServiceManualGc(Problem):
         self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "ad"
-        self.root_cause = f"The `{self.faulty_service}` service has a feature flag enabled that triggers manual garbage collection, causing performance degradation and potential service interruptions."
+        self.feature_flag = "adManualGc"
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The `{self.faulty_service}` deployment is experiencing excessive manual garbage collection "
+                "cycles that consume CPU and cause elevated latency with performance degradation and potential "
+                "service interruptions. The workload exhibits periodic latency spikes and unstable response times "
+                "as aggressive garbage collection cycles pause request handling. Users may observe slow or missing "
+                "ad responses and occasional transient failures while traffic is otherwise normal."
+            ),
+        )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = AlertOracle(problem=self)
@@ -25,10 +36,10 @@ class AdServiceManualGc(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.injector.inject_fault("adManualGc")
+        self.injector.inject_fault(self.feature_flag)
         print(f"Fault: adServiceManualGc | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector.recover_fault("adManualGc")
+        self.injector.recover_fault(self.feature_flag)

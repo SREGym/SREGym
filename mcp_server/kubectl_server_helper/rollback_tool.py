@@ -3,7 +3,6 @@ import os
 import tempfile
 import time
 import traceback
-from typing import Optional
 
 import yaml
 from pydantic.dataclasses import dataclass
@@ -41,7 +40,7 @@ class RollbackTool:
         if os.path.exists(state_source) and os.path.isfile(state_source):
             logger.info(f"Reading cluster state from file: {state_source}")
             try:
-                with open(state_source, "r") as f:
+                with open(state_source) as f:
                     yaml_content = f.read()
             except Exception as e:
                 error_msg = f"Failed to read state file: {e}"
@@ -207,10 +206,7 @@ class RollbackTool:
     @staticmethod
     def get_namespace_state(namespace: str | None) -> str:
         """Capture the current state of all resources in the cluster."""
-        if namespace is None or namespace == "":
-            all_namespace_flag = "--all-namespaces"
-        else:
-            all_namespace_flag = f"-n {namespace}"
+        all_namespace_flag = "--all-namespaces" if namespace is None or namespace == "" else f"-n {namespace}"
         all_resources_command = f"kubectl get all -o yaml {all_namespace_flag}"
         return KubeCtl.exec_command_result(all_resources_command)
 
@@ -235,7 +231,7 @@ class RollbackTool:
         try:
             if hasattr(self.action_stack, "is_empty") and self.action_stack.is_empty():
                 return "No more actions to rollback."
-            last_action: Optional[RollbackNode] = self.action_stack.pop()
+            last_action: RollbackNode | None = self.action_stack.pop()
 
             if last_action is not None:
                 result = []
@@ -245,7 +241,7 @@ class RollbackTool:
 
                         if one_step_result.returncode == 0:
                             output = parse_text(one_step_result.stdout, 1000)
-                            result.append(f"Rollback command: {rollback.content}; " f"Execution result: {output}")
+                            result.append(f"Rollback command: {rollback.content}; Execution result: {output}")
                             logger.info(result[-1])
                         else:
                             raise RuntimeError(f"Error executing rollback command: {one_step_result.stderr}")
@@ -253,7 +249,7 @@ class RollbackTool:
                     elif rollback.command_type == "file":
                         one_step_result = self._restore_cluster_state(rollback.content)
                         result.append(
-                            f"Try to restore cluster state with file {rollback.content}. " f"Result: {one_step_result}"
+                            f"Try to restore cluster state with file {rollback.content}. Result: {one_step_result}"
                         )
                         logger.info(result[-1])
                     else:
@@ -265,7 +261,7 @@ class RollbackTool:
                 )
                 for i, one_step_txt in enumerate(result):
                     rollback_process_desc += f"\nStep {i + 1}:\n{one_step_txt}\n"
-                rollback_process_desc += f"-------------------End of Rollback Process:-------------------\n"
+                rollback_process_desc += "-------------------End of Rollback Process:-------------------\n"
 
                 if self.config.validate_rollback:
                     time.sleep(self.config.retry_wait_time)

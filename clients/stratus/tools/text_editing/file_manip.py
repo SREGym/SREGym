@@ -1,7 +1,7 @@
 import logging
 import os.path
 from pathlib import Path
-from typing import Annotated, Optional, Union
+from typing import Annotated
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import InjectedToolCallId, tool
@@ -11,7 +11,6 @@ from langgraph.types import Command
 from clients.stratus.stratus_agent.state import State
 from clients.stratus.tools.text_editing.flake8_utils import flake8, format_flake8_output  # type: ignore
 from clients.stratus.tools.text_editing.windowed_file import (  # type: ignore
-    FileNotOpened,
     TextNotFound,
     WindowedFile,
 )
@@ -53,10 +52,7 @@ def update_file_vars_in_state(
             elif tool_name == "create":
                 new_state["curr_file"] = tool_args["path"]
                 new_state["workdir"] = str(Path(tool_args["path"]).parent)
-            elif tool_name == "edit":
-                # Explicitly pointing out as this tool does not modify agent state
-                pass
-            elif tool_name == "insert":
+            elif tool_name == "edit" or tool_name == "insert":
                 # Explicitly pointing out as this tool does not modify agent state
                 pass
 
@@ -72,8 +68,8 @@ def update_file_vars_in_state(
 def open_file(
     state: Annotated[dict, InjectedState] = None,
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
-    path: Optional[str] = None,
-    line_number: Optional[str] = None,
+    path: str | None = None,
+    line_number: str | None = None,
 ) -> Command:
     logger.info("in open_file, the last msg: %s", state["messages"][-1])
     if path is None:
@@ -131,7 +127,7 @@ def open_file(
 def goto_line(
     state: Annotated[dict, InjectedState],
     tool_call_id: Annotated[str, InjectedToolCallId],
-    line_number: Optional[int] = None,
+    line_number: int | None = None,
 ) -> Command:
     if state["curr_file"] == "":
         msg_txt = "Error: No file is open, use open_file to open a file first"
@@ -379,7 +375,7 @@ def insert(
     state: Annotated[dict, InjectedState],
     tool_call_id: Annotated[str, InjectedToolCallId],
     text: str,
-    line_number: Union[int, None] = None,
+    line_number: int | None = None,
 ):
     """
     Insert <text> at the end of the currently opened file or after <line> if specified.

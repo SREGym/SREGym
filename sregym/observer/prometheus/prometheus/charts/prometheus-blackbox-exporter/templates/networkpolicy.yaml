@@ -5,7 +5,7 @@ metadata:
   name: {{ template "prometheus-blackbox-exporter.fullname" . }}
   namespace: {{ template "prometheus-blackbox-exporter.namespace" . }}
   labels:
-    {{- include "prometheus-blackbox-exporter.labels" . | nindent 4 }}  
+    {{- include "prometheus-blackbox-exporter.labels" . | nindent 4 }}
 spec:
   podSelector:
     matchLabels:
@@ -25,4 +25,3 @@ spec:
   policyTypes:
   - Ingress
 {{- end }}
-

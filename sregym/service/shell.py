@@ -16,8 +16,7 @@ class Shell:
             out = subprocess.run(
                 command,
                 input=input_data,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 shell=True,
                 cwd=cwd,
             )
@@ -31,4 +30,4 @@ class Shell:
                 return output_message
 
         except Exception as e:
-            raise RuntimeError(f"Failed to execute command: {command}\nError: {str(e)}")
+            raise RuntimeError(f"Failed to execute command: {command}\nError: {str(e)}") from e

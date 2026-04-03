@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import csv
+import importlib
 import logging
 import os
 import sys
@@ -11,18 +12,61 @@ from pathlib import Path
 
 from rich.console import Console
 
-from llm_backend.init_backend import load_model_config
 from logger import init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
+from sregym.service.container_runner import ContainerRunner, ExecInput
 
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
+
+
+def run_preflight_check(
+    agent_name: str,
+    container_runner: ContainerRunner | None = None,
+    install_script: str | None = None,
+) -> None:
+    """Run the agent's pre-flight check inside the container."""
+
+    # Agents that need pre-flight check
+    agent_driver_modules: dict[str, str] = {
+        "stratus": "clients.stratus.stratus_agent.driver.driver",
+        "claudecode": "clients.claudecode.driver",
+        "codex": "clients.codex.driver",
+    }
+
+    module_path = agent_driver_modules.get(agent_name)
+    if not module_path:
+        return
+
+    driver_mod = importlib.import_module(module_path)
+    if not hasattr(driver_mod, "run_preflight"):
+        return
+
+    if container_runner is None:
+        logger.warning(f"⚠️  No container runner — skipping pre-flight check for '{agent_name}'")
+        return
+
+    check_cmd = f"python3 -c 'from {module_path} import run_preflight; run_preflight()'"
+    if install_script:
+        check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
+
+    logger.info(f"🔍 Running pre-flight check for '{agent_name}'...")
+    result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+    if result.returncode != 0:
+        if result.stdout:
+            print(result.stdout.strip())
+        if result.stderr:
+            print(result.stderr.strip())
+        logger.error(f"❌ Pre-flight check failed for '{agent_name}'")
+        sys.exit(1)
+
+    logger.info(f"✅ Pre-flight check passed for '{agent_name}'")
 
 
 def get_current_datetime_formatted():
@@ -126,7 +170,6 @@ def driver_loop(
                 continue
 
             conductor.problem_id = pid
-            
 
             # Keep a record of results for this problem in a temp file in case an attempt fails
             tmp_path = f"_running_{pid}_{agent_to_run}_results.csv"
@@ -161,6 +204,16 @@ def driver_loop(
                     if time.time() - agent_start_time > agent_timeout:
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
                         LAUNCHER.cleanup_agent(agent_to_run)
+
+                        # Record timeout in results so downstream CSV captures the failure
+                        conductor.results["timed_out"] = True
+                        conductor.results["agent_timeout_seconds"] = agent_timeout
+
+                        # Trigger conductor cleanup (fault recovery, teardown) so the
+                        # next problem starts from a clean state.
+                        console.log("🧹 Running conductor cleanup after agent timeout...")
+                        conductor._finish_problem()
+
                         break
 
                     # Check if agent process has exited
@@ -169,11 +222,19 @@ def driver_loop(
                         agent_proc.proc.poll()
                         if agent_proc.proc.returncode is not None:
                             console.log(f"⚠️  Agent process exited with return code {agent_proc.proc.returncode}")
-                            # Wait for any in-progress background evaluation to finish
-                            eval_wait = 0
-                            while eval_wait < 120 and conductor.submission_stage != "done":
-                                await asyncio.sleep(1)
-                                eval_wait += 1
+                            # Wait for the conductor's background evaluation to finish.
+                            # await the conductor's submit_future
+                            if conductor._submit_future is not None and not conductor._submit_future.done():
+                                console.log("⏳ Waiting for conductor evaluation to complete...")
+                                try:
+                                    await asyncio.wait_for(
+                                        asyncio.wrap_future(conductor._submit_future),
+                                        timeout=300,
+                                    )
+                                except TimeoutError:
+                                    console.log("⚠️  Conductor evaluation did not finish within 300s")
+                                except Exception as e:
+                                    console.log(f"⚠️  Conductor evaluation raised: {e}")
                             break
                     await asyncio.sleep(1)
 
@@ -210,7 +271,7 @@ def driver_loop(
                         snapshot[stage] = outcome
 
                 all_results_for_agent.append(snapshot)
-                
+
                 fieldnames = sorted({key for row in all_results_for_agent for key in row})
 
                 with open(tmp_path, "w", newline="") as csvfile:
@@ -232,7 +293,9 @@ def driver_loop(
                 if attempt == n_attempts:
                     final_csv_path = base_dir / agent_to_run / pid / f"{pid}_{agent_to_run}_results.csv"
                     os.replace(tmp_path, final_csv_path)
-                    logger.info(f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {final_csv_path}")
+                    logger.info(
+                        f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {final_csv_path}"
+                    )
 
                 # Cleanup agent process so a fresh one can be started for the next problem
                 if not use_external_harness:
@@ -288,22 +351,6 @@ def main(args):
     if args.noise:
         logger.info("Noise injection enabled.")
 
-    available_models = list(load_model_config().keys())
-
-    # Always validate judge model
-    if judge_model not in available_models:
-        logger.error(
-            f"❌ Judge model '{judge_model}' not found in llm_backend/configs.yaml. Available: {available_models}"
-        )
-        sys.exit(1)
-
-    # Validate agent model for stratus
-    if args.agent in ["stratus"] and agent_model not in available_models:
-        logger.error(
-            f"❌ Agent model '{agent_model}' not found in llm_backend/configs.yaml. Available: {available_models}"
-        )
-        sys.exit(1)
-
     # Push to env so downstream code picks it up
     os.environ["AGENT_MODEL_ID"] = agent_model
     os.environ["JUDGE_MODEL_ID"] = judge_model
@@ -314,9 +361,6 @@ def main(args):
 
     logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}")
 
-    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
-    conductor = Conductor(config=conductor_config)
-
     # Only build/check agent container image if the agent requires it
     agent_reg = (
         get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
@@ -325,6 +369,17 @@ def main(args):
     )
     if not agent_reg or agent_reg.container_isolation:
         LAUNCHER.enable_container_isolation(force_build=args.force_build)
+
+    # Pre-flight check — makes a real (minimal) API call inside the agent
+    # container to validate model and credentials in one shot.
+    run_preflight_check(
+        args.agent,
+        container_runner=LAUNCHER._container_runner,
+        install_script=agent_reg.install_script if agent_reg else None,
+    )
+
+    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
+    conductor = Conductor(config=conductor_config)
 
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
@@ -415,7 +470,7 @@ if __name__ == "__main__":
         "--model",
         type=str,
         default="gpt-5",
-        help="Model for both agent and judge (default: gpt-5)",
+        help="LiteLLM model string (e.g. anthropic/claude-sonnet-4-6-20250627, gpt-5, gemini/gemini-2.5-pro)",
     )
     parser.add_argument(
         "--judge-model",

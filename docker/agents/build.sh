@@ -15,8 +15,6 @@ SREGYM="$BUILD_CTX/sregym"
 # ───────────────────────────────────────────────
 mkdir -p "$BUILD_CTX"
 mkdir -p "$SREGYM/service/apps"
-mkdir -p "$SREGYM/service/metadata"
-mkdir -p "$SREGYM/generators/workload"
 
 # ───────────────────────────────────────────────
 # 2. Copy top-level modules
@@ -30,9 +28,6 @@ cp -r "$REPO_ROOT/llm_backend" "$BUILD_CTX/llm_backend"
 # ───────────────────────────────────────────────
 cp "$REPO_ROOT/sregym/__init__.py"                     "$SREGYM/__init__.py"
 cp "$REPO_ROOT/sregym/service/__init__.py"             "$SREGYM/service/__init__.py"
-cp "$REPO_ROOT/sregym/service/metadata/__init__.py"    "$SREGYM/service/metadata/__init__.py"
-cp "$REPO_ROOT/sregym/generators/__init__.py"          "$SREGYM/generators/__init__.py"
-cp "$REPO_ROOT/sregym/generators/workload/__init__.py" "$SREGYM/generators/workload/__init__.py"
 
 # ───────────────────────────────────────────────
 # 4. sregym — core modules
@@ -43,41 +38,33 @@ cp "$REPO_ROOT/sregym/service/helm.py"        "$SREGYM/service/helm.py"
 cp "$REPO_ROOT/sregym/service/apps/base.py"   "$SREGYM/service/apps/base.py"
 cp "$REPO_ROOT/sregym/service/apps/helpers.py" "$SREGYM/service/apps/helpers.py"
 
-# ───────────────────────────────────────────────
-# 5. sregym — workload generators (wrk2 only)
-# ───────────────────────────────────────────────
-cp "$REPO_ROOT/sregym/generators/workload/base.py"                "$SREGYM/generators/workload/base.py"
-cp "$REPO_ROOT/sregym/generators/workload/stream.py"              "$SREGYM/generators/workload/stream.py"
-cp "$REPO_ROOT/sregym/generators/workload/wrk2.py"                "$SREGYM/generators/workload/wrk2.py"
-cp "$REPO_ROOT/sregym/generators/workload/wrk-job-template.yaml"  "$SREGYM/generators/workload/wrk-job-template.yaml"
-
-# ───────────────────────────────────────────────
-# 6. sregym — app metadata JSON files
-# ───────────────────────────────────────────────
-cp "$REPO_ROOT/sregym/service/metadata/"*.json "$SREGYM/service/metadata/"
-
-# ───────────────────────────────────────────────
-# 7. sregym — concrete app classes
-# ───────────────────────────────────────────────
-cp "$REPO_ROOT/sregym/service/apps/social_network.py"    "$SREGYM/service/apps/social_network.py"
-cp "$REPO_ROOT/sregym/service/apps/hotel_reservation.py" "$SREGYM/service/apps/hotel_reservation.py"
-
-# Workload Oracle for AstronomyShop, FlightTicket, TrainTicket, FleetCast are not included
-
 echo "==> sregym modules copied ($(find "$SREGYM" -type f | wc -l) files)"
 
 # ───────────────────────────────────────────────
-# 8. Build support files
+# 5. Build support files
 # ───────────────────────────────────────────────
 cp -r "$SCRIPT_DIR/install-scripts"          "$BUILD_CTX/install-scripts"
 cp "$SCRIPT_DIR/requirements-container.txt"  "$BUILD_CTX/requirements-container.txt"
 cp "$SCRIPT_DIR/Dockerfile"                  "$BUILD_CTX/Dockerfile"
 
 # ───────────────────────────────────────────────
-# 9. Build image & clean up
+# 6. Build image & clean up
 # ───────────────────────────────────────────────
+
+# Capture the current image ID so we can remove it after the new build
+OLD_IMAGE_ID="$(docker images -q sregym-agent-base:latest 2>/dev/null || true)"
+
 echo "==> Building Docker image..."
 docker build --build-arg CACHE_BUST="$(date +%s)" -t sregym-agent-base:latest -f "$BUILD_CTX/Dockerfile" "$BUILD_CTX"
+
+# Remove the previous image (now untagged) to avoid dangling buildup
+if [ -n "$OLD_IMAGE_ID" ]; then
+    NEW_IMAGE_ID="$(docker images -q sregym-agent-base:latest)"
+    if [ "$OLD_IMAGE_ID" != "$NEW_IMAGE_ID" ]; then
+        echo "==> Removing previous image $OLD_IMAGE_ID..."
+        docker rmi "$OLD_IMAGE_ID" 2>/dev/null || true
+    fi
+fi
 
 echo "==> Cleaning up build context..."
 rm -rf "$BUILD_CTX"

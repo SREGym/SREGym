@@ -14,7 +14,14 @@ class ValkeyMemoryDisruption(Problem):
         super().__init__(app=self.app, namespace=self.namespace)
         self.faulty_service = "valkey-cart"
         self.kubectl = KubeCtl()
-        self.root_cause = "A job is flooding the valkey-cart store with large payloads (10MB each), causing it to enter an out-of-memory (OOM) state."
+        self.root_cause = self.build_structured_root_cause(
+            component=f"service/{self.faulty_service}",
+            namespace=self.namespace,
+            description=(
+                "A workload is flooding valkey-cart with very large payloads, exhausting memory and pushing the "
+                "cache service into OOM behavior that disrupts request processing."
+            ),
+        )
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

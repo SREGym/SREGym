@@ -27,7 +27,16 @@ class MissingService(Problem):
         super().__init__(app=self.app, namespace=self.app.namespace)
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
-        self.root_cause = f"The service `{self.faulty_service}` has been deleted, causing service discovery failures for dependent services."
+        self.root_cause = self.build_structured_root_cause(
+            component=self.faulty_service,
+            namespace=self.namespace,
+            description=(
+                f"The Kubernetes Service `{self.faulty_service}` has been deleted, so dependent workloads can no "
+                "longer resolve or route traffic to that backend through cluster service discovery. Requests to the "
+                "service name fail even if pods still exist, creating downstream connection errors and retries. "
+                "Users observe intermittent failures or complete outages on flows that depend on this service."
+            ),
+        )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.app.create_workload()
         self.resolution_oracle = MitigationOracle(problem=self)

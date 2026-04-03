@@ -19,7 +19,14 @@ class K8SOperatorWrongOperatorImage(Problem):
         self.namespace = self.app.namespace
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
-        self.root_cause = "The TiDB operator has a wrong container image configured."
+        self.root_cause = self.build_structured_root_cause(
+            component="deployment/tidb-operator-controller-manager",
+            namespace="tidb-operator",
+            description=(
+                "The TiDB operator controller is rolled to an incorrect image, breaking reconciliation logic and leaving "
+                "managed TiDB resources in unhealthy or stale states."
+            ),
+        )
         self.app.create_workload()
 
         # ============ Attach Evaluation Oracles ============

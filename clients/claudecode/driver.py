@@ -27,6 +27,22 @@ init_logger()
 logger = logging.getLogger("all.claudecode.driver")
 
 
+def run_preflight() -> None:
+    """Validate model + credentials by making a minimal Claude Code CLI call."""
+    import subprocess
+
+    m = os.environ["AGENT_MODEL_ID"].split("/")[-1]
+    r = subprocess.run(
+        ["claude", "-p", "say ok", "--model", m, "--max-turns", "1"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if r.returncode:
+        print(r.stdout or r.stderr)
+    sys.exit(r.returncode)
+
+
 def get_api_base_url() -> str:
     """Get the conductor API base URL."""
     host = os.getenv("API_HOSTNAME", "localhost")
@@ -133,7 +149,7 @@ Namespace: {namespace}
 
 CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
 
-WORKFLOW: You will perform THREE tasks in sequence:
+WORKFLOW: You will perform TWO tasks in sequence:
 
 TASK 1: DIAGNOSIS
 - Investigate the application to detect any anomalies or issues
@@ -146,11 +162,7 @@ TASK 2: MITIGATION
 - Implement a fix to resolve the problem
 - When the fix is applied, submit to trigger validation
 - Your mitigation is evaluated on whether the application is healthy after your changes
-
-TASK 3: RESOLUTION
-- After mitigation, the system verifies that the application has sustainably recovered to a healthy state
-- Your fixes must not only address immediate symptoms but ensure the system remains stable
-- Submit with an empty string once you are confident the system is fully healthy
+- Your fix is also evaluated on whether it addresses the root cause, not just the symptoms
 
 HOW TO SUBMIT:
 
@@ -162,10 +174,6 @@ For DIAGNOSIS stage:
 
 For MITIGATION stage:
 - Submit with an EMPTY STRING after you have applied the fix
-- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
-
-For RESOLUTION stage:
-- Verify the application is sustainably healthy, then submit with an EMPTY STRING
 - POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
 
 Important:

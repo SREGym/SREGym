@@ -21,7 +21,14 @@ class K8SOperatorWrongUpdateStrategyFault(Problem):
         self.namespace = self.app.namespace
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
-        self.root_cause = "The TiDBCluster custom resource specifies an invalid update strategy, causing deployment updates to fail or get stuck."
+        self.root_cause = self.build_structured_root_cause(
+            component="customresource/tidbcluster/basic",
+            namespace="tidb-cluster",
+            description=(
+                "The TiDBCluster CR sets an invalid update strategy, so rolling updates cannot progress correctly and the "
+                "cluster remains stuck in a partial or failed upgrade state."
+            ),
+        )
         self.app.create_workload()
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.resolution_oracle = WrongUpdateStrategyMitigationOracle(problem=self, deployment_name="basic")

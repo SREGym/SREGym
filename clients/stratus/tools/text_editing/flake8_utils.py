@@ -6,7 +6,7 @@
 
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 try:
     from sweagent import TOOLS_DIR
@@ -92,8 +92,8 @@ def format_flake8_output(
     show_line_numbers: bool = False,
     *,
     previous_errors_string: str = "",
-    replacement_window: Optional[Tuple[int, int]] = None,
-    replacement_n_lines: Optional[int] = None,
+    replacement_window: Tuple[int, int] | None = None,
+    replacement_n_lines: int | None = None,
 ) -> str:
     """Filter flake8 output for previous errors and print it for a given file.
 
@@ -138,5 +138,5 @@ def flake8(file_path: str) -> str:
         return ""
     cmd = "flake8 --isolated --select=F821,F822,F831,E111,E112,E113,E999,E902 {file_path}"
     # don't use capture_output because it's not compatible with python3.6
-    out = subprocess.run(cmd.format(file_path=file_path), shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    out = subprocess.run(cmd.format(file_path=file_path), shell=True, capture_output=True)
     return out.stdout.decode()

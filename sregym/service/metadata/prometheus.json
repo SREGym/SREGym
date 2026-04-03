@@ -10,8 +10,8 @@
     ],
     "Helm Config": {
         "release_name": "prometheus",
-        "chart_path": "observer/prometheus/prometheus/", 
+        "chart_path": "observer/prometheus/prometheus/",
         "namespace": "observe"
     },
-    "PersistentVolumeClaimConfig": "observer/prometheus/prometheus-pvc.yml" 
+    "PersistentVolumeClaimConfig": "observer/prometheus/prometheus-pvc.yml"
 }
