@@ -1,0 +1,6 @@
+# Agents listed here are marked as MOCK DATA on the leaderboard.
+# Remove a name from this file once they submit real results.
+resolve
+ciroos
+claude-agent
+k8s-gpt

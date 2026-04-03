@@ -111,6 +111,72 @@ def safe_filename(name: str) -> str:
     return name[:180] if name else "report"
 
 
+_MITIGATION_ATTEMPT_RE = re.compile(r"^mitigation_attempt_(\d+)$")
+_RUN_LABEL_RE = re.compile(r"^run_\d+$")
+
+
+def discover_stages(path: Path) -> list[str]:
+    """
+    Stream a JSONL file and return all stage names found, ordered as:
+      diagnosis → mitigation_attempt_0 → mitigation_attempt_1 → … → other stages
+    This replaces the hardcoded TARGET_STAGES_ORDER so every attempt is rendered.
+    """
+    found: set[str] = set()
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            stage = obj.get("stage")
+            if isinstance(stage, str) and stage:
+                found.add(stage)
+
+    attempts = sorted(
+        (s for s in found if _MITIGATION_ATTEMPT_RE.match(s)),
+        key=lambda s: int(_MITIGATION_ATTEMPT_RE.match(s).group(1)),
+    )
+    base = ["diagnosis"] if "diagnosis" in found else []
+    other = sorted(s for s in found if s != "diagnosis" and s not in attempts)
+    return base + attempts + other
+
+
+def extract_run_label(path: Path) -> str:
+    """
+    Return the run_N segment from a file path (e.g. …/run_2/trajectory/foo.jsonl → 'run_2').
+    Returns '' if no run_N segment is present.
+    """
+    for part in reversed(path.parts):
+        if _RUN_LABEL_RE.match(part):
+            return part
+    return ""
+
+
+def extract_agent_label(path: Path) -> str:
+    """
+    Extract the agent name from the directory structure.
+
+    main.py writes runs to:  results/{timestamp}/{agent}/{problem_id}/run_{N}/…
+    So the agent directory is always 2 levels above the run_N segment.
+
+    Returns '' if the run_N segment cannot be found or there are fewer than
+    2 parent directories above it.
+    """
+    parts = path.parts
+    for i, part in enumerate(parts):
+        if _RUN_LABEL_RE.match(part):
+            agent_idx = i - 2
+            if agent_idx >= 0:
+                return parts[agent_idx]
+            return ""
+    return ""
+
+
 def _to_int(x: Any) -> int | None:
     try:
         return int(x)
@@ -671,6 +737,8 @@ class IndexRow:
     parse_errors: int
 
     problem_id: str
+    run: str          # e.g. "run_1", "run_2", or "" when no run_N in path
+    agent: str        # e.g. "stratus", "claudecode", "codex", or ""
     origin: str
     failure_type: str
     fault_level: str
@@ -787,6 +855,8 @@ def summarize_index_row(
     rendered: int,
     parse_errors: int,
     problem_id: str,
+    run: str = "",
+    agent: str = "",
 ) -> IndexRow:
     data = ATTR_INDEX.get(problem_id, {}) if problem_id else {}
 
@@ -816,6 +886,8 @@ def summarize_index_row(
         rendered=rendered,
         parse_errors=parse_errors,
         problem_id=problem_id,
+        run=run,
+        agent=agent,
         origin=origin,
         failure_type=failure_type,
         fault_level=fault_level,
@@ -1329,12 +1401,19 @@ def main():
     all_parse_errors: list[str] = []
 
     for fpath in jsonl_files:
-        records, errors, total_lines = stream_pick_highest_event_index_per_stage(fpath, TARGET_STAGES_ORDER)
+        # Discover all stages present in this file (diagnosis + all mitigation_attempt_N)
+        stages = discover_stages(fpath) or TARGET_STAGES_ORDER
+        records, errors, total_lines = stream_pick_highest_event_index_per_stage(fpath, stages)
         file_pid = find_problem_id(fpath)
         all_parse_errors.extend(errors)
 
-        base = safe_filename(fpath.stem)
-        out_file = out_dir / f"{base}.html"
+        run_label = extract_run_label(fpath)
+        agent_label = extract_agent_label(fpath)
+        # Prefix output filename with agent+run to avoid collisions across agents/runs
+        stem = safe_filename(fpath.stem)
+        prefix_parts = [p for p in [safe_filename(agent_label), safe_filename(run_label)] if p]
+        prefix = ("_".join(prefix_parts) + "_") if prefix_parts else ""
+        out_file = out_dir / f"{prefix}{stem}.html"
 
         body = render_file_report(fpath.name, records, errors, total_lines, file_problem_id=file_pid)
         html = html_page(f"{fpath.name} — Investigation Report", body)
@@ -1354,26 +1433,50 @@ def main():
                 rendered=len(records),
                 parse_errors=len(errors),
                 problem_id=pid,
+                run=run_label,
+                agent=agent_label,
             )
         )
 
+    # Sort index: group by problem_id, then agent, then run number, then filename
+    def _run_sort_key(r: IndexRow) -> tuple:
+        m = re.search(r"(\d+)$", r.run)
+        run_num = int(m.group(1)) if m else 0
+        return (r.problem_id, r.agent, run_num, r.source_file)
+
+    index_rows.sort(key=_run_sort_key)
+
     idx = [
         "<div class='card'><h3 style='margin:0 0 10px 0;'>Reports</h3>",
-        "<small>Click chips to filter. You can also use the dropdowns/search above.</small>",
+        "<small>Click chips to filter. Rows grouped by problem → run.</small>",
         "</div>",
         INDEX_FILTER_UI,
         "<div class='card'>",
         "<table class='table'><thead><tr>"
-        "<th>Source file</th><th>Problem</th><th>Tags</th><th>Lines scanned</th><th>Rendered events</th><th>Parse errors</th>"
+        "<th>Problem</th><th>Agent</th><th>Run</th><th>Source file</th><th>Tags</th>"
+        "<th>Stages rendered</th><th>Lines scanned</th><th>Parse errors</th>"
         "</tr></thead><tbody>",
     ]
 
+    prev_group = None
     for r in index_rows:
+        # Visual separator between problem groups
+        group = r.problem_id
+        if group != prev_group:
+            if prev_group is not None:
+                idx.append(
+                    "<tr><td colspan='8' style='padding:4px 0;border:none;"
+                    "background:var(--border)'></td></tr>"
+                )
+            prev_group = group
+
         search_blob = " | ".join(
             [
                 r.source_file,
                 r.link,
                 r.problem_id,
+                r.agent,
+                r.run,
                 r.origin,
                 r.failure_type,
                 r.fault_level,
@@ -1389,6 +1492,7 @@ def main():
         idx.append(
             "<tr "
             f"data-problem-id='{escape(r.problem_id)}' "
+            f"data-agent='{escape(r.agent)}' "
             f"data-origin='{escape(r.origin)}' "
             f"data-failure-type='{escape(r.failure_type)}' "
             f"data-fault-level='{escape(r.fault_level)}' "
@@ -1399,11 +1503,13 @@ def main():
             f"data-mitigation='{escape(r.mitigation_ok)}' "
             f"data-overall='{escape(r.overall_ok)}' "
             f"data-search='{escape(search_blob)}'>"
-            f"<td><a href='{escape(r.link)}'>{escape(r.source_file)}</a></td>"
             f"<td class='mono'>{escape(r.problem_id)}</td>"
+            f"<td class='mono'>{escape(r.agent) if r.agent else '—'}</td>"
+            f"<td class='mono'>{escape(r.run) if r.run else '—'}</td>"
+            f"<td><a href='{escape(r.link)}'>{escape(r.source_file)}</a></td>"
             f"<td>{render_index_chips(r)}</td>"
-            f"<td>{r.lines_scanned}</td>"
             f"<td>{r.rendered}</td>"
+            f"<td>{r.lines_scanned}</td>"
             f"<td>{r.parse_errors}</td>"
             "</tr>"
         )
