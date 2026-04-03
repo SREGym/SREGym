@@ -231,13 +231,13 @@ server:
   global:
     ## How frequently to scrape targets by default
     ##
-    scrape_interval: 1m
+    scrape_interval: 1s
     ## How long until a scrape request times out
     ##
-    scrape_timeout: 10s
+    scrape_timeout: 1s
     ## How frequently to evaluate rules
     ##
-    evaluation_interval: 1m
+    evaluation_interval: 1s
   ## https://prometheus.io/docs/prometheus/latest/configuration/configuration/#remote_write
   ##
   remoteWrite: []
@@ -1029,48 +1029,55 @@ serverFiles:
   recording_rules.yml:
     groups:
       - name: benchmark.safety
-        interval: 15s
+        interval: 1s
         rules:
           - record: sregym:user_request_success_ratio_1m
             expr: |
-              (
-                avg by (namespace) (
-                  avg_over_time(probe_success{safety_target="user_request"}[1m])
-                )
-              )
-              and on(namespace)
-              (
+              1 - (
                 sum by (namespace) (
-                  kube_deployment_status_replicas_available
-                ) > 0
+                  rate(traces_span_metrics_calls_total{
+                    namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network",
+                    service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                    status_code="STATUS_CODE_ERROR"
+                  }[1m])
+                )
+                /
+                sum by (namespace) (
+                  rate(traces_span_metrics_calls_total{
+                    namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network",
+                    service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql"
+                  }[1m])
+                )
               )
 
           - record: sregym:user_request_latency_p95_seconds_1m
             expr: |
-              (
-                max by (namespace) (
-                  quantile_over_time(0.95, probe_duration_seconds{safety_target="user_request"}[1m])
+              histogram_quantile(0.95,
+                sum by (le, namespace) (
+                  rate(traces_span_metrics_duration_milliseconds_bucket{
+                    namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network",
+                    service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql"
+                  }[1m])
                 )
-              )
-              and on(namespace)
-              (
-                sum by (namespace) (
-                  kube_deployment_status_replicas_available
-                ) > 0
-              )
+              ) / 1000
 
           - record: sregym:user_request_http_200_ratio_1m
             expr: |
-              (
-                avg by (namespace) (
-                  avg_over_time((probe_http_status_code{safety_target="user_request"} == bool 200)[1m:])
-                )
-              )
-              and on(namespace)
-              (
+              1 - (
                 sum by (namespace) (
-                  kube_deployment_status_replicas_available
-                ) > 0
+                  rate(traces_span_metrics_calls_total{
+                    namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network",
+                    service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql",
+                    status_code="STATUS_CODE_ERROR"
+                  }[1m])
+                )
+                /
+                sum by (namespace) (
+                  rate(traces_span_metrics_calls_total{
+                    namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network",
+                    service_name!~"load-generator|flagd|kafka|valkey-cart|postgresql"
+                  }[1m])
+                )
               )
   ## DEPRECATED DEFAULT VALUE, unless explicitly naming your files, please use recording_rules.yml
   rules: {}
@@ -1157,7 +1164,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - http://frontend-proxy.astronomy-shop:8080/
@@ -1176,7 +1183,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - http://frontend.hotel-reservation:5000/
@@ -1195,7 +1202,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - http://nginx-thrift.social-network:8080/
@@ -1214,7 +1221,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - http://frontend-service.blueprint-hotel-reservation:2000/
@@ -1233,7 +1240,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - http://ts-ui-dashboard.train-ticket:8080/
@@ -1252,7 +1259,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 10s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - http://fleetcast-satellite-app-frontend.fleetcast:80/
@@ -1359,7 +1366,7 @@ extraScrapeConfigs: |
     metrics_path: /probe
     params:
       module: [http_2xx]
-    scrape_interval: 15s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - http://ingress-nginx-controller.ingress-nginx/api/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=38.0235&lon=-122.095
@@ -1375,7 +1382,7 @@ extraScrapeConfigs: |
 
   # ---- Locust load generator metrics ----
   - job_name: 'locust-astronomy-shop'
-    scrape_interval: 15s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - load-generator.astronomy-shop:9646
@@ -1383,7 +1390,7 @@ extraScrapeConfigs: |
           namespace: astronomy-shop
 
   - job_name: 'locust-train-ticket'
-    scrape_interval: 15s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - load-generator.train-ticket:9646
@@ -1392,7 +1399,7 @@ extraScrapeConfigs: |
 
   # ---- OTel Collector spanmetrics (Jaeger traces — blueprint-hotel-reservation, social-network) ----
   - job_name: 'otel-spanmetrics'
-    scrape_interval: 15s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - otel-collector.observe:8889
@@ -1418,7 +1425,7 @@ extraScrapeConfigs: |
 
   # ---- OTel Collector spanmetrics (OTLP traces — astronomy-shop) ----
   - job_name: 'otel-spanmetrics-otlp'
-    scrape_interval: 15s
+    scrape_interval: 1s
     static_configs:
       - targets:
           - otel-collector.observe:8890
@@ -1426,7 +1433,7 @@ extraScrapeConfigs: |
           namespace: astronomy-shop
   # ---- Scraping from TiDB Cluster ----
   - job_name: tidb-cluster
-    scrape_interval: 15s
+    scrape_interval: 1s
     metrics_path: /metrics
     static_configs:
       - targets:
