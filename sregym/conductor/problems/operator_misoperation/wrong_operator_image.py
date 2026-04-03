@@ -21,7 +21,7 @@ class K8SOperatorWrongOperatorImage(Problem):
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
             component="deployment/tidb-operator-controller-manager",
-            namespace="tidb-cluster",
+            namespace="tidb-operator",
             description=(
                 "The TiDB operator controller is rolled to an incorrect image, breaking reconciliation logic and leaving "
                 "managed TiDB resources in unhealthy or stale states."

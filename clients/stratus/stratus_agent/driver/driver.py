@@ -544,6 +544,7 @@ async def mitigation_task_main(diagnosis_summary):
 
             if mitigation_submission_requested(last_state):
                 logger.info("mitigation agent called submit tool; breaking retry loop.")
+                oracle_results_lst.append("N/A, agent called submit_tool")
                 break
 
             # getting oracle result
@@ -647,6 +648,7 @@ async def mitigation_task_main(diagnosis_summary):
 
             if mitigation_submission_requested(mitigation_agent_last_state):
                 logger.info("mitigation agent called submit tool; breaking retry loop.")
+                oracle_results_lst.append("N/A, agent called submit_tool")
                 break
 
             # getting oracle result

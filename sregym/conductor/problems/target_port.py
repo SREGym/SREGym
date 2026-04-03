@@ -21,8 +21,8 @@ class K8STargetPortMisconfig(Problem):
             component=f"service/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "The Service points traffic to an incorrect targetPort, so cluster requests reach no listening process "
-                "inside backend pods and callers observe connection failures and upstream timeouts."
+                "The Service targetPort is misconfigured from 9090 to 9999, so cluster requests reach no listening "
+                "process inside backend pods and callers observe connection failures and upstream timeouts."
             ),
         )
 
