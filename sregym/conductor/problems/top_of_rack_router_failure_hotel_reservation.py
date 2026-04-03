@@ -1,4 +1,4 @@
-from sregym.conductor.oracles.alert_oracle import AlertOracle
+from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.paths import TARGET_MICROSERVICES
@@ -34,7 +34,7 @@ class TopOfRackRouterPartitionHotelReservation(Problem):
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
         )
 
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = MitigationOracle(problem=self)
 
         self.faulty_microservices: list[str] = []
 
