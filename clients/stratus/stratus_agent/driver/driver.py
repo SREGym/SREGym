@@ -542,11 +542,6 @@ async def mitigation_task_main(diagnosis_summary):
             num_retry_attempts_lst.append(str(curr_attempt))
             rollback_stack_lst.append("N/A, naive retry")
 
-            if mitigation_submission_requested(last_state):
-                logger.info("mitigation agent called submit tool; breaking retry loop.")
-                oracle_results_lst.append("N/A, agent called submit_tool")
-                break
-
             # getting oracle result
             try:
                 oracle_results = validate_oracles(oracles)
@@ -558,12 +553,23 @@ async def mitigation_task_main(diagnosis_summary):
                 oracle_results = [False, []]
                 oracle_results_lst.append(f"Oracle error: {str(e)}")
                 has_succeeded = False
+
             if has_succeeded:
-                # agent succeeds, let's finish here.
-                logger.info("agent succeeds, breaking!")
+                logger.info("Oracles succeeded; making real submission.")
+                await manual_submit_tool("")
                 break
-            # otherwise, naively retry
-            logger.info(f"agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
+
+            # Oracles failed — decide whether to retry or submit
+            is_last_attempt = (curr_attempt + 1) >= mitigation_agent_max_retry_attempts
+            if is_last_attempt:
+                logger.info("Last attempt reached; making real submission regardless of oracle results.")
+                await manual_submit_tool("")
+                break
+
+            if mitigation_submission_requested(last_state):
+                logger.info("Agent called f_submit_tool but oracles failed; retrying.")
+            else:
+                logger.info(f"Agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
             curr_attempt += 1
         agent_exec_stats["agent_names"] = agent_names_lst
         agent_exec_stats["input_tokens"] = input_tokens_lst
@@ -646,11 +652,6 @@ async def mitigation_task_main(diagnosis_summary):
             num_retry_attempts_lst.append(str(curr_attempt))
             rollback_stack_lst.append("N/A, mitigation agent")
 
-            if mitigation_submission_requested(mitigation_agent_last_state):
-                logger.info("mitigation agent called submit tool; breaking retry loop.")
-                oracle_results_lst.append("N/A, agent called submit_tool")
-                break
-
             # getting oracle result
             try:
                 oracle_results = validate_oracles(oracles)
@@ -661,6 +662,16 @@ async def mitigation_task_main(diagnosis_summary):
                 oracle_results = [False, []]
                 oracle_results_lst.append(f"Oracle error: {str(e)}")
                 has_succeeded = False
+
+            if mitigation_submission_requested(mitigation_agent_last_state):
+                logger.info("mitigation agent called f_submit_tool; validating oracles before real submission.")
+                if has_succeeded:
+                    logger.info("Oracles succeeded after agent f_submit; making real submission.")
+                    await manual_submit_tool("")
+                else:
+                    logger.info("Oracles failed after agent f_submit; skipping real submission.")
+                break
+
             if has_succeeded:
                 # agent succeeds, let's finish here.
                 logger.info("agent succeeds! manually submitting for the agent")
