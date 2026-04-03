@@ -304,11 +304,7 @@ class Conductor:
         return r
 
     def _evaluate_mitigation(self, solution):
-        """Evaluation logic for mitigation stage.
-
-        Also evaluates the resolution oracle (if attached) alongside mitigation
-        so that both scores come from a single agent submission.
-        """
+        """Evaluation logic for mitigation stage."""
         problem = self.current_problem
         # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
         self.logger.info("Start Eval for Mitigation", extra={"sol": solution})
@@ -320,17 +316,6 @@ class Conductor:
             f"{'Succeed' if self.results['Mitigation']['success'] else 'Failed'}\n "
             f"TTM: {self.results['TTM']}"
         )
-
-        # Evaluate resolution oracle alongside mitigation if attached
-        if getattr(problem, "resolution_oracle", None):
-            self.logger.info("Evaluating resolution oracle alongside mitigation...")
-            res_r = problem.resolution_oracle.evaluate()
-            self.results["Resolution"] = res_r
-            self.results["TTR"] = time.time() - self.execution_start_time
-            self.logger.info(
-                f"[EVAL] Resolution {'Succeed' if res_r['success'] else 'Failed'}\n TTR: {self.results['TTR']}"
-            )
-
         return r
 
     def _advance_to_next_stage(self, start_index: int = 0):

@@ -1,6 +1,5 @@
 import time
 
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.imbalance_mitigation import ImbalanceMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
@@ -31,8 +30,7 @@ class WorkloadImbalance(Problem):
         # not so precise here by now
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
-        self.resolution_oracle = ImbalanceMitigationOracle(problem=self)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = ImbalanceMitigationOracle(problem=self)
 
         self.app.create_workload()
 

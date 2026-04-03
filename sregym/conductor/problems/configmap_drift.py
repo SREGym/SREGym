@@ -1,6 +1,5 @@
 """ConfigMap drift problem - removes critical keys from mounted ConfigMap."""
 
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.missing_cm_key_mitigation import MissingCmKeyMitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -33,7 +32,7 @@ class ConfigMapDrift(Problem):
         self.configmap_name = f"{self.faulty_service}-config"
 
         self.app.create_workload()
-        self.resolution_oracle = MissingCmKeyMitigationOracle(
+        self.mitigation_oracle = MissingCmKeyMitigationOracle(
             problem=self,
             configmap_name=self.configmap_name,
             expected_keys=[
@@ -59,7 +58,6 @@ class ConfigMapDrift(Problem):
                 "KnativeDomainName",
             ],
         )
-        self.mitigation_oracle = AlertOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

@@ -2,7 +2,6 @@
 The fault sets an invalid runAsUser value.
 """
 
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.operator_misoperation.security_context_mitigation import SecurityContextMitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -28,8 +27,7 @@ class K8SOperatorSecurityContextFault(Problem):
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.resolution_oracle = SecurityContextMitigationOracle(problem=self, deployment_name="basic")
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = SecurityContextMitigationOracle(problem=self, deployment_name="basic")
         self.app.create_workload()
 
     @mark_fault_injected

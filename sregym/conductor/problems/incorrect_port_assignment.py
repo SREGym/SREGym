@@ -1,4 +1,3 @@
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.assign_non_existent_node_mitigation import AssignNonExistentNodeMitigationOracle
 from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.incorrect_port import IncorrectPortAssignmentMitigationOracle
@@ -51,16 +50,15 @@ class IncorrectPortAssignment(Problem):
 
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.resolution_oracle = IncorrectPortAssignmentMitigationOracle(problem=self)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = IncorrectPortAssignmentMitigationOracle(problem=self)
 
         if unscheduable := kwargs.get("unschedulable", False):
-            resolution_oracles = [
+            mitigation_oracles = [
                 IncorrectPortAssignmentMitigationOracle(problem=self),
                 # for duplicated pvc mount, its just standard pod-status mitigation oracle.
                 AssignNonExistentNodeMitigationOracle(problem=self),
             ]
-            self.resolution_oracle = CompoundedOracle(self, *resolution_oracles)
+            self.mitigation_oracle = CompoundedOracle(self, *mitigation_oracles)
 
         self.app.create_workload()
 
