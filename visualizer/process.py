@@ -1384,18 +1384,37 @@ def main():
     # if src.exists():
     #     shutil.copy2(src, destination)
 
+    # Auto-convert any agent output files that don't yet have a trajectory JSONL.
+    _here = Path(__file__).resolve().parent
+    _gen = _here / "generate_trajectories.py"
+    if _gen.exists():
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location("generate_trajectories", _gen)
+        _gmod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_gmod)
+        for inp in args.inputs:
+            p = Path(inp).expanduser().resolve()
+            if p.is_dir():
+                _gmod.process_results(p)
+
     jsonl_files: list[Path] = []
     for inp in args.inputs:
         p = Path(inp).expanduser().resolve()
         if p.is_dir():
-            jsonl_files.extend(sorted(p.rglob("*.jsonl")))
+            # Only collect trajectory files; session/internal JSONL files
+            # (e.g. Claude Code's sessions/projects/-app/*.jsonl) are excluded.
+            jsonl_files.extend(sorted(p.rglob("*_trajectory.jsonl")))
         elif p.is_file() and p.suffix.lower() == ".jsonl":
             jsonl_files.append(p)
         else:
             print(f"Skipping (not .jsonl or dir): {p}")
 
     if not jsonl_files:
-        raise SystemExit("No .jsonl files found.")
+        raise SystemExit(
+            "No trajectory JSONL files found.\n"
+            "Expected files matching *_trajectory.jsonl under the given path.\n"
+            "Make sure a run has completed successfully so trajectory files are generated."
+        )
 
     index_rows: list[IndexRow] = []
     all_parse_errors: list[str] = []
