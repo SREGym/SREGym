@@ -1,4 +1,3 @@
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -33,8 +32,7 @@ class TaintNoToleration(Problem):
         # TODO: support more precise diagnosis oracle: Nodes or DeploymentConfiguration
 
         self.app.create_workload()
-        self.resolution_oracle = MitigationOracle(problem=self)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = MitigationOracle(problem=self)
 
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)
 

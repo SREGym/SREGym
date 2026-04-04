@@ -1,6 +1,5 @@
 from kubernetes import client
 
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.network_policy_oracle import NetworkPolicyMitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -37,8 +36,7 @@ class NetworkPolicyBlock(Problem):
         self.networking_v1 = client.NetworkingV1Api()
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.resolution_oracle = NetworkPolicyMitigationOracle(problem=self)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = NetworkPolicyMitigationOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

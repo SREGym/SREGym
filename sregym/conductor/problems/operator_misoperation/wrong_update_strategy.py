@@ -2,7 +2,6 @@
 This fault specifies an invalid update strategy.
 """
 
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.operator_misoperation.wrong_update_strategy_mitigation import (
     WrongUpdateStrategyMitigationOracle,
@@ -31,8 +30,7 @@ class K8SOperatorWrongUpdateStrategyFault(Problem):
         )
         self.app.create_workload()
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.resolution_oracle = WrongUpdateStrategyMitigationOracle(problem=self, deployment_name="basic")
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = WrongUpdateStrategyMitigationOracle(problem=self, deployment_name="basic")
 
     @mark_fault_injected
     def inject_fault(self):

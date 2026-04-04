@@ -1,7 +1,7 @@
 from kubernetes import client
 
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
+from sregym.conductor.oracles.rpc_retry_storm_mitigation import RPCRetryStormMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.workload.blueprint_hotel_work import BHotelWrk, BHotelWrkWorkloadManager
@@ -29,7 +29,7 @@ class CapacityDecreaseRPCRetryStorm(Problem):
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = RPCRetryStormMitigationOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

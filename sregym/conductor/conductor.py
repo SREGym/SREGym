@@ -9,7 +9,6 @@ from pathlib import Path
 import yaml
 
 from sregym.conductor.constants import StartProblemResult
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
 from sregym.conductor.problems.registry import ProblemRegistry
@@ -231,62 +230,6 @@ class Conductor:
             problem.diagnosis_oracle.load_diagnosis_checkpoint()
             self.logger.info("Diagnosis checkpoint loaded after fault injection.")
 
-    def _wait_for_alerts(self, timeout_seconds: int = 600, poll_interval_seconds: int = 10):
-        """Wait for at least one Prometheus alert to fire in the problem's namespace.
-
-        Called after fault injection so the agent only starts once alerts are
-        visible.  Reuses the AlertOracle query helper to check firing alerts.
-        """
-        problem = self.current_problem
-        namespace = problem.namespace
-
-        self.logger.info(f"[WAIT] Waiting for alerts to fire in namespace '{namespace}' (timeout={timeout_seconds}s)…")
-
-        alert_oracle = AlertOracle(problem=problem)
-        start = time.monotonic()
-        last_log_second = -1
-        settled = False
-
-        while True:
-            elapsed = time.monotonic() - start
-            if elapsed >= timeout_seconds:
-                self.logger.warning(
-                    f"[WAIT] Timed out after {timeout_seconds}s waiting for alerts in '{namespace}'. "
-                    "Proceeding without firing alerts."
-                )
-                return
-
-            firing = alert_oracle._query_firing_alerts(namespace)
-            if firing:
-                names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
-                self.logger.info(f"[WAIT] 🔔 Alerts firing in '{namespace}': {names}")
-                if not settled:
-                    max_for = alert_oracle._query_max_alert_for_duration()
-                    settle_seconds = max_for + 10
-                    self.logger.info(
-                        f"[WAIT] Longest alert 'for' period is {max_for}s — "
-                        f"settling for {settle_seconds}s to let transient alerts clear…"
-                    )
-                    time.sleep(settle_seconds)
-                    settled = True
-                    firing = alert_oracle._query_firing_alerts(namespace)
-                    if firing:
-                        names = ", ".join(alert_oracle._fmt_alert(a) for a in firing)
-                        self.logger.info(f"[WAIT] 🔔 Alerts still firing after settle: {names}")
-                        return
-                    else:
-                        self.logger.info("[WAIT] All alerts cleared during settle period — continuing to poll")
-                        continue
-                else:
-                    return
-
-            elapsed_int = int(elapsed)
-            if elapsed_int >= last_log_second + 30:
-                self.logger.info(f"[WAIT] No alerts yet — {elapsed_int}/{timeout_seconds}s elapsed")
-                last_log_second = elapsed_int
-
-            time.sleep(poll_interval_seconds)
-
     def _evaluate_diagnosis(self, solution):
         """Evaluation logic for diagnosis stage."""
         problem = self.current_problem
@@ -304,11 +247,7 @@ class Conductor:
         return r
 
     def _evaluate_mitigation(self, solution):
-        """Evaluation logic for mitigation stage.
-
-        Also evaluates the resolution oracle (if attached) alongside mitigation
-        so that both scores come from a single agent submission.
-        """
+        """Evaluation logic for mitigation stage."""
         problem = self.current_problem
         # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
         self.logger.info("Start Eval for Mitigation", extra={"sol": solution})
@@ -320,17 +259,6 @@ class Conductor:
             f"{'Succeed' if self.results['Mitigation']['success'] else 'Failed'}\n "
             f"TTM: {self.results['TTM']}"
         )
-
-        # Evaluate resolution oracle alongside mitigation if attached
-        if getattr(problem, "resolution_oracle", None):
-            self.logger.info("Evaluating resolution oracle alongside mitigation...")
-            res_r = problem.resolution_oracle.evaluate()
-            self.results["Resolution"] = res_r
-            self.results["TTR"] = time.time() - self.execution_start_time
-            self.logger.info(
-                f"[EVAL] Resolution {'Succeed' if res_r['success'] else 'Failed'}\n TTR: {self.results['TTR']}"
-            )
-
         return r
 
     def _advance_to_next_stage(self, start_index: int = 0):
@@ -350,7 +278,6 @@ class Conductor:
         # Inject fault before the first stage if not already done
         if start_index == 0 and not self.fault_injected:
             self._inject_fault()
-            self._wait_for_alerts()
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]

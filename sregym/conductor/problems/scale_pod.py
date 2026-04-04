@@ -2,7 +2,6 @@
 
 import time
 
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.scale_pod_zero_mitigation import ScalePodZeroMitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -35,8 +34,7 @@ class ScalePodSocialNet(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
-        self.resolution_oracle = ScalePodZeroMitigationOracle(problem=self)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = ScalePodZeroMitigationOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):
