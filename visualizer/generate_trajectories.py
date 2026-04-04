@@ -1,5 +1,5 @@
 """
-generate_trajectories.py — host-side post-processor
+generate_trajectories.py 
 
 Walks a results directory and converts any agent output files
 (claude-code.txt, codex.txt) that do not yet have a corresponding
