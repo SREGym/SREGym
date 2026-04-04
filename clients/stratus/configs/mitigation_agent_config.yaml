@@ -63,7 +63,7 @@ async_tools:
               command (str): The kubectl command you would like to execute, must start with "kubectl"
               INTERACTIVE COMMANDS ARE NOT SUPPORTED, e.g. "kubectl edit"
               INTERACTIVE FLAGS ARE NOT SUPPORTED, e.g., "kubectl logs -f"
-  - name: submit_tool
+  - name: f_submit_tool
     description: |
       The tool to submit benchmark results
 

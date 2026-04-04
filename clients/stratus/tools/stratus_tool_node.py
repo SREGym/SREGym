@@ -16,7 +16,7 @@ def reschedule_tool_calls(tool_calls):
     submit_tool_call = []
     wait_tool_call = []
     for tool_call in tool_calls:
-        if tool_call["name"] == "submit_tool":
+        if tool_call["name"] in {"submit_tool", "f_submit_tool", "r_submit_tool"}:
             submit_tool_call.append(tool_call)
         elif tool_call["name"] == "wait_tool":
             wait_tool_call.append(tool_call)

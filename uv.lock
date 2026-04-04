@@ -1693,59 +1693,6 @@ wheels = [
 ]
 
 [[package]]
-name = "ibm-cos-sdk"
-version = "2.14.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "ibm-cos-sdk-core" },
-    { name = "ibm-cos-sdk-s3transfer" },
-    { name = "jmespath" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/98/b8/b99f17ece72d4bccd7e75539b9a294d0f73ace5c6c475d8f2631afd6f65b/ibm_cos_sdk-2.14.3.tar.gz", hash = "sha256:643b6f2aa1683adad7f432df23407d11ae5adb9d9ad01214115bee77dc64364a", size = 58831, upload-time = "2025-08-01T06:35:51.722Z" }
-
-[[package]]
-name = "ibm-cos-sdk-core"
-version = "2.14.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "jmespath" },
-    { name = "python-dateutil" },
-    { name = "requests" },
-    { name = "urllib3" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7e/45/80c23aa1e13175a9deefe43cbf8e853a3d3bfc8dfa8b6d6fe83e5785fe21/ibm_cos_sdk_core-2.14.3.tar.gz", hash = "sha256:85dee7790c92e8db69bf39dae4c02cac211e3c1d81bb86e64fa2d1e929674623", size = 1103637, upload-time = "2025-08-01T06:35:41.645Z" }
-
-[[package]]
-name = "ibm-cos-sdk-s3transfer"
-version = "2.14.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "ibm-cos-sdk-core" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f3/ff/c9baf0997266d398ae08347951a2970e5e96ed6232ed0252f649f2b9a7eb/ibm_cos_sdk_s3transfer-2.14.3.tar.gz", hash = "sha256:2251ebfc4a46144401e431f4a5d9f04c262a0d6f95c88a8e71071da056e55f72", size = 139594, upload-time = "2025-08-01T06:35:46.403Z" }
-
-[[package]]
-name = "ibm-watsonx-ai"
-version = "1.5.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "cachetools" },
-    { name = "certifi" },
-    { name = "httpx" },
-    { name = "ibm-cos-sdk" },
-    { name = "lomond" },
-    { name = "packaging" },
-    { name = "pandas" },
-    { name = "requests" },
-    { name = "tabulate" },
-    { name = "urllib3" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/bb/d7/5a4250bc0b4bde2aa9fb44289cd869c8b7df229759098d435ab169bc9eb9/ibm_watsonx_ai-1.5.2.tar.gz", hash = "sha256:c85ccf4eb79a03c8cc27ff891c24c3a9aebcc0da5887baa64bc9bb67d83aaf54", size = 710281, upload-time = "2026-02-12T08:20:37.855Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d2/18/06dd0320590189c77283315da5368a361cef6b9807f6e44b9a59773139e9/ibm_watsonx_ai-1.5.2-py3-none-any.whl", hash = "sha256:0b9e80128a726788412ca50d63461dcea22ac23caf2057b8a6e32a0c376da18d", size = 1079661, upload-time = "2026-02-12T08:20:36.223Z" },
-]
-
-[[package]]
 name = "idna"
 version = "3.10"
 source = { registry = "https://pypi.org/simple" }
@@ -2000,19 +1947,6 @@ wheels = [
 ]
 
 [[package]]
-name = "langchain-ibm"
-version = "1.0.4"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "ibm-watsonx-ai" },
-    { name = "langchain-core" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/bb/da/10860741c411e4d36ba36e02d6a927828121c50ef7550c84f2638e1f1697/langchain_ibm-1.0.4.tar.gz", hash = "sha256:a8045822774bf8af8747084705c2da0a987215963407a87825da2182a49827df", size = 62618, upload-time = "2026-02-11T08:34:44.814Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5c/36/0b148baa250ab823757723fc74b6faf964569afbf5c28efc4ffe852e5afb/langchain_ibm-1.0.4-py3-none-any.whl", hash = "sha256:c583e5af73394b679ab9091889cbff604e4113bedddda976d3bb27a62498eb67", size = 50910, upload-time = "2026-02-11T08:34:42.834Z" },
-]
-
-[[package]]
 name = "langchain-litellm"
 version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2024,20 +1958,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b1/fa/088dd2e3426aa413991afb67aef4c4e79ff3c0e4c25f753842bfaf4ec43f/langchain_litellm-0.5.1.tar.gz", hash = "sha256:1af5743c424456ce12c59cbf08b4774fbc9025124b6de8249713864242db57e1", size = 18869, upload-time = "2026-02-11T00:56:40.631Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b9/6f/84c8cef2cd5a20e94222de93cc57645102087dff616d5054755b97db51b1/langchain_litellm-0.5.1-py3-none-any.whl", hash = "sha256:3726c050eaaeb0b8aad0c8ceefae549917b185d176859866375f97d1d0ed6748", size = 19954, upload-time = "2026-02-11T00:56:41.717Z" },
-]
-
-[[package]]
-name = "langchain-openai"
-version = "1.1.10"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "langchain-core" },
-    { name = "openai" },
-    { name = "tiktoken" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d6/0f/01147f842499338ae3b0dd0a351fb83006d9ed623cf3a999bd68ba5bbe2d/langchain_openai-1.1.10.tar.gz", hash = "sha256:ca6fae7cf19425acc81814efed59c7d205ec9a1f284fd1d08aae9bda85d6501b", size = 1059755, upload-time = "2026-02-17T18:03:44.506Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/72/17/3785cbcdc81c451179247e4176d2697879cb4f45ab2c59d949ca574e072d/langchain_openai-1.1.10-py3-none-any.whl", hash = "sha256:d91b2c09e9fbc70f7af45345d3aa477744962d41c73a029beb46b4f83b824827", size = 87205, upload-time = "2026-02-17T18:03:43.502Z" },
 ]
 
 [[package]]
@@ -2163,18 +2083,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9d/c5/7d7bd50ac744bc209a4bcbeb74660d7ae450a44441737efe92ee9d8ea6a7/locust-2.43.3.tar.gz", hash = "sha256:b5d2c48f8f7d443e3abdfdd6ec2f7aebff5cd74fab986bcf1e95b375b5c5a54b", size = 1445349, upload-time = "2026-02-12T09:55:34.591Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3d/d2/dc5379876d3a481720803653ea4d219f0c26f2d2b37c9243baaa16d0bc79/locust-2.43.3-py3-none-any.whl", hash = "sha256:e032c119b54a9d984cb74a936ee83cfd7d68b3c76c8f308af63d04f11396b553", size = 1463473, upload-time = "2026-02-12T09:55:31.727Z" },
-]
-
-[[package]]
-name = "lomond"
-version = "0.3.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c0/9e/ef7813c910d4a893f2bc763ce9246269f55cc68db21dc1327e376d6a2d02/lomond-0.3.3.tar.gz", hash = "sha256:427936596b144b4ec387ead99aac1560b77c8a78107d3d49415d3abbe79acbd3", size = 28789, upload-time = "2018-09-21T15:17:43.297Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0f/b1/02eebed49c754b01b17de7705caa8c4ceecfb4f926cdafc220c863584360/lomond-0.3.3-py2.py3-none-any.whl", hash = "sha256:df1dd4dd7b802a12b71907ab1abb08b8ce9950195311207579379eb3b1553de7", size = 35512, upload-time = "2018-09-21T15:17:38.686Z" },
 ]
 
 [[package]]
@@ -4081,9 +3989,7 @@ dependencies = [
     { name = "kubernetes" },
     { name = "langchain" },
     { name = "langchain-google-genai" },
-    { name = "langchain-ibm" },
     { name = "langchain-litellm" },
-    { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "langsmith" },
     { name = "litellm" },
@@ -4244,9 +4150,7 @@ requires-dist = [
     { name = "kubernetes", specifier = "==30.1.0" },
     { name = "langchain", specifier = ">=0.3.25" },
     { name = "langchain-google-genai", specifier = ">=2.1.12" },
-    { name = "langchain-ibm", specifier = ">=0.3.15" },
     { name = "langchain-litellm", specifier = ">=0.2.2" },
-    { name = "langchain-openai", specifier = ">=0.3.18" },
     { name = "langgraph", specifier = ">=0.4.7" },
     { name = "langsmith", specifier = ">=0.3.43" },
     { name = "litellm", specifier = ">=1.75.0" },
@@ -4373,15 +4277,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/b3/08/efd28d49162ce89c2ad61a88bd80e11fb77bc9f6c145402589112d38f8af/strictyaml-1.7.3.tar.gz", hash = "sha256:22f854a5fcab42b5ddba8030a0e4be51ca89af0267961c8d6cfa86395586c407", size = 115206, upload-time = "2023-03-10T12:50:27.062Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/96/7c/a81ef5ef10978dd073a854e0fa93b5d8021d0594b639cc8f6453c3c78a1d/strictyaml-1.7.3-py3-none-any.whl", hash = "sha256:fb5c8a4edb43bebb765959e420f9b3978d7f1af88c80606c03fb420888f5d1c7", size = 123917, upload-time = "2023-03-10T12:50:17.242Z" },
-]
-
-[[package]]
-name = "tabulate"
-version = "0.9.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/ec/fe/802052aecb21e3797b8f7902564ab6ea0d60ff8ca23952079064155d1ae1/tabulate-0.9.0.tar.gz", hash = "sha256:0095b12bf5966de529c0feb1fa08671671b3368eec77d7ef7ab114be2c068b3c", size = 81090, upload-time = "2022-10-06T17:21:48.54Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/40/44/4a5f08c96eb108af5cb50b41f76142f0afa346dfa99d5296fe7202a11854/tabulate-0.9.0-py3-none-any.whl", hash = "sha256:024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f", size = 35252, upload-time = "2022-10-06T17:21:44.262Z" },
 ]
 
 [[package]]
