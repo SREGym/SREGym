@@ -41,7 +41,7 @@ class ServicePortConflict(Problem):
             component=f"deployment/{self.faulty_service}",
             namespace=f"{self.namespace}",
             description=(
-                f"The pod template binds hostPort {self.conflicting_port}, which collides with the prometheus-node-exporter "
+                f"The pod template binds hostPort {self.conflicting_port}, which collides with the prometheus-node-exporter. "
                 f"DaemonSet (prometheus-node-exporter) is already occupying port {self.conflicting_port} on all nodes, "
                 "so new pods fail scheduling with host port conflict events and the service loses available replicas."
             ),

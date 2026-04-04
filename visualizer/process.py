@@ -24,6 +24,8 @@ class Tags:
 
 
 TARGET_STAGES_ORDER = ["diagnosis", "mitigation_attempt_0"]
+# Regex to match any mitigation retry stage: mitigation_attempt_0, mitigation_attempt_1, ...
+_MITIGATION_ATTEMPT_RE = re.compile(r"^mitigation_attempt_\d+$")
 all_results_csv: pd.DataFrame | None = None
 ATTR_INDEX: dict[str, dict[str, Any]] = {}
 tags_by_problem_id = {}
@@ -289,6 +291,20 @@ def generate_analysis_report(root: Path) -> None:
     subprocess.run(["python3", str(path), root, "-o analysis_report.html"], check=True, cwd=cwd)
 
 
+def _stage_matches(stage: str, stages_order: list[str]) -> bool:
+    """Check if a stage is in the explicit list or matches the mitigation_attempt_N pattern."""
+    return stage in stages_order or _MITIGATION_ATTEMPT_RE.match(stage) is not None
+
+
+def _mitigation_attempt_sort_key(stage: str) -> tuple[int, int]:
+    """Sort key: (0, 0) for 'diagnosis', (1, N) for 'mitigation_attempt_N'."""
+    m = _MITIGATION_ATTEMPT_RE.match(stage)
+    if m:
+        return (1, int(stage.rsplit("_", 1)[1]))
+    # Non-mitigation stages come first, in their original order
+    return (0, 0)
+
+
 def stream_pick_highest_event_index_per_stage(
     path: Path,
     stages_order: list[str],
@@ -296,6 +312,7 @@ def stream_pick_highest_event_index_per_stage(
     """
     Stream the JSONL file; do NOT store all records.
     Keep ONLY the highest event_index event per target stage.
+    Dynamically discovers all mitigation_attempt_N stages (not just _0).
     """
     errors: list[str] = []
     total_lines = 0
@@ -323,7 +340,7 @@ def stream_pick_highest_event_index_per_stage(
                 continue
 
             stage = obj.get("stage")
-            if stage not in stages_order:
+            if not _stage_matches(stage, stages_order):
                 continue
 
             ei_int = _to_int(obj.get("event_index"))
@@ -342,8 +359,13 @@ def stream_pick_highest_event_index_per_stage(
                 if (ei_int > cur_ei) or (ei_int == cur_ei and line_no > cur_ln):
                     best_num[stage] = (ei_int, line_no, obj)
 
+    # Build the final ordered list: explicit stages first, then any discovered
+    # mitigation_attempt_N stages sorted numerically
+    all_stages = set(best_num.keys()) | set(best_fallback.keys())
+    ordered_stages = sorted(all_stages, key=_mitigation_attempt_sort_key)
+
     out: list[dict[str, Any]] = []
-    for s in stages_order:
+    for s in ordered_stages:
         if s in best_num:
             out.append(best_num[s][2])
         elif s in best_fallback:
@@ -1035,7 +1057,7 @@ def html_page(title: str, body: str) -> str:
 <body>
 <header>
   <h1>{escape(title)}</h1>
-  <small>Generated {escape(now)} • Rendering ONLY highest event_index for stages: {escape(", ".join(TARGET_STAGES_ORDER))}</small>
+  <small>Generated {escape(now)} • Rendering highest event_index per stage (diagnosis + all mitigation attempts)</small>
 </header>
 <main>
 {body}
