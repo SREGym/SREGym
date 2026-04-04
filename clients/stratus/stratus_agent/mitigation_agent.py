@@ -22,7 +22,9 @@ class MitigationAgent(BaseAgent):
 
     async def force_submit(self, state: State):
         self.logger.warning(f"Agent reached step limit ({self.max_step}), forcing submission via f_submit.")
-        self.logger.info("Force submit: calling f_submit (no real benchmark submission; real submission deferred to driver).")
+        self.logger.info(
+            "Force submit: calling f_submit (no real benchmark submission; real submission deferred to driver)."
+        )
         return {"submitted": True, "messages": [HumanMessage("Step limit reached. Submitting via f_submit.")]}
 
 
