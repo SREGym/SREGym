@@ -20,3 +20,6 @@ class BaseOracle(ABC):
     @abstractmethod
     def validate(self, **kwargs) -> OracleResult:
         pass
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}"
