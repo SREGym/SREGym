@@ -176,7 +176,35 @@ def driver_loop(
 
             for attempt in range(1, n_attempts + 1):
                 console.log(f"\n🔍 Starting problem: {pid} (Attempt {attempt} of {n_attempts})")
-                result = await conductor.start_problem()
+
+                # Retry start_problem up to 3 times to handle transient deploy failures
+                max_deploy_retries = 3
+                result = None
+                for deploy_attempt in range(1, max_deploy_retries + 1):
+                    try:
+                        result = await conductor.start_problem()
+                        break  # Success — exit retry loop
+                    except Exception as e:
+                        console.log(
+                            f"❌ start_problem failed for '{pid}' "
+                            f"(deploy attempt {deploy_attempt}/{max_deploy_retries}): {e}"
+                        )
+                        if deploy_attempt < max_deploy_retries:
+                            console.log("🧹 Cleaning up before retry...")
+                            try:
+                                conductor._finish_problem()
+                            except Exception as cleanup_err:
+                                console.log(f"⚠️  Cleanup error (non-fatal): {cleanup_err}")
+                            console.log(f"🔄 Retrying start_problem for '{pid}'...")
+                        else:
+                            console.log(
+                                f"⛔ All {max_deploy_retries} deploy attempts failed for '{pid}', skipping this attempt"
+                            )
+                            result = None
+
+                if result is None:
+                    raise RuntimeError(f"All {max_deploy_retries} deploy attempts failed for problem '{pid}'")
+
                 if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
                     console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
                     break  # Skip to next problem
