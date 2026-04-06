@@ -1755,8 +1755,8 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def inject_daemon_set_image_replacement(self, daemon_set_name: str, new_image: str):
         daemon_set_yaml = self._get_daemon_set_yaml(daemon_set_name)
-
-        # print(f"Daemon set yaml: {daemon_set_yaml}")
+        if daemon_set_yaml is None:
+            raise RuntimeError(f"Failed to get daemonset '{daemon_set_name}'")
 
         # Replace the image in all containers
         if "spec" in daemon_set_yaml and "template" in daemon_set_yaml["spec"]:
@@ -1774,6 +1774,8 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_daemon_set_image_replacement(self, daemon_set_name: str, original_image: str):
         daemon_set_yaml = self._get_daemon_set_yaml(daemon_set_name)
+        if daemon_set_yaml is None:
+            return
         if "spec" in daemon_set_yaml and "template" in daemon_set_yaml["spec"]:
             template_spec = daemon_set_yaml["spec"]["template"]["spec"]
             if "containers" in template_spec:
@@ -2351,9 +2353,13 @@ class VirtualizationFaultInjector(FaultInjector):
         deployment_yaml = self.kubectl.exec_command(f"kubectl get service {service_name} -n {self.namespace} -o yaml")
         return yaml.safe_load(deployment_yaml)
 
-    def _get_daemon_set_yaml(self, daemon_set_name: str):
+    def _get_daemon_set_yaml(self, daemon_set_name: str) -> dict | None:
         daemon_set_yaml = self.kubectl.exec_command(f"kubectl get ds {daemon_set_name} -n {self.namespace} -o yaml")
-        return yaml.safe_load(daemon_set_yaml)
+        parsed = yaml.safe_load(daemon_set_yaml)
+        if not isinstance(parsed, dict):
+            print(f"[inject_virtual] Failed to get daemonset '{daemon_set_name}': {daemon_set_yaml[:200]}")
+            return None
+        return parsed
 
     def _change_node_selector(self, deployment_yaml: dict, node_name: str):
         if "spec" in deployment_yaml and "template" in deployment_yaml["spec"]:
