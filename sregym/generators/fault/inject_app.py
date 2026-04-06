@@ -263,54 +263,162 @@ class ApplicationFaultInjector(FaultInjector):
         except Exception as e:
             print(f"Error deleting job: {e}")
 
-    # A.6 valkey_maxmemory_reduction: Patch valkey-cart deployment to restrict maxmemory
+    # A.6 valkey_maxmemory_reduction: Restrict valkey maxmemory via a mounted ConfigMap
     def inject_valkey_maxmemory_reduction(self, maxmemory: int = 1048576, policy: str = "allkeys-lru"):
         """
-        Patch the valkey-cart deployment command to enforce a tiny maxmemory limit.
-        Uses a deployment-level patch so the config persists across pod restarts.
+        Inject a valkey maxmemory restriction by:
+          1. Creating a ConfigMap (valkey-cart-config) containing valkey.conf with the restriction.
+          2. Patching the valkey-cart deployment to mount that ConfigMap and load it.
+
+        The command in the deployment becomes `valkey-server /usr/local/etc/valkey/valkey.conf`,
+        which looks normal — the restriction is hidden inside the ConfigMap content.
+        Agents must inspect the ConfigMap to find the root cause.
         """
         import json as _json
+        from kubernetes import client as _k8s
 
-        print(f"[🔧] Injecting valkey maxmemory reduction: {maxmemory} bytes, policy={policy}")
-        command_value = ["valkey-server", "--maxmemory", str(maxmemory), "--maxmemory-policy", policy]
-        patch_payload = [{"op": "add", "path": "/spec/template/spec/containers/0/command", "value": command_value}]
-        patch_json_str = _json.dumps(patch_payload)
-        patch_cmd = (
-            f"kubectl patch deployment valkey-cart -n {self.namespace} "
-            f"--type='json' -p='{patch_json_str}'"
+        print(f"[🔧] Injecting valkey maxmemory reduction via ConfigMap: {maxmemory} bytes, policy={policy}")
+
+        # Step 1: Create the ConfigMap with the restricted valkey config
+        v1 = _k8s.CoreV1Api()
+        cm = _k8s.V1ConfigMap(
+            metadata=_k8s.V1ObjectMeta(name="valkey-cart-config", namespace=self.namespace),
+            data={"valkey.conf": f"maxmemory {maxmemory}\nmaxmemory-policy {policy}\n"},
         )
-        result = self.kubectl.exec_command(patch_cmd)
+        v1.create_namespaced_config_map(namespace=self.namespace, body=cm)
+        print("[✅] ConfigMap valkey-cart-config created")
+
+        # Step 2: Patch deployment to mount the ConfigMap and load it as config
+        # Uses strategic merge patch so other container fields are preserved.
+        patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "valkey-cart",
+                                "command": ["valkey-server", "/usr/local/etc/valkey/valkey.conf"],
+                                "volumeMounts": [
+                                    {"name": "valkey-config-vol", "mountPath": "/usr/local/etc/valkey", "readOnly": True}
+                                ],
+                            }
+                        ],
+                        "volumes": [
+                            {"name": "valkey-config-vol", "configMap": {"name": "valkey-cart-config"}}
+                        ],
+                    }
+                }
+            }
+        }
+        patch_json_str = _json.dumps(patch)
+        result = self.kubectl.exec_command(
+            f"kubectl patch deployment valkey-cart -n {self.namespace} "
+            f"--type=strategic -p='{patch_json_str}'"
+        )
         print(f"[⚠️] Deployment patch result: {result}")
 
-        # Wait for rollout to complete
-        rollout_cmd = f"kubectl rollout status deployment/valkey-cart -n {self.namespace} --timeout=120s"
-        self.kubectl.exec_command(rollout_cmd)
-        print("[✅] Valkey-cart rollout complete with restricted maxmemory.")
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/valkey-cart -n {self.namespace} --timeout=120s"
+        )
+        print("[✅] Valkey-cart rollout complete with ConfigMap-based maxmemory restriction.")
 
     def recover_valkey_maxmemory_reduction(self):
         """
-        Remove the command override from valkey-cart deployment, restoring default config.
+        Undo the valkey maxmemory injection:
+          1. Remove command, volumeMounts, and volumes from the deployment via JSON patch.
+          2. Delete the ConfigMap.
         """
-        print("[🔓] Recovering valkey maxmemory: removing deployment command override")
-        patch_json = '[{"op": "remove", "path": "/spec/template/spec/containers/0/command"}]'
-        patch_cmd = (
+        import json as _json
+        from kubernetes import client as _k8s
+
+        print("[🔓] Recovering valkey maxmemory: removing ConfigMap and deployment overrides")
+
+        # Remove command, volumeMounts[0], and volumes[0] via JSON patch
+        patch_payload = [
+            {"op": "remove", "path": "/spec/template/spec/containers/0/command"},
+            {"op": "remove", "path": "/spec/template/spec/containers/0/volumeMounts/0"},
+            {"op": "remove", "path": "/spec/template/spec/volumes/0"},
+        ]
+        patch_json_str = _json.dumps(patch_payload)
+        result = self.kubectl.exec_command(
             f"kubectl patch deployment valkey-cart -n {self.namespace} "
-            f"--type='json' -p='{patch_json}'"
+            f"--type='json' -p='{patch_json_str}'"
         )
-        result = self.kubectl.exec_command(patch_cmd)
         print(f"[✅] Deployment patch result: {result}")
 
-        # Wait for rollout to complete
-        rollout_cmd = f"kubectl rollout status deployment/valkey-cart -n {self.namespace} --timeout=120s"
-        self.kubectl.exec_command(rollout_cmd)
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/valkey-cart -n {self.namespace} --timeout=120s"
+        )
 
-        # Flush stale cache data from the new pod
+        # Delete the ConfigMap
+        try:
+            v1 = _k8s.CoreV1Api()
+            v1.delete_namespaced_config_map(name="valkey-cart-config", namespace=self.namespace)
+            print("[✅] ConfigMap valkey-cart-config deleted.")
+        except Exception as e:
+            print(f"[⚠️] Could not delete ConfigMap (may already be gone): {e}")
+
+        # Flush stale cache data
         pods = self.kubectl.list_pods(self.namespace)
         valkey_pods = [p.metadata.name for p in pods.items if "valkey-cart" in p.metadata.name]
         if valkey_pods:
-            flush_cmd = f"kubectl exec -n {self.namespace} {valkey_pods[0]} -- valkey-cli FLUSHALL"
-            self.kubectl.exec_command(flush_cmd)
+            self.kubectl.exec_command(
+                f"kubectl exec -n {self.namespace} {valkey_pods[0]} -- valkey-cli FLUSHALL"
+            )
             print("[✅] Valkey cache flushed.")
+
+    # A.7 cart_cpu_throttle: Starve the cart service of CPU to simulate resource contention
+    def inject_cart_cpu_throttle(self, cpu_limit: str = "50m"):
+        """
+        Reduce the cart deployment's CPU limit to create resource starvation.
+        Under high load, cart becomes severely CPU-throttled, compounding the cache cascade.
+        Agents must identify and fix this independently of the valkey misconfiguration.
+        """
+        import json as _json
+
+        print(f"[🔧] Injecting cart CPU throttle: limit={cpu_limit}")
+        patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "cart",
+                                "resources": {"limits": {"cpu": cpu_limit}},
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        patch_json_str = _json.dumps(patch)
+        result = self.kubectl.exec_command(
+            f"kubectl patch deployment cart -n {self.namespace} "
+            f"--type=strategic -p='{patch_json_str}'"
+        )
+        print(f"[⚠️] Cart CPU throttle patch result: {result}")
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/cart -n {self.namespace} --timeout=120s"
+        )
+        print("[✅] Cart CPU throttle applied.")
+
+    def recover_cart_cpu_throttle(self):
+        """Remove the injected CPU limit from the cart deployment."""
+        import json as _json
+
+        print("[🔓] Recovering cart CPU throttle: removing cpu limit")
+        patch_payload = [
+            {"op": "remove", "path": "/spec/template/spec/containers/0/resources/limits/cpu"}
+        ]
+        patch_json_str = _json.dumps(patch_payload)
+        result = self.kubectl.exec_command(
+            f"kubectl patch deployment cart -n {self.namespace} "
+            f"--type='json' -p='{patch_json_str}'"
+        )
+        print(f"[✅] Cart CPU limit removed: {result}")
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/cart -n {self.namespace} --timeout=120s"
+        )
 
     # A.5 incorrect_port_assignment: Update an env var to use the wrong port value
     def inject_incorrect_port_assignment(
