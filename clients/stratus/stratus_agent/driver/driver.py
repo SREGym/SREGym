@@ -861,6 +861,9 @@ async def main():
     agent_output_df["steps"] = agent_steps
     agent_output_df["num_retry_attempts"] = agent_retry_attempts
     agent_output_df["rollback_stack"] = agent_rollback_stack
+    # Pad oracle_results to match DataFrame length (mitigation agent may not produce oracle results)
+    while len(agent_oracle_results) < len(agent_output_df):
+        agent_oracle_results.append("N/A")
     agent_output_df["oracle_results"] = agent_oracle_results
 
     agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
@@ -872,9 +875,11 @@ async def main():
 
     problem_dir.mkdir(parents=True, exist_ok=True)
 
+    # Save trajectory before CSV so it's preserved even if CSV write fails
+    save_combined_trajectory(all_trajectories, current_problem, output_dir=problem_dir)
+
     csv_path = problem_dir / f"{current_problem}_stratus_output.csv"
     agent_output_df.to_csv(csv_path, index=False, header=True)
-    save_combined_trajectory(all_trajectories, current_problem, output_dir=problem_dir)
 
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
