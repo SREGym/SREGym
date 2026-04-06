@@ -36,7 +36,6 @@ class CacheEvictionCascade(Problem):
     INJECTED_SPAWN_RATE = 50
     ORIGINAL_USERS = 10
     ORIGINAL_SPAWN_RATE = 1
-    _IMPACT_SAMPLE_ENTRIES = 20
 
     def __init__(self):
         self.app = AstronomyShop()
@@ -89,12 +88,12 @@ class CacheEvictionCascade(Problem):
         self.app.wrk.change_users(self.INJECTED_USERS, self.namespace)
         self.app.wrk.change_spawn_rate(self.INJECTED_SPAWN_RATE, self.namespace)
 
-        # Step 3: Wait for cascade to establish
-        print("[3/4] Waiting 30s for cascade to establish under high load...")
+        # Step 3: Brief wait for load spike to take effect
+        print("[3/4] Waiting 30s for load spike to take effect...")
         time.sleep(30)
 
         # Step 4: Capture fault impact snapshot — proves user requests are impacted
-        print("[4/4] Capturing fault impact snapshot...")
+        print("[4/4] Capturing fault impact snapshot (with 60s data collection)...")
         self.fault_impact_snapshot = self._capture_impact_snapshot()
         print("[FAULT INJECTED] Cache eviction cascade established.")
 
@@ -113,9 +112,14 @@ class CacheEvictionCascade(Problem):
             "timestamp": time.time(),
         }
 
+        # Wait for workload data to accumulate after load spike
+        print("[⏳] Waiting 60s for workload data to accumulate under fault...")
+        time.sleep(60)
+
         try:
-            self.app.wrk.collect(number=1)  # Prime
-            entries = self.app.wrk.collect(number=self._IMPACT_SAMPLE_ENTRIES)
+            # Use recent_entries to get whatever is available, avoiding collect() timeout
+            self.app.wrk._extractlog()
+            entries = self.app.wrk.recent_entries(duration=60)
 
             if not entries:
                 print("[⚠️] No workload entries during fault — cannot capture impact")

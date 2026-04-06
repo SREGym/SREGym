@@ -269,12 +269,15 @@ class ApplicationFaultInjector(FaultInjector):
         Patch the valkey-cart deployment command to enforce a tiny maxmemory limit.
         Uses a deployment-level patch so the config persists across pod restarts.
         """
+        import json as _json
+
         print(f"[🔧] Injecting valkey maxmemory reduction: {maxmemory} bytes, policy={policy}")
         command_value = ["valkey-server", "--maxmemory", str(maxmemory), "--maxmemory-policy", policy]
-        patch_json = f'[{{"op": "add", "path": "/spec/template/spec/containers/0/command", "value": {command_value}}}]'
+        patch_payload = [{"op": "add", "path": "/spec/template/spec/containers/0/command", "value": command_value}]
+        patch_json_str = _json.dumps(patch_payload)
         patch_cmd = (
             f"kubectl patch deployment valkey-cart -n {self.namespace} "
-            f"--type='json' -p='{patch_json}'"
+            f"--type='json' -p='{patch_json_str}'"
         )
         result = self.kubectl.exec_command(patch_cmd)
         print(f"[⚠️] Deployment patch result: {result}")
