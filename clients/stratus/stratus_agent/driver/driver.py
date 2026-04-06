@@ -861,9 +861,6 @@ async def main():
     agent_output_df["steps"] = agent_steps
     agent_output_df["num_retry_attempts"] = agent_retry_attempts
     agent_output_df["rollback_stack"] = agent_rollback_stack
-    # Pad oracle_results to match DataFrame length (mitigation agent may not produce oracle results)
-    while len(agent_oracle_results) < len(agent_output_df):
-        agent_oracle_results.append("N/A")
     agent_output_df["oracle_results"] = agent_oracle_results
 
     agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
