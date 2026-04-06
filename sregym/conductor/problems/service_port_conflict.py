@@ -1,4 +1,3 @@
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -40,17 +39,17 @@ class ServicePortConflict(Problem):
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",
-            namespace=self.namespace,
+            namespace=f"{self.namespace}",
             description=(
-                f"The pod template binds hostPort {self.conflicting_port}, which collides with an already occupied node port, "
+                f"The pod template binds hostPort {self.conflicting_port}, which collides with the prometheus-node-exporter. "
+                f"DaemonSet (prometheus-node-exporter) is already occupying port {self.conflicting_port} on all nodes, "
                 "so new pods fail scheduling with host port conflict events and the service loses available replicas."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
-        self.resolution_oracle = MitigationOracle(problem=self)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = MitigationOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

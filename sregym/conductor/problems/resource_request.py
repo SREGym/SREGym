@@ -1,7 +1,6 @@
 import copy
 from abc import abstractmethod
 
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -33,8 +32,7 @@ class ResourceRequest(Problem):
         # Note: root_cause will be set in subclasses (ResourceRequestTooLarge/ResourceRequestTooSmall)
         # diagnosis_oracle will be set in subclasses after root_cause is set
         self.app.create_workload()
-        self.resolution_oracle = MitigationOracle(problem=self)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = MitigationOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

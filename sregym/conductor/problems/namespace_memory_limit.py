@@ -1,4 +1,3 @@
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.namespace_memory_limit_mitigation import NamespaceMemoryLimitMitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -28,8 +27,7 @@ class NamespaceMemoryLimit(Problem):
         )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.resolution_oracle = NamespaceMemoryLimitMitigationOracle(problem=self)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = NamespaceMemoryLimitMitigationOracle(problem=self)
 
         self.app.create_workload()
 

@@ -24,6 +24,8 @@ class Tags:
 
 
 TARGET_STAGES_ORDER = ["diagnosis", "mitigation_attempt_0"]
+# Regex to match any mitigation retry stage: mitigation_attempt_0, mitigation_attempt_1, ...
+_MITIGATION_ATTEMPT_RE = re.compile(r"^mitigation_attempt_\d+$")
 all_results_csv: pd.DataFrame | None = None
 ATTR_INDEX: dict[str, dict[str, Any]] = {}
 tags_by_problem_id = {}
@@ -115,6 +117,72 @@ def overall_success(problem_id: str) -> bool:
 def safe_filename(name: str) -> str:
     name = re.sub(r"[^\w\-.]+", "_", name.strip())
     return name[:180] if name else "report"
+
+
+_MITIGATION_ATTEMPT_RE = re.compile(r"^mitigation_attempt_(\d+)$")
+_RUN_LABEL_RE = re.compile(r"^run_\d+$")
+
+
+def discover_stages(path: Path) -> list[str]:
+    """
+    Stream a JSONL file and return all stage names found, ordered as:
+      diagnosis → mitigation_attempt_0 → mitigation_attempt_1 → … → other stages
+    This replaces the hardcoded TARGET_STAGES_ORDER so every attempt is rendered.
+    """
+    found: set[str] = set()
+    with path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(obj, dict):
+                continue
+            stage = obj.get("stage")
+            if isinstance(stage, str) and stage:
+                found.add(stage)
+
+    attempts = sorted(
+        (s for s in found if _MITIGATION_ATTEMPT_RE.match(s)),
+        key=lambda s: int(_MITIGATION_ATTEMPT_RE.match(s).group(1)),
+    )
+    base = ["diagnosis"] if "diagnosis" in found else []
+    other = sorted(s for s in found if s != "diagnosis" and s not in attempts)
+    return base + attempts + other
+
+
+def extract_run_label(path: Path) -> str:
+    """
+    Return the run_N segment from a file path (e.g. …/run_2/trajectory/foo.jsonl → 'run_2').
+    Returns '' if no run_N segment is present.
+    """
+    for part in reversed(path.parts):
+        if _RUN_LABEL_RE.match(part):
+            return part
+    return ""
+
+
+def extract_agent_label(path: Path) -> str:
+    """
+    Extract the agent name from the directory structure.
+
+    main.py writes runs to:  results/{timestamp}/{agent}/{problem_id}/run_{N}/…
+    So the agent directory is always 2 levels above the run_N segment.
+
+    Returns '' if the run_N segment cannot be found or there are fewer than
+    2 parent directories above it.
+    """
+    parts = path.parts
+    for i, part in enumerate(parts):
+        if _RUN_LABEL_RE.match(part):
+            agent_idx = i - 2
+            if agent_idx >= 0:
+                return parts[agent_idx]
+            return ""
+    return ""
 
 
 def _to_int(x: Any) -> int | None:
@@ -223,6 +291,20 @@ def generate_analysis_report(root: Path) -> None:
     subprocess.run(["python3", str(path), root, "-o analysis_report.html"], check=True, cwd=cwd)
 
 
+def _stage_matches(stage: str, stages_order: list[str]) -> bool:
+    """Check if a stage is in the explicit list or matches the mitigation_attempt_N pattern."""
+    return stage in stages_order or _MITIGATION_ATTEMPT_RE.match(stage) is not None
+
+
+def _mitigation_attempt_sort_key(stage: str) -> tuple[int, int]:
+    """Sort key: (0, 0) for 'diagnosis', (1, N) for 'mitigation_attempt_N'."""
+    m = _MITIGATION_ATTEMPT_RE.match(stage)
+    if m:
+        return (1, int(stage.rsplit("_", 1)[1]))
+    # Non-mitigation stages come first, in their original order
+    return (0, 0)
+
+
 def stream_pick_highest_event_index_per_stage(
     path: Path,
     stages_order: list[str],
@@ -230,6 +312,7 @@ def stream_pick_highest_event_index_per_stage(
     """
     Stream the JSONL file; do NOT store all records.
     Keep ONLY the highest event_index event per target stage.
+    Dynamically discovers all mitigation_attempt_N stages (not just _0).
     """
     errors: list[str] = []
     total_lines = 0
@@ -257,7 +340,7 @@ def stream_pick_highest_event_index_per_stage(
                 continue
 
             stage = obj.get("stage")
-            if stage not in stages_order:
+            if not _stage_matches(stage, stages_order):
                 continue
 
             ei_int = _to_int(obj.get("event_index"))
@@ -276,8 +359,13 @@ def stream_pick_highest_event_index_per_stage(
                 if (ei_int > cur_ei) or (ei_int == cur_ei and line_no > cur_ln):
                     best_num[stage] = (ei_int, line_no, obj)
 
+    # Build the final ordered list: explicit stages first, then any discovered
+    # mitigation_attempt_N stages sorted numerically
+    all_stages = set(best_num.keys()) | set(best_fallback.keys())
+    ordered_stages = sorted(all_stages, key=_mitigation_attempt_sort_key)
+
     out: list[dict[str, Any]] = []
-    for s in stages_order:
+    for s in ordered_stages:
         if s in best_num:
             out.append(best_num[s][2])
         elif s in best_fallback:
@@ -672,6 +760,8 @@ class IndexRow:
     parse_errors: int
 
     problem_id: str
+    run: str          # e.g. "run_1", "run_2", or "" when no run_N in path
+    agent: str        # e.g. "stratus", "claudecode", "codex", or ""
     origin: str
     failure_type: str
     fault_level: str
@@ -794,6 +884,8 @@ def summarize_index_row(
     rendered: int,
     parse_errors: int,
     problem_id: str,
+    run: str = "",
+    agent: str = "",
 ) -> IndexRow:
     data = ATTR_INDEX.get(problem_id, {}) if problem_id else {}
 
@@ -825,6 +917,8 @@ def summarize_index_row(
         rendered=rendered,
         parse_errors=parse_errors,
         problem_id=problem_id,
+        run=run,
+        agent=agent,
         origin=origin,
         failure_type=failure_type,
         fault_level=fault_level,
@@ -963,7 +1057,7 @@ def html_page(title: str, body: str) -> str:
 <body>
 <header>
   <h1>{escape(title)}</h1>
-  <small>Generated {escape(now)} • Rendering ONLY highest event_index for stages: {escape(", ".join(TARGET_STAGES_ORDER))}</small>
+  <small>Generated {escape(now)} • Rendering highest event_index per stage (diagnosis + all mitigation attempts)</small>
 </header>
 <main>
 {body}
@@ -1282,6 +1376,475 @@ def render_file_report(
     return "\n".join(parts)
 
 
+# ---------------------------------------------------------------------------
+# Raw agent output conversion (claude-code.txt / codex.txt → trajectory JSONL)
+# ---------------------------------------------------------------------------
+
+
+def _cc_extract_text(content: list[dict]) -> str:
+    """Join all text blocks from a content list (Claude Code format)."""
+    return "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+
+
+def _cc_parse_stream_json(input_path: Path) -> tuple[list[dict[str, Any]], bool]:
+    """
+    Parse a Claude Code stream-json output file into a flat list of messages.
+    Returns (messages, submitted).
+    """
+    messages: list[dict[str, Any]] = []
+    submitted = False
+
+    with input_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            etype = event.get("type")
+
+            if etype == "system" and event.get("subtype") == "init":
+                model = event.get("model", "")
+                cwd = event.get("cwd", "")
+                if model or cwd:
+                    messages.append({"role": "system", "content": f"model={model} cwd={cwd}"})
+
+            elif etype in ("user", "assistant"):
+                msg = event.get("message") or {}
+                role = msg.get("role", etype)
+                content = msg.get("content", "")
+
+                if isinstance(content, str):
+                    if content.strip():
+                        messages.append({"role": role, "content": content})
+                    continue
+
+                if not isinstance(content, list):
+                    continue
+
+                text_parts: list[str] = []
+                tool_calls: list[dict] = []
+                tool_results: list[dict] = []
+
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    btype = block.get("type")
+                    if btype == "text":
+                        text = block.get("text", "")
+                        if text.strip():
+                            text_parts.append(text)
+                    elif btype == "tool_use":
+                        tool_calls.append(
+                            {
+                                "id": block.get("id", ""),
+                                "name": block.get("name", ""),
+                                "args": block.get("input", {}),
+                                "type": "tool_call",
+                            }
+                        )
+                    elif btype == "tool_result":
+                        tool_results.append(block)
+
+                if tool_results:
+                    for tr in tool_results:
+                        tr_content = tr.get("content", "")
+                        if isinstance(tr_content, list):
+                            tr_content = "\n".join(
+                                b.get("text", "") for b in tr_content if isinstance(b, dict)
+                            )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_use_id": tr.get("tool_use_id", ""),
+                                "content": tr_content,
+                            }
+                        )
+                else:
+                    m: dict[str, Any] = {
+                        "role": role,
+                        "content": "\n".join(text_parts),
+                    }
+                    if tool_calls:
+                        m["tool_calls"] = tool_calls
+                    messages.append(m)
+
+            elif etype == "result":
+                submitted = event.get("subtype") == "success"
+
+    return messages, submitted
+
+
+def _codex_text_from_content(content: Any) -> str:
+    """Return a plain-text representation of a Codex content value."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                btype = block.get("type", "")
+                if btype in ("text", "output_text"):
+                    parts.append(block.get("text", ""))
+                elif btype in ("image", "file"):
+                    parts.append(f"[{btype}]")
+                else:
+                    parts.append(json.dumps(block, ensure_ascii=False))
+        return "\n".join(p for p in parts if p)
+    if isinstance(content, dict):
+        return json.dumps(content, ensure_ascii=False)
+    return str(content) if content is not None else ""
+
+
+def _codex_tool_calls_from_content(content: Any) -> list[dict]:
+    calls: list[dict] = []
+    if not isinstance(content, list):
+        return calls
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type", "")
+        if btype in ("tool_use", "function_call"):
+            calls.append(
+                {
+                    "id": block.get("id", ""),
+                    "name": block.get("name", ""),
+                    "args": block.get("input", None) or block.get("arguments", {}),
+                    "type": "tool_call",
+                }
+            )
+    return calls
+
+
+def _codex_tool_results_from_content(content: Any) -> list[dict]:
+    results: list[dict] = []
+    if not isinstance(content, list):
+        return results
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        btype = block.get("type", "")
+        if btype in ("tool_result", "function_call_output"):
+            inner = block.get("content", block.get("output", ""))
+            results.append(
+                {
+                    "role": "tool",
+                    "tool_use_id": block.get("tool_use_id", block.get("call_id", "")),
+                    "content": _codex_text_from_content(inner),
+                }
+            )
+    return results
+
+
+def _codex_parse_json(input_path: Path) -> tuple[list[dict[str, Any]], bool]:
+    """
+    Parse a Codex JSON output file into a flat list of messages.
+    Returns (messages, submitted).
+    """
+    messages: list[dict[str, Any]] = []
+    submitted = False
+    pending_function_call: dict | None = None
+
+    with input_path.open("r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            if not isinstance(event, dict):
+                continue
+
+            etype = event.get("type", "")
+
+            if etype == "message":
+                role = event.get("role", "")
+                content = event.get("content", "")
+
+                tool_results = _codex_tool_results_from_content(content)
+                if tool_results:
+                    messages.extend(tool_results)
+                    continue
+
+                tool_calls = _codex_tool_calls_from_content(content) if role == "assistant" else []
+                text = _codex_text_from_content(content)
+
+                m: dict[str, Any] = {"role": role or "user", "content": text}
+                if tool_calls:
+                    m["tool_calls"] = tool_calls
+                if text.strip() or tool_calls:
+                    messages.append(m)
+
+            elif etype == "function_call":
+                pending_function_call = {
+                    "id": event.get("call_id", event.get("id", "")),
+                    "name": event.get("name", ""),
+                    "args": event.get("arguments", event.get("input", {})),
+                    "type": "tool_call",
+                }
+
+            elif etype == "function_call_output":
+                if pending_function_call:
+                    if messages and messages[-1].get("role") == "assistant":
+                        tc = messages[-1].setdefault("tool_calls", [])
+                        tc.append(pending_function_call)
+                    else:
+                        messages.append(
+                            {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [pending_function_call],
+                            }
+                        )
+                    pending_function_call = None
+
+                output = event.get("output", event.get("content", ""))
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_use_id": event.get("call_id", event.get("tool_use_id", "")),
+                        "content": _codex_text_from_content(output),
+                    }
+                )
+
+            elif etype in ("assistant", "user"):
+                role = etype
+                content = event.get("content", event.get("message", ""))
+                tool_calls = _codex_tool_calls_from_content(content) if role == "assistant" else []
+                tool_results = _codex_tool_results_from_content(content) if role == "user" else []
+
+                if tool_results:
+                    messages.extend(tool_results)
+                else:
+                    text = _codex_text_from_content(content)
+                    m = {"role": role, "content": text}
+                    if tool_calls:
+                        m["tool_calls"] = tool_calls
+                    if text.strip() or tool_calls:
+                        messages.append(m)
+
+            elif "usage" in event and etype in ("", "usage", "completion"):
+                submitted = True
+
+            elif "role" in event and "content" in event:
+                role = event["role"]
+                content = event["content"]
+                tool_calls = _codex_tool_calls_from_content(content) if role == "assistant" else []
+                tool_results = _codex_tool_results_from_content(content) if role == "user" else []
+
+                if tool_results:
+                    messages.extend(tool_results)
+                else:
+                    text = _codex_text_from_content(content)
+                    m = {"role": role, "content": text}
+                    if tool_calls:
+                        m["tool_calls"] = tool_calls
+                    if text.strip() or tool_calls:
+                        messages.append(m)
+
+    if pending_function_call:
+        if messages and messages[-1].get("role") == "assistant":
+            messages[-1].setdefault("tool_calls", []).append(pending_function_call)
+        else:
+            messages.append(
+                {"role": "assistant", "content": "", "tool_calls": [pending_function_call]}
+            )
+
+    return messages, submitted
+
+
+def _build_trajectory_events(
+    messages: list[dict[str, Any]],
+    submitted: bool,
+    stage: str,
+    problem_id: str,
+    timestamp: str,
+) -> list[dict[str, Any]]:
+    """
+    Build incremental event records where each event contains the cumulative
+    message history up to that tool-result boundary.
+    """
+    events: list[dict[str, Any]] = []
+    event_index = 0
+    num_steps = 0
+    accumulated: list[dict] = []
+
+    i = 0
+    while i < len(messages):
+        msg = messages[i]
+        role = msg.get("role", "")
+        accumulated.append(msg)
+
+        if role == "tool":
+            num_steps += 1
+            while i + 1 < len(messages) and messages[i + 1].get("role") == "tool":
+                i += 1
+                accumulated.append(messages[i])
+                num_steps += 1
+
+            is_last = i == len(messages) - 1
+            events.append(
+                {
+                    "type": "event",
+                    "stage": stage,
+                    "event_index": event_index,
+                    "num_steps": num_steps,
+                    "submitted": submitted if is_last else False,
+                    "rollback_stack": "",
+                    "messages": list(accumulated),
+                    "last_message": accumulated[-1],
+                    "problem_id": problem_id,
+                    "timestamp": timestamp,
+                }
+            )
+            event_index += 1
+
+        i += 1
+
+    if not events or accumulated != events[-1]["messages"]:
+        events.append(
+            {
+                "type": "event",
+                "stage": stage,
+                "event_index": event_index,
+                "num_steps": num_steps,
+                "submitted": submitted,
+                "rollback_stack": "",
+                "messages": list(accumulated),
+                "last_message": accumulated[-1] if accumulated else {},
+                "problem_id": problem_id,
+                "timestamp": timestamp,
+            }
+        )
+
+    return events
+
+
+def _convert_agent_file(
+    input_path: Path,
+    output_path: Path,
+    problem_id: str,
+    agent: str,
+    stage: str = "diagnosis",
+) -> Path:
+    """
+    Convert a raw agent output file (claude-code.txt or codex.txt) to
+    a stratus-format trajectory JSONL.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now()
+    timestamp = now.strftime("%m%d_%H%M")
+    timestamp_readable = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    if agent == "claudecode":
+        messages, submitted = _cc_parse_stream_json(input_path)
+    elif agent == "codex":
+        messages, submitted = _codex_parse_json(input_path)
+    else:
+        raise ValueError(f"Unknown agent type for conversion: {agent}")
+
+    events = _build_trajectory_events(messages, submitted, stage, problem_id, timestamp)
+
+    with output_path.open("w", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {
+                    "type": "metadata",
+                    "problem_id": problem_id,
+                    "timestamp": timestamp,
+                    "timestamp_readable": timestamp_readable,
+                    "total_stages": 1,
+                    "total_events": len(events),
+                    "agent": agent,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+        f.write(
+            json.dumps(
+                {"type": "stage_start", "stage": stage, "num_events": len(events)},
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+        for ev in events:
+            f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+
+    print(f"[{agent}_to_trajectory] Wrote {len(events)} event(s) → {output_path}")
+    return output_path
+
+
+def _extract_problem_id_from_path(run_dir: Path) -> str:
+    """
+    Derive problem_id from directory structure:
+      results/{ts}/{agent}/{problem_id}/run_{N}/
+    """
+    for part in reversed(run_dir.parts):
+        if _RUN_LABEL_RE.match(part):
+            idx = list(run_dir.parts).index(part)
+            if idx > 0:
+                return run_dir.parts[idx - 1]
+    return run_dir.parent.name
+
+
+def _convert_raw_agent_outputs(root: Path) -> None:
+    """
+    Walk a results directory and convert any claude-code.txt / codex.txt files
+    that don't yet have a corresponding *_trajectory.jsonl.
+    """
+    _TS_RE = re.compile(r"^\d{4}_\d{4}$")
+
+    tasks: list[tuple[str, Path, Path]] = []
+    for output_file in sorted(root.rglob("claude-code.txt")):
+        run_dir = output_file.parent
+        if not any(run_dir.rglob("*_trajectory.jsonl")):
+            tasks.append(("claudecode", output_file, run_dir))
+
+    for output_file in sorted(root.rglob("codex.txt")):
+        run_dir = output_file.parent
+        if not any(run_dir.rglob("*_trajectory.jsonl")):
+            tasks.append(("codex", output_file, run_dir))
+
+    if not tasks:
+        return
+
+    for agent, output_file, run_dir in tasks:
+        problem_id = _extract_problem_id_from_path(run_dir)
+        traj_dir = run_dir / "trajectory"
+        ts = ""
+        for part in run_dir.parts:
+            if _TS_RE.match(part):
+                ts = part
+                break
+        out_name = (
+            f"{ts}_{problem_id}_{agent}_agent_trajectory.jsonl"
+            if ts
+            else f"{problem_id}_{agent}_agent_trajectory.jsonl"
+        )
+        out_path = traj_dir / out_name
+
+        print(f"Converting {output_file} → {out_path}")
+        try:
+            _convert_agent_file(
+                input_path=output_file,
+                output_path=out_path,
+                problem_id=problem_id,
+                agent=agent,
+            )
+        except Exception as exc:
+            print(f"  ERROR: {exc}")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Convert JSONL files to readable HTML reports (only highest event_index for target stages)."
@@ -1312,29 +1875,49 @@ def main():
     # if src.exists():
     #     shutil.copy2(src, destination)
 
+    # Auto-convert any agent output files (claude-code.txt, codex.txt)
+    # that don't yet have a trajectory JSONL.
+    for inp in args.inputs:
+        p = Path(inp).expanduser().resolve()
+        if p.is_dir():
+            _convert_raw_agent_outputs(p)
+
     jsonl_files: list[Path] = []
     for inp in args.inputs:
         p = Path(inp).expanduser().resolve()
         if p.is_dir():
-            jsonl_files.extend(sorted(p.rglob("*.jsonl")))
+            # Only collect trajectory files; session/internal JSONL files
+            # (e.g. Claude Code's sessions/projects/-app/*.jsonl) are excluded.
+            jsonl_files.extend(sorted(p.rglob("*_trajectory.jsonl")))
         elif p.is_file() and p.suffix.lower() == ".jsonl":
             jsonl_files.append(p)
         else:
             print(f"Skipping (not .jsonl or dir): {p}")
 
     if not jsonl_files:
-        raise SystemExit("No .jsonl files found.")
+        raise SystemExit(
+            "No trajectory JSONL files found.\n"
+            "Expected files matching *_trajectory.jsonl under the given path.\n"
+            "Make sure a run has completed successfully so trajectory files are generated."
+        )
 
     index_rows: list[IndexRow] = []
     all_parse_errors: list[str] = []
 
     for fpath in jsonl_files:
-        records, errors, total_lines = stream_pick_highest_event_index_per_stage(fpath, TARGET_STAGES_ORDER)
+        # Discover all stages present in this file (diagnosis + all mitigation_attempt_N)
+        stages = discover_stages(fpath) or TARGET_STAGES_ORDER
+        records, errors, total_lines = stream_pick_highest_event_index_per_stage(fpath, stages)
         file_pid = find_problem_id(fpath)
         all_parse_errors.extend(errors)
 
-        base = safe_filename(fpath.stem)
-        out_file = out_dir / f"{base}.html"
+        run_label = extract_run_label(fpath)
+        agent_label = extract_agent_label(fpath)
+        # Prefix output filename with agent+run to avoid collisions across agents/runs
+        stem = safe_filename(fpath.stem)
+        prefix_parts = [p for p in [safe_filename(agent_label), safe_filename(run_label)] if p]
+        prefix = ("_".join(prefix_parts) + "_") if prefix_parts else ""
+        out_file = out_dir / f"{prefix}{stem}.html"
 
         body = render_file_report(fpath.name, records, errors, total_lines, file_problem_id=file_pid)
         html = html_page(f"{fpath.name} — Investigation Report", body)
@@ -1354,26 +1937,50 @@ def main():
                 rendered=len(records),
                 parse_errors=len(errors),
                 problem_id=pid,
+                run=run_label,
+                agent=agent_label,
             )
         )
 
+    # Sort index: group by problem_id, then agent, then run number, then filename
+    def _run_sort_key(r: IndexRow) -> tuple:
+        m = re.search(r"(\d+)$", r.run)
+        run_num = int(m.group(1)) if m else 0
+        return (r.problem_id, r.agent, run_num, r.source_file)
+
+    index_rows.sort(key=_run_sort_key)
+
     idx = [
         "<div class='card'><h3 style='margin:0 0 10px 0;'>Reports</h3>",
-        "<small>Click chips to filter. You can also use the dropdowns/search above.</small>",
+        "<small>Click chips to filter. Rows grouped by problem → run.</small>",
         "</div>",
         INDEX_FILTER_UI,
         "<div class='card'>",
         "<table class='table'><thead><tr>"
-        "<th>Source file</th><th>Problem</th><th>Tags</th><th>Lines scanned</th><th>Rendered events</th><th>Parse errors</th>"
+        "<th>Problem</th><th>Agent</th><th>Run</th><th>Source file</th><th>Tags</th>"
+        "<th>Stages rendered</th><th>Lines scanned</th><th>Parse errors</th>"
         "</tr></thead><tbody>",
     ]
 
+    prev_group = None
     for r in index_rows:
+        # Visual separator between problem groups
+        group = r.problem_id
+        if group != prev_group:
+            if prev_group is not None:
+                idx.append(
+                    "<tr><td colspan='8' style='padding:4px 0;border:none;"
+                    "background:var(--border)'></td></tr>"
+                )
+            prev_group = group
+
         search_blob = " | ".join(
             [
                 r.source_file,
                 r.link,
                 r.problem_id,
+                r.agent,
+                r.run,
                 r.origin,
                 r.failure_type,
                 r.fault_level,
@@ -1390,6 +1997,7 @@ def main():
         idx.append(
             "<tr "
             f"data-problem-id='{escape(r.problem_id)}' "
+            f"data-agent='{escape(r.agent)}' "
             f"data-origin='{escape(r.origin)}' "
             f"data-failure-type='{escape(r.failure_type)}' "
             f"data-fault-level='{escape(r.fault_level)}' "
@@ -1401,11 +2009,13 @@ def main():
             f"data-resolution='{escape(r.resolution_ok)}' "
             f"data-overall='{escape(r.overall_ok)}' "
             f"data-search='{escape(search_blob)}'>"
-            f"<td><a href='{escape(r.link)}'>{escape(r.source_file)}</a></td>"
             f"<td class='mono'>{escape(r.problem_id)}</td>"
+            f"<td class='mono'>{escape(r.agent) if r.agent else '—'}</td>"
+            f"<td class='mono'>{escape(r.run) if r.run else '—'}</td>"
+            f"<td><a href='{escape(r.link)}'>{escape(r.source_file)}</a></td>"
             f"<td>{render_index_chips(r)}</td>"
-            f"<td>{r.lines_scanned}</td>"
             f"<td>{r.rendered}</td>"
+            f"<td>{r.lines_scanned}</td>"
             f"<td>{r.parse_errors}</td>"
             "</tr>"
         )

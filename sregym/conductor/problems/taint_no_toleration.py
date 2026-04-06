@@ -1,4 +1,3 @@
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -33,8 +32,7 @@ class TaintNoToleration(Problem):
         # TODO: support more precise diagnosis oracle: Nodes or DeploymentConfiguration
 
         self.app.create_workload()
-        self.resolution_oracle = MitigationOracle(problem=self)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = MitigationOracle(problem=self)
 
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)
 
@@ -59,6 +57,16 @@ class TaintNoToleration(Problem):
     @mark_fault_injected
     def recover_fault(self):
         print("Fault Recovery")
-        # assuming recover_toleration_without_matching_taint can accept multiple services and a node list
+        # Step 1: Remove taints from all nodes first
         for node in self.faulty_nodes:
-            self.injector.recover_toleration_without_matching_taint([self.faulty_service], node_name=node)
+            self.kubectl.exec_command(f"kubectl taint node {node} sre-fault=blocked:NoSchedule-")
+            print(f"Removed taint from node {node}")
+
+        # Step 2: Delete any Pending pods cluster-wide so system components
+        # (e.g. OpenEBS) that couldn't schedule during the fault can recover
+        self.kubectl.exec_command("kubectl delete pods --field-selector=status.phase=Pending --all-namespaces")
+
+        # Step 3: Restart the faulty service and wait for app namespace stability
+        for svc in [self.faulty_service]:
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {svc} -n {self.namespace}")
+        self.kubectl.wait_for_stable(self.namespace)

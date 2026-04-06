@@ -14,7 +14,6 @@ class Problem(ABC):
         # Optional: attach oracles in subclass
         self.diagnosis_oracle = None
         self.mitigation_oracle = None
-        self.resolution_oracle = None
 
     def requires_khaos(self) -> bool:
         """Override this method to return True if the problem requires Khaos for fault injection."""

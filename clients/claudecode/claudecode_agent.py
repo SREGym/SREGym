@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 logger = logging.getLogger("all.claudecode.agent")
 
@@ -224,6 +225,56 @@ class ClaudeCodeAgent:
         (self.sessions_dir / "todos").mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Created session directory structure at {self.sessions_dir}")
+
+    def generate_trajectory(self, problem_id: str, output_dir: Path | None = None) -> Path | None:
+        """
+        Convert the claude-code.txt output file to a stratus JSONL trajectory
+        readable by the SREGym visualizer (visualizer/process.py).
+
+        Args:
+            problem_id:  SREGym problem identifier.
+            output_dir:  Directory for the trajectory file (defaults to logs_dir/trajectory).
+
+        Returns:
+            Path to the generated JSONL file, or None if conversion failed.
+        """
+        # Load converter directly from its file so no __init__.py or sys.path tricks needed.
+        converter_file = Path(__file__).resolve().parents[2] / "visualizer" / "converters" / "claudecode_to_trajectory.py"
+        if not converter_file.exists():
+            logger.warning(f"Converter not found: {converter_file}")
+            return None
+
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("claudecode_to_trajectory", converter_file)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            convert = mod.convert
+        except Exception as exc:
+            logger.warning(f"Could not load claudecode_to_trajectory: {exc}")
+            return None
+
+        if not self.output_path.exists():
+            logger.warning(f"Claude Code output file not found: {self.output_path}")
+            return None
+
+        from datetime import datetime
+
+        traj_dir = Path(output_dir) if output_dir else self.logs_dir / "trajectory"
+        traj_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%m%d_%H%M")
+        traj_file = traj_dir / f"{timestamp}_{problem_id}_claudecode_agent_trajectory.jsonl"
+
+        try:
+            return convert(
+                input_path=self.output_path,
+                output_path=traj_file,
+                problem_id=problem_id,
+            )
+        except Exception as exc:
+            logger.error(f"Trajectory conversion failed: {exc}")
+            return None
 
     def run(self, instruction: str) -> int:
         """

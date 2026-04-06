@@ -557,12 +557,23 @@ async def mitigation_task_main(diagnosis_summary):
                 oracle_results = [False, []]
                 oracle_results_lst.append(f"Oracle error: {str(e)}")
                 has_succeeded = False
+
             if has_succeeded:
-                # agent succeeds, let's finish here.
-                logger.info("agent succeeds, breaking!")
+                logger.info("Oracles succeeded; making real submission.")
+                await manual_submit_tool("")
                 break
-            # otherwise, naively retry
-            logger.info(f"agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
+
+            # Oracles failed — decide whether to retry or submit
+            is_last_attempt = (curr_attempt + 1) >= mitigation_agent_max_retry_attempts
+            if is_last_attempt:
+                logger.info("Last attempt reached; making real submission regardless of oracle results.")
+                await manual_submit_tool("")
+                break
+
+            if mitigation_submission_requested(last_state):
+                logger.info("Agent called f_submit_tool but oracles failed; retrying.")
+            else:
+                logger.info(f"Agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
             curr_attempt += 1
         agent_exec_stats["agent_names"] = agent_names_lst
         agent_exec_stats["input_tokens"] = input_tokens_lst
@@ -659,49 +670,47 @@ async def mitigation_task_main(diagnosis_summary):
                 oracle_results = [False, []]
                 oracle_results_lst.append(f"Oracle error: {str(e)}")
                 has_succeeded = False
+
             if has_succeeded:
-                # agent succeeds, let's finish here.
-                logger.info("agent succeeds! manually submitting for the agent")
+                logger.info("Oracles succeeded; making real submission.")
                 await manual_submit_tool("")
-                logger.info("breaking the retry loop")
                 break
-                # return agent_exec_stats
+
+            # Oracles failed — decide whether to retry (with rollback) or submit
+            if mitigation_submission_requested(mitigation_agent_last_state):
+                logger.info("Agent called f_submit_tool but oracles failed.")
             else:
-                # here the agent fails, we make decision if we should retry
                 logger.info(
                     f"current attempt: {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}, agent failed the validation oracles."
                 )
-                should_retry = (curr_attempt + 1) < mitigation_agent_max_retry_attempts
-                logger.info(f"agent failed, should we retry? {'Yes!' if should_retry else 'No!'}")
-                if should_retry:
-                    # we should retry as we have more trials left
-                    logger.info(
-                        f"we should retry as we have more attempts left. attempts left: {(mitigation_agent_max_retry_attempts - 1) - (curr_attempt + 1)}"
-                    )
-                    logger.info(f"agent failed, retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
-                    logger.info("running deterministic rollback to reverse progress")
-                    rollback_start_time = time.perf_counter()
-                    executed_commands = mitigation_agent_last_state.values.get("executed_commands", [])
-                    exec_tool = next((t for t in agent.async_tools if t.name == "exec_kubectl_cmd_safely"), None)
-                    mcp_session_id = exec_tool.session_id if exec_tool is not None else None
-                    rollback_result = await perform_rollback(executed_commands, session_id=mcp_session_id)
-                    rollback_end_time = time.perf_counter() - rollback_start_time
-                    agent_names_lst.append("deterministic_rollback")
-                    input_tokens_lst.append(0)
-                    output_tokens_lst.append(0)
-                    total_tokens_lst.append(0)
-                    time_lst.append(str(rollback_end_time))
-                    steps_lst.append(rollback_result.steps)
-                    num_retry_attempts_lst.append(str(curr_attempt))
-                    rollback_stack_lst.append(rollback_result.rollback_stack)
-                    oracle_results_lst.append("N/A, deterministic rollback")
-                    curr_attempt += 1
-                else:
-                    logger.info("we shouldn't retry as we don't have more attempts left.")
-                    logger.info("making a real submission for the agent.")
-                    await manual_submit_tool("")
-                    break
-                    # return agent_exec_stats
+            should_retry = (curr_attempt + 1) < mitigation_agent_max_retry_attempts
+            logger.info(f"agent failed, should we retry? {'Yes!' if should_retry else 'No!'}")
+            if should_retry:
+                logger.info(
+                    f"we should retry as we have more attempts left. attempts left: {(mitigation_agent_max_retry_attempts - 1) - (curr_attempt + 1)}"
+                )
+                logger.info(f"retrying... {curr_attempt + 1}/{mitigation_agent_max_retry_attempts}")
+                logger.info("running deterministic rollback to reverse progress")
+                rollback_start_time = time.perf_counter()
+                executed_commands = mitigation_agent_last_state.values.get("executed_commands", [])
+                exec_tool = next((t for t in agent.async_tools if t.name == "exec_kubectl_cmd_safely"), None)
+                mcp_session_id = exec_tool.session_id if exec_tool is not None else None
+                rollback_result = await perform_rollback(executed_commands, session_id=mcp_session_id)
+                rollback_end_time = time.perf_counter() - rollback_start_time
+                agent_names_lst.append("deterministic_rollback")
+                input_tokens_lst.append(0)
+                output_tokens_lst.append(0)
+                total_tokens_lst.append(0)
+                time_lst.append(str(rollback_end_time))
+                steps_lst.append(rollback_result.steps)
+                num_retry_attempts_lst.append(str(curr_attempt))
+                rollback_stack_lst.append(rollback_result.rollback_stack)
+                oracle_results_lst.append("N/A, deterministic rollback")
+                curr_attempt += 1
+            else:
+                logger.info("Last attempt reached; making real submission regardless of oracle results.")
+                await manual_submit_tool("")
+                break
 
         agent_exec_stats["agent_name"] = agent_names_lst
         agent_exec_stats["input_tokens"] = input_tokens_lst

@@ -1,9 +1,5 @@
-   Building sregym @ file:///users/yimingsu/sregym
-      Built sregym @ file:///users/yimingsu/sregym
-Uninstalled 1 package in 1ms
-Installed 1 package in 2ms
-INFO - __main__ - 🔧 Config — agent: stratus, agent_model: bedrock-claude-sonnet-4.5, judge_model: bedrock-claude-sonnet-4.5
-INFO - all.sregym.container_runner - 🐳 Building container image 'sregym-agent-base:latest'...
+[94mINFO - __main__ - 🔧 Config — agent: stratus, agent_model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0, judge_model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0[0m
+[94mINFO - all.sregym.container_runner - 🐳 Building container image 'sregym-agent-base:latest'...[0m
 ==> Assembling build context...
 ==> sregym modules copied (27 files)
 ==> Building Docker image...
@@ -14,521 +10,58 @@ INFO - all.sregym.container_runner - 🐳 Building container image 'sregym-agent
 #1 DONE 0.0s
 
 #2 [internal] load metadata for docker.io/library/ubuntu:22.04
-#2 DONE 0.3s
+#2 DONE 0.4s
 
 #3 [internal] load .dockerignore
 #3 transferring context: 2B done
 #3 DONE 0.0s
 
-#4 [ 1/16] FROM docker.io/library/ubuntu:22.04@sha256:ce4a593b4e323dcc3dd728e397e0a866a1bf516a1b7c31d6aa06991baec4f2e0
-#4 resolve docker.io/library/ubuntu:22.04@sha256:ce4a593b4e323dcc3dd728e397e0a866a1bf516a1b7c31d6aa06991baec4f2e0 0.0s done
+#4 [ 1/16] FROM docker.io/library/ubuntu:22.04@sha256:eb29ed27b0821dca09c2e28b39135e185fc1302036427d5f4d70a41ce8fd7659
+#4 resolve docker.io/library/ubuntu:22.04@sha256:eb29ed27b0821dca09c2e28b39135e185fc1302036427d5f4d70a41ce8fd7659 0.0s done
 #4 DONE 0.0s
 
 #5 [internal] load build context
-#5 transferring context: 507.89kB 0.0s done
-#5 DONE 0.1s
+#5 transferring context: 632.32kB 0.0s done
+#5 DONE 0.0s
 
-#6 [ 2/16] RUN apt-get update     && apt-get install -y --no-install-recommends         ca-certificates curl gnupg software-properties-common     && rm -rf /var/lib/apt/lists/*
+#6 [ 5/16] RUN python3 -m ensurepip --upgrade     && python3 -m pip install --upgrade pip     && ln -sf /usr/bin/python3 /usr/bin/python
 #6 CACHED
 
-#7 [ 3/16] RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash -     && add-apt-repository ppa:deadsnakes/ppa
+#7 [ 8/16] RUN python3 -m pip install --break-system-packages -r /tmp/requirements-container.txt
 #7 CACHED
 
-#8 [ 4/16] RUN apt-get update     && apt-get install -y --no-install-recommends         git wget jq         nodejs         python3.12 python3.12-venv python3.12-dev     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1     && rm -rf /var/lib/apt/lists/*
+#8 [10/16] COPY logger/         /opt/sregym/logger/
 #8 CACHED
 
-#9 [ 5/16] RUN python3 -m ensurepip --upgrade     && python3 -m pip install --upgrade pip     && ln -sf /usr/bin/python3 /usr/bin/python
+#9 [12/16] COPY sregym/         /opt/sregym/sregym/
 #9 CACHED
 
-#10 [ 6/16] RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"     && chmod +x kubectl && mv kubectl /usr/local/bin/
+#10 [ 2/16] RUN apt-get update     && apt-get install -y --no-install-recommends         ca-certificates curl gnupg software-properties-common     && rm -rf /var/lib/apt/lists/*
 #10 CACHED
 
-#11 [ 7/16] COPY requirements-container.txt /tmp/requirements-container.txt
-#11 DONE 0.0s
+#11 [ 4/16] RUN apt-get update     && apt-get install -y --no-install-recommends         git wget jq         nodejs         python3.12 python3.12-venv python3.12-dev     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1     && rm -rf /var/lib/apt/lists/*
+#11 CACHED
 
-#12 [ 8/16] RUN python3 -m pip install --break-system-packages -r /tmp/requirements-container.txt
-#12 1.113 Collecting requests>=2.32.3 (from -r /tmp/requirements-container.txt (line 2))
-#12 1.229   Downloading requests-2.33.1-py3-none-any.whl.metadata (4.8 kB)
-#12 1.328 Collecting pyyaml==6.0.2 (from -r /tmp/requirements-container.txt (line 3))
-#12 1.337   Downloading PyYAML-6.0.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (2.1 kB)
-#12 1.367 Collecting python-dotenv==1.1.0 (from -r /tmp/requirements-container.txt (line 4))
-#12 1.378   Downloading python_dotenv-1.1.0-py3-none-any.whl.metadata (24 kB)
-#12 1.547 Collecting langchain>=0.3.25 (from -r /tmp/requirements-container.txt (line 7))
-#12 1.560   Downloading langchain-1.2.14-py3-none-any.whl.metadata (5.8 kB)
-#12 1.595 Collecting langchain-litellm>=0.2.2 (from -r /tmp/requirements-container.txt (line 8))
-#12 1.607   Downloading langchain_litellm-0.6.3-py3-none-any.whl.metadata (7.7 kB)
-#12 1.667 Collecting langchain-google-genai>=2.1.12 (from -r /tmp/requirements-container.txt (line 9))
-#12 1.679   Downloading langchain_google_genai-4.2.1-py3-none-any.whl.metadata (2.7 kB)
-#12 1.762 Collecting langgraph>=0.4.7 (from -r /tmp/requirements-container.txt (line 10))
-#12 1.775   Downloading langgraph-1.1.4-py3-none-any.whl.metadata (7.4 kB)
-#12 1.926 Collecting langsmith>=0.3.43 (from -r /tmp/requirements-container.txt (line 11))
-#12 1.936   Downloading langsmith-0.7.23-py3-none-any.whl.metadata (15 kB)
-#12 2.279 Collecting litellm>=1.75.0 (from -r /tmp/requirements-container.txt (line 12))
-#12 2.289   Downloading litellm-1.83.0-py3-none-any.whl.metadata (30 kB)
-#12 2.891 Collecting boto3>=1.28.57 (from -r /tmp/requirements-container.txt (line 13))
-#12 2.899   Downloading boto3-1.42.80-py3-none-any.whl.metadata (6.7 kB)
-#12 3.219 Collecting pandas==2.2.3 (from -r /tmp/requirements-container.txt (line 14))
-#12 3.232   Downloading pandas-2.2.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (89 kB)
-#12 3.375 Collecting kubernetes==30.1.0 (from -r /tmp/requirements-container.txt (line 15))
-#12 3.384   Downloading kubernetes-30.1.0-py2.py3-none-any.whl.metadata (1.5 kB)
-#12 3.652 Collecting pydantic==2.11.5 (from -r /tmp/requirements-container.txt (line 16))
-#12 3.664   Downloading pydantic-2.11.5-py3-none-any.whl.metadata (67 kB)
-#12 3.747 Collecting rich==13.9.4 (from -r /tmp/requirements-container.txt (line 17))
-#12 3.755   Downloading rich-13.9.4-py3-none-any.whl.metadata (18 kB)
-#12 3.826 Collecting anthropic>=0.52.0 (from -r /tmp/requirements-container.txt (line 18))
-#12 3.834   Downloading anthropic-0.87.0-py3-none-any.whl.metadata (3.0 kB)
-#12 3.935 Collecting tiktoken==0.7.0 (from -r /tmp/requirements-container.txt (line 19))
-#12 3.946   Downloading tiktoken-0.7.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.6 kB)
-#12 3.979 Collecting nest-asyncio==1.6.0 (from -r /tmp/requirements-container.txt (line 20))
-#12 3.987   Downloading nest_asyncio-1.6.0-py3-none-any.whl.metadata (2.8 kB)
-#12 4.040 Collecting fastmcp>=2.9.2 (from -r /tmp/requirements-container.txt (line 21))
-#12 4.052   Downloading fastmcp-3.2.0-py3-none-any.whl.metadata (8.1 kB)
-#12 4.107 Collecting mcp>=1.9.1 (from mcp[cli]>=1.9.1->-r /tmp/requirements-container.txt (line 22))
-#12 4.115   Downloading mcp-1.26.0-py3-none-any.whl.metadata (89 kB)
-#12 4.652 Collecting numpy>=1.26.0 (from pandas==2.2.3->-r /tmp/requirements-container.txt (line 14))
-#12 4.661   Downloading numpy-2.4.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl.metadata (6.6 kB)
-#12 4.701 Collecting python-dateutil>=2.8.2 (from pandas==2.2.3->-r /tmp/requirements-container.txt (line 14))
-#12 4.709   Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
-#12 4.810 Collecting pytz>=2020.1 (from pandas==2.2.3->-r /tmp/requirements-container.txt (line 14))
-#12 4.818   Downloading pytz-2026.1.post1-py2.py3-none-any.whl.metadata (22 kB)
-#12 4.866 Collecting tzdata>=2022.7 (from pandas==2.2.3->-r /tmp/requirements-container.txt (line 14))
-#12 4.877   Downloading tzdata-2025.3-py2.py3-none-any.whl.metadata (1.4 kB)
-#12 4.937 Collecting certifi>=14.05.14 (from kubernetes==30.1.0->-r /tmp/requirements-container.txt (line 15))
-#12 4.948   Downloading certifi-2026.2.25-py3-none-any.whl.metadata (2.5 kB)
-#12 4.958 Requirement already satisfied: six>=1.9.0 in ./usr/lib/python3/dist-packages (from kubernetes==30.1.0->-r /tmp/requirements-container.txt (line 15)) (1.16.0)
-#12 5.056 Collecting google-auth>=1.0.1 (from kubernetes==30.1.0->-r /tmp/requirements-container.txt (line 15))
-#12 5.065   Downloading google_auth-2.49.1-py3-none-any.whl.metadata (6.2 kB)
-#12 5.121 Collecting websocket-client!=0.40.0,!=0.41.*,!=0.42.*,>=0.32.0 (from kubernetes==30.1.0->-r /tmp/requirements-container.txt (line 15))
-#12 5.130   Downloading websocket_client-1.9.0-py3-none-any.whl.metadata (8.3 kB)
-#12 5.161 Collecting requests-oauthlib (from kubernetes==30.1.0->-r /tmp/requirements-container.txt (line 15))
-#12 5.170   Downloading requests_oauthlib-2.0.0-py2.py3-none-any.whl.metadata (11 kB)
-#12 5.196 Collecting oauthlib>=3.2.2 (from kubernetes==30.1.0->-r /tmp/requirements-container.txt (line 15))
-#12 5.204   Downloading oauthlib-3.3.1-py3-none-any.whl.metadata (7.9 kB)
-#12 5.257 Collecting urllib3>=1.24.2 (from kubernetes==30.1.0->-r /tmp/requirements-container.txt (line 15))
-#12 5.265   Downloading urllib3-2.6.3-py3-none-any.whl.metadata (6.9 kB)
-#12 5.288 Collecting annotated-types>=0.6.0 (from pydantic==2.11.5->-r /tmp/requirements-container.txt (line 16))
-#12 5.297   Downloading annotated_types-0.7.0-py3-none-any.whl.metadata (15 kB)
-#12 7.087 Collecting pydantic-core==2.33.2 (from pydantic==2.11.5->-r /tmp/requirements-container.txt (line 16))
-#12 7.096   Downloading pydantic_core-2.33.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (6.8 kB)
-#12 7.148 Collecting typing-extensions>=4.12.2 (from pydantic==2.11.5->-r /tmp/requirements-container.txt (line 16))
-#12 7.157   Downloading typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
-#12 7.181 Collecting typing-inspection>=0.4.0 (from pydantic==2.11.5->-r /tmp/requirements-container.txt (line 16))
-#12 7.192   Downloading typing_inspection-0.4.2-py3-none-any.whl.metadata (2.6 kB)
-#12 7.231 Collecting markdown-it-py>=2.2.0 (from rich==13.9.4->-r /tmp/requirements-container.txt (line 17))
-#12 7.240   Downloading markdown_it_py-4.0.0-py3-none-any.whl.metadata (7.3 kB)
-#12 7.287 Collecting pygments<3.0.0,>=2.13.0 (from rich==13.9.4->-r /tmp/requirements-container.txt (line 17))
-#12 7.297   Downloading pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)
-#12 8.196 Collecting regex>=2022.1.18 (from tiktoken==0.7.0->-r /tmp/requirements-container.txt (line 19))
-#12 8.206   Downloading regex-2026.3.32-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (40 kB)
-#12 8.454 Collecting charset_normalizer<4,>=2 (from requests>=2.32.3->-r /tmp/requirements-container.txt (line 2))
-#12 8.463   Downloading charset_normalizer-3.4.6-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (40 kB)
-#12 8.510 Collecting idna<4,>=2.5 (from requests>=2.32.3->-r /tmp/requirements-container.txt (line 2))
-#12 8.520   Downloading idna-3.11-py3-none-any.whl.metadata (8.4 kB)
-#12 8.651 Collecting langchain-core<2.0.0,>=1.2.10 (from langchain>=0.3.25->-r /tmp/requirements-container.txt (line 7))
-#12 8.661   Downloading langchain_core-1.2.23-py3-none-any.whl.metadata (4.4 kB)
-#12 8.732 Collecting langgraph-checkpoint<5.0.0,>=2.1.0 (from langgraph>=0.4.7->-r /tmp/requirements-container.txt (line 10))
-#12 8.742   Downloading langgraph_checkpoint-4.0.1-py3-none-any.whl.metadata (4.9 kB)
-#12 8.786 Collecting langgraph-prebuilt<1.1.0,>=1.0.8 (from langgraph>=0.4.7->-r /tmp/requirements-container.txt (line 10))
-#12 8.795   Downloading langgraph_prebuilt-1.0.8-py3-none-any.whl.metadata (5.2 kB)
-#12 8.846 Collecting langgraph-sdk<0.4.0,>=0.3.0 (from langgraph>=0.4.7->-r /tmp/requirements-container.txt (line 10))
-#12 8.855   Downloading langgraph_sdk-0.3.12-py3-none-any.whl.metadata (1.6 kB)
-#12 9.161 Collecting xxhash>=3.5.0 (from langgraph>=0.4.7->-r /tmp/requirements-container.txt (line 10))
-#12 9.172   Downloading xxhash-3.6.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (13 kB)
-#12 9.218 Collecting jsonpatch<2.0.0,>=1.33.0 (from langchain-core<2.0.0,>=1.2.10->langchain>=0.3.25->-r /tmp/requirements-container.txt (line 7))
-#12 9.227   Downloading jsonpatch-1.33-py2.py3-none-any.whl.metadata (3.0 kB)
-#12 9.284 Collecting packaging>=23.2.0 (from langchain-core<2.0.0,>=1.2.10->langchain>=0.3.25->-r /tmp/requirements-container.txt (line 7))
-#12 9.294   Downloading packaging-26.0-py3-none-any.whl.metadata (3.3 kB)
-#12 9.343 Collecting tenacity!=8.4.0,<10.0.0,>=8.1.0 (from langchain-core<2.0.0,>=1.2.10->langchain>=0.3.25->-r /tmp/requirements-container.txt (line 7))
-#12 9.353   Downloading tenacity-9.1.4-py3-none-any.whl.metadata (1.2 kB)
-#12 9.492 Collecting uuid-utils<1.0,>=0.12.0 (from langchain-core<2.0.0,>=1.2.10->langchain>=0.3.25->-r /tmp/requirements-container.txt (line 7))
-#12 9.504   Downloading uuid_utils-0.14.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.8 kB)
-#12 9.558 Collecting httpx<1,>=0.23.0 (from langsmith>=0.3.43->-r /tmp/requirements-container.txt (line 11))
-#12 9.567   Downloading httpx-0.28.1-py3-none-any.whl.metadata (7.1 kB)
-#12 10.19 Collecting orjson>=3.9.14 (from langsmith>=0.3.43->-r /tmp/requirements-container.txt (line 11))
-#12 10.20   Downloading orjson-3.11.8-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (41 kB)
-#12 10.24 Collecting requests-toolbelt>=1.0.0 (from langsmith>=0.3.43->-r /tmp/requirements-container.txt (line 11))
-#12 10.25   Downloading requests_toolbelt-1.0.0-py2.py3-none-any.whl.metadata (14 kB)
-#12 10.44 Collecting zstandard>=0.23.0 (from langsmith>=0.3.43->-r /tmp/requirements-container.txt (line 11))
-#12 10.45   Downloading zstandard-0.25.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (3.3 kB)
-#12 10.51 Collecting anyio (from httpx<1,>=0.23.0->langsmith>=0.3.43->-r /tmp/requirements-container.txt (line 11))
-#12 10.52   Downloading anyio-4.13.0-py3-none-any.whl.metadata (4.5 kB)
-#12 10.56 Collecting httpcore==1.* (from httpx<1,>=0.23.0->langsmith>=0.3.43->-r /tmp/requirements-container.txt (line 11))
-#12 10.57   Downloading httpcore-1.0.9-py3-none-any.whl.metadata (21 kB)
-#12 10.61 Collecting h11>=0.16 (from httpcore==1.*->httpx<1,>=0.23.0->langsmith>=0.3.43->-r /tmp/requirements-container.txt (line 11))
-#12 10.62   Downloading h11-0.16.0-py3-none-any.whl.metadata (8.3 kB)
-#12 10.66 Collecting jsonpointer>=1.9 (from jsonpatch<2.0.0,>=1.33.0->langchain-core<2.0.0,>=1.2.10->langchain>=0.3.25->-r /tmp/requirements-container.txt (line 7))
-#12 10.67   Downloading jsonpointer-3.1.1-py3-none-any.whl.metadata (2.4 kB)
-#12 10.82 Collecting ormsgpack>=1.12.0 (from langgraph-checkpoint<5.0.0,>=2.1.0->langgraph>=0.4.7->-r /tmp/requirements-container.txt (line 10))
-#12 10.83   Downloading ormsgpack-1.12.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (3.2 kB)
-#12 11.27 Collecting cryptography<47.0.0,>=46.0.5 (from langchain-litellm>=0.2.2->-r /tmp/requirements-container.txt (line 8))
-#12 11.28   Downloading cryptography-46.0.6-cp311-abi3-manylinux_2_34_x86_64.whl.metadata (5.7 kB)
-#12 12.71 Collecting aiohttp>=3.10 (from litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 12.72   Downloading aiohttp-3.13.5-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (8.1 kB)
-#12 12.77 Collecting click (from litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 12.78   Downloading click-8.3.1-py3-none-any.whl.metadata (2.6 kB)
-#12 12.86 Collecting fastuuid>=0.13.0 (from litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 12.87   Downloading fastuuid-0.14.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (1.1 kB)
-#12 12.94 Collecting importlib-metadata>=6.8.0 (from litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 12.95   Downloading importlib_metadata-9.0.0-py3-none-any.whl.metadata (4.5 kB)
-#12 13.00 Collecting jinja2<4.0.0,>=3.1.2 (from litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 13.01   Downloading jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
-#12 13.06 Collecting jsonschema<5.0.0,>=4.23.0 (from litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 13.07   Downloading jsonschema-4.26.0-py3-none-any.whl.metadata (7.6 kB)
-#12 13.19 Collecting openai>=2.8.0 (from litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 13.20   Downloading openai-2.30.0-py3-none-any.whl.metadata (29 kB)
-#12 13.58 Collecting tokenizers (from litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 13.59   Downloading tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (7.3 kB)
-#12 13.85 Collecting cffi>=2.0.0 (from cryptography<47.0.0,>=46.0.5->langchain-litellm>=0.2.2->-r /tmp/requirements-container.txt (line 8))
-#12 13.86   Downloading cffi-2.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (2.6 kB)
-#12 13.98 Collecting MarkupSafe>=2.0 (from jinja2<4.0.0,>=3.1.2->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 13.99   Downloading markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (2.7 kB)
-#12 14.04 Collecting attrs>=22.2.0 (from jsonschema<5.0.0,>=4.23.0->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 14.05   Downloading attrs-26.1.0-py3-none-any.whl.metadata (8.8 kB)
-#12 14.08 Collecting jsonschema-specifications>=2023.03.6 (from jsonschema<5.0.0,>=4.23.0->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 14.09   Downloading jsonschema_specifications-2025.9.1-py3-none-any.whl.metadata (2.9 kB)
-#12 14.16 Collecting referencing>=0.28.4 (from jsonschema<5.0.0,>=4.23.0->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 14.34   Downloading referencing-0.37.0-py3-none-any.whl.metadata (2.8 kB)
-#12 14.99 Collecting rpds-py>=0.25.0 (from jsonschema<5.0.0,>=4.23.0->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 15.00   Downloading rpds_py-0.30.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (4.1 kB)
-#12 15.04 Collecting filetype<2.0.0,>=1.2.0 (from langchain-google-genai>=2.1.12->-r /tmp/requirements-container.txt (line 9))
-#12 15.05   Downloading filetype-1.2.0-py2.py3-none-any.whl.metadata (6.5 kB)
-#12 15.11 Collecting google-genai<2.0.0,>=1.56.0 (from langchain-google-genai>=2.1.12->-r /tmp/requirements-container.txt (line 9))
-#12 15.12   Downloading google_genai-1.69.0-py3-none-any.whl.metadata (52 kB)
-#12 15.38 Collecting websockets<17.0,>=13.0.0 (from google-genai<2.0.0,>=1.56.0->langchain-google-genai>=2.1.12->-r /tmp/requirements-container.txt (line 9))
-#12 15.39   Downloading websockets-16.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (6.8 kB)
-#12 15.41 Requirement already satisfied: distro<2,>=1.7.0 in ./usr/lib/python3/dist-packages (from google-genai<2.0.0,>=1.56.0->langchain-google-genai>=2.1.12->-r /tmp/requirements-container.txt (line 9)) (1.7.0)
-#12 15.43 Collecting sniffio (from google-genai<2.0.0,>=1.56.0->langchain-google-genai>=2.1.12->-r /tmp/requirements-container.txt (line 9))
-#12 15.43   Downloading sniffio-1.3.1-py3-none-any.whl.metadata (3.9 kB)
-#12 15.50 Collecting pyasn1-modules>=0.2.1 (from google-auth>=1.0.1->kubernetes==30.1.0->-r /tmp/requirements-container.txt (line 15))
-#12 15.51   Downloading pyasn1_modules-0.4.2-py3-none-any.whl.metadata (3.5 kB)
-#12 16.13 Collecting botocore<1.43.0,>=1.42.80 (from boto3>=1.28.57->-r /tmp/requirements-container.txt (line 13))
-#12 16.14   Downloading botocore-1.42.80-py3-none-any.whl.metadata (5.9 kB)
-#12 16.17 Collecting jmespath<2.0.0,>=0.7.1 (from boto3>=1.28.57->-r /tmp/requirements-container.txt (line 13))
-#12 16.18   Downloading jmespath-1.1.0-py3-none-any.whl.metadata (7.6 kB)
-#12 16.23 Collecting s3transfer<0.17.0,>=0.16.0 (from boto3>=1.28.57->-r /tmp/requirements-container.txt (line 13))
-#12 16.24   Downloading s3transfer-0.16.0-py3-none-any.whl.metadata (1.7 kB)
-#12 16.36 Collecting docstring-parser<1,>=0.15 (from anthropic>=0.52.0->-r /tmp/requirements-container.txt (line 18))
-#12 16.37   Downloading docstring_parser-0.17.0-py3-none-any.whl.metadata (3.5 kB)
-#12 16.57 Collecting jiter<1,>=0.4.0 (from anthropic>=0.52.0->-r /tmp/requirements-container.txt (line 18))
-#12 16.58   Downloading jiter-0.13.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (5.2 kB)
-#12 16.64 Collecting authlib>=1.6.5 (from fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 16.65   Downloading authlib-1.6.9-py2.py3-none-any.whl.metadata (9.8 kB)
-#12 16.71 Collecting cyclopts>=4.0.0 (from fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 16.72   Downloading cyclopts-4.10.1-py3-none-any.whl.metadata (12 kB)
-#12 16.76 Collecting exceptiongroup>=1.2.2 (from fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 16.77   Downloading exceptiongroup-1.3.1-py3-none-any.whl.metadata (6.7 kB)
-#12 16.80 Collecting jsonref>=1.1.0 (from fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 16.81   Downloading jsonref-1.1.0-py3-none-any.whl.metadata (2.7 kB)
-#12 16.85 Collecting jsonschema-path>=0.3.4 (from fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 16.86   Downloading jsonschema_path-0.4.5-py3-none-any.whl.metadata (5.9 kB)
-#12 16.90 Collecting openapi-pydantic>=0.5.1 (from fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 16.91   Downloading openapi_pydantic-0.5.1-py3-none-any.whl.metadata (10 kB)
-#12 16.96 Collecting opentelemetry-api>=1.20.0 (from fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 16.97   Downloading opentelemetry_api-1.40.0-py3-none-any.whl.metadata (1.5 kB)
-#12 17.03 Collecting platformdirs>=4.0.0 (from fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 17.04   Downloading platformdirs-4.9.4-py3-none-any.whl.metadata (4.7 kB)
-#12 17.07 Collecting py-key-value-aio<0.5.0,>=0.4.4 (from py-key-value-aio[filetree,keyring,memory]<0.5.0,>=0.4.4->fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 17.08   Downloading py_key_value_aio-0.4.4-py3-none-any.whl.metadata (15 kB)
-#12 17.11 INFO: pip is looking at multiple versions of fastmcp to determine which version is compatible with other requirements. This could take a while.
-#12 17.11 Collecting fastmcp>=2.9.2 (from -r /tmp/requirements-container.txt (line 21))
-#12 17.12   Downloading fastmcp-3.1.1-py3-none-any.whl.metadata (8.1 kB)
-#12 17.14   Downloading fastmcp-3.1.0-py3-none-any.whl.metadata (8.1 kB)
-#12 17.17   Downloading fastmcp-3.0.2-py3-none-any.whl.metadata (7.8 kB)
-#12 17.20   Downloading fastmcp-3.0.1-py3-none-any.whl.metadata (7.8 kB)
-#12 17.23   Downloading fastmcp-3.0.0-py3-none-any.whl.metadata (7.7 kB)
-#12 17.26   Downloading fastmcp-2.14.6-py3-none-any.whl.metadata (20 kB)
-#12 17.29 Collecting py-key-value-aio<0.4.0,>=0.3.0 (from py-key-value-aio[disk,keyring,memory]<0.4.0,>=0.3.0->fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 17.30   Downloading py_key_value_aio-0.3.0-py3-none-any.whl.metadata (2.5 kB)
-#12 17.32 Collecting fastmcp>=2.9.2 (from -r /tmp/requirements-container.txt (line 21))
-#12 17.33   Downloading fastmcp-2.14.5-py3-none-any.whl.metadata (20 kB)
-#12 17.35 INFO: pip is still looking at multiple versions of fastmcp to determine which version is compatible with other requirements. This could take a while.
-#12 17.36   Downloading fastmcp-2.14.4-py3-none-any.whl.metadata (20 kB)
-#12 17.39   Downloading fastmcp-2.14.3-py3-none-any.whl.metadata (20 kB)
-#12 17.41   Downloading fastmcp-2.14.2-py3-none-any.whl.metadata (20 kB)
-#12 17.44   Downloading fastmcp-2.14.1-py3-none-any.whl.metadata (20 kB)
-#12 17.48   Downloading fastmcp-2.14.0-py3-none-any.whl.metadata (20 kB)
-#12 17.50 INFO: This is taking longer than usual. You might need to provide the dependency resolver with stricter constraints to reduce runtime. See https://pip.pypa.io/warnings/backtracking for guidance. If you want to abort this run, press Ctrl + C.
-#12 17.51   Downloading fastmcp-2.13.3-py3-none-any.whl.metadata (20 kB)
-#12 17.53 Collecting mcp>=1.9.1 (from mcp[cli]>=1.9.1->-r /tmp/requirements-container.txt (line 22))
-#12 17.54   Downloading mcp-1.22.0-py3-none-any.whl.metadata (85 kB)
-#12 17.59 Collecting fastmcp>=2.9.2 (from -r /tmp/requirements-container.txt (line 21))
-#12 17.60   Downloading fastmcp-2.13.2-py3-none-any.whl.metadata (20 kB)
-#12 17.63   Downloading fastmcp-2.13.1-py3-none-any.whl.metadata (20 kB)
-#12 17.64 Collecting py-key-value-aio<0.3.0,>=0.2.8 (from py-key-value-aio[disk,keyring,memory]<0.3.0,>=0.2.8->fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 17.65   Downloading py_key_value_aio-0.2.8-py3-none-any.whl.metadata (2.1 kB)
-#12 17.66 Collecting fastmcp>=2.9.2 (from -r /tmp/requirements-container.txt (line 21))
-#12 17.67   Downloading fastmcp-2.13.0.2-py3-none-any.whl.metadata (20 kB)
-#12 17.72   Downloading fastmcp-2.13.0.1-py3-none-any.whl.metadata (20 kB)
-#12 17.78 Collecting openapi-core>=0.19.5 (from fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 17.79   Downloading openapi_core-0.23.0-py3-none-any.whl.metadata (8.1 kB)
-#12 17.81 Collecting fastmcp>=2.9.2 (from -r /tmp/requirements-container.txt (line 21))
-#12 17.81   Downloading fastmcp-2.13.0-py3-none-any.whl.metadata (20 kB)
-#12 17.84   Downloading fastmcp-2.12.5-py3-none-any.whl.metadata (19 kB)
-#12 17.86 Collecting mcp>=1.9.1 (from mcp[cli]>=1.9.1->-r /tmp/requirements-container.txt (line 22))
-#12 17.87   Downloading mcp-1.16.0-py3-none-any.whl.metadata (80 kB)
-#12 17.90 Collecting fastmcp>=2.9.2 (from -r /tmp/requirements-container.txt (line 21))
-#12 17.91   Downloading fastmcp-2.12.4-py3-none-any.whl.metadata (19 kB)
-#12 17.95   Downloading fastmcp-2.12.3-py3-none-any.whl.metadata (17 kB)
-#12 17.98   Downloading fastmcp-2.12.2-py3-none-any.whl.metadata (17 kB)
-#12 18.00   Downloading fastmcp-2.12.1-py3-none-any.whl.metadata (17 kB)
-#12 18.04   Downloading fastmcp-2.12.0-py3-none-any.whl.metadata (17 kB)
-#12 18.08   Downloading fastmcp-2.11.3-py3-none-any.whl.metadata (17 kB)
-#12 18.11   Downloading fastmcp-2.11.2-py3-none-any.whl.metadata (17 kB)
-#12 18.15   Downloading fastmcp-2.11.1-py3-none-any.whl.metadata (17 kB)
-#12 18.19   Downloading fastmcp-2.11.0-py3-none-any.whl.metadata (17 kB)
-#12 18.21   Downloading fastmcp-2.10.6-py3-none-any.whl.metadata (17 kB)
-#12 18.24   Downloading fastmcp-2.10.5-py3-none-any.whl.metadata (17 kB)
-#12 18.27   Downloading fastmcp-2.10.4-py3-none-any.whl.metadata (17 kB)
-#12 18.30   Downloading fastmcp-2.10.3-py3-none-any.whl.metadata (17 kB)
-#12 18.33   Downloading fastmcp-2.10.2-py3-none-any.whl.metadata (17 kB)
-#12 18.36   Downloading fastmcp-2.10.1-py3-none-any.whl.metadata (17 kB)
-#12 18.39   Downloading fastmcp-2.10.0-py3-none-any.whl.metadata (17 kB)
-#12 18.42   Downloading fastmcp-2.9.2-py3-none-any.whl.metadata (17 kB)
-#12 18.45 Collecting mcp>=1.9.1 (from mcp[cli]>=1.9.1->-r /tmp/requirements-container.txt (line 22))
-#12 18.46   Downloading mcp-1.9.4-py3-none-any.whl.metadata (28 kB)
-#12 18.53 Collecting typer>=0.15.2 (from fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 18.54   Downloading typer-0.24.1-py3-none-any.whl.metadata (16 kB)
-#12 18.57 Collecting httpx-sse>=0.4 (from mcp>=1.9.1->mcp[cli]>=1.9.1->-r /tmp/requirements-container.txt (line 22))
-#12 18.58   Downloading httpx_sse-0.4.3-py3-none-any.whl.metadata (9.7 kB)
-#12 18.64 Collecting pydantic-settings>=2.5.2 (from mcp>=1.9.1->mcp[cli]>=1.9.1->-r /tmp/requirements-container.txt (line 22))
-#12 18.65   Downloading pydantic_settings-2.13.1-py3-none-any.whl.metadata (3.4 kB)
-#12 18.69 Collecting python-multipart>=0.0.9 (from mcp>=1.9.1->mcp[cli]>=1.9.1->-r /tmp/requirements-container.txt (line 22))
-#12 18.70   Downloading python_multipart-0.0.22-py3-none-any.whl.metadata (1.8 kB)
-#12 18.76 Collecting sse-starlette>=1.6.1 (from mcp>=1.9.1->mcp[cli]>=1.9.1->-r /tmp/requirements-container.txt (line 22))
-#12 18.77   Downloading sse_starlette-3.3.4-py3-none-any.whl.metadata (14 kB)
-#12 18.83 Collecting starlette>=0.27 (from mcp>=1.9.1->mcp[cli]>=1.9.1->-r /tmp/requirements-container.txt (line 22))
-#12 18.84   Downloading starlette-1.0.0-py3-none-any.whl.metadata (6.3 kB)
-#12 18.92 Collecting uvicorn>=0.23.1 (from mcp>=1.9.1->mcp[cli]>=1.9.1->-r /tmp/requirements-container.txt (line 22))
-#12 18.92   Downloading uvicorn-0.42.0-py3-none-any.whl.metadata (6.7 kB)
-#12 18.97 Collecting aiohappyeyeballs>=2.5.0 (from aiohttp>=3.10->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 18.98   Downloading aiohappyeyeballs-2.6.1-py3-none-any.whl.metadata (5.9 kB)
-#12 19.01 Collecting aiosignal>=1.4.0 (from aiohttp>=3.10->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 19.02   Downloading aiosignal-1.4.0-py3-none-any.whl.metadata (3.7 kB)
-#12 19.42 Collecting frozenlist>=1.1.1 (from aiohttp>=3.10->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 19.43   Downloading frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl.metadata (20 kB)
-#12 20.01 Collecting multidict<7.0,>=4.5 (from aiohttp>=3.10->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 20.02   Downloading multidict-6.7.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (5.3 kB)
-#12 20.16 Collecting propcache>=0.2.0 (from aiohttp>=3.10->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 20.17   Downloading propcache-0.4.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (13 kB)
-#12 20.80 Collecting yarl<2.0,>=1.17.0 (from aiohttp>=3.10->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 20.80   Downloading yarl-1.23.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl.metadata (79 kB)
-#12 20.91 Collecting pycparser (from cffi>=2.0.0->cryptography<47.0.0,>=46.0.5->langchain-litellm>=0.2.2->-r /tmp/requirements-container.txt (line 8))
-#12 20.92   Downloading pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
-#12 21.01 Collecting zipp>=3.20 (from importlib-metadata>=6.8.0->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 21.02   Downloading zipp-3.23.0-py3-none-any.whl.metadata (3.6 kB)
-#12 21.07 Collecting mdurl~=0.1 (from markdown-it-py>=2.2.0->rich==13.9.4->-r /tmp/requirements-container.txt (line 17))
-#12 21.08   Downloading mdurl-0.1.2-py3-none-any.whl.metadata (1.6 kB)
-#12 21.10 INFO: pip is looking at multiple versions of mcp[cli] to determine which version is compatible with other requirements. This could take a while.
-#12 21.11 Collecting mcp[cli]>=1.9.1 (from -r /tmp/requirements-container.txt (line 22))
-#12 21.12   Downloading mcp-1.25.0-py3-none-any.whl.metadata (89 kB)
-#12 21.17   Downloading mcp-1.24.0-py3-none-any.whl.metadata (89 kB)
-#12 21.23   Downloading mcp-1.23.3-py3-none-any.whl.metadata (89 kB)
-#12 21.28   Downloading mcp-1.23.2-py3-none-any.whl.metadata (89 kB)
-#12 21.32   Downloading mcp-1.23.1-py3-none-any.whl.metadata (88 kB)
-#12 21.36   Downloading mcp-1.23.0-py3-none-any.whl.metadata (88 kB)
-#12 21.40 INFO: pip is still looking at multiple versions of mcp[cli] to determine which version is compatible with other requirements. This could take a while.
-#12 21.41   Downloading mcp-1.21.2-py3-none-any.whl.metadata (85 kB)
-#12 21.44   Downloading mcp-1.21.1-py3-none-any.whl.metadata (85 kB)
-#12 21.48   Downloading mcp-1.21.0-py3-none-any.whl.metadata (85 kB)
-#12 21.52   Downloading mcp-1.20.0-py3-none-any.whl.metadata (85 kB)
-#12 21.56   Downloading mcp-1.19.0-py3-none-any.whl.metadata (85 kB)
-#12 21.60 INFO: This is taking longer than usual. You might need to provide the dependency resolver with stricter constraints to reduce runtime. See https://pip.pypa.io/warnings/backtracking for guidance. If you want to abort this run, press Ctrl + C.
-#12 21.61   Downloading mcp-1.18.0-py3-none-any.whl.metadata (80 kB)
-#12 21.65   Downloading mcp-1.17.0-py3-none-any.whl.metadata (80 kB)
-#12 21.69   Downloading mcp-1.15.0-py3-none-any.whl.metadata (80 kB)
-#12 21.73   Downloading mcp-1.14.1-py3-none-any.whl.metadata (75 kB)
-#12 21.77   Downloading mcp-1.14.0-py3-none-any.whl.metadata (75 kB)
-#12 21.80   Downloading mcp-1.13.1-py3-none-any.whl.metadata (74 kB)
-#12 21.85   Downloading mcp-1.13.0-py3-none-any.whl.metadata (68 kB)
-#12 21.89   Downloading mcp-1.12.4-py3-none-any.whl.metadata (68 kB)
-#12 21.93   Downloading mcp-1.12.3-py3-none-any.whl.metadata (60 kB)
-#12 21.97   Downloading mcp-1.12.2-py3-none-any.whl.metadata (60 kB)
-#12 22.00   Downloading mcp-1.12.1-py3-none-any.whl.metadata (60 kB)
-#12 22.04   Downloading mcp-1.12.0-py3-none-any.whl.metadata (60 kB)
-#12 22.08   Downloading mcp-1.11.0-py3-none-any.whl.metadata (44 kB)
-#12 22.11   Downloading mcp-1.10.1-py3-none-any.whl.metadata (40 kB)
-#12 22.14   Downloading mcp-1.10.0-py3-none-any.whl.metadata (40 kB)
-#12 22.26 Collecting tqdm>4 (from openai>=2.8.0->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 22.27   Downloading tqdm-4.67.3-py3-none-any.whl.metadata (57 kB)
-#12 22.36 Collecting pyasn1<0.7.0,>=0.6.1 (from pyasn1-modules>=0.2.1->google-auth>=1.0.1->kubernetes==30.1.0->-r /tmp/requirements-container.txt (line 15))
-#12 22.37   Downloading pyasn1-0.6.3-py3-none-any.whl.metadata (8.4 kB)
-#12 22.47 Collecting shellingham>=1.3.0 (from typer>=0.15.2->fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 22.47   Downloading shellingham-1.5.4-py2.py3-none-any.whl.metadata (3.5 kB)
-#12 22.50 Collecting annotated-doc>=0.0.2 (from typer>=0.15.2->fastmcp>=2.9.2->-r /tmp/requirements-container.txt (line 21))
-#12 22.51   Downloading annotated_doc-0.0.4-py3-none-any.whl.metadata (6.6 kB)
-#12 22.66 Collecting huggingface-hub<2.0,>=0.16.4 (from tokenizers->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 22.67   Downloading huggingface_hub-1.8.0-py3-none-any.whl.metadata (13 kB)
-#12 22.74 Collecting filelock>=3.10.0 (from huggingface-hub<2.0,>=0.16.4->tokenizers->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 22.75   Downloading filelock-3.25.2-py3-none-any.whl.metadata (2.0 kB)
-#12 22.81 Collecting fsspec>=2023.5.0 (from huggingface-hub<2.0,>=0.16.4->tokenizers->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 22.82   Downloading fsspec-2026.3.0-py3-none-any.whl.metadata (10 kB)
-#12 23.01 Collecting hf-xet<2.0.0,>=1.4.2 (from huggingface-hub<2.0,>=0.16.4->tokenizers->litellm>=1.75.0->-r /tmp/requirements-container.txt (line 12))
-#12 23.02   Downloading hf_xet-1.4.3-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl.metadata (4.9 kB)
-#12 23.08 Downloading PyYAML-6.0.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (767 kB)
-#12 23.14    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 767.5/767.5 kB 12.8 MB/s  0:00:00
-#12 23.15 Downloading python_dotenv-1.1.0-py3-none-any.whl (20 kB)
-#12 23.16 Downloading pandas-2.2.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (12.7 MB)
-#12 23.55    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12.7/12.7 MB 34.3 MB/s  0:00:00
-#12 23.56 Downloading kubernetes-30.1.0-py2.py3-none-any.whl (1.7 MB)
-#12 23.60    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.7/1.7 MB 44.6 MB/s  0:00:00
-#12 23.61 Downloading pydantic-2.11.5-py3-none-any.whl (444 kB)
-#12 23.63 Downloading rich-13.9.4-py3-none-any.whl (242 kB)
-#12 23.65 Downloading tiktoken-0.7.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.1 MB)
-#12 23.68    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 32.7 MB/s  0:00:00
-#12 23.69 Downloading nest_asyncio-1.6.0-py3-none-any.whl (5.2 kB)
-#12 23.71 Downloading pydantic_core-2.33.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.0 MB)
-#12 23.75    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.0/2.0 MB 49.2 MB/s  0:00:00
-#12 23.76 Downloading pygments-2.20.0-py3-none-any.whl (1.2 MB)
-#12 23.79    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.2/1.2 MB 41.6 MB/s  0:00:00
-#12 23.79 Downloading requests-2.33.1-py3-none-any.whl (64 kB)
-#12 23.81 Downloading charset_normalizer-3.4.6-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (207 kB)
-#12 23.83 Downloading idna-3.11-py3-none-any.whl (71 kB)
-#12 23.85 Downloading urllib3-2.6.3-py3-none-any.whl (131 kB)
-#12 23.87 Downloading langchain-1.2.14-py3-none-any.whl (112 kB)
-#12 23.88 Downloading langgraph-1.1.4-py3-none-any.whl (168 kB)
-#12 23.90 Downloading langchain_core-1.2.23-py3-none-any.whl (506 kB)
-#12 23.93 Downloading langsmith-0.7.23-py3-none-any.whl (362 kB)
-#12 23.95 Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
-#12 23.96 Downloading httpcore-1.0.9-py3-none-any.whl (78 kB)
-#12 23.98 Downloading jsonpatch-1.33-py2.py3-none-any.whl (12 kB)
-#12 24.00 Downloading langgraph_checkpoint-4.0.1-py3-none-any.whl (50 kB)
-#12 24.01 Downloading langgraph_prebuilt-1.0.8-py3-none-any.whl (35 kB)
-#12 24.03 Downloading langgraph_sdk-0.3.12-py3-none-any.whl (95 kB)
-#12 24.04 Downloading tenacity-9.1.4-py3-none-any.whl (28 kB)
-#12 24.06 Downloading typing_extensions-4.15.0-py3-none-any.whl (44 kB)
-#12 24.07 Downloading uuid_utils-0.14.1-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (345 kB)
-#12 24.10 Downloading langchain_litellm-0.6.3-py3-none-any.whl (24 kB)
-#12 24.11 Downloading litellm-1.83.0-py3-none-any.whl (15.6 MB)
-#12 24.37    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 15.6/15.6 MB 59.8 MB/s  0:00:00
-#12 24.39 Downloading cryptography-46.0.6-cp311-abi3-manylinux_2_34_x86_64.whl (4.5 MB)
-#12 24.47    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.5/4.5 MB 53.1 MB/s  0:00:00
-#12 24.48 Downloading jinja2-3.1.6-py3-none-any.whl (134 kB)
-#12 24.50 Downloading jsonschema-4.26.0-py3-none-any.whl (90 kB)
-#12 24.51 Downloading langchain_google_genai-4.2.1-py3-none-any.whl (66 kB)
-#12 24.52 Downloading filetype-1.2.0-py2.py3-none-any.whl (19 kB)
-#12 24.54 Downloading google_genai-1.69.0-py3-none-any.whl (760 kB)
-#12 24.55    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 760.6/760.6 kB 36.7 MB/s  0:00:00
-#12 24.56 Downloading anyio-4.13.0-py3-none-any.whl (114 kB)
-#12 24.58 Downloading google_auth-2.49.1-py3-none-any.whl (240 kB)
-#12 24.59 Downloading websockets-16.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (184 kB)
-#12 24.61 Downloading boto3-1.42.80-py3-none-any.whl (140 kB)
-#12 24.62 Downloading botocore-1.42.80-py3-none-any.whl (14.8 MB)
-#12 24.86    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 14.8/14.8 MB 62.0 MB/s  0:00:00
-#12 24.88 Downloading jmespath-1.1.0-py3-none-any.whl (20 kB)
-#12 24.89 Downloading python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
-#12 24.91 Downloading s3transfer-0.16.0-py3-none-any.whl (86 kB)
-#12 24.93 Downloading anthropic-0.87.0-py3-none-any.whl (472 kB)
-#12 24.95 Downloading docstring_parser-0.17.0-py3-none-any.whl (36 kB)
-#12 24.97 Downloading jiter-0.13.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (360 kB)
-#12 24.99 Downloading fastmcp-2.9.2-py3-none-any.whl (162 kB)
-#12 25.01 Downloading mcp-1.9.4-py3-none-any.whl (130 kB)
-#12 25.03 Downloading aiohttp-3.13.5-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (1.8 MB)
-#12 25.07    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.8/1.8 MB 41.1 MB/s  0:00:00
-#12 25.08 Downloading multidict-6.7.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (256 kB)
-#12 25.10 Downloading yarl-1.23.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (100 kB)
-#12 25.12 Downloading aiohappyeyeballs-2.6.1-py3-none-any.whl (15 kB)
-#12 25.14 Downloading aiosignal-1.4.0-py3-none-any.whl (7.5 kB)
-#12 25.15 Downloading annotated_types-0.7.0-py3-none-any.whl (13 kB)
-#12 25.17 Downloading attrs-26.1.0-py3-none-any.whl (67 kB)
-#12 25.18 Downloading authlib-1.6.9-py2.py3-none-any.whl (244 kB)
-#12 25.20 Downloading certifi-2026.2.25-py3-none-any.whl (153 kB)
-#12 25.22 Downloading cffi-2.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (219 kB)
-#12 25.24 Downloading exceptiongroup-1.3.1-py3-none-any.whl (16 kB)
-#12 25.25 Downloading fastuuid-0.14.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (278 kB)
-#12 25.27 Downloading frozenlist-1.8.0-cp312-cp312-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl (242 kB)
-#12 25.29 Downloading h11-0.16.0-py3-none-any.whl (37 kB)
-#12 25.31 Downloading httpx_sse-0.4.3-py3-none-any.whl (9.0 kB)
-#12 25.32 Downloading importlib_metadata-9.0.0-py3-none-any.whl (27 kB)
-#12 25.34 Downloading jsonpointer-3.1.1-py3-none-any.whl (7.7 kB)
-#12 25.35 Downloading jsonschema_specifications-2025.9.1-py3-none-any.whl (18 kB)
-#12 25.37 Downloading markdown_it_py-4.0.0-py3-none-any.whl (87 kB)
-#12 25.39 Downloading mdurl-0.1.2-py3-none-any.whl (10.0 kB)
-#12 25.40 Downloading markupsafe-3.0.3-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (22 kB)
-#12 25.42 Downloading numpy-2.4.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (16.6 MB)
-#12 25.71    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 16.6/16.6 MB 58.0 MB/s  0:00:00
-#12 25.72 Downloading oauthlib-3.3.1-py3-none-any.whl (160 kB)
-#12 25.74 Downloading openai-2.30.0-py3-none-any.whl (1.1 MB)
-#12 25.76    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 46.8 MB/s  0:00:00
-#12 25.77 Downloading openapi_pydantic-0.5.1-py3-none-any.whl (96 kB)
-#12 25.78 Downloading orjson-3.11.8-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (133 kB)
-#12 25.80 Downloading ormsgpack-1.12.2-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (212 kB)
-#12 25.81 Downloading packaging-26.0-py3-none-any.whl (74 kB)
-#12 25.83 Downloading propcache-0.4.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (221 kB)
-#12 25.85 Downloading pyasn1_modules-0.4.2-py3-none-any.whl (181 kB)
-#12 25.87 Downloading pyasn1-0.6.3-py3-none-any.whl (83 kB)
-#12 25.89 Downloading pydantic_settings-2.13.1-py3-none-any.whl (58 kB)
-#12 25.90 Downloading python_multipart-0.0.22-py3-none-any.whl (24 kB)
-#12 25.92 Downloading pytz-2026.1.post1-py2.py3-none-any.whl (510 kB)
-#12 25.95 Downloading referencing-0.37.0-py3-none-any.whl (26 kB)
-#12 25.96 Downloading regex-2026.3.32-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (801 kB)
-#12 25.99    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 801.5/801.5 kB 28.1 MB/s  0:00:00
-#12 26.00 Downloading requests_toolbelt-1.0.0-py2.py3-none-any.whl (54 kB)
-#12 26.02 Downloading rpds_py-0.30.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (394 kB)
-#12 26.04 Downloading sse_starlette-3.3.4-py3-none-any.whl (14 kB)
-#12 26.05 Downloading starlette-1.0.0-py3-none-any.whl (72 kB)
-#12 26.06 Downloading tqdm-4.67.3-py3-none-any.whl (78 kB)
-#12 26.08 Downloading typer-0.24.1-py3-none-any.whl (56 kB)
-#12 26.10 Downloading annotated_doc-0.0.4-py3-none-any.whl (5.3 kB)
-#12 26.12 Downloading click-8.3.1-py3-none-any.whl (108 kB)
-#12 26.13 Downloading shellingham-1.5.4-py2.py3-none-any.whl (9.8 kB)
-#12 26.15 Downloading typing_inspection-0.4.2-py3-none-any.whl (14 kB)
-#12 26.16 Downloading tzdata-2025.3-py2.py3-none-any.whl (348 kB)
-#12 26.19 Downloading uvicorn-0.42.0-py3-none-any.whl (68 kB)
-#12 26.20 Downloading websocket_client-1.9.0-py3-none-any.whl (82 kB)
-#12 26.22 Downloading xxhash-3.6.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl (193 kB)
-#12 26.24 Downloading zipp-3.23.0-py3-none-any.whl (10 kB)
-#12 26.26 Downloading zstandard-0.25.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (5.5 MB)
-#12 26.36    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 5.5/5.5 MB 53.3 MB/s  0:00:00
-#12 26.37 Downloading pycparser-3.0-py3-none-any.whl (48 kB)
-#12 26.39 Downloading requests_oauthlib-2.0.0-py2.py3-none-any.whl (24 kB)
-#12 26.40 Downloading sniffio-1.3.1-py3-none-any.whl (10 kB)
-#12 26.42 Downloading tokenizers-0.22.2-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.3 MB)
-#12 26.49    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 3.3/3.3 MB 44.4 MB/s  0:00:00
-#12 26.50 Downloading huggingface_hub-1.8.0-py3-none-any.whl (625 kB)
-#12 26.52    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 625.2/625.2 kB 27.7 MB/s  0:00:00
-#12 26.53 Downloading hf_xet-1.4.3-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (4.2 MB)
-#12 26.61    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.2/4.2 MB 50.7 MB/s  0:00:00
-#12 26.63 Downloading filelock-3.25.2-py3-none-any.whl (26 kB)
-#12 26.64 Downloading fsspec-2026.3.0-py3-none-any.whl (202 kB)
-#12 27.88 Installing collected packages: pytz, filetype, zstandard, zipp, xxhash, websockets, websocket-client, uuid-utils, urllib3, tzdata, typing-extensions, tqdm, tenacity, sniffio, shellingham, rpds-py, regex, pyyaml, python-multipart, python-dotenv, python-dateutil, pygments, pycparser, pyasn1, propcache, packaging, ormsgpack, orjson, oauthlib, numpy, nest-asyncio, multidict, mdurl, MarkupSafe, jsonpointer, jmespath, jiter, idna, httpx-sse, hf-xet, h11, fsspec, frozenlist, filelock, fastuuid, docstring-parser, click, charset_normalizer, certifi, attrs, annotated-types, annotated-doc, aiohappyeyeballs, yarl, uvicorn, typing-inspection, requests, referencing, pydantic-core, pyasn1-modules, pandas, markdown-it-py, jsonpatch, jinja2, importlib-metadata, httpcore, exceptiongroup, cffi, botocore, anyio, aiosignal, tiktoken, starlette, s3transfer, rich, requests-toolbelt, requests-oauthlib, pydantic, jsonschema-specifications, httpx, cryptography, aiohttp, typer, sse-starlette, pydantic-settings, openapi-pydantic, openai, langsmith, langgraph-sdk, jsonschema, google-auth, boto3, authlib, anthropic, mcp, langchain-core, kubernetes, huggingface-hub, tokenizers, langgraph-checkpoint, google-genai, fastmcp, litellm, langgraph-prebuilt, langchain-google-genai, langgraph, langchain-litellm, langchain
-#12 28.35   Attempting uninstall: zipp
-#12 28.36     Found existing installation: zipp 1.0.0
-#12 28.37     Uninstalling zipp-1.0.0:
-#12 28.39       Successfully uninstalled zipp-1.0.0
-#12 30.96   Attempting uninstall: oauthlib
-#12 30.97     Found existing installation: oauthlib 3.2.0
-#12 30.97     Uninstalling oauthlib-3.2.0:
-#12 31.02       Successfully uninstalled oauthlib-3.2.0
-#12 43.76   Attempting uninstall: importlib-metadata
-#12 43.77     Found existing installation: importlib-metadata 4.6.4
-#12 43.77     Uninstalling importlib-metadata-4.6.4:
-#12 43.79       Successfully uninstalled importlib-metadata-4.6.4
-#12 46.42   Attempting uninstall: cryptography
-#12 46.43     Found existing installation: cryptography 3.4.8
-#12 46.44     Uninstalling cryptography-3.4.8:
-#12 46.49       Successfully uninstalled cryptography-3.4.8
-#12 61.67 
-#12 61.70 Successfully installed MarkupSafe-3.0.3 aiohappyeyeballs-2.6.1 aiohttp-3.13.5 aiosignal-1.4.0 annotated-doc-0.0.4 annotated-types-0.7.0 anthropic-0.87.0 anyio-4.13.0 attrs-26.1.0 authlib-1.6.9 boto3-1.42.80 botocore-1.42.80 certifi-2026.2.25 cffi-2.0.0 charset_normalizer-3.4.6 click-8.3.1 cryptography-46.0.6 docstring-parser-0.17.0 exceptiongroup-1.3.1 fastmcp-2.9.2 fastuuid-0.14.0 filelock-3.25.2 filetype-1.2.0 frozenlist-1.8.0 fsspec-2026.3.0 google-auth-2.49.1 google-genai-1.69.0 h11-0.16.0 hf-xet-1.4.3 httpcore-1.0.9 httpx-0.28.1 httpx-sse-0.4.3 huggingface-hub-1.8.0 idna-3.11 importlib-metadata-9.0.0 jinja2-3.1.6 jiter-0.13.0 jmespath-1.1.0 jsonpatch-1.33 jsonpointer-3.1.1 jsonschema-4.26.0 jsonschema-specifications-2025.9.1 kubernetes-30.1.0 langchain-1.2.14 langchain-core-1.2.23 langchain-google-genai-4.2.1 langchain-litellm-0.6.3 langgraph-1.1.4 langgraph-checkpoint-4.0.1 langgraph-prebuilt-1.0.8 langgraph-sdk-0.3.12 langsmith-0.7.23 litellm-1.83.0 markdown-it-py-4.0.0 mcp-1.9.4 mdurl-0.1.2 multidict-6.7.1 nest-asyncio-1.6.0 numpy-2.4.4 oauthlib-3.3.1 openai-2.30.0 openapi-pydantic-0.5.1 orjson-3.11.8 ormsgpack-1.12.2 packaging-26.0 pandas-2.2.3 propcache-0.4.1 pyasn1-0.6.3 pyasn1-modules-0.4.2 pycparser-3.0 pydantic-2.11.5 pydantic-core-2.33.2 pydantic-settings-2.13.1 pygments-2.20.0 python-dateutil-2.9.0.post0 python-dotenv-1.1.0 python-multipart-0.0.22 pytz-2026.1.post1 pyyaml-6.0.2 referencing-0.37.0 regex-2026.3.32 requests-2.33.1 requests-oauthlib-2.0.0 requests-toolbelt-1.0.0 rich-13.9.4 rpds-py-0.30.0 s3transfer-0.16.0 shellingham-1.5.4 sniffio-1.3.1 sse-starlette-3.3.4 starlette-1.0.0 tenacity-9.1.4 tiktoken-0.7.0 tokenizers-0.22.2 tqdm-4.67.3 typer-0.24.1 typing-extensions-4.15.0 typing-inspection-0.4.2 tzdata-2025.3 urllib3-2.6.3 uuid-utils-0.14.1 uvicorn-0.42.0 websocket-client-1.9.0 websockets-16.0 xxhash-3.6.0 yarl-1.23.0 zipp-3.23.0 zstandard-0.25.0
-#12 61.70 WARNING: Running pip as the 'root' user can result in broken permissions and conflicting behaviour with the system package manager, possibly rendering your system unusable. It is recommended to use a virtual environment instead: https://pip.pypa.io/warnings/venv. Use the --root-user-action option if you know what you are doing and want to suppress this warning.
-#12 DONE 63.3s
+#12 [11/16] COPY llm_backend/    /opt/sregym/llm_backend/
+#12 CACHED
 
 #13 [ 9/16] COPY clients/        /opt/sregym/clients/
-#13 DONE 0.4s
+#13 CACHED
 
-#14 [10/16] COPY logger/         /opt/sregym/logger/
-#14 DONE 0.0s
+#14 [ 6/16] RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"     && chmod +x kubectl && mv kubectl /usr/local/bin/
+#14 CACHED
 
-#15 [11/16] COPY llm_backend/    /opt/sregym/llm_backend/
-#15 DONE 0.0s
+#15 [ 7/16] COPY requirements-container.txt /tmp/requirements-container.txt
+#15 CACHED
 
-#16 [12/16] COPY sregym/         /opt/sregym/sregym/
-#16 DONE 0.0s
+#16 [ 3/16] RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash -     && add-apt-repository ppa:deadsnakes/ppa
+#16 CACHED
 
 #17 [13/16] COPY install-scripts/ /opt/sregym/install-scripts/
-#17 DONE 0.0s
+#17 CACHED
 
 #18 [14/16] RUN chmod +x /opt/sregym/install-scripts/*.sh
-#18 DONE 0.3s
+#18 DONE 0.4s
 
 #19 [15/16] RUN mkdir -p /logs
 #19 DONE 0.5s
@@ -537,19 +70,19 @@ INFO - all.sregym.container_runner - 🐳 Building container image 'sregym-agent
 #20 DONE 0.0s
 
 #21 exporting to image
-#21 exporting layers
-#21 exporting layers 54.7s done
-#21 exporting manifest sha256:1966cbce49cffefaedde2687113cbf1b92076d0c606be563a0567abe9a1657ce done
-#21 exporting config sha256:a91cabe2d890621a9a03fa62e9c4eeeb86a96f098320a077c632fe8cd9f17015 done
-#21 exporting attestation manifest sha256:c8360ec25db64f76189c8b8e3f8b68944a92a3532f5cef111c7679f86babb496 0.0s done
-#21 exporting manifest list sha256:6de63275029c7f4a27ab7a87af7968ceabe466d6593d3198a401da8d83613fc8 done
+#21 exporting layers 0.1s done
+#21 exporting manifest sha256:8ce8ebf8998289b107cc0d5b6d0cdcef446ec3478d3ce21dda63c7518bcfeea6 done
+#21 exporting config sha256:693d53653fc7508d4fa045aa15bb39c59043a4c4f4aa844d4deb250dbb39488d done
+#21 exporting attestation manifest sha256:3dae409046437d0a9704bd5b3d1059cb8fe6e9c8328730880af588882af7fdef done
+#21 exporting manifest list sha256:2bd1ef6baebc9f3a86705af479b96796e0e4cd03295d6abcd9d2ecd3bef66f3b done
 #21 naming to docker.io/library/sregym-agent-base:latest done
-#21 unpacking to docker.io/library/sregym-agent-base:latest
-#21 unpacking to docker.io/library/sregym-agent-base:latest 21.9s done
-#21 DONE 76.7s
+#21 unpacking to docker.io/library/sregym-agent-base:latest 0.0s done
+#21 DONE 0.3s
 ==> Cleaning up build context...
 ==> Done! Image: sregym-agent-base:latest
-INFO - all.sregym.container_runner - ✅ Container image 'sregym-agent-base:latest' built successfully.
+[94mINFO - all.sregym.container_runner - ✅ Container image 'sregym-agent-base:latest' built successfully.[0m
+[94mINFO - __main__ - 🔍 Running pre-flight check for 'stratus'...[0m
+[94mINFO - __main__ - ✅ Pre-flight check passed for 'stratus'[0m
 ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── SREGym API Server ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │  ____  ____  _____ ____                                                                                                                                                                                                                                                │
 │ / ___||  _ \| ____/ ___|_   _ _ __ ___                                                                                                                                                                                                                                 │
@@ -567,223 +100,90 @@ Available Endpoints
   warnings.warn(  # deprecated in 14.0 - 2024-11-09
 /users/yimingsu/sregym/.venv/lib/python3.12/site-packages/uvicorn/protocols/websockets/websockets_impl.py:17: DeprecationWarning: websockets.server.WebSocketServerProtocol is deprecated
   from websockets.server import WebSocketServerProtocol
-INFO:     Started server process [1238569]
+INFO:     Started server process [2093778]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
-[23:14:25] Starting agent now: stratus                                                                                                                                                                                                                          main.py:72
-           🔒 Starting Kubernetes API proxy to hide chaos namespaces...                                                                                                                                                                                         main.py:76
-INFO - all.sregym.conductor - Starting Kubernetes API filtering proxy...
-INFO - all.infra.k8s_proxy - Kubernetes API filtering proxy started on port 16443
-INFO - all.infra.k8s_proxy - Hidden namespaces: {'khaos', 'chaos-mesh'}
-INFO - all.infra.k8s_proxy - Hidden labels: {'app': {'locust-fetcher', 'load-generator'}, 'job': {'workload'}, 'opentelemetry.io/name': {'load-generator'}}
-INFO - all.infra.k8s_proxy - Generated agent kubeconfig at /tmp/sregym-agent-kubeconfig
-INFO - all.sregym.conductor - Agent kubeconfig generated at: /tmp/sregym-agent-kubeconfig
-           🎯 Running single problem: incorrect_port_assignment                                                                                                                                                                                                 main.py:90
-                                                                                                                                                                                                                                                               main.py:133
-           🔍 Starting problem: incorrect_port_assignment (Attempt 1 of 1)                                                                                                                                                                                                
-INFO - all.application - Namespace astronomy-shop not found. Creating namespace.
-INFO - all.application - Namespace astronomy-shop created successfully: namespace/astronomy-shop created
-
-INFO - all.sregym.conductor - [Session Start] Problem ID: incorrect_port_assignment
-INFO - all.sregym.conductor - [STAGE] Start testing on problem: incorrect_port_assignment
-INFO - all.sregym.conductor - Fixing Kubernetes... to normal state.
-INFO - all.sregym.conductor - [FIX] Imbalance leftover if any
-INFO - all.sregym.conductor - [FIX] KubeletCrash leftover if any
-INFO - all.sregym.conductor - [FIX] Stale CoreDNS NXDOMAIN templates if any
-INFO - all.sregym.conductor - [FIX] Leftover dm-flakey infrastructure if any
-INFO - all.sregym.conductor - Fix Kubernetes completed.
-INFO - all.sregym.conductor - No tasklist.yml found. Defaulting to running diagnosis and mitigation for this problem.
-INFO - all.sregym.conductor - Undeploying app leftovers...
-INFO - all.infra.helm - Helm Uninstall: astronomy-shop in namespace astronomy-shop
-WARNING - all.infra.helm - Release astronomy-shop does not exist. Skipping uninstall.
+[22:18:21] Starting agent now: stratus                                                                                                                                                                                                                         main.py:117
+           🔒 Starting Kubernetes API proxy to hide chaos namespaces...                                                                                                                                                                                        main.py:121
+[94mINFO - all.sregym.conductor - Starting Kubernetes API filtering proxy...[0m
+[94mINFO - all.infra.k8s_proxy - Kubernetes API filtering proxy started on port 16443[0m
+[94mINFO - all.infra.k8s_proxy - Hidden namespaces: {'khaos', 'chaos-mesh'}[0m
+[94mINFO - all.infra.k8s_proxy - Hidden labels: {'app': {'load-generator', 'locust-fetcher'}, 'job': {'workload'}, 'opentelemetry.io/name': {'load-generator'}}[0m
+[94mINFO - all.infra.k8s_proxy - Generated agent kubeconfig at /tmp/sregym-agent-kubeconfig[0m
+[94mINFO - all.sregym.conductor - Agent kubeconfig generated at: /tmp/sregym-agent-kubeconfig[0m
+           🎯 Running single problem: cache_eviction_cascade                                                                                                                                                                                                   main.py:135
+                                                                                                                                                                                                                                                               main.py:178
+           🔍 Starting problem: cache_eviction_cascade (Attempt 1 of 1)                                                                                                                                                                                                   
+[94mINFO - all.application - Namespace astronomy-shop already exists.[0m
+[94mINFO - all.sregym.conductor - [Session Start] Problem ID: cache_eviction_cascade[0m
+[94mINFO - all.sregym.conductor - [STAGE] Start testing on problem: cache_eviction_cascade[0m
+[94mINFO - all.sregym.conductor - Fixing Kubernetes... to normal state.[0m
+[94mINFO - all.sregym.conductor - [FIX] Imbalance leftover if any[0m
+[94mINFO - all.sregym.conductor - [FIX] KubeletCrash leftover if any[0m
+[94mINFO - all.sregym.conductor - [FIX] Stale CoreDNS NXDOMAIN templates if any[0m
+[94mINFO - all.sregym.conductor - [FIX] Leftover dm-flakey infrastructure if any[0m
+[94mINFO - all.sregym.conductor - Fix Kubernetes completed.[0m
+[94mINFO - all.sregym.conductor - No tasklist.yml found. Defaulting to running diagnosis and mitigation for this problem.[0m
+[94mINFO - all.sregym.conductor - Undeploying app leftovers...[0m
+[94mINFO - all.infra.helm - Helm Uninstall: astronomy-shop in namespace astronomy-shop[0m
 Starting kubelet on node2.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us...
 Kubelet started on node2.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us
 Starting kubelet on node3.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us...
 Kubelet started on node3.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us
-Waiting for worker nodes {'node2.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us', 'node3.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us'} to become Ready...
+Waiting for worker nodes {'node3.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us', 'node2.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us'} to become Ready...
 All worker nodes are Ready.
 No NXDOMAIN templates found in CoreDNS config; nothing to do
 [dm-flakey] ⚠️ Could not remove dm-flakey on node1.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us (may not exist): No running Khaos pod found on node node1.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us
 [dm-flakey] ⚠️ Could not remove dm-flakey on node2.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us (may not exist): No running Khaos pod found on node node2.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us
 [dm-flakey] ⚠️ Could not remove dm-flakey on node3.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us (may not exist): No running Khaos pod found on node node3.yimingsu-296614.sieve-acto-pg0.wisc.cloudlab.us
-[23:14:27] Waiting for namespace deletion...                                                                                                                                                                                                                kubectl.py:215
-[23:14:33] Namespace 'astronomy-shop' has been deleted.                                                                                                                                                                                                     kubectl.py:223
-INFO - all.infra.kubectl - Namespace 'astronomy-shop' deleted successfully.
-[23:14:33] No jobs found with label 'job=workload' in namespace 'astronomy-shop'.                                                                                                                                                                           kubectl.py:301
-INFO - all.sregym.conductor - App leftovers undeployed.
-INFO - all.sregym.conductor - Deploying app...
-INFO - all.infra.cluster_state - Baseline state loaded from /users/yimingsu/cache_dir/cluster_baseline_state.json
-INFO - all.sregym.conductor - [DEPLOY] Loaded persisted cluster baseline state
-INFO - all.sregym.conductor - [DEPLOY] Setting up metrics-server…
-[23:14:35] Waiting for all pods in namespace 'kube-system' to be ready...                                                                                                                                                                                   kubectl.py:172
-[23:14:38] All pods in namespace 'kube-system' are ready.                                                                                                                                                                                                   kubectl.py:198
-INFO - all.sregym.conductor - [DEPLOY] Setting up OpenEBS…
-[23:14:39] Waiting for all pods in namespace 'openebs' to be ready...                                                                                                                                                                                       kubectl.py:172
-[23:14:50] All pods in namespace 'openebs' are ready.                                                                                                                                                                                                       kubectl.py:198
-INFO - all.sregym.conductor - [DEPLOY] Deploying Prometheus…
-WARNING - all.infra.prometheus - PersistentVolumeClaim prometheus-pvc not found. Skipping deletion.
-INFO - all.infra.helm - Helm Uninstall: prometheus in namespace observe
-WARNING - all.infra.helm - Release prometheus does not exist. Skipping uninstall.
-INFO - all.infra.prometheus - Applying PersistentVolumeClaim from /users/yimingsu/sregym/sregym/observer/prometheus/prometheus-pvc.yml
-INFO - all.infra.helm - Helm Install: prometheus in namespace observe
+[22:18:26] Waiting for namespace deletion...                                                                                                                                                                                                                kubectl.py:215
+[22:19:11] Namespace 'astronomy-shop' has been deleted.                                                                                                                                                                                                     kubectl.py:223
+[94mINFO - all.infra.kubectl - Namespace 'astronomy-shop' deleted successfully.[0m
+[22:19:11] No jobs found with label 'job=workload' in namespace 'astronomy-shop'.                                                                                                                                                                           kubectl.py:301
+[94mINFO - all.sregym.conductor - App leftovers undeployed.[0m
+[94mINFO - all.sregym.conductor - Deploying app...[0m
+[94mINFO - all.infra.cluster_state - Baseline state loaded from /users/yimingsu/cache_dir/cluster_baseline_state.json[0m
+[94mINFO - all.sregym.conductor - [DEPLOY] Loaded persisted cluster baseline state[0m
+[94mINFO - all.sregym.conductor - [DEPLOY] Setting up metrics-server…[0m
+[22:19:13] Waiting for all pods in namespace 'kube-system' to be ready...                                                                                                                                                                                   kubectl.py:172
+[22:19:16] All pods in namespace 'kube-system' are ready.                                                                                                                                                                                                   kubectl.py:198
+[94mINFO - all.sregym.conductor - [DEPLOY] Setting up OpenEBS…[0m
+[22:19:19] Waiting for all pods in namespace 'openebs' to be ready...                                                                                                                                                                                       kubectl.py:172
+           All pods in namespace 'openebs' are ready.                                                                                                                                                                                                       kubectl.py:198
+[94mINFO - all.sregym.conductor - [DEPLOY] Deploying Prometheus…[0m
+[92mWARNING - all.infra.prometheus - Prometheus is already running. Skipping redeployment.[0m
+[94mINFO - all.sregym.conductor - [DEPLOY] Deploying Jaeger…[0m
+[94mINFO - all.sregym.jaeger - Jaeger deployed successfully.[0m
+[94mINFO - all.sregym.conductor - [DEPLOY] Deploying OTel Collector…[0m
+[94mINFO - all.sregym.otel_collector - OTel Collector deployed successfully.[0m
+[94mINFO - all.sregym.conductor - [DEPLOY] Deploying Loki…[0m
+[92mWARNING - all.infra.loki - Loki is already running. Skipping redeployment.[0m
+[92mWARNING - all.infra.loki - Promtail is already running. Skipping redeployment.[0m
+[94mINFO - all.sregym.conductor - [DEPLOY] Deploying MCP server…[0m
+[94mINFO - all.sregym.mcp_server - MCP server RBAC resources ensured.[0m
+[94mINFO - all.sregym.mcp_server - MCP server already running, skipping redeploy.[0m
+[94mINFO - all.sregym.mcp_server - Port-forward is absent or stale, restarting.[0m
+[94mINFO - all.sregym.mcp_server - Port forwarding established at 9954. MCP_SERVER_PORT set.[0m
+[94mINFO - all.sregym.conductor - [ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki[0m
+[94mINFO - all.sregym.conductor - [DEPLOY] Deploying and starting workload[0m
+[94mINFO - all.infra.kubectl - Namespace 'astronomy-shop' not found. Creating namespace.[0m
+[94mINFO - all.infra.kubectl - Namespace 'astronomy-shop' created successfully.[0m
+[94mINFO - all.infra.helm - Helm Install: astronomy-shop in namespace astronomy-shop[0m
 Setting up OpenEBS LocalPV-Device…
-[23:15:19] Waiting for all pods in namespace 'observe' to be ready...                                                                                                                                                                                       kubectl.py:172
-[23:16:02] All pods in namespace 'observe' are ready.                                                                                                                                                                                                       kubectl.py:198
-INFO - all.sregym.conductor - [DEPLOY] Deploying Jaeger…
-INFO - all.sregym.jaeger - Jaeger deployed successfully.
-INFO - all.sregym.conductor - [DEPLOY] Deploying OTel Collector…
-INFO - all.sregym.otel_collector - OTel Collector deployed successfully.
-INFO - all.sregym.conductor - [DEPLOY] Deploying Loki…
-WARNING - all.infra.loki - PersistentVolumeClaim loki-pvc not found. Skipping deletion.
-INFO - all.infra.helm - Helm Uninstall: loki in namespace observe
-WARNING - all.infra.helm - Release loki does not exist. Skipping uninstall.
-INFO - all.infra.loki - Adding Grafana Helm repository...
-INFO - all.infra.loki - Applying PersistentVolumeClaim from /users/yimingsu/sregym/sregym/observer/loki/loki-pvc.yml
-INFO - all.infra.helm - Helm Install: loki in namespace observe
-[23:16:13] Waiting for all pods in namespace 'observe' to be ready...                                                                                                                                                                                       kubectl.py:172
-[23:17:00] All pods in namespace 'observe' are ready.                                                                                                                                                                                                       kubectl.py:198
-INFO - all.infra.loki - Deploying Promtail for Loki log collection...
-INFO - all.infra.helm - Helm Install: promtail in namespace observe
-WARNING - all.infra.helm - Helm install stderr output:
-level=WARN msg="this chart is deprecated"
-[23:17:02] Waiting for all pods in namespace 'observe' to be ready...                                                                                                                                                                                       kubectl.py:172
-[23:17:24] All pods in namespace 'observe' are ready.                                                                                                                                                                                                       kubectl.py:198
-INFO - all.sregym.conductor - [DEPLOY] Deploying MCP server…
-[23:17:24] Waiting for all pods in namespace 'sregym' to be ready...                                                                                                                                                                                        kubectl.py:172
-[23:17:55] All pods in namespace 'sregym' are ready.                                                                                                                                                                                                        kubectl.py:198
-INFO - all.sregym.mcp_server - Port forwarding established at 9954. MCP_SERVER_PORT set.
-INFO - all.sregym.mcp_server - MCP server deployed successfully.
-INFO - all.sregym.conductor - [ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki
-INFO - all.sregym.conductor - [DEPLOY] Deploying and starting workload
-INFO - all.infra.kubectl - Namespace 'astronomy-shop' not found. Creating namespace.
-INFO - all.infra.kubectl - Namespace 'astronomy-shop' created successfully.
-INFO - all.infra.helm - Helm Install: astronomy-shop in namespace astronomy-shop
-[23:18:22] Waiting for all pods in namespace 'astronomy-shop' to be ready...                                                                                                                                                                                kubectl.py:172
-[23:19:03] All pods in namespace 'astronomy-shop' are ready.                                                                                                                                                                                                kubectl.py:198
-INFO - all.sregym.conductor - [ENV] Deploy application: OpenTelemetry Demo Astronomy Shop
-INFO - all.sregym.jaeger - Created ExternalName service 'jaeger' in namespace 'astronomy-shop' -> otel-collector.observe.svc.cluster.local
-INFO - all.sregym.jaeger - Created ExternalName service 'jaeger-agent' in namespace 'astronomy-shop' -> otel-collector.observe.svc.cluster.local
-INFO - all.sregym.jaeger - Created ExternalName service 'jaeger-collector' in namespace 'astronomy-shop' -> otel-collector.observe.svc.cluster.local
-INFO - all.sregym.jaeger - Created ExternalName service 'jaeger-query' in namespace 'astronomy-shop' -> otel-collector.observe.svc.cluster.local
-INFO - all.sregym.jaeger - Restarted otel-collector-agent DaemonSet in namespace 'astronomy-shop'
-INFO - all.infra.workload - Start Workload with Locust
-INFO - all.infra.workload - AstronomyShop has a built-in load generator.
-INFO - all.infra.workload - Creating locust-fetcher pod...
-INFO - all.sregym.conductor - [ENV] Start workload
-INFO - all.sregym.conductor - App deployed.
-INFO - all.sregym.conductor - [ENV] Injected fault
-INFO - all.sregym.conductor - [WAIT] Waiting for alerts to fire in namespace 'astronomy-shop' (timeout=600s)…
-INFO - all.sregym.conductor - [WAIT] No alerts yet — 31/600s elapsed
-INFO - all.sregym.conductor - [WAIT] No alerts yet — 63/600s elapsed
-INFO - all.sregym.conductor - [WAIT] No alerts yet — 94/600s elapsed
-INFO - all.sregym.conductor - [WAIT] No alerts yet — 125/600s elapsed
-INFO - all.sregym.conductor - [WAIT] 🔔 Alerts firing in 'astronomy-shop': HighRequestErrorRate () [critical]
-INFO - all.sregym.conductor - [WAIT] Longest alert 'for' period is 120s — settling for 130s to let transient alerts clear…
-INFO - all.sregym.conductor - [WAIT] 🔔 Alerts still firing after settle: HighRequestErrorRate (checkout) [critical]
-INFO - all.sregym.conductor - [STAGE] Go to stage diagnosis
-INFO - all.sregym.conductor - ✅ Deployment complete. Ready for submission. Current stage is: diagnosis
-INFO - all.sregym.container_runner - Starting containerized agent [stratus-run]: python -m clients.stratus.stratus_agent.driver.driver 2>&1 | tee /logs/driver.lo...
-Waiting for locust-fetcher pod to be created...
-Pod locust-fetcher created.
-== Fault Injection ==
-Injected incorrect port assignment in PRODUCT_CATALOG_ADDR of checkout.
-Service: checkout | Namespace: astronomy-shop
-
-INFO:     127.0.0.1:54472 - "GET /get_problem HTTP/1.1" 200 OK
-INFO - all.stratus.driver - Response status: 200, text: {"problem_id":"incorrect_port_assignment"}
-INFO - all.stratus.driver - problem as str: {"problem_id":"incorrect_port_assignment"}
-INFO - all.stratus.driver - problem info: {'problem_id': 'incorrect_port_assignment'}
-INFO - all.stratus.driver - ************************* Starting [diagnosis agent] for [diagnosis] *************************
-INFO - all.stratus.driver - loading configs
-INFO:     127.0.0.1:54488 - "GET /get_app HTTP/1.1" 200 OK
-2026-04-01 04:23:44,373 - llm_backend.get_llm_backend - ERROR - Bad request error - request is malformed: litellm.BadRequestError: LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model=bedrock-claude-sonnet-4.5
- Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers
-Traceback (most recent call last):
-  File "<frozen runpy>", line 198, in _run_module_as_main
-  File "<frozen runpy>", line 88, in _run_code
-  File "/opt/sregym/clients/stratus/stratus_agent/driver/driver.py", line 846, in <module>
-    asyncio.run(main())
-  File "/usr/lib/python3.12/asyncio/runners.py", line 195, in run
-    return runner.run(main)
-           ^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
-    return self._loop.run_until_complete(task)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.12/asyncio/base_events.py", line 691, in run_until_complete
-    return future.result()
-           ^^^^^^^^^^^^^^^
-  File "/opt/sregym/clients/stratus/stratus_agent/driver/driver.py", line 745, in main
-    ) = await diagnosis_with_localization_task_main()
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/sregym/clients/stratus/stratus_agent/driver/driver.py", line 386, in diagnosis_with_localization_task_main
-    agent, last_state, graph_events = await diagnosis_single_run(first_run_initial_messages)
-                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/sregym/clients/stratus/stratus_agent/diagnosis_agent.py", line 66, in single_run_with_predefined_prompts
-    last_state, graph_events = await agent.arun(init_prompts)
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/sregym/clients/stratus/stratus_agent/base_agent.py", line 261, in arun
-    async for event in self.graph.astream(state, config=graph_config, stream_mode="values"):
-  File "/usr/local/lib/python3.12/dist-packages/langgraph/pregel/main.py", line 3115, in astream
-    async for _ in runner.atick(
-  File "/usr/local/lib/python3.12/dist-packages/langgraph/pregel/_runner.py", line 304, in atick
-    await arun_with_retry(
-  File "/usr/local/lib/python3.12/dist-packages/langgraph/pregel/_retry.py", line 211, in arun_with_retry
-    return await task.proc.ainvoke(task.input, config)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.12/dist-packages/langgraph/_internal/_runnable.py", line 705, in ainvoke
-    input = await asyncio.create_task(
-            ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.12/dist-packages/langgraph/_internal/_runnable.py", line 473, in ainvoke
-    ret = await self.afunc(*args, **kwargs)
-          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.12/dist-packages/langchain_core/runnables/config.py", line 636, in run_in_executor
-    return await asyncio.get_running_loop().run_in_executor(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.12/concurrent/futures/thread.py", line 59, in run
-    result = self.fn(*self.args, **self.kwargs)
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.12/dist-packages/langchain_core/runnables/config.py", line 627, in wrapper
-    return func(*args, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/sregym/clients/stratus/stratus_agent/base_agent.py", line 45, in call_model
-    ai_message = self.llm.inference(messages=state["messages"], tools=self._all_tools())
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/opt/sregym/llm_backend/get_llm_backend.py", line 101, in inference
-    logger.error(f"Error details: {e.response.json() if hasattr(e, 'response') else 'No response details'}")
-                                   ^^^^^^^^^^^^^^^^^
-  File "/usr/local/lib/python3.12/dist-packages/httpx/_models.py", line 832, in json
-    return jsonlib.loads(self.content, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.12/json/__init__.py", line 346, in loads
-    return _default_decoder.decode(s)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.12/json/decoder.py", line 338, in decode
-    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/usr/lib/python3.12/json/decoder.py", line 356, in raw_decode
-    raise JSONDecodeError("Expecting value", s, err.value) from None
-json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
-During task with name 'call_model' and id '92b8f16b-649a-8013-6b72-9370520585e6'
-No handler found for root logger
-🔧 Initializing LLM backend — model: bedrock-claude-sonnet-4.5
-
-Provider List: https://docs.litellm.ai/docs/providers
-
-
-Provider List: https://docs.litellm.ai/docs/providers
-
-[23:23:46] ⚠️  Agent process exited with return code 1                                                                                                                                                                                                          main.py:179
-           ✅ Completed incorrect_port_assignment: results={}                                                                                                                                                                                                  main.py:196
-           ⏳ Waiting for agent process to complete...                                                                                                                                                                                                         main.py:203
-           ✅ Agent process completed with return code 1                                                                                                                                                                                                       main.py:209
-INFO - __main__ - ⏳ Attempt 1 of 1 for problem incorrect_port_assignment complete - Intermediate results written to _running_incorrect_port_assignment_stratus_results.csv
-INFO - __main__ - ✅ Problem incorrect_port_assignment for agent stratus complete! Results written to results/0331_2314/stratus/incorrect_port_assignment/incorrect_port_assignment_stratus_results.csv
-           🧹 Cleaned up agent process for stratus                                                                                                                                                                                                             main.py:258
-           🔓 Stopping Kubernetes API proxy...                                                                                                                                                                                                                 main.py:262
-INFO - all.sregym.conductor - Stopping Kubernetes API filtering proxy...
-INFO - all.infra.k8s_proxy - Kubernetes API filtering proxy stopped
-WARNING - all.sregym.conductor_api - Shutting down API server...
-INFO:     Shutting down
-INFO:     Finished server process [1238569]
-INFO - __main__ - ✅ Benchmark complete! Results for stratus written to results/0331_2314/stratus_ALL_results.csv
+[22:19:48] Waiting for all pods in namespace 'astronomy-shop' to be ready...                                                                                                                                                                                kubectl.py:172
+[22:20:29] All pods in namespace 'astronomy-shop' are ready.                                                                                                                                                                                                kubectl.py:198
+[94mINFO - all.sregym.conductor - [ENV] Deploy application: OpenTelemetry Demo Astronomy Shop[0m
+[94mINFO - all.sregym.jaeger - Created ExternalName service 'jaeger' in namespace 'astronomy-shop' -> otel-collector.observe.svc.cluster.local[0m
+[94mINFO - all.sregym.jaeger - Created ExternalName service 'jaeger-agent' in namespace 'astronomy-shop' -> otel-collector.observe.svc.cluster.local[0m
+[94mINFO - all.sregym.jaeger - Created ExternalName service 'jaeger-collector' in namespace 'astronomy-shop' -> otel-collector.observe.svc.cluster.local[0m
+[94mINFO - all.sregym.jaeger - Created ExternalName service 'jaeger-query' in namespace 'astronomy-shop' -> otel-collector.observe.svc.cluster.local[0m
+[94mINFO - all.sregym.jaeger - Restarted otel-collector-agent DaemonSet in namespace 'astronomy-shop'[0m
+[94mINFO - all.infra.workload - Start Workload with Locust[0m
+[94mINFO - all.infra.workload - AstronomyShop has a built-in load generator.[0m
+[94mINFO - all.infra.workload - Creating locust-fetcher pod...[0m
+[94mINFO - all.sregym.conductor - [ENV] Start workload[0m
+[94mINFO - all.sregym.conductor - App deployed.[0m
+[94mINFO - all.sregym.conductor - [ENV] Injected fault[0m
+[94mINFO - all.sregym.conductor - [WAIT] Waiting for alerts to fire in namespace 'astronomy-shop' (timeout=600s)…[0m
+[94mINFO - all.sregym.conductor - [WAIT] No alerts yet — 31/600s elapsed[0m

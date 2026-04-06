@@ -296,6 +296,11 @@ def main():
     # Get usage metrics
     usage_metrics = agent.get_usage_metrics()
 
+    # Generate trajectory JSONL for the visualizer
+    traj_path = agent.generate_trajectory(problem_id=problem_id)
+    if traj_path:
+        logger.info(f"Trajectory written to: {traj_path}")
+
     # Save results
     save_results(logs_dir, problem_id, return_code, usage_metrics)
 

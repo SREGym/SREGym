@@ -325,6 +325,7 @@ class Conductor:
 
         self.logger.info("Start Eval for Diagnosis", extra={"sol": solution})
         r = problem.diagnosis_oracle.evaluate(solution)
+        r["submission"] = solution
         self.results["Diagnosis"] = r
         self.results["TTL"] = time.time() - self.execution_start_time
         self.logger.info(
@@ -335,11 +336,7 @@ class Conductor:
         return r
 
     def _evaluate_mitigation(self, solution):
-        """Evaluation logic for mitigation stage.
-
-        Also evaluates the resolution oracle (if attached) alongside mitigation
-        so that both scores come from a single agent submission.
-        """
+        """Evaluation logic for mitigation stage."""
         problem = self.current_problem
         # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
         self.logger.info("Start Eval for Mitigation", extra={"sol": solution})
@@ -384,7 +381,6 @@ class Conductor:
         # Inject fault before the first stage if not already done
         if start_index == 0 and not self.fault_injected:
             self._inject_fault()
-            self._wait_for_alerts()
 
             # Start continuous safety sampling after fault injection
             if self.problem is not None:
