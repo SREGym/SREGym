@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import re
 import subprocess
@@ -152,6 +153,159 @@ def discover_stages(path: Path) -> list[str]:
     base = ["diagnosis"] if "diagnosis" in found else []
     other = sorted(s for s in found if s != "diagnosis" and s not in attempts)
     return base + attempts + other
+
+
+# ---------------------------------------------------------------------------
+# Tool-call CSV export
+# ---------------------------------------------------------------------------
+
+def _extract_tool_calls_from_msg(msg: dict) -> list[dict]:
+    """Extract tool calls from a message, handling all known formats."""
+    # OpenAI / LangChain direct format
+    tcs = msg.get("tool_calls", [])
+    if isinstance(tcs, list) and tcs:
+        result = []
+        for tc in tcs:
+            if not isinstance(tc, dict):
+                continue
+            name = tc.get("name")
+            args = tc.get("args")
+            if not name:
+                fn = tc.get("function", {})
+                if isinstance(fn, dict):
+                    name = fn.get("name")
+                    args = fn.get("arguments")
+            if name:
+                result.append({"name": name, "args": args})
+        if result:
+            return result
+
+    # LangChain additional_kwargs format
+    ak = msg.get("additional_kwargs", {})
+    if isinstance(ak, dict):
+        tcs2 = ak.get("tool_calls", [])
+        if isinstance(tcs2, list) and tcs2:
+            result = []
+            for tc in tcs2:
+                if not isinstance(tc, dict):
+                    continue
+                name = tc.get("name")
+                args = tc.get("args")
+                if not name:
+                    fn = tc.get("function", {})
+                    if isinstance(fn, dict):
+                        name = fn.get("name")
+                        args = fn.get("arguments")
+                if name:
+                    result.append({"name": name, "args": args})
+            if result:
+                return result
+
+    # Anthropic content-block format (tool_use blocks inside content list)
+    content = msg.get("content")
+    if isinstance(content, list):
+        result = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                name = block.get("name")
+                args = block.get("input", {})
+                if name:
+                    result.append({"name": name, "args": args})
+        if result:
+            return result
+
+    return []
+
+
+_KUBECTL_TOOL_NAMES = {"exec_kubectl_cmd_safely", "exec_read_only_kubectl_cmd"}
+
+
+def _format_tool_call_signature(tc: dict) -> str:
+    """Format a tool call as name(arg1=val1, arg2=val2).
+
+    For kubectl tools, returns just the raw kubectl command string.
+    """
+    name = tc.get("name", "unknown")
+    args = tc.get("args")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except Exception:
+            pass
+
+    # For kubectl tools, return the raw command starting with "kubectl"
+    if name in _KUBECTL_TOOL_NAMES and isinstance(args, dict):
+        cmd = args.get("command", "")
+        if isinstance(cmd, str) and cmd.strip():
+            return cmd.strip()
+
+    if isinstance(args, dict):
+        parts = [f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in args.items()]
+        return f"{name}({', '.join(parts)})"
+    return f"{name}()"
+
+
+def save_tool_calls_csv(
+    records: list[dict[str, Any]],
+    out_dir: Path,
+    prefix: str,
+) -> None:
+    """
+    Save executed tool calls to CSV files with columns: turn_index, tool_call.
+
+    For stratus (diagnosis + mitigation stages), separate CSV files are written
+    for the diagnosis agent and the mitigation agent.  For single-stage agents,
+    one CSV is written.
+
+    Each assistant turn that contains tool calls gets a sequential *turn_index*
+    (0-based, per stage).  Each individual tool call within that turn is a
+    separate row sharing the same turn_index.
+    """
+    # stage -> list of (turn_index, formatted_signature)
+    stage_tool_calls: dict[str, list[tuple[int, str]]] = {}
+
+    for rec in records:
+        stage = rec.get("stage", "unknown")
+        msgs = detect_messages(rec)
+        if not msgs:
+            continue
+
+        turn_index = 0
+        for msg in msgs:
+            tcs = _extract_tool_calls_from_msg(msg)
+            if tcs:
+                for tc in tcs:
+                    sig = _format_tool_call_signature(tc)
+                    stage_tool_calls.setdefault(stage, []).append((turn_index, sig))
+                turn_index += 1
+
+    if not stage_tool_calls:
+        return
+
+    stages = list(stage_tool_calls.keys())
+    has_diagnosis = "diagnosis" in stages
+    has_mitigation = any(s.startswith("mitigation") for s in stages)
+    is_multi_agent = has_diagnosis and has_mitigation
+
+    if is_multi_agent:
+        for stage, calls in stage_tool_calls.items():
+            stage_label = "diagnosis" if stage == "diagnosis" else stage
+            csv_path = out_dir / f"{prefix}{stage_label}_tool_calls.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["turn_index", "tool_call"])
+                for turn_idx, sig in calls:
+                    writer.writerow([turn_idx, sig])
+    else:
+        all_calls = []
+        for calls in stage_tool_calls.values():
+            all_calls.extend(calls)
+        csv_path = out_dir / f"{prefix}tool_calls.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["turn_index", "tool_call"])
+            for turn_idx, sig in all_calls:
+                writer.writerow([turn_idx, sig])
 
 
 def extract_run_label(path: Path) -> str:
@@ -1922,6 +2076,9 @@ def main():
         body = render_file_report(fpath.name, records, errors, total_lines, file_problem_id=file_pid)
         html = html_page(f"{fpath.name} — Investigation Report", body)
         out_file.write_text(html, encoding="utf-8")
+
+        # Save tool calls to CSV
+        save_tool_calls_csv(records, out_dir, prefix)
 
         pid = ""
         if records:
