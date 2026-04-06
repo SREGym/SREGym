@@ -263,6 +263,12 @@ def driver_loop(
                                     console.log("⚠️  Conductor evaluation did not finish within 300s")
                                 except Exception as e:
                                     console.log(f"⚠️  Conductor evaluation raised: {e}")
+
+                            # Clean up fault injection and teardown so the next
+                            # problem starts from a clean state (matches timeout path).
+                            console.log("🧹 Running conductor cleanup after agent exit...")
+                            conductor._finish_problem()
+
                             break
                     await asyncio.sleep(1)
 
