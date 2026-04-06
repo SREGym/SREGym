@@ -63,6 +63,7 @@ from sregym.conductor.problems.target_port import K8STargetPortMisconfig
 from sregym.conductor.problems.train_ticket_f22 import TrainTicketF22
 from sregym.conductor.problems.trainticket_f17 import TrainTicketF17
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
+from sregym.conductor.problems.cache_eviction_cascade import CacheEvictionCascade
 from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
 from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
@@ -92,6 +93,7 @@ class ProblemRegistry:
             "storage_user_unregistered-2": lambda: MongoDBUserUnregistered(faulty_service="mongodb-rate"),
             "valkey_auth_disruption": ValkeyAuthDisruption,
             "valkey_memory_disruption": ValkeyMemoryDisruption,
+            "cache_eviction_cascade": CacheEvictionCascade,
             # # ==================== VIRTUALIZATION FAULT INJECTOR ====================
             # --- METASTABLE FAILURES ---
             "capacity_decrease_rpc_retry_storm": CapacityDecreaseRPCRetryStorm,

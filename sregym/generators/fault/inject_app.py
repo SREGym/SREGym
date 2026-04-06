@@ -263,6 +263,52 @@ class ApplicationFaultInjector(FaultInjector):
         except Exception as e:
             print(f"Error deleting job: {e}")
 
+    # A.6 valkey_maxmemory_reduction: Patch valkey-cart deployment to restrict maxmemory
+    def inject_valkey_maxmemory_reduction(self, maxmemory: int = 1048576, policy: str = "allkeys-lru"):
+        """
+        Patch the valkey-cart deployment command to enforce a tiny maxmemory limit.
+        Uses a deployment-level patch so the config persists across pod restarts.
+        """
+        print(f"[🔧] Injecting valkey maxmemory reduction: {maxmemory} bytes, policy={policy}")
+        command_value = ["valkey-server", "--maxmemory", str(maxmemory), "--maxmemory-policy", policy]
+        patch_json = f'[{{"op": "add", "path": "/spec/template/spec/containers/0/command", "value": {command_value}}}]'
+        patch_cmd = (
+            f"kubectl patch deployment valkey-cart -n {self.namespace} "
+            f"--type='json' -p='{patch_json}'"
+        )
+        result = self.kubectl.exec_command(patch_cmd)
+        print(f"[⚠️] Deployment patch result: {result}")
+
+        # Wait for rollout to complete
+        rollout_cmd = f"kubectl rollout status deployment/valkey-cart -n {self.namespace} --timeout=120s"
+        self.kubectl.exec_command(rollout_cmd)
+        print("[✅] Valkey-cart rollout complete with restricted maxmemory.")
+
+    def recover_valkey_maxmemory_reduction(self):
+        """
+        Remove the command override from valkey-cart deployment, restoring default config.
+        """
+        print("[🔓] Recovering valkey maxmemory: removing deployment command override")
+        patch_json = '[{"op": "remove", "path": "/spec/template/spec/containers/0/command"}]'
+        patch_cmd = (
+            f"kubectl patch deployment valkey-cart -n {self.namespace} "
+            f"--type='json' -p='{patch_json}'"
+        )
+        result = self.kubectl.exec_command(patch_cmd)
+        print(f"[✅] Deployment patch result: {result}")
+
+        # Wait for rollout to complete
+        rollout_cmd = f"kubectl rollout status deployment/valkey-cart -n {self.namespace} --timeout=120s"
+        self.kubectl.exec_command(rollout_cmd)
+
+        # Flush stale cache data from the new pod
+        pods = self.kubectl.list_pods(self.namespace)
+        valkey_pods = [p.metadata.name for p in pods.items if "valkey-cart" in p.metadata.name]
+        if valkey_pods:
+            flush_cmd = f"kubectl exec -n {self.namespace} {valkey_pods[0]} -- valkey-cli FLUSHALL"
+            self.kubectl.exec_command(flush_cmd)
+            print("[✅] Valkey cache flushed.")
+
     # A.5 incorrect_port_assignment: Update an env var to use the wrong port value
     def inject_incorrect_port_assignment(
         self, deployment_name: str, component_label: str, env_var: str, incorrect_port: str = "8082"
