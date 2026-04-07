@@ -1,4 +1,5 @@
 import argparse
+import csv
 import json
 import re
 import subprocess
@@ -152,6 +153,159 @@ def discover_stages(path: Path) -> list[str]:
     base = ["diagnosis"] if "diagnosis" in found else []
     other = sorted(s for s in found if s != "diagnosis" and s not in attempts)
     return base + attempts + other
+
+
+# ---------------------------------------------------------------------------
+# Tool-call CSV export
+# ---------------------------------------------------------------------------
+
+def _extract_tool_calls_from_msg(msg: dict) -> list[dict]:
+    """Extract tool calls from a message, handling all known formats."""
+    # OpenAI / LangChain direct format
+    tcs = msg.get("tool_calls", [])
+    if isinstance(tcs, list) and tcs:
+        result = []
+        for tc in tcs:
+            if not isinstance(tc, dict):
+                continue
+            name = tc.get("name")
+            args = tc.get("args")
+            if not name:
+                fn = tc.get("function", {})
+                if isinstance(fn, dict):
+                    name = fn.get("name")
+                    args = fn.get("arguments")
+            if name:
+                result.append({"name": name, "args": args})
+        if result:
+            return result
+
+    # LangChain additional_kwargs format
+    ak = msg.get("additional_kwargs", {})
+    if isinstance(ak, dict):
+        tcs2 = ak.get("tool_calls", [])
+        if isinstance(tcs2, list) and tcs2:
+            result = []
+            for tc in tcs2:
+                if not isinstance(tc, dict):
+                    continue
+                name = tc.get("name")
+                args = tc.get("args")
+                if not name:
+                    fn = tc.get("function", {})
+                    if isinstance(fn, dict):
+                        name = fn.get("name")
+                        args = fn.get("arguments")
+                if name:
+                    result.append({"name": name, "args": args})
+            if result:
+                return result
+
+    # Anthropic content-block format (tool_use blocks inside content list)
+    content = msg.get("content")
+    if isinstance(content, list):
+        result = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                name = block.get("name")
+                args = block.get("input", {})
+                if name:
+                    result.append({"name": name, "args": args})
+        if result:
+            return result
+
+    return []
+
+
+_KUBECTL_TOOL_NAMES = {"exec_kubectl_cmd_safely", "exec_read_only_kubectl_cmd"}
+
+
+def _format_tool_call_signature(tc: dict) -> str:
+    """Format a tool call as name(arg1=val1, arg2=val2).
+
+    For kubectl tools, returns just the raw kubectl command string.
+    """
+    name = tc.get("name", "unknown")
+    args = tc.get("args")
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except Exception:
+            pass
+
+    # For kubectl tools, return the raw command starting with "kubectl"
+    if name in _KUBECTL_TOOL_NAMES and isinstance(args, dict):
+        cmd = args.get("command", "")
+        if isinstance(cmd, str) and cmd.strip():
+            return cmd.strip()
+
+    if isinstance(args, dict):
+        parts = [f"{k}={json.dumps(v, ensure_ascii=False)}" for k, v in args.items()]
+        return f"{name}({', '.join(parts)})"
+    return f"{name}()"
+
+
+def save_tool_calls_csv(
+    records: list[dict[str, Any]],
+    out_dir: Path,
+    prefix: str,
+) -> None:
+    """
+    Save executed tool calls to CSV files with columns: turn_index, tool_call.
+
+    For stratus (diagnosis + mitigation stages), separate CSV files are written
+    for the diagnosis agent and the mitigation agent.  For single-stage agents,
+    one CSV is written.
+
+    Each assistant turn that contains tool calls gets a sequential *turn_index*
+    (0-based, per stage).  Each individual tool call within that turn is a
+    separate row sharing the same turn_index.
+    """
+    # stage -> list of (turn_index, formatted_signature)
+    stage_tool_calls: dict[str, list[tuple[int, str]]] = {}
+
+    for rec in records:
+        stage = rec.get("stage", "unknown")
+        msgs = detect_messages(rec)
+        if not msgs:
+            continue
+
+        turn_index = 0
+        for msg in msgs:
+            tcs = _extract_tool_calls_from_msg(msg)
+            if tcs:
+                for tc in tcs:
+                    sig = _format_tool_call_signature(tc)
+                    stage_tool_calls.setdefault(stage, []).append((turn_index, sig))
+                turn_index += 1
+
+    if not stage_tool_calls:
+        return
+
+    stages = list(stage_tool_calls.keys())
+    has_diagnosis = "diagnosis" in stages
+    has_mitigation = any(s.startswith("mitigation") for s in stages)
+    is_multi_agent = has_diagnosis and has_mitigation
+
+    if is_multi_agent:
+        for stage, calls in stage_tool_calls.items():
+            stage_label = "diagnosis" if stage == "diagnosis" else stage
+            csv_path = out_dir / f"{prefix}{stage_label}_tool_calls.csv"
+            with csv_path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(["turn_index", "tool_call"])
+                for turn_idx, sig in calls:
+                    writer.writerow([turn_idx, sig])
+    else:
+        all_calls = []
+        for calls in stage_tool_calls.values():
+            all_calls.extend(calls)
+        csv_path = out_dir / f"{prefix}tool_calls.csv"
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["turn_index", "tool_call"])
+            for turn_idx, sig in all_calls:
+                writer.writerow([turn_idx, sig])
 
 
 def extract_run_label(path: Path) -> str:
@@ -1478,78 +1632,28 @@ def _cc_parse_stream_json(input_path: Path) -> tuple[list[dict[str, Any]], bool]
     return messages, submitted
 
 
-def _codex_text_from_content(content: Any) -> str:
-    """Return a plain-text representation of a Codex content value."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for block in content:
-            if isinstance(block, str):
-                parts.append(block)
-            elif isinstance(block, dict):
-                btype = block.get("type", "")
-                if btype in ("text", "output_text"):
-                    parts.append(block.get("text", ""))
-                elif btype in ("image", "file"):
-                    parts.append(f"[{btype}]")
-                else:
-                    parts.append(json.dumps(block, ensure_ascii=False))
-        return "\n".join(p for p in parts if p)
-    if isinstance(content, dict):
-        return json.dumps(content, ensure_ascii=False)
-    return str(content) if content is not None else ""
-
-
-def _codex_tool_calls_from_content(content: Any) -> list[dict]:
-    calls: list[dict] = []
-    if not isinstance(content, list):
-        return calls
-    for block in content:
-        if not isinstance(block, dict):
-            continue
-        btype = block.get("type", "")
-        if btype in ("tool_use", "function_call"):
-            calls.append(
-                {
-                    "id": block.get("id", ""),
-                    "name": block.get("name", ""),
-                    "args": block.get("input", None) or block.get("arguments", {}),
-                    "type": "tool_call",
-                }
-            )
-    return calls
-
-
-def _codex_tool_results_from_content(content: Any) -> list[dict]:
-    results: list[dict] = []
-    if not isinstance(content, list):
-        return results
-    for block in content:
-        if not isinstance(block, dict):
-            continue
-        btype = block.get("type", "")
-        if btype in ("tool_result", "function_call_output"):
-            inner = block.get("content", block.get("output", ""))
-            results.append(
-                {
-                    "role": "tool",
-                    "tool_use_id": block.get("tool_use_id", block.get("call_id", "")),
-                    "content": _codex_text_from_content(inner),
-                }
-            )
-    return results
-
-
 def _codex_parse_json(input_path: Path) -> tuple[list[dict[str, Any]], bool]:
     """
-    Parse a Codex JSON output file into a flat list of messages.
+    Parse a Codex output file into a flat list of messages.
+
+    The file format is newline-delimited JSON (JSONL).  The very first line is
+    the plain-text banner "Reading additional input from stdin..." and is not
+    valid JSON — it is silently skipped.
+
+    Relevant event types:
+      item.completed / item.type=agent_message   → assistant narration text
+      item.started   / item.type=command_execution → tool call (shell command)
+      item.completed / item.type=command_execution → tool result (aggregated_output)
+
+    Multiple commands can be in-flight simultaneously and complete out of order.
+    The parser uses a two-phase approach:
+      1. Collect all events into a list (skipping non-JSON lines).
+      2. Walk the list maintaining a pending assistant turn; flush it (with its
+         accumulated tool_calls) when the first tool result for that turn arrives.
+
     Returns (messages, submitted).
     """
-    messages: list[dict[str, Any]] = []
-    submitted = False
-    pending_function_call: dict | None = None
-
+    raw_events: list[dict] = []
     with input_path.open("r", encoding="utf-8") as f:
         for raw_line in f:
             line = raw_line.strip()
@@ -1559,104 +1663,81 @@ def _codex_parse_json(input_path: Path) -> tuple[list[dict[str, Any]], bool]:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(event, dict):
+                raw_events.append(event)
 
-            if not isinstance(event, dict):
-                continue
+    messages: list[dict[str, Any]] = []
+    submitted = False
 
-            etype = event.get("type", "")
+    # Pending assistant turn (not yet emitted).
+    pending_text: str | None = None
+    pending_calls: list[dict] = []
+    assistant_flushed = True  # True once pending_text has been written to messages
 
-            if etype == "message":
-                role = event.get("role", "")
-                content = event.get("content", "")
+    def flush_assistant() -> None:
+        nonlocal assistant_flushed
+        if assistant_flushed:
+            return
+        msg: dict[str, Any] = {"role": "assistant", "content": pending_text or ""}
+        if pending_calls:
+            msg["tool_calls"] = list(pending_calls)
+        messages.append(msg)
+        assistant_flushed = True
 
-                tool_results = _codex_tool_results_from_content(content)
-                if tool_results:
-                    messages.extend(tool_results)
-                    continue
+    for event in raw_events:
+        etype = event.get("type", "")
+        item = event.get("item")
+        if not isinstance(item, dict):
+            continue
+        itype = item.get("type", "")
 
-                tool_calls = _codex_tool_calls_from_content(content) if role == "assistant" else []
-                text = _codex_text_from_content(content)
+        if etype == "item.completed" and itype == "agent_message":
+            # A new narration block starts a new assistant turn.
+            # If the previous turn never got tool calls, emit it as text-only now.
+            if not assistant_flushed:
+                flush_assistant()
+            pending_text = item.get("text", "")
+            pending_calls = []
+            assistant_flushed = False
 
-                m: dict[str, Any] = {"role": role or "user", "content": text}
-                if tool_calls:
-                    m["tool_calls"] = tool_calls
-                if text.strip() or tool_calls:
-                    messages.append(m)
-
-            elif etype == "function_call":
-                pending_function_call = {
-                    "id": event.get("call_id", event.get("id", "")),
-                    "name": event.get("name", ""),
-                    "args": event.get("arguments", event.get("input", {})),
+        elif etype == "item.started" and itype == "command_execution":
+            command = item.get("command", "")
+            pending_calls.append(
+                {
+                    "id": item.get("id", ""),
+                    "name": "bash",
+                    "args": {"command": command},
                     "type": "tool_call",
                 }
+            )
 
-            elif etype == "function_call_output":
-                if pending_function_call:
-                    if messages and messages[-1].get("role") == "assistant":
-                        tc = messages[-1].setdefault("tool_calls", [])
-                        tc.append(pending_function_call)
-                    else:
-                        messages.append(
-                            {
-                                "role": "assistant",
-                                "content": "",
-                                "tool_calls": [pending_function_call],
-                            }
-                        )
-                    pending_function_call = None
+        elif etype == "item.completed" and itype == "command_execution":
+            # Flush the pending assistant message (with tool_calls) before the
+            # first result of that turn arrives.
+            flush_assistant()
 
-                output = event.get("output", event.get("content", ""))
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_use_id": event.get("call_id", event.get("tool_use_id", "")),
-                        "content": _codex_text_from_content(output),
-                    }
-                )
+            output = item.get("aggregated_output", "") or ""
+            exit_code = item.get("exit_code")
+            if exit_code is not None and exit_code != 0:
+                content = f"[exit {exit_code}]\n{output}" if output else f"[exit {exit_code}]"
+            else:
+                content = output
 
-            elif etype in ("assistant", "user"):
-                role = etype
-                content = event.get("content", event.get("message", ""))
-                tool_calls = _codex_tool_calls_from_content(content) if role == "assistant" else []
-                tool_results = _codex_tool_results_from_content(content) if role == "user" else []
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_use_id": item.get("id", ""),
+                    "content": content,
+                }
+            )
 
-                if tool_results:
-                    messages.extend(tool_results)
-                else:
-                    text = _codex_text_from_content(content)
-                    m = {"role": role, "content": text}
-                    if tool_calls:
-                        m["tool_calls"] = tool_calls
-                    if text.strip() or tool_calls:
-                        messages.append(m)
-
-            elif "usage" in event and etype in ("", "usage", "completion"):
+            # Detect a successful submit call.
+            command = item.get("command", "")
+            if "/submit" in command and exit_code == 0:
                 submitted = True
 
-            elif "role" in event and "content" in event:
-                role = event["role"]
-                content = event["content"]
-                tool_calls = _codex_tool_calls_from_content(content) if role == "assistant" else []
-                tool_results = _codex_tool_results_from_content(content) if role == "user" else []
-
-                if tool_results:
-                    messages.extend(tool_results)
-                else:
-                    text = _codex_text_from_content(content)
-                    m = {"role": role, "content": text}
-                    if tool_calls:
-                        m["tool_calls"] = tool_calls
-                    if text.strip() or tool_calls:
-                        messages.append(m)
-
-    if pending_function_call:
-        if messages and messages[-1].get("role") == "assistant":
-            messages[-1].setdefault("tool_calls", []).append(pending_function_call)
-        else:
-            messages.append(
-                {"role": "assistant", "content": "", "tool_calls": [pending_function_call]}
-            )
+    # Flush any trailing assistant turn that never triggered a tool result.
+    flush_assistant()
 
     return messages, submitted
 
@@ -1797,22 +1878,45 @@ def _extract_problem_id_from_path(run_dir: Path) -> str:
     return run_dir.parent.name
 
 
+def _trajectory_has_messages(traj_path: Path) -> bool:
+    """Return True if the trajectory file contains at least one event with non-empty messages."""
+    try:
+        with traj_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") == "event" and obj.get("messages"):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def _convert_raw_agent_outputs(root: Path) -> None:
     """
     Walk a results directory and convert any claude-code.txt / codex.txt files
-    that don't yet have a corresponding *_trajectory.jsonl.
+    that don't yet have a valid *_trajectory.jsonl (one with actual messages).
     """
     _TS_RE = re.compile(r"^\d{4}_\d{4}$")
+
+    def _needs_conversion(run_dir: Path) -> bool:
+        trajs = list(run_dir.rglob("*_trajectory.jsonl"))
+        return not trajs or not any(_trajectory_has_messages(t) for t in trajs)
 
     tasks: list[tuple[str, Path, Path]] = []
     for output_file in sorted(root.rglob("claude-code.txt")):
         run_dir = output_file.parent
-        if not any(run_dir.rglob("*_trajectory.jsonl")):
+        if _needs_conversion(run_dir):
             tasks.append(("claudecode", output_file, run_dir))
 
     for output_file in sorted(root.rglob("codex.txt")):
         run_dir = output_file.parent
-        if not any(run_dir.rglob("*_trajectory.jsonl")):
+        if _needs_conversion(run_dir):
             tasks.append(("codex", output_file, run_dir))
 
     if not tasks:
@@ -1922,6 +2026,9 @@ def main():
         body = render_file_report(fpath.name, records, errors, total_lines, file_problem_id=file_pid)
         html = html_page(f"{fpath.name} — Investigation Report", body)
         out_file.write_text(html, encoding="utf-8")
+
+        # Save tool calls to CSV
+        save_tool_calls_csv(records, out_dir, prefix)
 
         pid = ""
         if records:
