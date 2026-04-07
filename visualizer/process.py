@@ -1878,22 +1878,45 @@ def _extract_problem_id_from_path(run_dir: Path) -> str:
     return run_dir.parent.name
 
 
+def _trajectory_has_messages(traj_path: Path) -> bool:
+    """Return True if the trajectory file contains at least one event with non-empty messages."""
+    try:
+        with traj_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if obj.get("type") == "event" and obj.get("messages"):
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 def _convert_raw_agent_outputs(root: Path) -> None:
     """
     Walk a results directory and convert any claude-code.txt / codex.txt files
-    that don't yet have a corresponding *_trajectory.jsonl.
+    that don't yet have a valid *_trajectory.jsonl (one with actual messages).
     """
     _TS_RE = re.compile(r"^\d{4}_\d{4}$")
+
+    def _needs_conversion(run_dir: Path) -> bool:
+        trajs = list(run_dir.rglob("*_trajectory.jsonl"))
+        return not trajs or not any(_trajectory_has_messages(t) for t in trajs)
 
     tasks: list[tuple[str, Path, Path]] = []
     for output_file in sorted(root.rglob("claude-code.txt")):
         run_dir = output_file.parent
-        if not any(run_dir.rglob("*_trajectory.jsonl")):
+        if _needs_conversion(run_dir):
             tasks.append(("claudecode", output_file, run_dir))
 
     for output_file in sorted(root.rglob("codex.txt")):
         run_dir = output_file.parent
-        if not any(run_dir.rglob("*_trajectory.jsonl")):
+        if _needs_conversion(run_dir):
             tasks.append(("codex", output_file, run_dir))
 
     if not tasks:
