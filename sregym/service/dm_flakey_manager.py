@@ -46,14 +46,21 @@ class DmFlakeyManager:
         Creates a dm-flakey device that will be used for all PVs created in /var/openebs/local/.
 
         Args:
-            nodes: List of node names to set up. If None, sets up on all nodes in the cluster.
+            nodes: List of node names to set up. If None, sets up on worker nodes only
+                   (control-plane nodes are skipped to avoid destabilising the K8s API server).
         """
         if nodes is None:
             nodes_response = self.kubectl.list_nodes()
-            nodes = [node.metadata.name for node in nodes_response.items]
+            nodes = [
+                node.metadata.name
+                for node in nodes_response.items
+                if not any(
+                    label.startswith("node-role.kubernetes.io/control-plane") for label in (node.metadata.labels or {})
+                )
+            ]
 
         if not nodes:
-            raise RuntimeError("No nodes available for dm-flakey setup")
+            raise RuntimeError("No worker nodes available for dm-flakey setup")
 
         for node in nodes:
             try:
@@ -223,7 +230,7 @@ echo 'OpenEBS dm-flakey infrastructure ready - all PVs will use dm-flakey'
 
     def teardown_openebs_dm_flakey_infrastructure(self, nodes: list[str] | None = None) -> None:
         """
-        Remove dm-flakey from OpenEBS storage on all nodes, restoring direct host storage.
+        Remove dm-flakey from OpenEBS storage on nodes, restoring direct host storage.
 
         This is needed before deploying apps that require fast I/O (e.g., TiDB),
         since the loop-backed dm-flakey device is too slow for some bootstrap operations.
