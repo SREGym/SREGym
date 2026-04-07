@@ -542,10 +542,6 @@ async def mitigation_task_main(diagnosis_summary):
             num_retry_attempts_lst.append(str(curr_attempt))
             rollback_stack_lst.append("N/A, naive retry")
 
-            if mitigation_submission_requested(last_state):
-                logger.info("mitigation agent called submit tool; breaking retry loop.")
-                break
-
             # getting oracle result
             try:
                 oracle_results = validate_oracles(oracles)
@@ -655,10 +651,6 @@ async def mitigation_task_main(diagnosis_summary):
             steps_lst.append(mitigation_agent_last_state.values["num_steps"])
             num_retry_attempts_lst.append(str(curr_attempt))
             rollback_stack_lst.append("N/A, mitigation agent")
-
-            if mitigation_submission_requested(mitigation_agent_last_state):
-                logger.info("mitigation agent called submit tool; breaking retry loop.")
-                break
 
             # getting oracle result
             try:
@@ -861,8 +853,6 @@ async def main():
     agent_output_df["steps"] = agent_steps
     agent_output_df["num_retry_attempts"] = agent_retry_attempts
     agent_output_df["rollback_stack"] = agent_rollback_stack
-    while len(agent_oracle_results) < len(agent_output_df):
-        agent_oracle_results.append("N/A")
     agent_output_df["oracle_results"] = agent_oracle_results
 
     agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
@@ -874,11 +864,9 @@ async def main():
 
     problem_dir.mkdir(parents=True, exist_ok=True)
 
-    # Save trajectory before CSV so it's preserved even if CSV write fails
-    save_combined_trajectory(all_trajectories, current_problem, output_dir=problem_dir)
-
     csv_path = problem_dir / f"{current_problem}_stratus_output.csv"
     agent_output_df.to_csv(csv_path, index=False, header=True)
+    save_combined_trajectory(all_trajectories, current_problem, output_dir=problem_dir)
 
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
     logger.info("*" * 25 + f" Finished Testing {current_problem} ! " + "*" * 25)
