@@ -1,6 +1,5 @@
 import time
 
-from sregym.conductor.oracles.alert_oracle import AlertOracle
 from sregym.conductor.oracles.cache_eviction_cascade_mitigation import (
     AvailabilityDamageOracle,
     CartResourceOracle,
@@ -82,11 +81,13 @@ class CacheEvictionCascade(Problem):
             self,
             ValkeyConfigOracle(problem=self),           # importance=2.0
             CartResourceOracle(problem=self),            # importance=2.0
-            AlertOracle(problem=self),                   # importance=1.0
             WorkloadOracle(problem=self, wrk_manager=self.app.wrk),  # importance=3.0
             SustainedReadinessOracle(problem=self),      # importance=1.0
             AvailabilityDamageOracle(problem=self),      # importance=2.5
         )
+        # AlertOracle intentionally excluded: HighRequestRate fires due to injected load
+        # (200 Locust users), not due to the faults. Recovery is measured by WorkloadOracle
+        # and AvailabilityDamageOracle instead.
 
     @mark_fault_injected
     def inject_fault(self):
