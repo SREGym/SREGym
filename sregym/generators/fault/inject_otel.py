@@ -4,12 +4,50 @@ import subprocess
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.kubectl import KubeCtl
 
+# Maps feature flags to the deployment(s) that consume them.
+# After restarting flagd, these services must also be restarted
+# so their OpenFeature SDK reconnects and picks up the new flag value
+# immediately instead of falling back to code-level defaults during
+# the gRPC EventStream reconnection window.
+# Source: https://opentelemetry.io/docs/demo/feature-flags/
+_FLAG_TO_DEPLOYMENTS: dict[str, list[str]] = {
+    "adFailure": ["ad"],
+    "adHighCpu": ["ad"],
+    "adManualGc": ["ad"],
+    "cartFailure": ["cart"],
+    "paymentFailure": ["payment"],
+    "paymentUnreachable": ["checkout"],
+    "productCatalogFailure": ["product-catalog"],
+    "kafkaQueueProblems": ["kafka"],
+    "imageSlowLoad": ["frontend"],
+    "loadGeneratorFloodHomepage": ["load-generator"],
+    "failedReadinessProbe": ["cart"],
+    "recommendationCacheFailure": ["recommendation"],
+    "emailMemoryLeak": ["email"],
+    "llmInaccurateResponse": ["llm"],
+    "llmRateLimitError": ["llm"],
+}
+
 
 class OtelFaultInjector(FaultInjector):
     def __init__(self, namespace: str):
         self.namespace = namespace
         self.kubectl = KubeCtl()
         self.configmap_name = "flagd-config"
+
+    def _restart_flagd_and_consumers(self, feature_flag: str) -> None:
+        """Restart flagd and the consuming service(s) so the flag change takes effect immediately."""
+        self.kubectl.exec_command(f"kubectl rollout restart deployment flagd -n {self.namespace}")
+
+        for deployment in _FLAG_TO_DEPLOYMENTS.get(feature_flag, []):
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {deployment} -n {self.namespace}")
+
+        # Wait for flagd to be ready before proceeding
+        self.kubectl.exec_command(f"kubectl rollout status deployment flagd -n {self.namespace} --timeout=60s")
+        for deployment in _FLAG_TO_DEPLOYMENTS.get(feature_flag, []):
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment {deployment} -n {self.namespace} --timeout=120s"
+            )
 
     def inject_fault(self, feature_flag: str):
         command = f"kubectl get configmap {self.configmap_name} -n {self.namespace} -o json"
@@ -34,7 +72,7 @@ class OtelFaultInjector(FaultInjector):
         updated_data = {"demo.flagd.json": json.dumps(flagd_data, indent=2)}
         self.kubectl.create_or_update_configmap(self.configmap_name, self.namespace, updated_data)
 
-        self.kubectl.exec_command(f"kubectl rollout restart deployment flagd -n {self.namespace}")
+        self._restart_flagd_and_consumers(feature_flag)
 
         print(f"Fault injected: Feature flag '{feature_flag}' set to 'on'.")
 
@@ -58,7 +96,8 @@ class OtelFaultInjector(FaultInjector):
         updated_data = {"demo.flagd.json": json.dumps(flagd_data, indent=2)}
         self.kubectl.create_or_update_configmap(self.configmap_name, self.namespace, updated_data)
 
-        self.kubectl.exec_command(f"kubectl rollout restart deployment flagd -n {self.namespace}")
+        self._restart_flagd_and_consumers(feature_flag)
+
         print(f"Fault recovered: Feature flag '{feature_flag}' set to 'off'.")
 
 
