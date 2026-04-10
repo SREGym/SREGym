@@ -232,6 +232,24 @@ class ClusterStateManager:
                 if e.status != 404:
                     logger.warning(f"Failed to delete PersistentVolume {pv}: {e}")
 
+        # 4b. Garbage-collect orphaned OpenEBS LocalPV hostpath dirs.
+        # The openebs namespace is itself "unexpected" and gets deleted in step 1
+        # above, which kills the openebs-localpv-provisioner before it can run
+        # cleanup helper pods for any PVs it provisioned. Additionally, on
+        # control-plane nodes the dm-flakey path is intentionally skipped, so
+        # those nodes never get the rm -rf wipe that workers do at dm-flakey
+        # setup. Either path leaks /var/openebs/local/pvc-* dirs, eventually
+        # filling the disk and breaking subsequent deploys. Sweep them now that
+        # all unexpected PVs are gone from the API. Best-effort.
+        try:
+            gc_results = self.kubectl.gc_orphan_localpv_dirs()
+            total = sum(c for c in gc_results.values() if c > 0)
+            if total:
+                changes["localpv_dirs_gc"] = {"removed": total, "by_node": gc_results}
+                logger.info(f"[gc_localpv] Removed {total} orphan LocalPV dir(s) total")
+        except Exception as e:
+            logger.warning(f"Failed to GC orphan LocalPV dirs: {e}")
+
         # 5. Delete unexpected StorageClasses
         current_scs = self._get_storage_classes()
         unexpected_scs = current_scs - self.baseline.storage_classes
