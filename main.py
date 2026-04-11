@@ -155,9 +155,9 @@ def driver_loop(
 
                 attempt_counts = Counter(r["problem_id"] for r in resume_rows)
                 completed_problems = {pid for pid, count in attempt_counts.items() if count >= n_attempts}
-                # Pre-seed all_results_for_agent with the resumed data
+
                 for row in resume_rows:
-                    all_results_for_agent.append({agent_to_run: [row]})
+                    all_results_for_agent.append(row)
                 console.log(
                     f"📋 Resuming from {resume_csv}: {len(completed_problems)} problems already done, skipping them"
                 )
