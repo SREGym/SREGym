@@ -23,12 +23,35 @@ class HWFaultInjector(FaultInjector):
         fault_type: str,
         params: list[str | int] | None = None,
     ):
+        # Resolve and inject per-pod, tolerating individual failures. A single
+        # pod racing with a container restart used to crash the entire problem
+        # (and on the third deploy retry, the entire benchmark). As long as we
+        # successfully inject into at least one pod, the fault is in effect.
+        successes: list[str] = []
+        failures: list[tuple[str, str]] = []
         for pod_ref in microservices:
-            ns, pod = self._split_ns_pod(pod_ref)
-            node = self._get_pod_node(ns, pod)
-            container_id = self._get_container_id(ns, pod)
-            host_pid = self._get_host_pid_on_node(node, container_id)
-            self._exec_khaos_fault_on_node(node, fault_type, host_pid, params)
+            try:
+                ns, pod = self._split_ns_pod(pod_ref)
+                node = self._get_pod_node(ns, pod)
+                container_id = self._get_container_id(ns, pod)
+                host_pid = self._get_host_pid_on_node(node, container_id)
+                self._exec_khaos_fault_on_node(node, fault_type, host_pid, params)
+                successes.append(pod_ref)
+            except Exception as e:
+                failures.append((pod_ref, str(e)))
+                print(f"[inject] Skipping {pod_ref}: {e}")
+
+        if failures:
+            print(
+                f"[inject] {fault_type}: injected into {len(successes)}/"
+                f"{len(successes) + len(failures)} pods ({len(failures)} skipped)"
+            )
+        if not successes:
+            first = failures[0][1] if failures else "no pods provided"
+            raise RuntimeError(
+                f"inject({fault_type}): could not inject into any of "
+                f"{len(microservices)} pod(s); first failure: {first}"
+            )
 
     def inject_node(
         self,
@@ -63,6 +86,49 @@ class HWFaultInjector(FaultInjector):
             target_pods = []
 
         self.recover(target_pods, fault_type)
+
+        # Sweep any leftover BPF pins for this fault. The reinjection monitor
+        # pins a fresh probe per restarted container, but `khaos --recover` only
+        # detaches one — leaving the rest as stale pins under /sys/fs/bpf that
+        # accumulate across runs and eventually leak kernel resources. We
+        # observed 14 leftover pins on node1 after a single failed
+        # latent_sector_error run.
+        try:
+            self._cleanup_pinned_bpf_for_fault(target_node, fault_type)
+        except Exception as e:
+            print(f"[recover] BPF pin sweep on {target_node} failed (non-fatal): {e}")
+
+    def _cleanup_pinned_bpf_for_fault(self, node: str, fault_type: str) -> None:
+        """Remove leftover /sys/fs/bpf pins matching the given fault type. Best-effort."""
+        pod_name = self._get_khaos_pod_on_node(node)
+        # khaos pin names embed the fault name (e.g.
+        # khaos-kprobe-lse-read-latent_sector_error_<pid>), so a substring glob
+        # on the fault name catches all variants for this fault.
+        pattern = f"/sys/fs/bpf/khaos-kprobe-*{fault_type}*"
+        cmd = [
+            "kubectl",
+            "-n",
+            self.khaos_ns,
+            "exec",
+            pod_name,
+            "--",
+            "sh",
+            "-lc",
+            f"set -e; n=$(ls {pattern} 2>/dev/null | wc -l); "
+            f'if [ "$n" -gt 0 ]; then rm -f {pattern}; fi; echo SWEPT=$n',
+        ]
+        try:
+            out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=15)
+            for line in out.splitlines():
+                if line.startswith("SWEPT="):
+                    n = line.split("=", 1)[1].strip()
+                    if n.isdigit() and int(n) > 0:
+                        print(f"[recover] Swept {n} leftover BPF pin(s) for {fault_type} on {node}")
+                    break
+        except subprocess.CalledProcessError as e:
+            print(f"[recover] Pin sweep command failed on {node}: {e.output}")
+        except subprocess.TimeoutExpired:
+            print(f"[recover] Pin sweep timed out on {node}")
 
     def recover(self, microservices: list[str], fault_type: str):
         touched = set()
@@ -118,21 +184,25 @@ class HWFaultInjector(FaultInjector):
 
     def _get_host_pid_on_node(self, node: str, container_id: str) -> int:
         pod_name = self._get_khaos_pod_on_node(node)
+        errors: list[str] = []
 
-        # /proc scan (fast, works with hostPID:true)
+        # /proc scan (fast, works with hostPID:true). This is the primary path.
         try:
             return self._get_host_pid_via_proc(pod_name, container_id)
-        except Exception:
-            pass
+        except Exception as e:
+            errors.append(f"proc: {e}")
 
-        # cgroup.procs search (works for both cgroup v1/v2)
+        # cgroup.procs search. The khaos daemonset mounts the host's
+        # /sys/fs/cgroup at /host/sys/fs/cgroup (read-only), so this can find
+        # workload container cgroups even when the /proc grep races with a
+        # restart and misses.
         try:
             return self._get_host_pid_via_cgroups(pod_name, container_id)
-        except Exception:
-            pass
+        except Exception as e:
+            errors.append(f"cgroups: {e}")
 
         raise RuntimeError(
-            f"Failed to resolve host PID for container {container_id} on node {node} (proc, cgroups, cri all failed)"
+            f"Failed to resolve host PID for container {container_id} on node {node}: " + "; ".join(errors)
         )
 
     def _get_host_pid_via_proc(self, khaos_pod: str, container_id: str) -> int:
@@ -171,12 +241,20 @@ class HWFaultInjector(FaultInjector):
     def _detect_cgroup_root(self, khaos_pod: str) -> str:
         """
         Detect cgroup mount root (v2 unified vs v1). Returns a path under which cgroup.procs exists.
+
+        Prefers /host/sys/fs/cgroup (the host's cgroup hierarchy mounted by
+        khaos.yaml) so we can see workload container cgroups, not just the
+        khaos container's own namespaced view.
         """
         candidates = [
-            "/sys/fs/cgroup",  # cgroup v2 (unified)
-            "/sys/fs/cgroup/systemd",  # v1 systemd hierarchy
-            "/sys/fs/cgroup/memory",  # v1 memory hierarchy
-            "/sys/fs/cgroup/pids",  # v1 pids hierarchy
+            "/host/sys/fs/cgroup",  # host cgroup root mounted by khaos.yaml (preferred)
+            "/host/sys/fs/cgroup/systemd",
+            "/host/sys/fs/cgroup/memory",
+            "/host/sys/fs/cgroup/pids",
+            "/sys/fs/cgroup",  # fallback: container's own (works only if no cgroup ns)
+            "/sys/fs/cgroup/systemd",
+            "/sys/fs/cgroup/memory",
+            "/sys/fs/cgroup/pids",
         ]
         for root in candidates:
             cmd = [
