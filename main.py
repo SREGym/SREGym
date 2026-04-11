@@ -203,7 +203,26 @@ def driver_loop(
                             result = None
 
                 if result is None:
-                    raise RuntimeError(f"All {max_deploy_retries} deploy attempts failed for problem '{pid}'")
+                    # The inner retry loop already logged the failure. Don't crash the
+                    # entire driver — record the failure, clean up cluster state, and
+                    # move on to the next problem so the benchmark can keep making progress.
+                    try:
+                        conductor._finish_problem()
+                    except Exception as cleanup_err:
+                        console.log(f"⚠️  Cleanup after exhausted deploy retries failed (non-fatal): {cleanup_err}")
+                    snapshot = {
+                        "problem_id": pid,
+                        "attempt": attempt,
+                        "deploy_failed": True,
+                    }
+                    all_results_for_agent.append(snapshot)
+                    fieldnames = sorted({key for row in all_results_for_agent for key in row})
+                    with open(tmp_path, "w", newline="") as csvfile:
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                        writer.writerows(all_results_for_agent)
+                    console.log(f"⏭️  Skipping remaining attempts for '{pid}' and moving to next problem")
+                    break
 
                 if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
                     console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
