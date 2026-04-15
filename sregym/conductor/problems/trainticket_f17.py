@@ -16,7 +16,7 @@ class TrainTicketF17(Problem):
     def __init__(self):
         self.app_name = "train-ticket"
         self.faulty_service = "ts-voucher-service"
-        self.fault_name = "tt-feat-17"
+        self.fault_name = "fault-17-nested-sql-select-clause-error"
         self.app = TrainTicket()
 
         self.namespace = self.app.namespace
@@ -46,7 +46,7 @@ class TrainTicketF17(Problem):
         self.injector._inject(
             fault_type="tt-feat-17",
         )
-        print(f"Injected tt-feat-17 | Namespace: {self.namespace}\n")
+        print(f"Injected fault-17-nested-sql-select-clause-error | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
@@ -55,4 +55,4 @@ class TrainTicketF17(Problem):
         self.injector._recover(
             fault_type="tt-feat-17",
         )
-        print(f"Recovered from tt-feat-17 | Namespace: {self.namespace}\n")
+        print(f"Recovered from fault-17-nested-sql-select-clause-error | Namespace: {self.namespace}\n")

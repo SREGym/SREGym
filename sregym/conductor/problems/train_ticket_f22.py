@@ -15,7 +15,7 @@ class TrainTicketF22(Problem):
     def __init__(self):
         self.app_name = "train-ticket"
         self.faulty_service = "ts-contacts-service"
-        self.fault_name = "tt-feat-22"
+        self.fault_name = "fault-22-sql-column-name-mismatch-error"
         self.app = TrainTicket()
 
         self.namespace = self.app.namespace
@@ -42,7 +42,7 @@ class TrainTicketF22(Problem):
         self.injector._inject(
             fault_type="tt-feat-22",
         )
-        print(f"Injected tt-feat-22 | Namespace: {self.namespace}\n")
+        print(f"Injected fault-22-sql-column-name-mismatch-error | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
@@ -51,4 +51,4 @@ class TrainTicketF22(Problem):
         self.injector._recover(
             fault_type="tt-feat-22",
         )
-        print(f"Recovered from tt-feat-22 | Namespace: {self.namespace}\n")
+        print(f"Recovered from fault-22-sql-column-name-mismatch-error | Namespace: {self.namespace}\n")
