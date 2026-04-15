@@ -177,8 +177,26 @@ class NoiseManager:
         with self._lock:
             for exp in self.active_experiments:
                 try:
-                    cmd = f"kubectl delete {exp['kind']} {exp['name']} -n {CHAOS_NAMESPACE} --ignore-not-found"
+                    # --wait=false returns as soon as deletionTimestamp is set,
+                    # so a stuck chaos-mesh finalizer can't block the caller.
+                    cmd = (
+                        f"kubectl delete {exp['kind']} {exp['name']} -n {CHAOS_NAMESPACE} "
+                        f"--ignore-not-found --wait=false --timeout=30s"
+                    )
                     self.kubectl.exec_command(cmd)
+
+                    # If the CR is still present, its finalizer is stuck
+                    # (common when the target pod is in CrashLoopBackOff and
+                    # chaos-mesh can't flush ip sets). Strip it so GC completes.
+                    remaining = self.kubectl.exec_command(
+                        f"kubectl get {exp['kind']} {exp['name']} -n {CHAOS_NAMESPACE} --ignore-not-found -o name"
+                    )
+                    if remaining and remaining.strip():
+                        logger.warning(f"Finalizer stuck on {exp['name']}; stripping to force removal")
+                        self.kubectl.exec_command(
+                            f"kubectl patch {exp['kind']} {exp['name']} -n {CHAOS_NAMESPACE} "
+                            f'--type=merge -p \'{{"metadata":{{"finalizers":[]}}}}\''
+                        )
                     logger.info(f"Cleaned up noise experiment {exp['name']}")
                 except Exception as e:
                     logger.error(f"Failed to clean up noise experiment {exp['name']}: {e}")
