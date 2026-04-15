@@ -20,28 +20,28 @@ class TrainTicketFaultInjector(FaultInjector):
         self.flagd_deployment = "flagd"
 
         self.fault_mapping = {
-            "fault-1-async-message-sequence-control": "F1: Asynchronous message delivery lacks sequence control",
-            "fault-2-data-request-order-inconsistency": "F2: Different data requests for the same report are returned in an unexpected order",
-            "fault-3-jvm-docker-config-mismatch": "F3: JVM configurations are inconsistent with Docker configurations",
-            "fault-4-ssl-offloading-granularity": "F4: SSL offloading happens in a fine granularity (happening in almost each Docker instance)",
-            "fault-5-high-load-timeout-cascade": "F5: The high load of a type of requests causes the timeout failure of another type of requests",
-            "fault-6-sql-error-recursive-requests": "F6: Endless recursive requests of a microservice are caused by SQL errors of another dependent microservice",
-            "fault-7-third-party-service-overload": "F7: The overload of requests to a third-party service leads to denial of service",
-            "fault-8-request-key-propagation-failure": "F8: The key in the request of one microservice is not passed to its dependent microservice",
-            "fault-9-css-bidirectional-display-error": "F9: There is a CSS display style error in bi-directional",
-            "fault-10-bom-api-unexpected-output": "F10: An API used in a special case of BOM updating returns unexpected output",
-            "fault-11-bom-data-sequence-error": "F11: The BOM data is updated in an unexpected sequence",
-            "fault-12-price-status-query-chain-error": "F12: Price status querying does not consider an unexpected output of a microservice in its call chain",
-            "fault-13-price-optimization-order-error": "F13: Price optimization steps are executed in an unexpected order",
-            "fault-14-locked-product-cpi-calculation-error": "F14: There is a mistake in including the locked product in CPI calculation",
-            "fault-15-spark-actor-system-config-error": "F15: The spark actor is used for the configuration of actorSystem (part of Apache Spark) instead of the system actor",
-            "fault-16-spray-max-content-length-limit": "F16: The 'max-content-length' configuration of spray is only 2 Mb, not allowing to support to upload a big file",
-            "fault-17-nested-sql-select-clause-error": "F17: Too many nested 'select' and 'from' clauses are in the constructed SQL statement",
-            "fault-18-json-chart-data-null-value": "F18: One key of the returned JSON data for the UI chart includes the null value",
-            "fault-19-product-price-french-format-error": "F19: The product price is not formatted correctly in the French format",
-            "fault-20-jboss-db2-jar-classpath-error": "F20: The JBoss startup classpath parameter does not include the right DB2 jar package",
-            "fault-21-aria-labeled-accessibility-error": "F21: The 'aria-labeled-by' element for accessibility cannot be located by the JAWS",
-            "fault-22-sql-column-name-mismatch-error": "F22: The constructed SQL statement includes a wrong column name in the 'select' part according to its 'from' part",
+            "tt-feat-01": "F1: Asynchronous message delivery lacks sequence control",
+            "tt-feat-02": "F2: Different data requests for the same report are returned in an unexpected order",
+            "tt-feat-03": "F3: JVM configurations are inconsistent with Docker configurations",
+            "tt-feat-04": "F4: SSL offloading happens in a fine granularity (happening in almost each Docker instance)",
+            "tt-feat-05": "F5: The high load of a type of requests causes the timeout failure of another type of requests",
+            "tt-feat-06": "F6: Endless recursive requests of a microservice are caused by SQL errors of another dependent microservice",
+            "tt-feat-07": "F7: The overload of requests to a third-party service leads to denial of service",
+            "tt-feat-08": "F8: The key in the request of one microservice is not passed to its dependent microservice",
+            "tt-feat-09": "F9: There is a CSS display style error in bi-directional",
+            "tt-feat-10": "F10: An API used in a special case of BOM updating returns unexpected output",
+            "tt-feat-11": "F11: The BOM data is updated in an unexpected sequence",
+            "tt-feat-12": "F12: Price status querying does not consider an unexpected output of a microservice in its call chain",
+            "tt-feat-13": "F13: Price optimization steps are executed in an unexpected order",
+            "tt-feat-14": "F14: There is a mistake in including the locked product in CPI calculation",
+            "tt-feat-15": "F15: The spark actor is used for the configuration of actorSystem (part of Apache Spark) instead of the system actor",
+            "tt-feat-16": "F16: The 'max-content-length' configuration of spray is only 2 Mb, not allowing to support to upload a big file",
+            "tt-feat-17": "F17: Too many nested 'select' and 'from' clauses are in the constructed SQL statement",
+            "tt-feat-18": "F18: One key of the returned JSON data for the UI chart includes the null value",
+            "tt-feat-19": "F19: The product price is not formatted correctly in the French format",
+            "tt-feat-20": "F20: The JBoss startup classpath parameter does not include the right DB2 jar package",
+            "tt-feat-21": "F21: The 'aria-labeled-by' element for accessibility cannot be located by the JAWS",
+            "tt-feat-22": "F22: The constructed SQL statement includes a wrong column name in the 'select' part according to its 'from' part",
         }
 
     def inject_fault(self, fault_type: str) -> bool:
@@ -67,7 +67,7 @@ class TrainTicketFaultInjector(FaultInjector):
         """Update fault state in ConfigMap.
 
         Args:
-            fault_type: Name of the fault (e.g., 'fault-6-sql-error-recursive-requests')
+            fault_type: Name of the fault (e.g., 'tt-feat-06')
             state: 'on' or 'off'
         """
         print(f"Setting {fault_type} to {state}...")
