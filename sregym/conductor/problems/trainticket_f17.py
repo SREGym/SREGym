@@ -44,7 +44,7 @@ class TrainTicketF17(Problem):
         print("== Fault Injection ==")
         self.injector = TrainTicketFaultInjector(namespace=self.namespace)
         self.injector._inject(
-            fault_type="fault-17-nested-sql-select-clause-error",
+            fault_type="tt-feat-17",
         )
         print(f"Injected fault-17-nested-sql-select-clause-error | Namespace: {self.namespace}\n")
 
@@ -53,6 +53,6 @@ class TrainTicketF17(Problem):
         print("== Fault Recovery ==")
         self.injector = TrainTicketFaultInjector(namespace=self.namespace)
         self.injector._recover(
-            fault_type="fault-17-nested-sql-select-clause-error",
+            fault_type="tt-feat-17",
         )
         print(f"Recovered from fault-17-nested-sql-select-clause-error | Namespace: {self.namespace}\n")
