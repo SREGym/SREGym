@@ -1,5 +1,6 @@
 import json
 import logging
+import random
 import time
 from typing import Any
 
@@ -19,38 +20,32 @@ class TrainTicketFaultInjector(FaultInjector):
         self.configmap_name = "flagd-config"
         self.flagd_deployment = "flagd"
 
-        self.fault_mapping = {
-            "tt-feat-01": "F1: Asynchronous message delivery lacks sequence control",
-            "tt-feat-02": "F2: Different data requests for the same report are returned in an unexpected order",
-            "tt-feat-03": "F3: JVM configurations are inconsistent with Docker configurations",
-            "tt-feat-04": "F4: SSL offloading happens in a fine granularity (happening in almost each Docker instance)",
-            "tt-feat-05": "F5: The high load of a type of requests causes the timeout failure of another type of requests",
-            "tt-feat-06": "F6: Endless recursive requests of a microservice are caused by SQL errors of another dependent microservice",
-            "tt-feat-07": "F7: The overload of requests to a third-party service leads to denial of service",
-            "tt-feat-08": "F8: The key in the request of one microservice is not passed to its dependent microservice",
-            "tt-feat-09": "F9: There is a CSS display style error in bi-directional",
-            "tt-feat-10": "F10: An API used in a special case of BOM updating returns unexpected output",
-            "tt-feat-11": "F11: The BOM data is updated in an unexpected sequence",
-            "tt-feat-12": "F12: Price status querying does not consider an unexpected output of a microservice in its call chain",
-            "tt-feat-13": "F13: Price optimization steps are executed in an unexpected order",
-            "tt-feat-14": "F14: There is a mistake in including the locked product in CPI calculation",
-            "tt-feat-15": "F15: The spark actor is used for the configuration of actorSystem (part of Apache Spark) instead of the system actor",
-            "tt-feat-16": "F16: The 'max-content-length' configuration of spray is only 2 Mb, not allowing to support to upload a big file",
-            "tt-feat-17": "F17: Too many nested 'select' and 'from' clauses are in the constructed SQL statement",
-            "tt-feat-18": "F18: One key of the returned JSON data for the UI chart includes the null value",
-            "tt-feat-19": "F19: The product price is not formatted correctly in the French format",
-            "tt-feat-20": "F20: The JBoss startup classpath parameter does not include the right DB2 jar package",
-            "tt-feat-21": "F21: The 'aria-labeled-by' element for accessibility cannot be located by the JAWS",
-            "tt-feat-22": "F22: The constructed SQL statement includes a wrong column name in the 'select' part according to its 'from' part",
+        self.supported_faults = {"tt-feat-17", "tt-feat-22"}
+        self.excluded_from_decoy = self.supported_faults | {"tt-feat-01"}
+        self.all_flags = {
+            "tt-feat-01",
+            "tt-feat-02",
+            "tt-feat-03",
+            "tt-feat-04",
+            "tt-feat-05",
+            "tt-feat-06",
+            "tt-feat-07",
+            "tt-feat-08",
+            "tt-feat-09",
+            "tt-feat-10",
+            "tt-feat-11",
+            "tt-feat-12",
+            "tt-feat-13",
+            "tt-feat-14",
+            "tt-feat-15",
+            "tt-feat-16",
+            "tt-feat-17",
+            "tt-feat-18",
+            "tt-feat-19",
+            "tt-feat-20",
+            "tt-feat-21",
+            "tt-feat-22",
         }
-
-    def inject_fault(self, fault_type: str) -> bool:
-        print(f"[TrainTicket] Injecting fault: {fault_type}")
-        return self._set_fault_state(fault_type, "on")
-
-    def recover_fault(self, fault_type: str) -> bool:
-        print(f"[TrainTicket] Recovering from fault: {fault_type}")
-        return self._set_fault_state(fault_type, "off")
 
     def _get_configmap(self) -> dict[str, Any]:
         try:
@@ -58,7 +53,6 @@ class TrainTicketFaultInjector(FaultInjector):
                 f"kubectl get configmap {self.configmap_name} -n {self.namespace} -o json"
             )
             return json.loads(result) if result else {}
-
         except Exception as e:
             logger.error(f"Error getting ConfigMap: {e}")
             return {}
@@ -67,9 +61,13 @@ class TrainTicketFaultInjector(FaultInjector):
         """Update fault state in ConfigMap.
 
         Args:
-            fault_type: Name of the fault (e.g., 'tt-feat-06')
+            fault_type: Name of the fault (e.g., 'tt-feat-17')
             state: 'on' or 'off'
         """
+        if fault_type not in self.supported_faults:
+            print(f"Unsupported fault type: {fault_type}")
+            return False
+
         print(f"Setting {fault_type} to {state}...")
 
         configmap = self._get_configmap()
@@ -84,9 +82,7 @@ class TrainTicketFaultInjector(FaultInjector):
             print(f"Fault '{fault_type}' not found in ConfigMap")
             return False
 
-        # Update fault state
         flags_data["flags"][fault_type]["defaultVariant"] = state
-
         updated_yaml = yaml.dump(flags_data, default_flow_style=False)
 
         try:
@@ -110,7 +106,7 @@ class TrainTicketFaultInjector(FaultInjector):
                 self._restart_flagd()
                 print("✅ flagd restarted successfully")
 
-                print("Sleeping for 20 seconds to flag value change to take effect...")
+                print("Sleeping for 20 seconds for flag value change to take effect...")
                 time.sleep(20)
                 return True
             else:
@@ -123,52 +119,99 @@ class TrainTicketFaultInjector(FaultInjector):
 
     def _restart_flagd(self):
         print("[TrainTicket] Restarting flagd deployment...")
-
         try:
             result = self.kubectl.exec_command(
                 f"kubectl rollout restart deployment/{self.flagd_deployment} -n {self.namespace}"
             )
-            print(f"[TrainTicket] flagd deployment restarted successfully: {result}")
-
+            print(f"[TrainTicket] flagd deployment restarted: {result}")
         except Exception as e:
             logger.error(f"Error restarting flagd: {e}")
 
-    def get_fault_status(self, fault_type: str) -> str:
+    def activate_decoy_flags(self, count: int = 3) -> bool:
+        """Turn on a random subset of dud flags so the real fault doesn't stand out.
+
+        Args:
+            count: How many decoy flags to enable.
+        """
+        dud_flags = list(self.all_flags - self.excluded_from_decoy)
+        random.shuffle(dud_flags)
+        chosen = dud_flags[: min(count, len(dud_flags))]
+
+        configmap = self._get_configmap()
+        if not configmap:
+            print("Failed to get ConfigMap for decoy activation")
+            return False
+
+        flags_yaml = configmap["data"]["flags.yaml"]
+        flags_data = yaml.safe_load(flags_yaml)
+
+        activated = []
+        for flag in chosen:
+            if flag in flags_data["flags"]:
+                flags_data["flags"][flag]["defaultVariant"] = "on"
+                activated.append(flag)
+
+        if not activated:
+            print("No decoy flags available in ConfigMap")
+            return False
+
+        updated_yaml = yaml.dump(flags_data, default_flow_style=False)
         try:
-            result = self.kubectl.exec_command(
-                f"kubectl get configmap {self.configmap_name} -n {self.namespace} -o jsonpath='{{.data.flags\\.yaml}}'"
+            result = self.kubectl.update_configmap(
+                name=self.configmap_name, namespace=self.namespace, data={"flags.yaml": updated_yaml}
             )
-
-            if result and fault_type in result:
-                import yaml
-
-                flags_data = yaml.safe_load(result)
-
-                if "flags" in flags_data and fault_type in flags_data["flags"]:
-                    return flags_data["flags"][fault_type].get("defaultVariant", "unknown")
-
+            if result:
+                print(f"Decoy flags activated: {activated}")
+                return True
+            else:
+                print("Failed to update ConfigMap with decoy flags")
+                return False
         except Exception as e:
-            logger.error(f"Error getting fault status: {e}")
+            print(f"Error activating decoy flags: {e}")
+            return False
 
-        return "unknown"
+    def deactivate_decoy_flags(self) -> bool:
+        """Turn off all dud flags (everything except supported faults)."""
+        configmap = self._get_configmap()
+        if not configmap:
+            print("Failed to get ConfigMap for decoy deactivation")
+            return False
 
-    def list_available_faults(self) -> list[str]:
-        return list(self.fault_mapping.keys())
+        flags_yaml = configmap["data"]["flags.yaml"]
+        flags_data = yaml.safe_load(flags_yaml)
 
-    def get_fault_description(self, fault_name: str) -> str | None:
-        return self.fault_mapping.get(fault_name)
+        deactivated = []
+        for flag in self.all_flags - self.excluded_from_decoy:
+            if flag in flags_data["flags"] and flags_data["flags"][flag].get("defaultVariant") == "on":
+                flags_data["flags"][flag]["defaultVariant"] = "off"
+                deactivated.append(flag)
 
-    # Override base class methods to use feature flag-based fault injection
-    def _inject(self, fault_type: str, microservices: list[str] = None, duration: str = None):
+        if not deactivated:
+            print("No decoy flags were active")
+            return True
+
+        updated_yaml = yaml.dump(flags_data, default_flow_style=False)
+        try:
+            result = self.kubectl.update_configmap(
+                name=self.configmap_name, namespace=self.namespace, data={"flags.yaml": updated_yaml}
+            )
+            if result:
+                print(f"Decoy flags deactivated: {deactivated}")
+                return True
+            else:
+                print("Failed to update ConfigMap for decoy deactivation")
+                return False
+        except Exception as e:
+            print(f"Error deactivating decoy flags: {e}")
+            return False
+
+    def _inject(self, fault_type: str, microservices: list[str] | None = None, duration: str | None = None):
         """Override base class _inject to use feature flag-based injection."""
-        print(f"[TrainTicket] Using feature flag injection for: {fault_type}")
-        return self.inject_fault(fault_type)
+        self.activate_decoy_flags(count=10)
+        return self._set_fault_state(fault_type, "on")
 
-    def _recover(self, fault_type: str, microservices: list[str] = None):
+    def _recover(self, fault_type: str, microservices: list[str] | None = None):
         """Override base class _recover to use feature flag-based recovery."""
-        print(f"[TrainTicket] Using feature flag recovery for: {fault_type}")
-        return self.recover_fault(fault_type)
-
-
-if __name__ == "__main__":
-    print("TrainTicketFaultInjector - Use via SREGym CLI")
+        result = self._set_fault_state(fault_type, "off")
+        self.deactivate_decoy_flags()
+        return result
