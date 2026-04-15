@@ -28,6 +28,15 @@ _FLAG_TO_DEPLOYMENTS: dict[str, list[str]] = {
     "llmRateLimitError": ["llm"],
 }
 
+# Flags whose "enabled" variant is NOT the standard "on".
+# These flags use percentage/multiplier variants instead of boolean on/off.
+# Source: https://github.com/open-telemetry/opentelemetry-demo/blob/main/src/flagd/demo.flagd.json
+_FLAG_INJECT_VARIANT: dict[str, str] = {
+    "imageSlowLoad": "10sec",
+    "paymentFailure": "100%",
+    "emailMemoryLeak": "1000x",
+}
+
 
 class OtelFaultInjector(FaultInjector):
     def __init__(self, namespace: str):
@@ -62,10 +71,8 @@ class OtelFaultInjector(FaultInjector):
         flagd_data = json.loads(configmap["data"]["demo.flagd.json"])
 
         if feature_flag in flagd_data["flags"]:
-            if feature_flag == "imageSlowLoad":
-                flagd_data["flags"][feature_flag]["defaultVariant"] = "10sec"
-            else:
-                flagd_data["flags"][feature_flag]["defaultVariant"] = "on"
+            variant = _FLAG_INJECT_VARIANT.get(feature_flag, "on")
+            flagd_data["flags"][feature_flag]["defaultVariant"] = variant
         else:
             raise ValueError(f"Feature flag '{feature_flag}' not found in ConfigMap '{self.configmap_name}'.")
 
@@ -74,7 +81,7 @@ class OtelFaultInjector(FaultInjector):
 
         self._restart_flagd_and_consumers(feature_flag)
 
-        print(f"Fault injected: Feature flag '{feature_flag}' set to 'on'.")
+        print(f"Fault injected: Feature flag '{feature_flag}' set to '{variant}'.")
 
     def recover_fault(self, feature_flag: str):
         command = f"kubectl get configmap {self.configmap_name} -n {self.namespace} -o json"
