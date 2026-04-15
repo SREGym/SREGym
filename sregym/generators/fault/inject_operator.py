@@ -195,7 +195,12 @@ class K8SOperatorFaultInjector(FaultInjector):
 
     def inject_non_existent_storage(self):
         """
-        This fault specifies a non-existent storage class.
+        This fault specifies a non-existent storage class for PD.
+
+        After updating the CR, deletes the PD StatefulSet and its PVCs so the
+        TiDB operator recreates them using the bogus storageClass from the CR.
+        New PVCs cannot be provisioned (StorageClass does not exist), so PD
+        pods remain stuck in Pending — making the fault observable.
         """
         cr_name = "non-existent-storage-fault"
         cr_yaml = {
@@ -229,7 +234,32 @@ class K8SOperatorFaultInjector(FaultInjector):
         }
         self._apply_yaml(cr_name, cr_yaml)
 
+        # StatefulSet volumeClaimTemplates are immutable, so the operator
+        # cannot propagate the updated storageClassName into the existing
+        # StatefulSet or its already-bound PVCs.  Delete the PD StatefulSet
+        # and its PVCs to force the operator to recreate them from the updated
+        # CR.  The new PVCs will reference ThisIsAStorageClass, fail to
+        # provision, and leave PD pods stuck in Pending.
+        pd_labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
+        print("[FAULT] Deleting PD PVCs to force reprovisioning with the bogus storage class...")
+        self.kubectl.exec_command(
+            f"kubectl delete pvc -n {self.namespace} -l {pd_labels} --wait=false"
+        )
+        print("[FAULT] Deleting PD StatefulSet so the operator rebuilds it from the updated CR...")
+        self.kubectl.exec_command(
+            f"kubectl delete statefulset basic-pd -n {self.namespace} --ignore-not-found=true --wait=false"
+        )
+
     def recover_non_existent_storage(self):
+        # PVCs with the bogus storageClass are stuck in Pending and are not
+        # automatically removed when the TidbCluster CR is deleted.  Delete
+        # them first so the operator can provision fresh PVCs with the correct
+        # storageClass after the CR is restored.
+        pd_labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
+        print("[RECOVER] Deleting stuck PD PVCs (bogus storage class)...")
+        self.kubectl.exec_command(
+            f"kubectl delete pvc -n {self.namespace} -l {pd_labels} --ignore-not-found=true --wait=false"
+        )
         self.recover_fault("non-existent-storage-fault")
 
     def inject_wrong_operator_image(self):
