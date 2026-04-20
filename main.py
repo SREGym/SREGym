@@ -496,13 +496,6 @@ def main(args):
     else:
         logger.warning("⚠️ No results to write.")
 
-    if __name__ == "__main__":
-        # separate run, use exit
-        sys.exit(0)
-    else:
-        # function call run, return results
-        return results
-
 
 if __name__ == "__main__":
     # Parse command-line arguments
