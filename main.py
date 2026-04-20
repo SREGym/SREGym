@@ -112,6 +112,7 @@ def driver_loop(
             available_agents = list_agents(path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml").keys()
             if agent_to_run not in available_agents:
                 console.log(f"⚠️ Agent '{agent_to_run}' not found in registry. Available agents: {available_agents}")
+                request_shutdown()
                 sys.exit(1)
 
             console.log(f"Starting agent now: {agent_to_run}")
