@@ -8,11 +8,12 @@ from fastapi import FastAPI, HTTPException
 from fastmcp import FastMCP
 from fastmcp.server.http import create_sse_app
 from pydantic import BaseModel
-from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
 from starlette.routing import Mount
 from uvicorn import Config, Server
+
+from logger import console
 
 _conductor = None
 
@@ -196,7 +197,6 @@ def run_api(conductor):
 
     logger.debug(f"API server starting on http://{host}:{port}")
 
-    console = Console()
     art = pyfiglet.figlet_format("SREGym")
     console.print(Panel(art, title="SREGym API Server", subtitle=f"http://{host}:{port}", style="bold green"))
     console.print(
@@ -215,6 +215,11 @@ def run_api(conductor):
         port=port,
         log_level="info",
         timeout_graceful_shutdown=5,
+        # log_config=None: don't install uvicorn's default StreamHandlers, which
+        # capture sys.stderr at construction time and would tear through the
+        # benchmark progress bar's live region. Falls back to root logger,
+        # which our RichHandler owns.
+        log_config=None,
     )
     config.install_signal_handlers = False
     server = Server(config)

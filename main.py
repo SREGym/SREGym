@@ -10,7 +10,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from rich.console import Console
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -21,7 +20,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from logger import init_logger
+from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor, ConductorConfig
@@ -107,8 +106,6 @@ def driver_loop(
     """
 
     async def driver():
-        console = Console()
-
         base_dir = Path("results") / get_current_datetime_formatted()
         base_dir.mkdir(parents=True, exist_ok=True)
         global _driver_base_dir

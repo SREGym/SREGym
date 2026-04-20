@@ -20,7 +20,8 @@ import os  # noqa: E402
 from kubernetes import dynamic  # noqa: E402
 from kubernetes.client import api_client  # noqa: E402
 from kubernetes.client.rest import ApiException  # noqa: E402
-from rich.console import Console  # noqa: E402
+
+from logger import console  # noqa: E402
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
 
@@ -146,7 +147,6 @@ class KubeCtl:
             sleep: Seconds between checks
             max_wait: Maximum seconds to wait
         """
-        console = Console()
 
         # Normalize to list
         if service_names is None:
@@ -209,7 +209,6 @@ class KubeCtl:
     def wait_for_namespace_deletion(self, namespace, sleep=2, max_wait=300):
         """Wait for a namespace to be fully deleted before proceeding."""
 
-        console = Console()
         console.log("[bold yellow]Waiting for namespace deletion...")
 
         wait = 0
@@ -252,7 +251,6 @@ class KubeCtl:
         return False
 
     def wait_for_stable(self, namespace: str, sleep: int = 2, max_wait: int = 300):
-        console = Console()
         console.log(f"[bold yellow]Waiting for namespace '{namespace}' to be stable...")
 
         wait = 0
@@ -275,7 +273,6 @@ class KubeCtl:
 
     def delete_job(self, job_name: str = None, label: str = None, namespace: str = "default"):
         """Delete a Kubernetes Job."""
-        console = Console()
         api_instance = client.BatchV1Api()
         try:
             if job_name:
@@ -326,7 +323,6 @@ class KubeCtl:
                 needs to access workload-generator jobs that are hidden from the agent.
         """
         api_instance = client.BatchV1Api(api_client=api_client) if api_client else client.BatchV1Api()
-        console = Console()
         start_time = time.time()
 
         console.log(f"[yellow]Waiting for job '{job_name}' to complete...")
