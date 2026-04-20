@@ -2,10 +2,10 @@
 
 <h1>SREGym: A Benchmarking Platform for SRE Agents</h1>
 
-[🔍Overview](#🤖overview) |
-[📦Installation](#📦installation) |
-[🚀Quick Start](#🚀quickstart) |
-[⚙️Usage](#⚙️usage) |
+[Overview](#overview) |
+[Installation](#installation) |
+[Quick Start](#quickstart) |
+[Usage](#usage) |
 [🤝Contributing](./CONTRIBUTING.md) |
 [📖Docs](https://sregym.com/docs) |
 [![Slack](https://img.shields.io/badge/-Slack-4A154B?style=flat-square&logo=slack&logoColor=white)](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w)

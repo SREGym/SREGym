@@ -45,4 +45,4 @@ class K8SOperatorInvalidAffinityTolerationFault(Problem):
 
         injector = K8SOperatorFaultInjector(namespace="tidb-cluster")
         injector.recover_invalid_affinity_toleration()
-        print(f"[FAULT INJECTED] {self.faulty_service} invalid affinity toleration failure\n")
+        print(f"[FAULT RECOVERED] {self.faulty_service} invalid affinity toleration failure\n")

@@ -1,5 +1,5 @@
 """
-This fault specifies an invalid update strategy.
+This fault specifies a wrong operator image.
 """
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle

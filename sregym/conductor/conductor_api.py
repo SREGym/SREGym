@@ -188,7 +188,7 @@ def run_api(conductor):
     """
     global _server
     set_conductor(conductor)
-    logger.debug(f"API server is binded to the conductor {conductor}")
+    logger.debug(f"API server is bound to the conductor {conductor}")
 
     # Load from .env with defaults
     host = os.getenv("API_BIND_HOST", "0.0.0.0")
