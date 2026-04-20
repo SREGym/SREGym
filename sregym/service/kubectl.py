@@ -172,42 +172,39 @@ class KubeCtl:
 
         console.log(f"[bold yellow]Waiting for all pods in {display_name} to be ready...")
 
-        with console.status("[bold green]Waiting for pods to be ready..."):
-            wait = 0
+        wait = 0
 
-            while wait < max_wait:
-                try:
-                    if label_selectors:
-                        # Collect pods from all services
-                        all_pods = []
-                        for selector in label_selectors:
-                            pod_list = self.core_v1_api.list_namespaced_pod(
-                                namespace=namespace, label_selector=selector
-                            )
-                            all_pods.extend(pod_list.items)
-                    else:
-                        all_pods = self.list_pods(namespace).items or []
+        while wait < max_wait:
+            try:
+                if label_selectors:
+                    # Collect pods from all services
+                    all_pods = []
+                    for selector in label_selectors:
+                        pod_list = self.core_v1_api.list_namespaced_pod(namespace=namespace, label_selector=selector)
+                        all_pods.extend(pod_list.items)
+                else:
+                    all_pods = self.list_pods(namespace).items or []
 
-                    if all_pods:
-                        ready_pods = [
-                            pod
-                            for pod in all_pods
-                            if pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses)
-                        ]
+                if all_pods:
+                    ready_pods = [
+                        pod
+                        for pod in all_pods
+                        if pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses)
+                    ]
 
-                        if len(ready_pods) == len(all_pods):
-                            console.log(f"[bold green]All pods in {display_name} are ready.")
-                            return
+                    if len(ready_pods) == len(all_pods):
+                        console.log(f"[bold green]All pods in {display_name} are ready.")
+                        return
 
-                except Exception as e:
-                    console.log(f"[red]Error checking pod statuses: {e}")
+            except Exception as e:
+                console.log(f"[red]Error checking pod statuses: {e}")
 
-                time.sleep(sleep)
-                wait += sleep
+            time.sleep(sleep)
+            wait += sleep
 
-            raise Exception(
-                f"[red]Timeout: Not all pods in {display_name} reached the Ready state within {max_wait} seconds."
-            )
+        raise Exception(
+            f"[red]Timeout: Not all pods in {display_name} reached the Ready state within {max_wait} seconds."
+        )
 
     def wait_for_namespace_deletion(self, namespace, sleep=2, max_wait=300):
         """Wait for a namespace to be fully deleted before proceeding."""
@@ -258,24 +255,23 @@ class KubeCtl:
         console = Console()
         console.log(f"[bold yellow]Waiting for namespace '{namespace}' to be stable...")
 
-        with console.status("[bold yellow]Waiting for pods to be stable..."):
-            wait = 0
+        wait = 0
 
-            while wait < max_wait:
-                try:
-                    pod_list = self.list_pods(namespace)
+        while wait < max_wait:
+            try:
+                pod_list = self.list_pods(namespace)
 
-                    if pod_list.items:
-                        if all(self.is_ready(pod) for pod in pod_list.items):
-                            console.log(f"[bold green]All pods in namespace '{namespace}' are stable.")
-                            return
-                except Exception as e:
-                    console.log(f"[red]Error checking pod statuses: {e}")
+                if pod_list.items:
+                    if all(self.is_ready(pod) for pod in pod_list.items):
+                        console.log(f"[bold green]All pods in namespace '{namespace}' are stable.")
+                        return
+            except Exception as e:
+                console.log(f"[red]Error checking pod statuses: {e}")
 
-                time.sleep(sleep)
-                wait += sleep
+            time.sleep(sleep)
+            wait += sleep
 
-            raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
+        raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
 
     def delete_job(self, job_name: str = None, label: str = None, namespace: str = "default"):
         """Delete a Kubernetes Job."""
@@ -334,49 +330,48 @@ class KubeCtl:
         start_time = time.time()
 
         console.log(f"[yellow]Waiting for job '{job_name}' to complete...")
-        with console.status("[bold green]Waiting for job to be done..."):
-            while time.time() - start_time < timeout:
-                try:
-                    job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
+        while time.time() - start_time < timeout:
+            try:
+                job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
 
-                    # Check job status conditions first (more reliable)
-                    if job.status.conditions:
-                        for condition in job.status.conditions:
-                            if condition.type == "Complete" and condition.status == "True":
-                                console.log(f"[bold green]Job '{job_name}' completed successfully!")
-                                return
-                            elif condition.type == "Failed" and condition.status == "True":
-                                error_msg = f"Job '{job_name}' failed."
-                                if condition.reason:
-                                    error_msg += f"\nReason: {condition.reason}"
-                                if condition.message:
-                                    error_msg += f"\nMessage: {condition.message}"
-                                console.log(f"[bold red]{error_msg}")
-                                raise Exception(error_msg)
+                # Check job status conditions first (more reliable)
+                if job.status.conditions:
+                    for condition in job.status.conditions:
+                        if condition.type == "Complete" and condition.status == "True":
+                            console.log(f"[bold green]Job '{job_name}' completed successfully!")
+                            return
+                        elif condition.type == "Failed" and condition.status == "True":
+                            error_msg = f"Job '{job_name}' failed."
+                            if condition.reason:
+                                error_msg += f"\nReason: {condition.reason}"
+                            if condition.message:
+                                error_msg += f"\nMessage: {condition.message}"
+                            console.log(f"[bold red]{error_msg}")
+                            raise Exception(error_msg)
 
-                    # Check numeric status as fallback
-                    succeeded = job.status.succeeded or 0
-                    failed = job.status.failed or 0
+                # Check numeric status as fallback
+                succeeded = job.status.succeeded or 0
+                failed = job.status.failed or 0
 
-                    if succeeded > 0:
-                        console.log(f"[bold green]Job '{job_name}' completed successfully! (succeeded: {succeeded})")
-                        return
-                    elif failed > 0:
-                        console.log(f"[bold red]Job '{job_name}' failed! (failed: {failed})")
-                        raise Exception(f"Job '{job_name}' failed.")
+                if succeeded > 0:
+                    console.log(f"[bold green]Job '{job_name}' completed successfully! (succeeded: {succeeded})")
+                    return
+                elif failed > 0:
+                    console.log(f"[bold red]Job '{job_name}' failed! (failed: {failed})")
+                    raise Exception(f"Job '{job_name}' failed.")
 
-                    time.sleep(2)
+                time.sleep(2)
 
-                except client.exceptions.ApiException as e:
-                    if e.status == 404:
-                        console.log(f"[red]Job '{job_name}' not found!")
-                        raise Exception(f"Job '{job_name}' not found in namespace '{namespace}'") from e
-                    else:
-                        console.log(f"[red]Error checking job status: {e}")
-                        raise
+            except client.exceptions.ApiException as e:
+                if e.status == 404:
+                    console.log(f"[red]Job '{job_name}' not found!")
+                    raise Exception(f"Job '{job_name}' not found in namespace '{namespace}'") from e
+                else:
+                    console.log(f"[red]Error checking job status: {e}")
+                    raise
 
-            console.log(f"[bold red]Timeout waiting for job '{job_name}' to complete!")
-            raise TimeoutError(f"Timeout: Job '{job_name}' did not complete within {timeout} seconds.")
+        console.log(f"[bold red]Timeout waiting for job '{job_name}' to complete!")
+        raise TimeoutError(f"Timeout: Job '{job_name}' did not complete within {timeout} seconds.")
 
     def update_deployment(self, name: str, namespace: str, deployment):
         """Update the deployment configuration."""
