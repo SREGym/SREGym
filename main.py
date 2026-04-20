@@ -11,6 +11,15 @@ from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
 from logger import init_logger
 from sregym.agent_launcher import AgentLauncher
@@ -164,11 +173,30 @@ def driver_loop(
             except Exception as e:
                 console.log(f"⚠️  Failed to load resume CSV: {e}")
 
+        already_done = sum(1 for p in problem_ids if p in completed_problems)
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+        )
+        task_id = progress.add_task(
+            f"[cyan]Benchmarking {agent_to_run or 'agent'}",
+            total=len(problem_ids),
+            completed=already_done,
+        )
+        progress.start()
+
         for pid in problem_ids:
             if pid in completed_problems:
                 console.log(f"⏭️  Skipping already-completed problem: {pid}")
+                progress.advance(task_id)
                 continue
 
+            progress.update(task_id, description=f"[cyan]Benchmarking {agent_to_run or 'agent'} — {pid}")
             conductor.problem_id = pid
 
             # Keep a record of results for this problem in a temp file in case an attempt fails
@@ -231,6 +259,7 @@ def driver_loop(
                 # If using external harness, fault is injected - exit now
                 if use_external_harness:
                     console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
+                    progress.stop()
                     return []
 
                 assert agent_to_run is not None
@@ -354,6 +383,10 @@ def driver_loop(
                 if not use_external_harness:
                     LAUNCHER.cleanup_agent(agent_to_run)
                     console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
+
+            progress.advance(task_id)
+
+        progress.stop()
 
         # Stop K8s API proxy when all problems are done
         if not use_external_harness:
