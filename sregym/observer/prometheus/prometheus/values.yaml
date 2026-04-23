@@ -897,6 +897,9 @@ serverFiles:
             - alert: HighRequestRate
               # Detects abnormal traffic spikes (e.g. load generator flooding).
               # Fires when a single service receives >50 req/s sustained.
+              # Suppressed while capacity_decrease_rpc_retry_storm is running
+              # (detected via the "capacity-restraint" ResourceQuota that problem installs),
+              # since a self-sustaining retry storm is the problem's expected symptom.
               expr: |
                 sum by (service_name, namespace) (
                   rate(traces_span_metrics_calls_total{
@@ -905,7 +908,7 @@ serverFiles:
                   }[2m])
                 ) > 50
                 unless on()
-                count(kube_namespace_labels{namespace="blueprint-hotel-reservation"}) > 0
+                count(kube_resourcequota{namespace="blueprint-hotel-reservation", resourcequota="capacity-restraint"}) > 0
               for: 1m
               labels:
                 severity: critical
