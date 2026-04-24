@@ -32,7 +32,7 @@ async def _run_smoke_test():
     )
 
     # 4. Submit a placeholder solution (we expect mitigation to fail)
-    response = await conductor.submit('```\nsubmit("placeholder")\n```')
+    response = await conductor.submit("placeholder")
     assert response.get("status") == "ok", f"submit response: {response}"
 
     # 5. Poll until evaluation completes

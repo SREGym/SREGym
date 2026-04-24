@@ -98,7 +98,7 @@ class LiteLLMBackend:
                 return completion
             except openai.BadRequestError as e:
                 logger.error(f"Bad request error - request is malformed: {e}")
-                logger.error(f"Error details: {e.response.json() if hasattr(e, 'response') else 'No response details'}")
+                logger.error(f"Error details: {_safe_response_details(e)}")
                 logger.error("This often happens when tool_calls don't have matching tool response messages.")
                 logger.error(
                     f"Last few messages: {prompt_messages[-3:] if len(prompt_messages) >= 3 else prompt_messages}"
@@ -152,6 +152,23 @@ class LiteLLMBackend:
                 raise
 
         raise RuntimeError("Max retries exceeded. Unable to complete the request.")
+
+
+def _safe_response_details(exc: BaseException) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return "No response details"
+    try:
+        return str(response.json())
+    except Exception:
+        pass
+    try:
+        text = getattr(response, "text", None)
+        if text:
+            return str(text)
+    except Exception:
+        pass
+    return "No response details"
 
 
 def _parse_duration_to_seconds(duration: Any) -> float | None:
