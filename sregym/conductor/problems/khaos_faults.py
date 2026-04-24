@@ -143,6 +143,13 @@ class _FaultReinjectionMonitor:
     def _check_pods(self) -> None:
         pods = self._injector._get_pods_on_node(self._namespace, self._node)
         for pod_ref in pods:
+            # Bail quickly if recovery has started. Without this check, the
+            # monitor could be mid-pod-iteration when stop() is called and
+            # would still pin a fresh probe via _exec_khaos_fault_on_node,
+            # producing a stale BPF pin that survives the subsequent
+            # `khaos --recover` call (which only detaches one probe at a time).
+            if self._stop_event.is_set():
+                return
             try:
                 ns, pod = self._injector._split_ns_pod(pod_ref)
 
@@ -157,8 +164,13 @@ class _FaultReinjectionMonitor:
                 if prev_cid is not None and prev_cid == cid:
                     continue  # no change
 
-                # New pod or restarted container — re-inject
+                # New pod or restarted container — re-inject. Re-check the
+                # stop flag right before the kubectl exec that would actually
+                # pin a probe, since _get_host_pid_on_node can take a few
+                # seconds and stop() may have fired in the meantime.
                 host_pid = self._injector._get_host_pid_on_node(self._node, cid)
+                if self._stop_event.is_set():
+                    return
                 print(
                     f"[reinjection-monitor] Re-injecting {self._fault_type} into "
                     f"PID {host_pid} (pod {pod_ref}, container {cid[:12]})"

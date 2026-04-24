@@ -1,5 +1,6 @@
 """Interface to K8S controller service."""
 
+import contextlib
 import json
 import logging
 import subprocess
@@ -487,6 +488,196 @@ class KubeCtl:
                 logger.warning(f"Namespace '{namespace}' not found.")
             else:
                 logger.error(f"Error deleting namespace '{namespace}': {e}")
+
+    def gc_orphan_localpv_dirs(
+        self,
+        localpv_path: str = "/var/openebs/local",
+        pod_namespace: str = "default",
+        timeout: int = 180,
+    ) -> dict:
+        """Garbage-collect orphaned OpenEBS LocalPV hostpath directories on every node.
+
+        OpenEBS hostpath PVs are reclaimed asynchronously by helper pods spawned by
+        openebs-localpv-provisioner. If the openebs namespace is torn down (which the
+        baseline reconciler does between problems), or the helper pod can't schedule
+        on a tainted control-plane node, the hostpath dirs under
+        ``/var/openebs/local/pvc-*`` leak. Over hundreds of problem cycles this
+        fills the disk and breaks subsequent deploys (observed: node0 accumulated
+        622 dirs / 15.8 GB after one benchmark run).
+
+        This sweep computes the set of currently-live PVs and removes any
+        ``pvc-*`` directory that doesn't correspond to one. It runs on every node
+        — including control-plane — by launching a one-shot privileged pod with a
+        host filesystem mount and toleration for all taints.
+
+        Best-effort: failures on individual nodes are logged but don't raise.
+        Returns a dict mapping node name -> number of orphan dirs removed.
+        """
+        results: dict[str, int] = {}
+
+        # Snapshot live PVs first so we never delete a dir for a PV that exists.
+        try:
+            live_pv_names = {pv.metadata.name for pv in self.core_v1_api.list_persistent_volume().items}
+        except Exception as e:
+            logger.warning(f"[gc_localpv] Could not list PVs, skipping GC: {e}")
+            return results
+
+        try:
+            node_names = [n.metadata.name for n in self.list_nodes().items]
+        except Exception as e:
+            logger.warning(f"[gc_localpv] Could not list nodes, skipping GC: {e}")
+            return results
+
+        if not node_names:
+            return results
+
+        logger.info(
+            f"[gc_localpv] Sweeping {localpv_path} on {len(node_names)} node(s) "
+            f"(preserving {len(live_pv_names)} live PV dir(s))"
+        )
+
+        # Pass the keep-list to the pod via a single env var. Newline-delimited
+        # is grep -Fxq friendly. Empty string is fine — the loop just removes
+        # everything matching pvc-*.
+        keep_blob = "\n".join(sorted(live_pv_names))
+        # The script intentionally uses /bin/sh + busybox-compatible constructs.
+        script = (
+            "set -u\n"
+            f'cd "/host{localpv_path}" 2>/dev/null || {{ echo GC_REMOVED=0; exit 0; }}\n'
+            "removed=0\n"
+            "for d in pvc-*; do\n"
+            '  [ -e "$d" ] || continue\n'
+            '  if [ -z "${KEEP:-}" ] || ! printf "%s\\n" "$KEEP" | grep -Fxq "$d"; then\n'
+            '    rm -rf -- "$d" && removed=$((removed+1))\n'
+            "  fi\n"
+            "done\n"
+            'echo "GC_REMOVED=$removed"\n'
+        )
+
+        for node_name in node_names:
+            try:
+                count = self._run_localpv_gc_pod_on_node(
+                    node_name=node_name,
+                    namespace=pod_namespace,
+                    script=script,
+                    keep_blob=keep_blob,
+                    timeout=timeout,
+                )
+                results[node_name] = count
+                if count:
+                    logger.info(f"[gc_localpv] {node_name}: removed {count} orphan dir(s)")
+                else:
+                    logger.debug(f"[gc_localpv] {node_name}: nothing to remove")
+            except Exception as e:
+                logger.warning(f"[gc_localpv] Failed on {node_name}: {e}")
+                results[node_name] = -1
+
+        return results
+
+    def _run_localpv_gc_pod_on_node(
+        self,
+        node_name: str,
+        namespace: str,
+        script: str,
+        keep_blob: str,
+        timeout: int,
+    ) -> int:
+        """Run a one-shot privileged busybox pod on ``node_name`` to execute ``script``.
+
+        Mounts host ``/`` at ``/host`` so the script can rm dirs under
+        ``/host/var/openebs/local``. Tolerates all taints so it can land on
+        control-plane nodes. Returns the integer parsed from the
+        ``GC_REMOVED=<n>`` line in pod stdout.
+        """
+        # Pod name must be DNS-1123: lowercase, <=63 chars. Use first label of
+        # the node hostname plus a short suffix.
+        short_node = node_name.split(".")[0].lower().replace("_", "-")[:40]
+        pod_name = f"sregym-localpv-gc-{short_node}-{int(time.time()) % 10000}"
+        pod_name = pod_name[:63]
+
+        pod_body = client.V1Pod(
+            metadata=client.V1ObjectMeta(
+                name=pod_name,
+                namespace=namespace,
+                labels={"app": "sregym-localpv-gc"},
+            ),
+            spec=client.V1PodSpec(
+                node_name=node_name,
+                restart_policy="Never",
+                tolerations=[client.V1Toleration(operator="Exists")],
+                host_pid=False,
+                automount_service_account_token=False,
+                containers=[
+                    client.V1Container(
+                        name="gc",
+                        image="busybox:1.36",
+                        image_pull_policy="IfNotPresent",
+                        command=["sh", "-c", script],
+                        env=[client.V1EnvVar(name="KEEP", value=keep_blob)],
+                        security_context=client.V1SecurityContext(privileged=True),
+                        volume_mounts=[
+                            client.V1VolumeMount(name="host", mount_path="/host"),
+                        ],
+                    )
+                ],
+                volumes=[
+                    client.V1Volume(
+                        name="host",
+                        host_path=client.V1HostPathVolumeSource(path="/", type="Directory"),
+                    )
+                ],
+            ),
+        )
+
+        # Best-effort delete in case a stale pod with the same name exists.
+        with contextlib.suppress(ApiException):
+            self.core_v1_api.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=0)
+
+        self.core_v1_api.create_namespaced_pod(namespace=namespace, body=pod_body)
+
+        try:
+            # Wait for the pod to reach a terminal phase.
+            waited = 0
+            sleep_s = 2
+            phase = "Pending"
+            while waited < timeout:
+                try:
+                    pod = self.core_v1_api.read_namespaced_pod(name=pod_name, namespace=namespace)
+                    phase = (pod.status.phase or "Pending") if pod.status else "Pending"
+                except ApiException as e:
+                    if e.status == 404:
+                        # Got deleted out from under us — treat as failure.
+                        raise RuntimeError(f"GC pod {pod_name} disappeared before completion") from e
+                    raise
+                if phase in ("Succeeded", "Failed"):
+                    break
+                time.sleep(sleep_s)
+                waited += sleep_s
+            else:
+                raise TimeoutError(f"GC pod {pod_name} on {node_name} did not finish within {timeout}s (phase={phase})")
+
+            logs = ""
+            try:
+                logs = self.core_v1_api.read_namespaced_pod_log(name=pod_name, namespace=namespace)
+            except ApiException as e:
+                logger.debug(f"[gc_localpv] Could not read logs for {pod_name}: {e}")
+
+            if phase != "Succeeded":
+                raise RuntimeError(
+                    f"GC pod {pod_name} on {node_name} ended with phase={phase}; logs: {logs.strip()[:500]}"
+                )
+
+            removed = 0
+            for line in (logs or "").splitlines():
+                line = line.strip()
+                if line.startswith("GC_REMOVED="):
+                    with contextlib.suppress(ValueError):
+                        removed = int(line.split("=", 1)[1])
+                    break
+            return removed
+        finally:
+            with contextlib.suppress(ApiException):
+                self.core_v1_api.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=0)
 
     def create_namespace_if_not_exist(self, namespace: str):
         """Create a namespace if it doesn't exist."""
