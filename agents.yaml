@@ -46,6 +46,15 @@ agents:
     install_script: null
     agent_version: null
     container_isolation: false
+  - name: tierzero
+    kickoff_command: python -m clients.tierzero.driver
+    kickoff_workdir: .
+    kickoff_env:
+      TIERZERO_API_URL: "https://app.tierzero.ai"
+      TIERZERO_ORG_API_KEY: "<your-api-key>"
+    install_script: null
+    agent_version: null
+    container_isolation: false
   - name: demo
     kickoff_command: python -m clients.demo.driver
     kickoff_workdir: .
