@@ -326,7 +326,7 @@ def driver_loop(
                             break
                     await asyncio.sleep(1)
 
-                console.log(f"✅ Completed {pid}: results={conductor.results}")
+                console.log(f"✅ Completed {pid}: results={conductor.results}", markup=False)
 
                 # Wait for agent process to complete naturally before cleanup
                 # This allows the agent to finish saving trajectories and other cleanup tasks

@@ -477,18 +477,12 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to restart noise manager: {e}")
 
-    async def submit(self, wrapped_cmd: str) -> dict:
+    async def submit(self, solution: str | None) -> dict:
         """
-        Called by CLI or HTTP /submit.  Parses the `submit(...)` call,
-        kicks off evaluation in the background, and returns immediately.
+        Called by CLI or HTTP /submit.  Kicks off evaluation in the
+        background and returns immediately.
         """
-        from sregym.conductor.parser import ResponseParser
-
-        parser = ResponseParser()
-        parsed = parser.parse(wrapped_cmd)
-        if parsed["api_name"] != "submit":
-            raise ValueError("Only `submit(...)` is supported.")
-        sol = parsed["args"][0] if parsed["args"] else None
+        sol = solution
 
         # If all tasks are already completed, simply return the final snapshot.
         if self.submission_stage == "done":
