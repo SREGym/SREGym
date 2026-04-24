@@ -38,11 +38,10 @@ async def submit_via_conductor(ans: str) -> dict[str, str]:
             }
         return {"status": "error", "text": f"Cannot submit at stage: {stage!r}"}
 
-    wrapped = f"```\nsubmit({repr(ans)})\n```"
     max_wait = 60
     for attempt in range(max_wait):
         try:
-            await _conductor.submit(wrapped)
+            await _conductor.submit(ans)
             return {"status": "200", "text": "Submission received"}
         except RuntimeError:
             if attempt < max_wait - 1:
@@ -125,17 +124,13 @@ async def submit_solution(req: SubmitRequest):
         logger.error(f"Cannot submit at stage: {stage!r}")
         raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {stage!r}")
 
-    # Use repr() to properly escape special characters in the solution string
-    wrapped = f"```\nsubmit({repr(req.solution)})\n```"
-    logger.debug(f"Wrapped submit content: {wrapped}")
-
     # The conductor evaluates submissions asynchronously. If a previous stage
     # is still being evaluated, waiting_for_agent will be False and submit()
     # raises RuntimeError.  Retry for up to 60s to handle this race.
     max_wait = 60
     for attempt in range(max_wait):
         try:
-            await _conductor.submit(wrapped)
+            await _conductor.submit(req.solution)
             return {"status": "200", "message": "Submission received"}
         except RuntimeError:
             if attempt < max_wait - 1:
