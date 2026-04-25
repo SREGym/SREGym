@@ -235,13 +235,17 @@ class Conductor:
         problem = self.current_problem
 
         self.logger.info("Start Eval for Diagnosis", extra={"sol": solution})
-        r = problem.diagnosis_oracle.evaluate(solution)
+        try:
+            r = problem.diagnosis_oracle.evaluate(solution)
+        except Exception as e:
+            self.logger.exception("Diagnosis oracle raised; recording as failure to avoid a stuck stage.")
+            r = {"success": False, "error": f"{type(e).__name__}: {e}"}
         r["submission"] = solution
         self.results["Diagnosis"] = r
         self.results["TTL"] = time.time() - self.execution_start_time
         self.logger.info(
             f"[EVAL] Diagnosis "
-            f"{'Succeed' if self.results['Diagnosis']['success'] else 'Failed'}\n "
+            f"{'Succeed' if self.results['Diagnosis'].get('success') else 'Failed'}\n "
             f"TTL: {self.results['TTL']}"
         )
         return r
@@ -251,12 +255,16 @@ class Conductor:
         problem = self.current_problem
         # Currently mitigation_oracle.evaluate() does not take the agent solution directly.
         self.logger.info("Start Eval for Mitigation", extra={"sol": solution})
-        r = problem.mitigation_oracle.evaluate()
+        try:
+            r = problem.mitigation_oracle.evaluate()
+        except Exception as e:
+            self.logger.exception("Mitigation oracle raised; recording as failure to avoid a stuck stage.")
+            r = {"success": False, "error": f"{type(e).__name__}: {e}"}
         self.results["Mitigation"] = r
         self.results["TTM"] = time.time() - self.execution_start_time
         self.logger.info(
             f"[EVAL] Mitigation "
-            f"{'Succeed' if self.results['Mitigation']['success'] else 'Failed'}\n "
+            f"{'Succeed' if self.results['Mitigation'].get('success') else 'Failed'}\n "
             f"TTM: {self.results['TTM']}"
         )
         return r
@@ -459,8 +467,20 @@ class Conductor:
                 self.logger.warning(f"Failed to stop noise manager: {e}")
 
         try:
-            # Run the evaluation function for the current stage
-            current_stage["evaluation"](sol)
+            # Run the evaluation function for the current stage. The per-stage
+            # _evaluate_* methods catch their own oracle exceptions and record
+            # a failure result; this outer guard is defense in depth so the
+            # stage always advances even if something above the oracle blows up.
+            try:
+                current_stage["evaluation"](sol)
+            except Exception:
+                self.logger.exception(
+                    f"Stage '{stage_name}' evaluation raised unexpectedly; advancing anyway "
+                    "so the conductor doesn't get stuck waiting on a dead stage."
+                )
+                self.results.setdefault(
+                    stage_name.capitalize(), {"success": False, "error": "stage evaluation raised", "submission": sol}
+                )
         finally:
             self._evaluating = False
 
