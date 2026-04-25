@@ -10,9 +10,17 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 
-from logger import init_logger
+from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor, ConductorConfig
@@ -98,8 +106,6 @@ def driver_loop(
     """
 
     async def driver():
-        console = Console()
-
         base_dir = Path("results") / get_current_datetime_formatted()
         base_dir.mkdir(parents=True, exist_ok=True)
         global _driver_base_dir
@@ -144,15 +150,16 @@ def driver_loop(
             problem_ids.remove(unknown_problem_id)
 
         # Resume support: load completed problems from previous CSV and pre-seed results
+        from collections import Counter
+
         completed_problems: set[str] = set()
+        attempt_counts: Counter[str] = Counter()
         if resume_csv:
             try:
                 with open(resume_csv, newline="") as f:
                     reader = csv.DictReader(f)
                     resume_rows = list(reader)
                 # Group by problem_id and count attempts
-                from collections import Counter
-
                 attempt_counts = Counter(r["problem_id"] for r in resume_rows)
                 completed_problems = {pid for pid, count in attempt_counts.items() if count >= n_attempts}
 
@@ -164,9 +171,29 @@ def driver_loop(
             except Exception as e:
                 console.log(f"⚠️  Failed to load resume CSV: {e}")
 
+        # Bar tracks attempts (problems × n_attempts), not problems, so the
+        # 0/N total reflects total work even when n_attempts > 1.
+        already_done = sum(min(attempt_counts.get(p, 0), n_attempts) for p in problem_ids)
+        progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+        )
+        task_id = progress.add_task(
+            f"[cyan]Benchmarking {agent_to_run or 'agent'}",
+            total=len(problem_ids) * n_attempts,
+            completed=already_done,
+        )
+        progress.start()
+
         for pid in problem_ids:
             if pid in completed_problems:
                 console.log(f"⏭️  Skipping already-completed problem: {pid}")
+                progress.advance(task_id, n_attempts)
                 continue
 
             conductor.problem_id = pid
@@ -175,6 +202,10 @@ def driver_loop(
             tmp_path = f"_running_{pid}_{agent_to_run}_results.csv"
 
             for attempt in range(1, n_attempts + 1):
+                progress.update(
+                    task_id,
+                    description=f"[cyan]Benchmarking {agent_to_run or 'agent'} — {pid} (attempt {attempt}/{n_attempts})",
+                )
                 console.log(f"\n🔍 Starting problem: {pid} (Attempt {attempt} of {n_attempts})")
 
                 # Retry start_problem up to 3 times to handle transient deploy failures
@@ -222,15 +253,19 @@ def driver_loop(
                         writer.writeheader()
                         writer.writerows(all_results_for_agent)
                     console.log(f"⏭️  Skipping remaining attempts for '{pid}' and moving to next problem")
+                    # Account for this attempt + remaining skipped attempts on the bar.
+                    progress.advance(task_id, n_attempts - attempt + 1)
                     break
 
                 if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
                     console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
+                    progress.advance(task_id, n_attempts - attempt + 1)
                     break  # Skip to next problem
 
                 # If using external harness, fault is injected - exit now
                 if use_external_harness:
                     console.log(f"✅ Fault injected for problem '{pid}'. Exiting for external harness.")
+                    progress.stop()
                     return []
 
                 assert agent_to_run is not None
@@ -354,6 +389,10 @@ def driver_loop(
                 if not use_external_harness:
                     LAUNCHER.cleanup_agent(agent_to_run)
                     console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
+
+                progress.advance(task_id)
+
+        progress.stop()
 
         # Stop K8s API proxy when all problems are done
         if not use_external_harness:
