@@ -71,8 +71,6 @@ class _ShutdownNoiseFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         # Case 1: exc_info carries the exception object directly.
         if record.exc_info and record.exc_info[1] is not None:
-            import asyncio
-
             if isinstance(record.exc_info[1], asyncio.CancelledError):
                 return False
         # Case 2: uvicorn formats the traceback as a plain string message
@@ -184,7 +182,7 @@ def run_api(conductor):
     """
     global _server
     set_conductor(conductor)
-    logger.debug(f"API server is binded to the conductor {conductor}")
+    logger.debug(f"API server is bound to the conductor {conductor}")
 
     # Load from .env with defaults
     host = os.getenv("API_BIND_HOST", "0.0.0.0")
