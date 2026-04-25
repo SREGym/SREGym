@@ -193,13 +193,10 @@ def wait_for_stage(target_stages: set[str], timeout: int = 300) -> str:
 
 def submit_to_conductor(solution: str) -> None:
     """POST /submit to conductor."""
-    # Strip backticks — the conductor wraps submissions in a markdown code block
-    # and its parser breaks if the solution text contains triple backticks.
-    sanitized = solution.replace("```", "")
-    logger.info(f"Submitting to conductor ({len(sanitized)} chars)")
+    logger.info(f"Submitting to conductor ({len(solution)} chars)")
     resp = requests.post(
         f"{CONDUCTOR_URL}/submit",
-        json={"solution": sanitized},
+        json={"solution": solution},
         timeout=30,
     )
     if not resp.ok:
