@@ -76,17 +76,6 @@ from sregym.service.kubectl import KubeCtl
 class ProblemRegistry:
     def __init__(self):
         self.PROBLEM_REGISTRY = {
-            # ============ Kimi rerun: DRIVER_CAUGHT_CRASH / STATE_SWITCH_TIMEOUT failures ============
-            "astronomy_shop_ad_service_failure": AdServiceFailure,
-            "capacity_decrease_rpc_retry_storm": CapacityDecreaseRPCRetryStorm,
-            "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
-            "duplicate_pvc_mounts_astronomy_shop": lambda: DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="frontend"),
-            "misconfig_app_hotel_res": MisconfigAppHotelRes,
-            "missing_configmap_social_network": lambda: MissingConfigMap(app_name="social_network", faulty_service="media-mongodb"),
-            "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(app_name="astronomy_shop", faulty_service="frontend"),
-            "wrong_service_selector_hotel_reservation": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend"),
-        }
-        _FULL_REGISTRY_DISABLED = {
             # ==================== APPLICATION FAULT INJECTOR ====================
             # --- CORRELATED PROBLEMS ---
             "faulty_image_correlated": FaultyImageCorrelated,
@@ -95,6 +84,7 @@ class ProblemRegistry:
             "incorrect_image": IncorrectImage,
             "incorrect_port_assignment": IncorrectPortAssignment,
             "unschedulable_incorrect_port_assignment": lambda: IncorrectPortAssignment(unschedulable=True),
+            "misconfig_app_hotel_res": MisconfigAppHotelRes,
             "missing_env_variable_astronomy_shop": lambda: MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend" ),
             "revoke_auth_mongodb-1": lambda: MongoDBRevokeAuth(faulty_service="mongodb-geo"),
             "revoke_auth_mongodb-2": lambda: MongoDBRevokeAuth(faulty_service="mongodb-rate"),
@@ -104,11 +94,15 @@ class ProblemRegistry:
             "valkey_memory_disruption": ValkeyMemoryDisruption,
             # # ==================== VIRTUALIZATION FAULT INJECTOR ====================
             # --- METASTABLE FAILURES ---
+            "capacity_decrease_rpc_retry_storm": CapacityDecreaseRPCRetryStorm,
             "gc_capacity_degradation": GCCapacityDegradation,
             # --- REGULAR VIRTUALIZATION PROBLEMS ---
             "assign_to_non_existent_node": AssignNonExistentNode,
             "auth_miss_mongodb": MongoDBAuthMissing,
+            "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
+            "duplicate_pvc_mounts_astronomy_shop": lambda: DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="frontend"),
             "duplicate_pvc_mounts_hotel_reservation": lambda: DuplicatePVCMounts(app_name="hotel_reservation", faulty_service="frontend"),
+            "duplicate_pvc_mounts_social_network": lambda: DuplicatePVCMounts(app_name="social_network", faulty_service="jaeger"),
             "env_variable_shadowing_astronomy_shop": lambda: EnvVariableShadowing(),
             "k8s_target_port-misconfig": lambda: K8STargetPortMisconfig(faulty_service="user-service"),
             "liveness_probe_misconfiguration_astronomy_shop": lambda: LivenessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),
