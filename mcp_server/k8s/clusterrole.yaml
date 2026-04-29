@@ -80,4 +80,4 @@ rules:
   - apiGroups: ["pingcap.com"]
     resources:
       - tidbclusters
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch", "update"]
