@@ -195,7 +195,12 @@ class K8SOperatorFaultInjector(FaultInjector):
 
     def inject_non_existent_storage(self):
         """
-        This fault specifies a non-existent storage class.
+        This fault specifies a non-existent storage class for PD.
+
+        After updating the CR, deletes the PD StatefulSet and its PVCs so the
+        TiDB operator recreates them using the bogus storageClass from the CR.
+        New PVCs cannot be provisioned (StorageClass does not exist), so PD
+        pods remain stuck in Pending — making the fault observable.
         """
         cr_name = "non-existent-storage-fault"
         cr_yaml = {
@@ -211,7 +216,7 @@ class K8SOperatorFaultInjector(FaultInjector):
                     "replicas": 3,
                     "requests": {"storage": "1Gi"},
                     "config": {},
-                    "storageClassName": "ThisIsAStorageClass",  # non-existent storage class
+                    "storageClassName": "nonexistent-storage-class",  # non-existent storage class (RFC 1123 valid so PVC creation passes validation and lands in Pending)
                 },
                 "tikv": {
                     "baseImage": "pingcap/tikv",
@@ -229,8 +234,44 @@ class K8SOperatorFaultInjector(FaultInjector):
         }
         self._apply_yaml(cr_name, cr_yaml)
 
+        # StatefulSet volumeClaimTemplates are immutable, so the operator
+        # cannot propagate the updated storageClassName into the existing
+        # StatefulSet or its already-bound PVCs.  Delete the PD StatefulSet
+        # and its PVCs to force the operator to recreate them from the updated
+        # CR.  The new PVCs will reference nonexistent-storage-class, fail to
+        # provision, and leave PD pods stuck in Pending.
+        pd_labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
+        print("[FAULT] Deleting PD PVCs to force reprovisioning with the bogus storage class...")
+        self.kubectl.exec_command(
+            f"kubectl delete pvc -n {self.namespace} -l {pd_labels} --wait=false"
+        )
+        print("[FAULT] Deleting PD StatefulSet so the operator rebuilds it from the updated CR...")
+        self.kubectl.exec_command(
+            f"kubectl delete statefulset basic-pd -n {self.namespace} --ignore-not-found=true --wait=false"
+        )
+
     def recover_non_existent_storage(self):
-        self.recover_fault("non-existent-storage-fault")
+        # Recovery has to be serialized: if the bogus PVCs are still around
+        # (or mid-deletion) when the clean CR is re-applied, the operator races
+        # the GC and the new basic-pd pod adopts a leftover PVC by name,
+        # pinning the bogus storageClass forever.  Tear down the bogus stack
+        # fully before applying the clean CR.
+        pd_labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
+        print("[RECOVER] Deleting bogus TidbCluster (foreground cascade)...")
+        result = self.kubectl.exec_command(
+            f"kubectl delete -f /tmp/non-existent-storage-fault.yaml -n {self.namespace} "
+            f"--ignore-not-found=true --cascade=foreground"
+        )
+        print(f"[RECOVER] CR delete: {result}")
+        print("[RECOVER] Deleting bogus PD PVCs (no consumers now)...")
+        result = self.kubectl.exec_command(
+            f"kubectl delete pvc -n {self.namespace} -l {pd_labels} --ignore-not-found=true"
+        )
+        print(f"[RECOVER] PVC delete: {result}")
+        print("[RECOVER] Applying clean TidbCluster CR...")
+        clean_url = "https://raw.githubusercontent.com/pingcap/tidb-operator/v1.6.0/examples/basic/tidb-cluster.yaml"
+        result = self.kubectl.exec_command(f"kubectl apply -f {clean_url} -n {self.namespace}")
+        print(f"Restored clean TiDBCluster: {result}")
 
     def inject_wrong_operator_image(self):
         """

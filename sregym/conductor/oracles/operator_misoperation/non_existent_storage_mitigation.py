@@ -91,7 +91,7 @@ class NonExistentStorageClassMitigationOracle(Oracle):
             f"kubectl get events -n {ns} --sort-by=.metadata.creationTimestamp | tail -n 50"
         )
 
-        BAD = "ThisIsAStorageClass"
+        BAD = "nonexistent-storage-class"
         cr_has_bad = (pd_sc == BAD) or (tikv_sc == BAD)
         pvc_shows_bad = any(e.get("storageClassName") == BAD for e in pvc_pd + pvc_tikv)
         any_pending = any(e.get("phase") == "Pending" for e in pvc_pd + pvc_tikv)
