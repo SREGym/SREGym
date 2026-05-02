@@ -137,13 +137,21 @@ def build_instruction(app_info: dict) -> str:
     """
     app_name = app_info.get("app_name", "unknown")
     namespace = app_info.get("namespace", "default")
+    namespaces = app_info.get("namespaces") or [namespace]
     descriptions = app_info.get("descriptions", "")
+
+    if len(namespaces) > 1:
+        namespace_block = (
+            f"Namespaces: {', '.join(namespaces)}\n(This scenario spans multiple namespaces; investigate all of them.)"
+        )
+    else:
+        namespace_block = f"Namespace: {namespaces[0]}"
 
     # Build instruction similar to how it would be done in Harbor
     instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
 
 Application: {app_name}
-Namespace: {namespace}
+{namespace_block}
 
 {descriptions}
 
@@ -177,7 +185,7 @@ For MITIGATION stage:
 - POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
 
 Important:
-- You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'
+- You have access to kubectl commands to inspect and modify resources in namespace(s): {", ".join(namespaces)}
 - You can query metrics and traces through the available observability tools
 - The conductor API is available at {get_api_base_url()}
 """
