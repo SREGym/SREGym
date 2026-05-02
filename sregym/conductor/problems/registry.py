@@ -24,6 +24,7 @@ from sregym.conductor.problems.khaos_faults import KhaosFaultName, KhaosFaultPro
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
+from sregym.conductor.problems.load_spike_rpc_retry_storm import LoadSpikeRPCRetryStorm
 from sregym.conductor.problems.loadgenerator_flood_homepage import LoadGeneratorFloodHomepage
 from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
@@ -94,8 +95,10 @@ class ProblemRegistry:
             "valkey_memory_disruption": ValkeyMemoryDisruption,
             # # ==================== VIRTUALIZATION FAULT INJECTOR ====================
             # --- METASTABLE FAILURES ---
+            # "cache_flush_capacity_degradation": CacheFlushCapacityDegradation,  # module not yet implemented
             "capacity_decrease_rpc_retry_storm": CapacityDecreaseRPCRetryStorm,
             "gc_capacity_degradation": GCCapacityDegradation,
+            "load_spike_rpc_retry_storm": LoadSpikeRPCRetryStorm,
             # --- REGULAR VIRTUALIZATION PROBLEMS ---
             "assign_to_non_existent_node": AssignNonExistentNode,
             "auth_miss_mongodb": MongoDBAuthMissing,
