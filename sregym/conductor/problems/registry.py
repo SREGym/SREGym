@@ -217,39 +217,39 @@ class ProblemRegistry:
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
-            # "port_misconfig_revoke_auth_wrong_svc_selector": \
-            #     lambda: MultipleIndependentFailures(problems=[
-            #         K8STargetPortMisconfig(faulty_service="user-service"),
-            #         MongoDBRevokeAuth(faulty_service="mongodb-geo"),
-            #         WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend")
-            # ]),
+            "port_misconfig_revoke_auth_wrong_svc_selector": \
+                lambda: MultipleIndependentFailures(problems=[
+                    K8STargetPortMisconfig(faulty_service="user-service"),
+                    MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+                    WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend")
+            ]),
             # another concurrent fault problem that deploys all three apps
-            # "port_misconfig_misconfig_hotelres_missing_env_var": \
-            #     lambda: MultipleIndependentFailures(problems=[
-            #         K8STargetPortMisconfig(faulty_service="user-service"),
-            #         MisconfigAppHotelRes(),
-            #         MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend")
-            # ]),
+            "port_misconfig_misconfig_hotelres_missing_env_var": \
+                lambda: MultipleIndependentFailures(problems=[
+                    K8STargetPortMisconfig(faulty_service="user-service"),
+                    MisconfigAppHotelRes(),
+                    MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend")
+            ]),
             # three concurrent fault problems, each only focuses on one app
             # astro shop
-            # "valkey_memory_disruption_missing_env_var_incorrect_port": \
-            #     lambda: MultipleIndependentFailures(problems=[
-            #         ValkeyAuthDisruption(),
-            #         MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend"),
-            #         IncorrectPortAssignment()
-            #     ]),
+            "valkey_memory_disruption_missing_env_var_incorrect_port": \
+                lambda: MultipleIndependentFailures(problems=[
+                    ValkeyMemoryDisruption(),
+                    MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend"),
+                    IncorrectPortAssignment()
+                ]),
             # hotel res
-            # "hotel_res_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
-            #     MisconfigAppHotelRes(),
-            #     MongoDBRevokeAuth(faulty_service="mongodb-geo"),
-            #     MongoDBUserUnregistered(faulty_service="mongodb-rate")
-            # ]),
+            "hotel_res_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
+                MisconfigAppHotelRes(),
+                MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+                MongoDBUserUnregistered(faulty_service="mongodb-rate")
+            ]),
             # social net
-            # "social_net_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
-            #     AssignNonExistentNode(),
-            #     MongoDBAuthMissing(),
-            #     LivenessProbeTooAggressive(app_name="social_network"),
-            # ]),
+            "social_net_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
+                AssignNonExistentNode(),
+                MongoDBAuthMissing(),
+                LivenessProbeTooAggressive(app_name="social_network"),
+            ]),
             # ad hoc:
             "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
