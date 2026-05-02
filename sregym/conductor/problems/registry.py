@@ -20,7 +20,19 @@ from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
-from sregym.conductor.problems.khaos_faults import KhaosFaultName, KhaosFaultProblem
+from sregym.conductor.problems.khaos_faults import (
+    _HW_CPU_CLOCKSOURCE_FAILURE,
+    _HW_DNS_RESOLVER_FAILURE,
+    _HW_DRAM_MODULE_FAILURE,
+    _HW_MMU_PAGE_PROTECTION_FAILURE,
+    _HW_NETWORK_INTERFACE_LINK_DOWN,
+    _HW_NIC_PACKET_CORRUPTION,
+    _HW_STORAGE_READ_FAILURE,
+    _HW_STORAGE_WRITE_FAILURE,
+    KhaosCompoundFaultProblem,
+    KhaosFaultName,
+    KhaosFaultProblem,
+)
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
@@ -167,6 +179,65 @@ class ProblemRegistry:
             "silent_data_corruption": SilentDataCorruption,
 
             "latent_sector_error": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error,inject_args=[30]),
+            # ----- Hardware-failure compound problems (Tier A) -----
+            "nic_packet_corruption": lambda: KhaosCompoundFaultProblem(
+                fault_specs=[
+                    (KhaosFaultName.packet_loss_sendto, [30]),
+                    (KhaosFaultName.packet_loss_recvfrom, [30]),
+                ],
+                root_cause=_HW_NIC_PACKET_CORRUPTION,
+            ),
+            "storage_controller_read_failure": lambda: KhaosCompoundFaultProblem(
+                fault_specs=[
+                    (KhaosFaultName.read_error, None),
+                    (KhaosFaultName.pread_error, None),
+                ],
+                root_cause=_HW_STORAGE_READ_FAILURE,
+            ),
+            "storage_write_failure": lambda: KhaosCompoundFaultProblem(
+                fault_specs=[
+                    (KhaosFaultName.write_error, None),
+                    (KhaosFaultName.pwrite_error, None),
+                    (KhaosFaultName.fsync_error, None),
+                ],
+                root_cause=_HW_STORAGE_WRITE_FAILURE,
+            ),
+            "dram_module_failure": lambda: KhaosCompoundFaultProblem(
+                fault_specs=[
+                    (KhaosFaultName.mmap_fail, None),
+                    (KhaosFaultName.mmap_oom, None),
+                    (KhaosFaultName.oom_memchunk, None),
+                ],
+                root_cause=_HW_DRAM_MODULE_FAILURE,
+            ),
+            "cpu_clocksource_failure": lambda: KhaosCompoundFaultProblem(
+                fault_specs=[
+                    (KhaosFaultName.clock_drift, None),
+                    (KhaosFaultName.gettimeofday_fail, None),
+                ],
+                root_cause=_HW_CPU_CLOCKSOURCE_FAILURE,
+            ),
+            # ----- Hardware-failure compound problems (Tier B) -----
+            "mmu_page_protection_failure": lambda: KhaosCompoundFaultProblem(
+                fault_specs=[
+                    (KhaosFaultName.force_mprotect_eacces, None),
+                    (KhaosFaultName.stack_rndsegfault, None),
+                ],
+                root_cause=_HW_MMU_PAGE_PROTECTION_FAILURE,
+            ),
+            "network_interface_link_down": lambda: KhaosCompoundFaultProblem(
+                fault_specs=[
+                    (KhaosFaultName.bind_enetdown, None),
+                    (KhaosFaultName.socket_block, None),
+                ],
+                root_cause=_HW_NETWORK_INTERFACE_LINK_DOWN,
+            ),
+            "dns_resolver_hardware_failure": lambda: KhaosCompoundFaultProblem(
+                fault_specs=[
+                    (KhaosFaultName.getaddrinfo_fail, None),
+                ],
+                root_cause=_HW_DNS_RESOLVER_FAILURE,
+            ),
             # "read_error": lambda: KhaosFaultProblem(KhaosFaultName.read_error),
             # "pread_error": lambda: KhaosFaultProblem(KhaosFaultName.pread_error),
             # "write_error": lambda: KhaosFaultProblem(KhaosFaultName.write_error),

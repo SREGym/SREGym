@@ -71,13 +71,19 @@ class KhaosFaultName(StrEnum):
     latent_sector_error = "latent_sector_error"
 
 
-# Disk faults that intercept read/pread syscalls need page cache dropped
+# Disk faults that intercept read/pread syscalls need the page cache dropped
 # so the application is forced to issue new reads that hit the eBPF probes.
-_DISK_FAULTS: frozenset[str] = frozenset(
+_NEEDS_CACHE_DROP: frozenset[str] = frozenset(
     {
         KhaosFaultName.latent_sector_error,
+        KhaosFaultName.read_error,
+        KhaosFaultName.pread_error,
+        KhaosFaultName.force_read_ret_ok,
     }
 )
+
+# Backwards-compatible alias; older code (and the reinjection monitor) reads this.
+_DISK_FAULTS: frozenset[str] = _NEEDS_CACHE_DROP
 
 
 class _FaultReinjectionMonitor:
@@ -177,7 +183,7 @@ class _FaultReinjectionMonitor:
                 )
                 self._injector._exec_khaos_fault_on_node(self._node, self._fault_type, host_pid, self._params)
 
-                if self._fault_type in _DISK_FAULTS:
+                if self._fault_type in _NEEDS_CACHE_DROP:
                     kernel_injector = KernelInjector(self._injector.kubectl)
                     kernel_injector.drop_caches(self._node, show_log=False)
                     print(f"[reinjection-monitor] Dropped caches on {self._node} after re-injection")
@@ -247,7 +253,7 @@ class KhaosFaultProblem(Problem):
         # Disk faults intercept read/pread syscalls via eBPF. Data already in
         # the page cache will be served without issuing those syscalls, so we
         # must drop caches to force the application to re-read from disk.
-        if self.fault_name in _DISK_FAULTS and self.target_node:
+        if self.fault_name in _NEEDS_CACHE_DROP and self.target_node:
             print("Dropping page caches to force disk reads through eBPF probes...")
             kernel_injector = KernelInjector(self.injector.kubectl)
             kernel_injector.drop_caches(self.target_node)
@@ -255,7 +261,7 @@ class KhaosFaultProblem(Problem):
         # eBPF probes are pinned to host PIDs. When Kubernetes restarts a
         # crashed pod, the new container gets a new PID and the fault
         # disappears. Start a background monitor that re-injects on restart.
-        if self.fault_name in _DISK_FAULTS and self.target_node:
+        if self.target_node:
             self._reinjection_monitor = _FaultReinjectionMonitor(
                 injector=self.injector,
                 namespace=self.namespace,
@@ -355,3 +361,204 @@ KHAOS_FAULT_CONFIGS: dict[KhaosFaultName, KhaosFaultConfig] = {
     name: KhaosFaultConfig(name=name, description=desc, default_args=defaults)
     for name, desc, defaults in _FAULT_CONFIG_ENTRIES
 }
+
+
+# ---------------------------------------------------------------------------
+# Compound hardware-failure problems
+# ---------------------------------------------------------------------------
+# A real hardware fault rarely manifests as a single failed syscall. A failing
+# DRAM module rejects mmap *and* malloc; a faulty NIC drops sendto *and*
+# recvfrom; a dying storage controller produces both read and write errors.
+# KhaosCompoundFaultProblem injects several khaos faults onto the same node so
+# the application sees the syscall-error signature of one underlying hardware
+# component failing — and exposes a single hardware-level root_cause to the
+# diagnosis judge instead of the per-syscall description.
+
+
+class KhaosCompoundFaultProblem(Problem):
+    """Inject multiple khaos faults onto a single node, with a hardware-failure
+    narrative as the root cause."""
+
+    def __init__(
+        self,
+        fault_specs: list[tuple[KhaosFaultName | str, list[int | str] | None]],
+        root_cause: str,
+        target_node: str | None = None,
+    ):
+        if not fault_specs:
+            raise ValueError("KhaosCompoundFaultProblem requires at least one fault_spec")
+
+        self.app = HotelReservation()
+        super().__init__(app=self.app, namespace=self.app.namespace)
+        self.kubectl = self.app.kubectl if hasattr(self.app, "kubectl") else None
+        self.namespace = self.app.namespace
+        self.injector = HWFaultInjector()
+        self.target_node = target_node
+
+        # Resolve fault names against the configs and apply default args when
+        # the caller didn't override them.
+        self.fault_specs: list[tuple[KhaosFaultName, list[int | str]]] = []
+        for raw_name, raw_args in fault_specs:
+            try:
+                name = KhaosFaultName(raw_name)
+            except Exception as e:
+                raise ValueError(f"Unknown fault name '{raw_name}'") from e
+            cfg = KHAOS_FAULT_CONFIGS[name]
+            args = list(raw_args) if raw_args is not None else list(cfg.default_args)
+            self.fault_specs.append((name, args))
+
+        self.app.payload_script = (
+            TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"
+        )
+
+        self._reinjection_monitors: list[_FaultReinjectionMonitor] = []
+
+        self.root_cause = root_cause
+        self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        self.mitigation_oracle = AlertOracle(problem=self)
+
+        self.app.create_workload()
+
+    def requires_khaos(self) -> bool:
+        return True
+
+    @mark_fault_injected
+    def inject_fault(self):
+        names = ", ".join(name.value for name, _ in self.fault_specs)
+        print(f"== Compound Fault Injection: {names} ==")
+
+        # First fault chooses the node (or honours the caller's preference).
+        # Subsequent faults reuse that node so all faults compose on one host.
+        first_name, first_args = self.fault_specs[0]
+        self.target_node = self.injector.inject_node(
+            self.namespace,
+            first_name.value,
+            self.target_node,
+            params=first_args,
+        )
+        print(f"Injected {first_name.value} on node {self.target_node}")
+
+        for name, args in self.fault_specs[1:]:
+            self.injector.inject_node(
+                self.namespace,
+                name.value,
+                self.target_node,
+                params=args,
+            )
+            print(f"Injected {name.value} on node {self.target_node}")
+
+        if self.target_node and any(name in _NEEDS_CACHE_DROP for name, _ in self.fault_specs):
+            print("Dropping page caches to force disk reads through eBPF probes...")
+            kernel_injector = KernelInjector(self.injector.kubectl)
+            kernel_injector.drop_caches(self.target_node)
+
+        if self.target_node:
+            for name, args in self.fault_specs:
+                monitor = _FaultReinjectionMonitor(
+                    injector=self.injector,
+                    namespace=self.namespace,
+                    node=self.target_node,
+                    fault_type=name.value,
+                    params=args,
+                )
+                monitor.start()
+                self._reinjection_monitors.append(monitor)
+        print(f"Compound fault injection complete on node {self.target_node}\n")
+
+    @mark_fault_injected
+    def recover_fault(self):
+        names = ", ".join(name.value for name, _ in self.fault_specs)
+        print(f"== Compound Fault Recovery: {names} on node {self.target_node} ==")
+
+        for monitor in self._reinjection_monitors:
+            monitor.stop()
+        self._reinjection_monitors = []
+
+        if not self.target_node:
+            print("[warn] No target node recorded; attempting best-effort recovery.")
+            return
+
+        # Recover in reverse order so that whichever fault was injected last
+        # is the first to be torn down — minimises the window where a half-
+        # recovered host can re-fault a still-bound probe.
+        for name, _ in reversed(self.fault_specs):
+            try:
+                self.injector.recover_node(self.namespace, name.value, self.target_node)
+            except Exception as exc:
+                print(f"[recover] {name.value} on {self.target_node}: {exc}")
+        print("Recovery requests sent.\n")
+
+
+# Hardware-failure narratives. Each entry composes one or more khaos faults
+# under a single hardware story so the LLM judge sees a hardware-level root
+# cause instead of a syscall-level one.
+
+_HW_NIC_PACKET_CORRUPTION = (
+    "[fault_spec] component=node-nic; namespace=hotel-reservation || "
+    "The host node's network interface is corrupting and dropping a substantial fraction of "
+    "packets in both directions, consistent with a failing NIC, dirty fiber-optic transceiver, "
+    "or top-of-rack switch port flapping. gRPC calls between hotel-reservation microservices "
+    "experience high error rates and elevated tail latency from retransmissions; cross-pod "
+    "communication on the affected node is degraded but not fully partitioned."
+)
+
+_HW_STORAGE_READ_FAILURE = (
+    "[fault_spec] component=node-storage-controller; namespace=hotel-reservation || "
+    "The storage controller / disk on the host node is returning hard read errors, consistent "
+    "with a SATA controller failure, head-read-recovery exhaustion on a failing HDD, or an SSD "
+    "exhausting its spare blocks. Pods on this node — especially MongoDB instances reading "
+    "WiredTiger pages and Go services reading config files — surface I/O errors and crash on "
+    "page faults backed by failing storage."
+)
+
+_HW_STORAGE_WRITE_FAILURE = (
+    "[fault_spec] component=node-storage; namespace=hotel-reservation || "
+    "Writes to the host node's persistent storage are failing, consistent with a write-head "
+    "failure, firmware-bug write rejection, or full disk hardware fault. MongoDB cannot persist "
+    "WiredTiger journal records or fsync the WAL, and write-heavy services on the node fail "
+    "their durability paths and crash."
+)
+
+_HW_DRAM_MODULE_FAILURE = (
+    "[fault_spec] component=node-dram; namespace=hotel-reservation || "
+    "The host node's DRAM is degraded — consistent with a defective memory module surfacing "
+    "uncorrectable ECC errors and the kernel offlining bad pages. Memory allocation paths "
+    "(mmap of new mappings, heap-chunk allocation) on this node return ENOMEM. Go services "
+    "cannot grow goroutine stacks; MongoDB cannot mmap WiredTiger storage files; pods on the "
+    "node fail to allocate and crash or fail to start."
+)
+
+_HW_CPU_CLOCKSOURCE_FAILURE = (
+    "[fault_spec] component=node-clocksource; namespace=hotel-reservation || "
+    "The host node's clocksource is unreliable — consistent with TSC instability, hardware RTC "
+    "failure, or cross-CPU clock desynchronisation. Time-reading syscalls (clock_gettime, "
+    "gettimeofday) return errors, so gRPC deadlines and timeouts behave unpredictably, span "
+    "metrics latency math is wrong, and dependent retry/backoff loops on this node misbehave."
+)
+
+_HW_MMU_PAGE_PROTECTION_FAILURE = (
+    "[fault_spec] component=node-mmu; namespace=hotel-reservation || "
+    "Page-protection operations on the host node are failing, consistent with MMU/TLB "
+    "corruption (e.g., a cosmic-ray-induced bit flip in page-table state, or a defective CPU "
+    "page-table walker). Calls into mprotect return EACCES across pods on this node. The Go "
+    "runtime uses mprotect when growing goroutine stacks and managing the heap, so services "
+    "fault on memory operations and the kernel sends SIGSEGV — pods crash and restart."
+)
+
+_HW_NETWORK_INTERFACE_LINK_DOWN = (
+    "[fault_spec] component=node-nic; namespace=hotel-reservation || "
+    "The host node's primary network interface has lost link — consistent with a fully-down "
+    "NIC, an unplugged cable, or a switchport admin-down event. New socket creation and bind "
+    "operations fail (ENETDOWN). Already-established gRPC connections initially survive, but "
+    "any pod restart on this node fails to come back up because services cannot bind their "
+    "listening ports, and any service trying to open new outbound connections is blocked."
+)
+
+_HW_DNS_RESOLVER_FAILURE = (
+    "[fault_spec] component=node-network-resolver; namespace=hotel-reservation || "
+    "Name resolution is failing on the host node, consistent with a node-local DNS resolver / "
+    "stub-resolver hardware-path failure (e.g., a corrupted resolver cache, broken libnss "
+    "shared memory, or the per-node DNS device path going read-error). getaddrinfo() returns "
+    "errors for service-name lookups, breaking services that resolve dependencies at request "
+    "time on this node."
+)
