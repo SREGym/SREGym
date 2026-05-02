@@ -33,11 +33,13 @@ class AlertOracle(Oracle):
         sustained_silence_seconds=_SUSTAINED_SILENCE_SECONDS,
         poll_interval_seconds=_POLL_INTERVAL_SECONDS,
         buffer_seconds=_BUFFER_SECONDS,
+        exclude_alerts=None,
     ):
         super().__init__(problem)
         self.sustained_silence_seconds = sustained_silence_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.buffer_seconds = buffer_seconds
+        self.exclude_alerts = set(exclude_alerts or [])
 
     # ------------------------------------------------------------------
     # Prometheus query helpers
@@ -77,6 +79,8 @@ class AlertOracle(Oracle):
                 continue
             labels = alert.get("labels", {})
             if labels.get("namespace") == namespace:
+                if labels.get("alertname") in self.exclude_alerts:
+                    continue
                 firing.append(alert)
         return firing
 

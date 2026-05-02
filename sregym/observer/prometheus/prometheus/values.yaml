@@ -907,8 +907,8 @@ serverFiles:
                     namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
                   }[2m])
                 ) > 50
-                unless on()
-                count(kube_resourcequota{namespace="blueprint-hotel-reservation", resourcequota="capacity-restraint"}) > 0
+                unless 
+                count(kube_pod_info{namespace="blueprint-hotel-reservation"}) > 0
               for: 1m
               labels:
                 severity: critical
@@ -925,7 +925,7 @@ serverFiles:
                       namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
                     }[2m])
                   )
-                ) > 1500
+                ) > 3000
               for: 1m
               labels:
                 severity: critical

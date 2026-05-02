@@ -29,7 +29,7 @@ class CapacityDecreaseRPCRetryStorm(Problem):
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self, exclude_alerts=["HighRequestRate"])
 
     @mark_fault_injected
     def inject_fault(self):

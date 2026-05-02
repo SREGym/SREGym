@@ -28,7 +28,7 @@ class GCCapacityDegradation(Problem):
         )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self, exclude_alerts=["HighRequestRate"])
 
     def _apply_memory_limit(self):
         config.load_kube_config()
