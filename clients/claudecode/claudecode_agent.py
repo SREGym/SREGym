@@ -9,7 +9,6 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("all.claudecode.agent")
 
@@ -239,13 +238,16 @@ class ClaudeCodeAgent:
             Path to the generated JSONL file, or None if conversion failed.
         """
         # Load converter directly from its file so no __init__.py or sys.path tricks needed.
-        converter_file = Path(__file__).resolve().parents[2] / "visualizer" / "converters" / "claudecode_to_trajectory.py"
+        converter_file = (
+            Path(__file__).resolve().parents[2] / "visualizer" / "converters" / "claudecode_to_trajectory.py"
+        )
         if not converter_file.exists():
             logger.warning(f"Converter not found: {converter_file}")
             return None
 
         try:
             import importlib.util
+
             spec = importlib.util.spec_from_file_location("claudecode_to_trajectory", converter_file)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)
@@ -322,10 +324,16 @@ class ClaudeCodeAgent:
             logger.error("=" * 80)
             return 1
 
-        if api_key:
-            env["ANTHROPIC_API_KEY"] = api_key
+        # Prefer OAuth when explicitly set: an OAuth token in the env reflects
+        # caller intent (e.g. driving the agent on a Claude Code subscription
+        # while the conductor / judge separately uses an API key from
+        # ANTHROPIC_API_KEY). Drop ANTHROPIC_API_KEY from the agent's env so
+        # the Claude Code CLI authenticates via the OAuth path.
         if oauth_token:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
+            env.pop("ANTHROPIC_API_KEY", None)
+        elif api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
 
         # Set model name
         env["ANTHROPIC_MODEL"] = model

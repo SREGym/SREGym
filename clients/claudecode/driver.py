@@ -32,11 +32,20 @@ def run_preflight() -> None:
     import subprocess
 
     m = os.environ["AGENT_MODEL_ID"].split("/")[-1]
+
+    # Mirror the agent's auth precedence: when CLAUDE_CODE_OAUTH_TOKEN is set,
+    # drop ANTHROPIC_API_KEY for this subprocess so the Claude CLI authenticates
+    # via OAuth (and the preflight tests the same path the actual run uses).
+    env = os.environ.copy()
+    if env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        env.pop("ANTHROPIC_API_KEY", None)
+
     r = subprocess.run(
         ["claude", "-p", "say ok", "--model", m, "--max-turns", "1"],
         capture_output=True,
         text=True,
         timeout=60,
+        env=env,
     )
     if r.returncode:
         print(r.stdout or r.stderr)
