@@ -165,7 +165,13 @@ async def get_app():
         raise HTTPException(status_code=400, detail="No problem has been started")
     app_inst = _conductor.app
     logger.debug(f"API returns App instance: {app_inst}")
-    return {"app_name": app_inst.app_name, "namespace": app_inst.namespace, "descriptions": str(app_inst.description)}
+    namespaces = getattr(app_inst, "namespaces", None) or [app_inst.namespace]
+    return {
+        "app_name": app_inst.app_name,
+        "namespace": app_inst.namespace,
+        "namespaces": namespaces,
+        "descriptions": str(app_inst.description),
+    }
 
 
 @app.get("/get_problem")

@@ -7,7 +7,6 @@ from sregym.service.apps.base import Application
 
 class CompositeApp:
     def __init__(self, apps: list[Application]):
-        self.namespace = "Multiple namespaces"
         self.apps = {}
         for app in apps:
             if app.name in self.apps:
@@ -17,6 +16,10 @@ class CompositeApp:
         print(f"[CompositeApp] Apps: {self.apps}")
         self.name = "CompositeApp"
         self.app_name = "CompositeApp"
+        self.namespaces = [app.namespace for app in self.apps.values()]
+        # Kept for backwards compatibility; consumers that expect a single
+        # namespace should prefer `namespaces` for composite apps.
+        self.namespace = self.namespaces[0] if self.namespaces else None
         self.description = f"Composite application containing {len(self.apps)} apps: {', '.join(self.apps.keys())}"
 
     def deploy(self):

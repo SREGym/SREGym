@@ -13,9 +13,13 @@ class MultipleIndependentFailures(Problem):
     def __init__(self, problems: list[Problem]):
         self.problems = problems
         apps = [p.app for p in problems]
-        self.app = CompositeApp(apps)
+        composite_app = CompositeApp(apps)
         self.namespaces = [p.namespace for p in problems]
-        self.fault_injected = False
+        # Initialize the Problem base. Use the composite app's namespace
+        # (first sub-app's namespace) as the canonical namespace; per-fault
+        # operations always go through the sub-problems, which carry their
+        # own namespace.
+        super().__init__(app=composite_app, namespace=composite_app.namespace)
 
         # === Attaching problem's oracles ===
         # diagnosis oracles can be statically defined.
@@ -39,7 +43,8 @@ class MultipleIndependentFailures(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         # mitigation oracle: compound of all sub-problem mitigation oracles
-        mitigation_oracles = [p.mitigation_oracle for p in self.problems if p.mitigation_oracle]
+        mitigation_oracles = [getattr(p, "mitigation_oracle", None) for p in self.problems]
+        mitigation_oracles = [o for o in mitigation_oracles if o is not None]
         if mitigation_oracles:
             self.mitigation_oracle = CompoundedOracle(self, *mitigation_oracles)
 
