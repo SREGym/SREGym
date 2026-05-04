@@ -4,9 +4,20 @@ from llm_backend.get_llm_backend import LiteLLMBackend
 
 
 def get_llm_backend(model_name: str) -> LiteLLMBackend:
-    """Initialize an LLM backend for the given litellm model string."""
+    """Initialize an LLM backend for the given litellm model string.
+
+    Optional env vars:
+      LLM_API_BASE — override the litellm api_base (e.g. Bedrock's
+        OpenAI-compatible endpoint to bypass the Converse-API read-timeout
+        regression on Moonshot/Kimi models, see langchain-aws#819).
+      LLM_API_KEY — override the litellm api_key.
+    """
     print(f"🔧 Initializing LLM backend — model: {model_name}")
-    return LiteLLMBackend(model_name=model_name)
+    return LiteLLMBackend(
+        model_name=model_name,
+        api_base=os.environ.get("LLM_API_BASE"),
+        api_key=os.environ.get("LLM_API_KEY"),
+    )
 
 
 def get_llm_backend_for_agent() -> LiteLLMBackend:

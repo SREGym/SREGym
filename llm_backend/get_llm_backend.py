@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 LLM_QUERY_MAX_RETRIES = int(os.getenv("LLM_QUERY_MAX_RETRIES", "5"))
 LLM_QUERY_INIT_RETRY_DELAY = int(os.getenv("LLM_QUERY_INIT_RETRY_DELAY", "1"))
+# Per-request timeout. Default 120s shrinks the chronic Bedrock Converse-API
+# read-timeout cost from ~600s to one short timeout + a fast retry.
+LLM_REQUEST_TIMEOUT_S = int(os.getenv("LLM_REQUEST_TIMEOUT_S", "120"))
 
 
 class LiteLLMBackend:
@@ -38,6 +41,7 @@ class LiteLLMBackend:
         self.max_tokens = max_tokens
         litellm.drop_params = True
         litellm.modify_params = True
+        litellm.request_timeout = LLM_REQUEST_TIMEOUT_S
 
     def inference(
         self,
