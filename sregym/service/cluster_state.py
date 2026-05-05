@@ -16,8 +16,33 @@ logger.propagate = True
 logger.setLevel(logging.DEBUG)
 
 
-# Namespaces that should never be deleted during reconciliation
-PROTECTED_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease", "default", "sregym"})
+# Namespaces that should never be deleted during reconciliation. `chaos-mesh`
+# is included so that noise injection survives the per-problem cleanup —
+# without it the conductor wipes the chaos-mesh helm release and CRDs after
+# every problem and the next noise injection silently fails.
+PROTECTED_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease", "default", "sregym", "chaos-mesh"})
+
+
+def _is_chaos_mesh_resource(name: str) -> bool:
+    """True if the cluster-scoped resource (CRD / ClusterRole / RoleBinding /
+    webhook config) belongs to chaos-mesh and should be preserved across runs.
+
+    chaos-mesh creates a sprawling set of cluster-scoped resources:
+      - CRDs ending in `.chaos-mesh.org`
+      - ClusterRoles named `chaos-mesh:*` or `chaos-controller-manager-*`
+      - ClusterRoleBindings with the same prefixes
+      - ValidatingWebhookConfigurations / MutatingWebhookConfigurations like
+        `chaos-mesh-validation-auth`, `validate-auth`, `chaos-mesh-mutation`
+    Any of them being deleted by reconcile_to_baseline breaks chaos-mesh, so
+    we filter all of them out of the "unexpected" delete sets.
+    """
+    if not name:
+        return False
+    if name.endswith(".chaos-mesh.org"):
+        return True
+    return (
+        ("chaos-mesh" in name) or ("chaos-controller" in name) or ("chaos-daemon" in name) or name in {"validate-auth"}
+    )
 
 
 @dataclass
@@ -198,6 +223,8 @@ class ClusterStateManager:
             # Skip system roles that may have been auto-created
             if role.startswith("system:") or role.startswith("kubeadm:"):
                 continue
+            if _is_chaos_mesh_resource(role):
+                continue
             logger.info(f"Deleting unexpected ClusterRole: {role}")
             try:
                 self.rbac_v1.delete_cluster_role(name=role)
@@ -211,6 +238,8 @@ class ClusterStateManager:
         unexpected_bindings = current_bindings - self.baseline.cluster_role_bindings
         for binding in unexpected_bindings:
             if binding.startswith("system:") or binding.startswith("kubeadm:"):
+                continue
+            if _is_chaos_mesh_resource(binding):
                 continue
             logger.info(f"Deleting unexpected ClusterRoleBinding: {binding}")
             try:
@@ -266,6 +295,8 @@ class ClusterStateManager:
         current_crds = self._get_crds()
         unexpected_crds = current_crds - self.baseline.crds
         for crd in unexpected_crds:
+            if _is_chaos_mesh_resource(crd):
+                continue
             logger.info(f"Deleting unexpected CRD: {crd}")
             self._strip_cr_finalizers(crd)
             try:
@@ -279,6 +310,8 @@ class ClusterStateManager:
         current_vwc = self._get_validating_webhook_configs()
         unexpected_vwc = current_vwc - self.baseline.validating_webhook_configs
         for vwc in unexpected_vwc:
+            if _is_chaos_mesh_resource(vwc):
+                continue
             logger.info(f"Deleting unexpected ValidatingWebhookConfiguration: {vwc}")
             try:
                 self.admission_v1.delete_validating_webhook_configuration(name=vwc)
@@ -291,6 +324,8 @@ class ClusterStateManager:
         current_mwc = self._get_mutating_webhook_configs()
         unexpected_mwc = current_mwc - self.baseline.mutating_webhook_configs
         for mwc in unexpected_mwc:
+            if _is_chaos_mesh_resource(mwc):
+                continue
             logger.info(f"Deleting unexpected MutatingWebhookConfiguration: {mwc}")
             try:
                 self.admission_v1.delete_mutating_webhook_configuration(name=mwc)
