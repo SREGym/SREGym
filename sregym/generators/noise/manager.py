@@ -203,13 +203,6 @@ class NoiseManager:
             self.active_experiments.clear()
 
     def _force_remove_all_chaos_resources(self):
-        """Remove finalizers from all chaos-mesh CRs so the namespace can terminate cleanly.
-
-        When the chaos-mesh controller is gone (or being deleted), CRs with
-        finalizers block namespace deletion indefinitely.  This method patches
-        the finalizers away for every CR of every chaos-mesh CRD, then deletes
-        the CRDs themselves.
-        """
         try:
             crd_output = self.kubectl.exec_command("kubectl get crd -o name 2>/dev/null | grep chaos-mesh.org || true")
         except Exception:
@@ -249,12 +242,7 @@ class NoiseManager:
                         f"2>/dev/null || true"
                     )
 
-        # Now delete the CRDs (should return quickly with finalizers removed)
-        for crd in crd_names:
-            with contextlib.suppress(Exception):
-                self.kubectl.exec_command(f"kubectl delete crd {crd} --timeout=30s 2>/dev/null || true")
-
-        logger.info("Force-removed all Chaos Mesh CRs and CRDs.")
+        logger.info("Stripped finalizers from chaos-mesh CRs; CRDs left in place for next run.")
 
     # ── Chaos Mesh installation ───────────────────────────────────────
 
