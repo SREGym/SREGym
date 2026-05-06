@@ -21,15 +21,6 @@ from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAss
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.khaos_faults import (
-    _HW_CPU_CLOCKSOURCE_FAILURE,
-    _HW_DNS_RESOLVER_FAILURE,
-    _HW_DRAM_MODULE_FAILURE,
-    _HW_MMU_PAGE_PROTECTION_FAILURE,
-    _HW_NETWORK_INTERFACE_LINK_DOWN,
-    _HW_NIC_PACKET_CORRUPTION,
-    _HW_STORAGE_READ_FAILURE,
-    _HW_STORAGE_WRITE_FAILURE,
-    KhaosCompoundFaultProblem,
     KhaosFaultName,
     KhaosFaultProblem,
 )
@@ -180,150 +171,103 @@ class ProblemRegistry:
             "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
             # ==================== HARDWARE FAULT INJECTOR ====================
             "silent_data_corruption": SilentDataCorruption,
-
             "latent_sector_error": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error,inject_args=[30]),
             # ----- Hardware-failure compound problems (Tier A) -----
-            "nic_packet_corruption": lambda: KhaosCompoundFaultProblem(
-                fault_specs=[
-                    (KhaosFaultName.packet_loss_sendto, [30]),
-                    (KhaosFaultName.packet_loss_recvfrom, [30]),
-                ],
-                root_cause=_HW_NIC_PACKET_CORRUPTION,
-            ),
-            "storage_controller_read_failure": lambda: KhaosCompoundFaultProblem(
-                fault_specs=[
-                    (KhaosFaultName.read_error, None),
-                    (KhaosFaultName.pread_error, None),
-                ],
-                root_cause=_HW_STORAGE_READ_FAILURE,
-            ),
-            "storage_write_failure": lambda: KhaosCompoundFaultProblem(
-                fault_specs=[
-                    (KhaosFaultName.write_error, None),
-                    (KhaosFaultName.pwrite_error, None),
-                    (KhaosFaultName.fsync_error, None),
-                ],
-                root_cause=_HW_STORAGE_WRITE_FAILURE,
-            ),
-            "dram_module_failure": lambda: KhaosCompoundFaultProblem(
-                fault_specs=[
-                    (KhaosFaultName.mmap_fail, None),
-                    (KhaosFaultName.mmap_oom, None),
-                    (KhaosFaultName.oom_memchunk, None),
-                ],
-                root_cause=_HW_DRAM_MODULE_FAILURE,
-            ),
-            "cpu_clocksource_failure": lambda: KhaosCompoundFaultProblem(
-                fault_specs=[
-                    (KhaosFaultName.clock_drift, None),
-                    (KhaosFaultName.gettimeofday_fail, None),
-                ],
-                root_cause=_HW_CPU_CLOCKSOURCE_FAILURE,
-            ),
-            # ----- Hardware-failure compound problems (Tier B) -----
-            "mmu_page_protection_failure": lambda: KhaosCompoundFaultProblem(
-                fault_specs=[
-                    (KhaosFaultName.force_mprotect_eacces, None),
-                    (KhaosFaultName.stack_rndsegfault, None),
-                ],
-                root_cause=_HW_MMU_PAGE_PROTECTION_FAILURE,
-            ),
-            "network_interface_link_down": lambda: KhaosCompoundFaultProblem(
-                fault_specs=[
-                    (KhaosFaultName.bind_enetdown, None),
-                    (KhaosFaultName.socket_block, None),
-                ],
-                root_cause=_HW_NETWORK_INTERFACE_LINK_DOWN,
-            ),
-            "dns_resolver_hardware_failure": lambda: KhaosCompoundFaultProblem(
-                fault_specs=[
-                    (KhaosFaultName.getaddrinfo_fail, None),
-                ],
-                root_cause=_HW_DNS_RESOLVER_FAILURE,
-            ),
-            # "read_error": lambda: KhaosFaultProblem(KhaosFaultName.read_error),
-            # "pread_error": lambda: KhaosFaultProblem(KhaosFaultName.pread_error),
-            # "write_error": lambda: KhaosFaultProblem(KhaosFaultName.write_error),
-            # "pwrite_error": lambda: KhaosFaultProblem(KhaosFaultName.pwrite_error),
-            # "fsync_error": lambda: KhaosFaultProblem(KhaosFaultName.fsync_error),
-            # "open_error": lambda: KhaosFaultProblem(KhaosFaultName.open_error),
-            # "close_fail": lambda: KhaosFaultProblem(KhaosFaultName.close_fail),
-            # "dup_fail": lambda: KhaosFaultProblem(KhaosFaultName.dup_fail),
-            # "getrandom_fail": lambda: KhaosFaultProblem(KhaosFaultName.getrandom_fail),
-            # "gettimeofday_fail": lambda: KhaosFaultProblem(KhaosFaultName.gettimeofday_fail),
-            # "ioctl_fail": lambda: KhaosFaultProblem(KhaosFaultName.ioctl_fail),
-            # "cuda_malloc_fail": lambda: KhaosFaultProblem(KhaosFaultName.cuda_malloc_fail),
-            # "getaddrinfo_fail": lambda: KhaosFaultProblem(KhaosFaultName.getaddrinfo_fail),
-            # "nanosleep_throttle": lambda: KhaosFaultProblem(KhaosFaultName.nanosleep_throttle),
-            # "nanosleep_interrupt": lambda: KhaosFaultProblem(KhaosFaultName.nanosleep_interrupt),
-            # "fork_fail": lambda: KhaosFaultProblem(KhaosFaultName.fork_fail),
-            # "clock_drift": lambda: KhaosFaultProblem(KhaosFaultName.clock_drift),
-            # "setns_fail": lambda: KhaosFaultProblem(KhaosFaultName.setns_fail),
-            # "prlimit_fail": lambda: KhaosFaultProblem(KhaosFaultName.prlimit_fail),
-            # "socket_block": lambda: KhaosFaultProblem(KhaosFaultName.socket_block),
-            # "mmap_fail": lambda: KhaosFaultProblem(KhaosFaultName.mmap_fail),
-            # "mmap_oom": lambda: KhaosFaultProblem(KhaosFaultName.mmap_oom),
-            # "brk_fail": lambda: KhaosFaultProblem(KhaosFaultName.brk_fail),
-            # "mlock_fail": lambda: KhaosFaultProblem(KhaosFaultName.mlock_fail),
-            # "bind_enetdown": lambda: KhaosFaultProblem(KhaosFaultName.bind_enetdown),
-            # "mount_io_error": lambda: KhaosFaultProblem(KhaosFaultName.mount_io_error),
-            # "force_close_ret_err": lambda: KhaosFaultProblem(KhaosFaultName.force_close_ret_err),
-            # "force_read_ret_ok": lambda: KhaosFaultProblem(KhaosFaultName.force_read_ret_ok),
-            # "force_open_ret_eperm": lambda: KhaosFaultProblem(KhaosFaultName.force_open_ret_eperm),
-            # "force_mmap_eagain": lambda: KhaosFaultProblem(KhaosFaultName.force_mmap_eagain),
-            # "force_brk_eagain": lambda: KhaosFaultProblem(KhaosFaultName.force_brk_eagain),
-            # "force_mlock_eperm": lambda: KhaosFaultProblem(KhaosFaultName.force_mlock_eperm),
-            # "force_mprotect_eacces": lambda: KhaosFaultProblem(KhaosFaultName.force_mprotect_eacces),
-            # "force_swapon_einval": lambda: KhaosFaultProblem(KhaosFaultName.force_swapon_einval),
-            # "oom_memchunk": lambda: KhaosFaultProblem(KhaosFaultName.oom_memchunk),
-            # "oom_heapspace": lambda: KhaosFaultProblem(KhaosFaultName.oom_heapspace),
-            # "oom_nonswap": lambda: KhaosFaultProblem(KhaosFaultName.oom_nonswap),
-            # "hfrag_memchunk": lambda: KhaosFaultProblem(KhaosFaultName.hfrag_memchunk),
-            # "hfrag_heapspace": lambda: KhaosFaultProblem(KhaosFaultName.hfrag_heapspace),
-            # "ptable_permit": lambda: KhaosFaultProblem(KhaosFaultName.ptable_permit),
-            # "stack_rndsegfault": lambda: KhaosFaultProblem(KhaosFaultName.stack_rndsegfault),
-            # "thrash_swapon": lambda: KhaosFaultProblem(KhaosFaultName.thrash_swapon),
-            # "thrash_swapoff": lambda: KhaosFaultProblem(KhaosFaultName.thrash_swapoff),
-            # "memleak_munmap": lambda: KhaosFaultProblem(KhaosFaultName.memleak_munmap),
-            # "packet_loss_sendto": lambda: KhaosFaultProblem(KhaosFaultName.packet_loss_sendto),
-            # "packet_loss_recvfrom": lambda: KhaosFaultProblem(KhaosFaultName.packet_loss_recvfrom),
+            # "nic_packet_corruption": lambda: KhaosCompoundFaultProblem(
+            #     fault_specs=[
+            #         (KhaosFaultName.packet_loss_sendto, [30]),
+            #         (KhaosFaultName.packet_loss_recvfrom, [30]),
+            #     ],
+            #     root_cause=_HW_NIC_PACKET_CORRUPTION,
+            # ),
+            # "storage_controller_read_failure": lambda: KhaosCompoundFaultProblem(
+            #     fault_specs=[
+            #         (KhaosFaultName.read_error, None),
+            #         (KhaosFaultName.pread_error, None),
+            #     ],
+            #     root_cause=_HW_STORAGE_READ_FAILURE,
+            # ),
+            # "storage_write_failure": lambda: KhaosCompoundFaultProblem(
+            #     fault_specs=[
+            #         (KhaosFaultName.write_error, None),
+            #         (KhaosFaultName.pwrite_error, None),
+            #         (KhaosFaultName.fsync_error, None),
+            #     ],
+            #     root_cause=_HW_STORAGE_WRITE_FAILURE,
+            # ),
+            # "dram_module_failure": lambda: KhaosCompoundFaultProblem(
+            #     fault_specs=[
+            #         (KhaosFaultName.mmap_fail, None),
+            #         (KhaosFaultName.mmap_oom, None),
+            #         (KhaosFaultName.oom_memchunk, None),
+            #     ],
+            #     root_cause=_HW_DRAM_MODULE_FAILURE,
+            # ),
+            # "cpu_clocksource_failure": lambda: KhaosCompoundFaultProblem(
+            #     fault_specs=[
+            #         (KhaosFaultName.clock_drift, None),
+            #         (KhaosFaultName.gettimeofday_fail, None),
+            #     ],
+            #     root_cause=_HW_CPU_CLOCKSOURCE_FAILURE,
+            # ),
+            # # ----- Hardware-failure compound problems (Tier B) -----
+            # "mmu_page_protection_failure": lambda: KhaosCompoundFaultProblem(
+            #     fault_specs=[
+            #         (KhaosFaultName.force_mprotect_eacces, None),
+            #         (KhaosFaultName.stack_rndsegfault, None),
+            #     ],
+            #     root_cause=_HW_MMU_PAGE_PROTECTION_FAILURE,
+            # ),
+            # "network_interface_link_down": lambda: KhaosCompoundFaultProblem(
+            #     fault_specs=[
+            #         (KhaosFaultName.bind_enetdown, None),
+            #         (KhaosFaultName.socket_block, None),
+            #     ],
+            #     root_cause=_HW_NETWORK_INTERFACE_LINK_DOWN,
+            # ),
+            # "dns_resolver_hardware_failure": lambda: KhaosCompoundFaultProblem(
+            #     fault_specs=[
+            #         (KhaosFaultName.getaddrinfo_fail, None),
+            #     ],
+            #     root_cause=_HW_DNS_RESOLVER_FAILURE,
+            # ),
             # ==================== DIRECT K8S API ====================
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
-            "port_misconfig_revoke_auth_wrong_svc_selector": \
-                lambda: MultipleIndependentFailures(problems=[
-                    K8STargetPortMisconfig(faulty_service="user-service"),
-                    MongoDBRevokeAuth(faulty_service="mongodb-geo"),
-                    WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend")
-            ]),
-            # another concurrent fault problem that deploys all three apps
-            "port_misconfig_misconfig_hotelres_missing_env_var": \
-                lambda: MultipleIndependentFailures(problems=[
-                    K8STargetPortMisconfig(faulty_service="user-service"),
-                    MisconfigAppHotelRes(),
-                    MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend")
-            ]),
-            # three concurrent fault problems, each only focuses on one app
-            # astro shop
-            "valkey_memory_disruption_missing_env_var_incorrect_port": \
-                lambda: MultipleIndependentFailures(problems=[
-                    ValkeyMemoryDisruption(),
-                    MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend"),
-                    IncorrectPortAssignment()
-                ]),
-            # hotel res
-            "hotel_res_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
-                MisconfigAppHotelRes(),
-                MongoDBRevokeAuth(faulty_service="mongodb-geo"),
-                MongoDBUserUnregistered(faulty_service="mongodb-rate")
-            ]),
-            # social net
-            "social_net_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
-                AssignNonExistentNode(),
-                MongoDBAuthMissing(),
-                LivenessProbeTooAggressive(app_name="social_network"),
-            ]),
+            # "port_misconfig_revoke_auth_wrong_svc_selector": \
+            #     lambda: MultipleIndependentFailures(problems=[
+            #         K8STargetPortMisconfig(faulty_service="user-service"),
+            #         MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+            #         WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend")
+            # ]),
+            # # another concurrent fault problem that deploys all three apps
+            # "port_misconfig_misconfig_hotelres_missing_env_var": \
+            #     lambda: MultipleIndependentFailures(problems=[
+            #         K8STargetPortMisconfig(faulty_service="user-service"),
+            #         MisconfigAppHotelRes(),
+            #         MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend")
+            # ]),
+            # # three concurrent fault problems, each only focuses on one app
+            # # astro shop
+            # "valkey_memory_disruption_missing_env_var_incorrect_port": \
+            #     lambda: MultipleIndependentFailures(problems=[
+            #         ValkeyMemoryDisruption(),
+            #         MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend"),
+            #         IncorrectPortAssignment()
+            #     ]),
+            # # hotel res
+            # "hotel_res_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
+            #     MisconfigAppHotelRes(),
+            #     MongoDBRevokeAuth(faulty_service="mongodb-geo"),
+            #     MongoDBUserUnregistered(faulty_service="mongodb-rate")
+            # ]),
+            # # social net
+            # "social_net_concurrent_fault": lambda: MultipleIndependentFailures(problems=[
+            #     AssignNonExistentNode(),
+            #     MongoDBAuthMissing(),
+            #     LivenessProbeTooAggressive(app_name="social_network"),
+            # ]),
             # ad hoc:
             "kubelet_crash": KubeletCrash,
             "workload_imbalance": WorkloadImbalance,
