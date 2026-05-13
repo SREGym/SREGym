@@ -1,3 +1,4 @@
 [submodule "SREGym-applications"]
 	path = SREGym-applications
 	url = https://github.com/SREGym/SREGym-applications.git
+	branch = postmortem-miner-validation
