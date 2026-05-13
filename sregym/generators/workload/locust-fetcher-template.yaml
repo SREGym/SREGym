@@ -9,18 +9,31 @@ spec:
   containers:
   - name: fetcher
     image: python:3.12-slim
-    command: ["bash", "-c"]
-    args: # Another choice: use requests
+    command: ["python", "-u", "-c"]
+    args:
       - |
-        apt-get update -qq && apt-get install -y -qq curl && rm -rf /var/lib/apt/lists/*
-        round=0
-        while true; do
-          echo "Running Locust on round #${round}"
-          round=$((round + 1))
-          curl -s $LOCUST_URL/stats/requests | python -m json.tool --compact
-          curl -s $LOCUST_URL/stats/reset > /dev/null
-          sleep $INTERVAL_SECONDS
-        done
+        import json, os, time, urllib.request
+        url = os.environ["LOCUST_URL"]
+        interval = int(os.environ.get("INTERVAL_SECONDS", "10"))
+        round_no = 0
+        while True:
+            print(f"Running Locust on round #{round_no}", flush=True)
+            round_no += 1
+            try:
+                with urllib.request.urlopen(f"{url}/stats/requests", timeout=5) as r:
+                    body = r.read().decode()
+                try:
+                    body = json.dumps(json.loads(body), separators=(",", ":"))
+                except Exception:
+                    pass
+                print(body, flush=True)
+                try:
+                    urllib.request.urlopen(f"{url}/stats/reset", timeout=5).read()
+                except Exception:
+                    pass
+            except Exception as e:
+                print(json.dumps({"error": repr(e)}), flush=True)
+            time.sleep(interval)
     env:
     - name: LOCUST_URL
       value: "http://load-generator:8089"

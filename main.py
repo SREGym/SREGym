@@ -240,6 +240,19 @@ def driver_loop(
                 run_dir.mkdir(parents=True, exist_ok=True)
                 os.environ["AGENT_LOGS_DIR"] = str(run_dir.resolve())
 
+                # Provision a per-attempt source workspace for code-change
+                # problems and bind it into the agent at /workspace. Config-only
+                # problems return None from provision_workspace() and the
+                # launcher sees no workspace.
+                workspace_path = None
+                if conductor.problem is not None and conductor.problem.has_workspace():
+                    workspace_path = conductor.problem.provision_workspace(
+                        run_dir / "workspace"
+                    )
+                    if workspace_path is not None:
+                        console.log(f"📂 Provisioned source workspace at {workspace_path}")
+                LAUNCHER.set_problem_workspace(workspace_path)
+
                 reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
                 if reg:
                     await LAUNCHER.ensure_started(reg)

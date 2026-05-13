@@ -458,6 +458,245 @@ class ApplicationFaultInjector(FaultInjector):
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
 
+    def inject_env_value_override(self, deployment_name: str, env_var: str, wrong_value: str):
+        """Override an existing env var's value with a wrong value (e.g. wrong unit)."""
+        try:
+            deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+            container = deployment.spec.template.spec.containers[0]
+            container_name = container.name
+            current_env = container.env or []
+        except Exception as e:
+            raise ValueError(f"Failed to get deployment '{deployment_name}': {e}") from e
+
+        updated_env = []
+        found = False
+        for e in current_env:
+            if e.name == env_var:
+                updated_env.append(client.V1EnvVar(name=env_var, value=wrong_value))
+                found = True
+            else:
+                updated_env.append(e)
+
+        if not found:
+            raise ValueError(
+                f"Environment variable '{env_var}' not found in deployment '{deployment_name}'"
+            )
+
+        patch_body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": container_name,
+                                "env": [{"name": v.name, "value": v.value} for v in updated_env],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
+        print(
+            f"Overrode environment variable '{env_var}' in deployment '{deployment_name}' "
+            f"with value '{wrong_value}'."
+        )
+
+    def recover_env_value_override(self, deployment_name: str, env_var: str, correct_value: str):
+        """Restore an overridden env var to its correct value."""
+        # Same shape as inject_env_value_override, but with the correct value.
+        self.inject_env_value_override(deployment_name, env_var, correct_value)
+        print(
+            f"Restored environment variable '{env_var}' in deployment '{deployment_name}' "
+            f"to '{correct_value}'."
+        )
+
+    def inject_source_file_override(
+        self,
+        deployment_name: str,
+        source_path: str,
+        replacement_content: str,
+        configmap_name: str | None = None,
+    ) -> str:
+        """Overlay a single file inside a running container with a patched
+        version via a ConfigMap subPath mount.
+
+        This is the code-change variant of fault injection — the replacement
+        content is written into a ConfigMap, the deployment is patched to
+        mount that key at `source_path` (subPath so only this one file is
+        replaced, not the whole directory), and the pod restarts into the
+        patched state. Recovery removes the mount and the ConfigMap, so the
+        next pod starts reading the image's original file.
+
+        Returns the name of the ConfigMap (either the provided one or a
+        derived `<deployment>-src-override`).
+        """
+        cm_name = configmap_name or f"{deployment_name}-src-override"
+        basename = source_path.rsplit("/", 1)[-1]
+        volume_name = f"{cm_name}-vol"
+
+        # Create (or replace) the ConfigMap holding the patched file.
+        self.kubectl.create_or_update_configmap(
+            cm_name,
+            self.namespace,
+            {basename: replacement_content},
+        )
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        pod_spec = deployment.spec.template.spec
+        container = pod_spec.containers[0]
+
+        # Build the new volume + volumeMount, preserving existing ones.
+        existing_volumes = list(pod_spec.volumes or [])
+        if not any(v.name == volume_name for v in existing_volumes):
+            existing_volumes.append(
+                client.V1Volume(
+                    name=volume_name,
+                    config_map=client.V1ConfigMapVolumeSource(name=cm_name),
+                )
+            )
+        existing_mounts = list(container.volume_mounts or [])
+        if not any(m.name == volume_name for m in existing_mounts):
+            existing_mounts.append(
+                client.V1VolumeMount(
+                    name=volume_name,
+                    mount_path=source_path,
+                    sub_path=basename,
+                    read_only=True,
+                )
+            )
+
+        pod_spec.volumes = existing_volumes
+        container.volume_mounts = existing_mounts
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        # ConfigMap subPath mounts snapshot the value at pod-start time and do
+        # *not* hot-reload when the ConfigMap changes, so force a rollout even
+        # when the Deployment spec itself wasn't modified on this call.
+        self.kubectl.exec_command(
+            f"kubectl rollout restart deployment/{deployment_name} -n {self.namespace}"
+        )
+        print(
+            f"Mounted ConfigMap '{cm_name}' key '{basename}' over '{source_path}' "
+            f"in deployment '{deployment_name}'."
+        )
+        return cm_name
+
+    def recover_source_file_override(
+        self,
+        deployment_name: str,
+        source_path: str,
+        configmap_name: str | None = None,
+    ):
+        """Remove the source-file overlay added by inject_source_file_override."""
+        cm_name = configmap_name or f"{deployment_name}-src-override"
+        volume_name = f"{cm_name}-vol"
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        pod_spec = deployment.spec.template.spec
+        container = pod_spec.containers[0]
+
+        pod_spec.volumes = [
+            v for v in (pod_spec.volumes or []) if v.name != volume_name
+        ]
+        container.volume_mounts = [
+            m for m in (container.volume_mounts or []) if m.name != volume_name
+        ]
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+
+        # Best-effort delete of the ConfigMap.
+        try:
+            self.kubectl.exec_command(
+                f"kubectl delete configmap {cm_name} -n {self.namespace}"
+            )
+        except Exception as e:
+            print(f"Warning: failed to delete ConfigMap {cm_name}: {e}")
+        print(
+            f"Removed source override for '{source_path}' from deployment "
+            f"'{deployment_name}'."
+        )
+
+    def set_sequence_value(
+        self,
+        pg_pod: str,
+        pg_superuser: str,
+        pg_db: str,
+        sequence: str,
+        value: int,
+    ):
+        """Set a PostgreSQL sequence's current value via setval().
+
+        Used to simulate a near-exhausted INT4 sequence (integer-overflow fault)
+        or to recover by resetting to a known safe value. Verifies the new
+        value is readable back via pg_sequences to catch silent failures.
+        """
+        set_sql = f"SELECT setval('{sequence}', {int(value)});"
+        set_cmd = (
+            f"kubectl exec -n {self.namespace} {pg_pod} -- "
+            f"psql -U {pg_superuser} -d {pg_db} -At -c \"{set_sql}\""
+        )
+        set_out = self.kubectl.exec_command(set_cmd).strip()
+        print(f"setval({sequence!r}, {value}) -> {set_out}")
+
+        verify_cmd = (
+            f"kubectl exec -n {self.namespace} {pg_pod} -- "
+            f"psql -U {pg_superuser} -d {pg_db} -At "
+            f"-c \"SELECT last_value FROM {sequence};\""
+        )
+        verify_out = self.kubectl.exec_command(verify_cmd).strip()
+        try:
+            live = int(verify_out.splitlines()[-1])
+        except (ValueError, IndexError) as e:
+            raise RuntimeError(
+                f"Could not read last_value for sequence {sequence}; psql returned: {verify_out!r}"
+            ) from e
+        if live != int(value):
+            raise RuntimeError(
+                f"setval did not take effect: {sequence} last_value is {live}, expected {value}."
+            )
+
+    def inject_role_connection_limit(
+        self,
+        pg_pod: str,
+        pg_superuser: str,
+        pg_db: str,
+        role: str,
+        limit: int,
+    ):
+        """Set a PostgreSQL role's CONNECTION LIMIT via `kubectl exec … psql`.
+
+        CONNECTION LIMIT is dynamic (no server restart required). Setting it to 0
+        blocks all new connections for that role; -1 means unlimited (the default).
+
+        Raises if the ALTER didn't take effect — `kubectl.exec_command` swallows
+        non-zero exits and returns stderr, so the caller wouldn't otherwise
+        notice a bad pod reference or auth failure.
+        """
+        alter_sql = f"ALTER ROLE {role} CONNECTION LIMIT {int(limit)};"
+        alter_cmd = (
+            f"kubectl exec -n {self.namespace} {pg_pod} -- "
+            f"psql -U {pg_superuser} -d {pg_db} -c \"{alter_sql}\""
+        )
+        alter_out = self.kubectl.exec_command(alter_cmd)
+        print(f"ALTER ROLE {role} CONNECTION LIMIT {limit} -> {alter_out.strip()}")
+
+        verify_sql = f"SELECT rolconnlimit FROM pg_roles WHERE rolname='{role}';"
+        verify_cmd = (
+            f"kubectl exec -n {self.namespace} {pg_pod} -- "
+            f"psql -U {pg_superuser} -d {pg_db} -At -c \"{verify_sql}\""
+        )
+        verify_out = self.kubectl.exec_command(verify_cmd).strip()
+        try:
+            live = int(verify_out.splitlines()[-1])
+        except (ValueError, IndexError) as e:
+            raise RuntimeError(
+                f"Could not read rolconnlimit for {role}; psql returned: {verify_out!r}"
+            ) from e
+        if live != int(limit):
+            raise RuntimeError(
+                f"ALTER ROLE did not take effect: {role} rolconnlimit is {live}, expected {limit}. "
+                f"Full output: {verify_out!r}"
+            )
+
 
 if __name__ == "__main__":
     namespace = "hotel-reservation"
