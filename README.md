@@ -2,8 +2,8 @@
 
 <h1>SREGym: A Benchmarking Platform for SRE Agents</h1>
 
-<p>📄 <strong>Preprint:</strong> <a href="https://arxiv.org/abs/2605.07161">arXiv:2605.07161</a></p>
-<p>🏆 <strong>Leaderboard:</strong> <a href="https://sregym.com">sregym.com</a></p>
+<p>❗❗❗<strong>The preprint for SREGym is out:</strong> <a href="https://arxiv.org/abs/2605.07161">https://arxiv.org/abs/2605.07161</a></p>
+
 
 [🔍Overview](#🤖overview) |
 [📦Installation](#📦installation) |
@@ -11,6 +11,7 @@
 [⚙️Usage](#⚙️usage) |
 [🤝Contributing](./CONTRIBUTING.md) |
 [📖Docs](https://sregym.com/docs) |
+[🏆Leaderboard](https://sregym.com) |
 [![Slack](https://img.shields.io/badge/-Slack-4A154B?style=flat-square&logo=slack&logoColor=white)](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w)
 </div>
 
