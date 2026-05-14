@@ -2,17 +2,15 @@
 
 <h1>SREGym: A Benchmarking Platform for SRE Agents</h1>
 
-<p>❗❗❗<strong>The preprint for SREGym is out:</strong> <a href="https://arxiv.org/abs/2605.07161">https://arxiv.org/abs/2605.07161</a></p>
-
-
-[🔍Overview](#🤖overview) |
-[📦Installation](#📦installation) |
-[🚀Quick Start](#🚀quickstart) |
-[⚙️Usage](#⚙️usage) |
-[🤝Contributing](./CONTRIBUTING.md) |
-[📖Docs](https://sregym.com/docs) |
-[🏆Leaderboard](https://sregym.com) |
+[![Overview](https://img.shields.io/badge/%F0%9F%94%8D-Overview-blue?style=flat-square)](#overview)
+[![Installation](https://img.shields.io/badge/%F0%9F%93%A6-Installation-blue?style=flat-square)](#📦installation)
+[![Quick Start](https://img.shields.io/badge/%F0%9F%9A%80-Quick%20Start-blue?style=flat-square)](#🚀quickstart)
+[![Usage](https://img.shields.io/badge/%E2%9A%99%EF%B8%8F-Usage-blue?style=flat-square)](#⚙️usage)
+[![Contributing](https://img.shields.io/badge/%F0%9F%A4%9D-Contributing-blue?style=flat-square)](./CONTRIBUTING.md)
+[![Docs](https://img.shields.io/badge/%F0%9F%93%96-Docs-blue?style=flat-square)](https://sregym.com/docs)
+[![Leaderboard](https://img.shields.io/badge/%F0%9F%8F%86-Leaderboard-blue?style=flat-square)](https://sregym.com)
 [![Slack](https://img.shields.io/badge/-Slack-4A154B?style=flat-square&logo=slack&logoColor=white)](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w)
+[![arXiv](https://img.shields.io/badge/arXiv-2605.07161-b31b1b?style=flat-square&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2605.07161)
 </div>
 
 <h2 id="overview">🔍 Overview</h2>
@@ -21,7 +19,7 @@ SREGym is an AI-native platform to enable the design, development, and evaluatio
 
 ![SREGym Overview](/assets/SREGymFigure.png)
 
-SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architectured with AI-native usability and extensibility as first-class principles. The SREGym benchmark suites contain 86 different SRE problems. It supports all the problems from AIOpsLab and ITBench, and includes new problems such as OS-level faults, metastable failures, and concurrent failures. See our [problem set](https://sregym.com/problems) for a complete list of problems.
+SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architectured with AI-native usability and extensibility as first-class principles. The SREGym benchmark suites contain 90 different SRE problems. It supports all the problems from AIOpsLab and ITBench, and includes new problems such as OS-level faults, metastable failures, and concurrent failures. See our [problem set](https://sregym.com/problems) for a complete list of problems.
 
 
 <h2 id="📦installation">📦 Installation</h2>
@@ -160,6 +158,21 @@ python main.py --agent stratus --model bedrock/us.anthropic.claude-sonnet-4-5-20
 See the full list of supported providers and model strings in the [LiteLLM docs](https://docs.litellm.ai/docs/providers).
 
 </details>
+
+## Cite This
+If our work was useful for you, please cite it:
+
+```bibtex
+@article{clark:arxiv:26,
+  author  = {Jackson Clark and Yiming Su and Saad Mohammad Rafid Pial and Yifang Tian and Lily Gniedziejko and Hans-Arno Jacobsen and Yinfang Chen and Tianyin Xu},
+  title   = {{SREGym: A Live Benchmark for AI SRE Agents with High-Fidelity Failure Scenarios}},
+  journal = {arXiv:2605.07161},
+  year    = {2026},
+  month   = may,
+  eprint  = {2605.07161},
+  archivePrefix = {arXiv}
+}
+```
 
 ## Acknowledgements
 This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org/).
