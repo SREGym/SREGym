@@ -113,6 +113,9 @@ class HumanAgent:
                 continue
             try:
                 resp = await self.conductor.submit(sol)
+                # Wait for background evaluation to finish before re-prompting,
+                if self.conductor._submit_future is not None:
+                    await asyncio.wrap_future(self.conductor._submit_future)
             except Exception as e:
                 env = f"[❌] Grading error: {e}"
             else:
