@@ -177,6 +177,9 @@ all:
     wrong_dns_policy_social_network:
     - diagnosis
     - mitigation
+    service_wrong_pod_selection_hotel_reservation:
+    - diagnosis
+    - mitigation
     wrong_service_selector_astronomy_shop:
     - diagnosis
     - mitigation
