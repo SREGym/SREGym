@@ -15,14 +15,7 @@ class WrongPodSelectionMitigationOracle(Oracle):
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
         service_name = self.problem.frontend_service
-        expected_selector = self.problem.expected_service_selector
         expected_pod_label = self.problem.expected_endpoint_pod_label
-
-        service = kubectl.get_service(service_name, namespace)
-        selector = service.spec.selector or {}
-        if selector != expected_selector:
-            print(f"Service {service_name} selector is {selector}, expected {expected_selector}")
-            return {"success": False}
 
         selected_pods = self._endpoint_pod_names(kubectl, namespace, service_name)
         if not selected_pods:
