@@ -15,8 +15,12 @@ attempt hits the broken webhook and is rejected, so the deployment stays
 under-replicated even though its spec, image, and resources are healthy.
 
 Three valid mitigations: delete the webhook config, change ``failurePolicy``
-to ``Ignore``, or repair the backend service. The generic ``MitigationOracle``
-accepts any of them because they all restore pod health.
+to ``Ignore``, or repair the backend service. ``DeploymentReadinessOracle``
+accepts any of them because each restores the affected Deployment's
+``ready_replicas`` to its desired count. The generic ``MitigationOracle``
+is unsuitable here: when admission blocks pod creation, the missing pod is
+absent from the namespace's pod list and the per-pod walk reports false
+success.
 """
 
 import time
@@ -24,8 +28,8 @@ import time
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
+from sregym.conductor.oracles.deployment_readiness import DeploymentReadinessOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.hotel_reservation import HotelReservation
@@ -45,9 +49,13 @@ class AdmissionWebhookOutage(Problem):
         "astronomy_shop": AstronomyShop,
     }
 
-    WEBHOOK_NAME = "sregym-admission-webhook-outage.sregym.io"
-    BACKEND_SVC_NAME = "sregym-faulty-webhook-svc"
-    BACKEND_SVC_NAMESPACE = "default"
+    # Names chosen to look like a real production policy webhook (Gatekeeper /
+    # Kyverno / pod-security-policy style) so neither the webhook configuration
+    # nor the backend service name leaks "this is a planted fault" to an agent
+    # inspecting the cluster.
+    WEBHOOK_NAME = "pod-policy.validation.k8s.io"
+    BACKEND_SVC_NAME = "pod-policy-webhook"
+    BACKEND_SVC_NAMESPACE = "policy-system"
 
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "recommendation"):
         if app_name not in self.APPS:
@@ -84,7 +92,10 @@ class AdmissionWebhookOutage(Problem):
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.app.create_workload()
-        self.mitigation_oracle = MitigationOracle(problem=self)
+        # Use DeploymentReadinessOracle, not the generic MitigationOracle: the fault
+        # makes the affected pod absent from the namespace's pod list, so a per-pod
+        # health walk reports false success even when the fault is unmitigated.
+        self.mitigation_oracle = DeploymentReadinessOracle(problem=self)
 
     def _build_webhook_body(self) -> dict:
         return {
