@@ -237,7 +237,7 @@ class ProblemRegistry:
             # ),
             # ==================== DIRECT K8S API ====================
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
-            "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
+            "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[
