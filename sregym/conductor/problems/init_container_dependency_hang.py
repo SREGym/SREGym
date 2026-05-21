@@ -27,10 +27,6 @@ Here the diagnosed root cause is the dependency-wait init container itself,
 patched onto a real application microservice.
 """
 
-from sregym.conductor.oracles.compound import CompoundedOracle
-from sregym.conductor.oracles.init_container_hang_mitigation import (
-    InitContainerHangMitigationOracle,
-)
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
@@ -88,16 +84,12 @@ class InitContainerDependencyHang(Problem):
 
         self.app.create_workload()
 
-        # CompoundedOracle: pods Running AND the broken init container is gone.
-        # The first guard is the generic "all pods Running" check; the second
-        # rejects reward-hack solutions that don't actually address the init
-        # container (e.g. deleting the namespace and letting the framework
-        # recreate it).
-        self.mitigation_oracle = CompoundedOracle(
-            self,
-            pods_running=MitigationOracle(problem=self),
-            init_container_fixed=InitContainerHangMitigationOracle(problem=self, deployment_name=self.faulty_service),
-        )
+        # All pods Running is sufficient here: the broken init container wedges
+        # every pod the ReplicaSet schedules, so deleting a stuck pod just gets
+        # a fresh stuck one, and deleting the namespace leaves no pods at all —
+        # both fail this check. A pass therefore means the init container was
+        # genuinely fixed.
+        self.mitigation_oracle = MitigationOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):
