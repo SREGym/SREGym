@@ -25,7 +25,11 @@ class ImageSlowLoad(Problem):
                 f"The `{self.faulty_service}` deployment is serving image responses with abnormally high "
                 "latency, causing slow page renders and degraded user experience. Image-dependent pages show "
                 "elevated latency and partial rendering while requests wait for delayed asset responses. Users "
-                "observe sluggish page loads and visibly delayed product imagery."
+                "observe sluggish page loads and visibly delayed product imagery. "
+                f"Mechanism: the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                f'`{self.feature_flag}` feature flag\'s `defaultVariant` set to `"10sec"`, which activates the '
+                "OpenTelemetry demo's in-app fault path that adds a 10-second sleep to the frontend's "
+                "`/api/products/{id}/images/...` image-serving handler before responding."
             ),
         )
         # === Attach evaluation oracles ===
