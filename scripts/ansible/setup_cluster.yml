@@ -591,13 +591,48 @@
     - name: Display cert_hash
       debug:
         msg: "cert_hash is {{ cert_hash }}"
-    - name: Install Flannel network plugin
+    # TODO: Remove this section once all clusters are migrated from Flannel to Calico
+    - name: Remove Flannel if present
       shell: |
-        kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
-      args:
-        creates: /etc/kubernetes/kube-flannel.yml
+        kubectl delete -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml --ignore-not-found=true
       environment:
         KUBECONFIG: "{{ kubeconfig_path }}"
+      ignore_errors: yes
+
+    - name: Clean up Flannel CNI config files
+      shell: |
+        rm -f /etc/cni/net.d/10-flannel.conflist
+      become: yes
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['control_nodes'] + groups['worker_nodes'] }}"
+      ignore_errors: yes
+    # END TODO
+
+    - name: Download Calico manifest
+      shell: |
+        curl -fsSL https://raw.githubusercontent.com/projectcalico/calico/v3.29.3/manifests/calico.yaml -o /tmp/calico.yaml
+
+    - name: Configure Calico to use cluster pod CIDR (10.244.0.0/16)
+      shell: |
+        sed -i 's|# - name: CALICO_IPV4POOL_CIDR|- name: CALICO_IPV4POOL_CIDR|' /tmp/calico.yaml
+        sed -i 's|#   value: "192.168.0.0/16"|  value: "10.244.0.0/16"|' /tmp/calico.yaml
+      become: yes
+
+    - name: Install Calico network plugin (supports NetworkPolicy enforcement)
+      shell: |
+        kubectl apply -f /tmp/calico.yaml
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+
+    - name: Wait for Calico pods to be ready
+      shell: |
+        kubectl wait --for=condition=ready pod -l k8s-app=calico-node -n kube-system --timeout=120s
+      environment:
+        KUBECONFIG: "{{ kubeconfig_path }}"
+      retries: 3
+      delay: 10
+      register: calico_ready
+      until: calico_ready.rc == 0
     - name: Untaint the control plane to host pods
       shell: kubectl taint nodes $(hostname) node-role.kubernetes.io/control-plane:NoSchedule- || true
       environment:
