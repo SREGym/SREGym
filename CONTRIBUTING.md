@@ -252,6 +252,19 @@ To add a new problem:
 
 4. **Document the problem** with clear description and expected behavior
 
+5. **Validate the problem in your PR.** When you open a pull request, fill in the
+   `Problem ID:` field of the PR template with your problem's registry key. The
+   [Problem Validation](.github/workflows/problem-validation.yml) workflow then
+   deploys the app, injects the fault, and verifies that the mitigation oracle
+   fails while the fault is live and passes again after recovery. The check must
+   be green before merge. To run the same validation locally:
+
+   ```bash
+   uv run python tests/integration/validate_problem.py --problem <problem_id>
+   ```
+
+   Automated validation does not replace human review.
+
 ### Adding New Oracles
 
 Custom oracles allow for specialized evaluation:
