@@ -143,7 +143,11 @@ jobs:
               ;;
             issue_comment)
               pr_number="$ISSUE_NUMBER"
-              checkout_ref="refs/pull/${pr_number}/head"
+              # Use the /merge ref (PR merged into current main) — not /head —
+              # so the validation harness and other main-only files are present
+              # even when the PR branch predates them. A PR with merge conflicts
+              # has no /merge ref and checkout will fail with a clear error.
+              checkout_ref="refs/pull/${pr_number}/merge"
               source="the triggering comment"
               # Comment triggers run expensive CI — restrict to write-access users.
               case "$COMMENT_ASSOC" in
@@ -203,7 +207,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      # ── Checkout (the PR head; default ref for pull_request/dispatch) ──
+      # ── Checkout (PR merged with main; default ref for pull_request/dispatch) ──
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
