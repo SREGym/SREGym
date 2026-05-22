@@ -3,8 +3,15 @@ name: Problem Validation
 # Validates a single contributed problem end-to-end:
 #   deploy app -> inject fault -> oracle fails -> recover fault -> oracle passes
 #
-# The problem ID comes from the "Problem ID:" line in the PR description (see
-# .github/PULL_REQUEST_TEMPLATE.md), or from the workflow_dispatch input.
+# Opt-in: this workflow only validates a problem when the PR description contains
+# a line of the form
+#   /validate-problem <problem_id>
+# (or when triggered manually via workflow_dispatch). PRs without that line are
+# unaffected — no kind cluster is created and no comment is posted.
+#
+# Gate: the `lint` job below fails a PR that changes files under
+# sregym/conductor/problems/ without a /validate-problem line, so contributors
+# must consciously opt in or write "/validate-problem skip".
 
 on:
   pull_request:
@@ -22,6 +29,62 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ── Gate: changing a problem requires opting in (or explicitly skipping) ──
+  lint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Require /validate-problem for problem changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+
+          # Files this PR adds or modifies under the problems directory.
+          changed=$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+            --json files --jq '.files[].path' \
+            | grep -E '^sregym/conductor/problems/' || true)
+
+          if [ -z "$changed" ]; then
+            echo "::notice::No files under sregym/conductor/problems/ changed — nothing to enforce."
+            exit 0
+          fi
+
+          echo "Problem files changed in this PR:"
+          printf '%s\n' "$changed" | sed 's/^/  /'
+
+          # Satisfied if the PR description has any /validate-problem line.
+          if printf '%s\n' "$PR_BODY" | grep -iqE '^[[:space:]]*/validate-problem[[:space:]:]+'; then
+            echo "::notice::Found a /validate-problem line — requirement satisfied."
+            exit 0
+          fi
+
+          echo "::error::This PR changes problem files but its description has no '/validate-problem' line."
+          cat <<'EOF'
+
+          ────────────────────────────────────────────────────────────────────
+          This PR modifies files under sregym/conductor/problems/ but does not
+          opt in to automated problem validation.
+
+          Add ONE of these lines to the PR description, then re-run this check:
+
+            /validate-problem <problem_id>   run end-to-end validation
+            /validate-problem skip           explicitly skip — e.g. a refactor,
+                                             a registry/base.py change, or a
+                                             Khaos-only problem that cannot run
+                                             on the CI kind cluster
+
+          See CONTRIBUTING.md → "Adding New Problems".
+          ────────────────────────────────────────────────────────────────────
+          EOF
+          exit 1
+
   # ── Resolve the problem ID from the PR body / dispatch input ───────────
   resolve:
     runs-on: ubuntu-latest
@@ -36,7 +99,6 @@ jobs:
         id: parse
         env:
           EVENT_NAME: ${{ github.event_name }}
-          IS_DRAFT: ${{ github.event.pull_request.draft }}
           PR_BODY: ${{ github.event.pull_request.body }}
           DISPATCH_ID: ${{ github.event.inputs.problem_id }}
         run: |
@@ -46,27 +108,28 @@ jobs:
           skip_reason=""
 
           if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
-            problem_id="$DISPATCH_ID"
-          elif [ "$IS_DRAFT" = "true" ]; then
-            skip_reason="PR is a draft"
+            raw="$DISPATCH_ID"
           else
-            # Pull the value from the "Problem ID:" line of the PR description.
+            # Opt-in: the contributor adds a "/validate-problem <id>" line to the PR body.
             line=$(printf '%s\n' "$PR_BODY" \
-              | grep -iE '^[[:space:]]*Problem[ _-]?ID[[:space:]]*:' \
+              | grep -iE '^[[:space:]]*/validate-problem[[:space:]:]+' \
               | head -n1 || true)
-            problem_id=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*[^:]*:[[:space:]]*//')
+            raw=$(printf '%s' "$line" \
+              | sed -E 's#^[[:space:]]*/validate-problem[[:space:]:]+##I')
           fi
 
-          # Strip whitespace and any quoting characters a contributor may add.
-          problem_id=$(printf '%s' "$problem_id" | tr -d '[:space:]')
+          # First token is the problem ID (or a skip keyword); ignore any trailing text.
+          problem_id=$(printf '%s' "$raw" | awk '{print $1}')
           problem_id=${problem_id//\`/}
           problem_id=${problem_id//\"/}
           problem_id=${problem_id//\'/}
 
-          lower=$(printf '%s' "$problem_id" | tr '[:upper:]' '[:lower:]')
-          case "$lower" in
-            ""|none|n/a|na|tbd|todo|-|"<problem_id>")
-              [ -n "$skip_reason" ] || skip_reason="no problem ID provided (this PR does not add or modify a problem)"
+          case "$(printf '%s' "$problem_id" | tr '[:upper:]' '[:lower:]')" in
+            "")
+              skip_reason="no '/validate-problem <id>' line found in the PR description"
+              ;;
+            skip|none|n/a|na)
+              skip_reason="validation explicitly skipped via '/validate-problem $problem_id'"
               ;;
             *)
               should_run=true
