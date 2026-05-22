@@ -1,0 +1,212 @@
+name: Problem Validation
+
+# Validates a single contributed problem end-to-end:
+#   deploy app -> inject fault -> oracle fails -> recover fault -> oracle passes
+#
+# The problem ID comes from the "Problem ID:" line in the PR description (see
+# .github/PULL_REQUEST_TEMPLATE.md), or from the workflow_dispatch input.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  workflow_dispatch:
+    inputs:
+      problem_id:
+        description: "Problem ID to validate (key in problems/registry.py)"
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Resolve the problem ID from the PR body / dispatch input ───────────
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_run: ${{ steps.parse.outputs.should_run }}
+      problem_id: ${{ steps.parse.outputs.problem_id }}
+      skip_reason: ${{ steps.parse.outputs.skip_reason }}
+    steps:
+      - name: Determine problem ID
+        id: parse
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          DISPATCH_ID: ${{ github.event.inputs.problem_id }}
+        run: |
+          set -euo pipefail
+          should_run=false
+          problem_id=""
+          skip_reason=""
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            problem_id="$DISPATCH_ID"
+          elif [ "$IS_DRAFT" = "true" ]; then
+            skip_reason="PR is a draft"
+          else
+            # Pull the value from the "Problem ID:" line of the PR description.
+            line=$(printf '%s\n' "$PR_BODY" \
+              | grep -iE '^[[:space:]]*Problem[ _-]?ID[[:space:]]*:' \
+              | head -n1 || true)
+            problem_id=$(printf '%s' "$line" | sed -E 's/^[[:space:]]*[^:]*:[[:space:]]*//')
+          fi
+
+          # Strip whitespace and any quoting characters a contributor may add.
+          problem_id=$(printf '%s' "$problem_id" | tr -d '[:space:]')
+          problem_id=${problem_id//\`/}
+          problem_id=${problem_id//\"/}
+          problem_id=${problem_id//\'/}
+
+          lower=$(printf '%s' "$problem_id" | tr '[:upper:]' '[:lower:]')
+          case "$lower" in
+            ""|none|n/a|na|tbd|todo|-|"<problem_id>")
+              [ -n "$skip_reason" ] || skip_reason="no problem ID provided (this PR does not add or modify a problem)"
+              ;;
+            *)
+              should_run=true
+              ;;
+          esac
+
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "problem_id=$problem_id" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
+
+          if [ "$should_run" = "true" ]; then
+            echo "::notice::Problem validation will run for '$problem_id'"
+          else
+            echo "::notice::Problem validation skipped — $skip_reason"
+          fi
+
+  # ── Deploy, inject, recover, and check the oracle ──────────────────────
+  validate:
+    needs: resolve
+    if: needs.resolve.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # ── Checkout ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      # ── Cluster tooling ───────────────────────────────────────────────
+      - name: Install Kind
+        run: |
+          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+          kind version
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Pre-pull kind node image
+        run: docker pull jacksonarthurclark/aiopslab-kind-x86:latest
+
+      - name: Prepare /run/udev for OpenEBS NDM
+        run: sudo mkdir -p /run/udev
+
+      - name: Create kind cluster
+        run: |
+          kind create cluster --config kind/kind-config-x86.yaml --wait 5m
+          kubectl cluster-info
+          kubectl get nodes -o wide
+
+      # ── Python environment ────────────────────────────────────────────
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync
+
+      # ── Run the problem lifecycle validation ──────────────────────────
+      - name: Validate problem
+        id: validate
+        env:
+          PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
+        run: |
+          uv run python tests/integration/validate_problem.py \
+            --problem "$PROBLEM_ID" \
+            --summary "$GITHUB_WORKSPACE/validation-summary.md"
+
+      # ── Diagnostics on failure ────────────────────────────────────────
+      - name: Dump cluster diagnostics
+        if: failure()
+        run: |
+          echo "=== Cluster Info ==="
+          kubectl cluster-info || true
+          echo "=== All Pods (all namespaces) ==="
+          kubectl get pods -A -o wide || true
+          echo "=== Pod Descriptions (non-Running) ==="
+          kubectl get pods -A --no-headers | grep -v Running | awk '{print $1, $2}' | \
+            while read ns pod; do
+              echo "--- $ns/$pod ---"
+              kubectl describe pod "$pod" -n "$ns" 2>/dev/null | tail -30
+            done || true
+          echo "=== Recent Events ==="
+          kubectl get events -A --sort-by='.lastTimestamp' | tail -50 || true
+
+      - name: Export kind logs
+        if: failure()
+        run: kind export logs /tmp/kind-logs || true
+
+      - name: Upload kind logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kind-logs
+          path: /tmp/kind-logs/
+          if-no-files-found: ignore
+
+      # ── Publish the result ────────────────────────────────────────────
+      - name: Upload validation summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-summary
+          path: validation-summary.md
+          if-no-files-found: warn
+
+      - name: Post validation result comment
+        # Non-fatal: fork PRs get a read-only token and cannot comment. The check
+        # status still reflects the validation result regardless.
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- problem-validation -->';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let body;
+            try {
+              body = fs.readFileSync(`${process.env.GITHUB_WORKSPACE}/validation-summary.md`, 'utf8');
+            } catch (e) {
+              body = `${marker}\n## 🧪 Problem Validation\n\n**Result: ❌ FAILED**\n\n` +
+                `The validation run did not produce a summary — it likely crashed before ` +
+                `completing. Check the [workflow logs](${runUrl}).`;
+            }
+            body += `\n\n_[Workflow run](${runUrl}) · commit \`${context.sha.substring(0, 7)}\`_`;
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
