@@ -5,6 +5,7 @@ import yaml
 from sregym.conductor.problems.ad_service_failure import AdServiceFailure
 from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
+from sregym.conductor.problems.admission_webhook_outage import AdmissionWebhookOutage
 from sregym.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from sregym.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
@@ -59,6 +60,9 @@ from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdate
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from sregym.conductor.problems.service_port_conflict import ServicePortConflict
+from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation import (
+    ServiceWrongPodSelectionHotelReservation,
+)
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
@@ -155,6 +159,7 @@ class ProblemRegistry:
             "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_dns_policy_hotel_reservation": lambda: WrongDNSPolicy(app_name="hotel_reservation", faulty_service="profile"),
             "wrong_dns_policy_social_network": lambda: WrongDNSPolicy(app_name="social_network", faulty_service="user-service"),
+            "service_wrong_pod_selection_hotel_reservation": ServiceWrongPodSelectionHotelReservation,
             "wrong_service_selector_astronomy_shop": lambda: WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_service_selector_hotel_reservation": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend"),
             "wrong_service_selector_social_network": lambda: WrongServiceSelector(app_name="social_network", faulty_service="user-service"),
@@ -237,7 +242,8 @@ class ProblemRegistry:
             # ),
             # ==================== DIRECT K8S API ====================
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
-            "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="payment-service"),
+            "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
+            "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[

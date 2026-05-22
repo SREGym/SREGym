@@ -10,7 +10,10 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class NetworkPolicyBlock(Problem):
-    def __init__(self, faulty_service="payment-service"):
+    # HotelReservation pods use "io.kompose.service" as their label key
+    POD_LABEL_KEY = "io.kompose.service"
+
+    def __init__(self, faulty_service="recommendation"):
         self.app = HotelReservation()
         self.namespace = self.app.namespace
         super().__init__(app=self.app, namespace=self.namespace)
@@ -28,9 +31,10 @@ class NetworkPolicyBlock(Problem):
             namespace=self.namespace,
             description=(
                 f"A NetworkPolicy `{self.policy_name}` blocks all ingress and egress traffic for pods labeled "
-                f"`app={self.faulty_service}`, creating complete network isolation for the target workload. "
-                "Service-to-service communication to and from the component fails, so dependent request paths break "
-                "even if pods remain Running. Users observe hard failures/timeouts on flows that require this service."
+                f"`{self.POD_LABEL_KEY}={self.faulty_service}`, creating complete network isolation for the target "
+                "workload. Service-to-service communication to and from the component fails, so dependent request "
+                "paths break even if pods remain Running. Users observe hard failures/timeouts on flows that require "
+                "this service."
             ),
         )
         self.networking_v1 = client.NetworkingV1Api()
@@ -46,7 +50,7 @@ class NetworkPolicyBlock(Problem):
             "kind": "NetworkPolicy",
             "metadata": {"name": self.policy_name, "namespace": self.namespace},
             "spec": {
-                "podSelector": {"matchLabels": {"app": self.faulty_service}},
+                "podSelector": {"matchLabels": {self.POD_LABEL_KEY: self.faulty_service}},
                 "policyTypes": ["Ingress", "Egress"],
                 "ingress": [],
                 "egress": [],

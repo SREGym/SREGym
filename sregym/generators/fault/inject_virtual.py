@@ -372,6 +372,80 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from wrong service selector fault for service: {service}")
 
+    def inject_service_wrong_pod_selection(self, microservices: list[str]):
+        if len(microservices) != 2:
+            raise ValueError("service_wrong_pod_selection requires [target_service, wrong_deployment]")
+
+        target_service = microservices[0]
+        wrong_deployment = microservices[1]
+        route_label_key = "service-route"
+        route_label_value = target_service
+
+        print(
+            f"Injecting wrong pod selection for service: {target_service} | "
+            f"wrong deployment: {wrong_deployment} | namespace: {self.namespace}"
+        )
+
+        for deployment in [target_service, wrong_deployment]:
+            self.kubectl.patch_deployment(
+                deployment,
+                self.namespace,
+                {
+                    "spec": {
+                        "template": {
+                            "metadata": {
+                                "labels": {
+                                    route_label_key: route_label_value,
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment/{deployment} -n {self.namespace} --timeout=120s"
+            )
+
+        selector = {route_label_key: route_label_value}
+        patch = json.dumps([{"op": "replace", "path": "/spec/selector", "value": selector}])
+        self.kubectl.exec_command(f"kubectl patch svc {target_service} -n {self.namespace} --type=json -p='{patch}'")
+
+        print(f"Patched service {target_service} with selector {selector}")
+
+    def recover_service_wrong_pod_selection(self, microservices: list[str]):
+        if len(microservices) != 2:
+            raise ValueError("service_wrong_pod_selection requires [target_service, wrong_deployment]")
+
+        target_service = microservices[0]
+        wrong_deployment = microservices[1]
+        route_label_key = "service-route"
+        original_selector = {"io.kompose.service": target_service}
+
+        patch = json.dumps([{"op": "replace", "path": "/spec/selector", "value": original_selector}])
+        self.kubectl.exec_command(f"kubectl patch svc {target_service} -n {self.namespace} --type=json -p='{patch}'")
+
+        for deployment in [target_service, wrong_deployment]:
+            self.kubectl.patch_deployment(
+                deployment,
+                self.namespace,
+                {
+                    "spec": {
+                        "template": {
+                            "metadata": {
+                                "labels": {
+                                    route_label_key: None,
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment/{deployment} -n {self.namespace} --timeout=120s"
+            )
+
+        print(f"Recovered from wrong pod selection fault for service: {target_service}")
+
     # V.10 - Inject service DNS resolution failure by patching CoreDNS ConfigMap
     def inject_service_dns_resolution_failure(self, microservices: list[str]):
         for service in microservices:
