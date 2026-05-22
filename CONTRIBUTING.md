@@ -263,8 +263,9 @@ To add a new problem:
    [Problem Validation](.github/workflows/problem-validation.yml) workflow, which
    deploys the app, injects the fault, and verifies that the mitigation oracle
    fails while the fault is live and passes again after recovery. The check must
-   be green before merge. You can add the line after opening the PR — the check
-   runs as soon as the description is saved.
+   be green before merge. You can add the line after opening the PR, or post it
+   as a **PR comment** — handy when a reviewer wants to run validation that the
+   contributor forgot. Comment triggers require write access to the repo.
 
    Any PR that changes files under `sregym/conductor/problems/` **must** include
    a `/validate-problem` line; a gate check fails the PR otherwise. If validation
