@@ -84,7 +84,7 @@ class NodeConntrackExhaustionHotelReservation(Problem):
         return workers[-1], workers[0]
 
     def _calibrate_client_replicas(self):
-        _, maximum = read_node_conntrack_usage(self.kubectl, self.victim_node)
+        _, maximum = read_node_conntrack_usage(self.kubectl, self.victim_node, self.namespace)
         target_connections = (maximum * 105 + 99) // 100
         replicas = max(1, (target_connections + self.connections_per_client - 1) // self.connections_per_client)
         if replicas > self.max_client_replicas:
@@ -116,7 +116,7 @@ class NodeConntrackExhaustionHotelReservation(Problem):
 
     def _deployment(self, name: str, replicas: int, node: str, container: dict):
         spec = {
-            "nodeSelector": {"kubernetes.io/hostname": node},
+            "nodeName": node,
             "terminationGracePeriodSeconds": 0,
             "automountServiceAccountToken": False,
             "containers": [container],
@@ -196,7 +196,7 @@ class NodeConntrackExhaustionHotelReservation(Problem):
         deadline = time.monotonic() + timeout
         last = None
         while time.monotonic() < deadline:
-            count, maximum = read_node_conntrack_usage(self.kubectl, node)
+            count, maximum = read_node_conntrack_usage(self.kubectl, node, self.namespace)
             ratio = count / maximum if maximum else 0
             last = f"{count}/{maximum} ({ratio:.2%})"
             print(f"Node {node} conntrack usage: {last}")

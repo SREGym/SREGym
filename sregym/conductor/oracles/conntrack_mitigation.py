@@ -1,5 +1,4 @@
 import contextlib
-import shlex
 import subprocess
 import time
 
@@ -11,26 +10,67 @@ from sregym.conductor.oracles.mitigation import MitigationOracle
 CONNTRACK_CMD = "cat /proc/sys/net/netfilter/nf_conntrack_count; cat /proc/sys/net/netfilter/nf_conntrack_max"
 
 
-def read_node_conntrack_usage(kubectl, node_name: str) -> tuple[int, int]:
+def read_node_conntrack_usage(kubectl, node_name: str, namespace: str = "default") -> tuple[int, int]:
     if node_name.startswith("kind-"):
-        output = subprocess.run(
-            ["docker", "exec", node_name, "bash", "-lc", CONNTRACK_CMD],
-            capture_output=True,
-            check=True,
-            text=True,
-            timeout=10,
-        ).stdout
-    else:
-        cmd = (
-            f"kubectl debug node/{node_name} --quiet --attach=true --rm --image=busybox -- "
-            f"chroot /host sh -c {shlex.quote(CONNTRACK_CMD)}"
-        )
-        output = kubectl.exec_command(cmd)
+        with contextlib.suppress(FileNotFoundError, subprocess.SubprocessError, RuntimeError):
+            output = subprocess.run(
+                ["docker", "exec", node_name, "sh", "-c", CONNTRACK_CMD],
+                capture_output=True,
+                check=True,
+                text=True,
+                timeout=10,
+            ).stdout
+            return _parse_conntrack_usage(node_name, output)
 
+    return _read_conntrack_with_host_network_pod(kubectl, node_name, namespace)
+
+
+def _parse_conntrack_usage(node_name: str, output: str) -> tuple[int, int]:
     values = [int(line.strip()) for line in output.splitlines() if line.strip().isdigit()]
     if len(values) < 2:
         raise RuntimeError(f"Could not parse conntrack usage from {node_name}: {output}")
     return values[0], values[1]
+
+
+def _read_conntrack_with_host_network_pod(kubectl, node_name: str, namespace: str) -> tuple[int, int]:
+    core_v1 = getattr(kubectl, "core_v1_api", client.CoreV1Api())
+    pod_name = f"conntrack-read-{int(time.time() * 1000)}"
+    pod = {
+        "metadata": {"name": pod_name, "namespace": namespace, "labels": {"app": "conntrack-read"}},
+        "spec": {
+            "restartPolicy": "Never",
+            "automountServiceAccountToken": False,
+            "hostNetwork": True,
+            "nodeName": node_name,
+            "containers": [
+                {
+                    "name": "reader",
+                    "image": "busybox:1.36",
+                    "command": ["sh", "-c", CONNTRACK_CMD],
+                }
+            ],
+        },
+    }
+    try:
+        core_v1.create_namespaced_pod(namespace, pod)
+        phase = _wait_for_pod_completion(core_v1, pod_name, namespace)
+        output = core_v1.read_namespaced_pod_log(pod_name, namespace)
+        if phase != "Succeeded":
+            raise RuntimeError(f"Conntrack reader pod {pod_name} on {node_name} finished in phase {phase}: {output}")
+        return _parse_conntrack_usage(node_name, output)
+    finally:
+        with contextlib.suppress(ApiException):
+            core_v1.delete_namespaced_pod(pod_name, namespace, grace_period_seconds=0)
+
+
+def _wait_for_pod_completion(core_v1, pod_name: str, namespace: str, timeout: int = 30) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pod = core_v1.read_namespaced_pod(pod_name, namespace)
+        if pod.status.phase in ("Succeeded", "Failed"):
+            return pod.status.phase
+        time.sleep(1)
+    return "Pending"
 
 
 class ConntrackMitigationOracle(MitigationOracle):
@@ -47,7 +87,7 @@ class ConntrackMitigationOracle(MitigationOracle):
             return results
 
         node_name = self._victim_node()
-        count, maximum = read_node_conntrack_usage(self.problem.kubectl, node_name)
+        count, maximum = read_node_conntrack_usage(self.problem.kubectl, node_name, self.problem.namespace)
         ratio = count / maximum if maximum else 1
         client_reduced = self._client_reduced()
         probe_ok = self._frontend_probe_succeeds(node_name)
@@ -88,7 +128,7 @@ class ConntrackMitigationOracle(MitigationOracle):
             "spec": {
                 "restartPolicy": "Never",
                 "automountServiceAccountToken": False,
-                "nodeSelector": {"kubernetes.io/hostname": node_name},
+                "nodeName": node_name,
                 "containers": [{"name": "probe", "image": "busybox:1.36", "command": ["sh", "-c", script]}],
             },
         }
