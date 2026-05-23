@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import yaml
-
+from sregym.conductor.problems.cascading_oom_hotel_reservation import CascadingOOMHotelReservation
 from sregym.conductor.problems.ad_service_failure import AdServiceFailure
 from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
@@ -85,6 +85,8 @@ from sregym.service.kubectl import KubeCtl
 class ProblemRegistry:
     def __init__(self):
         self.PROBLEM_REGISTRY = {
+
+            "cascading_oom_hotel_reservation": CascadingOOMHotelReservation,
             # ==================== APPLICATION FAULT INJECTOR ====================
             # --- CORRELATED PROBLEMS ---
             "faulty_image_correlated": FaultyImageCorrelated,
