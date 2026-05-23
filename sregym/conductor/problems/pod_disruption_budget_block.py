@@ -13,10 +13,10 @@ from sregym.utils.decorators import mark_fault_injected
 class PDBBlockHotelReservation(Problem):
     """PodDisruptionBudget misconfiguration that blocks voluntary disruptions.
 
-    Creates a PodDisruptionBudget with `minAvailable == replicas` so
-    `allowedDisruptions == 0`. Attempts to evict a pod are rejected by the
-    eviction API with the typical message about violating the disruption
-    budget, leaving the deployment under-replicated.
+    Creates a PodDisruptionBudget with `minAvailable == replicas` and then
+    attempts to drain the node hosting the frontend pod. The drain is blocked
+    by the eviction API, leaving the node cordoned and the maintenance action
+    stuck until the PDB is removed.
     """
 
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "frontend"):
@@ -28,16 +28,17 @@ class PDBBlockHotelReservation(Problem):
 
         self.kubectl = KubeCtl()
         self.faulty_service = faulty_service
+        self.target_node = None
 
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
             description=(
                 "A PodDisruptionBudget has been created with `minAvailable` equal to the "
-                "deployment's replica count, making `allowedDisruptions=0`. Voluntary "
-                "disruptions (evictions/drains) are therefore rejected by the Eviction API, "
-                "leaving the deployment permanently under-replicated even though pods and "
-                "their specs are healthy."
+                "deployment's replica count, making `allowedDisruptions=0`. A maintenance drain "
+                "of the node hosting the frontend pod is therefore rejected by the Eviction API, "
+                "leaving the node cordoned and the maintenance action stuck even though the pods "
+                "themselves are healthy."
             ),
         )
 
@@ -78,7 +79,7 @@ class PDBBlockHotelReservation(Problem):
             else:
                 print(f"Error creating PDB: {e}")
 
-        # Attempt to evict a pod using the eviction API so the disruption budget error surfaces
+        # Attempt to drain the node hosting the selected pod so the disruption budget error surfaces.
         core_api = client.CoreV1Api()
         label_selector = ",".join(f"{k}={v}" for k, v in (selector or {}).items()) if selector else None
         pods = core_api.list_namespaced_pod(namespace=self.namespace, label_selector=label_selector).items
@@ -88,20 +89,31 @@ class PDBBlockHotelReservation(Problem):
             return
 
         target_pod = pods[0].metadata.name
-        eviction = client.V1Eviction(
-            metadata=client.V1ObjectMeta(name=target_pod, namespace=self.namespace),
-            delete_options=client.V1DeleteOptions(grace_period_seconds=0),
-        )
+        self.target_node = getattr(pods[0].spec, "node_name", None)
+
+        if not self.target_node:
+            print(f"Pod {target_pod} is not scheduled on a node yet")
+            return
 
         try:
-            core_api.create_namespaced_pod_eviction(name=target_pod, namespace=self.namespace, body=eviction)
-            print(f"Eviction requested for pod {target_pod} (unexpectedly succeeded)")
+            drain_cmd = (
+                f"kubectl drain {self.target_node} --ignore-daemonsets "
+                f"--delete-emptydir-data --force --grace-period=0 --timeout=30s"
+            )
+            drain_out = self.kubectl.exec_command(drain_cmd)
+            print(f"Drain requested for node {self.target_node} (unexpectedly succeeded): {drain_out.strip()}")
         except ApiException as e:
             msg = str(e)
             if "disruption budget" in msg or (hasattr(e, "status") and e.status in (429, 400)):
-                print(f"Eviction rejected as expected: {msg}")
+                print(f"Drain rejected as expected: {msg}")
             else:
-                print(f"Eviction failed with unexpected error: {msg}")
+                print(f"Drain failed with unexpected error: {msg}")
+        except Exception as e:
+            msg = str(e)
+            if "disruption budget" in msg or "cannot delete" in msg or "evict" in msg:
+                print(f"Drain rejected as expected: {msg}")
+            else:
+                print(f"Drain failed with unexpected error: {msg}")
 
         print(f"Fault: pdb_block | Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
@@ -113,6 +125,9 @@ class PDBBlockHotelReservation(Problem):
         try:
             policy_api.delete_namespaced_pod_disruption_budget(name=pdb_name, namespace=self.namespace)
             print(f"Deleted PDB '{pdb_name}' from namespace {self.namespace}")
+            if self.target_node:
+                self.kubectl.exec_command(f"kubectl uncordon {self.target_node}")
+                print(f"Uncordoned node '{self.target_node}'")
         except ApiException as e:
             if e.status == 404:
                 print(f"PDB '{pdb_name}' not found (already removed)")
