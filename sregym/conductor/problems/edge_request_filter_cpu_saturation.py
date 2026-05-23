@@ -77,6 +77,20 @@ class EdgeRequestFilterCPUSaturation(Problem):
                     push @headers, $line;
                     last if $line =~ /^\\r?\\n$/;
                 }}
+                my $content_length = 0;
+                for my $header (@headers) {{
+                    if ($header =~ /^Content-Length:\\s*(\\d+)\\s*$/i) {{
+                        $content_length = $1;
+                        last;
+                    }}
+                }}
+                my $body = "";
+                while (length($body) < $content_length) {{
+                    my $chunk = "";
+                    my $read_bytes = read($client, $chunk, $content_length - length($body));
+                    last if !$read_bytes;
+                    $body .= $chunk;
+                }}
 
                 my ($candidate) = $request =~ /[?&]waf=([^ &]+)/;
                 $candidate ||= "";
@@ -113,6 +127,7 @@ class EdgeRequestFilterCPUSaturation(Problem):
                 }}
 
                 my $raw_request = join("", @headers);
+                $raw_request .= $body;
                 $raw_request =~ s/\\r?\\nConnection:.*?\\r?\\n/\\r\\n/ig;
                 $raw_request =~ s/\\r?\\nHost:.*?\\r?\\n/\\r\\n/ig;
                 my $upstream_headers = "\\r\\nHost: "
