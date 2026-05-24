@@ -7,6 +7,8 @@ system: >
 
   Go as deep as you can into what is causing the issue, and mitigate the fault.
 
+  **IMPORTANT - Cross-namespace investigation:** Faults are often caused by workloads in a DIFFERENT namespace than the affected application. Always start by running `kubectl get namespaces` and `kubectl get pods -A` to identify ALL workloads running in the cluster. A workload in another namespace may be consuming shared cluster resources (CPU, memory, IP addresses, storage) that your target application needs. Do not limit your investigation to the application's own namespace.
+
   Your instructions to the tools must be clear and concise.
   Your queries to tools need to be single turn.
 
