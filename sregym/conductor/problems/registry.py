@@ -16,6 +16,8 @@ from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowin
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.image_pull_backoff import ImagePullBackoff
+from sregym.conductor.problems.image_pull_wrong_secret import ImagePullWrongSecret
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
@@ -244,6 +246,8 @@ class ProblemRegistry:
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
             "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
+            "image_pull_backoff_hotel_reservation": lambda: ImagePullBackoff(app_name="hotel_reservation", faulty_service="search"),
+            "image_pull_wrong_secret_hotel_reservation": lambda: ImagePullWrongSecret(app_name="hotel_reservation", faulty_service="profile"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[

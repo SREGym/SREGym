@@ -1161,6 +1161,125 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from liveness probe misconfiguration fault for service: {service}")
 
+    def inject_image_pull_backoff(self, microservices: list[str]):
+        """Inject a fault by setting an invalid container image tag, causing ImagePullBackOff."""
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+            original_deployment_yaml = copy.deepcopy(deployment_yaml)
+
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            for container in containers:
+                image_parts = container["image"].rsplit(":", 1)
+                container["image"] = f"{image_parts[0]}:nonexistent-tag-xyzzy"
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            # Save original YAML for recovery (overwrites the temp path)
+            self._write_yaml_to_file(service, original_deployment_yaml)
+
+            print(f"Injected invalid image tag for service: {service}")
+
+    def recover_image_pull_backoff(self, microservices: list[str]):
+        """Recover from ImagePullBackOff by restoring the original container image."""
+        for service in microservices:
+            original_yaml_path = f"/tmp/{service}_modified.yaml"
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            self.kubectl.wait_for_ready(self.namespace)
+
+            print(f"Recovered from ImagePullBackOff fault for service: {service}")
+
+    def inject_wrong_pull_secret(self, microservices: list[str]):
+        """Simulate wrong registry credentials by pointing to a fake private registry with an invalid pull secret."""
+        import base64
+        import json
+
+        fake_registry = "fake-private-registry.sregym.internal"
+        secret_name = "fake-registry-credentials"
+
+        # Build a .dockerconfigjson with fake credentials
+        fake_auth = base64.b64encode(b"fakeuser:fakepassword").decode()
+        docker_config = {"auths": {fake_registry: {"auth": fake_auth}}}
+        docker_config_b64 = base64.b64encode(json.dumps(docker_config).encode()).decode()
+
+        secret_manifest = {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": secret_name, "namespace": self.namespace},
+            "type": "kubernetes.io/dockerconfigjson",
+            "data": {".dockerconfigjson": docker_config_b64},
+        }
+        secret_path = "/tmp/fake-registry-secret.yaml"
+        with open(secret_path, "w") as f:
+            yaml.dump(secret_manifest, f)
+        self.kubectl.exec_command(f"kubectl apply -f {secret_path} -n {self.namespace}")
+
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+            original_deployment_yaml = copy.deepcopy(deployment_yaml)
+
+            # Point image at the fake private registry
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            for container in containers:
+                image_name = container["image"].split("/")[-1]
+                container["image"] = f"{fake_registry}/{image_name}"
+
+            # Add imagePullSecrets
+            deployment_yaml["spec"]["template"]["spec"]["imagePullSecrets"] = [{"name": secret_name}]
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            # Save original for recovery
+            self._write_yaml_to_file(service, original_deployment_yaml)
+
+            print(f"Injected wrong pull secret fault for service: {service}")
+
+    def recover_wrong_pull_secret(self, microservices: list[str]):
+        """Recover from wrong pull secret by restoring the original deployment and removing the fake secret."""
+        for service in microservices:
+            original_yaml_path = f"/tmp/{service}_modified.yaml"
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+        self.kubectl.exec_command(
+            f"kubectl delete secret fake-registry-credentials -n {self.namespace} --ignore-not-found"
+        )
+        self.kubectl.wait_for_ready(self.namespace)
+        print(f"Recovered from wrong pull secret fault for services: {microservices}")
+
     # Duplicate PVC mounts multiple replicas share ReadWriteOnce PVC causing mount conflict
     def inject_duplicate_pvc_mounts(self, microservices: list[str]):
         for service in microservices:

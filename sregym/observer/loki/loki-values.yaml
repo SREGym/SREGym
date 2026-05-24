@@ -90,6 +90,12 @@ monitoring:
 test:
   enabled: false
 
+# Disable cache components to reduce memory usage on local clusters
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
 # Resource limits
 resources:
   limits:
