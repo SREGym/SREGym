@@ -252,6 +252,39 @@ To add a new problem:
 
 4. **Document the problem** with clear description and expected behavior
 
+5. **Validate the problem in your PR.** Add a line to your pull request
+   description in this form (anywhere in the body):
+
+   ```
+   /validate-problem <problem_id>
+   ```
+
+   where `<problem_id>` is your problem's registry key. This opts the PR into the
+   [Problem Validation](.github/workflows/problem-validation.yml) workflow, which
+   deploys the app, injects the fault, and verifies that the mitigation oracle
+   fails while the fault is live and passes again after recovery. The check must
+   be green before merge. You can add the line after opening the PR, or post it
+   as a **PR comment** — handy when a reviewer wants to run validation that the
+   contributor forgot. Comment triggers require write access to the repo.
+
+   Any PR that changes files under `sregym/conductor/problems/` **must** include
+   a `/validate-problem` line; a gate check fails the PR otherwise. If validation
+   genuinely does not apply — a refactor, a `registry.py`/`base.py` change, or a
+   Khaos-only problem that cannot run on the CI kind cluster — opt out explicitly
+   with:
+
+   ```
+   /validate-problem skip
+   ```
+
+   To run the validation locally:
+
+   ```bash
+   uv run python tests/integration/validate_problem.py --problem <problem_id>
+   ```
+
+   Automated validation does not replace human review.
+
 ### Adding New Oracles
 
 Custom oracles allow for specialized evaluation:

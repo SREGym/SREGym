@@ -2375,6 +2375,127 @@ class VirtualizationFaultInjector(FaultInjector):
 
         print(f"Recovered network partition and cleaned node labels ({tor_node_label_key}-).")
 
+    # V.N - init_container_dependency_hang: Pod stuck in Init because an injected
+    # init container loops forever waiting on a non-existent dependency (the
+    # classic wait-for-it / `until nslookup dep; do sleep; done` pattern, with a
+    # typoed / removed service name).  Distinct from `rolling_update_misconfigured`
+    # (where an init `sleep infinity` is incidental and the diagnosed root cause
+    # is the rolling-update strategy on a synthetic deployment) and from
+    # `rbac_misconfiguration` (where an init container fails on PERMISSIONS, not
+    # a hang).  See: kubernetes.io init-container docs (recommended dep-wait pattern).
+    INIT_DEP_HANG_CONTAINER_NAME = "wait-for-legacy-config"
+    INIT_DEP_HANG_TARGET_SVC = "legacy-config-service"
+
+    def inject_init_container_dependency_hang(self, microservices: list[str]):
+        """Patch each target deployment to add a busybox init container that loops
+        on `nslookup` against a non-existent service, so the pod never leaves
+        `Init:0/1`.  Saves the pre-injection deployment manifest for recovery
+        and forces a rollout restart so the fault takes effect on the next
+        ReplicaSet."""
+        for service in microservices:
+            get_cmd = f"kubectl get deployment {service} -n {self.namespace} -o yaml"
+            original_yaml_str = self.kubectl.exec_command(get_cmd)
+            try:
+                original = yaml.safe_load(original_yaml_str)
+            except yaml.YAMLError as exc:
+                raise RuntimeError(
+                    f"[init_container_dependency_hang] failed to parse current deployment "
+                    f"`{service}` in `{self.namespace}`: {exc}\nRaw kubectl output:\n{original_yaml_str}"
+                ) from exc
+            if not original or original.get("kind") != "Deployment":
+                raise RuntimeError(
+                    f"[init_container_dependency_hang] deployment `{service}` not found in "
+                    f"`{self.namespace}` (kubectl said: {original_yaml_str[:200]})"
+                )
+
+            # Strip runtime/status fields that would make re-apply ugly but keep
+            # the spec/metadata/labels intact so recovery is a clean round-trip.
+            for noisy in ("status",):
+                original.pop(noisy, None)
+            meta = original.setdefault("metadata", {})
+            for noisy in ("creationTimestamp", "resourceVersion", "uid", "generation", "managedFields"):
+                meta.pop(noisy, None)
+            # Annotations are kept because Helm releases use them; only drop
+            # last-applied so kubectl apply does not warn.
+            annotations = meta.get("annotations") or {}
+            annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+            if not annotations:
+                meta.pop("annotations", None)
+
+            snapshot_path = f"/tmp/{service}_init_dep_hang_original.yaml"
+            with open(snapshot_path, "w") as fh:
+                yaml.safe_dump(original, fh)
+            print(f"Saved pre-injection deployment to {snapshot_path}")
+
+            # Build the dep-wait init container.  We pin `busybox:1.28` because
+            # its nslookup exits non-zero on NXDOMAIN; newer busybox releases
+            # regressed this (kubernetes/website#12050) and would silently
+            # break the fault.  We rely on the exit code alone — an earlier
+            # `grep '^Address'` guard matched the resolver's own self-id line
+            # in busybox 1.28 output and let the loop terminate immediately
+            # even when the target name did not resolve.
+            init_cmd = (
+                f"echo 'waiting for {self.INIT_DEP_HANG_TARGET_SVC} to become ready...'; "
+                f"until nslookup {self.INIT_DEP_HANG_TARGET_SVC}.{self.namespace}.svc.cluster.local "
+                f">/dev/null 2>&1; do "
+                f"echo 'still waiting on {self.INIT_DEP_HANG_TARGET_SVC}'; sleep 5; done"
+            )
+            init_container = {
+                "name": self.INIT_DEP_HANG_CONTAINER_NAME,
+                "image": "busybox:1.28",
+                "command": ["/bin/sh", "-c", init_cmd],
+            }
+
+            tmpl_spec = original["spec"]["template"]["spec"]
+            existing_inits = tmpl_spec.get("initContainers") or []
+            # Drop any prior copy of our injected container (defensive: makes
+            # inject idempotent if invoked twice on the same cluster).
+            existing_inits = [c for c in existing_inits if c.get("name") != self.INIT_DEP_HANG_CONTAINER_NAME]
+            existing_inits.append(init_container)
+            tmpl_spec["initContainers"] = existing_inits
+
+            faulty_path = f"/tmp/{service}_init_dep_hang_faulty.yaml"
+            with open(faulty_path, "w") as fh:
+                yaml.safe_dump(original, fh)
+
+            apply_out = self.kubectl.exec_command(f"kubectl apply -f {faulty_path} -n {self.namespace}")
+            print(f"Applied init-container hang patch to {service}: {apply_out.strip()}")
+
+            # Force the new ReplicaSet so the fault is visible immediately rather
+            # than only on the next legitimate update.
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
+            print(f"⚠️  Injected init-container dependency hang into `{service}`")
+
+    def recover_init_container_dependency_hang(self, microservices: list[str]):
+        """Reapply the saved pre-injection manifest and force a rollout so the
+        cluster returns to its healthy steady state.  Safe to call even if the
+        injected init container has already been removed by the agent — the
+        round-trip apply is idempotent."""
+        for service in microservices:
+            snapshot_path = f"/tmp/{service}_init_dep_hang_original.yaml"
+            if not Path(snapshot_path).exists():
+                # Fall back to stripping our marker init container from whatever
+                # is currently deployed.
+                get_cmd = f"kubectl get deployment {service} -n {self.namespace} -o yaml"
+                current = yaml.safe_load(self.kubectl.exec_command(get_cmd))
+                tmpl_spec = current["spec"]["template"]["spec"]
+                inits = tmpl_spec.get("initContainers") or []
+                tmpl_spec["initContainers"] = [
+                    c for c in inits if c.get("name") != self.INIT_DEP_HANG_CONTAINER_NAME
+                ] or None
+                if tmpl_spec["initContainers"] is None:
+                    tmpl_spec.pop("initContainers")
+                with open(snapshot_path, "w") as fh:
+                    yaml.safe_dump(current, fh)
+                print(f"[recover] no snapshot found, reconstructed from live state at {snapshot_path}")
+
+            apply_out = self.kubectl.exec_command(f"kubectl apply -f {snapshot_path} -n {self.namespace}")
+            print(f"Restored deployment {service}: {apply_out.strip()}")
+
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
+            print(f"✅ Recovered init-container dependency hang for `{service}`")
+
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
