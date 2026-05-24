@@ -233,6 +233,7 @@ AGENTS.md
 .cursor/
 .kiro/
 .claude/
+.pi/
 
 # Ignore CodeQL database
 python-database
