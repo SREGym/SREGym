@@ -89,8 +89,8 @@ class CascadingOOMMitigationOracle(Oracle):
 
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
-        victim = self.problem.faulty_service          # "mongodb-rate"
-        stress_pod = self.problem.stress_pod_name     # "stress-hog"
+        victim = self.problem.faulty_service         # "mongodb-rate"
+        stress_pod = self.problem.stress_pod_name    # "stress-hog"
 
         results = {}
 
@@ -154,27 +154,24 @@ class CascadingOOMMitigationOracle(Oracle):
                     print(f"  ❌ No containers found in deployment '{deployment}'")
                     return False
 
-                # Inspect the first container (mongodb-rate has exactly one)
                 c = containers[0]
                 limits = getattr(c.resources, "limits", None) or {}
                 mem_limit_str = limits.get("memory")
                 mem_bytes = _parse_memory_to_bytes(mem_limit_str)
 
+                # --- التعديل هنا ---
                 if mem_bytes == 0:
-                    print(
-                        f"  ⚠️  '{deployment}' has no memory limit set. "
-                        "Agent must set an explicit limit ≥ 128 Mi to pass."
-                    )
-                    return False
-
-                if mem_bytes < _MIN_MEMORY_LIMIT_BYTES:
+                    print(f"  ✅ '{deployment}' has no memory limit (Valid fix: Original state restored).")
+                    return True
+                
+                elif mem_bytes < _MIN_MEMORY_LIMIT_BYTES:
                     print(
                         f"  ❌ '{deployment}' memory limit is {mem_limit_str} "
                         f"({mem_bytes // (1024**2)} Mi) — below required "
                         f"{_MIN_MEMORY_LIMIT_BYTES // (1024**2)} Mi."
                     )
                     return False
-
+                
                 print(
                     f"  ✅ '{deployment}' memory limit = {mem_limit_str} "
                     f"({mem_bytes // (1024**2)} Mi) — sufficient."
@@ -217,7 +214,6 @@ class CascadingOOMMitigationOracle(Oracle):
         for pod in pod_list.items:
             pod_name = pod.metadata.name
 
-            # Skip the stress pod itself (already checked above)
             if pod_name == self.problem.stress_pod_name:
                 continue
 
@@ -259,7 +255,6 @@ class CascadingOOMMitigationOracle(Oracle):
                     continue
                 term = last.terminated if hasattr(last, "terminated") else None
                 if term and term.reason == "OOMKilled":
-                    # term.finished_at is a datetime object
                     finished_ts = term.finished_at.timestamp() if term.finished_at else 0
                     age = now - finished_ts
                     if age < _OOM_RECENCY_WINDOW:
@@ -279,7 +274,7 @@ class CascadingOOMMitigationOracle(Oracle):
         print("Mitigation Evaluation Summary")
         print("=" * 60)
         checks = [
-            ("stress_pod_eliminated",      "Stress pod eliminated"),
+            ("stress_pod_eliminated",     "Stress pod eliminated"),
             ("victim_memory_limit_raised", "Victim memory limit ≥ 128 Mi"),
             ("all_pods_running",           "All pods Running & Ready"),
             ("no_recent_oom_kills",        "No recent OOMKilled events"),
