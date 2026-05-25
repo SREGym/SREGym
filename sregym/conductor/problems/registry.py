@@ -79,6 +79,7 @@ from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
 from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
+from sregym.conductor.problems.cpu_throttling_brownout import CpuThrottlingBrownout
 from sregym.service.kubectl import KubeCtl
 
 
@@ -153,6 +154,9 @@ class ProblemRegistry:
             "service_port_conflict_astronomy_shop": lambda: ServicePortConflict(app_name="astronomy_shop", faulty_service="ad"),
             "service_port_conflict_hotel_reservation": lambda: ServicePortConflict(app_name="hotel_reservation", faulty_service="recommendation"),
             "service_port_conflict_social_network": lambda: ServicePortConflict(app_name="social_network", faulty_service="media-service"),
+            "cpu_throttling_brownout_hotel_reservation": lambda: CpuThrottlingBrownout(app_name="hotel_reservation", faulty_service="frontend"),
+            "cpu_throttling_brownout_social_network": lambda: CpuThrottlingBrownout(app_name="social_network", faulty_service="user-service"),
+            "cpu_throttling_brownout_astronomy_shop": lambda: CpuThrottlingBrownout(app_name="astronomy_shop", faulty_service="frontend"),
             "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
             "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
