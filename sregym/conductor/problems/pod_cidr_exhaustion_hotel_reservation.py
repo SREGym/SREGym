@@ -135,21 +135,8 @@ spec:
             memory: "1Mi"
 """)
 
-        # Poll until batch-worker pods are scheduled (Running or ContainerCreating)
-        # to avoid a race condition on slow/loaded clusters
-        print("Waiting for batch-worker pods to be scheduled and consume IPs...")
-        for _ in range(30):
-            result = self.kubectl.exec_command(
-                f"kubectl get pods -n {self.EXHAUST_NAMESPACE} --no-headers"
-            )
-            if result:
-                scheduled = sum(
-                    1 for line in result.strip().split("\n")
-                    if "Running" in line or "ContainerCreating" in line
-                )
-                if scheduled >= self.NUM_EXHAUST_PODS - 5:
-                    break
-            time.sleep(2)
+        print("Waiting for batch-worker to consume IPs...")
+        time.sleep(20)
 
         # Step 6: Force delete HR pods
         print("Force deleting Hotel Reservation pods to trigger rescheduling...")
