@@ -110,7 +110,7 @@ class AdmissionWebhookTLSMismatch(Problem):
                 "openssl", "req", "-x509", "-new", "-nodes",
                 "-key", str(ca_key),
                 "-sha256", "-days", "365",
-                "-subj", "/CN=sregym-real-webhook-ca",
+                "-subj", "/CN=platform-services-ca",
                 "-out", str(ca_crt),
             ], stdout=subprocess.DEVNULL)
 
@@ -119,7 +119,7 @@ class AdmissionWebhookTLSMismatch(Problem):
                 "openssl", "req", "-x509", "-new", "-nodes",
                 "-key", str(wrong_ca_key),
                 "-sha256", "-days", "365",
-                "-subj", "/CN=sregym-stale-wrong-ca",
+                "-subj", "/CN=cluster-policy-ca",
                 "-out", str(wrong_ca_crt),
             ], stdout=subprocess.DEVNULL)
 
