@@ -167,6 +167,7 @@ spec:
   containers:
   - name: stress
     image: alexeiled/stress-ng:latest-ubuntu
+    command: ["stress-ng"]
     args:
       - "--vm"
       - "1"
