@@ -32,17 +32,14 @@ class ExpiredTlsHotelReservation(Problem):
     @mark_fault_injected
     def inject_fault(self) -> bool:
         logger.info("Injecting Expired TLS Certificate fault...")
-        
-        # 1. Forge the expired certificate
         self._generate_expired_cert()
         
-        # 2. Inject the TLS Secret into the cluster
+        # inject the TLS Secret into the cluster
         subprocess.run([
             "kubectl", "create", "secret", "tls", self.secret_name, 
             "--cert=/tmp/tls.crt", "--key=/tmp/tls.key", "-n", self.namespace
         ], check=False)
         
-        # 3. Apply the Ingress routing rule
         subprocess.run([
             "kubectl", "apply", "-f", self.ingress_yaml_path, "-n", self.namespace
         ], check=True)
@@ -81,7 +78,7 @@ class ExpiredTlsHotelReservation(Problem):
             x509.NameAttribute(NameOID.COMMON_NAME, u"hotel.local"),
         ])
         
-        # Forge the dates (Starts 10 days ago, expired 1 day ago)
+        # Make the certificate expire 10 days ago
         now = datetime.datetime.now(datetime.timezone.utc)
         cert = x509.CertificateBuilder().subject_name(
             subject
