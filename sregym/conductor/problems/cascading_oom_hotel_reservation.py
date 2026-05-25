@@ -217,13 +217,11 @@ spec:
         print(f"[RECOVERY] Deleted stress pod: {result}")
 
         # --- Remove the tight memory limit from mongodb-rate ---
-        # JSON-patch to remove the limits.memory key entirely
-        patch = '[{"op":"remove","path":"/spec/template/spec/containers/0/resources/limits/memory"}]'
+        # Strategic merge patch with null is safe and idempotent
+        patch = '{"spec":{"template":{"spec":{"containers":[{"name":"hotel-reserv-rate-mongo","resources":{"limits":{"memory":null}}}]}}}}'
         result = self.kubectl.exec_command(
             f"kubectl patch deployment {self.faulty_service} "
-            f"-n {self.namespace} --type=json -p '{patch}'"
+            f"-n {self.namespace} --type=strategic -p '{patch}'"
         )
-        print(f"[RECOVERY] Removed memory limit from {self.faulty_service}: {result}")
-
-	
+        print(f"[RECOVERY] Removed memory limit from {self.faulty_service}: {result}")	
 
