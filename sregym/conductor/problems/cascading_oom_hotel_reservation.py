@@ -189,10 +189,10 @@ spec:
         print(f"[STRESS POD] Deployed: {result}")
 
     def _tighten_victim_memory_limit(self):
-        """Patch mongodb-rate with an artificially low memory limit."""
+        container_name = "hotel-reserv-rate-mongo"
         patch = (
             '{"spec":{"template":{"spec":{"containers":[{'
-            f'"name":"{self.faulty_service}",'
+            f'"name":"{container_name}",'
             f'"resources":{{"limits":{{"memory":"{_VICTIM_MEMORY_LIMIT}"}}}}'
             "}]}}}}"
         )
@@ -201,7 +201,6 @@ spec:
             f"-n {self.namespace} --type=strategic -p '{patch}'"
         )
         print(f"[VICTIM PATCH] mongodb-rate memory limit → {_VICTIM_MEMORY_LIMIT}: {result}")
-
     # ------------------------------------------------------------------
     # Fault Recovery
     # ------------------------------------------------------------------
