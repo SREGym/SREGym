@@ -170,20 +170,6 @@ spec:
             f"kubectl delete ippool {self.TINY_POOL_NAME} --ignore-not-found"
         )
 
-        # Delete any remaining block affinities from the tiny pool
-        # to prevent stale allocations affecting subsequent runs
-        print("Cleaning up block affinities from exhaustion pool...")
-        result = self.kubectl.exec_command(
-            "kubectl get blockaffinities.crd.projectcalico.org -o name"
-        )
-        if result:
-            for line in result.strip().split("\n"):
-                if line and "192-168-254" in line:
-                    name = line.split("/")[-1]
-                    self.kubectl.exec_command(
-                        f"kubectl delete blockaffinity {name} --ignore-not-found"
-                    )
-
         # Disable strictAffinity
         print("Disabling Calico strictAffinity...")
         self.kubectl.exec_command(
