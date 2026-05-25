@@ -692,7 +692,9 @@ class KubeCtl:
             out = subprocess.run(command, shell=True, check=True, capture_output=True, input=input_data)
             return out.stdout.decode("utf-8")
         except subprocess.CalledProcessError as e:
-            return e.stderr.decode("utf-8")
+            stderr = e.stderr.decode("utf-8")
+            logger.error("Command failed (exit %d): %s\n  stderr: %s", e.returncode, command, stderr.strip())
+            return stderr
 
         # if out.stderr:
         #     return out.stderr.decode("utf-8")
