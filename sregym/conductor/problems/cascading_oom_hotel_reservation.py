@@ -155,12 +155,13 @@ class CascadingOOMHotelReservation(Problem):
         pod_manifest = f"""
 apiVersion: v1
 kind: Pod
+
 metadata:
   name: {self.stress_pod_name}
   namespace: {self.namespace}
   labels:
-    sregym-injected: "true"
-    sregym-fault: "cascading-oom"
+    app: load-generator
+    role: stress-test
 spec:
   restartPolicy: Always
   containers:
@@ -223,4 +224,6 @@ spec:
             f"-n {self.namespace} --type=json -p '{patch}'"
         )
         print(f"[RECOVERY] Removed memory limit from {self.faulty_service}: {result}")
+
+	
 
