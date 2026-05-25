@@ -14,6 +14,7 @@ from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.edge_request_filter_cpu_saturation import EdgeRequestFilterCPUSaturation
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
+from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
@@ -243,6 +244,7 @@ class ProblemRegistry:
             #     root_cause=_HW_DNS_RESOLVER_FAILURE,
             # ),
             # ==================== DIRECT K8S API ====================
+            "expired_tls_hotel_reservation": ExpiredTlsHotelReservation,
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
             "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
