@@ -21,11 +21,14 @@ class DiskPressureEviction(Problem):
             component=f"node/{self.target_node}",
             namespace=self.namespace,
             description=(
-                f"Node `{self.target_node}` is under DiskPressure: `/var/log` has been filled by a large "
-                f"file and the kubelet `nodefs.available` eviction threshold has been raised aggressively "
-                f"to 50%. The `{self.faulty_service}` Deployment is pinned to this node via `nodeName`, "
-                f"so evicted pods are recreated on the same pressured node, producing a continuous "
-                f"eviction loop and sustained service unavailability."
+                f"Node `{self.target_node}` is reporting `DiskPressure=True` because the kubelet "
+                f"`nodefs.available` eviction threshold in `/var/lib/kubelet/config.yaml` has been "
+                f"raised above the node's actual filesystem free-space ratio. The "
+                f"`{self.faulty_service}` Deployment is pinned to this node via `nodeName`, so "
+                f"evicted pods are recreated on the same pressured node, producing a continuous "
+                f"eviction loop and sustained service unavailability. Note: `df` will show ample "
+                f"free disk; the cause is the misconfigured eviction threshold, not actual disk "
+                f"exhaustion."
             ),
         )
 
@@ -49,11 +52,20 @@ class DiskPressureEviction(Problem):
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
+
+        # Restore kubelet eviction threshold so DiskPressure taint clears
         self.injector.recover_disk_pressure(node_name=self.target_node)
-        # Unpin the deployment by removing the nodeName field via JSON patch
+
+        print(f"Unpinning {self.faulty_service} deployment from pressured node...")
         self.kubectl.exec_command(
             f"kubectl patch deployment {self.faulty_service} -n {self.namespace} "
             f'--type=json -p=\'[{{"op":"remove","path":"/spec/template/spec/nodeName"}}]\''
         )
-        self.kubectl.exec_command(f"kubectl rollout restart deployment {self.faulty_service} -n {self.namespace}")
-        self.kubectl.wait_for_ready(self.namespace)
+
+        print("Deleting evicted pods...")
+        # TODO: this is taking too much time to recover. Figure out if there are any efficient way to do it.
+        self.kubectl.exec_command(
+            "kubectl delete pods --all-namespaces --field-selector=status.phase=Failed --ignore-not-found=true"
+        )
+
+        print("=== Fault Recovered ===")

@@ -205,10 +205,9 @@ class RemoteOSFaultInjector(FaultInjector):
             time.sleep(NODE_NOT_READY_POLL_INTERVAL)
         print(f"Timed out after {timeout}s waiting for {node_name} to become {target_status}.")
 
-    def _disk_pressure_script(self, fill_mb: int, threshold: str) -> str:
-        """Build the shell script that fills /var/log and lowers the kubelet eviction threshold."""
+    def _disk_pressure_script(self, threshold: str) -> str:
+        """Build the shell script that raises the kubelet nodefs.available eviction threshold."""
         return (
-            f"dd if=/dev/zero of=/var/log/sregym_fill.log bs=1M count={fill_mb} status=none && "
             "CFG=/var/lib/kubelet/config.yaml && "
             "if grep -q 'evictionHard:' \"$CFG\"; then "
             "  if grep -q 'nodefs.available' \"$CFG\"; then "
@@ -223,40 +222,50 @@ class RemoteOSFaultInjector(FaultInjector):
         )
 
     def _disk_pressure_recover_script(self) -> str:
-        """Build the shell script that removes the fill file and restores kubelet config."""
-        return (
-            "rm -f /var/log/sregym_fill.log; "
-            "CFG=/var/lib/kubelet/config.yaml && "
-            "sed -i '/nodefs.available:/d' \"$CFG\"; "
-            "systemctl restart kubelet"
-        )
+        """Build the shell script that restores the kubelet eviction threshold."""
+        return "CFG=/var/lib/kubelet/config.yaml && sed -i '/nodefs.available:/d' \"$CFG\"; systemctl restart kubelet"
 
-    def inject_disk_pressure(self, node_name: str, fill_mb: int = 500, threshold: str = "50%"):
-        """Fill /var/log on the target node and lower kubelet's nodefs.available eviction threshold.
+    def _get_node_free_pct(self, node_name: str) -> int:
+        """Return the current nodefs free-space percentage as reported by kubelet stats summary."""
+        raw = self.kubectl.exec_command(f"kubectl get --raw '/api/v1/nodes/{node_name}/proxy/stats/summary'")
+        fs = json.loads(raw)["node"]["fs"]
+        return round(fs["availableBytes"] / fs["capacityBytes"] * 100)
 
-        Combines a real on-disk fill with a threshold flip so the kubelet evicts pods quickly while
-        leaving a diagnosable signal on the node filesystem.
+    def inject_disk_pressure(self, node_name: str, threshold: str | None = None, margin_pct: int = 10):
+        """Raise kubelet's nodefs.available eviction threshold above the node's current free-space ratio.
+
+        Pods evict regardless of actual disk usage. Threshold is computed dynamically from kubelet
+        stats summary (current_free + margin_pct, capped at 95%) unless explicitly overridden.
         """
-        script = self._disk_pressure_script(fill_mb=fill_mb, threshold=threshold)
+        if threshold is None:
+            try:
+                free_pct = self._get_node_free_pct(node_name)
+                threshold = f"{min(95, free_pct + margin_pct)}%"
+                print(f"Node {node_name} free={free_pct}% -> threshold={threshold}")
+            except Exception as e:
+                threshold = "95%"
+                print(f"Failed to read node stats ({e!r}); falling back to threshold={threshold}")
+
+        script = self._disk_pressure_script(threshold=threshold)
         if self._check_is_kind():
             containers = self._get_kind_worker_containers()
             if node_name not in containers:
                 print(f"Node {node_name} not found among kind worker containers: {containers}")
                 return
-            print(f"Inducing disk pressure in {node_name} (fill {fill_mb}MB, threshold {threshold})...")
+            print(f"Inducing disk pressure in {node_name} (threshold {threshold})...")
             self._docker_exec(node_name, script)
         else:
             worker_nodes = self._get_worker_node_names()
             if node_name not in worker_nodes:
                 print(f"Node {node_name} not found among worker nodes: {worker_nodes}")
                 return
-            print(f"Inducing disk pressure on {node_name} (fill {fill_mb}MB, threshold {threshold})...")
+            print(f"Inducing disk pressure on {node_name} (threshold {threshold})...")
             self._node_exec(node_name, script)
 
         self._wait_for_single_node(node_name, target_status="Ready")
 
     def recover_disk_pressure(self, node_name: str):
-        """Remove the fill file, restore the kubelet eviction threshold, and restart kubelet."""
+        """Restore the kubelet eviction threshold and restart kubelet."""
         script = self._disk_pressure_recover_script()
         if self._check_is_kind():
             containers = self._get_kind_worker_containers()
