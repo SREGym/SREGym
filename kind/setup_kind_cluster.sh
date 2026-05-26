@@ -12,7 +12,7 @@
 set -euo pipefail
 
 CALICO_VERSION="v3.27.0"
-ARCH="${1:-arm}"
+ARCH="${1:-x86}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIND_CONFIG="${SCRIPT_DIR}/kind-config-${ARCH}.yaml"
 
