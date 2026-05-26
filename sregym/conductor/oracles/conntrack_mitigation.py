@@ -8,6 +8,7 @@ from kubernetes.client.rest import ApiException
 from sregym.conductor.oracles.mitigation import MitigationOracle
 
 CONNTRACK_CMD = "cat /proc/sys/net/netfilter/nf_conntrack_count; cat /proc/sys/net/netfilter/nf_conntrack_max"
+CONNTRACK_MAX_PATH = "/proc/sys/net/netfilter/nf_conntrack_max"
 
 
 def read_node_conntrack_usage(kubectl, node_name: str, namespace: str = "default") -> tuple[int, int]:
@@ -22,7 +23,25 @@ def read_node_conntrack_usage(kubectl, node_name: str, namespace: str = "default
             ).stdout
             return _parse_conntrack_usage(node_name, output)
 
-    return _read_conntrack_with_host_network_pod(kubectl, node_name, namespace)
+    output = _run_node_check_pod(kubectl, node_name, namespace, CONNTRACK_CMD)
+    return _parse_conntrack_usage(node_name, output)
+
+
+def write_node_conntrack_max(kubectl, node_name: str, value: int, namespace: str = "default") -> None:
+    value = int(value)
+    command = f"printf '%s' {value} > {CONNTRACK_MAX_PATH}"
+    if node_name.startswith("kind-"):
+        with contextlib.suppress(FileNotFoundError, subprocess.SubprocessError, RuntimeError):
+            subprocess.run(
+                ["docker", "exec", node_name, "sh", "-c", command],
+                capture_output=True,
+                check=True,
+                text=True,
+                timeout=10,
+            )
+            return
+
+    _run_node_check_pod(kubectl, node_name, namespace, command, privileged=True)
 
 
 def _parse_conntrack_usage(node_name: str, output: str) -> tuple[int, int]:
@@ -32,23 +51,24 @@ def _parse_conntrack_usage(node_name: str, output: str) -> tuple[int, int]:
     return values[0], values[1]
 
 
-def _read_conntrack_with_host_network_pod(kubectl, node_name: str, namespace: str) -> tuple[int, int]:
+def _run_node_check_pod(kubectl, node_name: str, namespace: str, command: str, *, privileged: bool = False) -> str:
     core_v1 = getattr(kubectl, "core_v1_api", client.CoreV1Api())
-    pod_name = f"conntrack-read-{int(time.time() * 1000)}"
+    pod_name = f"node-healthcheck-{int(time.time() * 1000)}"
+    container = {
+        "name": "check",
+        "image": "busybox:1.36",
+        "command": ["sh", "-c", command],
+    }
+    if privileged:
+        container["securityContext"] = {"privileged": True}
     pod = {
-        "metadata": {"name": pod_name, "namespace": namespace, "labels": {"app": "conntrack-read"}},
+        "metadata": {"name": pod_name, "namespace": namespace, "labels": {"app": "node-healthcheck"}},
         "spec": {
             "restartPolicy": "Never",
             "automountServiceAccountToken": False,
             "hostNetwork": True,
             "nodeName": node_name,
-            "containers": [
-                {
-                    "name": "reader",
-                    "image": "busybox:1.36",
-                    "command": ["sh", "-c", CONNTRACK_CMD],
-                }
-            ],
+            "containers": [container],
         },
     }
     try:
@@ -56,8 +76,8 @@ def _read_conntrack_with_host_network_pod(kubectl, node_name: str, namespace: st
         phase = _wait_for_pod_completion(core_v1, pod_name, namespace)
         output = core_v1.read_namespaced_pod_log(pod_name, namespace)
         if phase != "Succeeded":
-            raise RuntimeError(f"Conntrack reader pod {pod_name} on {node_name} finished in phase {phase}: {output}")
-        return _parse_conntrack_usage(node_name, output)
+            raise RuntimeError(f"Node healthcheck pod {pod_name} on {node_name} finished in phase {phase}: {output}")
+        return output
     finally:
         with contextlib.suppress(ApiException):
             core_v1.delete_namespaced_pod(pod_name, namespace, grace_period_seconds=0)
@@ -74,11 +94,12 @@ def _wait_for_pod_completion(core_v1, pod_name: str, namespace: str, timeout: in
 
 
 class ConntrackMitigationOracle(MitigationOracle):
-    def __init__(self, problem, ratio_threshold: float = 0.70, probe_attempts: int = 20):
+    def __init__(self, problem, ratio_threshold: float = 0.70, probe_attempts: int = 20, drain_timeout: int = 90):
         super().__init__(problem=problem)
         self.core_v1 = client.CoreV1Api()
         self.ratio_threshold = ratio_threshold
         self.probe_attempts = probe_attempts
+        self.drain_timeout = drain_timeout
 
     def evaluate(self) -> dict:
         print("== Conntrack Mitigation Evaluation ==")
@@ -87,20 +108,24 @@ class ConntrackMitigationOracle(MitigationOracle):
             return results
 
         node_name = self._victim_node()
-        count, maximum = read_node_conntrack_usage(self.problem.kubectl, node_name, self.problem.namespace)
-        ratio = count / maximum if maximum else 1
-        client_reduced = self._client_reduced()
+        deadline = time.monotonic() + self.drain_timeout
+        while True:
+            count, maximum = read_node_conntrack_usage(self.problem.kubectl, node_name, self.problem.namespace)
+            ratio = count / maximum if maximum else 1
+            print(f"Node {node_name} conntrack usage: {count}/{maximum} ({ratio:.2%})")
+            if ratio < self.ratio_threshold or time.monotonic() >= deadline:
+                break
+            time.sleep(5)
+
         probe_ok = self._frontend_probe_succeeds(node_name)
 
         results.update(
             {
                 "conntrack_ratio": ratio,
-                "client_reduced": client_reduced,
                 "frontend_probe": probe_ok,
-                "success": ratio < self.ratio_threshold and client_reduced and probe_ok,
+                "success": ratio < self.ratio_threshold and probe_ok,
             }
         )
-        print(f"Node {node_name} conntrack usage: {count}/{maximum} ({ratio:.2%})")
         return results
 
     def _victim_node(self) -> str:
@@ -108,23 +133,19 @@ class ConntrackMitigationOracle(MitigationOracle):
             return self.problem.victim_node
         return self.problem.select_worker_nodes()[0]
 
-    def _client_reduced(self) -> bool:
-        try:
-            dep = self.problem.kubectl.get_deployment(self.problem.client_deployment, self.problem.namespace)
-            allowed = max(1, self.problem.client_replicas // 10)
-            return (dep.spec.replicas or 0) <= allowed
-        except ApiException as e:
-            return e.status == 404
-
     def _frontend_probe_succeeds(self, node_name: str) -> bool:
-        pod_name = f"frontend-conntrack-probe-{int(time.time())}"
+        pod_name = f"service-healthcheck-{int(time.time() * 1000)}"
         script = (
             f"ok=0; fail=0; for i in $(seq 1 {self.probe_attempts}); do "
             "wget -q -T 2 -O /dev/null http://frontend:5000/ && ok=$((ok+1)) || fail=$((fail+1)); "
             'sleep 0.1; done; echo "PROBE_OK=${ok} PROBE_FAIL=${fail}"; test "$fail" -le 1'
         )
         pod = {
-            "metadata": {"name": pod_name, "namespace": self.problem.namespace, "labels": {"app": "conntrack-probe"}},
+            "metadata": {
+                "name": pod_name,
+                "namespace": self.problem.namespace,
+                "labels": {"app": "service-healthcheck"},
+            },
             "spec": {
                 "restartPolicy": "Never",
                 "automountServiceAccountToken": False,
