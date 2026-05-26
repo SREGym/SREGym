@@ -27,6 +27,7 @@ log = logging.getLogger("orders-validator")
 BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 TOPIC = os.environ.get("ORDERS_TOPIC", "orders-fulfillment")
 GROUP = os.environ.get("CONSUMER_GROUP", "orders-validator")
+LENIENT = os.environ.get("LENIENT", "").lower() in ("1", "true", "yes")
 
 
 def process(value):
@@ -65,10 +66,14 @@ def main():
             order_id = process(msg.value())
         except Exception as exc:
             log.error("unprocessable record at offset=%d: %s", msg.offset(), exc)
-            log.error("cannot advance past offset=%d -- head-of-line block", msg.offset())
-            while True:
-                time.sleep(15)
-                log.error("still blocked on unprocessable record at offset=%d", msg.offset())
+            if not LENIENT:
+                log.error("cannot advance past offset=%d -- head-of-line block", msg.offset())
+                while True:
+                    time.sleep(15)
+                    log.error("still blocked on unprocessable record at offset=%d", msg.offset())
+            consumer.commit(message=msg, asynchronous=False)
+            log.info("skipped unprocessable record COMMITTED offset=%d", msg.offset() + 1)
+            continue
 
         consumer.commit(message=msg, asynchronous=False)
         log.info("processed order_id=%s COMMITTED offset=%d", order_id, msg.offset() + 1)
@@ -233,16 +238,53 @@ class KafkaFaultInjector(FaultInjector):
         return self.poison_offset
 
     def recover(self) -> None:
-        """Tear down the injected pipeline. Best-effort.
+        """Recover the fault by switching the consumer to lenient mode.
 
-        The topic and consumer group are recreated fresh by the producer on the
-        next run (delete-then-create), so no broker-side cleanup is needed here.
+        The consumer is patched to skip the unprocessable record (dead-letter
+        style) instead of head-of-line blocking, then restarted. It resumes,
+        advances past the poison record, and the data plane drains. The
+        producer is left running so progress remains observable. The injected
+        Deployments and ConfigMap are removed when the app namespace is torn
+        down at the end of the run.
         """
-        logger.info("[Kafka FI] Recovery: removing injected pipeline")
-        self._delete_deployment(self.CONSUMER_DEPLOYMENT)
-        self._delete_deployment(self.PRODUCER_DEPLOYMENT)
-        self._delete_configmap(self.SCRIPTS_CONFIGMAP)
-        logger.info("[Kafka FI] Recovery complete")
+        logger.info("[Kafka FI] Recovery: switching consumer to lenient skip-poison mode")
+        self._patch_consumer_lenient()
+        self._delete_consumer_pods()
+        time.sleep(10)
+        self._wait_deployment_ready(self.CONSUMER_DEPLOYMENT)
+        logger.info("[Kafka FI] Recovery complete: consumer skips the poison record and the pipeline drains")
+
+    def _patch_consumer_lenient(self) -> None:
+        patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": self.CONSUMER_DEPLOYMENT,
+                                "env": [{"name": "LENIENT", "value": "true"}],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        self.kubectl.apps_v1_api.patch_namespaced_deployment(
+            self.CONSUMER_DEPLOYMENT, self.namespace, patch
+        )
+
+    def _delete_consumer_pods(self) -> None:
+        pods = self.kubectl.list_pods(self.namespace)
+        for pod in pods.items:
+            labels = pod.metadata.labels or {}
+            if labels.get("app") == self.CONSUMER_DEPLOYMENT:
+                try:
+                    self.kubectl.core_v1_api.delete_namespaced_pod(
+                        pod.metadata.name, self.namespace
+                    )
+                except client.exceptions.ApiException as exc:
+                    if exc.status != 404:
+                        logger.warning("[Kafka FI] delete pod %s: %r", pod.metadata.name, exc)
 
     def _apply_configmap(self) -> None:
         body = client.V1ConfigMap(
@@ -324,13 +366,6 @@ class KafkaFaultInjector(FaultInjector):
         except client.exceptions.ApiException as exc:
             if exc.status != 404:
                 logger.warning("[Kafka FI] delete deployment %s: %r", name, exc)
-
-    def _delete_configmap(self, name: str) -> None:
-        try:
-            self.kubectl.core_v1_api.delete_namespaced_config_map(name, self.namespace)
-        except client.exceptions.ApiException as exc:
-            if exc.status != 404:
-                logger.warning("[Kafka FI] delete configmap %s: %r", name, exc)
 
     def _wait_deployment_ready(self, name: str, timeout: int = 420) -> None:
         api = self.kubectl.apps_v1_api
