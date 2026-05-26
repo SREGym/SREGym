@@ -61,10 +61,10 @@ SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/)
 
 ```bash
 # For x86 machines
-kind create cluster --config kind/kind-config-x86.yaml
+bash kind/setup_kind_cluster.sh x86
 
 # For ARM machines
-kind create cluster --config kind/kind-config-arm.yaml
+bash kind/setup_kind_cluster.sh arm
 ```
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
