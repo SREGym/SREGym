@@ -15,17 +15,44 @@ set -euo pipefail
 CALICO_VERSION="v3.27.0"
 CLUSTER_NAME="srelab"
 ARCH="${1:-arm}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KIND_CONFIG="${SCRIPT_DIR}/kind-config-${ARCH}.yaml"
 
-if [[ ! -f "${KIND_CONFIG}" ]]; then
-    echo "❌ Config file not found: ${KIND_CONFIG}"
-    echo "Usage: bash kind/setup_calico_cluster.sh [arm|x86]"
+if [[ "${ARCH}" == "arm" ]]; then
+    NODE_IMAGE="jacksonarthurclark/aiopslab-kind-arm:latest"
+elif [[ "${ARCH}" == "x86" ]]; then
+    NODE_IMAGE="jacksonarthurclark/aiopslab-kind-x86:latest"
+else
+    echo "❌ Unknown arch: ${ARCH}. Use 'arm' or 'x86'."
     exit 1
 fi
 
-echo "==> Step 1: Create Kind cluster using ${KIND_CONFIG}"
-kind create cluster --name "${CLUSTER_NAME}" --config="${KIND_CONFIG}"
+echo "==> Step 1: Create Kind cluster with disableDefaultCNI (arch: ${ARCH})"
+cat <<EOF | kind create cluster --name "${CLUSTER_NAME}" --config=-
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+networking:
+  disableDefaultCNI: true
+nodes:
+  - role: control-plane
+    image: ${NODE_IMAGE}
+    extraMounts:
+      - hostPath: /run/udev
+        containerPath: /run/udev
+  - role: worker
+    image: ${NODE_IMAGE}
+    extraMounts:
+      - hostPath: /run/udev
+        containerPath: /run/udev
+  - role: worker
+    image: ${NODE_IMAGE}
+    extraMounts:
+      - hostPath: /run/udev
+        containerPath: /run/udev
+  - role: worker
+    image: ${NODE_IMAGE}
+    extraMounts:
+      - hostPath: /run/udev
+        containerPath: /run/udev
+EOF
 
 echo "==> Step 2: Install Calico CNI"
 kubectl apply -f "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml"
@@ -44,3 +71,5 @@ rm -f ~/cache_dir/cluster_baseline_state.json
 echo ""
 echo "✅ Cluster setup complete!"
 echo ""
+echo "Notes:"
+echo "  - Calico CNI installed (replaces kindnet)"
