@@ -1444,14 +1444,7 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Restored original deployment {service}: {apply_result}")
 
     def inject_namespace_memory_limit(self, deployment_name: str, namespace: str, memory_limit: str):
-        # Delete associated ReplicaSet
-        rs_list = self.kubectl.get_matching_replicasets(namespace, deployment_name)
-        if not rs_list:
-            raise RuntimeError(f"No ReplicaSet found for deployment {deployment_name} in {namespace}")
-        rs_name = rs_list[0].metadata.name
-        self.kubectl.delete_replicaset(name=rs_name, namespace=namespace)
-
-        # Create memory resource quota
+        # Create memory resource quota FIRST so new pods are rejected
         quota_body = {
             "apiVersion": "v1",
             "kind": "ResourceQuota",
@@ -1459,6 +1452,13 @@ class VirtualizationFaultInjector(FaultInjector):
             "spec": {"hard": {"memory": memory_limit}},
         }
         self.kubectl.apply_resource(quota_body)
+
+        # Then delete associated ReplicaSet to trigger pod recreation
+        rs_list = self.kubectl.get_matching_replicasets(namespace, deployment_name)
+        if not rs_list:
+            raise RuntimeError(f"No ReplicaSet found for deployment {deployment_name} in {namespace}")
+        rs_name = rs_list[0].metadata.name
+        self.kubectl.delete_replicaset(name=rs_name, namespace=namespace)
 
     def recover_namespace_memory_limit(self, deployment_name: str, namespace: str):
         # Remove all memory-based quotas
