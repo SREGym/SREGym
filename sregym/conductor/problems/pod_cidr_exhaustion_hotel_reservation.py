@@ -15,7 +15,7 @@ class PodCIDRExhaustionHotelReservation(Problem):
     Simulates a real-world GKE outage where the pod IP secondary range
     was exhausted due to per-node pre-allocation.
 
-    Real-world reference: https://blog.deleu.dev/when-gke-ran-out-of-ip-addresses/
+    Real-world reference: https://deploy.live/blog/when-gke-ran-out-of-ip-addresses/
 
     Simulation approach (works on /16 clusters, no cluster CIDR changes needed):
     - Disable the default IPPool and create a tiny exhaustible pool
