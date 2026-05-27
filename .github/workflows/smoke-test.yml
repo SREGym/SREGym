@@ -54,7 +54,7 @@ jobs:
 
       - name: Create kind cluster
         run: |
-          kind create cluster --config kind/kind-config-x86.yaml --wait 5m
+          kind create cluster --config kind/kind-config-x86.yaml
           kubectl cluster-info
           kubectl get nodes -o wide
 
@@ -63,6 +63,7 @@ jobs:
           kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
           kubectl rollout status daemonset/calico-node -n kube-system --timeout=120s
           kubectl wait --for=condition=ready pod -l k8s-app=calico-node -n kube-system --timeout=120s
+          kubectl wait --for=condition=Ready nodes --all --timeout=120s
 
       # ── Python environment ────────────────────────────────────────────
       - name: Install uv
