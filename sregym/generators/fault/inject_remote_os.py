@@ -206,11 +206,7 @@ class RemoteOSFaultInjector(FaultInjector):
         print(f"Timed out after {timeout}s waiting for {node_name} to become {target_status}.")
 
     def _disk_pressure_script(self, threshold: str) -> str:
-        """Build the shell script that raises the kubelet nodefs.available eviction threshold.
-
-        Also pin imageGC thresholds to 100/99 so kubelet does not purge cached images
-        while DiskPressure is active (otherwise every test run re-pulls images).
-        """
+        """Build the shell script that raises the kubelet nodefs.available eviction threshold."""
         return (
             "CFG=/var/lib/kubelet/config.yaml && "
             "if grep -q 'evictionHard:' \"$CFG\"; then "
@@ -222,18 +218,12 @@ class RemoteOSFaultInjector(FaultInjector):
             "else "
             f'  printf \'\\nevictionHard:\\n  nodefs.available: "{threshold}"\\n\' >> "$CFG"; '
             "fi && "
-            "sed -i '/imageGCHighThresholdPercent:/d; /imageGCLowThresholdPercent:/d' \"$CFG\" && "
-            "printf 'imageGCHighThresholdPercent: 100\\nimageGCLowThresholdPercent: 99\\n' >> \"$CFG\" && "
             "systemctl restart kubelet"
         )
 
     def _disk_pressure_recover_script(self) -> str:
-        """Build the shell script that restores the kubelet eviction threshold and image GC defaults."""
-        return (
-            "CFG=/var/lib/kubelet/config.yaml && "
-            "sed -i '/nodefs.available:/d; /imageGCHighThresholdPercent:/d; /imageGCLowThresholdPercent:/d' \"$CFG\"; "
-            "systemctl restart kubelet"
-        )
+        """Build the shell script that restores the kubelet eviction threshold."""
+        return "CFG=/var/lib/kubelet/config.yaml && sed -i '/nodefs.available:/d' \"$CFG\"; systemctl restart kubelet"
 
     def _get_node_free_pct(self, node_name: str) -> int:
         """Return the current nodefs free-space percentage as reported by kubelet stats summary."""
