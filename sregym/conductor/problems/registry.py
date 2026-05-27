@@ -15,6 +15,7 @@ from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.edge_request_filter_cpu_saturation import EdgeRequestFilterCPUSaturation
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
+from sregym.conductor.problems.ephemeral_storage_eviction import EphemeralStorageEviction
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
@@ -250,6 +251,9 @@ class ProblemRegistry:
             "node_conntrack_exhaustion_hotel_reservation": NodeConntrackExhaustionHotelReservation,
             "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
             "admission_webhook_tls_mismatch_hotel_reservation": lambda: AdmissionWebhookTLSMismatch(app_name="hotel_reservation", faulty_service="recommendation"),
+            "ephemeral_storage_eviction_hotel_reservation": lambda: EphemeralStorageEviction(app_name="hotel_reservation", faulty_service="frontend"),
+            "ephemeral_storage_eviction_astronomy_shop": lambda: EphemeralStorageEviction(app_name="astronomy_shop", faulty_service="frontend"),
+            "ephemeral_storage_eviction_social_network": lambda: EphemeralStorageEviction(app_name="social_network", faulty_service="frontend"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[

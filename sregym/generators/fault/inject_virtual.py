@@ -2621,6 +2621,53 @@ class VirtualizationFaultInjector(FaultInjector):
 
         print(f"DNS policy propagation check for service '{service}' failed after {max_wait}s.")
 
+    def inject_ephemeral_storage_eviction(self, microservices: list[str]):
+        """Inject a fault to set extremely low ephemeral-storage limit on a service, triggering eviction."""
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+            original_deployment_yaml = copy.deepcopy(deployment_yaml)
+
+            # Modify deployment spec to set ephemeral-storage limit to 1Ki
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            for container in containers:
+                if "resources" not in container:
+                    container["resources"] = {}
+                if "limits" not in container["resources"]:
+                    container["resources"]["limits"] = {}
+                container["resources"]["limits"]["ephemeral-storage"] = "1Ki"
+
+                # Also set requests if not already set or mismatching
+                if "requests" not in container["resources"]:
+                    container["resources"]["requests"] = {}
+                container["resources"]["requests"]["ephemeral-storage"] = "1Ki"
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            # Apply the modified deployment
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+            self.kubectl.exec_command(delete_command)
+            self.kubectl.exec_command(apply_command)
+
+            # Save the original deployment for recovery
+            self._write_yaml_to_file(service, original_deployment_yaml)
+            print(f"Injected ephemeral-storage eviction limit (1Ki) on service: {service}")
+
+    def recover_ephemeral_storage_eviction(self, microservices: list[str]):
+        """Recover from ephemeral-storage eviction by restoring original deployment and cleaning up evicted pods."""
+        for service in microservices:
+            orig_path = f"/tmp/{service}_modified.yaml"
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {orig_path} -n {self.namespace}"
+            self.kubectl.exec_command(delete_command)
+            self.kubectl.exec_command(apply_command)
+            print(f"Restored original deployment for service: {service}")
+
+        # Clean up any Failed/Evicted pods in the namespace
+        cleanup_cmd = f"kubectl delete pods -n {self.namespace} --field-selector status.phase=Failed"
+        self.kubectl.exec_command(cleanup_cmd)
+        print("Cleaned up Evicted/Failed pods.")
+
 
 if __name__ == "__main__":
     namespace = "social-network"

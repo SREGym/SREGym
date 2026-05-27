@@ -35,6 +35,12 @@ loki:
           prefix: index_
           period: 24h
 
+  memcached:
+    chunk_cache:
+      enabled: false
+    results_cache:
+      enabled: false
+
 # Deploy as single binary (all-in-one)
 deploymentMode: SingleBinary
 
@@ -100,3 +106,9 @@ resources:
     cpu: 100m
     memory: 256Mi
     ephemeral-storage: 1Gi
+
+# Disable memcached caches to avoid huge memory requests on local kind clusters
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
