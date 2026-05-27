@@ -26,7 +26,10 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  # Include event_name so issue_comment runs aren't cancelled by pull_request
+  # events on the same PR (notably fork PRs whose pull_request runs sit at
+  # action_required and never actually execute).
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
