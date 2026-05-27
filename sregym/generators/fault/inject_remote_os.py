@@ -241,11 +241,13 @@ class RemoteOSFaultInjector(FaultInjector):
         fs = json.loads(raw)["node"]["fs"]
         return round(fs["availableBytes"] / fs["capacityBytes"] * 100)
 
-    def inject_disk_pressure(self, node_name: str, threshold: str | None = None, margin_pct: int = 10):
+    def inject_disk_pressure(self, node_name: str, threshold: str | None = None, margin_pct: int = 10) -> str | None:
         """Raise kubelet's nodefs.available eviction threshold above the node's current free-space ratio.
 
         Pods evict regardless of actual disk usage. Threshold is computed dynamically from kubelet
         stats summary (current_free + margin_pct, capped at 95%) unless explicitly overridden.
+
+        Returns the threshold string applied (e.g. "75%"), or None if the node wasn't found.
         """
         if threshold is None:
             try:
@@ -261,18 +263,19 @@ class RemoteOSFaultInjector(FaultInjector):
             containers = self._get_kind_worker_containers()
             if node_name not in containers:
                 print(f"Node {node_name} not found among kind worker containers: {containers}")
-                return
+                return None
             print(f"Inducing disk pressure in {node_name} (threshold {threshold})...")
             self._docker_exec(node_name, script)
         else:
             worker_nodes = self._get_worker_node_names()
             if node_name not in worker_nodes:
                 print(f"Node {node_name} not found among worker nodes: {worker_nodes}")
-                return
+                return None
             print(f"Inducing disk pressure on {node_name} (threshold {threshold})...")
             self._node_exec(node_name, script)
 
         self._wait_for_single_node(node_name, target_status="Ready")
+        return threshold
 
     def recover_disk_pressure(self, node_name: str):
         """Restore the kubelet eviction threshold and restart kubelet."""

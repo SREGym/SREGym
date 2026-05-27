@@ -1,4 +1,6 @@
-from sregym.conductor.oracles.alert_oracle import AlertOracle
+from sregym.conductor.oracles.kubelet_eviction_threshold_misconfig_mitigation import (
+    KubeletEvictionThresholdMisconfigMitigationOracle,
+)
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
@@ -7,7 +9,7 @@ from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 
-class DiskPressureEviction(Problem):
+class KubeletEvictionThresholdMisconfig(Problem):
     def __init__(self):
         self.app = AstronomyShop()
         super().__init__(app=self.app, namespace=self.app.namespace)
@@ -16,6 +18,7 @@ class DiskPressureEviction(Problem):
         self.faulty_service = "currency"
         self.target_node = "kind-worker"
         self.injector = RemoteOSFaultInjector()
+        self.injected_threshold: str | None = None
 
         self.root_cause = self.build_structured_root_cause(
             component=f"node/{self.target_node}",
@@ -33,7 +36,7 @@ class DiskPressureEviction(Problem):
         )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = KubeletEvictionThresholdMisconfigMitigationOracle(problem=self)
 
         self.app.create_workload()
 
@@ -46,7 +49,7 @@ class DiskPressureEviction(Problem):
             f'--type=strategic -p=\'{{"spec":{{"template":{{"spec":{{"nodeName":"{self.target_node}"}}}}}}}}\''
         )
         # Trigger node-level disk pressure
-        self.injector.inject_disk_pressure(node_name=self.target_node)
+        self.injected_threshold = self.injector.inject_disk_pressure(node_name=self.target_node)
         print(f"Service: {self.faulty_service} | Node: {self.target_node} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
