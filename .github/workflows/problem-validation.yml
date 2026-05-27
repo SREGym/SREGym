@@ -285,18 +285,8 @@ jobs:
       - name: Prepare /run/udev for OpenEBS NDM
         run: sudo mkdir -p /run/udev
 
-      - name: Create kind cluster
-        run: |
-          kind create cluster --config kind/kind-config-x86.yaml
-          kubectl cluster-info
-          kubectl get nodes -o wide
-
-      - name: Install Calico CNI
-        run: |
-          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
-          kubectl rollout status daemonset/calico-node -n kube-system --timeout=120s
-          kubectl wait --for=condition=ready pod -l k8s-app=calico-node -n kube-system --timeout=120s
-          kubectl wait --for=condition=Ready nodes --all --timeout=120s
+      - name: Create kind cluster with Calico
+        run: bash kind/setup_kind_cluster.sh x86
 
       # ── Python environment ────────────────────────────────────────────
       - name: Install uv
