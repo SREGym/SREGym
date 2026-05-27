@@ -27,9 +27,9 @@ class PodCIDRExhaustionHotelReservation(Problem):
     Requires Calico CNI (works with both /16 and /24 cluster CIDRs).
     """
 
-    EXHAUST_NAMESPACE = "batch-jobs"
-    EXHAUST_DEPLOYMENT = "batch-worker"
-    TINY_POOL_NAME = "exhaustion-pool"
+    EXHAUST_NAMESPACE = "data-processing"
+    EXHAUST_DEPLOYMENT = "data-pipeline"
+    TINY_POOL_NAME = "workload-pool"
     TINY_POOL_CIDR = "192.168.254.0/26"  # 64 IPs — enough for batch-worker, too few for HR
     DEFAULT_POOL_NAME = "default-ipv4-ippool"
     NUM_EXHAUST_PODS = 60  # enough to exhaust a /26 with strictAffinity
@@ -45,15 +45,14 @@ class PodCIDRExhaustionHotelReservation(Problem):
             component="cluster-networking",
             namespace=self.namespace,
             description=(
-                "The cluster's pod CIDR has been exhausted by a batch-jobs deployment "
-                "consuming all available Calico IP allocations across worker nodes. "
-                "Calico strictAffinity is enabled, preventing nodes from borrowing IP "
+                "Calico IPAM IP exhaustion: the cluster's available IP address pool has been "
+                "exhausted and strictAffinity is enabled, preventing nodes from borrowing IP "
                 "blocks from each other. Hotel Reservation pods cannot obtain IP addresses "
-                "and are stuck in ContainerCreating state with: 'failed to request IPv4 "
+                "and are stuck in ContainerCreating state. Evidence: 'failed to request IPv4 "
                 "addresses: Assigned 0 out of 1 requested IPv4 addresses; No more free "
-                "affine blocks and strict affinity enabled'. Mitigation requires scaling "
-                "down the batch-worker deployment in the batch-jobs namespace sufficiently "
-                "to free IP allocations for Hotel Reservation pods to recover."
+                "affine blocks and strict affinity enabled'. Mitigation requires either "
+                "freeing IP allocations by scaling down consuming workloads or restoring "
+                "the default IP pool."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
@@ -89,7 +88,6 @@ spec:
   ipipMode: Always
   natOutgoing: true
   disabled: false
-  blockSize: 32
 """)
 
 
@@ -135,8 +133,19 @@ spec:
             memory: "1Mi"
 """)
 
-        print("Waiting for batch-worker to consume IPs...")
-        time.sleep(20)
+        print("Waiting for batch-worker pods to be scheduled and consume IPs...")
+        for _ in range(30):
+            result = self.kubectl.exec_command(
+                f"kubectl get pods -n {self.EXHAUST_NAMESPACE} --no-headers"
+            )
+            if result:
+                scheduled = sum(
+                    1 for line in result.strip().split("\n")
+                    if "Running" in line or "ContainerCreating" in line
+                )
+                if scheduled >= self.NUM_EXHAUST_PODS - 5:
+                    break
+            time.sleep(2)
 
         # Step 6: Force delete HR pods
         print("Force deleting Hotel Reservation pods to trigger rescheduling...")
