@@ -58,6 +58,12 @@ jobs:
           kubectl cluster-info
           kubectl get nodes -o wide
 
+      - name: Install Calico CNI
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml
+          kubectl rollout status daemonset/calico-node -n kube-system --timeout=120s
+          kubectl wait --for=condition=ready pod -l k8s-app=calico-node -n kube-system --timeout=120s
+
       # ── Python environment ────────────────────────────────────────────
       - name: Install uv
         uses: astral-sh/setup-uv@v4
