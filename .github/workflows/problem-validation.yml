@@ -26,7 +26,10 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  # Include event_name so issue_comment runs aren't cancelled by pull_request
+  # events on the same PR (notably fork PRs whose pull_request runs sit at
+  # action_required and never actually execute).
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -143,7 +146,11 @@ jobs:
               ;;
             issue_comment)
               pr_number="$ISSUE_NUMBER"
-              checkout_ref="refs/pull/${pr_number}/head"
+              # Use the /merge ref (PR merged into current main) — not /head —
+              # so the validation harness and other main-only files are present
+              # even when the PR branch predates them. A PR with merge conflicts
+              # has no /merge ref and checkout will fail with a clear error.
+              checkout_ref="refs/pull/${pr_number}/merge"
               source="the triggering comment"
               # Comment triggers run expensive CI — restrict to write-access users.
               case "$COMMENT_ASSOC" in
@@ -202,8 +209,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      issues: write
     steps:
-      # ── Checkout (the PR head; default ref for pull_request/dispatch) ──
+      # ── Checkout (PR merged with main; default ref for pull_request/dispatch) ──
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
@@ -214,6 +222,51 @@ jobs:
       - name: Record checked-out commit
         id: gitsha
         run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      # ── Progress: signal "started" before the long cluster steps ──
+      - name: Post "running" sticky comment
+        if: needs.resolve.outputs.pr_number != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
+          COMMIT_SHA: ${{ steps.gitsha.outputs.sha }}
+        with:
+          script: |
+            const marker = '<!-- problem-validation -->';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body =
+              `${marker}\n## 🧪 Problem Validation\n\n` +
+              `**Status: 🟡 Running** for \`${process.env.PROBLEM_ID}\`\n\n` +
+              `Deploying app → injecting fault → checking oracle → recovering → checking oracle.\n` +
+              `Typical runtime is 5–15 minutes.\n\n` +
+              `_[Live workflow run](${runUrl}) · commit \`${process.env.COMMIT_SHA}\`_`;
+
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: React 👀 to triggering comment
+        if: github.event_name == 'issue_comment'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content: 'eyes',
+            });
 
       # ── Cluster tooling ───────────────────────────────────────────────
       - name: Install Kind
@@ -315,16 +368,25 @@ jobs:
                 `The validation run did not produce a summary — it likely crashed before ` +
                 `completing. Check the [workflow logs](${runUrl}).`;
             }
-            body += `\n\n_[Workflow run](${runUrl}) · commit \`${process.env.COMMIT_SHA}\`_`;
-
-            const { owner, repo } = context.repo;
-            const issue_number = Number(process.env.PR_NUMBER);
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner, repo, issue_number,
-            });
             const existing = comments.find(c => c.body && c.body.includes(marker));
             if (existing) {
               await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+
+      - name: React to triggering comment with final result
+        if: always() && github.event_name == 'issue_comment'
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            const content = process.env.JOB_STATUS === 'success' ? '+1' : '-1';
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: context.payload.comment.id,
+              content,
+            });

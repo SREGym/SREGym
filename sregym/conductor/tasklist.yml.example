@@ -237,6 +237,9 @@ all:
     network_policy_block:
     - diagnosis
     - mitigation
+    node_conntrack_exhaustion_hotel_reservation:
+    - diagnosis
+    - mitigation
     social_net_hotel_res_astro_shop_concurrent_failures:
     - diagnosis
     - mitigation
