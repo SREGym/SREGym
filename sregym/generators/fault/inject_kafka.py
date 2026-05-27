@@ -17,6 +17,7 @@ CONSUMER_SCRIPT = r'''
 import json
 import logging
 import os
+import signal
 import time
 
 from confluent_kafka import Consumer
@@ -28,6 +29,13 @@ BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 TOPIC = os.environ.get("ORDERS_TOPIC", "orders-fulfillment")
 GROUP = os.environ.get("CONSUMER_GROUP", "orders-validator")
 LENIENT = os.environ.get("LENIENT", "").lower() in ("1", "true", "yes")
+
+_shutdown = False
+
+
+def _request_shutdown(signum, frame):
+    global _shutdown
+    _shutdown = True
 
 
 def process(value):
@@ -47,10 +55,12 @@ def main():
         }
     )
     consumer.subscribe([TOPIC])
+    signal.signal(signal.SIGTERM, _request_shutdown)
+    signal.signal(signal.SIGINT, _request_shutdown)
     log.info("orders-validator started bootstrap=%s topic=%s group=%s", BOOTSTRAP, TOPIC, GROUP)
 
     first = True
-    while True:
+    while not _shutdown:
         msg = consumer.poll(1.0)
         if msg is None:
             continue
@@ -68,15 +78,22 @@ def main():
             log.error("unprocessable record at offset=%d: %s", msg.offset(), exc)
             if not LENIENT:
                 log.error("cannot advance past offset=%d -- head-of-line block", msg.offset())
-                while True:
-                    time.sleep(15)
-                    log.error("still blocked on unprocessable record at offset=%d", msg.offset())
+                blocked = 0
+                while not _shutdown:
+                    time.sleep(1)
+                    blocked += 1
+                    if blocked % 15 == 0:
+                        log.error("still blocked on unprocessable record at offset=%d", msg.offset())
+                break
             consumer.commit(message=msg, asynchronous=False)
             log.info("skipped unprocessable record COMMITTED offset=%d", msg.offset() + 1)
             continue
 
         consumer.commit(message=msg, asynchronous=False)
         log.info("processed order_id=%s COMMITTED offset=%d", order_id, msg.offset() + 1)
+
+    consumer.close()
+    log.info("orders-validator stopped; left consumer group")
 
 
 if __name__ == "__main__":
@@ -234,7 +251,10 @@ class KafkaFaultInjector(FaultInjector):
             name=self.CONSUMER_DEPLOYMENT, script="consumer.py", extra_env=[]
         )
         self._wait_deployment_ready(self.CONSUMER_DEPLOYMENT)
-        logger.info("[Kafka FI] Pipeline running; consumer will halt at offset %d", self.poison_offset)
+
+        logger.info("[Kafka FI] Waiting for the consumer to stall on the poison record")
+        self._wait_for_log(self.CONSUMER_DEPLOYMENT, "head-of-line block", timeout=420)
+        logger.info("[Kafka FI] Fault is live; consumer is halted at offset %d", self.poison_offset)
         return self.poison_offset
 
     def recover(self) -> None:
