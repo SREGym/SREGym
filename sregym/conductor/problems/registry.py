@@ -6,12 +6,14 @@ from sregym.conductor.problems.ad_service_failure import AdServiceFailure
 from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
 from sregym.conductor.problems.admission_webhook_outage import AdmissionWebhookOutage
+from sregym.conductor.problems.admission_webhook_tls_mismatch import AdmissionWebhookTLSMismatch
 from sregym.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from sregym.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
+from sregym.conductor.problems.edge_request_filter_cpu_saturation import EdgeRequestFilterCPUSaturation
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
@@ -102,6 +104,7 @@ class ProblemRegistry:
             "storage_user_unregistered-2": lambda: MongoDBUserUnregistered(faulty_service="mongodb-rate"),
             "valkey_auth_disruption": ValkeyAuthDisruption,
             "valkey_memory_disruption": ValkeyMemoryDisruption,
+            "edge_request_filter_cpu_saturation": EdgeRequestFilterCPUSaturation,
             # # ==================== VIRTUALIZATION FAULT INJECTOR ====================
             # --- METASTABLE FAILURES ---
             # "cache_flush_capacity_degradation": CacheFlushCapacityDegradation,  # module not yet implemented
@@ -246,6 +249,7 @@ class ProblemRegistry:
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
             "node_conntrack_exhaustion_hotel_reservation": NodeConntrackExhaustionHotelReservation,
             "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
+            "admission_webhook_tls_mismatch_hotel_reservation": lambda: AdmissionWebhookTLSMismatch(app_name="hotel_reservation", faulty_service="recommendation"),
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[

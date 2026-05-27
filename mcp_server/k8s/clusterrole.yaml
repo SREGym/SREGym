@@ -85,6 +85,13 @@ rules:
       - rolebindings
     verbs: ["get", "list", "watch"]
 
+  # Metrics API - allows kubectl top pods/nodes
+  - apiGroups: ["metrics.k8s.io"]
+    resources:
+      - pods
+      - nodes
+    verbs: ["get", "list"]
+
   # Custom resources (TiDB)
   - apiGroups: ["pingcap.com"]
     resources:
