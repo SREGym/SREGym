@@ -1,3 +1,5 @@
+import json
+
 from sregym.conductor.oracles.base import Oracle
 
 
@@ -21,7 +23,7 @@ class DNSResolutionMitigationOracle(Oracle):
         selector_output = kubectl.exec_command(command).strip()
 
         # Parse selector to label query
-        selector_dict = eval(selector_output)
+        selector_dict = json.loads(selector_output)
         label_selector = ",".join(f"{k}={v}" for k, v in selector_dict.items())
 
         # Get pod names using the selector
