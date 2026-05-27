@@ -75,7 +75,6 @@ class KubeletEvictionThresholdMisconfig(Problem):
         )
 
         print("Deleting evicted pods...")
-        # TODO: this is taking too much time to recover. Figure out if there are any efficient way to do it.
         self.kubectl.exec_command(
             "kubectl delete pods --all-namespaces --field-selector=status.phase=Failed --ignore-not-found=true"
         )

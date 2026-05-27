@@ -38,9 +38,8 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
         injector = self.problem.injector
         kubectl = self.problem.kubectl
         target_node = self.problem.target_node
-        injected = self.problem.injected_threshold
 
-        # Check 1: kubelet config threshold
+        # Check 1: kubelet config threshold must sit below the node's actual free-space ratio.
         config_line = self._read_kubelet_config(injector, target_node).strip()
         threshold_ok = False
 
@@ -51,19 +50,21 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
             current = _parse_config_threshold(config_line)
             if current is None:
                 print(f"❌ Could not parse threshold from kubelet config line: {config_line!r}")
-            elif injected is None:
-                print(f"⚠️ No injected threshold recorded; cannot compare. Current: {current}%")
-            elif current < injected:
-                print(
-                    f"✅ Threshold lowered on {target_node}: {current}% < injected {injected}% "
-                    f"(config: {config_line!r})"
-                )
-                threshold_ok = True
             else:
-                print(
-                    f"❌ Threshold still at or above injected value on {target_node}: "
-                    f"current={current}% injected={injected}% (config: {config_line!r})"
-                )
+                try:
+                    free_pct = injector._get_node_free_pct(target_node)
+                except Exception as e:
+                    print(f"❌ Could not read kubelet stats summary for {target_node}: {e!r}")
+                    return {"success": False}
+
+                if current < free_pct:
+                    print(f"✅ Threshold below node free pct on {target_node}: ")
+                    threshold_ok = True
+                else:
+                    print(
+                        f"❌ Threshold still at or above node free pct on {target_node}: "
+                        f"current={current}% free={free_pct}% (config: {config_line!r})"
+                    )
 
         if not threshold_ok:
             return {"success": False}
