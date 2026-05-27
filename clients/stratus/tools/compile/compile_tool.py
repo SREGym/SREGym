@@ -34,19 +34,20 @@ def compile_postgresql_server(
         return f"Work directory {workdir} does not exist. Please set the workdir in the state."
 
     cmds = [
-        f"./configure --prefix={workdir}/pgsql --without-icu",
-        "make > /dev/null 2>&1",
-        "make install > /dev/null 2>&1",
-        f"{homedir}/pgsql/bin/initdb -D {homedir}/pgsql/data2",
-        f"{homedir}/pgsql/bin/pg_ctl -D {homedir}/pgsql/data2 -l logfile start",
-        f"{homedir}/pgsql/bin/createdb test",
-        f"{homedir}/pgsql/bin/psql -d test -c '\\l'",
+        ["./configure", f"--prefix={workdir}/pgsql", "--without-icu"],
+        ["make"],
+        ["make", "install"],
+        [f"{homedir}/pgsql/bin/initdb", "-D", f"{homedir}/pgsql/data2"],
+        [f"{homedir}/pgsql/bin/pg_ctl", "-D", f"{homedir}/pgsql/data2", "-l", "logfile", "start"],
+        [f"{homedir}/pgsql/bin/createdb", "test"],
+        [f"{homedir}/pgsql/bin/psql", "-d", "test", "-c", "\\l"],
     ]
 
     output = ""
     for cmd in cmds:
-        process = subprocess.run(cmd, cwd=workdir, capture_output=True, shell=True, text=True, env=env)
-        output += f"$ {cmd}\n{process.stdout}\n{process.stderr}\n"
-        logger.info(f"Command: {cmd}")
+        process = subprocess.run(cmd, cwd=workdir, capture_output=True, shell=False, text=True, env=env)
+        cmd_str = " ".join(cmd)
+        output += f"$ {cmd_str}\n{process.stdout}\n{process.stderr}\n"
+        logger.info(f"Command: {cmd_str}")
         logger.info(f"Output: {process.stdout}")
     return ToolMessage(tool_call_id=tool_call_id, content=output)
