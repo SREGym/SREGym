@@ -458,6 +458,111 @@ class ApplicationFaultInjector(FaultInjector):
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
 
+    # A.8 feature_flag_latent_bug: patch ConfigMap flag and override command to crash on activation
+    def inject_feature_flag_latent_bug(
+        self,
+        deployment_name: str = "frontend",
+        configmap_name: str = "frontend-feature-flags",
+        flag_key: str = "FEATURE_FLAG_EXPERIMENTAL_BRANCH",
+    ):
+        """Create the feature flag ConfigMap set to true, patch the deployment
+        command to crash when the flag is active, then restart all replicas."""
+
+        # Step 1: create or update the ConfigMap with flag=true
+        self.kubectl.create_or_update_configmap(
+            name=configmap_name,
+            namespace=self.namespace,
+            data={flag_key: "true"},
+        )
+        print(f"ConfigMap {configmap_name} created with {flag_key}=true")
+
+        # Step 2: patch the deployment command and mount the flag
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        container_name = deployment.spec.template.spec.containers[0].name
+
+        patch_body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": container_name,
+                                "command": ["/bin/sh", "-c"],
+                                "args": [
+                                    f'if [ "${{{flag_key}}}" = "true" ]; then '
+                                    f'echo "FATAL: feature flag {flag_key} is enabled, '
+                                    f'activating experimental branch - service cannot start" >&2; '
+                                    f"exit 1; "
+                                    f"else exec frontend; fi"
+                                ],
+                                "env": [
+                                    {"name": "JAEGER_SAMPLE_RATIO", "value": "1"},
+                                    {
+                                        "name": flag_key,
+                                        "valueFrom": {
+                                            "configMapKeyRef": {
+                                                "name": configmap_name,
+                                                "key": flag_key,
+                                            }
+                                        },
+                                    },
+                                ],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
+        print(f"Patched deployment {deployment_name} with flag-checking command")
+        # Force rollout restart so all pods pick up the new ConfigMap value
+        restart_command = f"kubectl rollout restart deployment/{deployment_name} -n {self.namespace}"
+        result = self.kubectl.exec_command(restart_command)
+        print(f"Rollout restart result: {result}")
+        time.sleep(10)
+
+    def recover_feature_flag_latent_bug(
+        self,
+        deployment_name: str = "frontend",
+        configmap_name: str = "frontend-feature-flags",
+        flag_key: str = "FEATURE_FLAG_EXPERIMENTAL_BRANCH",
+    ):
+        """Revert the ConfigMap flag to false and restore the original command."""
+
+        # Step 1: revert the ConfigMap flag to false
+        self.kubectl.create_or_update_configmap(
+            name=configmap_name,
+            namespace=self.namespace,
+            data={flag_key: "false"},
+        )
+        print(f"ConfigMap {configmap_name} reverted: {flag_key}=false")
+
+        # Step 2: restore the original deployment command
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        container_name = deployment.spec.template.spec.containers[0].name
+
+        patch_body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": container_name,
+                                "command": ["frontend"],
+                                "args": None,
+                                "env": [
+                                    {"name": "JAEGER_SAMPLE_RATIO", "value": "1"},
+                                ],
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+        self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
+        print(f"Restored original command for deployment {deployment_name}")
+        time.sleep(10)
+
 
 if __name__ == "__main__":
     namespace = "hotel-reservation"
