@@ -112,6 +112,29 @@ class RemoteOSFaultInjector(FaultInjector):
             print("No Kind worker containers found.")
         return containers
 
+    def _get_worker_node_names(self):
+        """Return list of worker node names from kubectl."""
+        output = self.kubectl.exec_command("kubectl get nodes --no-headers")
+        return [
+            line.split()[0]
+            for line in output.strip().splitlines()
+            if len(line.split()) >= 3 and "control-plane" not in line.split()[2]
+        ]
+
+    def _node_exec(self, node_name: str, command: str):
+        """Run a command on a remote worker node via SSH, mapping node name to inventory host."""
+        worker_info = self._get_remote_worker_info()
+        if not worker_info:
+            print(f"No remote worker info available for {node_name}")
+            return ""
+        # Match node name to inventory host (inventory keys are IPs/hostnames)
+        for host, user in worker_info.items():
+            if node_name in host or host in node_name:
+                return self._ssh_exec(host, user, f"sudo bash -c '{command}'")
+        # Fallback: use first worker
+        host, user = next(iter(worker_info.items()))
+        return self._ssh_exec(host, user, f"sudo bash -c '{command}'")
+
     def _wait_for_worker_nodes(self, target_status="NotReady", timeout=NODE_NOT_READY_TIMEOUT):
         """Poll until all worker nodes reach the target status ('Ready' or 'NotReady')."""
         output = self.kubectl.exec_command("kubectl get nodes --no-headers")
