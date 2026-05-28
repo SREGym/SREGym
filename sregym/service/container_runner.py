@@ -161,6 +161,10 @@ class ContainerRunner:
             env_vars["API_HOSTNAME"] = "host.docker.internal"
             mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
             env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
+        elif self.config.network_mode == "host":  # Linux / WSL
+            env_vars["API_HOSTNAME"] = "host.docker.internal"
+            mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
+            env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
 
         for key, value in env_vars.items():
             flags.extend(["-e", f"{key}={value}"])
@@ -181,9 +185,10 @@ class ContainerRunner:
                 # macOS: Don't use --network host (it's ignored), rely on host.docker.internal
                 args.append("--add-host=host.docker.internal:host-gateway")
             else:
-                # Linux: --network=host shares the host's network stack, so
-                # localhost already reaches host services directly.
-                args.append(f"--network={self.config.network_mode}")
+                # Linux: --network=host is unreliable in some configurations.
+                # --add-host injects the host IP directly into /etc/hosts.
+                args.append("--network=host")
+                args.append("--add-host=host.docker.internal:host-gateway")
         else:
             args.append(f"--network={self.config.network_mode}")
 
