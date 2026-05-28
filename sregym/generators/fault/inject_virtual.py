@@ -343,6 +343,29 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from resource request fault for service: {service}")
 
+    # V.8a - Set a tight CPU limit to trigger CFS throttling without crashing the pod
+    def inject_cpu_throttle(self, microservices: list[str], cpu_limit: str = "50m"):
+        for service in microservices:
+            original_deployment_yaml = self._get_deployment_yaml(service)
+            deployment_yaml = copy.deepcopy(original_deployment_yaml)
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            for container in containers:
+                resources = container.setdefault("resources", {})
+                # requests must be <= limits, so lower both
+                resources.setdefault("requests", {})["cpu"] = "10m"
+                resources.setdefault("limits", {})["cpu"] = cpu_limit
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+            self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
+            self._write_yaml_to_file(service, original_deployment_yaml)
+            print(f"Injected CPU throttle ({cpu_limit}) for service: {service}")
+
+    def recover_cpu_throttle(self, microservices: list[str]):
+        for service in microservices:
+            self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl apply -f /tmp/{service}_modified.yaml -n {self.namespace}")
+            print(f"Recovered from CPU throttle fault for service: {service}")
+
     # V.9 - Manually patch a service's selector to include an additional label
     def inject_wrong_service_selector(self, microservices: list[str]):
         for service in microservices:
