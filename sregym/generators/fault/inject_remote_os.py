@@ -2,6 +2,7 @@
 
 import os
 import re
+import shlex
 import subprocess
 import time
 
@@ -130,10 +131,10 @@ class RemoteOSFaultInjector(FaultInjector):
         # Match node name to inventory host (inventory keys are IPs/hostnames)
         for host, user in worker_info.items():
             if node_name in host or host in node_name:
-                return self._ssh_exec(host, user, f"sudo bash -c '{command}'")
+                return self._ssh_exec(host, user, f"sudo sh -c {shlex.quote(command)}")
         # Fallback: use first worker
         host, user = next(iter(worker_info.items()))
-        return self._ssh_exec(host, user, f"sudo bash -c '{command}'")
+        return self._ssh_exec(host, user, f"sudo sh -c {shlex.quote(command)}")
 
     def _wait_for_worker_nodes(self, target_status="NotReady", timeout=NODE_NOT_READY_TIMEOUT):
         """Poll until all worker nodes reach the target status ('Ready' or 'NotReady')."""
@@ -252,6 +253,8 @@ class RemoteOSFaultInjector(FaultInjector):
             print(f"Node {node_name} free={free_pct}% -> threshold={threshold}%")
 
         value = f'"{threshold}%"'
+        # Use %% to escape % in printf format string
+        printf_value = value.replace("%", "%%")
         script = (
             "CFG=/var/lib/kubelet/config.yaml && "
             "if grep -q 'evictionHard:' \"$CFG\"; then "
@@ -261,7 +264,7 @@ class RemoteOSFaultInjector(FaultInjector):
             f"    sed -i '/evictionHard:/a\\  nodefs.available: {value}' \"$CFG\"; "
             "  fi; "
             "else "
-            f"  printf '\\nevictionHard:\\n  nodefs.available: {value}\\n' >> \"$CFG\"; "
+            f"  printf '\\nevictionHard:\\n  nodefs.available: {printf_value}\\n' >> \"$CFG\"; "
             "fi && "
             "systemctl restart kubelet"
         )
