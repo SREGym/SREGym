@@ -97,3 +97,21 @@ rules:
     resources:
       - tidbclusters
     verbs: ["get", "list", "watch", "patch", "update"]
+
+  # Calico CRDs — allows diagnosing and fixing CNI/IPAM networking issues
+  - apiGroups: ["crd.projectcalico.org"]
+    resources:
+      - ippools
+      - ipamconfigs
+      - ipamblocks
+      - ipamhandles
+      - ipreservations
+      - blockaffinities
+      - felixconfigurations
+      - clusterinformations
+      - caliconodestatuses
+      - networkpolicies
+      - globalnetworkpolicies
+      - networksets
+      - globalnetworksets
+    verbs: ["get", "list", "watch", "patch", "update", "create", "delete"]
