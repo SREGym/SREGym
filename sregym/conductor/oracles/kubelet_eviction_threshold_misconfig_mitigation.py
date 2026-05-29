@@ -68,17 +68,22 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
         print(f"✅ Node {target_node} DiskPressure cleared")
         return True
 
-    def _app_healthy(self, kubectl, namespace: str) -> bool:
-        """
-        Accepts the app-level mitigation (e.g. removing the nodeName pin so pods
-        reschedule onto healthy nodes), even if the victim node stays misconfigured.
-        Evicted/Failed pods left behind are ignored — they don't reduce ready replicas.
+    def _app_recovered(self, kubectl, namespace: str, faulty_service: str) -> bool:
+        """True when the faulty service no longer runs on a DiskPressure node AND every
+        deployment has its desired ready replicas.
         """
         self._wait_for_rollouts(kubectl, namespace)
         deployments = kubectl.list_deployments(namespace)
         if not deployments.items:
             print(f"❌ No deployments found in namespace {namespace}")
             return False
+
+        faulty = next((d for d in deployments.items if d.metadata.name == faulty_service), None)
+        if faulty is not None:
+            pinned_node = faulty.spec.template.spec.node_name
+            if pinned_node and self._disk_pressure_active(kubectl, pinned_node):
+                print(f"❌ {faulty_service} still pinned to DiskPressure node {pinned_node}")
+                return False
 
         all_ready = True
         for dep in deployments.items:
@@ -89,7 +94,7 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
                 all_ready = False
 
         if all_ready:
-            print(f"✅ All deployments in {namespace} at desired ready replicas")
+            print(f"✅ All deployments in {namespace} ready; {faulty_service} not on a DiskPressure node")
         return all_ready
 
     def evaluate(self, solution=None, trace=None, duration=None) -> dict:
@@ -107,7 +112,7 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
         if self._node_fix_applied(injector, kubectl, target_node):
             return {"success": True}
 
-        if self._app_healthy(kubectl, namespace):
+        if self._app_recovered(kubectl, namespace, self.problem.faulty_service):
             return {"success": True}
 
         return {"success": False}
