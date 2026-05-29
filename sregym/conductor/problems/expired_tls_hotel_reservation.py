@@ -4,9 +4,10 @@ import os
 
 from kubernetes import client
 
-from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.expired_tls_mitigation_oracle import ExpiredTlsMitigationOracle
+from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
+from sregym.observer.ingress_nginx import IngressNginx
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -29,14 +30,22 @@ class ExpiredTlsHotelReservation(Problem):
 
         self.kubectl = KubeCtl()
         self.problem_id = "expired_tls_hotel_reservation"
-        self.secret_name = "expired-frontend-cert"
+        self.secret_name = "hotel-frontend-tls"
+        self.ingress_name = "frontend-ingress"
         self.faulty_service = ["frontend"]
         self.ingress_yaml_path = os.path.join(os.path.dirname(__file__), "manifests", "frontend_ingress.yaml")
 
         self.root_cause = self.build_structured_root_cause(
-            component="frontend-ingress",
+            component=self.ingress_name,
             namespace=self.namespace,
             description=(
+                # "The frontend Ingress is configured with a TLS secret named "
+                # f"`{self.secret_name}` which contains an expired TLS certificate. "
+                # "The NGINX Ingress controller detects the expired certificate, logs a "
+                # "validation error, and falls back to its default certificate. "
+                # "Clients connecting to hotel-reservation.local receive an unexpected "
+                # "certificate rather than the configured one, and the controller logs "
+                # "show the expiry error."
                 "The frontend Ingress resource is configured with a TLS secret named "
                 f"`{self.secret_name}` which contains an expired TLS certificate. "
                 "This breaks HTTPS connections."
@@ -44,15 +53,30 @@ class ExpiredTlsHotelReservation(Problem):
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = ExpiredTlsMitigationOracle(problem=self)
+        self.app.create_workload()
 
     @mark_fault_injected
     def inject_fault(self) -> bool:
         logger.info("Injecting Expired TLS Certificate fault...")
 
+        IngressNginx().deploy()
+
         cert_pem, key_pem = self._generate_expired_cert()
         self._create_tls_secret(cert_pem, key_pem)
 
         KubeCtl().apply_configs(self.namespace, self.ingress_yaml_path)
+
+        # Delete the NGINX default certificate so it cannot fall back to a working cert.
+        # This forces clients to receive the expired certificate directly.
+        # Uncomment to enable strict TLS failure.
+        # v1 = client.CoreV1Api()
+        # try:
+        #     v1.delete_namespaced_secret(
+        #         name="ingress-nginx-admission",
+        #         namespace="ingress-nginx"
+        #     )
+        # except client.exceptions.ApiException:
+        #     pass
 
         logger.info("Injected expired TLS cert into Ingress.")
         return True
@@ -60,6 +84,10 @@ class ExpiredTlsHotelReservation(Problem):
     @mark_fault_injected
     def recover_fault(self) -> bool:
         logger.info("Recovering from Expired TLS Certificate fault...")
+
+        # If the default cert deletion above is enabled, restore it here by
+        # redeploying IngressNginx or recreating the secret.
+        # IngressNginx().deploy()
 
         KubeCtl().delete_configs(self.namespace, self.ingress_yaml_path)
 
@@ -115,9 +143,9 @@ class ExpiredTlsHotelReservation(Problem):
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
         subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, "hotel.local"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "hotel-reservation.local"),
         ])
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         cert = (
             x509.CertificateBuilder()
             .subject_name(subject)
@@ -127,7 +155,13 @@ class ExpiredTlsHotelReservation(Problem):
             # Certificate was "valid" for 9 days but expired yesterday
             # the -10 day start avoids clocks-skew rejection on strict validators.
             .not_valid_before(now - datetime.timedelta(days=10))
-            .not_valid_after(now - datetime.timedelta(days=1))
+            .not_valid_after(now - datetime.timedelta(days=1))  # expired yesterday
+            .add_extension(
+                x509.SubjectAlternativeName([
+                    x509.DNSName("hotel-reservation.local"),
+                ]),
+                critical=False,
+            )
             .sign(key, hashes.SHA256())
         )
 

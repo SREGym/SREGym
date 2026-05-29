@@ -6,12 +6,13 @@ metadata:
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
+  ingressClassName: nginx
   tls:
   - hosts:
-    - hotel.local
-    secretName: expired-frontend-cert
+    - hotel-reservation.local
+    secretName: hotel-frontend-tls
   rules:
-  - host: hotel.local
+  - host: hotel-reservation.local
     http:
       paths:
       - path: /

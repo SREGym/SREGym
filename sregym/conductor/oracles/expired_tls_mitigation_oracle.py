@@ -1,12 +1,15 @@
+import base64
 import datetime
 import logging
 
 from kubernetes import client
 
+from sregym.conductor.oracles.base import Oracle
+
 logger = logging.getLogger(__name__)
 
 
-class ExpiredTlsMitigationOracle:
+class ExpiredTlsMitigationOracle(Oracle):
     """Mitigation oracle for the ExpiredTlsHotelReservation problem.
 
     The default MitigationOracle only checks pod health, which is insufficient
@@ -21,11 +24,11 @@ class ExpiredTlsMitigationOracle:
     """
 
     def __init__(self, problem):
-        self.problem = problem
+        super().__init__(problem=problem)
 
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation (Expired TLS) ==")
-
+ 
         namespace = self.problem.namespace
         networking_v1 = client.NetworkingV1Api()
         v1 = client.CoreV1Api() # used below to read TLS secrets referenced by the Ingress
@@ -33,20 +36,20 @@ class ExpiredTlsMitigationOracle:
         # check if the ingress still exists.
         try:
             ingress = networking_v1.read_namespaced_ingress(
-                name="frontend-ingress", namespace=namespace
+                name=self.problem.ingress_name, namespace=namespace
             )
         except client.exceptions.ApiException as e:
             if e.status == 404:
-                logger.info("frontend-ingress has been deleted — mitigation accepted.")
+                logger.info("frontend-ingress has been deleted, mitigation accepted.")
                 return {"success": True}
             raise
 
         # check if ingress still exists/check every TLS secret it references.
         if not ingress.spec.tls:
-            logger.info("Ingress exists but has no TLS config — mitigation accepted.")
+            logger.info("Ingress exists but has no TLS config -- mitigation accepted.")
             return {"success": True}
 
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
 
         for tls_entry in ingress.spec.tls:
             secret_name = tls_entry.secret_name
@@ -64,7 +67,7 @@ class ExpiredTlsMitigationOracle:
             cert_data = (secret.data or {}).get("tls.crt")
             if not cert_data:
                 continue
-
+                
             expiry = self._get_cert_expiry(cert_data)
             if expiry is None:
                 logger.warning("Could not parse certificate in secret '%s'.", secret_name)
@@ -84,14 +87,12 @@ class ExpiredTlsMitigationOracle:
                     ),
                 }
 
-        logger.info("No expired TLS certificates found on the Ingress — mitigation accepted.")
+        logger.info("No expired TLS certificates found on the Ingress -- mitigation accepted.")
         return {"success": True}
 
     @staticmethod
     def _get_cert_expiry(cert_b64: str) -> datetime.datetime | None:
         """Decode a base64-encoded PEM certificate and return its expiry datetime."""
-        import base64
-
         try:
             from cryptography import x509
         except ImportError:
