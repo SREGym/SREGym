@@ -3,6 +3,7 @@
 
 - [Contributing to SREGym](#contributing-to-sregym)
   - [Table of Contents](#table-of-contents)
+  - [Rules and Guidelines on AI Usage](#rules-and-guidelines-on-ai-usage)
   - [Getting Started](#getting-started)
   - [Development Setup](#development-setup)
     - [Prerequisites](#prerequisites)
@@ -27,6 +28,32 @@
     - [Getting Help](#getting-help)
     - [Staying Updated](#staying-updated)
   - [License](#license)
+
+## Rules and Guidelines on AI Usage
+
+LLMs and coding agents are significant productivity boost if used correctly,
+   but a big headache if not.
+In SREGym, we welcome contributors who leverage LLMs and coding agents in
+   building new features, but blatant abuse of LLMs and coding agents in
+   generating code and communicating on GitHub is not welcomed.
+
+More specifically, it is ok to use AI to:
+- generate code for features or bug fixes, but
+   **any AI generated code MUST be checked and tested by a human**
+
+It is **NOT** ok to use AI to:
+- generate complete responses to other humans, e.g., in PRs, comments, etc,
+   with no human intervention
+- "one-shot" an open issue by using coding agents
+   to generate commits, PR description,
+   and PR comments, with no human intervention
+- Other use cases where blatant abuse is obvious.
+
+For PRs and communications that violate the rules above,
+   if its owner (i.e., the GitHub user that opens them) is a first-time violator,
+   they receive a warning on the behavior.
+If they violate the rules again, they are unfortunately
+   banned from contributing to SREGym.
 
 ## Getting Started
 
