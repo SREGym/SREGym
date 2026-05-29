@@ -23,8 +23,8 @@ from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.init_container_dependency_hang import InitContainerDependencyHang
-from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.kafka_poison_pill_hol_block import KafkaPoisonPillHOLBlock
+from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.khaos_faults import (
     KhaosFaultName,
     KhaosFaultProblem,
