@@ -22,7 +22,7 @@ import os
 import ssl
 import tempfile
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 import urllib3
@@ -391,7 +391,7 @@ class KubernetesAPIProxy:
                 self._proxy_request("HEAD")
 
         # Create and start server
-        self.server = HTTPServer(("127.0.0.1", self.listen_port), FilteringProxyHandler)
+        self.server = ThreadingHTTPServer(("127.0.0.1", self.listen_port), FilteringProxyHandler)
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.server_thread.start()
         logger.info(f"Kubernetes API filtering proxy started on port {self.listen_port}")
