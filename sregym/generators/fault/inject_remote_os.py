@@ -189,6 +189,27 @@ class RemoteOSFaultInjector(FaultInjector):
 
         self._wait_for_worker_nodes("Ready")
 
+    def flush_pod_routes(self, node: str):
+        """Delete per-pod host routes from the kernel routing table on a specific worker node."""
+        cmd = "ip route show | awk '/^10\\.244\\.[0-9]+\\.[0-9]+ dev veth/ {print $1}' | xargs -r -n 1 ip route del"
+        if self._check_is_kind():
+            print(f"Flushing pod routes on {node}...")
+            self._docker_exec(node, cmd)
+            print(f"Pod routes flushed on {node}")
+        else:
+            if not self._check_remote_host():
+                return
+            worker_info = self._get_remote_worker_info()
+            if not worker_info:
+                return
+            if node not in worker_info:
+                print(f"Node {node} not found in inventory")
+                return
+            user = worker_info[node]
+            print(f"Flushing pod routes on {node}...")
+            self._ssh_exec(node, user, cmd)
+            print(f"Pod routes flushed on {node}")
+
 
 def main():
     injector = RemoteOSFaultInjector()

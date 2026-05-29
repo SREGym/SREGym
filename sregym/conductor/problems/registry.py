@@ -41,6 +41,7 @@ from sregym.conductor.problems.multiple_failures import MultipleIndependentFailu
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from sregym.conductor.problems.network_policy_block import NetworkPolicyBlock
 from sregym.conductor.problems.node_conntrack_exhaustion import NodeConntrackExhaustionHotelReservation
+from sregym.conductor.problems.node_routing_table_wipeout import NodeRoutingTableWipeout
 from sregym.conductor.problems.operator_misoperation.invalid_affinity_toleration import (
     K8SOperatorInvalidAffinityTolerationFault,
 )
@@ -286,6 +287,7 @@ class ProblemRegistry:
             # ]),
             # ad hoc:
             "kubelet_crash": KubeletCrash,
+            "node_routing_table_wipeout": NodeRoutingTableWipeout,
             "workload_imbalance": WorkloadImbalance,
             # ==================== K8S OPERATOR MISOPERATION ==================
             "operator_overload_replicas": K8SOperatorOverloadReplicasFault,
