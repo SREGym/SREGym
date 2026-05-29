@@ -566,6 +566,10 @@ class Conductor:
 
         self.logger.info("[FIX] KubeletEvictionThresholdMisconfig leftover if any")
         injector.recover_disk_pressure_all()
+        # some pods might be in Failed state due to eviction; clean them up to avoid confusion for the next problem
+        self.kubectl.exec_command(
+            "kubectl delete pods --all-namespaces --field-selector=status.phase=Failed --ignore-not-found=true"
+        )
 
         self.logger.info("[FIX] Calico IPPool/strictAffinity leftover if any")
         try:
