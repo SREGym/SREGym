@@ -47,6 +47,7 @@ class KafkaPoisonPillHOLBlock(Problem):
             consumer_group=self.CONSUMER_GROUP,
             topic=self.TOPIC,
             consumer_deployment=self.CONSUMER_DEPLOYMENT,
+            archiver_deployment=KafkaFaultInjector.ARCHIVER_DEPLOYMENT,
         )
 
     @mark_fault_injected

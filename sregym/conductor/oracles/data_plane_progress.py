@@ -15,15 +15,17 @@ class DataPlaneProgressOracle(Oracle):
         consumer_group: str,
         topic: str,
         consumer_deployment: str,
+        archiver_deployment: str = "orders-archiver",
         settle_seconds: int = 30,
-        progress_timeout: int = 300,
+        progress_timeout: int = 240,
         progress_window_seconds: int = 45,
-        restart_recover_timeout: int = 360,
+        restart_recover_timeout: int = 300,
     ):
         super().__init__(problem)
         self.consumer_group = consumer_group
         self.topic = topic
         self.consumer_deployment = consumer_deployment
+        self.archiver_deployment = archiver_deployment
         self.settle_seconds = settle_seconds
         self.progress_timeout = progress_timeout
         self.progress_window_seconds = progress_window_seconds
@@ -31,44 +33,29 @@ class DataPlaneProgressOracle(Oracle):
 
     def _consumer_pods(self):
         pods = self.problem.kubectl.list_pods(self.problem.namespace)
-        return [
-            pod
-            for pod in pods.items
-            if pod.metadata.labels and pod.metadata.labels.get("app") == self.consumer_deployment
-        ]
+        return [pod for pod in pods.items if (pod.metadata.labels or {}).get("app") == self.consumer_deployment]
 
     def _running_consumer_pods(self):
         return [pod for pod in self._consumer_pods() if pod.status.phase == "Running"]
 
-    def _logs(self) -> str:
-        return self.problem.kubectl.exec_command(
-            f"kubectl logs deployment/{self.consumer_deployment} "
-            f"-n {self.problem.namespace} --tail=20000"
+    def _processed_offsets(self) -> set[int]:
+        logs = self.problem.kubectl.exec_command(
+            f"kubectl logs deployment/{self.archiver_deployment} -n {self.problem.namespace} --tail=20000"
         )
+        return {int(x) for x in re.findall(r"AUDIT src_offset=(\d+)", logs)}
 
-    @staticmethod
-    def _committed_offsets(logs: str) -> list[int]:
-        return [int(x) for x in re.findall(r"COMMITTED offset=(\d+)", logs)]
-
-    @staticmethod
-    def _resume_offsets(logs: str) -> list[int]:
-        return [int(x) for x in re.findall(r"RESUMING FROM offset=(\d+)", logs)]
+    def _max_processed(self, default: int = -1) -> int:
+        processed = self._processed_offsets()
+        return max(processed) if processed else default
 
     def _await_progress_past(self, poison: int, timeout: int):
-        """Poll consumer logs until a COMMITTED offset > poison appears.
-
-        Returns (max_committed_offset, logs) on success, or (None, "") on
-        timeout. Tolerates the consumer pod's start-up / pip-install lag.
-        """
         deadline = time.time() + timeout
         while time.time() < deadline:
-            if self._running_consumer_pods():
-                logs = self._logs()
-                committed = self._committed_offsets(logs)
-                if committed and max(committed) > poison:
-                    return max(committed), logs
+            processed = self._processed_offsets()
+            if processed and max(processed) > poison:
+                return processed
             time.sleep(10)
-        return None, ""
+        return None
 
     def evaluate(self) -> dict:
         print("== Data-Plane Progress Oracle ==")
@@ -76,32 +63,26 @@ class DataPlaneProgressOracle(Oracle):
         if poison is None:
             return {"success": False, "reason": "poison_offset unknown (fault not injected?)"}
 
-        if not self._consumer_pods():
-            print("❌ No orders-validator consumer pod found")
-            return {"success": False, "reason": "consumer deployment not present"}
-
         print(f"⏳ Settling {self.settle_seconds}s before evaluation...")
         time.sleep(self.settle_seconds)
-        print(f"   Checking the consumer advanced past poison offset {poison}...")
-        max_committed, logs = self._await_progress_past(poison, self.progress_timeout)
-        if max_committed is None:
-            print(f"❌ Consumer never committed past the poison offset {poison}")
+        print(f"   Checking processed records advance past poison offset {poison}...")
+        processed = self._await_progress_past(poison, self.progress_timeout)
+        if processed is None:
+            print(f"❌ No records processed past the poison offset {poison}")
             return {"success": False, "reason": "offset not advanced past poison record"}
-        print(f"   max committed offset = {max_committed} (poison was {poison})")
-        resumes = self._resume_offsets(logs)
-        if resumes and resumes[-1] > poison + 1:
-            print(
-                f"❌ Consumer resumed at offset {resumes[-1]}, past poison+1 "
-                f"({poison + 1}) — valid records were skipped"
-            )
+        high = max(processed)
+        print(f"   processed up to src_offset {high} ({len(processed)} records; poison was {poison})")
+
+        missing = sorted((set(range(high + 1)) - {poison}) - processed)
+        if missing:
+            print(f"❌ {len(missing)} record(s) never processed, e.g. {missing[:10]} — data loss")
             return {"success": False, "reason": "data loss: valid records skipped"}
 
         time.sleep(self.progress_window_seconds)
-        after = self._committed_offsets(self._logs())
-        max_after = max(after) if after else -1
-        print(f"   forward progress: {max_committed} -> {max_after}")
-        if max_after <= max_committed:
-            print("❌ Consumer offset is not advancing — no live forward progress")
+        high_after = self._max_processed(default=high)
+        print(f"   forward progress: {high} -> {high_after}")
+        if high_after <= high:
+            print("❌ No new records processed — pipeline is not making progress")
             return {"success": False, "reason": "no forward progress"}
 
         running = self._running_consumer_pods()
@@ -109,15 +90,17 @@ class DataPlaneProgressOracle(Oracle):
             return {"success": False, "reason": "consumer not Running before restart probe"}
         victim = running[0].metadata.name
         print(f"🔁 Restart-resistance probe: deleting consumer pod {victim}")
-        self.problem.kubectl.exec_command(
-            f"kubectl delete pod {victim} -n {self.problem.namespace} --wait=true"
-        )
+        self.problem.kubectl.exec_command(f"kubectl delete pod {victim} -n {self.problem.namespace} --wait=true")
 
-        probe_max, _ = self._await_progress_past(poison, self.restart_recover_timeout)
-        if probe_max is None:
-            print("❌ Pipeline re-stalled after restart — the fix was not durable")
-            return {"success": False, "reason": "not restart-resistant"}
-        print(f"   post-restart max committed offset = {probe_max}")
-
-        print("✅ Advanced past the poison record, no data loss, restart-resistant")
-        return {"success": True}
+        baseline = self._max_processed(default=high_after)
+        deadline = time.time() + self.restart_recover_timeout
+        while time.time() < deadline:
+            if self._running_consumer_pods():
+                now = self._max_processed(default=baseline)
+                if now > baseline:
+                    print(f"   post-restart progress: {baseline} -> {now}")
+                    print("✅ Processed past the poison, no gaps, restart-resistant")
+                    return {"success": True}
+            time.sleep(10)
+        print("❌ Pipeline did not resume processing after restart — fix is not durable")
+        return {"success": False, "reason": "not restart-resistant"}
