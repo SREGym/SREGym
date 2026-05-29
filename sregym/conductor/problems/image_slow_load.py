@@ -25,7 +25,11 @@ class ImageSlowLoad(Problem):
                 f"The `{self.faulty_service}` deployment is serving image responses with abnormally high "
                 "latency, causing slow page renders and degraded user experience. Image-dependent pages show "
                 "elevated latency and partial rendering while requests wait for delayed asset responses. Users "
-                "observe sluggish page loads and visibly delayed product imagery."
+                "observe sluggish page loads and visibly delayed product imagery. "
+                f"Mechanism: the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                f'`{self.feature_flag}` feature flag\'s `defaultVariant` set to `"10sec"`, which triggers the '
+                "OpenTelemetry demo's Envoy proxy fault-injection path that adds a 10-second delay to product-image "
+                "responses served through the frontend."
             ),
         )
         # === Attach evaluation oracles ===
