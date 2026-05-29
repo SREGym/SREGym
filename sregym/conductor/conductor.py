@@ -564,17 +564,22 @@ class Conductor:
         injector = RemoteOSFaultInjector()
         injector.recover_kubelet_crash()
 
+        self.logger.info("[FIX] KubeletEvictionThresholdMisconfig leftover if any")
+        injector.recover_disk_pressure_all()
+
         self.logger.info("[FIX] Calico IPPool/strictAffinity leftover if any")
         try:
-            from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodCIDRExhaustionHotelReservation
+            from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import (
+                PodCIDRExhaustionHotelReservation,
+            )
+
             kubectl = KubeCtl()
             kubectl.exec_command(
                 f"kubectl patch ippool {PodCIDRExhaustionHotelReservation.DEFAULT_POOL_NAME} --type=merge "
-                "-p '{\"spec\":{\"disabled\":false}}'"
+                '-p \'{"spec":{"disabled":false}}\''
             )
             kubectl.exec_command(
-                "kubectl patch ipamconfig default --type=merge "
-                "-p '{\"spec\":{\"strictAffinity\":false}}'"
+                'kubectl patch ipamconfig default --type=merge -p \'{"spec":{"strictAffinity":false}}\''
             )
             kubectl.exec_command(
                 f"kubectl delete ippool {PodCIDRExhaustionHotelReservation.TINY_POOL_NAME} --ignore-not-found"

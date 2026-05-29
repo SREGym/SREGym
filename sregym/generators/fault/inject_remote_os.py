@@ -306,6 +306,12 @@ class RemoteOSFaultInjector(FaultInjector):
 
         self._wait_for_single_node(node_name, target_status="Ready")
 
+    def recover_disk_pressure_all(self):
+        """Strip the nodefs.available eviction threshold on every worker node."""
+        nodes = self._get_kind_worker_containers() if self._check_is_kind() else self._get_worker_node_names()
+        for node_name in nodes:
+            self.recover_disk_pressure(node_name)
+
 
 def main():
     injector = RemoteOSFaultInjector()
