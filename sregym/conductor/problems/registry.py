@@ -23,6 +23,7 @@ from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.init_container_dependency_hang import InitContainerDependencyHang
+from sregym.conductor.problems.kafka_poison_pill_hol_block import KafkaPoisonPillHOLBlock
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.khaos_faults import (
     KhaosFaultName,
@@ -179,6 +180,7 @@ class ProblemRegistry:
             "astronomy_shop_payment_service_unreachable": PaymentServiceUnreachable,
             "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
             "kafka_queue_problems": KafkaQueueProblems,
+            "kafka_poison_pill_hol_block": KafkaPoisonPillHOLBlock,
             "loadgenerator_flood_homepage": LoadGeneratorFloodHomepage,
             # ==================== TRAIN TICKET FAULT INJECTOR ====================
             "trainticket_f17_nested_sql_select_clause_error": TrainTicketF17,
