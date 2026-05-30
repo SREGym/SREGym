@@ -4,6 +4,7 @@ import time
 
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
+from kubernetes.utils.quantity import parse_quantity
 
 from sregym.conductor.oracles.base import Oracle
 
@@ -77,6 +78,30 @@ class PriorityPreemptionMitigationOracle(Oracle):
             return False, deployment
         return True, deployment
 
+    def _all_deployments_ready(self, namespace):
+        try:
+            deployments = self.apps_v1.list_namespaced_deployment(namespace).items
+        except ApiException as e:
+            if e.status == 404:
+                print(f"❌ Namespace '{namespace}' not found")
+                return False
+            raise
+
+        if not deployments:
+            print(f"❌ No deployments found in namespace '{namespace}'")
+            return False
+
+        for deployment in deployments:
+            desired = deployment.spec.replicas or 0
+            ready = deployment.status.ready_replicas or 0
+            if desired < 1:
+                print(f"❌ Deployment '{deployment.metadata.name}' was scaled below one replica")
+                return False
+            if ready != desired:
+                print(f"❌ Deployment '{deployment.metadata.name}' has {ready}/{desired} replicas ready")
+                return False
+        return True
+
     def _service_has_ready_endpoint(self, service_name, namespace):
         try:
             endpoints = self.core_v1.read_namespaced_endpoints(service_name, namespace)
@@ -110,6 +135,33 @@ class PriorityPreemptionMitigationOracle(Oracle):
                     return False
         return True
 
+    def _memory_quantity_to_kib(self, quantity):
+        return int(parse_quantity(str(quantity)) / 1024)
+
+    def _container_memory_request_kib(self, deployment):
+        total = 0
+        for container in deployment.spec.template.spec.containers or []:
+            resources = container.resources
+            if not resources or not resources.requests:
+                continue
+            memory = resources.requests.get("memory")
+            if memory:
+                total += self._memory_quantity_to_kib(memory)
+        return total
+
+    def _request_not_reduced(self, deployment, expected_memory):
+        if not expected_memory:
+            return True
+        expected_kib = self._memory_quantity_to_kib(expected_memory)
+        current_kib = self._container_memory_request_kib(deployment)
+        if current_kib < expected_kib:
+            print(
+                f"❌ Deployment '{deployment.metadata.name}' memory request was reduced "
+                f"from {expected_memory} to {current_kib}Ki"
+            )
+            return False
+        return True
+
     def evaluate(self) -> dict:
         print("== Priority Preemption Mitigation Evaluation ==")
 
@@ -127,6 +179,9 @@ class PriorityPreemptionMitigationOracle(Oracle):
             return {"success": False}
 
         if not self._service_has_ready_endpoint(target, namespace):
+            return {"success": False}
+
+        if not self._all_deployments_ready(namespace):
             return {"success": False}
 
         if not self._all_app_pods_ready(namespace):
@@ -159,6 +214,9 @@ class PriorityPreemptionMitigationOracle(Oracle):
             )
             return {"success": False}
 
+        if not self._request_not_reduced(target_deployment, getattr(self.problem, "target_request_memory", None)):
+            return {"success": False}
+
         try:
             pressure = self.apps_v1.read_namespaced_deployment(
                 name=pressure_deployment,
@@ -175,6 +233,8 @@ class PriorityPreemptionMitigationOracle(Oracle):
 
         if (pressure.spec.replicas or 0) < 1:
             print(f"❌ Pressure deployment '{pressure_deployment}' was scaled to zero")
+            return {"success": False}
+        if not self._request_not_reduced(pressure, getattr(self.problem, "pressure_request_memory", None)):
             return {"success": False}
 
         print("✅ App is healthy and priority policy has been corrected")

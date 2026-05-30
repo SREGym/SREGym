@@ -19,12 +19,12 @@ Sources:
 
 ## How this simulates the failure on SREGym
 
-The Hotel Reservation app is deployed normally. Fault injection then prepares the `reservation` deployment with realistic memory requests while it still has no priority. Next, the injector creates two PriorityClasses:
+The Hotel Reservation app is deployed normally. Fault injection then prepares the existing `reservation` pod with realistic memory requests and asserts it still has priority `0` on the selected pressure node. Only after that low-priority victim exists does the injector create two PriorityClasses:
 
 - `platform-medium`: value `100000`, mistakenly set as the global default.
 - `production-critical`: value `200000`, intended for protected production services but not applied.
 
-The injector then creates a synthetic tenant workload, `analytics-batch/tenant-ingester`, pinned to the same node as the existing `reservation` pod. The tenant workload uses `platform-medium` and requests enough memory that it can only schedule by preempting the lower-priority `reservation` pod.
+The injector then creates a synthetic tenant workload, `analytics-batch/tenant-ingester`, pinned to the same node as the existing `reservation` pod. The tenant workload uses `platform-medium` and requests enough memory, computed from node allocatable/requested memory and the `reservation` request, that it can only schedule by preempting the lower-priority `reservation` pod.
 
 To keep victim selection deterministic, the injector explicitly assigns `platform-medium` to the other Hotel Reservation deployments before creating the tenant workload. `reservation` remains the only app deployment with an existing priority-0 pod on the pressure node.
 
@@ -45,7 +45,18 @@ kubectl get pods -A -o custom-columns=NAMESPACE:.metadata.namespace,NAME:.metada
 kubectl describe node <node>
 ```
 
-Expected evidence includes a high-priority `analytics-batch/tenant-ingester` pod, an unsafe global `platform-medium` PriorityClass, and a `reservation` rollout that cannot regain capacity.
+Expected evidence includes a scheduler preemption event, a high-priority `analytics-batch/tenant-ingester` pod, an unsafe global `platform-medium` PriorityClass, and a `reservation` rollout that cannot regain capacity. A successful local run should show evidence in this shape:
+
+```shell
+kubectl get events -A --sort-by=.lastTimestamp | grep -Ei "preempt|failedscheduling|reservation|tenant-ingester"
+
+kubectl get pod -n hotel-reservation \
+  -l io.kompose.service=reservation \
+  -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,NODE:.spec.nodeName,PRIORITY:.spec.priority,CLASS:.spec.priorityClassName,NOMINATED:.status.nominatedNodeName
+
+kubectl get pod -n analytics-batch \
+  -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,NODE:.spec.nodeName,PRIORITY:.spec.priority,CLASS:.spec.priorityClassName
+```
 
 ## Correct diagnosis
 
@@ -61,10 +72,12 @@ The current oracle is intentionally strict. It accepts mitigation when:
 
 - `reservation` is healthy with all desired replicas available.
 - the `reservation` Service has ready endpoints.
+- all Hotel Reservation deployments still have at least one desired replica and are ready.
 - `platform-medium` still exists but is no longer `globalDefault: true`.
 - `production-critical` exists and has a higher value than `platform-medium`.
 - the `reservation` deployment template explicitly uses `priorityClassName: production-critical`.
 - the synthetic tenant workload still exists and has not simply been deleted or scaled to zero.
+- the memory requests used to create the scheduler pressure were not reduced to avoid the policy fix.
 
 This strictness is deliberate: deleting the tenant workload, deleting all PriorityClasses, or scaling `reservation` down can make a pod-health check pass while avoiding the scheduler-policy diagnosis.
 

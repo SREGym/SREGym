@@ -36,6 +36,8 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     PRESSURE_NAMESPACE = "analytics-batch"
     PRESSURE_DEPLOYMENT = "tenant-ingester"
     PRESSURE_LABEL = "tenant-ingester"
+    PROBLEM_LABEL_KEY = "sregym.io/problem"
+    PROBLEM_LABEL_VALUE = "priority-preemption-cascade"
 
     TARGET_REQUEST_RATIO = 0.30
     PRESSURE_PREEMPTION_RATIO = 0.50
@@ -56,6 +58,10 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         self.target_node = None
         self.target_request_memory = None
         self.pressure_request_memory = None
+        self._priority_class_snapshots = {}
+        self._deployment_priority_classes = {}
+        self._target_original_resources = None
+        self._target_original_node_selector = None
         self._app_cleanup = self.app.cleanup
         self.app.cleanup = self._cleanup
 
@@ -63,13 +69,11 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
             component=f"PriorityClass/{self.PLATFORM_PRIORITY_CLASS}",
             namespace=self.namespace,
             description=(
-                f"PriorityClass `{self.PLATFORM_PRIORITY_CLASS}` has been made the cluster-wide global default. "
-                f"Existing `{self.faulty_service}` pods in namespace `{self.namespace}` were created before that "
-                "default existed, so they have priority 0. A new tenant workload in namespace "
-                f"`{self.PRESSURE_NAMESPACE}` receives `{self.PLATFORM_PRIORITY_CLASS}` and requests enough memory "
-                "on the same node to trigger scheduler preemption. The scheduler evicts the lower-priority "
-                f"`{self.faulty_service}` pod, but replacement production pods inherit the same medium priority "
-                "instead of the intended `production-critical` class and cannot preempt the tenant workload back. "
+                "A cluster-wide default PriorityClass was mis-scoped so an existing production pod kept priority 0 "
+                "while a newly created tenant or batch workload received a higher priority and enough memory request "
+                "to force scheduler preemption on the same node. The scheduler evicts the lower-priority production "
+                "pod, but its replacement inherits the same medium/default priority relationship instead of the "
+                "intended production-critical priority and cannot reclaim capacity from the tenant workload. "
                 "The service stays under-replicated even though its image, service, and application config are valid. "
                 f"Mitigation must make `{self.PLATFORM_PRIORITY_CLASS}` no longer an unsafe global default and "
                 f"explicitly protect `{self.faulty_service}` with `{self.PRODUCTION_PRIORITY_CLASS}`."
@@ -83,21 +87,52 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     def _target_deployment(self):
         return self.apps_v1.read_namespaced_deployment(name=self.faulty_service, namespace=self.namespace)
 
+    def _app_deployments(self):
+        try:
+            return self.apps_v1.list_namespaced_deployment(self.namespace).items
+        except ApiException as e:
+            if e.status == 404:
+                return []
+            raise
+
     def _target_container_name(self):
         return self._target_deployment().spec.template.spec.containers[0].name
 
-    def _target_pod(self):
+    def _target_pods(self):
         deployment = self._target_deployment()
         match_labels = deployment.spec.selector.match_labels or {}
         selector = ",".join(f"{key}={value}" for key, value in match_labels.items())
-        pods = self.core_v1.list_namespaced_pod(
+        return self.core_v1.list_namespaced_pod(
             namespace=self.namespace,
             label_selector=selector,
         ).items
+
+    def _target_pod(self):
+        pods = self._target_pods()
         running = [pod for pod in pods if pod.status.phase == "Running" and pod.spec.node_name]
         if not running:
             raise RuntimeError(f"No running pod found for service '{self.faulty_service}'")
         return running[0]
+
+    def _pressure_pods(self):
+        try:
+            return self.core_v1.list_namespaced_pod(
+                namespace=self.PRESSURE_NAMESPACE,
+                label_selector=f"app={self.PRESSURE_LABEL}",
+            ).items
+        except ApiException as e:
+            if e.status == 404:
+                return []
+            raise
+
+    def _wait_for_pressure_pod(self, timeout=60):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            pods = self._pressure_pods()
+            if pods:
+                return pods[0]
+            time.sleep(2)
+        raise TimeoutError(f"Timed out waiting for pressure pod in namespace '{self.PRESSURE_NAMESPACE}'")
 
     def _active_pods_on_node(self, node_name):
         pods = self.core_v1.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={node_name}").items
@@ -147,19 +182,67 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
             time.sleep(2)
         raise TimeoutError(f"Timed out waiting for deployment {namespace}/{name} to become ready")
 
+    def _preemption_event_seen(self):
+        events = self.core_v1.list_event_for_all_namespaces().items
+        for event in events:
+            reason = (event.reason or "").lower()
+            message = (event.message or "").lower()
+            involved = event.involved_object
+            involved_name = (involved.name if involved else "") or ""
+            involved_namespace = (involved.namespace if involved else "") or ""
+            event_text = " ".join(
+                [
+                    reason,
+                    message,
+                    involved_name.lower(),
+                    involved_namespace.lower(),
+                ]
+            )
+            if "preempt" not in event_text:
+                continue
+            if (
+                self.faulty_service in event_text
+                or self.PRESSURE_DEPLOYMENT in event_text
+                or self.PRESSURE_LABEL in event_text
+            ):
+                return True
+        return False
+
+    def _replacement_target_has_platform_priority(self):
+        for pod in self._target_pods():
+            priority_class = pod.spec.priority_class_name
+            priority = pod.spec.priority or 0
+            if pod.status.phase == "Running" and pod.spec.node_name:
+                continue
+            if priority_class == self.PLATFORM_PRIORITY_CLASS and priority >= 100000:
+                return True
+        return False
+
+    def _preemption_evidence_ready(self, target, pressure):
+        target_desired = target.spec.replicas or 0
+        target_ready = target.status.ready_replicas or 0
+        pressure_ready = pressure.status.ready_replicas or 0
+        return (
+            pressure_ready >= 1
+            and target_ready < target_desired
+            and self._preemption_event_seen()
+            and self._replacement_target_has_platform_priority()
+        )
+
     def _wait_for_preemption(self, timeout=180):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             target = self.apps_v1.read_namespaced_deployment(self.faulty_service, self.namespace)
             pressure = self.apps_v1.read_namespaced_deployment(self.PRESSURE_DEPLOYMENT, self.PRESSURE_NAMESPACE)
-            target_desired = target.spec.replicas or 0
-            target_ready = target.status.ready_replicas or 0
-            pressure_ready = pressure.status.ready_replicas or 0
-            if pressure_ready >= 1 and target_ready < target_desired:
+            if self._preemption_evidence_ready(target, pressure):
                 return
             time.sleep(3)
-        events = self.kubectl.exec_command(f"kubectl get events -n {self.namespace} --sort-by=.lastTimestamp")
-        raise TimeoutError(f"Timed out waiting for priority preemption to manifest. Recent app events:\n{events}")
+        events = self.kubectl.exec_command("kubectl get events -A --sort-by=.lastTimestamp")
+        raise TimeoutError(
+            "Timed out waiting for priority preemption evidence: pressure pod ready, target unavailable, "
+            f"scheduler preemption event present, and replacement target pod inheriting {self.PLATFORM_PRIORITY_CLASS}. "
+            f"Recent events:\n{events}"
+        )
 
     def _target_request_for_node(self, node_name):
         allocatable_kib = self._node_allocatable_memory_kib(node_name)
@@ -249,10 +332,91 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         self.apps_v1.patch_namespaced_deployment(name=self.faulty_service, namespace=self.namespace, body=body)
         self._wait_for_deployment_ready(self.faulty_service, self.namespace)
 
+    def _capture_app_template_state(self):
+        self._deployment_priority_classes = {}
+        self._target_original_resources = None
+        self._target_original_node_selector = None
+        for deployment in self._app_deployments():
+            self._deployment_priority_classes[deployment.metadata.name] = (
+                deployment.spec.template.spec.priority_class_name
+            )
+            if deployment.metadata.name != self.faulty_service:
+                continue
+            self._target_original_node_selector = dict(deployment.spec.template.spec.node_selector or {})
+            target_container = deployment.spec.template.spec.containers[0]
+            resources = target_container.resources
+            self._target_original_resources = {
+                "requests": dict(resources.requests or {}) if resources and resources.requests else {},
+                "limits": dict(resources.limits or {}) if resources and resources.limits else {},
+            }
+
+    def _restore_app_template_state(self):
+        for deployment in self._app_deployments():
+            pod_spec = deployment.spec.template.spec
+            desired_priority = self._deployment_priority_classes.get(deployment.metadata.name)
+            current_priority = pod_spec.priority_class_name
+            body = {"spec": {"template": {"spec": {}}}}
+            if current_priority != desired_priority:
+                body["spec"]["template"]["spec"]["priorityClassName"] = desired_priority
+
+            if deployment.metadata.name == self.faulty_service and self._target_original_resources is not None:
+                resources = {}
+                if self._target_original_resources["requests"]:
+                    resources["requests"] = dict(self._target_original_resources["requests"])
+                if self._target_original_resources["limits"]:
+                    resources["limits"] = dict(self._target_original_resources["limits"])
+                body["spec"]["template"]["spec"]["nodeSelector"] = self._target_original_node_selector or None
+                body["spec"]["template"]["spec"]["containers"] = [
+                    {
+                        "name": pod_spec.containers[0].name,
+                        "resources": resources,
+                    }
+                ]
+
+            if body["spec"]["template"]["spec"]:
+                self.apps_v1.patch_namespaced_deployment(
+                    name=deployment.metadata.name,
+                    namespace=self.namespace,
+                    body=body,
+                )
+
+    def _pin_target_to_node(self):
+        deployment = self._target_deployment()
+        node_selector = dict(deployment.spec.template.spec.node_selector or {})
+        node_selector["kubernetes.io/hostname"] = self.target_node
+        body = {"spec": {"template": {"spec": {"nodeSelector": node_selector}}}}
+        self.apps_v1.patch_namespaced_deployment(name=self.faulty_service, namespace=self.namespace, body=body)
+        self._wait_for_deployment_ready(self.faulty_service, self.namespace)
+
+    def _clear_app_priority_references(self):
+        for deployment in self._app_deployments():
+            if not deployment.spec.template.spec.priority_class_name:
+                continue
+            body = {"spec": {"template": {"spec": {"priorityClassName": None}}}}
+            self.apps_v1.patch_namespaced_deployment(
+                name=deployment.metadata.name,
+                namespace=self.namespace,
+                body=body,
+            )
+
+    def _wait_for_priority_references_removed(self, timeout=60):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            references = [
+                deployment.metadata.name
+                for deployment in self._app_deployments()
+                if deployment.spec.template.spec.priority_class_name
+                in {self.PLATFORM_PRIORITY_CLASS, self.PRODUCTION_PRIORITY_CLASS}
+            ]
+            if not references:
+                return
+            time.sleep(2)
+        raise TimeoutError("Timed out waiting for app deployments to drop problem PriorityClass references")
+
     def _protect_peer_deployments(self):
         peer_names = [
             deployment.metadata.name
-            for deployment in self.apps_v1.list_namespaced_deployment(self.namespace).items
+            for deployment in self._app_deployments()
             if deployment.metadata.name != self.faulty_service
         ]
         body = {"spec": {"template": {"spec": {"priorityClassName": self.PLATFORM_PRIORITY_CLASS}}}}
@@ -269,6 +433,25 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
                 f"Target pod {target_pod.metadata.name} is no longer the low-priority preemption victim "
                 f"(priorityClassName={priority_class}, priority={priority})"
             )
+        if target_pod.spec.node_name != self.target_node:
+            raise RuntimeError(
+                f"Target pod {target_pod.metadata.name} moved from pressure node {self.target_node} "
+                f"to {target_pod.spec.node_name}; refusing to inject a non-deterministic preemption fault"
+            )
+
+    def _ensure_pressure_can_preempt_target(self, pressure_pod, target_pod):
+        pressure_priority = pressure_pod.spec.priority or 0
+        target_priority = target_pod.spec.priority or 0
+        if pressure_priority <= target_priority:
+            raise RuntimeError(
+                f"Pressure pod {pressure_pod.metadata.name} priority {pressure_priority} is not higher than "
+                f"target pod {target_pod.metadata.name} priority {target_priority}"
+            )
+        if pressure_pod.spec.priority_class_name != self.PLATFORM_PRIORITY_CLASS:
+            raise RuntimeError(
+                f"Pressure pod {pressure_pod.metadata.name} did not receive PriorityClass "
+                f"{self.PLATFORM_PRIORITY_CLASS}"
+            )
 
     def _create_or_replace_priority_class(self, name, value, global_default):
         if global_default:
@@ -284,7 +467,10 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
                 )
 
         body = client.V1PriorityClass(
-            metadata=client.V1ObjectMeta(name=name),
+            metadata=client.V1ObjectMeta(
+                name=name,
+                labels={self.PROBLEM_LABEL_KEY: self.PROBLEM_LABEL_VALUE},
+            ),
             value=value,
             global_default=global_default,
             preemption_policy="PreemptLowerPriority",
@@ -302,6 +488,60 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
                 ) from e
             body.metadata.resource_version = existing.metadata.resource_version
             self.scheduling_v1.replace_priority_class(name=name, body=body)
+
+    def _capture_priority_classes(self):
+        self._priority_class_snapshots = {}
+        for name in [self.PLATFORM_PRIORITY_CLASS, self.PRODUCTION_PRIORITY_CLASS]:
+            try:
+                existing = self.scheduling_v1.read_priority_class(name)
+            except ApiException as e:
+                if e.status == 404:
+                    self._priority_class_snapshots[name] = None
+                    continue
+                raise
+
+            self._priority_class_snapshots[name] = {
+                "value": existing.value,
+                "global_default": bool(existing.global_default),
+                "preemption_policy": existing.preemption_policy,
+                "description": existing.description,
+                "labels": dict(existing.metadata.labels or {}),
+            }
+
+    def _priority_class_has_problem_label(self, name):
+        try:
+            priority_class = self.scheduling_v1.read_priority_class(name)
+        except ApiException as e:
+            if e.status == 404:
+                return False
+            raise
+        labels = priority_class.metadata.labels or {}
+        return labels.get(self.PROBLEM_LABEL_KEY) == self.PROBLEM_LABEL_VALUE
+
+    def _restore_or_delete_priority_class(self, name):
+        has_snapshot = name in self._priority_class_snapshots
+        snapshot = self._priority_class_snapshots.get(name)
+        if snapshot:
+            body = client.V1PriorityClass(
+                metadata=client.V1ObjectMeta(name=name, labels=snapshot["labels"]),
+                value=snapshot["value"],
+                global_default=snapshot["global_default"],
+                preemption_policy=snapshot["preemption_policy"],
+                description=snapshot["description"],
+            )
+            try:
+                existing = self.scheduling_v1.read_priority_class(name)
+            except ApiException as e:
+                if e.status == 404:
+                    self.scheduling_v1.create_priority_class(body)
+                    return
+                raise
+            body.metadata.resource_version = existing.metadata.resource_version
+            self.scheduling_v1.replace_priority_class(name=name, body=body)
+            return
+
+        if (has_snapshot and snapshot is None) or self._priority_class_has_problem_label(name):
+            self._delete_priority_class(name)
 
     def _delete_priority_class(self, name):
         try:
@@ -380,11 +620,22 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
 
     def _delete_support_resources(self):
         with contextlib.suppress(Exception):
+            self._restore_app_template_state()
+        with contextlib.suppress(Exception):
+            self._clear_app_priority_references()
+        priority_references_removed = False
+        try:
+            self._wait_for_priority_references_removed()
+            priority_references_removed = True
+        except Exception:
+            pass
+        with contextlib.suppress(Exception):
             self._delete_pressure_namespace()
-        with contextlib.suppress(Exception):
-            self._delete_priority_class(self.PLATFORM_PRIORITY_CLASS)
-        with contextlib.suppress(Exception):
-            self._delete_priority_class(self.PRODUCTION_PRIORITY_CLASS)
+        if priority_references_removed:
+            with contextlib.suppress(Exception):
+                self._restore_or_delete_priority_class(self.PLATFORM_PRIORITY_CLASS)
+            with contextlib.suppress(Exception):
+                self._restore_or_delete_priority_class(self.PRODUCTION_PRIORITY_CLASS)
 
     def _cleanup(self):
         self._delete_support_resources()
@@ -401,16 +652,23 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         self._delete_support_resources()
+        self._capture_priority_classes()
 
         target_pod = self._target_pod()
         self.target_node = target_pod.spec.node_name
         self.target_request_memory = self._target_request_for_node(self.target_node)
+        self._capture_app_template_state()
         print(f"Target node: {self.target_node} | target request: {self.target_request_memory}")
 
         print(f"Preparing existing production pod '{self.faulty_service}' with realistic memory requests")
         self._patch_target_requests()
         target_pod = self._target_pod()
         self.target_node = target_pod.spec.node_name
+        print(f"Pinning '{self.faulty_service}' to pressure node '{self.target_node}'")
+        self._pin_target_to_node()
+        target_pod = self._target_pod()
+        self.target_node = target_pod.spec.node_name
+        self._ensure_target_preemptable(target_pod)
 
         print("Creating unsafe PriorityClasses")
         self._create_or_replace_priority_class(self.PLATFORM_PRIORITY_CLASS, value=100000, global_default=True)
@@ -426,6 +684,8 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
 
         print(f"Creating tenant pressure workload in namespace '{self.PRESSURE_NAMESPACE}'")
         self._create_pressure_deployment()
+        pressure_pod = self._wait_for_pressure_pod()
+        self._ensure_pressure_can_preempt_target(pressure_pod, target_pod)
         self._wait_for_preemption()
 
         print(
