@@ -55,6 +55,7 @@ from sregym.conductor.problems.payment_service_unreachable import PaymentService
 from sregym.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
 from sregym.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodCIDRExhaustionHotelReservation
+from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
 from sregym.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
 from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
@@ -139,6 +140,7 @@ class ProblemRegistry:
             "namespace_memory_limit": NamespaceMemoryLimit,
             "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
+            "priority_preemption_cascade_hotel_reservation": PriorityPreemptionCascadeHotelReservation,
             "pvc_claim_mismatch": PVCClaimMismatch,
             "rbac_misconfiguration": RBACMisconfiguration,
             "readiness_probe_misconfiguration_astronomy_shop": lambda: ReadinessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),
