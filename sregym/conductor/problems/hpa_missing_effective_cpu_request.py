@@ -31,7 +31,7 @@ class HPAMissingEffectiveCPURequest(Problem):
     HPA_DEFAULT_MEMORY_REQUEST = "128Mi"
     HPA_DEFAULT_CPU_LIMIT = "1"
     HPA_SNAPSHOT_SUFFIX = "hpa_effective_cpu_request_original"
-    HPA_ROLLOUT_ANNOTATION = "sregym.io/frontend-capacity-rollout-at"
+    ROLLOUT_RESTART_ANNOTATION = "kubectl.kubernetes.io/restartedAt"
 
     def __init__(self):
         self.app = HotelReservation()
@@ -115,7 +115,7 @@ class HPAMissingEffectiveCPURequest(Problem):
                 f"--limits=cpu={self.HPA_DEFAULT_CPU_LIMIT}"
             )
 
-        # Snapshot apply triggers a rollout automatically; kubectl set resources does not.
+        # Snapshot apply already restores the pod template; force a rollout only in the fallback path.
         if not restored_from_snapshot:
             self._force_hpa_rollout(self.faulty_service)
 
@@ -359,7 +359,7 @@ class HPAMissingEffectiveCPURequest(Problem):
                 "template": {
                     "metadata": {
                         "annotations": {
-                            self.HPA_ROLLOUT_ANNOTATION: restart_stamp,
+                            self.ROLLOUT_RESTART_ANNOTATION: restart_stamp,
                         }
                     }
                 }
@@ -412,7 +412,7 @@ class HPAMissingEffectiveCPURequest(Problem):
         restart_stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         template_metadata = deployment["spec"]["template"].setdefault("metadata", {})
         annotations = template_metadata.setdefault("annotations", {})
-        annotations[self.HPA_ROLLOUT_ANNOTATION] = restart_stamp
+        annotations[self.ROLLOUT_RESTART_ANNOTATION] = restart_stamp
 
     def _hpa_snapshot_path(self, service: str) -> str:
         return f"/tmp/{service}_{self.HPA_SNAPSHOT_SUFFIX}.yaml"
