@@ -43,19 +43,23 @@ class HPAMissingEffectiveCPURequest(Problem):
         self.kubectl = KubeCtl()
 
         self.root_cause = self.build_structured_root_cause(
-            component=f"HorizontalPodAutoscaler/{self.HPA_NAME}",
+            component=(
+                f"Deployment/{self.faulty_service} resource configuration and HorizontalPodAutoscaler/{self.HPA_NAME}"
+            ),
             namespace=self.namespace,
             description=(
-                f"The HorizontalPodAutoscaler `{self.HPA_NAME}` targets "
-                f"`Deployment/{self.faulty_service}` in namespace `{self.namespace}` and uses CPU "
-                "utilization, but the targeted frontend pods do not have an effective CPU request. "
-                "CPU utilization is calculated relative to CPU requests, so the HPA cannot compute "
-                "the metric and reports `<unknown>/60%`, `ScalingActive=False`, and "
-                "`FailedGetResourceMetric` with a message like `missing request for cpu`. "
-                "The frontend pods may still be Running/Ready; the fault is the broken autoscaling "
-                "control loop. A valid mitigation restores a computable CPU metric, typically by "
-                "restoring CPU requests. Manually scaling the deployment without fixing the HPA is "
-                "not sufficient."
+                f"The frontend autoscaling control loop is broken because `Deployment/{self.faulty_service}` "
+                f"produces pods without an effective CPU request, while `HorizontalPodAutoscaler/{self.HPA_NAME}` "
+                "is configured to scale that deployment using CPU utilization. CPU utilization is calculated "
+                "relative to CPU requests, so the HPA cannot compute the metric and reports `<unknown>/60%`, "
+                "`ScalingActive=False`, and `FailedGetResourceMetric` with a message like "
+                "`missing request for cpu`. The frontend pods may still be Running/Ready; the fault is the "
+                "missing effective CPU request on the frontend workload causing the HPA control loop to fail. "
+                "A complete diagnosis should identify both the missing effective CPU request and the resulting "
+                "HPA CPU-utilization metric failure. Merely reporting that pods are healthy, or merely noting "
+                "a missing CPU request without tying it to HPA/autoscaling behavior, is incomplete. "
+                "A valid mitigation restores a computable CPU metric, typically by restoring CPU requests. "
+                "Manually scaling the deployment without fixing the HPA is not sufficient."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
