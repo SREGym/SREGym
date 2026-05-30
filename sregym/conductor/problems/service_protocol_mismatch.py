@@ -1,8 +1,8 @@
-"""Hotel Reservation Service protocol mismatch fault.
+"""Hotel Reservation service configuration fault.
 
-This problem simulates a realistic Kubernetes Service misconfiguration where a
-TCP microservice is accidentally exposed as UDP. Pods and endpoints can look
-healthy, but TCP clients cannot use the Service correctly.
+This problem simulates a realistic Kubernetes Service misconfiguration where
+the application pods and endpoints can look healthy, but clients cannot use
+one Service correctly.
 """
 
 from sregym.conductor.oracles.base import Oracle
@@ -15,7 +15,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class ServiceProtocolMismatchMitigationOracle(Oracle):
-    """Mitigation succeeds only when the Service protocol is restored to TCP."""
+    """Mitigation succeeds only when the affected Service configuration is restored."""
 
     importance = 1.0
 
@@ -32,19 +32,18 @@ class ServiceProtocolMismatchMitigationOracle(Oracle):
         ports = service.spec.ports or []
 
         if not ports:
-            print(f"❌ Service {service_name} has no ports")
+            print(f"[FAIL] Service {service_name} has no ports")
             results["success"] = False
             return results
 
         protocol = ports[0].protocol
 
         if protocol != "TCP":
-            print(f"❌ Service {service_name} protocol is still {protocol}, expected TCP")
+            print(f"[FAIL] Service {service_name} configuration is not restored")
             results["success"] = False
-            results["protocol"] = protocol
             return results
 
-        print(f"✅ Service {service_name} protocol restored to TCP")
+        print(f"[OK] Service {service_name} configuration restored")
 
         # Also make sure the application pods are still healthy.
         pod_oracle = MitigationOracle(problem=self.problem)
@@ -52,7 +51,7 @@ class ServiceProtocolMismatchMitigationOracle(Oracle):
 
 
 class ServiceProtocolMismatchHotelReservation(Problem):
-    """Inject a wrong Service protocol into the Hotel Reservation recommendation Service."""
+    """Inject a Service configuration fault into the Hotel Reservation recommendation Service."""
 
     def __init__(self):
         self.app = HotelReservation()
@@ -92,10 +91,7 @@ class ServiceProtocolMismatchHotelReservation(Problem):
         )
 
         print(f"Patch result for {self.faulty_service}: {result}")
-        print(
-            f"Injected Service protocol mismatch for service: {self.faulty_service}\n"
-            f"Protocol: {self.wrong_protocol} | Namespace: {self.namespace}\n"
-        )
+        print(f"Injected configuration fault for service: {self.faulty_service}")
 
     @mark_fault_injected
     def recover_fault(self):
@@ -107,7 +103,4 @@ class ServiceProtocolMismatchHotelReservation(Problem):
         )
 
         print(f"Patch result for {self.faulty_service}: {result}")
-        print(
-            f"Recovered Service protocol for service: {self.faulty_service}\n"
-            f"Protocol: {self.correct_protocol} | Namespace: {self.namespace}\n"
-        )
+        print(f"Recovered configuration for service: {self.faulty_service}")
