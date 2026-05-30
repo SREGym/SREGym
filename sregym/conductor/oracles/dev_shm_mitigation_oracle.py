@@ -7,18 +7,10 @@ from sregym.conductor.oracles.base import Oracle
 class DevShmMitigationOracle(Oracle):
     """Hack-resistant mitigation oracle for the /dev/shm exhaustion problem.
 
-    The default MitigationOracle only checks that no pod is unhealthy, which an
-    agent could satisfy by simply *deleting* the crash-looping worker. This oracle
-    instead requires the genuine fix and rejects shortcuts. Mitigation succeeds
-    only when all of the following hold:
-
-    1. The worker deployment still exists with at least one desired replica
-       (rejects "delete / scale-to-zero the worker").
-    2. Its pod template mounts a memory-backed emptyDir (``medium: Memory``) at
-       ``/dev/shm`` (rejects "shrink the workload so it no longer overflows", and
-       rejects a disk-backed volume that defeats shared-memory semantics).
-    3. All worker pods are Running and Ready -- i.e. the crash loop is gone
-       (rejects "just restart it" and an under-sized shm that still overflows).
+    Passes only when:
+    1. Worker deployment exists with >= 1 desired replica.
+    2. Pod template mounts a memory-backed emptyDir (medium: Memory) at /dev/shm.
+    3. All worker pods are Running and Ready.
     """
 
     importance = 1.0
@@ -30,7 +22,6 @@ class DevShmMitigationOracle(Oracle):
         namespace = self.problem.namespace
         name = self.problem.worker_name
 
-        # (1) worker deployment must still exist with >= 1 desired replica
         try:
             deployment = apps_v1.read_namespaced_deployment(name, namespace)
         except ApiException as e:
@@ -41,7 +32,6 @@ class DevShmMitigationOracle(Oracle):
         if desired < 1:
             return {"success": False, "reason": f"Worker deployment '{name}' is scaled to {desired} replicas."}
 
-        # (2) pod template must mount a memory-backed emptyDir at /dev/shm
         if not self._has_memory_backed_shm(deployment.spec.template.spec):
             return {
                 "success": False,
@@ -51,7 +41,6 @@ class DevShmMitigationOracle(Oracle):
                 ),
             }
 
-        # (3) all worker pods must be Running and Ready (crash loop gone)
         pods = core_v1.list_namespaced_pod(namespace, label_selector=f"app={name}").items
         if not pods:
             return {"success": False, "reason": f"No pods found for worker '{name}'."}
@@ -70,7 +59,7 @@ class DevShmMitigationOracle(Oracle):
         return {"success": True}
 
     def _has_memory_backed_shm(self, pod_spec) -> bool:
-        """True if a Memory-medium emptyDir is mounted at /dev/shm in the pod spec."""
+        """Return True if a Memory-medium emptyDir is mounted at /dev/shm."""
         shm_volume_names = set()
         for container in pod_spec.containers or []:
             for mount in container.volume_mounts or []:

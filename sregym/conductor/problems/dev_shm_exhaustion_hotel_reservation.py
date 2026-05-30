@@ -1,18 +1,9 @@
 """Shared-memory (/dev/shm) exhaustion on Hotel Reservation.
 
-A media-processing worker writes a scratch buffer larger than the container
-runtime's default 64 MiB ``/dev/shm`` tmpfs. Because the pod template does not
-request a memory-backed ``emptyDir`` at ``/dev/shm``, the write fails with
-``ENOSPC`` ("No space left on device"), the container exits non-zero, and the
-deployment falls into ``CrashLoopBackOff`` -- even though the node's filesystem
-has plenty of free disk space.
-
-This reproduces a classic real-world abstraction leak: applications that rely on
-POSIX shared memory (PostgreSQL parallel queries, ML data loaders, Chromium,
-OpenCV/FFmpeg) crash with a *disk* error message while the disk is nearly empty.
-The intended fix is to mount an ``emptyDir`` with ``medium: Memory`` at
-``/dev/shm``; restarting or deleting the worker does not fix the underlying
-misconfiguration.
+A media-processing worker writes more than the container runtime's default 64 MiB
+/dev/shm tmpfs allows. The write fails with ENOSPC, the container exits non-zero,
+and the deployment enters CrashLoopBackOff -- even though the node disk is nearly empty.
+Fix: mount an emptyDir with medium: Memory at /dev/shm.
 """
 
 import contextlib
@@ -30,24 +21,15 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class DevShmExhaustionHotelReservation(Problem):
-    """Inject a /dev/shm exhaustion fault that crash-loops a worker deployment.
-
-    The worker (generic name ``media-processor`` so the benchmark/fault is not
-    revealed to the agent) writes ``scratch_mib`` MiB into ``/dev/shm``. With the
-    default 64 MiB shm tmpfs this overflows and the container crash-loops.
-    """
+    """Inject a /dev/shm exhaustion fault that crash-loops a worker deployment."""
 
     worker_name = "media-processor"
     worker_image = "busybox:1.36"
     shm_mount_path = "/dev/shm"
-    # How much the worker writes to /dev/shm. Larger than the 64 MiB default so it
-    # overflows; the intended fix provisions a memory-backed shm comfortably above
-    # this (e.g. 256Mi).
     scratch_mib = 128
 
     def __init__(self):
         self.app = HotelReservation()
-        # app must be set before super().__init__() so the base can read app.namespace
         super().__init__(app=self.app, namespace=self.app.namespace)
 
         self.kubectl = KubeCtl()
@@ -74,12 +56,9 @@ class DevShmExhaustionHotelReservation(Problem):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        # Start from a clean slate in case of a re-run.
         self._delete_worker()
         self.apps_v1.create_namespaced_deployment(self.namespace, self._worker_deployment())
         print(f"Created worker '{self.worker_name}' with default 64 MiB /dev/shm | Namespace: {self.namespace}")
-        # Best-effort: wait until the symptom (crash-loop) is actually visible so the
-        # agent does not start investigating a still-pulling pod.
         self._wait_for_worker_unhealthy(timeout=120)
 
     @mark_fault_injected
@@ -88,11 +67,7 @@ class DevShmExhaustionHotelReservation(Problem):
         self._delete_worker()
         print(f"Removed worker '{self.worker_name}' | Namespace: {self.namespace}")
 
-    # ----------------------------------------------------------------- helpers
-
     def _worker_deployment(self) -> dict:
-        # The command writes scratch_mib MiB into /dev/shm then idles. On a 64 MiB
-        # shm this fails with ENOSPC and the container exits non-zero -> CrashLoop.
         command = (
             f"dd if=/dev/zero of={self.shm_mount_path}/scratch bs=1M count={self.scratch_mib} && tail -f /dev/null"
         )
@@ -139,8 +114,6 @@ class DevShmExhaustionHotelReservation(Problem):
     def _delete_worker(self):
         with contextlib.suppress(ApiException):
             self.apps_v1.delete_namespaced_deployment(self.worker_name, self.namespace, grace_period_seconds=0)
-        # Wait for the deployment to actually disappear so a subsequent create
-        # does not race with a pending deletion.
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
