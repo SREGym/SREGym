@@ -26,7 +26,11 @@ class LoadGeneratorFloodHomepage(Problem):
                 f"The `{self.faulty_service}` deployment is experiencing a sustained traffic surge on the "
                 "homepage endpoint, saturating frontend capacity. This leads to queueing, high latency, and "
                 "timeout spikes during normal user flows. Users observe intermittent homepage errors and degraded "
-                "responsiveness across storefront interactions."
+                "responsiveness across storefront interactions. "
+                f"Mechanism: the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                f'`{self.feature_flag}` feature flag\'s `defaultVariant` set to `"on"`, which causes the '
+                "OpenTelemetry demo's `load-generator` deployment to amplify its request rate against the "
+                "frontend's homepage route, producing the observed traffic flood."
             ),
         )
         # === Attach evaluation oracles ===

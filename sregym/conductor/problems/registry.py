@@ -32,6 +32,7 @@ from sregym.conductor.problems.khaos_faults import (
     KhaosFaultProblem,
 )
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
+from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
 from sregym.conductor.problems.load_spike_rpc_retry_storm import LoadSpikeRPCRetryStorm
@@ -295,6 +296,7 @@ class ProblemRegistry:
             # ]),
             # ad hoc:
             "kubelet_crash": KubeletCrash,
+            "kubelet_eviction_threshold_misconfig": KubeletEvictionThresholdMisconfig,
             "workload_imbalance": WorkloadImbalance,
             # ==================== K8S OPERATOR MISOPERATION ==================
             "operator_overload_replicas": K8SOperatorOverloadReplicasFault,
