@@ -10,8 +10,15 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class KubeletEvictionThresholdMisconfig(Problem):
+    # Static so fix_kubernetes() can reference it without instantiating the problem
+    NAMESPACE = "astronomy-shop"
+
     def __init__(self):
         self.app = AstronomyShop()
+        assert self.app.namespace == self.NAMESPACE, (
+            f"AstronomyShop namespace {self.app.namespace!r} drifted from "
+            f"KubeletEvictionThresholdMisconfig.NAMESPACE {self.NAMESPACE!r}"
+        )
         super().__init__(app=self.app, namespace=self.app.namespace)
         self.kubectl = KubeCtl()
         self.namespace = self.app.namespace
@@ -69,9 +76,4 @@ class KubeletEvictionThresholdMisconfig(Problem):
         self.kubectl.exec_command(
             f"kubectl patch deployment {self.faulty_service} -n {self.namespace} "
             f'--type=json -p=\'[{{"op":"remove","path":"/spec/template/spec/nodeName"}}]\''
-        )
-
-        print("Deleting evicted pods...")
-        self.kubectl.exec_command(
-            "kubectl delete pods --all-namespaces --field-selector=status.phase=Failed --ignore-not-found=true"
         )
