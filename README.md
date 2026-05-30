@@ -17,9 +17,16 @@
 SREGym is an AI-native platform to enable the design, development, and evaluation of AI agents for Site Reliability Engineering (SRE). The core idea is to create live system environments for SRE agents to solve real-world SRE problems. SREGym provides a comprehensive SRE benchmark suite with a wide variety of problems for evaluating SRE agents and also for training next-generation AI agents.
 <br><br>
 
-![SREGym Overview](/assets/SREGymFigure.png)
+![SREGym Overview](/assets/overview.png)
 
 SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architectured with AI-native usability and extensibility as first-class principles. The SREGym benchmark suites contain 90 different SRE problems. It supports all the problems from AIOpsLab and ITBench, and includes new problems such as OS-level faults, metastable failures, and concurrent failures. See our [problem set](https://sregym.com/problems) for a complete list of problems.
+
+SREGym has been used to simulate real-world cloud failures, such as:
+- Cloudflare WAF regex rules exhausted CPU ([postmortem](https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019), [simulation](https://github.com/SREGym/SREGym/pull/773))
+- Admission webhook TLS mismatch ([postmortem](https://github.com/cert-manager/cert-manager/issues/6350), [simulation](https://github.com/SREGym/SREGym/pull/777))
+- Exhausting conntrack table space crippled a production cluster ([postmortem](https://www.markbetz.net/2023/12/12/exhausting-conntrack-table-space-crippled-our-k8s-cluster), [simulation](https://github.com/SREGym/SREGym/pull/768))
+- GKE ran out of IP addresses ([postmortem](https://deploy.live/blog/when-gke-ran-out-of-ip-addresses), [simulation](https://github.com/SREGym/SREGym/pull/774))
+- Kafka poison pill ([postmortem](https://www.lydtechconsulting.com/blog/kafka-poison-pill), [simulation](https://github.com/SREGym/SREGym/pull/790))
 
 
 <h2 id="📦installation">📦 Installation</h2>
@@ -61,10 +68,10 @@ SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/)
 
 ```bash
 # For x86 machines
-kind create cluster --config kind/kind-config-x86.yaml
+bash kind/setup_kind_cluster.sh x86
 
 # For ARM machines
-kind create cluster --config kind/kind-config-arm.yaml
+bash kind/setup_kind_cluster.sh arm
 ```
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
@@ -113,7 +120,7 @@ python main.py --agent codex --model gpt-5 --force-build
 
 ### Model Selection
 
-SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings directly -- no config file needed. Just pass any supported model string via `--model`:
+SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings directly (no config file needed). Just pass any supported model string via `--model`:
 
 | CLI Flag | Default | Purpose |
 |----------|---------|---------|
@@ -160,10 +167,10 @@ See the full list of supported providers and model strings in the [LiteLLM docs]
 </details>
 
 ## Cite This
-If our work was useful for you, please cite it:
+If our work is useful for you, please cite it:
 
 ```bibtex
-@article{clark:arxiv:26,
+@article{sregym:26,
   author  = {Jackson Clark and Yiming Su and Saad Mohammad Rafid Pial and Yifang Tian and Lily Gniedziejko and Hans-Arno Jacobsen and Yinfang Chen and Tianyin Xu},
   title   = {{SREGym: A Live Benchmark for AI SRE Agents with High-Fidelity Failure Scenarios}},
   journal = {arXiv:2605.07161},
@@ -175,7 +182,7 @@ If our work was useful for you, please cite it:
 ```
 
 ## Acknowledgements
-This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org/).
+This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org).
 
 https://github.com/user-attachments/assets/e7b2ee27-e7a9-436a-858d-ee58e8bbd61d
 

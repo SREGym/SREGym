@@ -25,7 +25,11 @@ class AdServiceFailure(Problem):
                 f"The `{self.faulty_service}` deployment is experiencing persistent internal errors in its "
                 "ad-serving path, causing repeated request failures. Requests depending on ad responses experience "
                 "intermittent timeouts. Users see missing or delayed ad content while other storefront paths may "
-                "still respond."
+                "still respond. "
+                f"Mechanism: the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                f'`{self.feature_flag}` feature flag\'s `defaultVariant` set to `"on"`, which activates the '
+                "OpenTelemetry demo's in-app fault path that makes the ad service's `GetAds` gRPC handler "
+                "return intermittent errors on a fraction of requests."
             ),
         )
         # === Attach evaluation oracles ===
