@@ -66,6 +66,7 @@ from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdate
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from sregym.conductor.problems.service_port_conflict import ServicePortConflict
+from sregym.conductor.problems.service_protocol_mismatch import ServiceProtocolMismatchHotelReservation
 from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation import (
     ServiceWrongPodSelectionHotelReservation,
 )
@@ -161,6 +162,10 @@ class ProblemRegistry:
             "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
             "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
+
+
+            "service_protocol_mismatch_hotel_reservation": ServiceProtocolMismatchHotelReservation,
+
             # "top_of_rack_router_failure_hotel_reservation": lambda: TopOfRackRouterPartitionHotelReservation(app_name="hotel_reservation", faulty_service="frontend"),
             "wrong_bin_usage": WrongBinUsage,
             "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(app_name="astronomy_shop", faulty_service="frontend"),
