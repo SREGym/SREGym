@@ -1,13 +1,12 @@
 """Mitigation oracle for HPA control-plane health.
 
-The generic MitigationOracle is insufficient for this problem because all pods
-can be Running/Ready while the HorizontalPodAutoscaler remains broken. This
-oracle evaluates the current HPA status instead of historical events or a
-load-driven scale-up outcome.
+The default MitigationOracle only checks pod health, which is insufficient
+here because pods can be Running/Ready while the HPA control loop is broken.
+This oracle evaluates the live HPA status instead.
 
-It is intentionally effect-based. Restoring CPU requests is the canonical fix,
-but changing the HPA to a valid raw CPU averageValue metric can also be accepted
-if the HPA remains correctly wired and healthy.
+Restoring CPU requests is the canonical fix, but replacing the metric with a
+valid raw CPU averageValue target is also accepted, as long as the HPA remains
+correctly wired and healthy.
 """
 
 from __future__ import annotations
@@ -45,16 +44,10 @@ class HPAControlPlaneMitigationOracle(Oracle):
         self.poll_interval_seconds = poll_interval_seconds
         self.consecutive_successes = consecutive_successes
 
-    def evaluate(self, solution=None, trace=None, duration=None) -> dict:
-        """Evaluate current HPA health.
-
-        The validation harness performs long outer retries, so this method only
-        does a short internal settle loop. The short loop helps real submit()
-        calls avoid transient failures immediately after a rollout, while still
-        allowing the harness to own the long retry window.
-        """
+    def evaluate(self) -> dict:
         print("== HPA Control Plane Mitigation Evaluation ==")
 
+        # Multiple consecutive healthy polls prevent a transient pass right after a rollout.
         consecutive_healthy = 0
         last_detail = "not evaluated"
         deadline = time.monotonic() + self.timeout_seconds
@@ -207,6 +200,7 @@ class HPAControlPlaneMitigationOracle(Oracle):
         min_replicas = spec.get("minReplicas", 1)
         max_replicas = spec.get("maxReplicas", 0)
 
+        # maxReplicas=1 means the HPA can never scale up, making it effectively a no-op.
         if max_replicas < 2:
             return False, f"maxReplicas={max_replicas}; expected at least 2"
 
