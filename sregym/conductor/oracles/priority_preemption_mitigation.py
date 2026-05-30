@@ -99,6 +99,8 @@ class PriorityPreemptionMitigationOracle(Oracle):
             return False
 
         for pod in pods:
+            if pod.status.phase == "Succeeded":
+                continue
             if pod.status.phase != "Running":
                 print(f"❌ Pod {pod.metadata.name} is in phase: {pod.status.phase}")
                 return False

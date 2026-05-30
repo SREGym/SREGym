@@ -18,6 +18,7 @@ import time
 
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
+from kubernetes.utils.quantity import parse_quantity
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.priority_preemption_mitigation import PriorityPreemptionMitigationOracle
@@ -37,9 +38,11 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     PRESSURE_LABEL = "tenant-ingester"
 
     TARGET_REQUEST_RATIO = 0.30
-    PRESSURE_REQUEST_RATIO = 0.80
+    PRESSURE_PREEMPTION_RATIO = 0.50
     MIN_TARGET_REQUEST_KIB = 256 * 1024
     MIN_PRESSURE_REQUEST_KIB = 512 * 1024
+    MIN_PREEMPTION_GAP_KIB = 64 * 1024
+    SCHEDULING_HEADROOM_KIB = 128 * 1024
 
     def __init__(self, faulty_service: str = "reservation"):
         self.app = HotelReservation()
@@ -96,6 +99,31 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
             raise RuntimeError(f"No running pod found for service '{self.faulty_service}'")
         return running[0]
 
+    def _active_pods_on_node(self, node_name):
+        pods = self.core_v1.list_pod_for_all_namespaces(field_selector=f"spec.nodeName={node_name}").items
+        return [pod for pod in pods if pod.status.phase not in {"Succeeded", "Failed"}]
+
+    def _pod_memory_request_kib(self, pod):
+        total = 0
+        for container in pod.spec.containers or []:
+            resources = container.resources
+            if not resources or not resources.requests:
+                continue
+            memory = resources.requests.get("memory")
+            if memory:
+                total += self._memory_quantity_to_kib(memory)
+        return total
+
+    def _memory_quantity_to_kib(self, quantity):
+        return int(parse_quantity(str(quantity)) / 1024)
+
+    def _node_allocatable_memory_kib(self, node_name):
+        node = self.core_v1.read_node(node_name)
+        return self._memory_quantity_to_kib(node.status.allocatable["memory"])
+
+    def _node_requested_memory_kib(self, node_name):
+        return sum(self._pod_memory_request_kib(pod) for pod in self._active_pods_on_node(node_name))
+
     def _wait_for_deployment_ready(self, name, namespace, timeout=180):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -133,19 +161,77 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         events = self.kubectl.exec_command(f"kubectl get events -n {self.namespace} --sort-by=.lastTimestamp")
         raise TimeoutError(f"Timed out waiting for priority preemption to manifest. Recent app events:\n{events}")
 
-    def _memory_requests_for_node(self, node_name):
-        node = self.core_v1.read_node(node_name)
-        allocatable_kib = self.kubectl.parse_k8s_quantity(node.status.allocatable["memory"])
+    def _target_request_for_node(self, node_name):
+        allocatable_kib = self._node_allocatable_memory_kib(node_name)
+        requested_kib = self._node_requested_memory_kib(node_name)
+        free_kib = max(0, allocatable_kib - requested_kib)
+        target_ceiling_kib = free_kib - self.SCHEDULING_HEADROOM_KIB
+        if target_ceiling_kib < self.MIN_TARGET_REQUEST_KIB:
+            raise RuntimeError(
+                "Cannot inject priority preemption cascade because the target node does not have enough "
+                f"request headroom. Node={node_name}, allocatable={self.kubectl.format_k8s_memory(allocatable_kib)}, "
+                f"requested={self.kubectl.format_k8s_memory(requested_kib)}"
+            )
+
         target_kib = max(self.MIN_TARGET_REQUEST_KIB, int(allocatable_kib * self.TARGET_REQUEST_RATIO))
-        pressure_kib = max(self.MIN_PRESSURE_REQUEST_KIB, int(allocatable_kib * self.PRESSURE_REQUEST_RATIO))
-        if target_kib + pressure_kib <= allocatable_kib:
-            pressure_kib = int(allocatable_kib * 0.85)
-        if pressure_kib >= allocatable_kib:
-            pressure_kib = int(allocatable_kib * 0.80)
-        return self.kubectl.format_k8s_memory(target_kib), self.kubectl.format_k8s_memory(pressure_kib)
+        target_kib = min(target_kib, target_ceiling_kib)
+        return self.kubectl.format_k8s_memory(target_kib)
+
+    def _pressure_request_for_target_pod(self, target_pod):
+        node_name = target_pod.spec.node_name
+        allocatable_kib = self._node_allocatable_memory_kib(node_name)
+        requested_kib = self._node_requested_memory_kib(node_name)
+        free_kib = max(0, allocatable_kib - requested_kib)
+        target_request_kib = self._pod_memory_request_kib(target_pod)
+        if target_request_kib <= self.MIN_PREEMPTION_GAP_KIB:
+            raise RuntimeError(
+                f"Target pod {target_pod.metadata.name} has too little memory request "
+                "to make scheduler preemption deterministic"
+            )
+
+        headroom_kib = min(self.SCHEDULING_HEADROOM_KIB, max(1, target_request_kib // 4))
+        pressure_ceiling_kib = free_kib + target_request_kib - headroom_kib
+        if pressure_ceiling_kib <= free_kib:
+            raise RuntimeError(
+                f"Target pod {target_pod.metadata.name} does not free enough requested memory for pressure workload"
+            )
+
+        preemption_gap_kib = max(
+            self.MIN_PREEMPTION_GAP_KIB,
+            int(target_request_kib * self.PRESSURE_PREEMPTION_RATIO),
+        )
+        preemption_gap_kib = min(preemption_gap_kib, pressure_ceiling_kib - free_kib)
+        pressure_kib = free_kib + preemption_gap_kib
+        if pressure_ceiling_kib >= self.MIN_PRESSURE_REQUEST_KIB:
+            pressure_kib = max(self.MIN_PRESSURE_REQUEST_KIB, pressure_kib)
+        if pressure_kib <= free_kib:
+            raise RuntimeError(
+                "Pressure workload would fit without preemption; refusing to inject a non-deterministic fault"
+            )
+        return self.kubectl.format_k8s_memory(pressure_kib)
 
     def _patch_target_requests(self):
         container_name = self._target_container_name()
+        deployment = self._target_deployment()
+        container = next(
+            (container for container in deployment.spec.template.spec.containers if container.name == container_name),
+            None,
+        )
+        resources = {
+            "requests": {
+                "cpu": "25m",
+                "memory": self.target_request_memory,
+            }
+        }
+        if container and container.resources and container.resources.limits:
+            limits = dict(container.resources.limits)
+            memory_limit = limits.get("memory")
+            if memory_limit and self._memory_quantity_to_kib(memory_limit) < self._memory_quantity_to_kib(
+                self.target_request_memory
+            ):
+                limits["memory"] = self.target_request_memory
+                resources["limits"] = limits
+
         body = {
             "spec": {
                 "template": {
@@ -153,12 +239,7 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
                         "containers": [
                             {
                                 "name": container_name,
-                                "resources": {
-                                    "requests": {
-                                        "cpu": "25m",
-                                        "memory": self.target_request_memory,
-                                    }
-                                },
+                                "resources": resources,
                             }
                         ]
                     }
@@ -168,16 +249,26 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         self.apps_v1.patch_namespaced_deployment(name=self.faulty_service, namespace=self.namespace, body=body)
         self._wait_for_deployment_ready(self.faulty_service, self.namespace)
 
-    def _reset_target_template(self):
-        deployment = self._target_deployment()
-        deployment.spec.template.spec.priority_class_name = None
-        for container in deployment.spec.template.spec.containers:
-            container.resources = client.V1ResourceRequirements()
-        self.apps_v1.replace_namespaced_deployment(
-            name=self.faulty_service,
-            namespace=self.namespace,
-            body=deployment,
-        )
+    def _protect_peer_deployments(self):
+        peer_names = [
+            deployment.metadata.name
+            for deployment in self.apps_v1.list_namespaced_deployment(self.namespace).items
+            if deployment.metadata.name != self.faulty_service
+        ]
+        body = {"spec": {"template": {"spec": {"priorityClassName": self.PLATFORM_PRIORITY_CLASS}}}}
+        for name in peer_names:
+            self.apps_v1.patch_namespaced_deployment(name=name, namespace=self.namespace, body=body)
+        for name in peer_names:
+            self._wait_for_deployment_ready(name, self.namespace)
+
+    def _ensure_target_preemptable(self, target_pod):
+        priority = target_pod.spec.priority or 0
+        priority_class = target_pod.spec.priority_class_name
+        if priority_class or priority >= 100000:
+            raise RuntimeError(
+                f"Target pod {target_pod.metadata.name} is no longer the low-priority preemption victim "
+                f"(priorityClassName={priority_class}, priority={priority})"
+            )
 
     def _create_or_replace_priority_class(self, name, value, global_default):
         if global_default:
@@ -205,6 +296,10 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
             if e.status != 409:
                 raise
             existing = self.scheduling_v1.read_priority_class(name)
+            if existing.value != value:
+                raise RuntimeError(
+                    f"PriorityClass '{name}' already exists with immutable value {existing.value}; " f"expected {value}"
+                ) from e
             body.metadata.resource_version = existing.metadata.resource_version
             self.scheduling_v1.replace_priority_class(name=name, body=body)
 
@@ -309,18 +404,25 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
 
         target_pod = self._target_pod()
         self.target_node = target_pod.spec.node_name
-        self.target_request_memory, self.pressure_request_memory = self._memory_requests_for_node(self.target_node)
-        print(
-            f"Target node: {self.target_node} | target request: {self.target_request_memory} | "
-            f"pressure request: {self.pressure_request_memory}"
-        )
+        self.target_request_memory = self._target_request_for_node(self.target_node)
+        print(f"Target node: {self.target_node} | target request: {self.target_request_memory}")
 
         print(f"Preparing existing production pod '{self.faulty_service}' with realistic memory requests")
         self._patch_target_requests()
+        target_pod = self._target_pod()
+        self.target_node = target_pod.spec.node_name
 
         print("Creating unsafe PriorityClasses")
         self._create_or_replace_priority_class(self.PLATFORM_PRIORITY_CLASS, value=100000, global_default=True)
         self._create_or_replace_priority_class(self.PRODUCTION_PRIORITY_CLASS, value=200000, global_default=False)
+
+        print("Protecting peer app deployments so the scheduler has a deterministic victim")
+        self._protect_peer_deployments()
+        target_pod = self._target_pod()
+        self._ensure_target_preemptable(target_pod)
+        self.target_node = target_pod.spec.node_name
+        self.pressure_request_memory = self._pressure_request_for_target_pod(target_pod)
+        print(f"Pressure node: {self.target_node} | pressure request: {self.pressure_request_memory}")
 
         print(f"Creating tenant pressure workload in namespace '{self.PRESSURE_NAMESPACE}'")
         self._create_pressure_deployment()

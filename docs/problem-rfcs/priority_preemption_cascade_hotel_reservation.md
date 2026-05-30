@@ -26,6 +26,8 @@ The Hotel Reservation app is deployed normally. Fault injection then prepares th
 
 The injector then creates a synthetic tenant workload, `analytics-batch/tenant-ingester`, pinned to the same node as the existing `reservation` pod. The tenant workload uses `platform-medium` and requests enough memory that it can only schedule by preempting the lower-priority `reservation` pod.
 
+To keep victim selection deterministic, the injector explicitly assigns `platform-medium` to the other Hotel Reservation deployments before creating the tenant workload. `reservation` remains the only app deployment with an existing priority-0 pod on the pressure node.
+
 Once the `reservation` pod is preempted, its replacement pod inherits `platform-medium` from the unsafe global default. It cannot preempt the already-running tenant workload with the same priority, so the `reservation` deployment remains under-replicated even though the image, service, and application configuration are valid.
 
 ## Problem runtime behavior
