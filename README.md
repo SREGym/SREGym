@@ -26,6 +26,7 @@ SREGym has been used to simulate real-world cloud failures, such as:
 - Admission webhook TLS mismatch ([postmortem](https://github.com/cert-manager/cert-manager/issues/6350), [simulation](https://github.com/SREGym/SREGym/pull/777))
 - Exhausting conntrack table space crippled a production cluster ([postmortem](https://www.markbetz.net/2023/12/12/exhausting-conntrack-table-space-crippled-our-k8s-cluster), [simulation](https://github.com/SREGym/SREGym/pull/768))
 - GKE ran out of IP addresses ([postmortem](https://deploy.live/blog/when-gke-ran-out-of-ip-addresses), [simulation](https://github.com/SREGym/SREGym/pull/774))
+- Kafka poison pill ([postmortem](https://www.lydtechconsulting.com/blog/kafka-poison-pill), [simulation](https://github.com/SREGym/SREGym/pull/790))
 
 
 <h2 id="📦installation">📦 Installation</h2>

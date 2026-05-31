@@ -26,7 +26,11 @@ class AdServiceManualGc(Problem):
                 "cycles that consume CPU and cause elevated latency with performance degradation and potential "
                 "service interruptions. The workload exhibits periodic latency spikes and unstable response times "
                 "as aggressive garbage collection cycles pause request handling. Users may observe slow or missing "
-                "ad responses and occasional transient failures while traffic is otherwise normal."
+                "ad responses and occasional transient failures while traffic is otherwise normal. "
+                f"Mechanism: the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                f'`{self.feature_flag}` feature flag\'s `defaultVariant` set to `"on"`, which activates the '
+                "OpenTelemetry demo's in-app fault path that periodically forces the ad service JVM to perform "
+                "full manual garbage collections, producing the observed throughput and latency degradation."
             ),
         )
         # === Attach evaluation oracles ===
