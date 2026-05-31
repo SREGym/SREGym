@@ -25,7 +25,11 @@ class PaymentServiceUnreachable(Problem):
                 f"The `{self.faulty_service}` deployment cannot reach the payment service, causing all "
                 "payment-dependent operations to time out. Checkout retries and eventually times out when creating "
                 "payments, causing order placement failures. Users can browse and add items but fail consistently "
-                "at payment."
+                "at payment. "
+                f"Mechanism: the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                f'`{self.feature_flag}` feature flag\'s `defaultVariant` set to `"on"`, which activates the '
+                "OpenTelemetry demo's in-app fault path that makes the checkout service redirect its payment-client "
+                "gRPC calls to an unreachable address so every charge attempt times out."
             ),
         )
         # === Attach evaluation oracles ===

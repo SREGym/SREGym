@@ -23,7 +23,11 @@ class FailedReadinessProbe(Problem):
             description=(
                 "The cart deployment's readiness probe is consistently failing, so Kubernetes marks pods "
                 "NotReady and removes them from service endpoints, breaking cart-dependent request paths. "
-                "Symptoms include repeated readiness probe failures and the cart endpoint disappearing from service discovery."
+                "Symptoms include repeated readiness probe failures and the cart endpoint disappearing from service discovery. "
+                f"Mechanism: a gRPC readiness probe on port 8080 was patched onto the `{self.faulty_service}` "
+                f"deployment, and the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                '`failedReadinessProbe` feature flag\'s `defaultVariant` set to `"on"`, which causes the cart '
+                "service's gRPC health endpoint to report NOT_SERVING so the probe never succeeds."
             ),
         )
         # === Attach evaluation oracles ===
