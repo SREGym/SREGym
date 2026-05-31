@@ -2519,10 +2519,8 @@ class VirtualizationFaultInjector(FaultInjector):
             deployment_yaml = self._get_deployment_yaml(service)
             
             containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
-            if "command" in containers[0]:
-                del containers[0]["command"]
-            if "args" in containers[0]:
-                del containers[0]["args"]
+            containers[0]["command"] = [entrypoint_cmd]
+            containers[0]["args"] = []
             
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
             
