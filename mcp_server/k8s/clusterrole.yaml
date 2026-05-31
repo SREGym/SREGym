@@ -26,9 +26,14 @@ rules:
   - apiGroups: [""]
     resources:
       - namespaces
-      - nodes
       - persistentvolumes
     verbs: ["get", "list", "watch"]
+
+  # Nodes - agents may need to repair labels/annotations during network recovery
+  - apiGroups: [""]
+    resources:
+      - nodes
+    verbs: ["get", "list", "watch", "patch", "update"]
 
   # Apps API group
   - apiGroups: ["apps"]
@@ -107,6 +112,8 @@ rules:
       - ipamhandles
       - ipreservations
       - blockaffinities
+      - bgpconfigurations
+      - bgppeers
       - felixconfigurations
       - clusterinformations
       - caliconodestatuses

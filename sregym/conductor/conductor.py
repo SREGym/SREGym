@@ -1,6 +1,8 @@
 import asyncio
 import concurrent.futures
+import json
 import logging
+import shlex
 import shutil
 import time
 from dataclasses import dataclass
@@ -551,6 +553,77 @@ class Conductor:
 
         return {"status": "ok", "message": "Submission received"}
 
+    @staticmethod
+    def _q(value):
+        return shlex.quote(str(value))
+
+    def _fix_calico_route_reflector_label_drift(self):
+        self.logger.info("[FIX] Calico route-reflector label drift leftovers if any")
+        try:
+            from sregym.conductor.problems.calico_route_reflector_label_drift import (
+                CalicoRouteReflectorLabelDriftHotelReservation,
+            )
+
+            problem = CalicoRouteReflectorLabelDriftHotelReservation
+            kubectl = KubeCtl()
+
+            def kubectl_json(command):
+                output = kubectl.exec_command(command)
+                try:
+                    return json.loads(output)
+                except json.JSONDecodeError:
+                    return None
+
+            def has_problem_label(resource):
+                if not resource:
+                    return False
+                labels = resource.get("metadata", {}).get("labels", {}) or {}
+                return labels.get(problem.PROBLEM_LABEL_KEY) == problem.PROBLEM_LABEL_VALUE
+
+            nodes = (kubectl_json("kubectl get nodes -o json") or {}).get("items", [])
+            marked_nodes = [
+                node.get("metadata", {}).get("name")
+                for node in nodes
+                if (node.get("metadata", {}).get("annotations", {}) or {}).get(problem.NODE_MARKER_ANNOTATION) == "true"
+            ]
+            marked_nodes = [node for node in marked_nodes if node]
+
+            bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} -o json")
+            bgp_config = kubectl_json("kubectl get bgpconfiguration default -o json")
+            support_namespace = kubectl_json(f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} -o json")
+
+            bgppeer_labeled = has_problem_label(bgppeer)
+            bgp_config_labeled = has_problem_label(bgp_config)
+            support_namespace_labeled = has_problem_label(support_namespace)
+            residue_found = bool(marked_nodes or bgppeer_labeled or bgp_config_labeled or support_namespace_labeled)
+            if not residue_found:
+                return
+
+            kubectl.exec_command(f"kubectl delete namespace {self._q(problem.PROBE_NAMESPACE)} --ignore-not-found")
+            kubectl.exec_command(f"kubectl delete bgppeer {self._q(problem.BGP_PEER_NAME)} --ignore-not-found")
+
+            if bgp_config_labeled:
+                kubectl.exec_command("kubectl delete bgpconfiguration default --ignore-not-found")
+            elif bgp_config:
+                patch = json.dumps({"spec": {"nodeToNodeMeshEnabled": True}})
+                kubectl.exec_command(f"kubectl patch bgpconfiguration default --type=merge -p {self._q(patch)}")
+
+            for node_name in marked_nodes:
+                quoted_node = self._q(node_name)
+                kubectl.exec_command(f"kubectl label node {quoted_node} {self._q(f'{problem.LEGACY_MASTER_LABEL}-')}")
+                kubectl.exec_command(
+                    f"kubectl annotate node {quoted_node} "
+                    f"{self._q(f'{problem.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION}-')}"
+                )
+                kubectl.exec_command(
+                    f"kubectl annotate node {quoted_node} {self._q(f'{problem.NODE_MARKER_ANNOTATION}-')}"
+                )
+
+            kubectl.exec_command("kubectl -n kube-system rollout restart ds/calico-node")
+            kubectl.exec_command("kubectl -n kube-system rollout status ds/calico-node --timeout=180s")
+        except Exception as e:
+            self.logger.warning(f"Could not fix Calico route-reflector label drift state: {e}")
+
     def fix_kubernetes(self):
         self.logger.info("Fixing Kubernetes... to normal state.")
         self.logger.info("[FIX] Imbalance leftover if any")
@@ -564,18 +637,6 @@ class Conductor:
         injector = RemoteOSFaultInjector()
         injector.recover_kubelet_crash()
 
-        self.logger.info("[FIX] KubeletEvictionThresholdMisconfig leftover if any")
-        injector.recover_disk_pressure_all()
-        # Delete Failed pods left by the eviction loop. Skip the app namespace
-        # undeploy_app() tears down the application namespace anyway
-        from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
-
-        self.kubectl.exec_command(
-            f"kubectl delete pods --all-namespaces "
-            f"--field-selector=status.phase=Failed,metadata.namespace!={KubeletEvictionThresholdMisconfig.NAMESPACE} "
-            "--ignore-not-found=true"
-        )
-
         self.logger.info("[FIX] Calico IPPool/strictAffinity leftover if any")
         try:
             from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import (
@@ -588,7 +649,7 @@ class Conductor:
                 '-p \'{"spec":{"disabled":false}}\''
             )
             kubectl.exec_command(
-                'kubectl patch ipamconfig default --type=merge -p \'{"spec":{"strictAffinity":false}}\''
+                "kubectl patch ipamconfig default --type=merge " '-p \'{"spec":{"strictAffinity":false}}\''
             )
             kubectl.exec_command(
                 f"kubectl delete ippool {PodCIDRExhaustionHotelReservation.TINY_POOL_NAME} --ignore-not-found"
@@ -598,6 +659,8 @@ class Conductor:
             )
         except Exception as e:
             self.logger.warning(f"Could not fix Calico IPPool state: {e}")
+
+        self._fix_calico_route_reflector_label_drift()
 
         self.logger.info("[FIX] Stale CoreDNS NXDOMAIN templates if any")
         injector = VirtualizationFaultInjector(namespace="kube-system")
