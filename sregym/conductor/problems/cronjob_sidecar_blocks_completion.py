@@ -363,9 +363,7 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
         pod_spec = body["spec"]["jobTemplate"]["spec"]["template"]["spec"]
 
         containers = pod_spec["containers"]
-        sidecar_idx = next(
-            i for i, c in enumerate(containers) if c["name"] == self.SIDECAR_CONTAINER
-        )
+        sidecar_idx = next(i for i, c in enumerate(containers) if c["name"] == self.SIDECAR_CONTAINER)
         sidecar = containers.pop(sidecar_idx)
         sidecar["restartPolicy"] = "Always"
         pod_spec["initContainers"] = [sidecar]
@@ -407,7 +405,7 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
             time.sleep(self.RECOVERY_POLL_INTERVAL_S)
         leftover = self._count_owned_jobs()
         if leftover:
-            print(f"⚠️ {leftover} Job(s) owned by '{self.CRONJOB_NAME}' still present " "after recovery timeout.")
+            print(f"⚠️ {leftover} Job(s) owned by '{self.CRONJOB_NAME}' still present after recovery timeout.")
 
     def _wait_for_specific_jobs_absent(self, job_names):
         """Wait until none of the listed Job names exist any more. New Jobs
@@ -424,7 +422,4 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
             time.sleep(self.RECOVERY_POLL_INTERVAL_S)
         remaining = {j.metadata.name for j in self._list_owned_jobs()} & target
         if remaining:
-            print(
-                f"⚠️ {len(remaining)} pre-recovery Job(s) still present after recovery "
-                f"timeout: {sorted(remaining)}"
-            )
+            print(f"⚠️ {len(remaining)} pre-recovery Job(s) still present after recovery timeout: {sorted(remaining)}")

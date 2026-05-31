@@ -200,11 +200,7 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
 
         pod_spec = cronjob.spec.job_template.spec.template.spec
 
-        for ic in pod_spec.init_containers or []:
-            if getattr(ic, "restart_policy", None) == "Always":
-                return True
-
-        return False
+        return any(getattr(ic, "restart_policy", None) == "Always" for ic in pod_spec.init_containers or [])
 
     def _fix_description(self, cronjob) -> str:
         if cronjob is None:
@@ -252,10 +248,7 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
 
     @staticmethod
     def _owned_by_cronjob(job, cronjob_name: str) -> bool:
-        for ref in job.metadata.owner_references or []:
-            if ref.kind == "CronJob" and ref.name == cronjob_name:
-                return True
-        return False
+        return any(ref.kind == "CronJob" and ref.name == cronjob_name for ref in job.metadata.owner_references or [])
 
     def _unhealthy_deployment(self, namespace):
         """Return the name of the first under-replicated Deployment, or None."""
