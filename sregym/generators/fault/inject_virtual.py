@@ -2496,6 +2496,72 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
             print(f"✅ Recovered init-container dependency hang for `{service}`")
 
+    # V.N - pdb_blocks_node_drain: An over-constrained PodDisruptionBudget
+    # (minAvailable == replica count) makes a target deployment's pods
+    # un-evictable. A node carrying such a pod is cordoned and drained for
+    # routine maintenance, but the drain deadlocks forever because the pod
+    # cannot be voluntarily evicted without violating the budget. The node is
+    # left Ready,SchedulingDisabled with a never-completing drain.
+    PDB_FAULT_NAME = "maintenance-guard"
+
+    def inject_pdb_blocks_node_drain(self, microservices: list[str]):
+        for service in microservices:
+            dep = self.kubectl.get_deployment(service, self.namespace)
+            replicas = dep.spec.replicas or 1
+            match_labels = dep.spec.selector.match_labels
+
+            pdb_manifest = {
+                "apiVersion": "policy/v1",
+                "kind": "PodDisruptionBudget",
+                "metadata": {"name": self.PDB_FAULT_NAME, "namespace": self.namespace},
+                "spec": {
+                    "minAvailable": replicas,
+                    "selector": {"matchLabels": match_labels},
+                },
+            }
+            pdb_json = json.dumps(pdb_manifest)
+            self.kubectl.exec_command(f"kubectl apply -f - <<EOF\n{pdb_json}\nEOF")
+            print(f"Created over-constrained PDB '{self.PDB_FAULT_NAME}' (minAvailable={replicas}) for {service}")
+
+            pods = self.kubectl.list_pods(self.namespace)
+            node = None
+            for pod in pods.items:
+                if pod.metadata.name.startswith(service) and pod.spec.node_name:
+                    node = pod.spec.node_name
+                    break
+            if not node:
+                raise RuntimeError(f"Could not find a node hosting {service}")
+
+            with open(f"/tmp/{service}_pdb_drain_node.txt", "w") as f:
+                f.write(node)
+
+            self.kubectl.exec_command(f"kubectl cordon {node}")
+            print(f"Cordoned node {node} (now SchedulingDisabled)")
+
+            self.kubectl.exec_command(
+                f"nohup kubectl drain {node} --ignore-daemonsets --delete-emptydir-data "
+                f"--force --timeout=0 >/tmp/{service}_pdb_drain.log 2>&1 &"
+            )
+            print(f"Started stuck drain on {node}; it will deadlock on {service} (blocked by PDB)")
+
+    def recover_pdb_blocks_node_drain(self, microservices: list[str]):
+        for service in microservices:
+            self.kubectl.exec_command(
+                f"kubectl delete pdb {self.PDB_FAULT_NAME} -n {self.namespace} --ignore-not-found=true"
+            )
+            print(f"Deleted PDB '{self.PDB_FAULT_NAME}'")
+
+            node_file = f"/tmp/{service}_pdb_drain_node.txt"
+            if Path(node_file).exists():
+                with open(node_file) as f:
+                    node = f.read().strip()
+                if node:
+                    self.kubectl.exec_command(f"kubectl uncordon {node}")
+                    print(f"Uncordoned node {node}")
+
+            self.kubectl.wait_for_stable(self.namespace)
+            print(f"Recovered from PDB-blocked-drain fault for {service}")
+
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:

@@ -51,6 +51,7 @@ from sregym.conductor.problems.operator_misoperation.wrong_operator_image import
 from sregym.conductor.problems.operator_misoperation.wrong_update_strategy import K8SOperatorWrongUpdateStrategyFault
 from sregym.conductor.problems.payment_service_failure import PaymentServiceFailure
 from sregym.conductor.problems.payment_service_unreachable import PaymentServiceUnreachable
+from sregym.conductor.problems.pdb_blocks_drain import PDBBlocksDrain
 from sregym.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
 from sregym.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodCIDRExhaustionHotelReservation
@@ -145,6 +146,7 @@ class ProblemRegistry:
             "readiness_probe_misconfiguration_social_network": lambda: ReadinessProbeMisconfiguration(app_name="social_network", faulty_service="user-service"),
             "resource_request_too_large": lambda: ResourceRequestTooLarge(app_name="hotel_reservation", faulty_service="mongodb-rate"),
             "resource_request_too_small": lambda: ResourceRequestTooSmall(app_name="hotel_reservation", faulty_service="mongodb-rate"),
+            "pdb_blocks_drain_hotel_reservation": lambda: PDBBlocksDrain(app_name="hotel_reservation", faulty_service="frontend"),
             "rolling_update_misconfigured_hotel_reservation": lambda: RollingUpdateMisconfigured(app_name="hotel_reservation"),
             "rolling_update_misconfigured_social_network": lambda: RollingUpdateMisconfigured(app_name="social_network"),
             "scale_pod_zero_social_net": ScalePodSocialNet,
