@@ -12,7 +12,7 @@ class FileDescriptorExhaustion(Problem):
     def __init__(self):
         self.app = HotelReservation()
         self.namespace = self.app.namespace
-        self.faulty_service = "recommendation"
+        self.faulty_service = "frontend"
         self.forced_ulimit = 20
 
         super().__init__(app=self.app, namespace=self.namespace)
@@ -38,7 +38,7 @@ class FileDescriptorExhaustion(Problem):
         injector.inject_fd_exhaustion(
             microservices=[self.faulty_service],
             entrypoint_cmd=f"{self.faulty_service}",
-            limit = 10
+            limit = 30
         )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 

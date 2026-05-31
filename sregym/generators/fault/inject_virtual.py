@@ -2496,27 +2496,18 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
             print(f"✅ Recovered init-container dependency hang for `{service}`")
 
-    def inject_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str, limit: int = 10):
-        """Set an artificially low ulimit to simulate file descriptor exhaustion"""
+    def inject_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str, limit: int = 50):
+        """Injects a file descriptor exhaustion fault by restricting the ulimit."""
         for service in microservices:
-            patch = {
-                "spec": {
-                    "template": {
-                        "spec": {
-                            "containers": [{
-                                "name": service,
-                                "command": ["/bin/sh", "-c"],
-                                "args": [f"ulimit -n {limit} && exec {entrypoint_cmd}"]
-                            }]
-                        }
-                    }
-                }
-            }
-            patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} -p '{json.dumps(patch)}'"
-
-            result = self.kubectl.exec_command(patch_cmd)
-            print(f"Patch result for {service}: {result}")
-
+            deployment_yaml = self._get_deployment_yaml(service)
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            containers[0]["command"] = ["/bin/sh", "-c"]
+            containers[0]["args"] = [f"ulimit -n {limit} && exec {entrypoint_cmd}"]
+            
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+            apply_result = self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
+            print(f"Apply result for {service}: {apply_result}")
+            
             self.kubectl.exec_command(
                 f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s"
             )
@@ -2525,28 +2516,23 @@ class VirtualizationFaultInjector(FaultInjector):
     def recover_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str):
         """Recover from FD exhaustion by pushing the soft limit to the kernel hard limit."""
         for service in microservices:
-            patch = {
-                "spec": {
-                    "template": {
-                        "spec": {
-                            "containers": [{
-                                "name": service,
-                                "command": ["/bin/sh", "-c"],
-                                "args": [f"ulimit -n $(ulimit -Hn) && exec {entrypoint_cmd}"]
-                            }]
-                        }
-                    }
-                }
-            }  
-            patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} -p '{json.dumps(patch)}'"  
-
-            result = self.kubectl.exec_command(patch_cmd)
-            print(f"Patch result for {service}: {result}")
-
+            deployment_yaml = self._get_deployment_yaml(service)
+            
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            if "command" in containers[0]:
+                del containers[0]["command"]
+            if "args" in containers[0]:
+                del containers[0]["args"]
+            
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+            
+            apply_result = self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
+            print(f"Recover apply result for {service}: {apply_result}")
+            
             self.kubectl.exec_command(
                 f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s"
             )
-            print(f"Recover from FD exhaustion for service: {service}")
+            print(f"Recovered FD exhaustion for service: {service}")
 
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
