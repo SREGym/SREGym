@@ -24,7 +24,11 @@ class ProductCatalogServiceFailure(Problem):
             description=(
                 f"The `{self.faulty_service}` deployment is returning persistent errors on catalog queries, "
                 "causing product listing and detail retrieval to fail. This degrades browse and search flows. "
-                "Users see missing product data, empty results, or repeated errors when loading product pages."
+                "Users see missing product data, empty results, or repeated errors when loading product pages. "
+                f"Mechanism: the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                f'`{self.feature_flag}` feature flag\'s `defaultVariant` set to `"on"`, which activates the '
+                "OpenTelemetry demo's in-app fault path that makes the product-catalog service's `GetProduct` gRPC "
+                "handler return an error for a specific product."
             ),
         )
         # === Attach evaluation oracles ===

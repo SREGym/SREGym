@@ -2,6 +2,7 @@
 
 import os
 import re
+import shlex
 import subprocess
 import time
 
@@ -112,6 +113,29 @@ class RemoteOSFaultInjector(FaultInjector):
             print("No Kind worker containers found.")
         return containers
 
+    def _get_worker_node_names(self):
+        """Return list of worker node names from kubectl."""
+        output = self.kubectl.exec_command("kubectl get nodes --no-headers")
+        return [
+            line.split()[0]
+            for line in output.strip().splitlines()
+            if len(line.split()) >= 3 and "control-plane" not in line.split()[2]
+        ]
+
+    def _node_exec(self, node_name: str, command: str):
+        """Run a command on a remote worker node via SSH, mapping node name to inventory host."""
+        worker_info = self._get_remote_worker_info()
+        if not worker_info:
+            print(f"No remote worker info available for {node_name}")
+            return ""
+        # Match node name to inventory host (inventory keys are IPs/hostnames)
+        for host, user in worker_info.items():
+            if node_name in host or host in node_name:
+                return self._ssh_exec(host, user, f"sudo sh -c {shlex.quote(command)}")
+        # Fallback: use first worker
+        host, user = next(iter(worker_info.items()))
+        return self._ssh_exec(host, user, f"sudo sh -c {shlex.quote(command)}")
+
     def _wait_for_worker_nodes(self, target_status="NotReady", timeout=NODE_NOT_READY_TIMEOUT):
         """Poll until all worker nodes reach the target status ('Ready' or 'NotReady')."""
         output = self.kubectl.exec_command("kubectl get nodes --no-headers")
@@ -188,6 +212,105 @@ class RemoteOSFaultInjector(FaultInjector):
                 print(f"Kubelet started on {host}")
 
         self._wait_for_worker_nodes("Ready")
+
+    def _wait_for_single_node(
+        self, node_name: str, target_status: str = "Ready", timeout: int = NODE_NOT_READY_TIMEOUT
+    ):
+        """Poll until a single named node reaches target status."""
+        print(f"Waiting for node {node_name} to become {target_status}...")
+        start = time.time()
+        while time.time() - start < timeout:
+            output = self.kubectl.exec_command("kubectl get nodes --no-headers")
+            for line in output.strip().splitlines():
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == node_name and parts[1] == target_status:
+                    print(f"Node {node_name} is {target_status}.")
+                    return
+            time.sleep(NODE_NOT_READY_POLL_INTERVAL)
+        print(f"Timed out after {timeout}s waiting for {node_name} to become {target_status}.")
+
+    def inject_disk_pressure(
+        self, node_name: str, threshold: float | None = None, margin_pct: int = 10
+    ) -> float | None:
+        """Raise kubelet's nodefs.available eviction threshold above the node's current free-space ratio.
+
+        Pods evict regardless of actual disk usage. Threshold is computed dynamically from kubelet
+        stats summary (current_free + margin_pct, capped at 99%) unless explicitly overridden.
+
+        Returns the threshold percent applied (e.g. 75.0), or None if the node wasn't found.
+        """
+        if threshold is None:
+            try:
+                free_pct = self.kubectl.get_node_free_pct(node_name)
+
+            except Exception as e:
+                raise RuntimeError(
+                    f"Cannot read kubelet stats summary for node {node_name} ({e!r}); "
+                    f"refusing to guess a threshold — pass `threshold=` explicitly to override."
+                ) from e
+
+            threshold = float(min(99, free_pct + margin_pct))
+            print(f"Node {node_name} free={free_pct}% -> threshold={threshold}%")
+
+        value = f'"{threshold}%"'
+        # Use %% to escape % in printf format string
+        printf_value = value.replace("%", "%%")
+        script = (
+            "CFG=/var/lib/kubelet/config.yaml && "
+            "if grep -q 'evictionHard:' \"$CFG\"; then "
+            "  if grep -q 'nodefs.available' \"$CFG\"; then "
+            f"    sed -i 's|nodefs.available:.*|nodefs.available: {value}|' \"$CFG\"; "
+            "  else "
+            f"    sed -i '/evictionHard:/a\\  nodefs.available: {value}' \"$CFG\"; "
+            "  fi; "
+            "else "
+            f"  printf '\\nevictionHard:\\n  nodefs.available: {printf_value}\\n' >> \"$CFG\"; "
+            "fi && "
+            "systemctl restart kubelet"
+        )
+        if self._check_is_kind():
+            containers = self._get_kind_worker_containers()
+            if node_name not in containers:
+                print(f"Node {node_name} not found among kind worker containers: {containers}")
+                return None
+            print(f"Inducing disk pressure in {node_name} (threshold {threshold}%)...")
+            self._docker_exec(node_name, script)
+        else:
+            worker_nodes = self._get_worker_node_names()
+            if node_name not in worker_nodes:
+                print(f"Node {node_name} not found among worker nodes: {worker_nodes}")
+                return None
+            print(f"Inducing disk pressure on {node_name} (threshold {threshold}%)...")
+            self._node_exec(node_name, script)
+
+        self._wait_for_single_node(node_name, target_status="Ready")
+        return threshold
+
+    def recover_disk_pressure(self, node_name: str):
+        """Restore the kubelet eviction threshold and restart kubelet."""
+        script = "CFG=/var/lib/kubelet/config.yaml && sed -i '/nodefs.available:/d' \"$CFG\"; systemctl restart kubelet"
+        if self._check_is_kind():
+            containers = self._get_kind_worker_containers()
+            if node_name not in containers:
+                print(f"Node {node_name} not found among kind worker containers: {containers}")
+                return
+            print(f"Recovering disk pressure in {node_name}...")
+            self._docker_exec(node_name, script)
+        else:
+            worker_nodes = self._get_worker_node_names()
+            if node_name not in worker_nodes:
+                print(f"Node {node_name} not found among worker nodes: {worker_nodes}")
+                return
+            print(f"Recovering disk pressure on {node_name}...")
+            self._node_exec(node_name, script)
+
+        self._wait_for_single_node(node_name, target_status="Ready")
+
+    def recover_disk_pressure_all(self):
+        """Strip the nodefs.available eviction threshold on every worker node."""
+        nodes = self._get_kind_worker_containers() if self._check_is_kind() else self._get_worker_node_names()
+        for node_name in nodes:
+            self.recover_disk_pressure(node_name)
 
 
 def main():
