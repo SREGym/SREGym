@@ -2496,6 +2496,58 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
             print(f"✅ Recovered init-container dependency hang for `{service}`")
 
+    def inject_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str, limit: int = 10):
+        """Set an artificially low ulimit to simulate file descriptor exhaustion"""
+        for service in microservices:
+            patch = {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [{
+                                "name": service,
+                                "command": ["/bin/sh", "-c"],
+                                "args": [f"ulimit -n {limit} && exec {entrypoint_cmd}"]
+                            }]
+                        }
+                    }
+                }
+            }
+            patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} -p '{json.dumps(patch)}'"
+
+            result = self.kubectl.exec_command(patch_cmd)
+            print(f"Patch result for {service}: {result}")
+
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s"
+            )
+            print(f"Injected FD exhaustion (limit: {limit}) for service: {service}")
+
+    def recover_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str):
+        """Recover from FD exhaustion by pushing the soft limit to the kernel hard limit."""
+        for service in microservices:
+            patch = {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [{
+                                "name": service,
+                                "command": ["/bin/sh", "-c"],
+                                "args": [f"ulimit -n $(ulimit -Hn) && exec {entrypoint_cmd}"]
+                            }]
+                        }
+                    }
+                }
+            }  
+            patch_cmd = f"kubectl patch deployment {service} -n {self.namespace} -p '{json.dumps(patch)}'"  
+
+            result = self.kubectl.exec_command(patch_cmd)
+            print(f"Patch result for {service}: {result}")
+
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s"
+            )
+            print(f"Recover from FD exhaustion for service: {service}")
+
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
