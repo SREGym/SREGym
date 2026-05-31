@@ -3,6 +3,7 @@ update_incompatible_correlated
 incorrect_image
 incorrect_port_assignment
 misconfig_app_hotel_res
+ephemeral_port_range_hotel_reservation
 missing_env_variable_astronomy_shop
 revoke_auth_mongodb-1
 revoke_auth_mongodb-2
