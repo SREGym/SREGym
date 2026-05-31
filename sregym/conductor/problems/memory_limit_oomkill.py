@@ -1,6 +1,5 @@
 """'Memory limit too low -> OOMKilled CrashLoopBackOff' problem.
 
-
 Real-world analog
 -----------------
 A capacity / hardening change sets a container's `resources.limits.memory` far
