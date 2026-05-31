@@ -53,6 +53,12 @@ class KubeCtl:
         """Return a list of all running nodes."""
         return self.core_v1_api.list_node()
 
+    def get_node_free_pct(self, node_name: str) -> int:
+        """Return the nodefs free-space percentage as reported by kubelet stats summary."""
+        raw = self.exec_command(f"kubectl get --raw '/api/v1/nodes/{node_name}/proxy/stats/summary'")
+        fs = json.loads(raw)["node"]["fs"]
+        return round(fs["availableBytes"] / fs["capacityBytes"] * 100)
+
     def get_concise_deployments_info(self, namespace=None):
         """Return a concise info of a deployment."""
         cmd = f"kubectl get deployment {f'-n {namespace}' if namespace else ''} -o wide"
