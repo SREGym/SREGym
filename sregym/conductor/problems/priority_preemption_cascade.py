@@ -40,11 +40,17 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     RESOURCE_LABEL_VALUE = "priority-policy-rollout"
 
     TARGET_REQUEST_RATIO = 0.30
+    TARGET_REQUEST_CAP_KIB = 8 * 1024 * 1024
     PRESSURE_PREEMPTION_RATIO = 0.50
     MIN_TARGET_REQUEST_KIB = 256 * 1024
     MIN_PRESSURE_REQUEST_KIB = 512 * 1024
     MIN_PREEMPTION_GAP_KIB = 64 * 1024
     SCHEDULING_HEADROOM_KIB = 128 * 1024
+    DESIRED_FREE_MEMORY_KIB = 4 * 1024 * 1024
+    PADDING_REQUEST_KIB = 16 * 1024 * 1024
+    MIN_PADDING_REQUEST_KIB = 8 * 1024 * 1024
+    PADDING_DEPLOYMENT_PREFIX = "report-cache-shard"
+    PADDING_LABEL = "report-cache"
 
     def __init__(self, faulty_service: str = "reservation"):
         self.app = HotelReservation()
@@ -257,8 +263,25 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
             )
 
         target_kib = max(self.MIN_TARGET_REQUEST_KIB, int(allocatable_kib * self.TARGET_REQUEST_RATIO))
-        target_kib = min(target_kib, target_ceiling_kib)
+        target_kib = min(target_kib, self.TARGET_REQUEST_CAP_KIB, target_ceiling_kib)
         return self.kubectl.format_k8s_memory(target_kib)
+
+    def _padding_request_sizes_kib(self, free_kib, desired_free_kib=None):
+        desired_free_kib = self.DESIRED_FREE_MEMORY_KIB if desired_free_kib is None else desired_free_kib
+        reserve_kib = max(0, free_kib - desired_free_kib)
+        request_sizes = []
+        while reserve_kib >= self.PADDING_REQUEST_KIB:
+            request_sizes.append(self.PADDING_REQUEST_KIB)
+            reserve_kib -= self.PADDING_REQUEST_KIB
+        if reserve_kib >= self.MIN_PADDING_REQUEST_KIB:
+            request_sizes.append(self.MIN_PADDING_REQUEST_KIB)
+        return request_sizes
+
+    def _padding_request_sizes_for_node(self, node_name):
+        allocatable_kib = self._node_allocatable_memory_kib(node_name)
+        requested_kib = self._node_requested_memory_kib(node_name)
+        free_kib = max(0, allocatable_kib - requested_kib)
+        return self._padding_request_sizes_kib(free_kib)
 
     def _pressure_request_for_target_pod(self, target_pod):
         node_name = target_pod.spec.node_name
@@ -600,6 +623,69 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
                 body=body,
             )
 
+    def _create_padding_deployment(self, index, request_memory):
+        name = f"{self.PADDING_DEPLOYMENT_PREFIX}-{index}"
+        labels = {"app": self.PADDING_LABEL, "shard": str(index)}
+        body = {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "metadata": {"name": name, "namespace": self.PRESSURE_NAMESPACE},
+            "spec": {
+                "replicas": 1,
+                "selector": {"matchLabels": labels},
+                "template": {
+                    "metadata": {"labels": {**labels, "workload": "analytics-cache"}},
+                    "spec": {
+                        "priorityClassName": self.PLATFORM_PRIORITY_CLASS,
+                        "nodeSelector": {"kubernetes.io/hostname": self.target_node},
+                        "terminationGracePeriodSeconds": 0,
+                        "containers": [
+                            {
+                                "name": "cache",
+                                "image": "registry.k8s.io/pause:3.9",
+                                "resources": {
+                                    "requests": {
+                                        "cpu": "10m",
+                                        "memory": request_memory,
+                                    }
+                                },
+                            }
+                        ],
+                    },
+                },
+            },
+        }
+        try:
+            self.apps_v1.create_namespaced_deployment(namespace=self.PRESSURE_NAMESPACE, body=body)
+        except ApiException as e:
+            if e.status != 409:
+                raise
+            self.apps_v1.replace_namespaced_deployment(
+                name=name,
+                namespace=self.PRESSURE_NAMESPACE,
+                body=body,
+            )
+        return name
+
+    def _create_capacity_padding(self):
+        request_sizes_kib = self._padding_request_sizes_for_node(self.target_node)
+        if not request_sizes_kib:
+            return []
+
+        self._ensure_namespace(self.PRESSURE_NAMESPACE)
+        padding_names = []
+        try:
+            for index, request_kib in enumerate(request_sizes_kib):
+                request_memory = self.kubectl.format_k8s_memory(request_kib)
+                padding_names.append(self._create_padding_deployment(index, request_memory))
+            for name in padding_names:
+                self._wait_for_deployment_ready(name, self.PRESSURE_NAMESPACE)
+        except Exception:
+            with contextlib.suppress(Exception):
+                self._delete_pressure_namespace()
+            raise
+        return padding_names
+
     def _delete_pressure_namespace(self):
         try:
             self.core_v1.delete_namespace(self.PRESSURE_NAMESPACE)
@@ -694,14 +780,25 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         target_pod = self._target_pod()
         self._ensure_target_preemptable(target_pod)
         self.target_node = target_pod.spec.node_name
-        self.pressure_request_memory = self._pressure_request_for_target_pod(target_pod)
-        print(f"Pressure node: {self.target_node} | pressure request: {self.pressure_request_memory}")
+        padding_names = self._create_capacity_padding()
+        try:
+            if padding_names:
+                print(
+                    f"Created {len(padding_names)} cache padding workload(s) with the tenant pressure PriorityClass "
+                    f"on pressure node '{self.target_node}'"
+                )
+            self.pressure_request_memory = self._pressure_request_for_target_pod(target_pod)
+            print(f"Pressure node: {self.target_node} | pressure request: {self.pressure_request_memory}")
 
-        print(f"Creating tenant pressure workload in namespace '{self.PRESSURE_NAMESPACE}'")
-        self._create_pressure_deployment()
-        pressure_pod = self._wait_for_pressure_pod()
-        self._ensure_pressure_can_preempt_target(pressure_pod, target_pod)
-        self._wait_for_preemption()
+            print(f"Creating tenant pressure workload in namespace '{self.PRESSURE_NAMESPACE}'")
+            self._create_pressure_deployment()
+            pressure_pod = self._wait_for_pressure_pod()
+            self._ensure_pressure_can_preempt_target(pressure_pod, target_pod)
+            self._wait_for_preemption()
+        except Exception:
+            with contextlib.suppress(Exception):
+                self._delete_pressure_namespace()
+            raise
 
         print(
             f"Priority preemption cascade injected: '{self.PRESSURE_DEPLOYMENT}' preempted "
