@@ -18,9 +18,9 @@ class PriorityPreemptionMitigationOracle(Oracle):
     A plain pod-health oracle is too weak for scheduler-priority faults: an agent
     can delete the pressure workload or remove all PriorityClasses and make the
     app look healthy without correcting the bad priority relationship. This
-    oracle requires the production workload to be explicitly protected and the
-    unsafe global default to be removed while keeping the synthetic tenant
-    workload present.
+    oracle requires the production workload to be protected by a higher-valued
+    PriorityClass and the unsafe global default to be removed while keeping the
+    synthetic tenant workload present.
     """
 
     importance = 1.0
@@ -162,6 +162,26 @@ class PriorityPreemptionMitigationOracle(Oracle):
             return False
         return True
 
+    def _target_priority_is_safe(self, deployment, platform_pc):
+        priority_name = deployment.spec.template.spec.priority_class_name
+        if not priority_name:
+            print(f"❌ Deployment '{deployment.metadata.name}' has no explicit priorityClassName")
+            return False
+
+        priority_class = self._read_priority_class(priority_name)
+        if priority_class is None:
+            print(f"❌ Deployment '{deployment.metadata.name}' references missing PriorityClass '{priority_name}'")
+            return False
+
+        if (priority_class.value or 0) <= (platform_pc.value or 0):
+            print(
+                f"❌ Deployment '{deployment.metadata.name}' uses PriorityClass '{priority_name}' "
+                f"with value {priority_class.value}, which is not higher than "
+                f"'{platform_pc.metadata.name}' ({platform_pc.value})"
+            )
+            return False
+        return True
+
     def evaluate(self) -> dict:
         print("== Priority Preemption Mitigation Evaluation ==")
 
@@ -170,7 +190,6 @@ class PriorityPreemptionMitigationOracle(Oracle):
         pressure_namespace = self.problem.PRESSURE_NAMESPACE
         pressure_deployment = self.problem.PRESSURE_DEPLOYMENT
         platform_priority = self.problem.PLATFORM_PRIORITY_CLASS
-        production_priority = self.problem.PRODUCTION_PRIORITY_CLASS
 
         self._wait_for_rollouts(namespace)
 
@@ -188,30 +207,14 @@ class PriorityPreemptionMitigationOracle(Oracle):
             return {"success": False}
 
         platform_pc = self._read_priority_class(platform_priority)
-        production_pc = self._read_priority_class(production_priority)
         if platform_pc is None:
             print(f"❌ PriorityClass '{platform_priority}' was deleted instead of made safe")
-            return {"success": False}
-        if production_pc is None:
-            print(f"❌ PriorityClass '{production_priority}' is missing")
             return {"success": False}
 
         if platform_pc.global_default:
             print(f"❌ PriorityClass '{platform_priority}' is still an unsafe global default")
             return {"success": False}
-        if (production_pc.value or 0) <= (platform_pc.value or 0):
-            print(
-                f"❌ PriorityClass '{production_priority}' value "
-                f"({production_pc.value}) is not higher than '{platform_priority}' ({platform_pc.value})"
-            )
-            return {"success": False}
-
-        template_priority = target_deployment.spec.template.spec.priority_class_name
-        if template_priority != production_priority:
-            print(
-                f"❌ Deployment '{target}' is not explicitly protected with "
-                f"priorityClassName '{production_priority}'"
-            )
+        if not self._target_priority_is_safe(target_deployment, platform_pc):
             return {"success": False}
 
         if not self._request_not_reduced(target_deployment, getattr(self.problem, "target_request_memory", None)):

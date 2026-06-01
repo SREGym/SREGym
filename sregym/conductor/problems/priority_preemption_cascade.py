@@ -36,8 +36,8 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     PRESSURE_NAMESPACE = "analytics-batch"
     PRESSURE_DEPLOYMENT = "tenant-ingester"
     PRESSURE_LABEL = "tenant-ingester"
-    PROBLEM_LABEL_KEY = "sregym.io/problem"
-    PROBLEM_LABEL_VALUE = "priority-preemption-cascade"
+    RESOURCE_LABEL_KEY = "app.kubernetes.io/part-of"
+    RESOURCE_LABEL_VALUE = "priority-policy-rollout"
 
     TARGET_REQUEST_RATIO = 0.30
     PRESSURE_PREEMPTION_RATIO = 0.50
@@ -73,10 +73,10 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
                 "while a newly created tenant or batch workload received a higher priority and enough memory request "
                 "to force scheduler preemption on the same node. The scheduler evicts the lower-priority production "
                 "pod, but its replacement inherits the same medium/default priority relationship instead of the "
-                "intended production-critical priority and cannot reclaim capacity from the tenant workload. "
+                "intended higher production priority and cannot reclaim capacity from the tenant workload. "
                 "The service stays under-replicated even though its image, service, and application config are valid. "
                 f"Mitigation must make `{self.PLATFORM_PRIORITY_CLASS}` no longer an unsafe global default and "
-                f"explicitly protect `{self.faulty_service}` with `{self.PRODUCTION_PRIORITY_CLASS}`."
+                f"explicitly protect `{self.faulty_service}` with a higher-valued production PriorityClass."
             ),
         )
 
@@ -453,7 +453,7 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
                 f"{self.PLATFORM_PRIORITY_CLASS}"
             )
 
-    def _create_or_replace_priority_class(self, name, value, global_default):
+    def _create_or_replace_priority_class(self, name, value, global_default, description):
         if global_default:
             existing_defaults = [
                 pc.metadata.name
@@ -469,12 +469,12 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         body = client.V1PriorityClass(
             metadata=client.V1ObjectMeta(
                 name=name,
-                labels={self.PROBLEM_LABEL_KEY: self.PROBLEM_LABEL_VALUE},
+                labels={self.RESOURCE_LABEL_KEY: self.RESOURCE_LABEL_VALUE},
             ),
             value=value,
             global_default=global_default,
             preemption_policy="PreemptLowerPriority",
-            description="SREGym priority preemption cascade simulation.",
+            description=description,
         )
         try:
             self.scheduling_v1.create_priority_class(body)
@@ -516,7 +516,7 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
                 return False
             raise
         labels = priority_class.metadata.labels or {}
-        return labels.get(self.PROBLEM_LABEL_KEY) == self.PROBLEM_LABEL_VALUE
+        return labels.get(self.RESOURCE_LABEL_KEY) == self.RESOURCE_LABEL_VALUE
 
     def _restore_or_delete_priority_class(self, name):
         has_snapshot = name in self._priority_class_snapshots
@@ -642,7 +642,12 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         self._app_cleanup()
 
     def _make_platform_priority_safe(self):
-        self._create_or_replace_priority_class(self.PLATFORM_PRIORITY_CLASS, value=100000, global_default=False)
+        self._create_or_replace_priority_class(
+            self.PLATFORM_PRIORITY_CLASS,
+            value=100000,
+            global_default=False,
+            description="Default priority for shared platform and tenant workloads.",
+        )
 
     def _protect_target_deployment(self):
         body = {"spec": {"template": {"spec": {"priorityClassName": self.PRODUCTION_PRIORITY_CLASS}}}}
@@ -671,8 +676,18 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         self._ensure_target_preemptable(target_pod)
 
         print("Creating unsafe PriorityClasses")
-        self._create_or_replace_priority_class(self.PLATFORM_PRIORITY_CLASS, value=100000, global_default=True)
-        self._create_or_replace_priority_class(self.PRODUCTION_PRIORITY_CLASS, value=200000, global_default=False)
+        self._create_or_replace_priority_class(
+            self.PLATFORM_PRIORITY_CLASS,
+            value=100000,
+            global_default=True,
+            description="Default priority for shared platform and tenant workloads.",
+        )
+        self._create_or_replace_priority_class(
+            self.PRODUCTION_PRIORITY_CLASS,
+            value=200000,
+            global_default=False,
+            description=f"Priority for protected {self.faulty_service} production workloads.",
+        )
 
         print("Protecting peer app deployments so the scheduler has a deterministic victim")
         self._protect_peer_deployments()

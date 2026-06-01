@@ -40,6 +40,14 @@ def _deployment(name, replicas=1, ready=1, priority_class=None, memory="512Mi"):
     )
 
 
+def _priority_class(name, value, global_default=False):
+    return SimpleNamespace(
+        metadata=SimpleNamespace(name=name),
+        value=value,
+        global_default=global_default,
+    )
+
+
 def test_all_deployments_ready_rejects_scaled_down_shortcut():
     oracle = _oracle()
     oracle.apps_v1 = SimpleNamespace(
@@ -87,3 +95,34 @@ def test_request_check_is_disabled_when_injection_did_not_record_expected_memory
     deployment = _deployment("reservation", memory="128Mi")
 
     assert oracle._request_not_reduced(deployment, None) is True
+
+
+def test_target_priority_accepts_custom_class_above_platform():
+    oracle = _oracle()
+    deployment = _deployment("reservation", priority_class="reservation-high-priority")
+    platform = _priority_class("platform-medium", 100000)
+    classes = {
+        "reservation-high-priority": _priority_class("reservation-high-priority", 200000),
+    }
+    oracle._read_priority_class = classes.get
+
+    assert oracle._target_priority_is_safe(deployment, platform) is True
+
+
+def test_target_priority_rejects_missing_or_low_priority_class():
+    oracle = _oracle()
+    platform = _priority_class("platform-medium", 100000)
+    classes = {
+        "platform-medium": platform,
+        "reservation-low": _priority_class("reservation-low", 50000),
+    }
+    oracle._read_priority_class = classes.get
+
+    assert oracle._target_priority_is_safe(_deployment("reservation"), platform) is False
+    assert (
+        oracle._target_priority_is_safe(_deployment("reservation", priority_class="missing-priority"), platform)
+        is False
+    )
+    assert (
+        oracle._target_priority_is_safe(_deployment("reservation", priority_class="reservation-low"), platform) is False
+    )
