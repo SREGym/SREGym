@@ -68,6 +68,8 @@ class HumanAgent:
         while True:
             inp = await self._prompt()
             cmd = inp.strip().split(maxsplit=1)
+            if not cmd:
+                continue
             if cmd[0].lower() == "exit":
                 sys.exit(0)
             if cmd[0].lower() == "options":

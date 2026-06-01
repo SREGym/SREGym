@@ -564,17 +564,31 @@ class Conductor:
         injector = RemoteOSFaultInjector()
         injector.recover_kubelet_crash()
 
+        self.logger.info("[FIX] KubeletEvictionThresholdMisconfig leftover if any")
+        injector.recover_disk_pressure_all()
+        # Delete Failed pods left by the eviction loop. Skip the app namespace
+        # undeploy_app() tears down the application namespace anyway
+        from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
+
+        self.kubectl.exec_command(
+            f"kubectl delete pods --all-namespaces "
+            f"--field-selector=status.phase=Failed,metadata.namespace!={KubeletEvictionThresholdMisconfig.NAMESPACE} "
+            "--ignore-not-found=true"
+        )
+
         self.logger.info("[FIX] Calico IPPool/strictAffinity leftover if any")
         try:
-            from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodCIDRExhaustionHotelReservation
+            from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import (
+                PodCIDRExhaustionHotelReservation,
+            )
+
             kubectl = KubeCtl()
             kubectl.exec_command(
                 f"kubectl patch ippool {PodCIDRExhaustionHotelReservation.DEFAULT_POOL_NAME} --type=merge "
-                "-p '{\"spec\":{\"disabled\":false}}'"
+                '-p \'{"spec":{"disabled":false}}\''
             )
             kubectl.exec_command(
-                "kubectl patch ipamconfig default --type=merge "
-                "-p '{\"spec\":{\"strictAffinity\":false}}'"
+                'kubectl patch ipamconfig default --type=merge -p \'{"spec":{"strictAffinity":false}}\''
             )
             kubectl.exec_command(
                 f"kubectl delete ippool {PodCIDRExhaustionHotelReservation.TINY_POOL_NAME} --ignore-not-found"
