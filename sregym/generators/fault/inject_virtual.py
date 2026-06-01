@@ -2496,7 +2496,7 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
             print(f"✅ Recovered init-container dependency hang for `{service}`")
 
-    def inject_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str, limit: int = 50):
+    def inject_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str, limit: int = 1024):
         """Injects a file descriptor exhaustion fault by restricting the ulimit."""
         for service in microservices:
             deployment_yaml = self._get_deployment_yaml(service)
