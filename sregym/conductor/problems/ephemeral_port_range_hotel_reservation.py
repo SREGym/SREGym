@@ -1,6 +1,5 @@
 import json
 
-from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.workload import WorkloadOracle
 from sregym.conductor.problems.base import Problem
@@ -33,7 +32,6 @@ class EphemeralPortRangeHotelReservation(Problem):
         )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.detection_oracle = DetectionOracle(problem=self)
 
         # Workload checks catch failures even when pods stay Running.
         self.app.create_workload()
