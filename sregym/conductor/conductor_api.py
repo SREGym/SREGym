@@ -174,16 +174,6 @@ async def get_app():
     }
 
 
-@app.get("/get_problem")
-async def get_problem():
-    if _conductor is None:
-        logger.error("No problem has been started")
-        raise HTTPException(status_code=400, detail="No problem has been started")
-    problem_id = _conductor.problem_id
-    logger.debug(f"API returns Problem ID: {problem_id}")
-    return {"problem_id": problem_id}
-
-
 def run_api(conductor):
     """
     Start the API server and block until request_shutdown() is called.
