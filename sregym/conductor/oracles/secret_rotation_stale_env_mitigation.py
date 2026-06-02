@@ -109,20 +109,19 @@ class SecretRotationStaleEnvMitigation(Oracle):
         results["secret_conn"] = secret_conn
         results["product_env_conn"] = env_conn
 
-        old_password_works = self._postgres_accepts_password(self.old_password)
-        new_password_works = self._postgres_accepts_password(self.new_password)
-        product_password_works = self._postgres_accepts_password(self._password_from_conn_string(env_conn))
-        results["postgres_accepts_old_password"] = old_password_works
-        results["postgres_accepts_new_password"] = new_password_works
-        results["postgres_accepts_product_env_password"] = product_password_works
+        results["postgres_accepts_old_password"] = self._postgres_accepts_password(self.old_password)
+        results["postgres_accepts_new_password"] = self._postgres_accepts_password(self.new_password)
+        results["postgres_accepts_product_env_password"] = self._postgres_accepts_password(
+            self._password_from_conn_string(env_conn)
+        )
 
-        if secret_conn == self.new_conn and env_conn == self.old_conn and new_password_works:
+        if secret_conn == self.new_conn and env_conn == self.old_conn and results["postgres_accepts_new_password"]:
             results["reason"] = "product-catalog still has stale old env while Secret/PostgreSQL use new credential"
             return results
         if env_conn not in {self.old_conn, self.new_conn}:
             results["reason"] = f"unexpected product-catalog DB_CONNECTION_STRING: {env_conn!r}"
             return results
-        if not product_password_works:
+        if not results["postgres_accepts_product_env_password"]:
             results["reason"] = "PostgreSQL does not accept the password product-catalog is using"
             return results
         if results["deployment_references_secret"] and secret_conn not in {None, env_conn}:
