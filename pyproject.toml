@@ -218,7 +218,6 @@ build-backend = "setuptools.build_meta"
 [dependency-groups]
 dev = [
     "deptry>=0.24.0",
-    "pre-commit>=4.6.0",
 ]
 
 [tool.setuptools]
