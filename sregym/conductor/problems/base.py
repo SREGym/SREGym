@@ -5,7 +5,6 @@ from abc import ABC, abstractmethod
 
 class Problem(ABC):
     def __init__(self, app, namespace: str | None = None):
-        """Initialize a problem, defaulting its namespace to the application's namespace."""
         self.app = app
         self.namespace = app.namespace if namespace is None else namespace
         self.fault_injected = False
