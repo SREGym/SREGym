@@ -22,9 +22,7 @@ class AgentProcess:
         self.proc = proc
         self.started_at = datetime.now(UTC)
         self.container_name: str | None = None  # set when running in container mode
-        # Process-group id for shell-launched (non-container) agents. Set so that
-        # cleanup can signal the whole process tree, not just the shell wrapper.
-        self.pgid = pgid
+        self.pgid = pgid  # process group of shell-launched agents, for tree cleanup
 
 
 class AgentLauncher:
@@ -87,10 +85,8 @@ class AgentLauncher:
             text=True,
             bufsize=1,
             universal_newlines=True,
-            # Run the shell wrapper in its own session so it becomes the leader
-            # of a new process group (pgid == proc.pid). This lets cleanup signal
-            # the entire agent process tree instead of only the shell wrapper,
-            # which otherwise leaves orphaned driver/agent children running.
+            # New session => wrapper leads its own group (pgid == pid), so cleanup
+            # can kill the whole tree instead of orphaning the agent's children.
             start_new_session=True,
         )
         ap = AgentProcess(reg.name, proc, pgid=proc.pid)
@@ -174,10 +170,8 @@ class AgentLauncher:
             del self._procs[agent_name]
             return
 
-        # Choose the teardown path based on how THIS process was launched
-        # (tracked per-process via container_name), not the launcher's global
-        # container-runner state. Otherwise a shell-launched agent could fall
-        # into the container branch, find no container_name, and never be killed.
+        # Branch on the per-process container_name (not the global runner): a
+        # shell-launched agent has none and must be killed as a process group.
         container_name = getattr(existing, "container_name", None)
         if container_name:
             ContainerRunner.stop_container(container_name, timeout=timeout)
@@ -188,12 +182,8 @@ class AgentLauncher:
             del self._procs[agent_name]
 
     def _terminate_process_group(self, ap: AgentProcess, timeout: int) -> None:
-        """Terminate a shell-launched agent and its entire process group.
-
-        Signals the whole process group (the shell wrapper plus the driver and
-        any children it spawned) so no orphaned processes survive. Falls back to
-        single-process termination if no process-group id was captured.
-        """
+        """Kill a shell-launched agent's whole process group, falling back to the
+        wrapper alone if no pgid was captured."""
         proc = ap.proc
 
         if ap.pgid is None:
@@ -208,35 +198,31 @@ class AgentLauncher:
                 proc.wait(timeout=timeout)
             return
 
-        # Wait for the *whole group* to drain, not just the shell wrapper. The
-        # wrapper often exits immediately on SIGTERM while the real driver (or a
-        # SIGTERM-ignoring child) keeps running, so polling proc alone would skip
-        # the SIGKILL escalation and leave orphans behind.
+        # Wait on the whole group, not just the wrapper: the wrapper often exits
+        # on SIGTERM while a stubborn child lives on, so we'd skip the SIGKILL.
         if not self._wait_for_group_exit(ap.pgid, proc, timeout):
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(ap.pgid, signal.SIGKILL)
             self._wait_for_group_exit(ap.pgid, proc, timeout)
 
-        # Reap the wrapper so it does not linger as a zombie.
+        # Reap the wrapper so it doesn't linger as a zombie.
         with contextlib.suppress(Exception):
             proc.wait(timeout=timeout)
 
     @staticmethod
     def _wait_for_group_exit(pgid: int, proc: subprocess.Popen, timeout: int, interval: float = 0.05) -> bool:
-        """Poll until no process remains in the group, or timeout. Returns True if drained.
+        """Poll until the group has no live members (or timeout). Returns True if drained.
 
-        ``proc`` (the group leader / shell wrapper) is reaped opportunistically via
-        ``poll()`` each iteration. Otherwise an unreaped zombie leader keeps the
-        group "alive" for ``killpg(pgid, 0)`` and would mask that all real children
-        have already exited.
+        Reaps the leader via poll() each loop; an unreaped zombie leader would
+        otherwise keep killpg(pgid, 0) succeeding and mask that children are gone.
         """
         deadline = time.monotonic() + timeout
         while True:
-            proc.poll()  # reap the leader if it has exited, so it stops counting
+            proc.poll()  # reap the leader if it exited, so it stops counting
             try:
-                os.killpg(pgid, 0)  # signal 0 == existence check for the group
+                os.killpg(pgid, 0)  # signal 0 == group existence check
             except ProcessLookupError:
-                return True  # no live members left
+                return True
             if time.monotonic() >= deadline:
                 return False
             time.sleep(interval)
