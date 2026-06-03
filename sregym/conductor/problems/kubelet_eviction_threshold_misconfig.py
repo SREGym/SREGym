@@ -19,9 +19,8 @@ class KubeletEvictionThresholdMisconfig(Problem):
             f"AstronomyShop namespace {self.app.namespace!r} drifted from "
             f"KubeletEvictionThresholdMisconfig.NAMESPACE {self.NAMESPACE!r}"
         )
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=self.app)
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = "currency"
         self.injector = RemoteOSFaultInjector()
         self.target_node = self._pick_worker_node()

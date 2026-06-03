@@ -18,8 +18,7 @@ class TrainTicketF22(Problem):
         self.fault_name = "fault-22-sql-column-name-mismatch-error"
         self.app = TrainTicket()
 
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=self.app)
 
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",

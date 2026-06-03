@@ -15,7 +15,7 @@ DEFAULT_RANGE = "32768 60999"
 class EphemeralPortRangeHotelReservation(Problem):
     def __init__(self):
         self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=self.app)
         self.kubectl = KubeCtl()
         self.faulty_service = "all"
 

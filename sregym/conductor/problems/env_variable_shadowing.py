@@ -16,8 +16,7 @@ class EnvVariableShadowing(Problem):
             self.app = AstronomyShop()
         else:
             raise ValueError(f"Unsupported application: {self.app_name}")
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=self.app)
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",

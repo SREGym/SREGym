@@ -16,8 +16,7 @@ class MissingEnvVariable(Problem):
             raise ValueError
 
         self.app = AstronomyShop()
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=self.app)
         self.env_var = "CART_ADDR"
         self.env_var_value = "cart:8080"
         self.root_cause = self.build_structured_root_cause(

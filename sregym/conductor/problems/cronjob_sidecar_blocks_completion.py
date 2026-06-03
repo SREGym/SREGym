@@ -119,9 +119,8 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
         self.cronjob_name = self.CRONJOB_NAME
 
         self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=self.app)
 
-        self.namespace = self.app.namespace
         self.kubectl = KubeCtl()
         self.batch_v1 = client.BatchV1Api()
         self.core_v1 = client.CoreV1Api()

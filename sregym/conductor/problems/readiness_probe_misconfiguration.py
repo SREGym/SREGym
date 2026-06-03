@@ -23,8 +23,7 @@ class ReadinessProbeMisconfiguration(Problem):
         else:
             raise ValueError(f"Unsupported app name: {app_name}")
 
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=self.app)
 
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(

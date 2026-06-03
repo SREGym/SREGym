@@ -14,9 +14,8 @@ class TopOfRackRouterPartitionHotelReservation(Problem):
         else:
             raise ValueError(f"Unsupported app_name: {app_name}")
         self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=self.app)
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = faulty_service
         self.fault_type = "tor_network_partition"
         self.root_cause = self.build_structured_root_cause(

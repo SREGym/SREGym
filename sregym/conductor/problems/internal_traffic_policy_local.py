@@ -82,7 +82,7 @@ class InternalTrafficPolicyLocalAstronomyShop(Problem):
 
     def __init__(self):
         self.app = AstronomyShop()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=self.app)
         self.kubectl = KubeCtl()
         self.core_v1 = client.CoreV1Api()
         self.apps_v1 = client.AppsV1Api()

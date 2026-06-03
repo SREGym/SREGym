@@ -23,9 +23,8 @@ class MissingService(Problem):
         else:
             raise ValueError(f"Unsupported app_name: {app_name}")
 
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=self.app)
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.root_cause = self.build_structured_root_cause(
             component=self.faulty_service,
             namespace=self.namespace,

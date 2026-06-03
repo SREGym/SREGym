@@ -14,9 +14,8 @@ class RBACMisconfiguration(Problem):
         else:
             raise ValueError(f"Unsupported app name: {app_name}")
 
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=self.app)
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = faulty_service
 
         self.root_cause = self.build_structured_root_cause(

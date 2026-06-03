@@ -40,7 +40,7 @@ class SilentDataCorruption(Problem):
         self.down_interval = down_interval
         self.probability = self.probability * 10000000  # (0-1000000000 scale) for (0-100% probability)
 
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=self.app)
 
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.deploy}",

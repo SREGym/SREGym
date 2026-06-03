@@ -30,7 +30,7 @@ class DevShmExhaustionHotelReservation(Problem):
 
     def __init__(self):
         self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=self.app)
 
         self.kubectl = KubeCtl()
         self.apps_v1 = client.AppsV1Api()

@@ -11,7 +11,6 @@ class UpdateIncompatibleCorrelated(Problem):
     def __init__(self):
         self.app = HotelReservation()
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = [
             "mongodb-geo",
             "mongodb-profile",
@@ -20,7 +19,7 @@ class UpdateIncompatibleCorrelated(Problem):
             "mongodb-reservation",
             "mongodb-user",
         ]
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=self.app)
         self.root_cause = self.build_structured_root_cause(
             component=f"deployments/{', '.join(self.faulty_service)}",
             namespace=self.namespace,

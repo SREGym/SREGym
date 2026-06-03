@@ -35,10 +35,9 @@ class HPAMissingEffectiveCPURequest(Problem):
 
     def __init__(self):
         self.app = HotelReservation()
-        self.namespace = self.app.namespace
         self.faulty_service = "frontend"
 
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=self.app)
 
         self.kubectl = KubeCtl()
 

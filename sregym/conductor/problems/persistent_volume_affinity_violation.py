@@ -11,9 +11,8 @@ class PersistentVolumeAffinityViolation(Problem):
     def __init__(self, app_name: str = "Social Network", faulty_service: str = "user-service"):
         self.apps = AppRegistry()
         self.app = self.apps.get_app_instance(app_name)
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=self.app)
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = faulty_service
         self.root_cause = self.build_structured_root_cause(
             component=self.faulty_service,
