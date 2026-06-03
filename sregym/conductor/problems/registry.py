@@ -18,6 +18,7 @@ from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowin
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.gitops_mass_deletion_hotel_reservation import GitOpsMassDeletionHotelReservation
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
@@ -111,6 +112,7 @@ class ProblemRegistry:
             # "cache_flush_capacity_degradation": CacheFlushCapacityDegradation,  # module not yet implemented
             "capacity_decrease_rpc_retry_storm": CapacityDecreaseRPCRetryStorm,
             "gc_capacity_degradation": GCCapacityDegradation,
+            "gitops_mass_deletion_hotel_reservation": GitOpsMassDeletionHotelReservation,
             "load_spike_rpc_retry_storm": LoadSpikeRPCRetryStorm,
             # --- REGULAR VIRTUALIZATION PROBLEMS ---
             "assign_to_non_existent_node": AssignNonExistentNode,
