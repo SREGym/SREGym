@@ -1,8 +1,11 @@
+import contextlib
 import logging
 import os
+import signal
 import subprocess
 import sys
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,11 +17,14 @@ logger = logging.getLogger(__name__)
 
 
 class AgentProcess:
-    def __init__(self, name: str, proc: subprocess.Popen):
+    def __init__(self, name: str, proc: subprocess.Popen, pgid: int | None = None):
         self.name = name
         self.proc = proc
         self.started_at = datetime.now(UTC)
         self.container_name: str | None = None  # set when running in container mode
+        # Process-group id for shell-launched (non-container) agents. Set so that
+        # cleanup can signal the whole process tree, not just the shell wrapper.
+        self.pgid = pgid
 
 
 class AgentLauncher:
@@ -81,8 +87,13 @@ class AgentLauncher:
             text=True,
             bufsize=1,
             universal_newlines=True,
+            # Run the shell wrapper in its own session so it becomes the leader
+            # of a new process group (pgid == proc.pid). This lets cleanup signal
+            # the entire agent process tree instead of only the shell wrapper,
+            # which otherwise leaves orphaned driver/agent children running.
+            start_new_session=True,
         )
-        ap = AgentProcess(reg.name, proc)
+        ap = AgentProcess(reg.name, proc, pgid=proc.pid)
         self._procs[reg.name] = ap
         t = threading.Thread(target=self._pipe_logs, args=(reg.name, proc), daemon=True)
         t.start()
@@ -163,20 +174,81 @@ class AgentLauncher:
             del self._procs[agent_name]
             return
 
-        if self._use_containers and self._container_runner:
-            container_name = getattr(existing, "container_name", None)
-            if container_name:
-                ContainerRunner.stop_container(container_name, timeout=timeout)
+        # Choose the teardown path based on how THIS process was launched
+        # (tracked per-process via container_name), not the launcher's global
+        # container-runner state. Otherwise a shell-launched agent could fall
+        # into the container branch, find no container_name, and never be killed.
+        container_name = getattr(existing, "container_name", None)
+        if container_name:
+            ContainerRunner.stop_container(container_name, timeout=timeout)
         else:
-            try:
-                existing.proc.terminate()
-                try:
-                    existing.proc.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    existing.proc.kill()
-                    existing.proc.wait()
-            except Exception:
-                pass
+            self._terminate_process_group(existing, timeout)
 
         if agent_name in self._procs:
             del self._procs[agent_name]
+
+    def _terminate_process_group(self, ap: AgentProcess, timeout: int) -> None:
+        """Terminate a shell-launched agent and its entire process group.
+
+        Signals the whole process group (the shell wrapper plus the driver and
+        any children it spawned) so no orphaned processes survive. Falls back to
+        single-process termination if no process-group id was captured.
+        """
+        proc = ap.proc
+
+        if ap.pgid is None:
+            self._terminate_single(proc, timeout)
+            return
+
+        try:
+            os.killpg(ap.pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            # Group already gone; still reap the wrapper to avoid a zombie.
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=timeout)
+            return
+
+        # Wait for the *whole group* to drain, not just the shell wrapper. The
+        # wrapper often exits immediately on SIGTERM while the real driver (or a
+        # SIGTERM-ignoring child) keeps running, so polling proc alone would skip
+        # the SIGKILL escalation and leave orphans behind.
+        if not self._wait_for_group_exit(ap.pgid, proc, timeout):
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(ap.pgid, signal.SIGKILL)
+            self._wait_for_group_exit(ap.pgid, proc, timeout)
+
+        # Reap the wrapper so it does not linger as a zombie.
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=timeout)
+
+    @staticmethod
+    def _wait_for_group_exit(pgid: int, proc: subprocess.Popen, timeout: int, interval: float = 0.05) -> bool:
+        """Poll until no process remains in the group, or timeout. Returns True if drained.
+
+        ``proc`` (the group leader / shell wrapper) is reaped opportunistically via
+        ``poll()`` each iteration. Otherwise an unreaped zombie leader keeps the
+        group "alive" for ``killpg(pgid, 0)`` and would mask that all real children
+        have already exited.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            proc.poll()  # reap the leader if it has exited, so it stops counting
+            try:
+                os.killpg(pgid, 0)  # signal 0 == existence check for the group
+            except ProcessLookupError:
+                return True  # no live members left
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(interval)
+
+    def _terminate_single(self, proc: subprocess.Popen, timeout: int) -> None:
+        """Terminate a single process (fallback when no pgid is available)."""
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        except Exception:
+            pass
