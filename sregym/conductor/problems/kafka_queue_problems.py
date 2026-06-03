@@ -25,7 +25,11 @@ class KafkaQueueProblems(Problem):
                 f"The `{self.faulty_service}` path is experiencing queue-processing instability, with "
                 "inconsistent message production and consumption. This creates backlog growth and delivery delays "
                 "across dependent workflows. Users observe delayed state updates and intermittent operation "
-                "failures tied to event processing."
+                "failures tied to event processing. "
+                f"Mechanism: the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                f'`{self.feature_flag}` feature flag\'s `defaultVariant` set to `"on"`, which activates the '
+                "OpenTelemetry demo's in-app fault path that overloads the Kafka queue while introducing a "
+                "consumer-side processing delay, producing a consumer lag spike."
             ),
         )
         # === Attach evaluation oracles ===

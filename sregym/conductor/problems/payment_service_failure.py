@@ -24,7 +24,11 @@ class PaymentServiceFailure(Problem):
             description=(
                 f"The `{self.faulty_service}` deployment is returning persistent errors on payment processing "
                 "requests. Checkout requests reach the payment step but fail authorization/charge flow with retries "
-                "and eventual cancellation. Users experience failed purchases despite valid cart state."
+                "and eventual cancellation. Users experience failed purchases despite valid cart state. "
+                f"Mechanism: the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                f'`{self.feature_flag}` feature flag\'s `defaultVariant` set to `"100%"`, which activates the '
+                "OpenTelemetry demo's in-app fault path that makes the payment service's `Charge` gRPC handler "
+                "fail 100% of charge requests."
             ),
         )
         # === Attach evaluation oracles ===
