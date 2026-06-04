@@ -446,6 +446,98 @@ class VirtualizationFaultInjector(FaultInjector):
 
         print(f"Recovered from wrong pod selection fault for service: {target_service}")
 
+    # V.10 - Inject stale EndpointSlice entries after a rollout by keeping a deleted pod IP
+    def inject_stale_endpointslice_after_rollout(self, microservices: list[str]):
+        if len(microservices) != 1:
+            raise ValueError("stale_endpointslice_after_rollout requires [service_name]")
+
+        service = microservices[0]
+        service_config = self.kubectl.get_service_json(service, self.namespace)
+        selector = service_config.get("spec", {}).get("selector") or {}
+        if not selector:
+            raise ValueError(f"Service {service} has no selector")
+
+        selector_str = ",".join(f"{k}={v}" for k, v in selector.items())
+        pods_json = self.kubectl.exec_command(f"kubectl get pods -n {self.namespace} -l {selector_str} -o json")
+        pods_data = json.loads(pods_json)
+        pods = pods_data.get("items", [])
+        if not pods:
+            raise RuntimeError(f"No pods found for service {service} to simulate rollout")
+
+        selected_pod = next((pod for pod in pods if pod.get("status", {}).get("phase") == "Running"), pods[0])
+        pod_name = selected_pod.get("metadata", {}).get("name")
+        stale_ip = selected_pod.get("status", {}).get("podIP")
+        if not pod_name or not stale_ip:
+            raise RuntimeError(f"Could not determine a stale pod or IP for service {service}")
+
+        print(f"Deleting pod {pod_name} from service {service} to simulate rollout")
+        self.kubectl.exec_command(f"kubectl delete pod {pod_name} -n {self.namespace}")
+        self.kubectl.exec_command(f"kubectl rollout status deployment/{service} -n {self.namespace} --timeout=120s")
+
+        endpoint_slices_json = self.kubectl.exec_command(
+            f"kubectl get endpointslice -n {self.namespace} -l kubernetes.io/service-name={service} -o json"
+        )
+        endpoint_slice_data = json.loads(endpoint_slices_json)
+        slices = endpoint_slice_data.get("items", [])
+        if not slices:
+            raise RuntimeError(f"No EndpointSlice found for service {service}")
+
+        endpoint_slice = slices[0]
+        slice_name = endpoint_slice.get("metadata", {}).get("name")
+        patch_value = {
+            "addresses": [stale_ip],
+            "conditions": {"ready": True, "serving": True, "terminating": False},
+        }
+
+        patch = json.dumps([{"op": "add", "path": "/spec/endpoints/-", "value": patch_value}])
+        self.kubectl.exec_command(
+            f"kubectl patch endpointslice {slice_name} -n {self.namespace} --type=json -p='{patch}'"
+        )
+
+        print(f"Injected stale EndpointSlice entry {stale_ip} into EndpointSlice {slice_name} for service {service}")
+
+    def recover_stale_endpointslice_after_rollout(self, microservices: list[str]):
+        if len(microservices) != 1:
+            raise ValueError("stale_endpointslice_after_rollout requires [service_name]")
+
+        service = microservices[0]
+        service_config = self.kubectl.get_service_json(service, self.namespace)
+        selector = service_config.get("spec", {}).get("selector") or {}
+        if not selector:
+            raise ValueError(f"Service {service} has no selector")
+
+        selector_str = ",".join(f"{k}={v}" for k, v in selector.items())
+        pods_json = self.kubectl.exec_command(f"kubectl get pods -n {self.namespace} -l {selector_str} -o json")
+        pods_data = json.loads(pods_json)
+        current_pod_ips = {
+            pod.get("status", {}).get("podIP")
+            for pod in pods_data.get("items", [])
+            if pod.get("status", {}).get("podIP")
+        }
+
+        endpoint_slices_json = self.kubectl.exec_command(
+            f"kubectl get endpointslice -n {self.namespace} -l kubernetes.io/service-name={service} -o json"
+        )
+        endpoint_slice_data = json.loads(endpoint_slices_json)
+        for endpoint_slice in endpoint_slice_data.get("items", []):
+            slice_name = endpoint_slice.get("metadata", {}).get("name")
+            endpoints = endpoint_slice.get("endpoints", [])
+            filtered_endpoints = [
+                endpoint
+                for endpoint in endpoints
+                if any(addr in current_pod_ips for addr in endpoint.get("addresses", []))
+            ]
+
+            if filtered_endpoints != endpoints:
+                patch_body = {"spec": {"endpoints": filtered_endpoints}}
+                patch = json.dumps(patch_body)
+                self.kubectl.exec_command(
+                    f"kubectl patch endpointslice {slice_name} -n {self.namespace} --type=merge -p='{patch}'"
+                )
+                print(f"Recovered endpoint slice {slice_name}: removed stale endpoints")
+
+        print(f"Recovered stale EndpointSlice state for service {service}")
+
     # V.10 - Inject service DNS resolution failure by patching CoreDNS ConfigMap
     def inject_service_dns_resolution_failure(self, microservices: list[str]):
         for service in microservices:
