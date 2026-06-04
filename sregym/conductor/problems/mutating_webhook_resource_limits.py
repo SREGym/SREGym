@@ -6,9 +6,8 @@ every pod is mutated at creation time. The Deployment spec looks healthy. The
 actual running pods have an injected memory limit and crash immediately. The gap
 between spec and runtime is the diagnostic clue.
 
-Valid mitigations include deleting the MutatingWebhookConfiguration or patching
-it to change failurePolicy to Ignore, followed by a rolling restart to replace
-the OOMKilled pods.
+Valid mitigations include deleting the MutatingWebhookConfiguration followed by a 
+rolling restart to replace the OOMKilled pods.
 """
 
 import base64
