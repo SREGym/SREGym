@@ -1,8 +1,11 @@
+import contextlib
 import logging
 import os
+import signal
 import subprocess
 import sys
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,11 +17,12 @@ logger = logging.getLogger(__name__)
 
 
 class AgentProcess:
-    def __init__(self, name: str, proc: subprocess.Popen):
+    def __init__(self, name: str, proc: subprocess.Popen, pgid: int | None = None):
         self.name = name
         self.proc = proc
         self.started_at = datetime.now(UTC)
         self.container_name: str | None = None  # set when running in container mode
+        self.pgid = pgid  # process group of shell-launched agents, for tree cleanup
 
 
 class AgentLauncher:
@@ -81,8 +85,11 @@ class AgentLauncher:
             text=True,
             bufsize=1,
             universal_newlines=True,
+            # New session => wrapper leads its own group (pgid == pid), so cleanup
+            # can kill the whole tree instead of orphaning the agent's children.
+            start_new_session=True,
         )
-        ap = AgentProcess(reg.name, proc)
+        ap = AgentProcess(reg.name, proc, pgid=proc.pid)
         self._procs[reg.name] = ap
         t = threading.Thread(target=self._pipe_logs, args=(reg.name, proc), daemon=True)
         t.start()
@@ -163,20 +170,71 @@ class AgentLauncher:
             del self._procs[agent_name]
             return
 
-        if self._use_containers and self._container_runner:
-            container_name = getattr(existing, "container_name", None)
-            if container_name:
-                ContainerRunner.stop_container(container_name, timeout=timeout)
+        # Branch on the per-process container_name (not the global runner): a
+        # shell-launched agent has none and must be killed as a process group.
+        container_name = getattr(existing, "container_name", None)
+        if container_name:
+            ContainerRunner.stop_container(container_name, timeout=timeout)
         else:
-            try:
-                existing.proc.terminate()
-                try:
-                    existing.proc.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    existing.proc.kill()
-                    existing.proc.wait()
-            except Exception:
-                pass
+            self._terminate_process_group(existing, timeout)
 
         if agent_name in self._procs:
             del self._procs[agent_name]
+
+    def _terminate_process_group(self, ap: AgentProcess, timeout: int) -> None:
+        """Kill a shell-launched agent's whole process group, falling back to the
+        wrapper alone if no pgid was captured."""
+        proc = ap.proc
+
+        if ap.pgid is None:
+            self._terminate_single(proc, timeout)
+            return
+
+        try:
+            os.killpg(ap.pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            # Group already gone; still reap the wrapper to avoid a zombie.
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=timeout)
+            return
+
+        # Wait on the whole group, not just the wrapper: the wrapper often exits
+        # on SIGTERM while a stubborn child lives on, so we'd skip the SIGKILL.
+        if not self._wait_for_group_exit(ap.pgid, proc, timeout):
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(ap.pgid, signal.SIGKILL)
+            self._wait_for_group_exit(ap.pgid, proc, timeout)
+
+        # Reap the wrapper so it doesn't linger as a zombie.
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=timeout)
+
+    @staticmethod
+    def _wait_for_group_exit(pgid: int, proc: subprocess.Popen, timeout: int, interval: float = 0.05) -> bool:
+        """Poll until the group has no live members (or timeout). Returns True if drained.
+
+        Reaps the leader via poll() each loop; an unreaped zombie leader would
+        otherwise keep killpg(pgid, 0) succeeding and mask that children are gone.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            proc.poll()  # reap the leader if it exited, so it stops counting
+            try:
+                os.killpg(pgid, 0)  # signal 0 == group existence check
+            except ProcessLookupError:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(interval)
+
+    def _terminate_single(self, proc: subprocess.Popen, timeout: int) -> None:
+        """Terminate a single process (fallback when no pgid is available)."""
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        except Exception:
+            pass
