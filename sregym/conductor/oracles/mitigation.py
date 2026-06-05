@@ -11,6 +11,11 @@ _ROLLOUT_POLL_INTERVAL = 5
 class MitigationOracle(Oracle):
     importance = 1.0
 
+    def __init__(self, problem):
+        self.problem = problem
+        deployments = self.problem.kubectl.list_deployments(self.problem.namespace)
+        self.replica_count = {dep.metadata.name: dep.spec.replicas for dep in deployments.items}
+
     def _wait_for_rollouts(self, kubectl, namespace):
         """Wait for all deployments in the namespace to finish rolling out."""
         deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS
@@ -42,6 +47,16 @@ class MitigationOracle(Oracle):
         # Wait for any in-progress rollouts to finish so we don't evaluate
         # a transient state where old pods are gone and new ones haven't crashed yet.
         self._wait_for_rollouts(kubectl, namespace)
+
+        deployments = kubectl.list_deployments(namespace)
+        if len(deployments.items) != len(self.replica_count):
+            results["success"] = False
+            return results
+
+        for dep in deployments.items:
+            if (dep.metadata.name not in self.replica_count) or (dep.status.ready_replicas != self.replica_count[dep.metadata.name]):
+                results["success"] = False
+                return results
 
         pod_list = kubectl.list_pods(namespace)
 
