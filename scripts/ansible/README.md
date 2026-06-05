@@ -2,6 +2,9 @@
 
 This is the instruction to use Ansible to build a remote cluster for SREGym. We currently use [CloudLab](https://www.cloudlab.us/) but we believe this will work on any servers you have access to.
 
+> [!NOTE]
+> This playbook needs SSH + root (sudo) access to each host for OS-level setup, so a managed Kubernetes service won't work. Instead, spin up a few plain VMs/VPS instances and add them to `inventory.yml`.
+
 
 ### 1) Modify the inventory file
 ```bash
