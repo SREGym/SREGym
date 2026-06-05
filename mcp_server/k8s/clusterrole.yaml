@@ -76,10 +76,6 @@ rules:
       - mutatingwebhookconfigurations
     verbs: ["get", "list", "watch", "delete", "patch", "update"]
 
-  # RBAC discovery and repair. Patch/update on ClusterRoles is needed for
-  # controller-RBAC incidents where the framework creates the faulty role and
-  # agents must restore missing rules. Create remains excluded so the framework
-  # controls which cluster-scoped RBAC objects appear.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources:
       - clusterroles
