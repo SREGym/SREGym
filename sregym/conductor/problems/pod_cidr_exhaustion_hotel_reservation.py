@@ -36,9 +36,8 @@ class PodCIDRExhaustionHotelReservation(Problem):
 
     def __init__(self, faulty_service: str = "frontend"):
         self.faulty_service = faulty_service
-        self.app = HotelReservation()
         self.kubectl = KubeCtl()
-        super().__init__(app=self.app)
+        super().__init__(app=HotelReservation())
 
         self.root_cause = self.build_structured_root_cause(
             component="cluster-networking",

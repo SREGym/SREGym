@@ -63,8 +63,8 @@ class AdmissionWebhookOutage(Problem):
 
         self.app_name = app_name
         self.faulty_service = faulty_service
-        self.app = self.APPS[app_name]()
-        super().__init__(app=self.app)
+        app = self.APPS[app_name]()
+        super().__init__(app=app)
 
         self.kubectl = KubeCtl()
         self.admission_api = client.AdmissionregistrationV1Api()

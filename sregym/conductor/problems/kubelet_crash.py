@@ -9,8 +9,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class KubeletCrash(Problem):
     def __init__(self):
-        self.app = AstronomyShop()
-        super().__init__(app=self.app)
+        super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
         self.rollout_services = ["frontend", "frontend-proxy", "currency"]
         self.injector = RemoteOSFaultInjector()

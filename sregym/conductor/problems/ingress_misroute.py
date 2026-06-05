@@ -11,8 +11,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class IngressMisroute(Problem):
     def __init__(self, path="/api", correct_service="frontend-service", wrong_service="recommendation-service"):
-        self.app = HotelReservation()
-        super().__init__(app=self.app)
+        super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
         self.path = path
         self.correct_service = correct_service

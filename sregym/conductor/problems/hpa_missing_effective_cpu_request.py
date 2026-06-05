@@ -34,10 +34,9 @@ class HPAMissingEffectiveCPURequest(Problem):
     ROLLOUT_RESTART_ANNOTATION = "kubectl.kubernetes.io/restartedAt"
 
     def __init__(self):
-        self.app = HotelReservation()
         self.faulty_service = "frontend"
 
-        super().__init__(app=self.app)
+        super().__init__(app=HotelReservation())
 
         self.kubectl = KubeCtl()
 

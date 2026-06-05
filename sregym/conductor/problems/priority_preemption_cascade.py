@@ -53,8 +53,7 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     PADDING_LABEL = "report-cache"
 
     def __init__(self, faulty_service: str = "reservation"):
-        self.app = HotelReservation()
-        super().__init__(app=self.app)
+        super().__init__(app=HotelReservation())
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
         self.apps_v1 = client.AppsV1Api()

@@ -12,8 +12,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class GCCapacityDegradation(Problem):
     def __init__(self):
-        self.app = BlueprintHotelReservation()
-        super().__init__(app=self.app)
+        super().__init__(app=BlueprintHotelReservation())
         self.kubectl = KubeCtl()
         self.faulty_service = "garbage collection"
         self.root_cause = self.build_structured_root_cause(

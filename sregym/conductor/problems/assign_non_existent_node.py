@@ -13,8 +13,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class AssignNonExistentNode(Problem):
     def __init__(self):
-        self.app = SocialNetwork()
-        super().__init__(app=self.app)
+        super().__init__(app=SocialNetwork())
         self.kubectl = KubeCtl()
         self.faulty_service = "user-service"
         self.root_cause = self.build_structured_root_cause(

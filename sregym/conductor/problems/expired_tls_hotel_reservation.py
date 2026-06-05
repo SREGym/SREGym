@@ -25,8 +25,7 @@ class ExpiredTlsHotelReservation(Problem):
     """
 
     def __init__(self):
-        self.app = HotelReservation()
-        super().__init__(app=self.app)
+        super().__init__(app=HotelReservation())
 
         self.kubectl = KubeCtl()
         self.problem_id = "expired_tls_hotel_reservation"

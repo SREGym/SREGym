@@ -13,8 +13,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class ScalePodSocialNet(Problem):
     def __init__(self):
-        self.app = SocialNetwork()
-        super().__init__(app=self.app)
+        super().__init__(app=SocialNetwork())
         self.kubectl = KubeCtl()
         # self.faulty_service = "url-shorten-mongodb"
         self.faulty_service = "user-service"

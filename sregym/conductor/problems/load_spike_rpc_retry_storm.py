@@ -25,8 +25,7 @@ _REVERT_SECONDS = 3510
 
 class LoadSpikeRPCRetryStorm(Problem):
     def __init__(self):
-        self.app = BlueprintHotelReservation()
-        super().__init__(app=self.app)
+        super().__init__(app=BlueprintHotelReservation())
         self.kubectl = KubeCtl()
         self.faulty_service = "rpc"
         self.root_cause = self.build_structured_root_cause(

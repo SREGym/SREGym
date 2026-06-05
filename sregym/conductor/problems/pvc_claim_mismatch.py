@@ -12,8 +12,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class PVCClaimMismatch(Problem):
     def __init__(self):
-        self.app = HotelReservation()
-        super().__init__(app=self.app)
+        super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
         self.app.payload_script = (
             TARGET_MICROSERVICES / "hotelReservation/wrk2/scripts/hotel-reservation/mixed-workload_type_1.lua"

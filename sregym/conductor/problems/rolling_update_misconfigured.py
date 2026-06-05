@@ -14,13 +14,13 @@ class RollingUpdateMisconfigured(Problem):
         self.app_name = app_name
 
         if self.app_name == "social_network":
-            self.app = SocialNetwork()
+            app = SocialNetwork()
         elif self.app_name == "hotel_reservation":
-            self.app = HotelReservation()
+            app = HotelReservation()
         else:
             raise ValueError(f"Unsupported app name: {app_name}")
 
-        super().__init__(app=self.app)
+        super().__init__(app=app)
 
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(

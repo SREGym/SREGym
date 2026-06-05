@@ -12,8 +12,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class IncorrectPortAssignment(Problem):
     def __init__(self, **kwargs):
-        self.app = AstronomyShop()
-        super().__init__(app=self.app)
+        super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
         self.faulty_service = "checkout"
         self.env_var = "PRODUCT_CATALOG_ADDR"

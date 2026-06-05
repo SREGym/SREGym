@@ -9,8 +9,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class ValkeyMemoryDisruption(Problem):
     def __init__(self):
-        self.app = AstronomyShop()
-        super().__init__(app=self.app)
+        super().__init__(app=AstronomyShop())
         self.faulty_service = "valkey-cart"
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(

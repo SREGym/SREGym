@@ -12,8 +12,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class MongoDBUserUnregistered(Problem):
     def __init__(self, faulty_service: str = "mongodb-geo"):
-        self.app = HotelReservation()
-        super().__init__(app=self.app)
+        super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
         self.faulty_service = faulty_service
         # NOTE: change the faulty service to mongodb-rate to create another scenario

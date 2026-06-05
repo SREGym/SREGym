@@ -11,8 +11,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class ProductCatalogServiceFailure(Problem):
     def __init__(self):
-        self.app = AstronomyShop()
-        super().__init__(app=self.app)
+        super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "product-catalog"
