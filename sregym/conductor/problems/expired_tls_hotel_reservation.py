@@ -141,11 +141,10 @@ class ExpiredTlsHotelReservation(Problem):
         # 65537 (0x10001) is the standard RSA public exponent
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 
-        subject = issuer = x509.Name(
-            [
-                x509.NameAttribute(NameOID.COMMON_NAME, "hotel-reservation.local"),
-            ]
-        )
+        # fmt: off
+        subject = issuer = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, "hotel-reservation.local"),
+        ])
         now = datetime.datetime.now(datetime.UTC)
         cert = (
             x509.CertificateBuilder()
@@ -158,15 +157,14 @@ class ExpiredTlsHotelReservation(Problem):
             .not_valid_before(now - datetime.timedelta(days=10))
             .not_valid_after(now - datetime.timedelta(days=1))  # expired yesterday
             .add_extension(
-                x509.SubjectAlternativeName(
-                    [
-                        x509.DNSName("hotel-reservation.local"),
-                    ]
-                ),
+                x509.SubjectAlternativeName([
+                    x509.DNSName("hotel-reservation.local"),
+                ]),
                 critical=False,
             )
             .sign(key, hashes.SHA256())
         )
+        # fmt: on
 
         cert_pem = cert.public_bytes(serialization.Encoding.PEM)
         key_pem = key.private_bytes(
