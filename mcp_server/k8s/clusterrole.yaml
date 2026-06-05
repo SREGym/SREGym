@@ -75,7 +75,7 @@ rules:
       - validatingwebhookconfigurations
       - mutatingwebhookconfigurations
     verbs: ["get", "list", "watch", "delete", "patch", "update"]
-
+# RBAC (read-only)
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources:
       - clusterroles
