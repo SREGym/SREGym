@@ -1,16 +1,30 @@
-"""Problem: a MutatingWebhookConfiguration silently overwrites pod memory limits,
-causing OOMKill on every new pod in the social-network namespace.
+"""Problem: a MutatingWebhookConfiguration silently rewrites pod memory
+requests and limits, causing OOMKill on every new pod in the social-network
+namespace.
 
-The webhook backend is reachable and TLS is valid, so admission succeeds — but
-every pod is mutated at creation time. The Deployment spec looks healthy. The
-actual running pods have an injected memory limit and crash immediately. The gap
-between spec and runtime is the diagnostic clue.
+The target Deployment (``nginx-thrift``) is first patched with explicit,
+legitimate-looking memory resources (``requests: 128Mi``, ``limits: 256Mi``)
+so the spec carries real values — an agent inspecting the Deployment cannot
+rule the webhook in by spotting an empty ``resources`` block. The webhook
+backend is reachable and TLS is valid, so admission succeeds. At pod CREATE
+time the webhook overwrites both ``requests.memory`` and ``limits.memory``
+to ``16Mi`` (keeping ``requests <= limits`` so the apiserver accepts the
+mutated pod), and the container is OOMKilled on startup. The only diagnostic
+clue is the gap between the Deployment spec (128Mi / 256Mi) and the running
+pod resources (16Mi / 16Mi).
 
-Valid mitigations include deleting the MutatingWebhookConfiguration followed by a 
-rolling restart to replace the OOMKilled pods.
+Several inert decoy MutatingWebhookConfigurations (cert-manager, istio,
+kyverno, linkerd) are installed alongside the real one so the cluster's
+admission stack looks like a realistic production setup; the agent has to
+read each webhook's rules and clientConfig to identify the active one.
+
+Valid mitigations include deleting the active MutatingWebhookConfiguration
+(``pod-policy.platform.k8s.io``) followed by a rolling restart to replace
+the OOMKilled pods.
 """
 
 import base64
+import json
 import subprocess
 import tempfile
 import textwrap
@@ -29,13 +43,90 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class MutatingWebhookResourceLimits(Problem):
-    """Deploy a mutating admission webhook that silently caps pod memory to INJECTED_MEMORY_LIMIT."""
+    """Pre-patch nginx-thrift with legitimate-looking memory resources, then
+    deploy a mutating admission webhook that silently rewrites both
+    ``requests.memory`` and ``limits.memory`` of every new pod to
+    ``INJECTED_MEMORY``."""
 
     WEBHOOK_NAME = "pod-policy.platform.k8s.io"
     BACKEND_SVC_NAME = "platform-policy-controller"
     BACKEND_SVC_NAMESPACE = "platform-ops"
     BACKEND_DEPLOYMENT_NAME = "platform-policy-controller"
-    INJECTED_MEMORY_LIMIT = "16Mi"
+    # Spec values applied to the target Deployment before the webhook is armed,
+    # so the agent sees plausible production-grade resource values when they
+    # inspect the Deployment.
+    SPEC_MEMORY_REQUEST = "128Mi"
+    SPEC_MEMORY_LIMIT = "256Mi"
+    # Value the webhook stamps into both requests.memory and limits.memory at
+    # CREATE time. Equal request and limit keeps the mutated pod admissible
+    # (requests <= limits) while still triggering OOMKill on real workloads.
+    INJECTED_MEMORY = "16Mi"
+
+    # All decoy webhooks share this namespaceSelector. No namespace in the
+    # cluster carries the label, so the decoys are never consulted regardless
+    # of their rules. failurePolicy=Ignore is a second layer of safety in case
+    # an unrelated controller ever happens to apply the label.
+    DECOY_NAMESPACE_SELECTOR = {"matchLabels": {"sregym.io/decoy-target": "true"}}
+
+    # Inert decoy MutatingWebhookConfigurations installed alongside the real
+    # fault so an agent surveying the cluster sees a realistic policy/mesh
+    # stack rather than a single suspicious webhook. Names, webhook FQDNs,
+    # and rules mirror the canonical configurations shipped by each project
+    # so the real fault hides among them.
+    DECOY_WEBHOOKS = (
+        {
+            "name": "cert-manager-webhook",
+            "webhook_name": "webhook.cert-manager.io",
+            "service_name": "cert-manager-webhook",
+            "service_namespace": "cert-manager",
+            "rules": [{
+                "apiGroups": ["cert-manager.io"],
+                "apiVersions": ["v1"],
+                "operations": ["CREATE", "UPDATE"],
+                "resources": ["certificates", "issuers"],
+                "scope": "*",
+            }],
+        },
+        {
+            "name": "istio-sidecar-injector",
+            "webhook_name": "rev.namespace.sidecar-injector.istio.io",
+            "service_name": "istiod",
+            "service_namespace": "istio-system",
+            "rules": [{
+                "apiGroups": [""],
+                "apiVersions": ["v1"],
+                "operations": ["CREATE"],
+                "resources": ["pods"],
+                "scope": "Namespaced",
+            }],
+        },
+        {
+            "name": "kyverno-resource-mutating-webhook-cfg",
+            "webhook_name": "mutate.kyverno.svc",
+            "service_name": "kyverno-svc",
+            "service_namespace": "kyverno",
+            "rules": [{
+                "apiGroups": [""],
+                "apiVersions": ["v1"],
+                "operations": ["CREATE", "UPDATE"],
+                "resources": ["pods"],
+                "scope": "Namespaced",
+            }],
+        },
+        {
+            "name": "linkerd-proxy-injector-webhook-config",
+            "webhook_name": "linkerd-proxy-injector.linkerd.io",
+            "service_name": "linkerd-proxy-injector",
+            "service_namespace": "linkerd",
+            "rules": [{
+                "apiGroups": [""],
+                "apiVersions": ["v1"],
+                "operations": ["CREATE"],
+                "resources": ["pods"],
+                "scope": "Namespaced",
+            }],
+        },
+    )
 
     def __init__(self):
         self.faulty_service = "nginx-thrift"
@@ -54,11 +145,14 @@ class MutatingWebhookResourceLimits(Problem):
             description=(
                 f"The fault is the cluster-scoped MutatingWebhookConfiguration named `{self.WEBHOOK_NAME}`. "
                 f"It intercepts all pod CREATE operations in the `{self.namespace}` namespace and injects "
-                f"a JSON patch that overwrites the first container's memory limit to `{self.INJECTED_MEMORY_LIMIT}`. "
-                "The webhook backend server that executes the patch is not the fault — it is functioning "
-                "exactly as configured. The fault is the webhook configuration itself being present. "
-                "The Deployment spec is untouched and reports correct resource limits; "
-                f"the actual running pods have `{self.INJECTED_MEMORY_LIMIT}` and are immediately OOMKilled on startup."
+                f"a JSON patch that overwrites the first container's `resources.requests.memory` and "
+                f"`resources.limits.memory` to `{self.INJECTED_MEMORY}`. The webhook backend server that "
+                "executes the patch is not the fault — it is functioning exactly as configured. The fault "
+                "is the webhook configuration itself being present. The Deployment spec reports legitimate "
+                f"memory values (`requests: {self.SPEC_MEMORY_REQUEST}`, `limits: {self.SPEC_MEMORY_LIMIT}`); "
+                f"the actual running pods have `requests: {self.INJECTED_MEMORY}` / "
+                f"`limits: {self.INJECTED_MEMORY}` and are immediately OOMKilled on startup. The discrepancy "
+                "between the Deployment spec and the running pod resources is the diagnostic signal."
             ),
         )
 
@@ -127,6 +221,35 @@ import json
 import ssl
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
+MEMORY = "__MEMORY_VALUE__"
+
+def build_patch(resources):
+    """Emit JSON Patch ops that stamp MEMORY into both
+    resources.requests.memory and resources.limits.memory on container[0].
+    RFC 6902 "add" semantics: replaces the value if the target already exists,
+    so this works whether the field is absent or already populated."""
+    ops = []
+    if resources is None:
+        ops.append({
+            "op": "add",
+            "path": "/spec/containers/0/resources",
+            "value": {"requests": {"memory": MEMORY}, "limits": {"memory": MEMORY}},
+        })
+        return ops
+    if resources.get("requests") is None:
+        ops.append({"op": "add", "path": "/spec/containers/0/resources/requests",
+                    "value": {"memory": MEMORY}})
+    else:
+        ops.append({"op": "add", "path": "/spec/containers/0/resources/requests/memory",
+                    "value": MEMORY})
+    if resources.get("limits") is None:
+        ops.append({"op": "add", "path": "/spec/containers/0/resources/limits",
+                    "value": {"memory": MEMORY}})
+    else:
+        ops.append({"op": "add", "path": "/spec/containers/0/resources/limits/memory",
+                    "value": MEMORY})
+    return ops
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         length = int(self.headers.get("content-length", "0") or 0)
@@ -138,16 +261,7 @@ class Handler(BaseHTTPRequestHandler):
             uid = body.get("request", {}).get("uid", "")
             containers = body.get("request", {}).get("object", {}).get("spec", {}).get("containers", [])
             if containers:
-                resources = containers[0].get("resources")
-                if resources is None:
-                    patch = [{"op": "add", "path": "/spec/containers/0/resources",
-                              "value": {"limits": {"memory": "__MEMORY_LIMIT__"}}}]
-                elif resources.get("limits") is None:
-                    patch = [{"op": "add", "path": "/spec/containers/0/resources/limits",
-                              "value": {"memory": "__MEMORY_LIMIT__"}}]
-                else:
-                    patch = [{"op": "add", "path": "/spec/containers/0/resources/limits/memory",
-                              "value": "__MEMORY_LIMIT__"}]
+                patch = build_patch(containers[0].get("resources"))
         except Exception:
             pass
 
@@ -176,7 +290,7 @@ ctx.load_cert_chain("/certs/tls.crt", "/certs/tls.key")
 httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
 httpd.serve_forever()
 '''
-        server_code = server_code.replace("__MEMORY_LIMIT__", self.INJECTED_MEMORY_LIMIT)
+        server_code = server_code.replace("__MEMORY_VALUE__", self.INJECTED_MEMORY)
 
         manifest = f"""
 apiVersion: v1
@@ -307,11 +421,150 @@ spec:
             ],
         }
 
+    def _build_decoy_webhook_body(self, spec: dict) -> dict:
+        """Build a decoy MutatingWebhookConfiguration body from a DECOY_WEBHOOKS spec.
+
+        Decoys reuse the real backend's CA bundle (saves a second OpenSSL run
+        and makes them visually indistinguishable from the real one to an
+        agent eyeballing caBundle values). They point at services in
+        namespaces that don't exist; the apiserver never resolves them
+        because DECOY_NAMESPACE_SELECTOR matches no namespace, and
+        failurePolicy=Ignore guarantees no impact even if it did.
+        """
+        if not self.ca_bundle:
+            raise RuntimeError("ca_bundle not initialized; call _ensure_webhook_backend first")
+
+        return {
+            "apiVersion": "admissionregistration.k8s.io/v1",
+            "kind": "MutatingWebhookConfiguration",
+            "metadata": {"name": spec["name"]},
+            "webhooks": [
+                {
+                    "name": spec["webhook_name"],
+                    "clientConfig": {
+                        "service": {
+                            "name": spec["service_name"],
+                            "namespace": spec["service_namespace"],
+                            "path": "/mutate",
+                            "port": 443,
+                        },
+                        "caBundle": self.ca_bundle,
+                    },
+                    "rules": spec["rules"],
+                    "failurePolicy": "Ignore",
+                    "sideEffects": "None",
+                    "admissionReviewVersions": ["v1"],
+                    "namespaceSelector": self.DECOY_NAMESPACE_SELECTOR,
+                    "timeoutSeconds": 1,
+                }
+            ],
+        }
+
+    def _install_decoy_webhooks(self):
+        """Install all DECOY_WEBHOOKS. Idempotent: existing decoys are replaced
+        in-place so re-running inject_fault never errors on the second pass."""
+        print(f"[Decoys] Installing {len(self.DECOY_WEBHOOKS)} decoy MutatingWebhookConfigurations")
+        for spec in self.DECOY_WEBHOOKS:
+            body = self._build_decoy_webhook_body(spec)
+            try:
+                self.admission_api.create_mutating_webhook_configuration(body=body)
+                print(f"  Created decoy: {spec['name']}")
+            except ApiException as e:
+                if e.status == 409:
+                    existing = self.admission_api.read_mutating_webhook_configuration(name=spec["name"])
+                    body["metadata"]["resourceVersion"] = existing.metadata.resource_version
+                    self.admission_api.replace_mutating_webhook_configuration(name=spec["name"], body=body)
+                    print(f"  Replaced decoy: {spec['name']}")
+                else:
+                    raise
+
+    def _remove_decoy_webhooks(self):
+        """Delete all DECOY_WEBHOOKS. 404s are tolerated (already gone)."""
+        print("[Decoys] Removing decoy MutatingWebhookConfigurations")
+        for spec in self.DECOY_WEBHOOKS:
+            try:
+                self.admission_api.delete_mutating_webhook_configuration(name=spec["name"])
+                print(f"  Deleted decoy: {spec['name']}")
+            except ApiException as e:
+                if e.status == 404:
+                    print(f"  Decoy {spec['name']} already absent")
+                else:
+                    raise
+
+    def _patch_target_deployment_resources(self):
+        """Patch the target Deployment's first container with explicit memory
+        requests and limits so its spec carries plausible production values.
+
+        The container is identified by name (looked up from the live
+        Deployment) so the strategic-merge patch merges into the existing
+        container rather than appending a new one. This runs before the
+        webhook is armed so the rolling restart caused by the patch completes
+        with healthy pods; the webhook only ever sees the *next* CREATE.
+        """
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        if deployment is None:
+            raise RuntimeError(
+                f"Deployment '{self.faulty_service}' not found in namespace '{self.namespace}'"
+            )
+        containers = deployment.spec.template.spec.containers
+        if not containers:
+            raise RuntimeError(
+                f"Deployment '{self.faulty_service}' has no containers"
+            )
+        container_name = containers[0].name
+
+        print(
+            f"[Spec Pre-patch] Setting {self.faulty_service} container "
+            f"'{container_name}' memory requests={self.SPEC_MEMORY_REQUEST}, "
+            f"limits={self.SPEC_MEMORY_LIMIT}"
+        )
+        patch_body = json.dumps({
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": container_name,
+                                "resources": {
+                                    "requests": {"memory": self.SPEC_MEMORY_REQUEST},
+                                    "limits": {"memory": self.SPEC_MEMORY_LIMIT},
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        })
+        self._run([
+            "kubectl", "-n", self.namespace,
+            "patch", "deployment", self.faulty_service,
+            "--type=strategic", "-p", patch_body,
+        ])
+        self._run([
+            "kubectl", "-n", self.namespace,
+            "rollout", "status", f"deployment/{self.faulty_service}",
+            "--timeout=180s",
+        ])
+
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
 
+        # Pre-patch the target Deployment so its spec carries explicit, realistic
+        # memory resources before the webhook is armed. Without this, an agent
+        # can rule the webhook in by spotting an empty `resources` block on the
+        # spec vs. a populated one on the running pod. With the spec carrying
+        # 128Mi/256Mi, only the *value* gap (spec 128/256 vs. pod 16/16) leaks
+        # the mutation.
+        self._patch_target_deployment_resources()
+
         self._ensure_webhook_backend()
+
+        # Install decoys before the real webhook so the cluster's admission
+        # surface looks like a real policy/mesh stack the moment the fault is
+        # armed. Decoys are inert (namespaceSelector never matches,
+        # failurePolicy=Ignore), so install order has no functional effect.
+        self._install_decoy_webhooks()
 
         webhook = self._build_webhook_body()
         try:
@@ -341,7 +594,10 @@ spec:
             namespace=self.namespace,
             body=client.V1DeleteOptions(grace_period_seconds=0),
         )
-        print(f"Deleted pod {target}; replacement pod will be mutated to {self.INJECTED_MEMORY_LIMIT} memory limit")
+        print(
+            f"Deleted pod {target}; replacement pod will be mutated to "
+            f"requests={self.INJECTED_MEMORY}, limits={self.INJECTED_MEMORY}"
+        )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
@@ -355,6 +611,8 @@ spec:
                 print(f"MutatingWebhookConfiguration {self.WEBHOOK_NAME} already absent")
             else:
                 raise
+
+        self._remove_decoy_webhooks()
 
         subprocess.run(
             ["kubectl", "delete", "namespace", self.BACKEND_SVC_NAMESPACE, "--ignore-not-found"],
