@@ -20,6 +20,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
+from clients.harness.problem_id import HARNESS_PROBLEM_ID_ENV
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
@@ -274,6 +275,8 @@ def driver_loop(
                 run_dir = base_dir / agent_to_run / pid / f"run_{attempt}"
                 run_dir.mkdir(parents=True, exist_ok=True)
                 os.environ["AGENT_LOGS_DIR"] = str(run_dir.resolve())
+                # Harness-only problem id for client drivers (host + container via AgentLauncher).
+                os.environ[HARNESS_PROBLEM_ID_ENV] = pid
 
                 reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
                 if reg:
@@ -389,6 +392,7 @@ def driver_loop(
                 if not use_external_harness:
                     LAUNCHER.cleanup_agent(agent_to_run)
                     console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
+                    os.environ.pop(HARNESS_PROBLEM_ID_ENV, None)
 
                 progress.advance(task_id)
 
