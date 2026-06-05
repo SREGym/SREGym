@@ -13,14 +13,25 @@ mutated pod), and the container is OOMKilled on startup. The only diagnostic
 clue is the gap between the Deployment spec (128Mi / 256Mi) and the running
 pod resources (16Mi / 16Mi).
 
-Several inert decoy MutatingWebhookConfigurations (cert-manager, istio,
-kyverno, linkerd) are installed alongside the real one so the cluster's
-admission stack looks like a realistic production setup; the agent has to
-read each webhook's rules and clientConfig to identify the active one.
+Four companion MutatingWebhookConfigurations modelled on cert-manager,
+istio, kyverno, and linkerd are installed alongside the active one. All
+five share the same backend Service, CA bundle, ``failurePolicy``,
+``sideEffects``, ``admissionReviewVersions``, ``timeoutSeconds`` — *and
+the same ``namespaceSelector`` targeting the affected namespace.* An
+agent's "which webhook matches this namespace?" check returns five hits,
+not one. Each companion stays inert via a different mechanism:
+cert-manager's rules target ``cert-manager.io`` CRDs that aren't
+installed; istio, kyverno, and linkerd carry ``objectSelectors`` requiring
+opt-in pod labels (``sidecar.istio.io/inject: "true"``,
+``kyverno.io/managed: enabled``, ``linkerd.io/inject: enabled``) that no
+pod in the cluster carries. The active webhook
+(``gatekeeper-mutating-webhook-configuration``) is the only one whose
+rules target pod CREATE *and* whose objectSelector is absent — it is
+the only one that actually fires.
 
 Valid mitigations include deleting the active MutatingWebhookConfiguration
-(``pod-policy.platform.k8s.io``) followed by a rolling restart to replace
-the OOMKilled pods.
+(``gatekeeper-mutating-webhook-configuration``) followed by a rolling
+restart to replace the OOMKilled pods.
 """
 
 import base64
@@ -48,7 +59,15 @@ class MutatingWebhookResourceLimits(Problem):
     ``requests.memory`` and ``limits.memory`` of every new pod to
     ``INJECTED_MEMORY``."""
 
-    WEBHOOK_NAME = "pod-policy.platform.k8s.io"
+    # Active MWC resource name. Chosen to match the canonical name shipped
+    # by OPA Gatekeeper so the active config doesn't stand out by name in
+    # the company of the four companion configs (cert-manager, istio,
+    # kyverno, linkerd). Without this, an agent listing webhooks pattern-
+    # matches recognizable project names against one unfamiliar one and
+    # singles out the active one by name alone.
+    WEBHOOK_NAME = "gatekeeper-mutating-webhook-configuration"
+    # Canonical OPA Gatekeeper webhook FQDN; used for webhooks[0].name.
+    WEBHOOK_FQDN = "mutation.gatekeeper.sh"
     BACKEND_SVC_NAME = "platform-policy-controller"
     BACKEND_SVC_NAMESPACE = "platform-ops"
     BACKEND_DEPLOYMENT_NAME = "platform-policy-controller"
@@ -62,23 +81,27 @@ class MutatingWebhookResourceLimits(Problem):
     # (requests <= limits) while still triggering OOMKill on real workloads.
     INJECTED_MEMORY = "16Mi"
 
-    # All decoy webhooks share this namespaceSelector. No namespace in the
-    # cluster carries the label, so the decoys are never consulted regardless
-    # of their rules. failurePolicy=Ignore is a second layer of safety in case
-    # an unrelated controller ever happens to apply the label.
-    DECOY_NAMESPACE_SELECTOR = {"matchLabels": {"sregym.io/decoy-target": "true"}}
-
-    # Inert decoy MutatingWebhookConfigurations installed alongside the real
-    # fault so an agent surveying the cluster sees a realistic policy/mesh
-    # stack rather than a single suspicious webhook. Names, webhook FQDNs,
-    # and rules mirror the canonical configurations shipped by each project
-    # so the real fault hides among them.
+    # Companion MutatingWebhookConfigurations installed alongside the active
+    # one. Each entry mirrors the canonical naming, FQDN, and rules shipped
+    # by its public counterpart. All five (these four plus the active one)
+    # share the same backend Service AND the same namespaceSelector
+    # targeting the affected namespace — so an agent's "which webhook
+    # matches this namespace?" check returns five hits, not one. Companions
+    # stay inert via different mechanisms instead of selector mismatch:
+    #   - cert-manager: rules target cert-manager.io CRDs that aren't
+    #     installed, so the webhook is never invoked.
+    #   - istio:   objectSelector requires `sidecar.istio.io/inject: "true"`
+    #              (the real Istio injection-opt-in label), which no pod
+    #              in the cluster carries.
+    #   - kyverno: objectSelector requires `kyverno.io/managed: enabled`.
+    #   - linkerd: objectSelector requires `linkerd.io/inject: enabled`
+    #              (the real Linkerd injection-opt-in label).
+    # The backend independently gates its memory patch on `kind == Pod`,
+    # so an unexpectedly-invoked companion still no-ops.
     DECOY_WEBHOOKS = (
         {
             "name": "cert-manager-webhook",
             "webhook_name": "webhook.cert-manager.io",
-            "service_name": "cert-manager-webhook",
-            "service_namespace": "cert-manager",
             "rules": [{
                 "apiGroups": ["cert-manager.io"],
                 "apiVersions": ["v1"],
@@ -86,12 +109,11 @@ class MutatingWebhookResourceLimits(Problem):
                 "resources": ["certificates", "issuers"],
                 "scope": "*",
             }],
+            "object_selector": None,
         },
         {
             "name": "istio-sidecar-injector",
             "webhook_name": "rev.namespace.sidecar-injector.istio.io",
-            "service_name": "istiod",
-            "service_namespace": "istio-system",
             "rules": [{
                 "apiGroups": [""],
                 "apiVersions": ["v1"],
@@ -99,12 +121,11 @@ class MutatingWebhookResourceLimits(Problem):
                 "resources": ["pods"],
                 "scope": "Namespaced",
             }],
+            "object_selector": {"matchLabels": {"sidecar.istio.io/inject": "true"}},
         },
         {
             "name": "kyverno-resource-mutating-webhook-cfg",
             "webhook_name": "mutate.kyverno.svc",
-            "service_name": "kyverno-svc",
-            "service_namespace": "kyverno",
             "rules": [{
                 "apiGroups": [""],
                 "apiVersions": ["v1"],
@@ -112,12 +133,11 @@ class MutatingWebhookResourceLimits(Problem):
                 "resources": ["pods"],
                 "scope": "Namespaced",
             }],
+            "object_selector": {"matchLabels": {"kyverno.io/managed": "enabled"}},
         },
         {
             "name": "linkerd-proxy-injector-webhook-config",
             "webhook_name": "linkerd-proxy-injector.linkerd.io",
-            "service_name": "linkerd-proxy-injector",
-            "service_namespace": "linkerd",
             "rules": [{
                 "apiGroups": [""],
                 "apiVersions": ["v1"],
@@ -125,6 +145,7 @@ class MutatingWebhookResourceLimits(Problem):
                 "resources": ["pods"],
                 "scope": "Namespaced",
             }],
+            "object_selector": {"matchLabels": {"linkerd.io/inject": "enabled"}},
         },
     )
 
@@ -146,13 +167,17 @@ class MutatingWebhookResourceLimits(Problem):
                 f"The fault is the cluster-scoped MutatingWebhookConfiguration named `{self.WEBHOOK_NAME}`. "
                 f"It intercepts all pod CREATE operations in the `{self.namespace}` namespace and injects "
                 f"a JSON patch that overwrites the first container's `resources.requests.memory` and "
-                f"`resources.limits.memory` to `{self.INJECTED_MEMORY}`. The webhook backend server that "
-                "executes the patch is not the fault — it is functioning exactly as configured. The fault "
-                "is the webhook configuration itself being present. The Deployment spec reports legitimate "
-                f"memory values (`requests: {self.SPEC_MEMORY_REQUEST}`, `limits: {self.SPEC_MEMORY_LIMIT}`); "
-                f"the actual running pods have `requests: {self.INJECTED_MEMORY}` / "
-                f"`limits: {self.INJECTED_MEMORY}` and are immediately OOMKilled on startup. The discrepancy "
-                "between the Deployment spec and the running pod resources is the diagnostic signal."
+                f"`resources.limits.memory` to `{self.INJECTED_MEMORY}`. Four companion "
+                "MutatingWebhookConfigurations share the same namespaceSelector and backend Service, but "
+                "each remains inert via different mechanisms (rules targeting CRDs that aren't installed, "
+                "or objectSelectors requiring opt-in pod labels that no pod carries). The webhook backend "
+                "server that executes the patch is not the fault — it is functioning exactly as "
+                "configured. The fault is the webhook configuration itself being present. The Deployment "
+                f"spec reports legitimate memory values (`requests: {self.SPEC_MEMORY_REQUEST}`, "
+                f"`limits: {self.SPEC_MEMORY_LIMIT}`); the actual running pods have "
+                f"`requests: {self.INJECTED_MEMORY}` / `limits: {self.INJECTED_MEMORY}` and are "
+                "immediately OOMKilled on startup. The discrepancy between the Deployment spec and the "
+                "running pod resources is the diagnostic signal."
             ),
         )
 
@@ -391,7 +416,7 @@ spec:
             "metadata": {"name": self.WEBHOOK_NAME},
             "webhooks": [
                 {
-                    "name": self.WEBHOOK_NAME,
+                    "name": self.WEBHOOK_FQDN,
                     "clientConfig": {
                         "service": {
                             "name": self.BACKEND_SVC_NAME,
@@ -422,42 +447,50 @@ spec:
         }
 
     def _build_decoy_webhook_body(self, spec: dict) -> dict:
-        """Build a decoy MutatingWebhookConfiguration body from a DECOY_WEBHOOKS spec.
+        """Build a companion MutatingWebhookConfiguration body from a
+        DECOY_WEBHOOKS spec.
 
-        Decoys reuse the real backend's CA bundle (saves a second OpenSSL run
-        and makes them visually indistinguishable from the real one to an
-        agent eyeballing caBundle values). They point at services in
-        namespaces that don't exist; the apiserver never resolves them
-        because DECOY_NAMESPACE_SELECTOR matches no namespace, and
-        failurePolicy=Ignore guarantees no impact even if it did.
+        All companions share the same backend Service, CA bundle,
+        failurePolicy, sideEffects, admissionReviewVersions, timeoutSeconds,
+        *and namespaceSelector* as the active webhook — so an agent
+        comparing them on those fields cannot single out the active one.
+        Each companion differs only in metadata.name, webhooks[0].name,
+        rules, and objectSelector; the objectSelector keeps it inert by
+        requiring an opt-in pod label no pod in the cluster carries.
+        cert-manager has no objectSelector but its rules target CRDs that
+        aren't installed, so it never fires either.
         """
         if not self.ca_bundle:
             raise RuntimeError("ca_bundle not initialized; call _ensure_webhook_backend first")
+
+        webhook = {
+            "name": spec["webhook_name"],
+            "clientConfig": {
+                "service": {
+                    "name": self.BACKEND_SVC_NAME,
+                    "namespace": self.BACKEND_SVC_NAMESPACE,
+                    "path": "/mutate",
+                    "port": 443,
+                },
+                "caBundle": self.ca_bundle,
+            },
+            "rules": spec["rules"],
+            "failurePolicy": "Fail",
+            "sideEffects": "None",
+            "admissionReviewVersions": ["v1"],
+            "namespaceSelector": {
+                "matchLabels": {"kubernetes.io/metadata.name": self.namespace},
+            },
+            "timeoutSeconds": 5,
+        }
+        if spec.get("object_selector") is not None:
+            webhook["objectSelector"] = spec["object_selector"]
 
         return {
             "apiVersion": "admissionregistration.k8s.io/v1",
             "kind": "MutatingWebhookConfiguration",
             "metadata": {"name": spec["name"]},
-            "webhooks": [
-                {
-                    "name": spec["webhook_name"],
-                    "clientConfig": {
-                        "service": {
-                            "name": spec["service_name"],
-                            "namespace": spec["service_namespace"],
-                            "path": "/mutate",
-                            "port": 443,
-                        },
-                        "caBundle": self.ca_bundle,
-                    },
-                    "rules": spec["rules"],
-                    "failurePolicy": "Ignore",
-                    "sideEffects": "None",
-                    "admissionReviewVersions": ["v1"],
-                    "namespaceSelector": self.DECOY_NAMESPACE_SELECTOR,
-                    "timeoutSeconds": 1,
-                }
-            ],
+            "webhooks": [webhook],
         }
 
     def _install_decoy_webhooks(self):
@@ -561,9 +594,11 @@ spec:
         self._ensure_webhook_backend()
 
         # Install decoys before the real webhook so the cluster's admission
-        # surface looks like a real policy/mesh stack the moment the fault is
-        # armed. Decoys are inert (namespaceSelector never matches,
-        # failurePolicy=Ignore), so install order has no functional effect.
+        # surface looks like a real policy/mesh stack the moment the fault
+        # is armed. Decoys share the active webhook's namespaceSelector but
+        # each stays inert (rules targeting CRDs that aren't installed, or
+        # objectSelectors requiring labels no pod carries), so install
+        # order has no functional effect.
         self._install_decoy_webhooks()
 
         webhook = self._build_webhook_body()
