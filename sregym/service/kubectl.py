@@ -137,6 +137,19 @@ class KubeCtl:
         """Fetch the service configuration."""
         return client.CoreV1Api().read_namespaced_service(name=name, namespace=namespace)
 
+    @staticmethod
+    def _is_completed_job_pod(pod) -> bool:
+        """True if the pod is a successfully-completed Job pod.
+
+        Such pods (e.g. k3s's helm-install-* pods in kube-system) sit in phase
+        "Succeeded" with terminated containers forever, so a readiness wait must
+        not block on them. Restricted to Job-owned pods so unrelated Succeeded
+        pods aren't silently excused.
+        """
+        if pod.status.phase != "Succeeded":
+            return False
+        return any(owner.kind == "Job" for owner in (pod.metadata.owner_references or []))
+
     def wait_for_ready(
         self,
         namespace: str,
@@ -195,7 +208,13 @@ class KubeCtl:
                     ready_pods = [
                         pod
                         for pod in all_pods
-                        if pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses)
+                        # Completed Job pods (e.g. k3s's helm-install-* pods in
+                        # kube-system) finish "Succeeded" with terminated, never-ready
+                        # containers — they're done, not pending — so don't block on
+                        # them. Scoped to Job-owned pods so a stray Succeeded pod (or
+                        # any Failed pod) still has to be accounted for.
+                        if self._is_completed_job_pod(pod)
+                        or (pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses))
                     ]
 
                     if len(ready_pods) == len(all_pods):
