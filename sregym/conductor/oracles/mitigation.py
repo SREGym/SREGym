@@ -24,7 +24,7 @@ class MitigationOracle(Oracle):
             all_settled = True
             for dep in deployments.items:
                 status = dep.status
-                desired = dep.spec.replicas or 1
+                desired = dep.spec.replicas if dep.spec.replicas is not None else 1
                 if (
                     (status.updated_replicas or 0) < desired
                     or (status.ready_replicas or 0) < desired
