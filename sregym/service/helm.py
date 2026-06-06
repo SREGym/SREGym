@@ -178,8 +178,6 @@ class Helm:
             namespace,
             "-f",
             values_file,
-            "--server-side=true",
-            "--force-conflicts",
         ]
 
         # Add --set options if provided
