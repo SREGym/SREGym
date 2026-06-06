@@ -115,6 +115,9 @@ class SecretRotationStaleEnvMitigation(Oracle):
             self._password_from_conn_string(env_conn)
         )
 
+        if not results["postgres_accepts_new_password"]:
+            results["reason"] = "PostgreSQL does not accept the expected rotated password"
+            return results
         if secret_conn == self.new_conn and env_conn == self.old_conn and results["postgres_accepts_new_password"]:
             results["reason"] = "product-catalog still has stale old env while Secret/PostgreSQL use new credential"
             return results
