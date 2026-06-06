@@ -7,14 +7,20 @@ from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
 from sregym.conductor.problems.admission_webhook_outage import AdmissionWebhookOutage
 from sregym.conductor.problems.admission_webhook_tls_mismatch import AdmissionWebhookTLSMismatch
+from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
 from sregym.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from sregym.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
+from sregym.conductor.problems.dev_shm_exhaustion_hotel_reservation import DevShmExhaustionHotelReservation
+from sregym.conductor.problems.cronjob_sidecar_blocks_completion import (
+    CronJobSidecarBlocksCompletionHotelReservation,
+)
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.edge_request_filter_cpu_saturation import EdgeRequestFilterCPUSaturation
 from sregym.conductor.problems.env_variable_shadowing import EnvVariableShadowing
+from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import EphemeralPortRangeHotelReservation
 from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
@@ -25,6 +31,7 @@ from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.init_container_dependency_hang import InitContainerDependencyHang
+from sregym.conductor.problems.internal_traffic_policy_local import InternalTrafficPolicyLocalAstronomyShop
 from sregym.conductor.problems.kafka_poison_pill_hol_block import KafkaPoisonPillHOLBlock
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.khaos_faults import (
@@ -58,6 +65,7 @@ from sregym.conductor.problems.payment_service_unreachable import PaymentService
 from sregym.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
 from sregym.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodCIDRExhaustionHotelReservation
+from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
 from sregym.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
 from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
@@ -110,6 +118,7 @@ class ProblemRegistry:
             "valkey_auth_disruption": ValkeyAuthDisruption,
             "valkey_memory_disruption": ValkeyMemoryDisruption,
             "edge_request_filter_cpu_saturation": EdgeRequestFilterCPUSaturation,
+            "ephemeral_port_range_hotel_reservation": EphemeralPortRangeHotelReservation,
             # # ==================== VIRTUALIZATION FAULT INJECTOR ====================
             # --- METASTABLE FAILURES ---
             # "cache_flush_capacity_degradation": CacheFlushCapacityDegradation,  # module not yet implemented
@@ -142,6 +151,7 @@ class ProblemRegistry:
             "namespace_memory_limit": NamespaceMemoryLimit,
             "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
+            "priority_preemption_cascade_hotel_reservation": PriorityPreemptionCascadeHotelReservation,
             "pvc_claim_mismatch": PVCClaimMismatch,
             "rbac_misconfiguration": RBACMisconfiguration,
             "readiness_probe_misconfiguration_astronomy_shop": lambda: ReadinessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),
@@ -256,10 +266,14 @@ class ProblemRegistry:
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
             "node_conntrack_exhaustion_hotel_reservation": NodeConntrackExhaustionHotelReservation,
+            "dev_shm_exhaustion_hotel_reservation": DevShmExhaustionHotelReservation,
+            "internal_traffic_policy_local_astronomy_shop": InternalTrafficPolicyLocalAstronomyShop,
             "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
             "pod_cidr_exhaustion_hotel_reservation": lambda: PodCIDRExhaustionHotelReservation(),
 
             "admission_webhook_tls_mismatch_hotel_reservation": lambda: AdmissionWebhookTLSMismatch(app_name="hotel_reservation", faulty_service="recommendation"),
+            "mutating_webhook_resource_limits_social_network": MutatingWebhookResourceLimits,
+            "cronjob_sidecar_blocks_completion_hotel_reservation": CronJobSidecarBlocksCompletionHotelReservation,
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[
