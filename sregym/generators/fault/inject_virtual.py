@@ -2538,11 +2538,28 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl cordon {node}")
             print(f"Cordoned node {node} (now SchedulingDisabled)")
 
-            self.kubectl.exec_command(
-                f"nohup kubectl drain {node} --ignore-daemonsets --delete-emptydir-data "
-                f"--force --timeout=0 >/tmp/{service}_pdb_drain.log 2>&1 &"
-            )
-            print(f"Started stuck drain on {node}; it will deadlock on {service} (blocked by PDB)")
+            target_pod = None
+            for pod in pods.items:
+                if pod.metadata.name.startswith(service) and pod.spec.node_name == node:
+                    target_pod = pod.metadata.name
+                    break
+            if target_pod:
+                evict_body = (
+                    '{"apiVersion":"policy/v1","kind":"Eviction",'
+                    f'"metadata":{{"name":"{target_pod}","namespace":"{self.namespace}"}}}}'
+                )
+                evict_cmd = (
+                    "kubectl create --raw "
+                    f"/api/v1/namespaces/{self.namespace}/pods/{target_pod}/eviction "
+                    f"-f - <<EOF\n{evict_body}\nEOF"
+                )
+                result = self.kubectl.exec_command(evict_cmd)
+                print(
+                    f"Attempted voluntary eviction of {target_pod}; blocked by PDB "
+                    f"(node {node} cannot be drained for maintenance). Response: {result}"
+                )
+            else:
+                print(f"Could not locate the {service} pod on node {node} to demonstrate the blocked eviction")
 
     def recover_pdb_blocks_node_drain(self, microservices: list[str]):
         for service in microservices:

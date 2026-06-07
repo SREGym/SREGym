@@ -599,6 +599,31 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not fix Calico IPPool state: {e}")
 
+        self.logger.info("[FIX] PDBBlocksDrain leftover if any")
+        try:
+            kubectl = KubeCtl()
+            pdb_name = VirtualizationFaultInjector.PDB_FAULT_NAME
+            # Find any leftover over-constrained PDB created by this fault.
+            # (kubectl cannot get/delete a named resource across all namespaces,
+            # so list all PDBs and filter by name.)
+            rows = kubectl.exec_command(
+                "kubectl get pdb --all-namespaces "
+                '-o jsonpath=\'{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\\n"}{end}\''
+            ).split("\n")
+            for row in rows:
+                parts = row.split()
+                if len(parts) == 2 and parts[1] == pdb_name:
+                    kubectl.exec_command(f"kubectl delete pdb {pdb_name} -n {parts[0]} --ignore-not-found=true")
+                    self.logger.info(f"[FIX] Deleted leftover PDB {pdb_name} in namespace {parts[0]}")
+            # Uncordon any node left SchedulingDisabled by a prior run
+            nodes = kubectl.list_nodes()
+            for node in nodes.items:
+                if node.spec.unschedulable:
+                    kubectl.exec_command(f"kubectl uncordon {node.metadata.name}")
+                    self.logger.info(f"[FIX] Uncordoned leftover node {node.metadata.name}")
+        except Exception as e:
+            self.logger.warning(f"Could not fix PDBBlocksDrain leftover state: {e}")
+
         self.logger.info("[FIX] Stale CoreDNS NXDOMAIN templates if any")
         injector = VirtualizationFaultInjector(namespace="kube-system")
         try:
