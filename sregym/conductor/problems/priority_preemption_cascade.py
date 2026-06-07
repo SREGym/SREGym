@@ -53,9 +53,7 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
     PADDING_LABEL = "report-cache"
 
     def __init__(self, faulty_service: str = "reservation"):
-        self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
-        self.namespace = self.app.namespace
+        super().__init__(app=HotelReservation())
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
         self.apps_v1 = client.AppsV1Api()
@@ -507,7 +505,7 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
             existing = self.scheduling_v1.read_priority_class(name)
             if existing.value != value:
                 raise RuntimeError(
-                    f"PriorityClass '{name}' already exists with immutable value {existing.value}; " f"expected {value}"
+                    f"PriorityClass '{name}' already exists with immutable value {existing.value}; expected {value}"
                 ) from e
             body.metadata.resource_version = existing.metadata.resource_version
             self.scheduling_v1.replace_priority_class(name=name, body=body)

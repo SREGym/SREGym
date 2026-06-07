@@ -59,10 +59,9 @@ class AdmissionWebhookTLSMismatch(Problem):
 
         self.app_name = app_name
         self.faulty_service = faulty_service
-        self.app = self.APPS[app_name]()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        app = self.APPS[app_name]()
+        super().__init__(app=app)
 
-        self.namespace = self.app.namespace
         self.kubectl = KubeCtl()
         self.admission_api = client.AdmissionregistrationV1Api()
         self.core_api = client.CoreV1Api()
