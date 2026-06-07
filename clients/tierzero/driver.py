@@ -19,6 +19,8 @@ from pathlib import Path
 
 import requests
 
+from clients.harness.problem_id import resolve_problem_id
+
 # Add SREGym root to path
 sregym_root = Path(__file__).resolve().parents[2]
 if str(sregym_root) not in sys.path:
@@ -164,15 +166,6 @@ def get_app_info(max_retries: int = 6, backoff: int = 5) -> dict:
                 raise
 
 
-def get_problem_id() -> str:
-    """Fetch current problem ID from conductor."""
-    resp = requests.get(f"{CONDUCTOR_URL}/get_problem", timeout=10)
-    resp.raise_for_status()
-    problem_id = resp.json().get("problem_id", "unknown")
-    logger.info(f"Problem ID: {problem_id}")
-    return problem_id
-
-
 def wait_for_stage(target_stages: set[str], timeout: int = 300) -> str:
     """Poll conductor until stage is in target_stages."""
     start = time.time()
@@ -279,7 +272,8 @@ def main():
 
     # ---- Get problem info ----
     app_info = get_app_info()
-    problem_id = get_problem_id()
+    problem_id = resolve_problem_id()
+    logger.info(f"Problem ID (harness): {problem_id}")
 
     params = {
         "app_name": app_info.get("app_name", "unknown"),
