@@ -26,8 +26,7 @@ class NodeConntrackExhaustionHotelReservation(Problem):
     inject_ratio_threshold, recovery_ratio_threshold = 0.98, 0.10
 
     def __init__(self):
-        self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
         self.apps_v1 = client.AppsV1Api()
         self.core_v1 = client.CoreV1Api()
