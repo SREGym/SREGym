@@ -16,9 +16,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class K8SOperatorOverloadReplicasFault(Problem):
     def __init__(self, faulty_service="tidb-app"):
-        self.app = FleetCast()
-        super().__init__(app=self.app, namespace="tidb-cluster")
-        self.namespace = self.app.namespace
+        super().__init__(app=FleetCast(), namespace="tidb-cluster")
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(

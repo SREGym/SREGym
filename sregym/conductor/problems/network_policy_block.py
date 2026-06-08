@@ -14,9 +14,7 @@ class NetworkPolicyBlock(Problem):
     POD_LABEL_KEY = "io.kompose.service"
 
     def __init__(self, faulty_service="recommendation"):
-        self.app = HotelReservation()
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
         self.faulty_service = faulty_service
         self.policy_name = f"deny-all-{faulty_service}"

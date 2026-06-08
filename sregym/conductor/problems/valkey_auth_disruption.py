@@ -9,9 +9,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class ValkeyAuthDisruption(Problem):
     def __init__(self):
-        self.app = AstronomyShop()
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=AstronomyShop())
         self.faulty_service = "valkey-cart"
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(

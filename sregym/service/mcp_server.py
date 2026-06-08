@@ -104,7 +104,9 @@ class MCPServer:
                 time.sleep(3)
                 continue
 
-            command = f"kubectl port-forward svc/{self.service_name} {self.port}:9954 -n {self.namespace}"
+            command = (
+                f"kubectl port-forward svc/{self.service_name} {self.port}:9954 -n {self.namespace} --address 0.0.0.0"
+            )
             self.port_forward_process = subprocess.Popen(
                 command,
                 shell=True,

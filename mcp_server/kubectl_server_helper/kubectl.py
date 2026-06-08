@@ -1,10 +1,12 @@
 """Interface to K8S controller service."""
 
+import contextlib
 import logging
 import os
 import re
 import shlex
-import subprocess  # nosec B404
+import signal
+import subprocess
 import time
 from enum import Enum
 
@@ -50,9 +52,8 @@ class KubeCtl:
         started = time.monotonic()
         try:
             logger.info("kubectl exec start timeout=%ss command=%r", timeout, command)
-            out = subprocess.run(  # nosec B602
+            out = _run_in_process_group(
                 command,
-                shell=True,
                 check=True,
                 capture_output=True,
                 input=input_data,
@@ -91,7 +92,7 @@ class KubeCtl:
             return f"Error executing kubectl command:\n{result.stderr}"
 
     @staticmethod
-    def extract_namespace_from_command(command: str) -> str:
+    def extract_namespace_from_command(command: str) -> str | None:
         """
         Returns the namespace.
         """
@@ -108,7 +109,7 @@ class KubeCtl:
         return namespace
 
     @staticmethod
-    def insert_flags(command: str, flags=str | list[str]) -> str:
+    def insert_flags(command: str, flags: str | list[str]) -> str:
         """
         Insert flags into a kubectl command.
         Args:
@@ -163,9 +164,8 @@ class KubeCtl:
         dry_run_command = KubeCtl.insert_flags(command, dry_run_arguments)
         timeout = _kubectl_dry_run_timeout_seconds()
         try:
-            dry_run_result = subprocess.run(  # nosec B602
+            dry_run_result = _run_in_process_group(
                 dry_run_command,
-                shell=True,
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -240,3 +240,57 @@ def _decode_output(value: bytes | str | None) -> str:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="replace")
     return value
+
+
+def _run_in_process_group(command, *, timeout, input=None, check=False, **kwargs) -> subprocess.CompletedProcess:
+    """Run a shell command in a new session so timeout kills the whole tree, not just /bin/sh.
+
+    Mirrors ``subprocess.run``: raises ``TimeoutExpired`` on timeout and ``CalledProcessError``
+    when ``check`` is set and the command fails.
+    """
+    if input is not None:
+        kwargs.setdefault("stdin", subprocess.PIPE)
+    if kwargs.pop("capture_output", False):
+        kwargs.setdefault("stdout", subprocess.PIPE)
+        kwargs.setdefault("stderr", subprocess.PIPE)
+    with subprocess.Popen(
+        command,
+        shell=True,
+        start_new_session=True,
+        **kwargs,
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(input=input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(proc)
+            stdout, stderr = _reap_after_kill(proc)
+            raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr) from None
+        except BaseException:
+            _kill_process_group(proc)
+            _reap_after_kill(proc)
+            raise
+        retcode = proc.wait()
+        if check and retcode:
+            raise subprocess.CalledProcessError(retcode, command, output=stdout, stderr=stderr)
+        return subprocess.CompletedProcess(command, retcode, stdout, stderr)
+
+
+def _reap_after_kill(proc: subprocess.Popen, timeout: float = 10.0) -> tuple:
+    """Bounded drain/reap so a process that escaped the group can't re-hang the cleanup."""
+    try:
+        return proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logger.warning("kubectl reap timed out after %.0fs; abandoning pipe drain", timeout)
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=timeout)
+        return None, None
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the whole process group led by ``proc``."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        # Can't signal the group; fall back to the child alone.
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()
