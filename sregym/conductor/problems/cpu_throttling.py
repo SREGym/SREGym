@@ -6,8 +6,6 @@ from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
-_CPU_LIMIT = "125m"
-
 
 class CpuThrottling(Problem):
     def __init__(self, faulty_service: str = "geo"):
@@ -22,16 +20,15 @@ class CpuThrottling(Problem):
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                f"The `{self.faulty_service}` deployment has a CPU limit of {_CPU_LIMIT} millicores, "
-                "which is far too low for its normal operation. The Linux CFS scheduler throttles the "
-                "container whenever it exceeds its quota within a 100ms scheduling window, causing "
-                "severe latency increases on search paths that depend on this service. "
-                "Crucially, `kubectl top pods` shows CPU usage well below the limit — the throttling "
-                "is silent at the kubectl level but visible in the container's cgroup stats "
-                "(`cpu.stat`: high `nr_throttled`) and in the Prometheus "
-                "`ContainerCPUThrottling` alert. The fix is to raise the CPU limit to a value that "
-                "accommodates burst traffic, or remove it entirely. Many kubernetes good practices guides for "
-                "critical applications recommend removing it "
+                f"The `{self.faulty_service}` deployment has a CPU limit set too low for its normal operation. "
+                "The Linux CFS scheduler throttles the container whenever it exceeds its quota within a "
+                "100ms scheduling window, causing severe latency increases on search paths that depend on "
+                "this service. Crucially, `kubectl top pods` shows CPU usage well below the limit — the "
+                "throttling is silent at the kubectl level but visible in the container's cgroup stats "
+                "(`cpu.stat`: high `nr_throttled`) and in the Prometheus `ContainerCPUThrottling` alert. "
+                "The fix is to raise the CPU limit to a value that accommodates burst traffic, or remove "
+                "it entirely. Many kubernetes good practices guides for critical applications recommend "
+                "removing it "
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
@@ -39,14 +36,13 @@ class CpuThrottling(Problem):
         self.mitigation_oracle = CpuThrottlingMitigationOracle(
             problem=self,
             faulty_service=self.faulty_service,
-            injected_cpu_limit=_CPU_LIMIT,
         )
 
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
         injector = VirtualizationFaultInjector(namespace=self.namespace)
-        injector.inject_cpu_throttle(microservices=[self.faulty_service], cpu_limit=_CPU_LIMIT)
+        injector.inject_cpu_throttle(microservices=[self.faulty_service])
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected

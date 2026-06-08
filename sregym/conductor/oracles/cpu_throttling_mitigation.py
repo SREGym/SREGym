@@ -19,10 +19,9 @@ def _parse_cpu_millicores(cpu_str: str) -> int | None:
 class CpuThrottlingMitigationOracle(Oracle):
     importance = 1.0
 
-    def __init__(self, problem, faulty_service: str, injected_cpu_limit: str = "50m"):
+    def __init__(self, problem, faulty_service: str):
         super().__init__(problem)
         self.faulty_service = faulty_service
-        self.injected_cpu_limit = injected_cpu_limit
 
     def _wait_for_rollouts(self, kubectl, namespace):
         deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS

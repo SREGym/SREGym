@@ -1,6 +1,7 @@
 """Inject faults at the virtualization layer: K8S, Docker, etc."""
 
 import copy
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -344,8 +345,9 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from resource request fault for service: {service}")
 
     # V.8a - Set a tight CPU limit to trigger CFS throttling without crashing the pod
-    def inject_cpu_throttle(self, microservices: list[str], cpu_limit: str = "50m"):
+    def inject_cpu_throttle(self, microservices: list[str], cpu_limit: str | None = None):
         for service in microservices:
+            limit = cpu_limit if cpu_limit is not None else self.calibrate_cpu_limit(service)
             original_deployment_yaml = self._get_deployment_yaml(service)
             deployment_yaml = copy.deepcopy(original_deployment_yaml)
             containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
@@ -353,12 +355,94 @@ class VirtualizationFaultInjector(FaultInjector):
                 resources = container.setdefault("resources", {})
                 # requests must be <= limits, so lower both
                 resources.setdefault("requests", {})["cpu"] = "10m"
-                resources.setdefault("limits", {})["cpu"] = cpu_limit
+                resources.setdefault("limits", {})["cpu"] = limit
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
             self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
             self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
             self._write_yaml_to_file(service, original_deployment_yaml)
-            print(f"Injected CPU throttle ({cpu_limit}) for service: {service}")
+            print(f"Injected CPU throttle ({limit}) for service: {service}")
+
+    def calibrate_cpu_limit(
+        self,
+        service: str,
+        warmup_seconds: int = 20,
+        n_samples: int = 5,
+        headroom_factor: float = 1.15,
+        cache_path: str = "/tmp/sregym_cpu_calibration.json",
+        fallback: str = "125m",
+    ) -> str:
+        """Measure unconstrained CPU usage and derive a limit with headroom.
+
+        Targets ~87% utilisation in kubectl top so the fault isn't obvious,
+        while keeping the limit tight enough to cause CFS burst throttling.
+        Result is cached by cluster fingerprint so calibration runs once per cluster.
+        """
+        key = f"{self._cluster_fingerprint()}/{service}"
+        cached = self._read_calibration_cache(cache_path, key)
+        if cached:
+            print(f"[calibration] using cached limit for {service}: {cached}")
+            return cached
+
+        print(f"[calibration] measuring baseline CPU for {service} (warmup {warmup_seconds}s)...")
+        time.sleep(warmup_seconds)
+
+        samples = []
+        for _ in range(n_samples):
+            m = self._sample_cpu_millicores(service)
+            if m is not None:
+                samples.append(m)
+            time.sleep(4)
+
+        if not samples:
+            print(f"[calibration] sampling failed, using fallback {fallback}")
+            return fallback
+
+        baseline = max(samples)
+        raw = int(baseline * headroom_factor)
+        limit_m = ((raw + 4) // 5) * 5  # round up to nearest 5m
+        limit = f"{limit_m}m"
+
+        self._write_calibration_cache(cache_path, key, limit)
+        print(f"[calibration] {service}: baseline={baseline}m → limit={limit}")
+        return limit
+
+    def _cluster_fingerprint(self) -> str:
+        nodes = self.kubectl.exec_command("kubectl get nodes -o jsonpath='{.items[*].metadata.name}'")
+        return hashlib.md5(nodes.encode()).hexdigest()[:8]
+
+    def _sample_cpu_millicores(self, service: str) -> int | None:
+        out = self.kubectl.exec_command(
+            f"kubectl top pod -n {self.namespace} -l io.kompose.service={service} --no-headers 2>/dev/null"
+        )
+        if not out or not out.strip():
+            return None
+        parts = out.strip().split()
+        if len(parts) < 2:
+            return None
+        cpu_str = parts[1]
+        if cpu_str.endswith("m"):
+            return int(cpu_str[:-1])
+        try:
+            return int(float(cpu_str) * 1000)
+        except ValueError:
+            return None
+
+    def _read_calibration_cache(self, path: str, key: str) -> str | None:
+        try:
+            with open(path) as f:
+                return json.load(f).get(key)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def _write_calibration_cache(self, path: str, key: str, value: str) -> None:
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = {}
+        data[key] = value
+        with open(path, "w") as f:
+            json.dump(data, f)
 
     def recover_cpu_throttle(self, microservices: list[str]):
         for service in microservices:
