@@ -83,6 +83,7 @@ class SecretRotationStaleEnvMitigation(Oracle):
             "postgres_accepts_product_env_password": False,
             "postgres_accepts_old_password": False,
             "postgres_accepts_new_password": False,
+            "postgresql_init_uses_new_password": False,
             "reason": "",
         }
 
@@ -114,9 +115,13 @@ class SecretRotationStaleEnvMitigation(Oracle):
         results["postgres_accepts_product_env_password"] = self._postgres_accepts_password(
             self._password_from_conn_string(env_conn)
         )
+        results["postgresql_init_uses_new_password"] = self.problem._postgresql_init_uses_password(self.new_password)
 
         if not results["postgres_accepts_new_password"]:
             results["reason"] = "PostgreSQL does not accept the expected rotated password"
+            return results
+        if not results["postgresql_init_uses_new_password"]:
+            results["reason"] = "postgresql-init no longer declares the expected rotated password"
             return results
         if secret_conn == self.new_conn and env_conn == self.old_conn and results["postgres_accepts_new_password"]:
             results["reason"] = "product-catalog still has stale old env while Secret/PostgreSQL use new credential"

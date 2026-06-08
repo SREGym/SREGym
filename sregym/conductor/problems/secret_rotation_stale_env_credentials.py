@@ -34,12 +34,24 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         self.backend_service = "postgresql"
         self.secret_name = "product-catalog-db-conn"
         self.secret_key = "DB_CONNECTION_STRING"
+        self.postgresql_init_configmap = "postgresql-init"
+        self.postgresql_init_key = "init.sql"
         self.db_user = "otelu"
         self.db_name = "otel"
         self.old_password = "otelp"
         self.new_password = "otelp_7k9m2q4x"
         self.old_conn = "postgres://otelu:otelp@postgresql/otel?sslmode=disable"
         self.new_conn = "postgres://otelu:otelp_7k9m2q4x@postgresql/otel?sslmode=disable"
+        self.literal_db_clients = {
+            "accounting": (
+                "Host=postgresql;Username=otelu;Password=otelp;Database=otel",
+                "Host=postgresql;Username=otelu;Password=otelp_7k9m2q4x;Database=otel",
+            ),
+            "product-reviews": (
+                "host=postgresql user=otelu password=otelp dbname=otel",
+                "host=postgresql user=otelu password=otelp_7k9m2q4x dbname=otel",
+            ),
+        }
         self.stale_product_catalog_pod_uid: str | None = None
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.faulty_service}",
@@ -90,6 +102,18 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         if "error" in output.lower() or "invalid" in output.lower():
             raise RuntimeError(f"Failed to set literal {self.secret_key}: {output}")
 
+    def _set_literal_db_clients_password(self, password: str) -> None:
+        """Update non-faulty pods' credentials so only product-catalog keeps wrong credentials."""
+        conn_index = 0 if password == self.old_password else 1
+        for deployment, conn_strings in self.literal_db_clients.items():
+            output = self._run(
+                f"kubectl set env deployment/{deployment} -n {self.namespace} "
+                f"--containers={deployment} {self.secret_key}={shlex.quote(conn_strings[conn_index])}"
+            )
+            if "error" in output.lower() or "invalid" in output.lower():
+                raise RuntimeError(f"Failed to set literal {self.secret_key} for {deployment}: {output}")
+            self._run(f"kubectl rollout status deployment/{deployment} -n {self.namespace} --timeout=180s")
+
     def _rollout_restart(self, deployment: str, timeout: str = "180s") -> None:
         """Restart a Deployment and wait for its rollout to finish."""
         self._run(f"kubectl rollout restart deployment/{deployment} -n {self.namespace}")
@@ -139,6 +163,52 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
             if attempt < self._POSTGRES_PASSWORD_CHECK_ATTEMPTS - 1:
                 time.sleep(self._POSTGRES_PASSWORD_CHECK_INTERVAL_SECONDS)
         return False
+
+    def _get_postgresql_init_sql(self) -> str | None:
+        """Return the live PostgreSQL init from the postgresql-init ConfigMap."""
+        output = self._run(
+            f"kubectl get configmap {self.postgresql_init_configmap} -n {self.namespace} "
+            "-o jsonpath='{.data.init\\.sql}'"
+        )
+        if "not found" in output.lower() or "error from server" in output.lower():
+            return None
+        return output or None
+
+    def _postgresql_init_uses_password(self, password: str) -> bool:
+        """Return whether postgresql-init would recreate the app user with the new password."""
+        init_sql = self._get_postgresql_init_sql() or ""
+        expected_line = f"CREATE USER {self.db_user} WITH PASSWORD '{password}';"
+        other_passwords = (item for item in (self.old_password, self.new_password) if item != password)
+        return expected_line in init_sql and not any(
+            f"CREATE USER {self.db_user} WITH PASSWORD '{other_password}';" in init_sql
+            for other_password in other_passwords
+        )
+
+    def _patch_postgresql_init_password(self, password: str) -> None:
+        """Update live postgresql-init bootstrap SQL to recreate otelu with the new password."""
+        init_sql = self._get_postgresql_init_sql()
+        if not init_sql:
+            raise RuntimeError(
+                f"ConfigMap {self.postgresql_init_configmap}/{self.postgresql_init_key} is missing or empty."
+            )
+
+        from_line = f"CREATE USER {self.db_user} WITH PASSWORD '{self.old_password}';"
+        to_line = f"CREATE USER {self.db_user} WITH PASSWORD '{self.new_password}';"
+        if password == self.old_password:
+            from_line, to_line = to_line, from_line
+        if from_line not in init_sql:
+            if to_line in init_sql:
+                return
+            raise RuntimeError(f"Could not find {self.db_user} password declaration in {self.postgresql_init_key}.")
+
+        updated_sql = init_sql.replace(from_line, to_line)
+        patch = json.dumps({"data": {self.postgresql_init_key: updated_sql}})
+        output = self._run(
+            f"kubectl patch configmap {self.postgresql_init_configmap} -n {self.namespace} "
+            f"--type=merge -p {shlex.quote(patch)}"
+        )
+        if "error" in output.lower() or "invalid" in output.lower():
+            raise RuntimeError(f"Failed to patch {self.postgresql_init_configmap}: {output}")
 
     def _get_product_catalog_pod(self):
         """Return the current product-catalog pod object, preferring a running pod."""
@@ -215,6 +285,8 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
             if not self._postgres_accepts_password(self.old_password):
                 raise RuntimeError("PostgreSQL password restore did not make the baseline password valid.")
 
+        self._patch_postgresql_init_password(self.old_password)
+        self._set_literal_db_clients_password(self.old_password)
         self._set_product_catalog_literal_env(self.old_conn)
         self._run(f"kubectl delete secret {self.secret_name} -n {self.namespace} --ignore-not-found")
         self._rollout_restart(self.faulty_service)
@@ -245,6 +317,12 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         logger.info("[secret-rotation] Updating Kubernetes Secret to the new DB connection string.")
         self._apply_secret(self.new_conn)
 
+        logger.info("[secret-rotation] Updating PostgreSQL bootstrap ConfigMap to the new DB password.")
+        self._patch_postgresql_init_password(self.new_password)
+
+        logger.info("[secret-rotation] Updating non-faulty literal DB clients to the new DB password.")
+        self._set_literal_db_clients_password(self.new_password)
+
         logger.info("[secret-rotation] Terminating existing PostgreSQL sessions to force product-catalog reconnect.")
         self._drop_postgres_connections(self.new_password)
 
@@ -255,31 +333,16 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
                 "product_env_is_old": self._get_product_catalog_env() == self.old_conn,
                 "product_pods_ready": self._product_catalog_pods_ready(),
                 "postgres_new_password": self._postgres_accepts_password(self.new_password),
-                "postgres_old_password": self._postgres_accepts_password(self.old_password),
+                "postgres_old_password_rejected": not self._postgres_accepts_password(self.old_password),
+                "postgresql_init_is_new": self._postgresql_init_uses_password(self.new_password),
             }
-            if all(
-                [
-                    state["secret_is_new"],
-                    state["product_env_is_old"],
-                    state["product_pods_ready"],
-                    state["postgres_new_password"],
-                    not state["postgres_old_password"],
-                ]
-            ):
+            if all(state.values()):
                 break
             if time.monotonic() >= deadline:
                 break
             time.sleep(self._POSTGRES_PASSWORD_CHECK_INTERVAL_SECONDS)
         logger.info("[secret-rotation] Verification: %s", state)
-        if not all(
-            [
-                state["secret_is_new"],
-                state["product_env_is_old"],
-                state["product_pods_ready"],
-                state["postgres_new_password"],
-                not state["postgres_old_password"],
-            ]
-        ):
+        if not all(state.values()):
             raise RuntimeError(f"Fault verification failed; stale env state was not created: {state}")
 
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
