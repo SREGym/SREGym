@@ -2506,23 +2506,65 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def inject_pdb_blocks_node_drain(self, microservices: list[str]):
         for service in microservices:
-            dep = self.kubectl.get_deployment(service, self.namespace)
-            replicas = dep.spec.replicas or 1
-            match_labels = dep.spec.selector.match_labels
-
-            pdb_manifest = {
-                "apiVersion": "policy/v1",
-                "kind": "PodDisruptionBudget",
-                "metadata": {"name": self.PDB_FAULT_NAME, "namespace": self.namespace},
-                "spec": {
-                    "minAvailable": replicas,
-                    "selector": {"matchLabels": match_labels},
-                },
+            # 1. Identify nodes hosting MongoDB pods. These are stateful and PV-pinned,
+            #    so they cannot reschedule and must never be drained.
+            pods = self.kubectl.list_pods(self.namespace)
+            mongo_nodes = {
+                pod.spec.node_name
+                for pod in pods.items
+                if pod.metadata.name.startswith("mongodb-") and pod.spec.node_name
             }
-            pdb_json = json.dumps(pdb_manifest)
-            self.kubectl.exec_command(f"kubectl apply -f - <<EOF\n{pdb_json}\nEOF")
-            print(f"Created over-constrained PDB '{self.PDB_FAULT_NAME}' (minAvailable={replicas}) for {service}")
+            mongo_services = sorted(
+                {
+                    pod.metadata.labels.get("io.kompose.service")
+                    for pod in pods.items
+                    if pod.metadata.name.startswith("mongodb-")
+                    and pod.metadata.labels
+                    and pod.metadata.labels.get("io.kompose.service")
+                }
+            )
+            print(f"MongoDB pods are on nodes {sorted(mongo_nodes)} (services: {mongo_services})")
 
+            # 2. Add soft anti-affinity so the target avoids co-locating with MongoDB,
+            #    then restart it so it reschedules onto a MongoDB-free node.
+            if mongo_services:
+                antiaffinity_patch = {
+                    "spec": {
+                        "template": {
+                            "spec": {
+                                "affinity": {
+                                    "podAntiAffinity": {
+                                        "preferredDuringSchedulingIgnoredDuringExecution": [
+                                            {
+                                                "weight": 100,
+                                                "podAffinityTerm": {
+                                                    "labelSelector": {
+                                                        "matchExpressions": [
+                                                            {
+                                                                "key": "io.kompose.service",
+                                                                "operator": "In",
+                                                                "values": mongo_services,
+                                                            }
+                                                        ]
+                                                    },
+                                                    "topologyKey": "kubernetes.io/hostname",
+                                                },
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                self.kubectl.patch_deployment(service, self.namespace, antiaffinity_patch)
+                self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
+                self.kubectl.exec_command(
+                    f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s"
+                )
+                print(f"Applied anti-affinity (avoid MongoDB nodes) and restarted {service}")
+
+            # 3. Find the node the target landed on after rescheduling.
             pods = self.kubectl.list_pods(self.namespace)
             node = None
             for pod in pods.items:
@@ -2532,34 +2574,42 @@ class VirtualizationFaultInjector(FaultInjector):
             if not node:
                 raise RuntimeError(f"Could not find a node hosting {service}")
 
+            # 4. Guarantee determinism: the drained node must have no MongoDB pod, so the
+            #    drain only blocks on the PDB-protected target and never on a PV-pinned pod.
+            if node in mongo_nodes:
+                raise RuntimeError(
+                    f"{service} landed on MongoDB-hosting node {node}; aborting to avoid a "
+                    "non-deterministic drain. Anti-affinity is soft; retrying injection usually resolves this."
+                )
+            print(f"{service} is on MongoDB-free node {node}; safe to cordon and drain")
+
             with open(f"/tmp/{service}_pdb_drain_node.txt", "w") as f:
                 f.write(node)
 
+            # 5. Create the over-constrained PDB (minAvailable == replicas => 0 disruptions allowed).
+            dep = self.kubectl.get_deployment(service, self.namespace)
+            replicas = dep.spec.replicas or 1
+            match_labels = dep.spec.selector.match_labels
+            pdb_manifest = {
+                "apiVersion": "policy/v1",
+                "kind": "PodDisruptionBudget",
+                "metadata": {"name": self.PDB_FAULT_NAME, "namespace": self.namespace},
+                "spec": {"minAvailable": replicas, "selector": {"matchLabels": match_labels}},
+            }
+            pdb_json = json.dumps(pdb_manifest)
+            self.kubectl.exec_command(f"kubectl apply -f - <<EOF\n{pdb_json}\nEOF")
+            print(f"Created over-constrained PDB '{self.PDB_FAULT_NAME}' (minAvailable={replicas}) for {service}")
+
+            # 6. Cordon the node and start a real drain. It evicts stateless pods (which
+            #    reschedule) and then deadlocks retrying on the PDB-protected target. No
+            #    MongoDB pod is on this node, so nothing stateful is disrupted.
             self.kubectl.exec_command(f"kubectl cordon {node}")
             print(f"Cordoned node {node} (now SchedulingDisabled)")
-
-            target_pod = None
-            for pod in pods.items:
-                if pod.metadata.name.startswith(service) and pod.spec.node_name == node:
-                    target_pod = pod.metadata.name
-                    break
-            if target_pod:
-                evict_body = (
-                    '{"apiVersion":"policy/v1","kind":"Eviction",'
-                    f'"metadata":{{"name":"{target_pod}","namespace":"{self.namespace}"}}}}'
-                )
-                evict_cmd = (
-                    "kubectl create --raw "
-                    f"/api/v1/namespaces/{self.namespace}/pods/{target_pod}/eviction "
-                    f"-f - <<EOF\n{evict_body}\nEOF"
-                )
-                result = self.kubectl.exec_command(evict_cmd)
-                print(
-                    f"Attempted voluntary eviction of {target_pod}; blocked by PDB "
-                    f"(node {node} cannot be drained for maintenance). Response: {result}"
-                )
-            else:
-                print(f"Could not locate the {service} pod on node {node} to demonstrate the blocked eviction")
+            self.kubectl.exec_command(
+                f"nohup kubectl drain {node} --ignore-daemonsets --delete-emptydir-data "
+                f"--force --timeout=0 >/tmp/{service}_pdb_drain.log 2>&1 &"
+            )
+            print(f"Started node drain on {node}; it will deadlock on {service} (blocked by PDB)")
 
     def recover_pdb_blocks_node_drain(self, microservices: list[str]):
         for service in microservices:
@@ -2575,6 +2625,15 @@ class VirtualizationFaultInjector(FaultInjector):
                 if node:
                     self.kubectl.exec_command(f"kubectl uncordon {node}")
                     print(f"Uncordoned node {node}")
+
+            # Remove the injected anti-affinity so scheduling returns to normal.
+            remove_affinity_patch = '[{"op":"remove","path":"/spec/template/spec/affinity"}]'
+            self.kubectl.exec_command(
+                f"kubectl patch deployment {service} -n {self.namespace} "
+                f"--type=json -p='{remove_affinity_patch}' 2>/dev/null || true"
+            )
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
+            print(f"Removed anti-affinity and restarted {service}")
 
             self.kubectl.wait_for_stable(self.namespace)
             print(f"Recovered from PDB-blocked-drain fault for {service}")
