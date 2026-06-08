@@ -14,14 +14,13 @@ class KubeletEvictionThresholdMisconfig(Problem):
     NAMESPACE = "astronomy-shop"
 
     def __init__(self):
-        self.app = AstronomyShop()
-        assert self.app.namespace == self.NAMESPACE, (
-            f"AstronomyShop namespace {self.app.namespace!r} drifted from "
+        app = AstronomyShop()
+        assert app.namespace == self.NAMESPACE, (
+            f"AstronomyShop namespace {app.namespace!r} drifted from "
             f"KubeletEvictionThresholdMisconfig.NAMESPACE {self.NAMESPACE!r}"
         )
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=app)
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = "currency"
         self.injector = RemoteOSFaultInjector()
         self.target_node = self._pick_worker_node()

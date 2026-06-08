@@ -19,7 +19,7 @@ class MultipleIndependentFailures(Problem):
         # (first sub-app's namespace) as the canonical namespace; per-fault
         # operations always go through the sub-problems, which carry their
         # own namespace.
-        super().__init__(app=composite_app, namespace=composite_app.namespace)
+        super().__init__(app=composite_app)
 
         # === Attaching problem's oracles ===
         # diagnosis oracles can be statically defined.

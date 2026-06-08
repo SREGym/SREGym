@@ -13,10 +13,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 class ScalePodSocialNet(Problem):
     def __init__(self):
-        self.app = SocialNetwork()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=SocialNetwork())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         # self.faulty_service = "url-shorten-mongodb"
         self.faulty_service = "user-service"
         # Choose a very front service to test - this will directly cause an exception
