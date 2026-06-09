@@ -10,7 +10,7 @@ from sregym.conductor.oracles.base import Oracle
 _REQUIRED_VERBS = {"patch", "update"}
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 5
-_CONTROLLER_COMPLETION_ANNOTATION = "sregym.io/finalizer-cleanup-completed"
+_CONTROLLER_COMPLETION_ANNOTATION = "cleanup-controller.platform.io/finalizer-cleanup-completed"
 
 
 class FinalizerDeadlockControllerMitigationOracle(Oracle):

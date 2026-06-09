@@ -24,7 +24,7 @@ _CLUSTERROLEBINDING_NAME = "configmap-cleanup-controller"
 _CONFIGMAP_NAME = "reservation-cleanup-token"
 _FINALIZER = "cleanup.reservations.io/pending-cleanup"
 _CONTROLLER_IMAGE = "mongo:4.4.6"
-_CONTROLLER_COMPLETION_ANNOTATION = "sregym.io/finalizer-cleanup-completed"
+_CONTROLLER_COMPLETION_ANNOTATION = "cleanup-controller.platform.io/finalizer-cleanup-completed"
 
 
 def _correct_clusterrole_rules():
@@ -248,7 +248,7 @@ class FinalizerDeadlockController(Problem):
             echo "cleanup-controller starting namespace={self.namespace} configmap={self.configmap_name} finalizer={self.finalizer}"
             while true; do
               echo "ConfigMap {self.configmap_name} is Terminating with finalizer {self.finalizer}; attempting controller-owned cleanup"
-              echo "FORBIDDEN: ServiceAccount lacks permission to patch configmaps/finalizers in namespace {self.namespace}. Hint: check ClusterRole {self.clusterrole_name}; it may be missing patch/update rules for configmaps and configmaps/finalizers. Error: HTTP 403 Forbidden"
+              echo "cleanup-controller reconciliation failed: Kubernetes API denied the finalizer cleanup request with Forbidden"
               sleep 10
             done
             """
@@ -399,7 +399,7 @@ class FinalizerDeadlockController(Problem):
                     )
                 except ApiException:
                     continue
-                if "FORBIDDEN: ServiceAccount lacks permission" in logs:
+                if "Kubernetes API denied the finalizer cleanup request with Forbidden" in logs:
                     return
             time.sleep(2)
         print("Controller 403 log not observed before timeout; fault state was still injected")
