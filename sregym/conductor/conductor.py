@@ -599,6 +599,16 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not fix Calico IPPool state: {e}")
 
+        self.logger.info("[FIX] MissingImagePullSecret containerd dockerhub-block leftover if any")
+        try:
+            from sregym.conductor.problems.missing_image_pull_secret_hotel_reservation import (
+                MissingImagePullSecretHotelReservation,
+            )
+
+            MissingImagePullSecretHotelReservation.cleanup_leftovers()
+        except Exception as e:
+            self.logger.warning(f"Could not clean up MissingImagePullSecret leftovers: {e}")
+
         self.logger.info("[FIX] Stale CoreDNS NXDOMAIN templates if any")
         injector = VirtualizationFaultInjector(namespace="kube-system")
         try:
