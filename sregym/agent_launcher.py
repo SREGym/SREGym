@@ -11,6 +11,8 @@ from pathlib import Path
 
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
 
+from clients.harness.problem_id import HARNESS_PROBLEM_ID_ENV
+
 from .agent_registry import AgentRegistration
 
 logger = logging.getLogger(__name__)
@@ -134,10 +136,13 @@ class AgentLauncher:
 
         exec_input = ExecInput(
             command=composite_cmd,
-            env=reg.kickoff_env or {},
+            env=dict(reg.kickoff_env or {}),
             label=f"{reg.name}-run",
         )
         exec_input.env.setdefault("AGENT_LOGS_DIR", "/logs")
+        harness_problem_id = os.environ.get(HARNESS_PROBLEM_ID_ENV)
+        if harness_problem_id:
+            exec_input.env[HARNESS_PROBLEM_ID_ENV] = harness_problem_id
 
         proc = self._container_runner.run_async(exec_input)
         ap = AgentProcess(reg.name, proc)

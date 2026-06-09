@@ -27,7 +27,6 @@ class SilentDataCorruption(Problem):
         up_interval: int = 0,  # Seconds device is healthy
         down_interval: int = 1,  # Seconds device corrupts data
     ):
-        self.app = HotelReservation()
         self.kubectl = KubeCtl()
         self.namespace = namespace
         self.deploy = target_deploy
@@ -40,7 +39,7 @@ class SilentDataCorruption(Problem):
         self.down_interval = down_interval
         self.probability = self.probability * 10000000  # (0-1000000000 scale) for (0-100% probability)
 
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=HotelReservation())
 
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.deploy}",

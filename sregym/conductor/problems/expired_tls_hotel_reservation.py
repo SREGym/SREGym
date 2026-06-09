@@ -24,9 +24,7 @@ class ExpiredTlsHotelReservation(Problem):
     inside the referenced secret to discover the root cause.
     """
     def __init__(self):
-        self.app = HotelReservation()
-        # app must be set before super().__init__() so the base class can read self.app.namespace
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=HotelReservation())
 
         self.kubectl = KubeCtl()
         self.problem_id = "expired_tls_hotel_reservation"
