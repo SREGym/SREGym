@@ -2621,6 +2621,119 @@ class VirtualizationFaultInjector(FaultInjector):
 
         print(f"DNS policy propagation check for service '{service}' failed after {max_wait}s.")
 
+    # native_sidecar_crashloop: Native sidecar crashloop
+    def inject_native_sidecar_crashloop(
+        self,
+        deployment_name: str,
+        namespace: str,
+        snapshot_dir: str = "/tmp",
+    ) -> None:
+        """
+        Save the deployment, then inject a native sidecar container
+        (initContainer with restartPolicy: Always) whose startupProbe
+        always fails.  The sidecar enters CrashLoopBackOff; Kubernetes
+        holds the main container in the Init phase until the sidecar
+        passes its startupProbe — which it never does.
+
+        busybox:1.28 is pinned intentionally.  busybox:1.30+ changed
+        exit-code semantics in ways that make probe behaviour
+        non-deterministic (see kubernetes/website#12050).
+        """
+        import json
+        import os
+
+        snapshot_path = os.path.join(
+            snapshot_dir,
+            f"{deployment_name}_native_sidecar_original.json",
+        )
+
+        original = self.kubectl.exec_command(f"kubectl get deployment {deployment_name} -n {namespace} -o json")
+        with open(snapshot_path, "w") as fh:
+            fh.write(original)
+
+        sidecar_patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "initContainers": [
+                            {
+                                "name": "otel-collector-sidecar",
+                                "image": "busybox:1.28",
+                                # restartPolicy: Always is what makes this
+                                # a native sidecar (K8s 1.29+, GA in 1.32)
+                                "restartPolicy": "Always",
+                                "command": [
+                                    "/bin/sh",
+                                    "-c",
+                                    "echo otel-collector starting...; while true; do sleep 30; done",
+                                ],
+                                "startupProbe": {
+                                    # Checks for /tmp/otel-ready — a file
+                                    # that is never created.  Probe always
+                                    # exits 1, so the sidecar never reaches
+                                    # 'started' state and the main container
+                                    # is permanently blocked.
+                                    "exec": {
+                                        "command": [
+                                            "/bin/sh",
+                                            "-c",
+                                            "cat /tmp/otel-ready",
+                                        ]
+                                    },
+                                    "initialDelaySeconds": 5,
+                                    "periodSeconds": 5,
+                                    "failureThreshold": 3,
+                                },
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+
+        self.kubectl.exec_command(
+            f"kubectl patch deployment {deployment_name} "
+            f"-n {namespace} --type=strategic "
+            f"-p '{json.dumps(sidecar_patch)}'"
+        )
+        self.kubectl.exec_command(f"kubectl rollout restart deployment/{deployment_name} -n {namespace}")
+
+    def recover_native_sidecar_crashloop(
+        self,
+        deployment_name: str,
+        namespace: str,
+        snapshot_dir: str = "/tmp",
+    ) -> None:
+        """Restore from snapshot; fall back to JSON-patch removal."""
+        import json
+        import os
+
+        snapshot_path = os.path.join(
+            snapshot_dir,
+            f"{deployment_name}_native_sidecar_original.json",
+        )
+
+        if os.path.exists(snapshot_path):
+            self.kubectl.exec_command(f"kubectl apply -f {snapshot_path}")
+            os.remove(snapshot_path)
+        else:
+            # Fallback: remove by index — the injected sidecar is
+            # always the first (index 0) init container.
+            remove_patch = json.dumps(
+                [
+                    {
+                        "op": "remove",
+                        "path": "/spec/template/spec/initContainers/0",
+                    }
+                ]
+            )
+            self.kubectl.exec_command(
+                f"kubectl patch deployment {deployment_name} -n {namespace} --type=json -p '{remove_patch}'"
+            )
+
+        self.kubectl.exec_command(f"kubectl rollout restart deployment/{deployment_name} -n {namespace}")
+        self.kubectl.exec_command(f"kubectl rollout status deployment/{deployment_name} -n {namespace} --timeout=120s")
+
 
 if __name__ == "__main__":
     namespace = "social-network"

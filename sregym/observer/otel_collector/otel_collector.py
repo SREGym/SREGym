@@ -22,7 +22,7 @@ class OtelCollector:
         """Deploy OTel Collector with spanmetrics connector."""
         self._create_jaeger_backend_service()
         self.run_cmd(f"kubectl apply -f {self.config_file} -n {self.namespace}")
-        self._wait_for_ready(timeout=120)
+        self._wait_for_ready(timeout=300)
         logger.info("OTel Collector deployed successfully.")
 
     def _create_jaeger_backend_service(self):
