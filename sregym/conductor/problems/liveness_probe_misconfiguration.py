@@ -15,22 +15,21 @@ class LivenessProbeMisconfiguration(Problem):
         self.faulty_service = faulty_service
 
         if app_name == "social_network":
-            self.app = SocialNetwork()
-            self.app.create_workload(duration=30)
+            app = SocialNetwork()
+            app.create_workload(duration=30)
 
         elif app_name == "hotel_reservation":
-            self.app = HotelReservation()
-            self.app.create_workload(duration=30)
+            app = HotelReservation()
+            app.create_workload(duration=30)
 
         elif app_name == "astronomy_shop":
-            self.app = AstronomyShop()
-            self.app.create_workload()
+            app = AstronomyShop()
+            app.create_workload()
 
         else:
             raise ValueError(f"Unsupported app name: {app_name}")
 
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=app)
 
         self.kubectl = KubeCtl()
         self.injector = VirtualizationFaultInjector(namespace=self.app.namespace)
