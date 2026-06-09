@@ -102,49 +102,57 @@ class MutatingWebhookResourceLimits(Problem):
         {
             "name": "cert-manager-webhook",
             "webhook_name": "webhook.cert-manager.io",
-            "rules": [{
-                "apiGroups": ["cert-manager.io"],
-                "apiVersions": ["v1"],
-                "operations": ["CREATE", "UPDATE"],
-                "resources": ["certificates", "issuers"],
-                "scope": "*",
-            }],
+            "rules": [
+                {
+                    "apiGroups": ["cert-manager.io"],
+                    "apiVersions": ["v1"],
+                    "operations": ["CREATE", "UPDATE"],
+                    "resources": ["certificates", "issuers"],
+                    "scope": "*",
+                }
+            ],
             "object_selector": None,
         },
         {
             "name": "istio-sidecar-injector",
             "webhook_name": "rev.namespace.sidecar-injector.istio.io",
-            "rules": [{
-                "apiGroups": [""],
-                "apiVersions": ["v1"],
-                "operations": ["CREATE"],
-                "resources": ["pods"],
-                "scope": "Namespaced",
-            }],
+            "rules": [
+                {
+                    "apiGroups": [""],
+                    "apiVersions": ["v1"],
+                    "operations": ["CREATE"],
+                    "resources": ["pods"],
+                    "scope": "Namespaced",
+                }
+            ],
             "object_selector": {"matchLabels": {"sidecar.istio.io/inject": "true"}},
         },
         {
             "name": "kyverno-resource-mutating-webhook-cfg",
             "webhook_name": "mutate.kyverno.svc",
-            "rules": [{
-                "apiGroups": [""],
-                "apiVersions": ["v1"],
-                "operations": ["CREATE", "UPDATE"],
-                "resources": ["pods"],
-                "scope": "Namespaced",
-            }],
+            "rules": [
+                {
+                    "apiGroups": [""],
+                    "apiVersions": ["v1"],
+                    "operations": ["CREATE", "UPDATE"],
+                    "resources": ["pods"],
+                    "scope": "Namespaced",
+                }
+            ],
             "object_selector": {"matchLabels": {"kyverno.io/managed": "enabled"}},
         },
         {
             "name": "linkerd-proxy-injector-webhook-config",
             "webhook_name": "linkerd-proxy-injector.linkerd.io",
-            "rules": [{
-                "apiGroups": [""],
-                "apiVersions": ["v1"],
-                "operations": ["CREATE"],
-                "resources": ["pods"],
-                "scope": "Namespaced",
-            }],
+            "rules": [
+                {
+                    "apiGroups": [""],
+                    "apiVersions": ["v1"],
+                    "operations": ["CREATE"],
+                    "resources": ["pods"],
+                    "scope": "Namespaced",
+                }
+            ],
             "object_selector": {"matchLabels": {"linkerd.io/inject": "enabled"}},
         },
     )
@@ -198,36 +206,79 @@ class MutatingWebhookResourceLimits(Problem):
             server_crt = d / "server.crt"
             ext = d / "server.ext"
 
-            self._run(["openssl", "genrsa", "-out", str(ca_key), "2048"],
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self._run([
-                "openssl", "req", "-x509", "-new", "-nodes",
-                "-key", str(ca_key), "-sha256", "-days", "365",
-                "-subj", "/CN=platform-policy-ca",
-                "-out", str(ca_crt),
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._run(
+                ["openssl", "genrsa", "-out", str(ca_key), "2048"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            self._run(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-new",
+                    "-nodes",
+                    "-key",
+                    str(ca_key),
+                    "-sha256",
+                    "-days",
+                    "365",
+                    "-subj",
+                    "/CN=platform-policy-ca",
+                    "-out",
+                    str(ca_crt),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
-            self._run(["openssl", "genrsa", "-out", str(server_key), "2048"],
-                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            self._run([
-                "openssl", "req", "-new",
-                "-key", str(server_key),
-                "-subj", f"/CN={self.BACKEND_SVC_NAME}.{self.BACKEND_SVC_NAMESPACE}.svc",
-                "-out", str(server_csr),
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._run(
+                ["openssl", "genrsa", "-out", str(server_key), "2048"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self._run(
+                [
+                    "openssl",
+                    "req",
+                    "-new",
+                    "-key",
+                    str(server_key),
+                    "-subj",
+                    f"/CN={self.BACKEND_SVC_NAME}.{self.BACKEND_SVC_NAMESPACE}.svc",
+                    "-out",
+                    str(server_csr),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
             ext.write_text(
                 f"subjectAltName=DNS:{self.BACKEND_SVC_NAME}.{self.BACKEND_SVC_NAMESPACE}.svc,"
                 f"DNS:{self.BACKEND_SVC_NAME}.{self.BACKEND_SVC_NAMESPACE}.svc.cluster.local\n"
             )
 
-            self._run([
-                "openssl", "x509", "-req",
-                "-in", str(server_csr),
-                "-CA", str(ca_crt), "-CAkey", str(ca_key), "-CAcreateserial",
-                "-out", str(server_crt), "-days", "365", "-sha256",
-                "-extfile", str(ext),
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._run(
+                [
+                    "openssl",
+                    "x509",
+                    "-req",
+                    "-in",
+                    str(server_csr),
+                    "-CA",
+                    str(ca_crt),
+                    "-CAkey",
+                    str(ca_key),
+                    "-CAcreateserial",
+                    "-out",
+                    str(server_crt),
+                    "-days",
+                    "365",
+                    "-sha256",
+                    "-extfile",
+                    str(ext),
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
 
             return {
                 "tls_crt_b64": base64.b64encode(server_crt.read_bytes()).decode(),
@@ -400,11 +451,17 @@ spec:
 """
 
         self._run(["kubectl", "apply", "-f", "-"], input=manifest)
-        self._run([
-            "kubectl", "-n", self.BACKEND_SVC_NAMESPACE,
-            "rollout", "status", f"deployment/{self.BACKEND_DEPLOYMENT_NAME}",
-            "--timeout=180s",
-        ])
+        self._run(
+            [
+                "kubectl",
+                "-n",
+                self.BACKEND_SVC_NAMESPACE,
+                "rollout",
+                "status",
+                f"deployment/{self.BACKEND_DEPLOYMENT_NAME}",
+                "--timeout=180s",
+            ]
+        )
 
     def _build_webhook_body(self) -> dict:
         if not self.ca_bundle:
@@ -536,14 +593,10 @@ spec:
         """
         deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
         if deployment is None:
-            raise RuntimeError(
-                f"Deployment '{self.faulty_service}' not found in namespace '{self.namespace}'"
-            )
+            raise RuntimeError(f"Deployment '{self.faulty_service}' not found in namespace '{self.namespace}'")
         containers = deployment.spec.template.spec.containers
         if not containers:
-            raise RuntimeError(
-                f"Deployment '{self.faulty_service}' has no containers"
-            )
+            raise RuntimeError(f"Deployment '{self.faulty_service}' has no containers")
         container_name = containers[0].name
 
         print(
@@ -551,33 +604,49 @@ spec:
             f"'{container_name}' memory requests={self.SPEC_MEMORY_REQUEST}, "
             f"limits={self.SPEC_MEMORY_LIMIT}"
         )
-        patch_body = json.dumps({
-            "spec": {
-                "template": {
-                    "spec": {
-                        "containers": [
-                            {
-                                "name": container_name,
-                                "resources": {
-                                    "requests": {"memory": self.SPEC_MEMORY_REQUEST},
-                                    "limits": {"memory": self.SPEC_MEMORY_LIMIT},
-                                },
-                            }
-                        ]
+        patch_body = json.dumps(
+            {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": container_name,
+                                    "resources": {
+                                        "requests": {"memory": self.SPEC_MEMORY_REQUEST},
+                                        "limits": {"memory": self.SPEC_MEMORY_LIMIT},
+                                    },
+                                }
+                            ]
+                        }
                     }
                 }
             }
-        })
-        self._run([
-            "kubectl", "-n", self.namespace,
-            "patch", "deployment", self.faulty_service,
-            "--type=strategic", "-p", patch_body,
-        ])
-        self._run([
-            "kubectl", "-n", self.namespace,
-            "rollout", "status", f"deployment/{self.faulty_service}",
-            "--timeout=180s",
-        ])
+        )
+        self._run(
+            [
+                "kubectl",
+                "-n",
+                self.namespace,
+                "patch",
+                "deployment",
+                self.faulty_service,
+                "--type=strategic",
+                "-p",
+                patch_body,
+            ]
+        )
+        self._run(
+            [
+                "kubectl",
+                "-n",
+                self.namespace,
+                "rollout",
+                "status",
+                f"deployment/{self.faulty_service}",
+                "--timeout=180s",
+            ]
+        )
 
     @mark_fault_injected
     def inject_fault(self):
@@ -655,13 +724,25 @@ spec:
             text=True,
         )
 
-        self._run([
-            "kubectl", "rollout", "restart",
-            f"deployment/{self.faulty_service}", "-n", self.namespace,
-        ])
-        self._run([
-            "kubectl", "rollout", "status",
-            f"deployment/{self.faulty_service}", "-n", self.namespace,
-            "--timeout=120s",
-        ])
+        self._run(
+            [
+                "kubectl",
+                "rollout",
+                "restart",
+                f"deployment/{self.faulty_service}",
+                "-n",
+                self.namespace,
+            ]
+        )
+        self._run(
+            [
+                "kubectl",
+                "rollout",
+                "status",
+                f"deployment/{self.faulty_service}",
+                "-n",
+                self.namespace,
+                "--timeout=120s",
+            ]
+        )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")

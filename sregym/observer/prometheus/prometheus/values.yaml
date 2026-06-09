@@ -907,7 +907,7 @@ serverFiles:
                     namespace=~"astronomy-shop|hotel-reservation|blueprint-hotel-reservation|social-network"
                   }[2m])
                 ) > 50
-                unless 
+                unless
                 count(kube_pod_info{namespace="blueprint-hotel-reservation"}) > 0
               for: 1m
               labels:
