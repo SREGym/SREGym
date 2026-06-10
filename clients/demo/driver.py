@@ -5,16 +5,15 @@ import os
 import sys
 import time
 import uuid
-from ast import literal_eval
 from datetime import datetime
 from pathlib import Path
 
-import requests
 from fastmcp import Client
 from fastmcp.client import SSETransport
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 
+from clients.harness.problem_id import resolve_problem_id
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig
 from logger import init_logger
 
@@ -53,19 +52,6 @@ def get_current_datetime_formatted():
     now = datetime.now()
     formatted_datetime = now.strftime("%m%d_%H%M")
     return formatted_datetime
-
-
-def get_curr_problem():
-    ltc = LanggraphToolConfig()
-    url = ltc.benchmark_current_problem
-    try:
-        response = requests.get(url)
-        problem_str = str(response.text)
-        problem = literal_eval(problem_str)
-        return problem["problem_id"]
-    except Exception as e:
-        logger.error(f"[get_curr_problem] HTTP request failed: {e}")
-        return "error"
 
 
 async def manual_submit_tool(ans: str) -> str:
@@ -115,7 +101,7 @@ def save_trajectory(events, problem_id, output_dir=None):
 
 
 async def run_demo_agent():
-    problem_id = get_curr_problem()
+    problem_id = resolve_problem_id()
     logger.info(f"Starting Demo Agent for problem: {problem_id}")
 
     cmds_file = Path(__file__).parent / Path("kubectl_cmds.txt")

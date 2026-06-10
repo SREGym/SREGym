@@ -9,9 +9,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class FaultyImageCorrelated(Problem):
     def __init__(self):
-        self.app = HotelReservation()
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
         self.faulty_service = ["frontend", "geo", "profile", "rate", "recommendation", "reservation", "user", "search"]
         self.injector = ApplicationFaultInjector(namespace=self.namespace)

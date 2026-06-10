@@ -206,10 +206,8 @@ class KhaosFaultProblem(Problem):
         target_node: str | None = None,
         inject_args: list[int | str] | None = None,
     ):
-        self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=HotelReservation())
         self.kubectl = self.app.kubectl if hasattr(self.app, "kubectl") else None
-        self.namespace = self.app.namespace
         self.injector = HWFaultInjector()
         self.target_node = target_node
 
@@ -388,10 +386,8 @@ class KhaosCompoundFaultProblem(Problem):
         if not fault_specs:
             raise ValueError("KhaosCompoundFaultProblem requires at least one fault_spec")
 
-        self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=HotelReservation())
         self.kubectl = self.app.kubectl if hasattr(self.app, "kubectl") else None
-        self.namespace = self.app.namespace
         self.injector = HWFaultInjector()
         self.target_node = target_node
 
