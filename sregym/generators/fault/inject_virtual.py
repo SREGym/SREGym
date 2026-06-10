@@ -1,5 +1,6 @@
 """Inject faults at the virtualization layer: K8S, Docker, etc."""
 
+import contextlib
 import copy
 import hashlib
 import json
@@ -367,14 +368,17 @@ class VirtualizationFaultInjector(FaultInjector):
         service: str,
         warmup_seconds: int = 20,
         n_samples: int = 5,
+        sample_window_seconds: int = 5,
         headroom_factor: float = 1.15,
         cache_path: str = "/tmp/sregym_cpu_calibration.json",
         fallback: str = "125m",
     ) -> str:
-        """Measure unconstrained CPU usage and derive a limit with headroom.
+        """Derive a CPU limit from per-period burst demand measured via cpu.stat.
 
-        Targets ~87% utilisation in kubectl top so the fault isn't obvious,
-        while keeping the limit tight enough to cause CFS burst throttling.
+        Reads usage_usec and nr_periods deltas from the container's cgroup rather
+        than kubectl top (which time-averages and misses intra-period bursts).
+        Sets limit = max_burst_demand * headroom_factor so kubectl top shows usage
+        clearly below the limit while CFS still throttles on bursts.
         Result is cached by cluster fingerprint so calibration runs once per cluster.
         """
         key = f"{self._cluster_fingerprint()}/{service}"
@@ -388,10 +392,9 @@ class VirtualizationFaultInjector(FaultInjector):
 
         samples = []
         for _ in range(n_samples):
-            m = self._sample_cpu_millicores(service)
+            m = self._sample_cpu_millicores(service, window_seconds=sample_window_seconds)
             if m is not None:
                 samples.append(m)
-            time.sleep(4)
 
         if not samples:
             print(f"[calibration] sampling failed, using fallback {fallback}")
@@ -403,29 +406,54 @@ class VirtualizationFaultInjector(FaultInjector):
         limit = f"{limit_m}m"
 
         self._write_calibration_cache(cache_path, key, limit)
-        print(f"[calibration] {service}: baseline={baseline}m → limit={limit}")
+        print(f"[calibration] {service}: burst baseline={baseline}m → limit={limit}")
         return limit
 
     def _cluster_fingerprint(self) -> str:
         nodes = self.kubectl.exec_command("kubectl get nodes -o jsonpath='{.items[*].metadata.name}'")
         return hashlib.md5(nodes.encode()).hexdigest()[:8]
 
-    def _sample_cpu_millicores(self, service: str) -> int | None:
+    def _get_running_pod(self, service: str) -> str | None:
         out = self.kubectl.exec_command(
-            f"kubectl top pod -n {self.namespace} -l io.kompose.service={service} --no-headers 2>/dev/null"
+            f"kubectl get pod -n {self.namespace} -l io.kompose.service={service} "
+            f"--field-selector=status.phase=Running -o jsonpath='{{.items[0].metadata.name}}' 2>/dev/null"
         )
-        if not out or not out.strip():
+        return out.strip() or None
+
+    def _sample_cpu_millicores(self, service: str, window_seconds: int = 5) -> int | None:
+        """Measure per-period CPU demand from cgroup cpu.stat deltas.
+
+        Unlike kubectl top (time-averaged), this captures burst demand within
+        each 100ms CFS period by computing delta_usage_usec / delta_nr_periods.
+        """
+        pod = self._get_running_pod(service)
+        if not pod:
             return None
-        parts = out.strip().split()
-        if len(parts) < 2:
+
+        def read_stat() -> dict:
+            out = self.kubectl.exec_command(
+                f"kubectl exec {pod} -n {self.namespace} -- cat /sys/fs/cgroup/cpu.stat 2>/dev/null"
+            )
+            result = {}
+            for line in (out or "").strip().splitlines():
+                parts = line.split()
+                if len(parts) == 2:
+                    with contextlib.suppress(ValueError):
+                        result[parts[0]] = int(parts[1])
+            return result
+
+        s1 = read_stat()
+        time.sleep(window_seconds)
+        s2 = read_stat()
+
+        delta_usage = s2.get("usage_usec", 0) - s1.get("usage_usec", 0)
+        delta_periods = s2.get("nr_periods", 0) - s1.get("nr_periods", 0)
+
+        if delta_periods == 0:
             return None
-        cpu_str = parts[1]
-        if cpu_str.endswith("m"):
-            return int(cpu_str[:-1])
-        try:
-            return int(float(cpu_str) * 1000)
-        except ValueError:
-            return None
+
+        # delta_usage_usec / (delta_periods * 100000 usec/period) * 1000 = millicores
+        return int(delta_usage / (delta_periods * 100))
 
     def _read_calibration_cache(self, path: str, key: str) -> str | None:
         try:
