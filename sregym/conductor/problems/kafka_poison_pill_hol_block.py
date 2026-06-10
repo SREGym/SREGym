@@ -15,8 +15,7 @@ class KafkaPoisonPillHOLBlock(Problem):
     CONSUMER_DEPLOYMENT = "orders-validator"
 
     def __init__(self):
-        self.app = AstronomyShop()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=AstronomyShop())
 
         self.kubectl = KubeCtl()
         self.injector = KafkaFaultInjector(namespace=self.namespace)

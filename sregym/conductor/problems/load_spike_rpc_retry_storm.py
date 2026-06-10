@@ -25,10 +25,8 @@ _REVERT_SECONDS = 3510
 
 class LoadSpikeRPCRetryStorm(Problem):
     def __init__(self):
-        self.app = BlueprintHotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=BlueprintHotelReservation())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = "rpc"
         self.root_cause = self.build_structured_root_cause(
             component=f"configmap/{self.faulty_service}",
@@ -97,8 +95,7 @@ class LoadSpikeRPCRetryStorm(Problem):
             check=True,
         )
         subprocess.run(
-            ["kubectl", "rollout", "status", "deployment", "bhotelwrk-wlgen",
-             "-n", self.namespace, "--timeout=120s"],
+            ["kubectl", "rollout", "status", "deployment", "bhotelwrk-wlgen", "-n", self.namespace, "--timeout=120s"],
             check=True,
         )
         print(f"[Config] Wlgen set for single spike: 60s warm-up → 30s spike → {_REVERT_SECONDS}s base traffic")
@@ -183,10 +180,7 @@ class LoadSpikeRPCRetryStorm(Problem):
             print(f"[Calibration] Not sustained — scaling to {current_replicas} replica(s)...")
             self._scale_workload_deployment(current_replicas)
 
-        print(
-            f"[Calibration] WARNING: HighRequestLatency not sustained even at "
-            f"{MAX_WORKLOAD_REPLICAS} replicas"
-        )
+        print(f"[Calibration] WARNING: HighRequestLatency not sustained even at {MAX_WORKLOAD_REPLICAS} replicas")
 
     def start_workload(self):
         if not hasattr(self, "wrk"):

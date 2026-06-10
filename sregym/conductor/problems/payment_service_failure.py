@@ -11,10 +11,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 class PaymentServiceFailure(Problem):
     def __init__(self):
-        self.app = AstronomyShop()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "payment"
         self.feature_flag = "paymentFailure"

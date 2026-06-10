@@ -20,10 +20,8 @@ class EdgeRequestFilterCPUSaturation(Problem):
     """
 
     def __init__(self):
-        self.app = AstronomyShop()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = "frontend-proxy"
         self.traffic_source = "load-generator"
         self.regex_env = "WAF_RULE_REGEX"
