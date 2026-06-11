@@ -30,7 +30,7 @@ _STRESS_DEPLOYMENT = "analytics-collector"
 # Annotation key used to persist the original CoreDNS configuration on the
 # deployment itself.  This survives process crashes and avoids fragile temp
 # files or hardcoded defaults.
-_ORIGINAL_CONFIG_ANNOTATION = "sregym.io/coredns-original-config"
+_ORIGINAL_CONFIG_ANNOTATION = "original-config"
 
 
 class CoreDNSSaturationNdots(Problem):
@@ -279,6 +279,15 @@ def _restore_coredns_from_annotation(apps_v1, kubectl):
         return
 
     original = json.loads(raw)
+
+    resources = original.get("resources", {})
+    if "limits" not in resources:
+        resources["limits"] = {}
+
+    # Set to None if 'cpu' wasn't part of the original limits config
+    if "cpu" not in resources["limits"]:
+        resources["limits"]["cpu"] = None
+
     patch_body = {
         "metadata": {"annotations": {_ORIGINAL_CONFIG_ANNOTATION: None}},
         "spec": {
@@ -288,7 +297,7 @@ def _restore_coredns_from_annotation(apps_v1, kubectl):
                     "containers": [
                         {
                             "name": _COREDNS_DEPLOYMENT,
-                            "resources": original.get("resources", {}),
+                            "resources": resources,
                         }
                     ]
                 }
