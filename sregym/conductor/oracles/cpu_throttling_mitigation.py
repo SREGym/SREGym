@@ -59,14 +59,16 @@ class CpuThrottlingMitigationOracle(Oracle):
         for container in containers:
             limits = (container.resources and container.resources.limits) or {}
             cpu_limit_str = limits.get("cpu") if isinstance(limits, dict) else getattr(limits, "cpu", None)
-            if cpu_limit_str is not None:
-                cpu_mc = _parse_cpu_millicores(str(cpu_limit_str))
-                if cpu_mc is not None and cpu_mc <= _MIN_ACCEPTABLE_CPU_MILLICORES:
-                    print(
-                        f"Container '{container.name}' still has a throttling CPU limit: {cpu_limit_str} "
-                        f"(<= {_MIN_ACCEPTABLE_CPU_MILLICORES}m)"
-                    )
-                    return {"success": False}
+            if cpu_limit_str is None:
+                print(f"Container '{container.name}' has no CPU limit, removing it is NOT a valid fix")
+                return {"success": False}
+            cpu_mc = _parse_cpu_millicores(str(cpu_limit_str))
+            if cpu_mc is not None and cpu_mc <= _MIN_ACCEPTABLE_CPU_MILLICORES:
+                print(
+                    f"Container '{container.name}' still has a throttling CPU limit: {cpu_limit_str} "
+                    f"(<= {_MIN_ACCEPTABLE_CPU_MILLICORES}m)"
+                )
+                return {"success": False}
         print(f"Deployment '{self.faulty_service}' CPU limit is fixed")
 
         self._wait_for_rollouts(kubectl, namespace)

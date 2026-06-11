@@ -26,13 +26,12 @@ class CpuThrottling(Problem):
                 "this service. Crucially, `kubectl top pods` shows CPU usage well below the limit — the "
                 "throttling is silent at the kubectl level but visible in the container's cgroup stats "
                 "(`cpu.stat`: high `nr_throttled`) and in the Prometheus `ContainerCPUThrottling` alert. "
-                "The fix is to raise the CPU limit to a value that accommodates burst traffic, or remove "
-                "it entirely. Many kubernetes good practices guides for critical applications recommend "
-                "removing it "
+                "The fix is to raise the CPU limit to a value that accommodates burst traffic."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.app.create_workload()
+        # calibration warmup(30s) + n_samples(5) * window(7s) = 55s; keep wrk2 alive through it
+        self.app.create_workload(duration=120)
         self.mitigation_oracle = CpuThrottlingMitigationOracle(
             problem=self,
             faulty_service=self.faulty_service,
