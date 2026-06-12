@@ -4,7 +4,6 @@ from sregym.conductor.oracles.base import Oracle
 
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 5
-_MIN_ACCEPTABLE_CPU_MILLICORES = 100
 
 
 def _parse_cpu_millicores(cpu_str: str) -> int | None:
@@ -22,6 +21,7 @@ class CpuThrottlingMitigationOracle(Oracle):
     def __init__(self, problem, faulty_service: str):
         super().__init__(problem)
         self.faulty_service = faulty_service
+        self.injected_cpu_limit: str | None = None
 
     def _wait_for_rollouts(self, kubectl, namespace):
         deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS
@@ -62,13 +62,15 @@ class CpuThrottlingMitigationOracle(Oracle):
             if cpu_limit_str is None:
                 print(f"Container '{container.name}' has no CPU limit, removing it is NOT a valid fix")
                 return {"success": False}
-            cpu_mc = _parse_cpu_millicores(str(cpu_limit_str))
-            if cpu_mc is not None and cpu_mc <= _MIN_ACCEPTABLE_CPU_MILLICORES:
-                print(
-                    f"Container '{container.name}' still has a throttling CPU limit: {cpu_limit_str} "
-                    f"(<= {_MIN_ACCEPTABLE_CPU_MILLICORES}m)"
-                )
-                return {"success": False}
+            injected_mc = _parse_cpu_millicores(self.injected_cpu_limit) if self.injected_cpu_limit else None
+            if injected_mc is not None:
+                cpu_mc = _parse_cpu_millicores(str(cpu_limit_str))
+                if cpu_mc is not None and cpu_mc <= injected_mc * 2:
+                    print(
+                        f"Container '{container.name}' still has a throttling CPU limit: {cpu_limit_str} "
+                        f"(<= {injected_mc * 2}m)"
+                    )
+                    return {"success": False}
         print(f"Deployment '{self.faulty_service}' CPU limit is fixed")
 
         self._wait_for_rollouts(kubectl, namespace)

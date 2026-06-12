@@ -346,7 +346,8 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from resource request fault for service: {service}")
 
     # V.8a - Set a tight CPU limit to trigger CFS throttling without crashing the pod
-    def inject_cpu_throttle(self, microservices: list[str], cpu_limit: str | None = None):
+    def inject_cpu_throttle(self, microservices: list[str], cpu_limit: str | None = None) -> dict[str, str]:
+        injected = {}
         for service in microservices:
             limit = cpu_limit if cpu_limit is not None else self.calibrate_cpu_limit(service)
             original_deployment_yaml = self._get_deployment_yaml(service)
@@ -362,6 +363,8 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
             self._write_yaml_to_file(service, original_deployment_yaml)
             print(f"Injected CPU throttle ({limit}) for service: {service}")
+            injected[service] = limit
+        return injected
 
     def calibrate_cpu_limit(
         self,
