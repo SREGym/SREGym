@@ -104,6 +104,8 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
         for rule in role.rules or []:
             resources = set(rule.resources or [])
             verbs = set(rule.verbs or [])
+            if "*" in verbs:
+                verbs.update(_REQUIRED_VERBS)
             if "configmaps" in resources or "*" in resources:
                 granted_on_configmaps.update(verbs)
             if "configmaps/finalizers" in resources or "*" in resources:

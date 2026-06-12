@@ -155,7 +155,7 @@ class FinalizerDeadlockController(Problem):
             metadata=client.V1ObjectMeta(
                 name=self.sa_name,
                 namespace=self.namespace,
-                labels={"sregym.io/injected": "true"},
+                labels={"platform.io/injected": "true"},
             )
         )
         try:
@@ -172,7 +172,7 @@ class FinalizerDeadlockController(Problem):
         body = client.V1ClusterRole(
             metadata=client.V1ObjectMeta(
                 name=self.clusterrole_name,
-                labels={"sregym.io/injected": "true"},
+                labels={"platform.io/injected": "true"},
             ),
             rules=rules,
         )
@@ -188,7 +188,7 @@ class FinalizerDeadlockController(Problem):
         body = client.V1ClusterRole(
             metadata=client.V1ObjectMeta(
                 name=self.clusterrole_name,
-                labels={"sregym.io/injected": "true"},
+                labels={"platform.io/injected": "true"},
             ),
             rules=rules,
         )
@@ -212,7 +212,7 @@ class FinalizerDeadlockController(Problem):
             "kind": "ClusterRoleBinding",
             "metadata": {
                 "name": self.clusterrolebinding_name,
-                "labels": {"sregym.io/injected": "true"},
+                "labels": {"platform.io/injected": "true"},
             },
             "roleRef": {
                 "apiGroup": "rbac.authorization.k8s.io",
@@ -257,7 +257,7 @@ class FinalizerDeadlockController(Problem):
             metadata=client.V1ObjectMeta(
                 name=_CONTROLLER_SCRIPT_CONFIGMAP,
                 namespace=self.namespace,
-                labels={"sregym.io/injected": "true"},
+                labels={"platform.io/injected": "true"},
             ),
             data={"loop.sh": script},
         )
@@ -313,7 +313,7 @@ class FinalizerDeadlockController(Problem):
             metadata=client.V1ObjectMeta(
                 name=self.controller_name,
                 namespace=self.namespace,
-                labels={"app": self.controller_name, "sregym.io/injected": "true"},
+                labels={"app": self.controller_name, "platform.io/injected": "true"},
             ),
             spec=client.V1DeploymentSpec(
                 replicas=1,
