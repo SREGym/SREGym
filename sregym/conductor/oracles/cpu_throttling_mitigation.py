@@ -59,10 +59,9 @@ class CpuThrottlingMitigationOracle(Oracle):
         for container in containers:
             limits = (container.resources and container.resources.limits) or {}
             cpu_limit_str = limits.get("cpu") if isinstance(limits, dict) else getattr(limits, "cpu", None)
-            if cpu_limit_str is None:
-                print(f"Container '{container.name}' has no CPU limit, removing it is NOT a valid fix")
-                return {"success": False}
             injected_mc = _parse_cpu_millicores(self.injected_cpu_limit) if self.injected_cpu_limit else None
+            if cpu_limit_str is None:
+                continue
             if injected_mc is not None:
                 cpu_mc = _parse_cpu_millicores(str(cpu_limit_str))
                 if cpu_mc is not None and cpu_mc <= injected_mc * 2:
