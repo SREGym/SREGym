@@ -23,6 +23,8 @@ from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import Eph
 from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
+from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
+from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
@@ -133,10 +135,12 @@ class ProblemRegistry:
             "assign_to_non_existent_node": AssignNonExistentNode,
             "auth_miss_mongodb": MongoDBAuthMissing,
             "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
+            "finalizer_deadlock_controller_hotel_reservation": FinalizerDeadlockController,
             "duplicate_pvc_mounts_astronomy_shop": lambda: DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="frontend"),
             "duplicate_pvc_mounts_hotel_reservation": lambda: DuplicatePVCMounts(app_name="hotel_reservation", faulty_service="frontend"),
             "duplicate_pvc_mounts_social_network": lambda: DuplicatePVCMounts(app_name="social_network", faulty_service="jaeger"),
             "env_variable_shadowing_astronomy_shop": lambda: EnvVariableShadowing(),
+            "file_descriptor_exhaustion": lambda: FileDescriptorExhaustion(),
             "k8s_target_port-misconfig": lambda: K8STargetPortMisconfig(faulty_service="user-service"),
             "liveness_probe_misconfiguration_astronomy_shop": lambda: LivenessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),
             "liveness_probe_misconfiguration_hotel_reservation": lambda: LivenessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="recommendation"),

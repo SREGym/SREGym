@@ -105,47 +105,90 @@ class AdmissionWebhookTLSMismatch(Problem):
             ext = d / "server.ext"
 
             self._run(["openssl", "genrsa", "-out", str(ca_key), "2048"], stdout=subprocess.DEVNULL)
-            self._run([
-                "openssl", "req", "-x509", "-new", "-nodes",
-                "-key", str(ca_key),
-                "-sha256", "-days", "365",
-                "-subj", "/CN=platform-services-ca",
-                "-out", str(ca_crt),
-            ], stdout=subprocess.DEVNULL)
+            self._run(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-new",
+                    "-nodes",
+                    "-key",
+                    str(ca_key),
+                    "-sha256",
+                    "-days",
+                    "365",
+                    "-subj",
+                    "/CN=platform-services-ca",
+                    "-out",
+                    str(ca_crt),
+                ],
+                stdout=subprocess.DEVNULL,
+            )
 
             self._run(["openssl", "genrsa", "-out", str(wrong_ca_key), "2048"], stdout=subprocess.DEVNULL)
-            self._run([
-                "openssl", "req", "-x509", "-new", "-nodes",
-                "-key", str(wrong_ca_key),
-                "-sha256", "-days", "365",
-                "-subj", "/CN=cluster-policy-ca",
-                "-out", str(wrong_ca_crt),
-            ], stdout=subprocess.DEVNULL)
+            self._run(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-new",
+                    "-nodes",
+                    "-key",
+                    str(wrong_ca_key),
+                    "-sha256",
+                    "-days",
+                    "365",
+                    "-subj",
+                    "/CN=cluster-policy-ca",
+                    "-out",
+                    str(wrong_ca_crt),
+                ],
+                stdout=subprocess.DEVNULL,
+            )
 
             self._run(["openssl", "genrsa", "-out", str(server_key), "2048"], stdout=subprocess.DEVNULL)
-            self._run([
-                "openssl", "req", "-new",
-                "-key", str(server_key),
-                "-subj", f"/CN={self.BACKEND_SVC_NAME}.{self.BACKEND_SVC_NAMESPACE}.svc",
-                "-out", str(server_csr),
-            ], stdout=subprocess.DEVNULL)
+            self._run(
+                [
+                    "openssl",
+                    "req",
+                    "-new",
+                    "-key",
+                    str(server_key),
+                    "-subj",
+                    f"/CN={self.BACKEND_SVC_NAME}.{self.BACKEND_SVC_NAMESPACE}.svc",
+                    "-out",
+                    str(server_csr),
+                ],
+                stdout=subprocess.DEVNULL,
+            )
 
             ext.write_text(
                 f"subjectAltName=DNS:{self.BACKEND_SVC_NAME}.{self.BACKEND_SVC_NAMESPACE}.svc,"
                 f"DNS:{self.BACKEND_SVC_NAME}.{self.BACKEND_SVC_NAMESPACE}.svc.cluster.local\n"
             )
 
-            self._run([
-                "openssl", "x509", "-req",
-                "-in", str(server_csr),
-                "-CA", str(ca_crt),
-                "-CAkey", str(ca_key),
-                "-CAcreateserial",
-                "-out", str(server_crt),
-                "-days", "365",
-                "-sha256",
-                "-extfile", str(ext),
-            ], stdout=subprocess.DEVNULL)
+            self._run(
+                [
+                    "openssl",
+                    "x509",
+                    "-req",
+                    "-in",
+                    str(server_csr),
+                    "-CA",
+                    str(ca_crt),
+                    "-CAkey",
+                    str(ca_key),
+                    "-CAcreateserial",
+                    "-out",
+                    str(server_crt),
+                    "-days",
+                    "365",
+                    "-sha256",
+                    "-extfile",
+                    str(ext),
+                ],
+                stdout=subprocess.DEVNULL,
+            )
 
             return {
                 "tls_crt_b64": base64.b64encode(server_crt.read_bytes()).decode(),
@@ -158,7 +201,7 @@ class AdmissionWebhookTLSMismatch(Problem):
         material = self._generate_tls_material()
         self.wrong_ca_bundle = material["wrong_ca_bundle"]
 
-        server_code = r'''
+        server_code = r"""
 import json
 import ssl
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -193,7 +236,7 @@ ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
 ctx.load_cert_chain("/certs/tls.crt", "/certs/tls.key")
 httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
 httpd.serve_forever()
-'''
+"""
 
         manifest = f"""
 apiVersion: v1
@@ -278,11 +321,17 @@ spec:
 """
 
         self._run(["kubectl", "apply", "-f", "-"], input=manifest)
-        self._run([
-            "kubectl", "-n", self.BACKEND_SVC_NAMESPACE,
-            "rollout", "status", f"deployment/{self.BACKEND_DEPLOYMENT_NAME}",
-            "--timeout=180s",
-        ])
+        self._run(
+            [
+                "kubectl",
+                "-n",
+                self.BACKEND_SVC_NAMESPACE,
+                "rollout",
+                "status",
+                f"deployment/{self.BACKEND_DEPLOYMENT_NAME}",
+                "--timeout=180s",
+            ]
+        )
 
     def _build_webhook_body(self) -> dict:
         if not self.wrong_ca_bundle:

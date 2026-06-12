@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import csv
 import json
 import re
@@ -159,6 +160,7 @@ def discover_stages(path: Path) -> list[str]:
 # Tool-call CSV export
 # ---------------------------------------------------------------------------
 
+
 def _extract_tool_calls_from_msg(msg: dict) -> list[dict]:
     """Extract tool calls from a message, handling all known formats."""
     # OpenAI / LangChain direct format
@@ -228,10 +230,8 @@ def _format_tool_call_signature(tc: dict) -> str:
     name = tc.get("name", "unknown")
     args = tc.get("args")
     if isinstance(args, str):
-        try:
+        with contextlib.suppress(Exception):
             args = json.loads(args)
-        except Exception:
-            pass
 
     # For kubectl tools, return the raw command starting with "kubectl"
     if name in _KUBECTL_TOOL_NAMES and isinstance(args, dict):
@@ -533,23 +533,20 @@ def find_problem_id(path: Path) -> str:
     Each JSONL file is one problem_id. If our selected records are empty,
     this finds the first dict with a non-empty problem_id by streaming.
     """
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(obj, dict):
-                    pid = obj.get("problem_id")
-                    pid_s = as_str(pid)
-                    if pid_s:
-                        return pid_s
-    except Exception:
-        pass
+    with contextlib.suppress(Exception), path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except Exception:
+                continue
+            if isinstance(obj, dict):
+                pid = obj.get("problem_id")
+                pid_s = as_str(pid)
+                if pid_s:
+                    return pid_s
     return ""
 
 
@@ -914,8 +911,8 @@ class IndexRow:
     parse_errors: int
 
     problem_id: str
-    run: str          # e.g. "run_1", "run_2", or "" when no run_N in path
-    agent: str        # e.g. "stratus", "claudecode", "codex", or ""
+    run: str  # e.g. "run_1", "run_2", or "" when no run_N in path
+    agent: str  # e.g. "stratus", "claudecode", "codex", or ""
     origin: str
     failure_type: str
     fault_level: str
@@ -1607,9 +1604,7 @@ def _cc_parse_stream_json(input_path: Path) -> tuple[list[dict[str, Any]], bool]
                     for tr in tool_results:
                         tr_content = tr.get("content", "")
                         if isinstance(tr_content, list):
-                            tr_content = "\n".join(
-                                b.get("text", "") for b in tr_content if isinstance(b, dict)
-                            )
+                            tr_content = "\n".join(b.get("text", "") for b in tr_content if isinstance(b, dict))
                         messages.append(
                             {
                                 "role": "tool",
@@ -2075,10 +2070,7 @@ def main():
         group = r.problem_id
         if group != prev_group:
             if prev_group is not None:
-                idx.append(
-                    "<tr><td colspan='8' style='padding:4px 0;border:none;"
-                    "background:var(--border)'></td></tr>"
-                )
+                idx.append("<tr><td colspan='8' style='padding:4px 0;border:none;background:var(--border)'></td></tr>")
             prev_group = group
 
         search_blob = " | ".join(

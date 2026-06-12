@@ -744,8 +744,7 @@ class Conductor:
     def _ensure_openebs_device_storageclass(self) -> None:
         self.logger.info("[DEPLOY] Ensuring OpenEBS LocalPV-Device StorageClass…")
         existing = self.kubectl.exec_command(
-            "kubectl get storageclass openebs-device "
-            "-o jsonpath='{.provisioner}{\"\\n\"}{.volumeBindingMode}'"
+            "kubectl get storageclass openebs-device -o jsonpath='{.provisioner}{\"\\n\"}{.volumeBindingMode}'"
         )
         if "not found" not in existing.lower() and "error from server" not in existing.lower():
             provisioner, _, volume_binding_mode = existing.partition("\n")
