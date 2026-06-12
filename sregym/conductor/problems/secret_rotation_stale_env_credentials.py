@@ -351,5 +351,14 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
     def recover_fault(self):
         """Recover the service configuration and restart product-catalog."""
         print("== Fault Recovery ==")
-        self._recover_to_baseline()
+        if not self._postgres_accepts_password(self.new_password):
+            self._rotate_postgres_password(self.old_password, self.new_password)
+
+        self._apply_secret(self.new_conn)
+        self._patch_postgresql_init_password(self.new_password)
+        self._set_literal_db_clients_password(self.new_password)
+        self._set_product_catalog_secret_env()
+        self._rollout_restart(self.faulty_service)
+        self.stale_product_catalog_pod_uid = None
+
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
