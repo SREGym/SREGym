@@ -77,6 +77,9 @@ from sregym.conductor.problems.resource_request import ResourceRequestTooLarge, 
 from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
+from sregym.conductor.problems.secret_rotation_stale_env_credentials import (
+    SecretRotationStaleEnvCredentialsAstronomyShop,
+)
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from sregym.conductor.problems.service_port_conflict import ServicePortConflict
 from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation import (
@@ -123,6 +126,7 @@ class ProblemRegistry:
             "valkey_memory_disruption": ValkeyMemoryDisruption,
             "edge_request_filter_cpu_saturation": EdgeRequestFilterCPUSaturation,
             "ephemeral_port_range_hotel_reservation": EphemeralPortRangeHotelReservation,
+            "secret_rotation_stale_env_credentials_astronomy_shop": SecretRotationStaleEnvCredentialsAstronomyShop,
             # # ==================== VIRTUALIZATION FAULT INJECTOR ====================
             # --- METASTABLE FAILURES ---
             # "cache_flush_capacity_degradation": CacheFlushCapacityDegradation,  # module not yet implemented
