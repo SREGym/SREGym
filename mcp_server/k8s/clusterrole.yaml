@@ -80,6 +80,11 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources:
       - clusterroles
+    verbs: ["get", "list", "watch", "patch", "update"]
+
+  # RBAC bindings remain read-only.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
       - clusterrolebindings
       - roles
       - rolebindings

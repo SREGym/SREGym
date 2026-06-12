@@ -9,9 +9,8 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
-
 from clients.harness.problem_id import HARNESS_PROBLEM_ID_ENV
+from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
 
 from .agent_registry import AgentRegistration
 

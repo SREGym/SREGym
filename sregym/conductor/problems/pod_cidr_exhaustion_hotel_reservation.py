@@ -73,8 +73,7 @@ class PodCIDRExhaustionHotelReservation(Problem):
         # Step 1: Enable strictAffinity
         print("Enabling Calico strictAffinity...")
         self.kubectl.exec_command(
-            "kubectl patch ipamconfig default --type=merge "
-            "-p '{\"spec\":{\"strictAffinity\":true}}'"
+            'kubectl patch ipamconfig default --type=merge -p \'{"spec":{"strictAffinity":true}}\''
         )
 
         # Step 2: Create tiny pool
@@ -90,18 +89,15 @@ spec:
   disabled: false
 """)
 
-
         # Step 3: Disable default pool
         print(f"Disabling default IPPool '{self.DEFAULT_POOL_NAME}'...")
         self.kubectl.exec_command(
-            f"kubectl patch ippool {self.DEFAULT_POOL_NAME} --type=merge "
-            f"-p '{{\"spec\":{{\"disabled\":true}}}}'"
+            f'kubectl patch ippool {self.DEFAULT_POOL_NAME} --type=merge -p \'{{"spec":{{"disabled":true}}}}\''
         )
 
         # Step 4: Create batch-jobs namespace
         self.kubectl.exec_command(
-            f"kubectl create namespace {self.EXHAUST_NAMESPACE} "
-            f"--dry-run=client -o yaml | kubectl apply -f -"
+            f"kubectl create namespace {self.EXHAUST_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -"
         )
 
         # Step 5: Deploy batch-worker to exhaust the tiny pool
@@ -135,13 +131,10 @@ spec:
 
         print("Waiting for batch-worker pods to be scheduled and consume IPs...")
         for _ in range(30):
-            result = self.kubectl.exec_command(
-                f"kubectl get pods -n {self.EXHAUST_NAMESPACE} --no-headers"
-            )
+            result = self.kubectl.exec_command(f"kubectl get pods -n {self.EXHAUST_NAMESPACE} --no-headers")
             if result:
                 scheduled = sum(
-                    1 for line in result.strip().split("\n")
-                    if "Running" in line or "ContainerCreating" in line
+                    1 for line in result.strip().split("\n") if "Running" in line or "ContainerCreating" in line
                 )
                 if scheduled >= self.NUM_EXHAUST_PODS - 5:
                     break
@@ -149,9 +142,7 @@ spec:
 
         # Step 6: Force delete HR pods
         print("Force deleting Hotel Reservation pods to trigger rescheduling...")
-        self.kubectl.exec_command(
-            f"kubectl delete pods --all -n {self.namespace} --force --grace-period=0"
-        )
+        self.kubectl.exec_command(f"kubectl delete pods --all -n {self.namespace} --force --grace-period=0")
         print("IP pool exhausted. Hotel Reservation pods cannot reschedule.")
 
     @mark_fault_injected
@@ -160,43 +151,33 @@ spec:
 
         # Scale down batch-worker
         self.kubectl.exec_command(
-            f"kubectl scale deployment {self.EXHAUST_DEPLOYMENT} "
-            f"-n {self.EXHAUST_NAMESPACE} --replicas=0"
+            f"kubectl scale deployment {self.EXHAUST_DEPLOYMENT} -n {self.EXHAUST_NAMESPACE} --replicas=0"
         )
         print("Scaled down batch-worker deployment to 0 replicas")
-
 
         # Re-enable default pool
         print(f"Re-enabling default IPPool '{self.DEFAULT_POOL_NAME}'...")
         self.kubectl.exec_command(
-            f"kubectl patch ippool {self.DEFAULT_POOL_NAME} --type=merge "
-            f"-p '{{\"spec\":{{\"disabled\":false}}}}'"
+            f'kubectl patch ippool {self.DEFAULT_POOL_NAME} --type=merge -p \'{{"spec":{{"disabled":false}}}}\''
         )
 
         # Delete tiny pool
         print(f"Deleting tiny IPPool '{self.TINY_POOL_NAME}'...")
-        self.kubectl.exec_command(
-            f"kubectl delete ippool {self.TINY_POOL_NAME} --ignore-not-found"
-        )
+        self.kubectl.exec_command(f"kubectl delete ippool {self.TINY_POOL_NAME} --ignore-not-found")
 
         # Disable strictAffinity
         print("Disabling Calico strictAffinity...")
         self.kubectl.exec_command(
-            "kubectl patch ipamconfig default --type=merge "
-            "-p '{\"spec\":{\"strictAffinity\":false}}'"
+            'kubectl patch ipamconfig default --type=merge -p \'{"spec":{"strictAffinity":false}}\''
         )
 
         # Delete namespace
-        self.kubectl.exec_command(
-            f"kubectl delete namespace {self.EXHAUST_NAMESPACE} --ignore-not-found"
-        )
+        self.kubectl.exec_command(f"kubectl delete namespace {self.EXHAUST_NAMESPACE} --ignore-not-found")
         print(f"Deleted namespace: {self.EXHAUST_NAMESPACE}")
 
         # Wait and restart HR
         print("Waiting for Calico to reclaim IP allocations...")
         time.sleep(30)
-        self.kubectl.exec_command(
-            f"kubectl rollout restart deployment -n {self.namespace}"
-        )
+        self.kubectl.exec_command(f"kubectl rollout restart deployment -n {self.namespace}")
         self.kubectl.wait_for_stable(self.namespace)
         print("Recovery complete")
