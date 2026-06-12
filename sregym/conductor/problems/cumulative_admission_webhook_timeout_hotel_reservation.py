@@ -430,12 +430,38 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
         """Create a busybox-sleep deployment that exists only as a target
         for the NetworkPolicy. The container has no real handler; calls
         from kube-apiserver are dropped at the NetworkPolicy layer before
-        ever reaching the container."""
+        ever reaching the container.
+
+        Backends run on worker nodes only, pinned via ``nodeAffinity``
+        that excludes the control-plane label. The kube-apiserver runs
+        with ``hostNetwork: true`` on the control-plane, and Calico
+        does not enforce ingress NetworkPolicy on traffic from a
+        host-network sender to a pod on the same node. Pinning the
+        backends off the control-plane keeps every apiserver-to-backend
+        connection cross-node, which is where the NetworkPolicy
+        actually takes effect.
+        """
         container = client.V1Container(
             name="app",
             image=self.WEBHOOK_BACKEND_IMAGE,
             command=["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 60; done"],
             ports=[client.V1ContainerPort(container_port=self.WEBHOOK_BACKEND_PORT)],
+        )
+        affinity = client.V1Affinity(
+            node_affinity=client.V1NodeAffinity(
+                required_during_scheduling_ignored_during_execution=client.V1NodeSelector(
+                    node_selector_terms=[
+                        client.V1NodeSelectorTerm(
+                            match_expressions=[
+                                client.V1NodeSelectorRequirement(
+                                    key="node-role.kubernetes.io/control-plane",
+                                    operator="DoesNotExist",
+                                )
+                            ]
+                        )
+                    ]
+                )
+            )
         )
         body = client.V1Deployment(
             metadata=client.V1ObjectMeta(name=name, namespace=self.POLICY_NAMESPACE),
@@ -444,7 +470,7 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
                 selector=client.V1LabelSelector(match_labels={"app": name}),
                 template=client.V1PodTemplateSpec(
                     metadata=client.V1ObjectMeta(labels={"app": name}),
-                    spec=client.V1PodSpec(containers=[container]),
+                    spec=client.V1PodSpec(containers=[container], affinity=affinity),
                 ),
             ),
         )
