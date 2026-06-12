@@ -607,6 +607,22 @@ class Conductor:
         except Exception as e:
             self.logger.error(f"Failed to recover CoreDNS NXDOMAIN templates: {e}")
 
+        self.logger.info("[FIX] CoreDNS ndots saturation leftover if any")
+        try:
+            from kubernetes import client
+
+            from sregym.conductor.problems.coredns_saturation_ndots import _restore_coredns_from_annotation
+
+            # Delete analytics-collector stress workload in all namespaces.
+            self.kubectl.exec_command(
+                "kubectl delete deployment -l app=analytics-collector --all-namespaces --ignore-not-found --timeout=10s"
+            )
+
+            # Restore CoreDNS if the injection annotation is present.
+            _restore_coredns_from_annotation(client.AppsV1Api(), self.kubectl)
+        except Exception as e:
+            self.logger.warning(f"CoreDNS cleanup failed: {e}")
+
         self.logger.info("[FIX] Leftover dm-flakey infrastructure if any")
         try:
             self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
