@@ -11,10 +11,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 class LoadGeneratorFloodHomepage(Problem):
     def __init__(self):
-        self.app = AstronomyShop()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "frontend"  # This fault technically gets injected into the load generator, but the loadgenerator just spams the frontend
         # We can discuss more and see if we think we should change it, but loadgenerator isn't a "real" service.

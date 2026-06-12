@@ -11,10 +11,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 class MisconfigAppHotelRes(Problem):
     def __init__(self):
-        self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = ["geo"]
         self.root_cause = self.build_structured_root_cause(
             component="deployment/geo",
