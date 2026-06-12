@@ -157,11 +157,7 @@ class ContainerRunner:
         # stack directly, so localhost/127.0.0.1 already reaches host services.
         # host.docker.internal resolves to the bridge IP (172.17.0.1) where
         # kubectl port-forward is NOT listening, so we must NOT override.
-        if self.config.network_mode == "host" and platform.system() == "Darwin":
-            env_vars["API_HOSTNAME"] = "host.docker.internal"
-            mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
-            env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
-        elif self.config.network_mode == "host":  # Linux / WSL
+        if self.config.network_mode == "host" and platform.system() == "Darwin" or self.config.network_mode == "host":
             env_vars["API_HOSTNAME"] = "host.docker.internal"
             mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
             env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"

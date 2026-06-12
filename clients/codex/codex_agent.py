@@ -249,6 +249,7 @@ class CodexAgent:
 
         try:
             import importlib.util
+
             spec = importlib.util.spec_from_file_location("codex_to_trajectory", converter_file)
             mod = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(mod)

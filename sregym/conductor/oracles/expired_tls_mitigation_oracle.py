@@ -18,7 +18,7 @@ class ExpiredTlsMitigationOracle(Oracle):
     TLS certificate, accepting any of the following as a valid mitigation:
 
     - The faulty Ingress has been deleted entirely.
-    - The Ingress still exists but its TLS secret has been replaced with a 
+    - The Ingress still exists but its TLS secret has been replaced with a
     certificate that is currently valid (not_valid_after > now).
     - The Ingress still exists but the TLS secret has been removed entirely.
     """
@@ -28,16 +28,14 @@ class ExpiredTlsMitigationOracle(Oracle):
 
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation (Expired TLS) ==")
- 
+
         namespace = self.problem.namespace
         networking_v1 = client.NetworkingV1Api()
-        v1 = client.CoreV1Api() # used below to read TLS secrets referenced by the Ingress
+        v1 = client.CoreV1Api()  # used below to read TLS secrets referenced by the Ingress
 
         # check if the ingress still exists.
         try:
-            ingress = networking_v1.read_namespaced_ingress(
-                name=self.problem.ingress_name, namespace=namespace
-            )
+            ingress = networking_v1.read_namespaced_ingress(name=self.problem.ingress_name, namespace=namespace)
         except client.exceptions.ApiException as e:
             if e.status == 404:
                 logger.info("frontend-ingress has been deleted, mitigation accepted.")
@@ -67,7 +65,7 @@ class ExpiredTlsMitigationOracle(Oracle):
             cert_data = (secret.data or {}).get("tls.crt")
             if not cert_data:
                 continue
-                
+
             expiry = self._get_cert_expiry(cert_data)
             if expiry is None:
                 logger.warning("Could not parse certificate in secret '%s'.", secret_name)
@@ -82,8 +80,7 @@ class ExpiredTlsMitigationOracle(Oracle):
                 return {
                     "success": False,
                     "reason": (
-                        f"Secret '{secret_name}' still contains a certificate that "
-                        f"expired on {expiry.isoformat()}."
+                        f"Secret '{secret_name}' still contains a certificate that expired on {expiry.isoformat()}."
                     ),
                 }
 
