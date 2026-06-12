@@ -54,6 +54,9 @@ all:
     configmap_drift_hotel_reservation:
     - diagnosis
     - mitigation
+    connection_pool_exhaustion_hotel_reservation:
+    - diagnosis
+    - mitigation
     duplicate_pvc_mounts_astronomy_shop:
     - diagnosis
     - mitigation
