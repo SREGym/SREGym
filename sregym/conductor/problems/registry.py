@@ -99,6 +99,7 @@ from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
 from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
+from sregym.conductor.problems.run_as_non_root_fault import RunAsNonRootFault
 from sregym.service.kubectl import KubeCtl
 
 
