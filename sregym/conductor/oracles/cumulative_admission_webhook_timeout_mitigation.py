@@ -150,9 +150,11 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
         np = self._get_network_policy(net_policy_name, policy_ns)
         if np is None:
             return True, "NetworkPolicy deleted (accepted fix shape)"
-        # Allow-all check: ingress contains an empty from selector list which means "from anywhere"
+        # Allow-all check: an ingress rule with no ``from`` selector (or an empty
+        # ``from`` list) is interpreted by Kubernetes as "allow traffic from any
+        # source." Either form recovers admission.
         ingress = (np.spec and np.spec.ingress) or []
-        if any(rule.from_ is None or rule.from_ == [] or rule.from_ is None for rule in ingress):
+        if any(rule.from_ is None or rule.from_ == [] for rule in ingress):
             return True, "NetworkPolicy permits ingress from anywhere (accepted fix shape)"
 
         # Inspect surviving SREGym-created webhook configurations

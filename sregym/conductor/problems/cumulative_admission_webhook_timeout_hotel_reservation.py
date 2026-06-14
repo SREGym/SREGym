@@ -12,12 +12,12 @@ kube-apiserver returns ``context deadline exceeded`` and the error names no
 offending webhook.
 
 The fault here adds four mutating admission webhooks scoped to the Hotel
-Reservation namespace, each with ``timeoutSeconds=10`` and
-``failurePolicy=Ignore``. A default-deny ingress NetworkPolicy in the
-webhooks' namespace blocks all kube-apiserver -> backend connections, so
-every call hangs to its full per-webhook timeout. 4 x 10s = 40s of
-cumulative waiting overshoots the 30s global deadline; the global timeout
-fires first; pod admission fails.
+Reservation namespace, each with ``failurePolicy=Ignore`` and an uneven
+per-webhook ``timeoutSeconds`` (12s, 8s, 11s, 9s). A default-deny ingress
+NetworkPolicy in the webhooks' namespace blocks all kube-apiserver ->
+backend connections, so every call hangs to its full per-webhook
+timeout. The cumulative 40s of waiting overshoots the 30s global
+deadline; the global timeout fires first; pod admission fails.
 
 Application impact is direct. The injection deletes the running
 ``recommendation`` pod. The ReplicaSet attempts to recreate it; admission
@@ -61,14 +61,17 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
     """Four mutating webhooks whose cumulative timeout starves the
     kube-apiserver's global admission deadline.
 
-    Each webhook has ``timeoutSeconds=10`` and ``failurePolicy=Ignore`` and
-    is scoped to the Hotel Reservation namespace via ``namespaceSelector``.
-    A default-deny ingress ``NetworkPolicy`` in the webhooks' namespace
-    makes every backend call hang to its full timeout. The per-webhook
-    ``Ignore`` only triggers after the per-webhook timeout elapses, and the
-    global ~30s admission deadline fires before the cumulative 40s of
-    waiting can complete. The kube-apiserver returns ``context deadline
-    exceeded`` with no offending webhook named in the error.
+    Each webhook has ``failurePolicy=Ignore`` and is scoped to the Hotel
+    Reservation namespace via ``namespaceSelector``. Per-webhook
+    ``timeoutSeconds`` are uneven (12s, 8s, 11s, 9s); the values are
+    individually unremarkable but their sum, 40s, sits above the
+    apiserver's global admission deadline. A default-deny ingress
+    ``NetworkPolicy`` in the webhooks' namespace makes every backend
+    call hang to its full timeout. The per-webhook ``Ignore`` only
+    triggers after that webhook's own ``timeoutSeconds`` elapses, and
+    the global ~30s admission deadline fires before the cumulative 40s
+    of waiting can complete. The kube-apiserver returns ``context
+    deadline exceeded`` with no offending webhook named in the error.
 
     The accepted fix space is wide. Any of the following recover the
     cluster:
@@ -111,13 +114,153 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
         "image-policy-checker",
         "tenant-quota-validator",
     )
-    WEBHOOK_BACKEND_IMAGE = "busybox:1.36"
+    WEBHOOK_BACKEND_IMAGE = "python:3.12-alpine"
     WEBHOOK_BACKEND_PORT = 443
 
-    # Per-webhook timeout. 10 seconds is the upper bound the upstream issue
-    # uses; combined with WEBHOOK_COUNT=4 it gives 40s cumulative, safely
-    # above the kube-apiserver's global ~30s admission deadline.
-    WEBHOOK_TIMEOUT_SECONDS = 10
+    # Names of the cluster-scoped Secret and ConfigMap that every backend
+    # mounts. The Secret holds the TLS server cert and key, signed by the
+    # CA that the webhook configs reference in caBundle. The ConfigMap
+    # holds the Python admission-webhook server source that each backend
+    # runs.
+    TLS_SECRET_NAME = "compliance-webhook-tls"
+    SCRIPT_CONFIGMAP_NAME = "compliance-webhook-server"
+
+    # The webhook server source. Each backend Deployment runs this script
+    # via `python /app/server.py`. The script terminates TLS using the
+    # cert and key mounted at /tls, reads incoming AdmissionReviews, and
+    # decides allow/deny based on two policy checks: a trusted-image
+    # registry allowlist and a per-container CPU request ceiling. The
+    # allowlist and ceiling are loose enough that every Hotel
+    # Reservation workload passes; the rules are real but the policy
+    # plane is intentionally non-restrictive against the application
+    # under test. Denials return a proper AdmissionReview with a 403
+    # status and a human-readable message, matching how production
+    # webhook servers (Kyverno, OPA Gatekeeper, etc.) format
+    # rejections.
+    #
+    # Access logs are suppressed. During the fault window no requests
+    # reach the container anyway (the NetworkPolicy drops them before
+    # TLS), so logs would be silent regardless; keeping them off avoids
+    # noise during normal operation.
+    WEBHOOK_SERVER_SCRIPT = """\
+import json
+import ssl
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+TRUSTED_IMAGE_PREFIXES = (
+    # Trusted registries.
+    "docker.io/",
+    "gcr.io/",
+    "ghcr.io/",
+    "quay.io/",
+    "registry.k8s.io/",
+    "k8s.gcr.io/",
+    # Common base images on Docker Hub's library namespace, which kubelet
+    # renders without an explicit registry prefix.
+    "busybox:",
+    "alpine:",
+    "debian:",
+    "ubuntu:",
+    "python:",
+    "nginx:",
+    "redis:",
+    "mongo:",
+    "memcached:",
+    "consul:",
+    # Common third-party tooling images.
+    "jaegertracing/",
+    "prometheus/",
+    "grafana/",
+    "envoyproxy/",
+    # Internal application images.
+    "yinfangchen/",
+)
+MAX_CPU_REQUEST_M = 4000
+
+
+def _image_trusted(image):
+    return any(image.startswith(p) for p in TRUSTED_IMAGE_PREFIXES)
+
+
+def _cpu_millis(req):
+    if not req:
+        return 0
+    if req.endswith("m"):
+        try:
+            return int(req[:-1])
+        except ValueError:
+            return 0
+    try:
+        return int(float(req) * 1000)
+    except ValueError:
+        return 0
+
+
+def _evaluate(review):
+    request = review.get("request", {})
+    obj = request.get("object") or {}
+    spec = obj.get("spec") or {}
+    containers = (spec.get("containers") or []) + (spec.get("initContainers") or [])
+    for c in containers:
+        image = c.get("image", "")
+        if image and not _image_trusted(image):
+            return False, f"image {image!r} is not from a trusted registry"
+        cpu = ((c.get("resources") or {}).get("requests") or {}).get("cpu", "")
+        if _cpu_millis(cpu) > MAX_CPU_REQUEST_M:
+            return (
+                False,
+                f"container {c.get('name', '?')!r} requests "
+                f"{cpu} CPU, above the {MAX_CPU_REQUEST_M}m policy ceiling",
+            )
+    return True, ""
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            review = json.loads(self.rfile.read(length))
+        except Exception:
+            review = {}
+        allowed, message = _evaluate(review)
+        uid = review.get("request", {}).get("uid", "")
+        resp = {"uid": uid, "allowed": allowed}
+        if not allowed:
+            resp["status"] = {"code": 403, "message": message}
+        body = json.dumps(
+            {
+                "apiVersion": "admission.k8s.io/v1",
+                "kind": "AdmissionReview",
+                "response": resp,
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        return
+
+
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+ctx.load_cert_chain("/tls/tls.crt", "/tls/tls.key")
+srv = HTTPServer(("0.0.0.0", 443), Handler)
+srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
+srv.serve_forever()
+"""
+
+    # Per-backend webhook timeoutSeconds. Values are uneven so the
+    # cumulative cannot be computed by counting webhooks and multiplying
+    # a single number. The sum (40s) sits above the kube-apiserver's
+    # ~30s global admission deadline, which is what triggers the fault.
+    WEBHOOK_TIMEOUTS_S = {
+        "pod-resource-validator": 12,
+        "audit-log-enforcer": 8,
+        "image-policy-checker": 11,
+        "tenant-quota-validator": 9,
+    }
 
     # ------------------------------------------------------------------
     # Lifecycle timeouts
@@ -234,8 +377,9 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
                 "the cumulative waiting time across a chain of mutating "
                 "admission webhooks. Several MutatingWebhookConfigurations "
                 f"target this namespace via `namespaceSelector` matching "
-                f"`{self.namespace}`, each with `timeoutSeconds: "
-                f"{self.WEBHOOK_TIMEOUT_SECONDS}` and `failurePolicy: Ignore`. "
+                f"`{self.namespace}`, each with `failurePolicy: Ignore` and "
+                "per-webhook `timeoutSeconds` whose sum across the chain is "
+                f"approximately {sum(self.WEBHOOK_TIMEOUTS_S.values())} seconds. "
                 "Their backend Services live in the "
                 f"`{self.POLICY_NAMESPACE}` namespace, where a default-deny "
                 f"`NetworkPolicy` named `{self.NETWORK_POLICY_NAME}` blocks "
@@ -275,17 +419,20 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
 
         Sequence:
             1. Create the policy namespace (idempotent).
-            2. Generate a throwaway self-signed CA for use as the webhook
-               ``caBundle``. The CA is never actually used at runtime
-               because the NetworkPolicy drops connections before TLS, but
-               the ``caBundle`` field is required by the webhook config
-               schema.
+            2. Generate a self-signed CA and a server cert signed by
+               it whose SubjectAlternativeName covers every backend
+               Service's DNS name. The CA goes into each webhook's
+               ``caBundle``. The server cert and key go into a Secret
+               that every backend mounts at ``/tls``. The Python
+               webhook server script goes into a ConfigMap that every
+               backend mounts at ``/app``.
             3. Create four backend Deployments + Services in the policy
                namespace (idempotent).
             4. Wait for backends to be Available.
             5. Apply the default-deny ingress NetworkPolicy (idempotent).
             6. Create four MutatingWebhookConfigurations scoped to the
-               application namespace via ``namespaceSelector``.
+               application namespace via ``namespaceSelector``, each
+               with its own ``timeoutSeconds`` from ``WEBHOOK_TIMEOUTS_S``.
             7. Delete the running target deployment's pod so the
                ReplicaSet attempts to recreate it; admission fails because
                of the cumulative webhook timeout, and the new pod is
@@ -299,8 +446,11 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
         # Step 1: policy namespace
         self._ensure_namespace(self.POLICY_NAMESPACE)
 
-        # Step 2: generate throwaway CA
-        ca_bundle_b64 = self._generate_ca_bundle()
+        # Step 2: generate the CA + server cert and persist the cert,
+        # key, and server script the backends need at runtime.
+        ca_bundle_b64, server_cert_pem, server_key_pem = self._generate_tls_material()
+        self._ensure_tls_secret(server_cert_pem, server_key_pem)
+        self._ensure_server_script_configmap()
 
         # Step 3 + 4: backend deployments + services
         for backend_name in self.WEBHOOK_BACKEND_NAMES:
@@ -324,11 +474,11 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
         # Step 6b: decoy MutatingWebhookConfigurations
         self._install_decoy_webhooks(ca_bundle_b64)
 
+        cumulative = sum(self.WEBHOOK_TIMEOUTS_S.values())
         logger.info(
             f"All {len(self.WEBHOOK_BACKEND_NAMES)} MutatingWebhookConfigurations "
-            f"in place, each with timeoutSeconds={self.WEBHOOK_TIMEOUT_SECONDS} and "
-            f"failurePolicy=Ignore, scoped via namespaceSelector to "
-            f"'{self.namespace}'."
+            f"in place with failurePolicy=Ignore, scoped via namespaceSelector to "
+            f"'{self.namespace}', cumulative timeoutSeconds={cumulative}s."
         )
 
         # Step 7: trigger the symptom by deleting the target's pod
@@ -405,47 +555,161 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
             else:
                 raise
 
-    def _generate_ca_bundle(self) -> str:
-        """Generate a throwaway self-signed CA. The certificate is never
-        actually validated at runtime because the NetworkPolicy drops
-        traffic before TLS handshake, but the ``caBundle`` field on the
-        webhook config requires a base64-encoded PEM-encoded cert."""
-        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "sregym-webhook-ca")])
+    def _generate_tls_material(self) -> tuple[str, str, str]:
+        """Generate the TLS material that the webhook plane needs: a
+        self-signed CA, plus a leaf server cert signed by that CA whose
+        SubjectAlternativeName covers every backend Service's in-cluster
+        DNS name. Returns ``(ca_bundle_b64, server_cert_pem,
+        server_key_pem)``.
+
+        The CA goes into each MutatingWebhookConfiguration's ``caBundle``.
+        The server cert and key go into a Secret that every backend
+        Deployment mounts at ``/tls``. The Python webhook server uses
+        those files to terminate TLS on port 443. The kube-apiserver
+        validates the server cert against the CA at handshake time, so
+        post-recovery admission completes cleanly because every Hotel
+        Reservation workload passes each backend's compliance check.
+
+        Both certs expire after one day. Inject regenerates them on
+        every run, so the short lifetime is fine for benchmark runs.
+        """
         now = datetime.datetime.now(datetime.UTC)
-        cert = (
+        not_before = now - datetime.timedelta(minutes=5)
+        not_after = now + datetime.timedelta(days=1)
+
+        ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "compliance-webhook-ca")])
+        ca_cert = (
             x509.CertificateBuilder()
-            .subject_name(subject)
-            .issuer_name(issuer)
-            .public_key(key.public_key())
+            .subject_name(ca_name)
+            .issuer_name(ca_name)
+            .public_key(ca_key.public_key())
             .serial_number(x509.random_serial_number())
-            .not_valid_before(now - datetime.timedelta(minutes=5))
-            .not_valid_after(now + datetime.timedelta(days=1))
-            .sign(key, hashes.SHA256())
+            .not_valid_before(not_before)
+            .not_valid_after(not_after)
+            .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+            .sign(ca_key, hashes.SHA256())
         )
-        cert_pem = cert.public_bytes(serialization.Encoding.PEM)
-        return base64.b64encode(cert_pem).decode()
+
+        server_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        sans = []
+        for backend_name in self.WEBHOOK_BACKEND_NAMES:
+            sans.append(x509.DNSName(f"{backend_name}.{self.POLICY_NAMESPACE}.svc"))
+            sans.append(x509.DNSName(f"{backend_name}.{self.POLICY_NAMESPACE}.svc.cluster.local"))
+        server_cert = (
+            x509.CertificateBuilder()
+            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "compliance-webhook")]))
+            .issuer_name(ca_name)
+            .public_key(server_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(not_before)
+            .not_valid_after(not_after)
+            .add_extension(x509.SubjectAlternativeName(sans), critical=False)
+            .sign(ca_key, hashes.SHA256())
+        )
+
+        ca_pem = ca_cert.public_bytes(serialization.Encoding.PEM)
+        server_cert_pem = server_cert.public_bytes(serialization.Encoding.PEM).decode()
+        server_key_pem = server_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption(),
+        ).decode()
+        return base64.b64encode(ca_pem).decode(), server_cert_pem, server_key_pem
+
+    def _ensure_tls_secret(self, server_cert_pem: str, server_key_pem: str) -> None:
+        """Create or update the Secret that holds the webhook server's
+        TLS cert and key. Every backend Deployment mounts this Secret
+        at ``/tls``. The cert has SANs covering every backend Service's
+        DNS name, so a single Secret serves all four backends."""
+        body = client.V1Secret(
+            metadata=client.V1ObjectMeta(name=self.TLS_SECRET_NAME, namespace=self.POLICY_NAMESPACE),
+            type="kubernetes.io/tls",
+            string_data={"tls.crt": server_cert_pem, "tls.key": server_key_pem},
+        )
+        try:
+            self.core_v1.create_namespaced_secret(namespace=self.POLICY_NAMESPACE, body=body)
+            logger.info(f"Created Secret '{self.TLS_SECRET_NAME}' in '{self.POLICY_NAMESPACE}'.")
+        except ApiException as e:
+            if e.status == 409:
+                existing = self.core_v1.read_namespaced_secret(
+                    name=self.TLS_SECRET_NAME, namespace=self.POLICY_NAMESPACE
+                )
+                body.metadata.resource_version = existing.metadata.resource_version
+                self.core_v1.replace_namespaced_secret(
+                    name=self.TLS_SECRET_NAME, namespace=self.POLICY_NAMESPACE, body=body
+                )
+                logger.info(f"Replaced Secret '{self.TLS_SECRET_NAME}' in '{self.POLICY_NAMESPACE}'.")
+            else:
+                raise
+
+    def _ensure_server_script_configmap(self) -> None:
+        """Create or update the ConfigMap that holds the Python webhook
+        server source. Every backend Deployment mounts this ConfigMap
+        at ``/app`` and runs ``python /app/server.py`` as its
+        container command."""
+        body = client.V1ConfigMap(
+            metadata=client.V1ObjectMeta(name=self.SCRIPT_CONFIGMAP_NAME, namespace=self.POLICY_NAMESPACE),
+            data={"server.py": self.WEBHOOK_SERVER_SCRIPT},
+        )
+        try:
+            self.core_v1.create_namespaced_config_map(namespace=self.POLICY_NAMESPACE, body=body)
+            logger.info(f"Created ConfigMap '{self.SCRIPT_CONFIGMAP_NAME}' in '{self.POLICY_NAMESPACE}'.")
+        except ApiException as e:
+            if e.status == 409:
+                existing = self.core_v1.read_namespaced_config_map(
+                    name=self.SCRIPT_CONFIGMAP_NAME, namespace=self.POLICY_NAMESPACE
+                )
+                body.metadata.resource_version = existing.metadata.resource_version
+                self.core_v1.replace_namespaced_config_map(
+                    name=self.SCRIPT_CONFIGMAP_NAME, namespace=self.POLICY_NAMESPACE, body=body
+                )
+                logger.info(f"Replaced ConfigMap '{self.SCRIPT_CONFIGMAP_NAME}' in '{self.POLICY_NAMESPACE}'.")
+            else:
+                raise
 
     def _ensure_backend_deployment(self, name: str) -> None:
-        """Create a busybox-sleep deployment that exists only as a target
-        for the NetworkPolicy. The container has no real handler; calls
-        from kube-apiserver are dropped at the NetworkPolicy layer before
-        ever reaching the container.
+        """Create a webhook backend Deployment. Each backend runs a
+        small Python HTTPS server that terminates TLS on the webhook
+        port, evaluates each incoming AdmissionReview against a
+        trusted-image-registry allowlist and a per-container CPU
+        ceiling, and returns either ``allowed: true`` or a 403 denial.
+        The allowlist and ceiling are loose enough that every Hotel
+        Reservation workload passes. The cert and key are mounted from
+        the ``compliance-webhook-tls`` Secret at ``/tls``, and the
+        server source is mounted from the ``compliance-webhook-server``
+        ConfigMap at ``/app``. Both resources are set up earlier in
+        inject_fault and shared by all four backends.
+
+        Under normal conditions the backend works correctly. The fault
+        is entirely in the network path: the default-deny NetworkPolicy
+        in the policy namespace drops the kube-apiserver's SYN before
+        it reaches the container, so during the fault window each
+        webhook call waits the full per-webhook ``timeoutSeconds``
+        before the apiserver gives up. After recovery, the apiserver
+        completes TLS against the mounted cert, sends an
+        AdmissionReview, and gets the allowed response back from each
+        backend in turn, which is how the chain would behave in
+        production once the network is opened.
 
         Backends run on worker nodes only, pinned via ``nodeAffinity``
         that excludes the control-plane label. The kube-apiserver runs
         with ``hostNetwork: true`` on the control-plane, and Calico
         does not enforce ingress NetworkPolicy on traffic from a
         host-network sender to a pod on the same node. Pinning the
-        backends off the control-plane keeps every apiserver-to-backend
-        connection cross-node, which is where the NetworkPolicy
-        actually takes effect.
+        backends off the control-plane keeps every
+        apiserver-to-backend connection cross-node, which is where the
+        NetworkPolicy actually takes effect.
         """
         container = client.V1Container(
             name="app",
             image=self.WEBHOOK_BACKEND_IMAGE,
-            command=["sh", "-c", "trap 'exit 0' TERM; while true; do sleep 60; done"],
+            command=["python", "/app/server.py"],
             ports=[client.V1ContainerPort(container_port=self.WEBHOOK_BACKEND_PORT)],
+            volume_mounts=[
+                client.V1VolumeMount(name="tls", mount_path="/tls", read_only=True),
+                client.V1VolumeMount(name="app", mount_path="/app", read_only=True),
+            ],
         )
         affinity = client.V1Affinity(
             node_affinity=client.V1NodeAffinity(
@@ -463,6 +727,16 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
                 )
             )
         )
+        volumes = [
+            client.V1Volume(
+                name="tls",
+                secret=client.V1SecretVolumeSource(secret_name=self.TLS_SECRET_NAME),
+            ),
+            client.V1Volume(
+                name="app",
+                config_map=client.V1ConfigMapVolumeSource(name=self.SCRIPT_CONFIGMAP_NAME),
+            ),
+        ]
         body = client.V1Deployment(
             metadata=client.V1ObjectMeta(name=name, namespace=self.POLICY_NAMESPACE),
             spec=client.V1DeploymentSpec(
@@ -470,7 +744,11 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
                 selector=client.V1LabelSelector(match_labels={"app": name}),
                 template=client.V1PodTemplateSpec(
                     metadata=client.V1ObjectMeta(labels={"app": name}),
-                    spec=client.V1PodSpec(containers=[container], affinity=affinity),
+                    spec=client.V1PodSpec(
+                        containers=[container],
+                        affinity=affinity,
+                        volumes=volumes,
+                    ),
                 ),
             ),
         )
@@ -479,7 +757,10 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
             logger.info(f"Created backend deployment '{name}' in '{self.POLICY_NAMESPACE}'.")
         except ApiException as e:
             if e.status == 409:
-                logger.info(f"Backend deployment '{name}' already exists; skipping create.")
+                existing = self.apps_v1.read_namespaced_deployment(name=name, namespace=self.POLICY_NAMESPACE)
+                body.metadata.resource_version = existing.metadata.resource_version
+                self.apps_v1.replace_namespaced_deployment(name=name, namespace=self.POLICY_NAMESPACE, body=body)
+                logger.info(f"Replaced backend deployment '{name}' in '{self.POLICY_NAMESPACE}'.")
             else:
                 raise
 
@@ -497,7 +778,12 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
             logger.info(f"Created backend service '{name}' in '{self.POLICY_NAMESPACE}'.")
         except ApiException as e:
             if e.status == 409:
-                logger.info(f"Backend service '{name}' already exists; skipping create.")
+                existing = self.core_v1.read_namespaced_service(name=name, namespace=self.POLICY_NAMESPACE)
+                # ClusterIP is immutable once assigned; preserve it on replace.
+                body.metadata.resource_version = existing.metadata.resource_version
+                body.spec.cluster_ip = existing.spec.cluster_ip
+                self.core_v1.replace_namespaced_service(name=name, namespace=self.POLICY_NAMESPACE, body=body)
+                logger.info(f"Replaced backend service '{name}' in '{self.POLICY_NAMESPACE}'.")
             else:
                 raise
 
@@ -532,6 +818,10 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
             )
         except ApiException as e:
             if e.status == 409:
+                existing = self.networking_v1.read_namespaced_network_policy(
+                    name=self.NETWORK_POLICY_NAME, namespace=self.POLICY_NAMESPACE
+                )
+                body.metadata.resource_version = existing.metadata.resource_version
                 self.networking_v1.replace_namespaced_network_policy(
                     name=self.NETWORK_POLICY_NAME, namespace=self.POLICY_NAMESPACE, body=body
                 )
@@ -563,7 +853,7 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
                     admission_review_versions=["v1"],
                     side_effects="None",
                     failure_policy="Ignore",
-                    timeout_seconds=self.WEBHOOK_TIMEOUT_SECONDS,
+                    timeout_seconds=self.WEBHOOK_TIMEOUTS_S[backend_name],
                     rules=[
                         client.V1RuleWithOperations(
                             api_groups=[""],
@@ -593,6 +883,8 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
             logger.info(f"Created MutatingWebhookConfiguration '{config_name}'.")
         except ApiException as e:
             if e.status == 409:
+                existing = self.admissionregistration_v1.read_mutating_webhook_configuration(name=config_name)
+                body.metadata.resource_version = existing.metadata.resource_version
                 self.admissionregistration_v1.replace_mutating_webhook_configuration(name=config_name, body=body)
                 logger.info(f"Replaced existing MutatingWebhookConfiguration '{config_name}'.")
             else:
