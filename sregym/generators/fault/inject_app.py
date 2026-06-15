@@ -473,36 +473,7 @@ class ApplicationFaultInjector(FaultInjector):
 
         deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
 
-        script = textwrap.dedent(
-            """
-            from confluent_kafka import Producer
-            import threading
-            
-            n = 10
-
-            def task(tid):
-                c = 0
-                while True:
-                    p = Producer({'bootstrap.servers': 'kafka:9092', 'enable.idempotence': True})
-                    p.produce('orders', b'order_created')
-                    p.flush()
-                    c += 1
-                    if c % 100 == 0:
-                        print(f'Thread {tid} created {c} producers successfully')
-            
-            threads = []
-            for i in range(n):
-                t = threading.Thread(target=task, args=(i,))
-                t.start()
-                threads.append(t)
-            
-            for t in threads:
-                t.join()
-            """).strip()
-
-        encoded = base64.b64encode(script.encode()).decode()
-
-        container = client.V1Container(name="order-creator", image="python:3.12-slim", command=["sh", "-c", f"pip install confluent-kafka && python3 -u -c \"import base64; exec(base64.b64decode('{encoded}'))\""])
+        container = client.V1Container(name="order-creator", image="vsmart06/order-creator:latest")
 
         deployment.spec.template.spec.containers.append(container)
 
