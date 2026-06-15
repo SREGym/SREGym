@@ -28,8 +28,8 @@ The oracle checks four properties in order:
    the policy namespace still selects the webhook backends. This rejects
    the "open everything up" shortcut: the fault is a missing allow, so
    the fix must add the allow, not tear down the isolation. (Deleting
-   only the baseline default-deny does not even work, because the
-   metrics-scrape policy keeps the backends isolated.)
+   only the baseline default-deny does not even work, because the other
+   targeted allow policies still select and isolate the backends.)
 3. **Pod healthy.** The target deployment reports
    ``ready_replicas == spec.replicas``; the Service has at least one
    endpoint.

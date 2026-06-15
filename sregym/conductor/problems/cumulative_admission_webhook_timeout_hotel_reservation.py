@@ -15,9 +15,12 @@ The fault here adds four mutating admission webhooks scoped to the Hotel
 Reservation namespace, each with ``failurePolicy=Ignore`` and an uneven
 per-webhook ``timeoutSeconds`` (12s, 8s, 11s, 9s). The webhook backends
 in the policy namespace are isolated by NetworkPolicies: a baseline
-default-deny plus a legitimate metrics-scrape allow, and neither admits
-the kube-apiserver (which connects from a node address because it runs
-with ``hostNetwork: true``). With the apiserver's path unallowed, every
+default-deny plus several realistic targeted allows (metrics scraping,
+intra-namespace, and a kube-system control-plane allow), none of which
+admits the kube-apiserver (which connects from a node address because it
+runs with ``hostNetwork: true``). The control-plane allow is a near-miss:
+it matches kube-system pods, not the host-network apiserver. With the
+apiserver's path unallowed, every
 call hangs to its full per-webhook timeout. The cumulative 40s of
 waiting overshoots the 30s global deadline; the global timeout fires
 first; pod admission fails. The fault is the *missing* apiserver allow,
@@ -71,10 +74,13 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
     ``timeoutSeconds`` are uneven (12s, 8s, 11s, 9s); the values are
     individually unremarkable but their sum, 40s, sits above the
     apiserver's global admission deadline. The webhook backends in the
-    policy namespace are isolated by two NetworkPolicies, a baseline
-    default-deny and a legitimate metrics-scrape allow, and neither
-    admits the kube-apiserver. Because the apiserver's path is unallowed,
-    every backend call hangs to its full timeout. The per-webhook
+    policy namespace are isolated by a baseline default-deny plus several
+    realistic targeted allows (metrics scraping, intra-namespace, and a
+    kube-system control-plane allow), none of which admits the
+    kube-apiserver. The control-plane allow is a near-miss: it matches
+    kube-system pods, not the host-network apiserver. Because the
+    apiserver's path is unallowed, every backend call hangs to its full
+    timeout. The per-webhook
     ``Ignore`` only triggers after that webhook's own ``timeoutSeconds``
     elapses, and the global ~30s admission deadline fires before the
     cumulative 40s of waiting can complete. The kube-apiserver returns
@@ -98,8 +104,8 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
     - Delete every isolating NetworkPolicy: opens the backends but
       removes the namespace's security isolation. The oracle rejects
       this and points to the additive fix. (Deleting only the baseline
-      default-deny does not even work: the metrics policy still selects
-      the backends, so they stay isolated.)
+      default-deny does not even work: the other targeted allow policies
+      still select the backends, so they stay isolated.)
     - Delete all four webhooks: removes the compliance / policy plane
       entirely. The oracle rejects this with a "policy plane must
       remain present" message.
@@ -118,18 +124,14 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
     # ------------------------------------------------------------------
     POLICY_NAMESPACE = "policy-system"
 
-    # Two NetworkPolicies isolate the backends. Neither allows the
-    # kube-apiserver's source, so the apiserver cannot reach the
-    # backends and the fault holds. The fault is the *missing* apiserver
-    # allow, mirroring kubernetes/kubernetes#128162.
-    #   - default-deny-ingress: the baseline deny (podSelector {}, no rules).
-    #   - allow-metrics-ingress: a legitimate targeted allow (Prometheus in
-    #     the observe namespace scraping the backends). It selects the
-    #     backends too, so deleting the baseline deny alone does not open
-    #     the path (NetworkPolicy is additive; a pod stays isolated while
-    #     any policy selects it).
+    # The backends are isolated by a baseline default-deny plus several
+    # realistic targeted allows (below). None of the allows admits the
+    # kube-apiserver, so the apiserver cannot reach the backends and the
+    # fault holds. The fault is the *missing* apiserver allow, mirroring
+    # kubernetes/kubernetes#128162. NetworkPolicy is additive and a pod
+    # stays isolated while any policy selects it, so deleting the baseline
+    # deny alone does not open the path.
     NETWORK_POLICY_NAME = "default-deny-ingress"
-    ALLOW_PARTIAL_POLICY_NAME = "allow-metrics-ingress"
 
     # The allow that recover_fault (and a correct operator) adds: grant
     # the kube-apiserver ingress to the backends on the webhook port.
@@ -142,6 +144,26 @@ class CumulativeAdmissionWebhookTimeoutHotelReservation(Problem):
     # Label applied to the backend pods so the allow policies can select
     # them by tier (the Service selector still uses ``app``).
     BACKEND_TIER_LABEL = {"tier": "compliance"}
+
+    # Realistic targeted ingress allows on the backends. Each is a
+    # believable policy a real default-deny namespace would carry, and
+    # NONE admits the kube-apiserver: the apiserver is host-network, so its
+    # webhook calls reach the backends from a node tunnel address (in the
+    # pod CIDR) that no namespaceSelector matches. The fault is the absent
+    # apiserver allow.
+    #
+    # ``allow-control-plane`` is a deliberate near-miss: its name and
+    # kube-system source imply it already permits the apiserver, but the
+    # host-network apiserver is not a kube-system *pod*, so the selector
+    # does not match it. An agent that reads "the control plane is already
+    # allowed" and looks elsewhere has been misled. Every entry uses a
+    # ``namespaceSelector`` peer (never a pod-CIDR ipBlock or 0.0.0.0/0),
+    # which is what keeps them from accidentally opening the apiserver path.
+    BACKEND_ALLOW_POLICIES = (
+        {"name": "allow-metrics-ingress", "from_namespace": OBSERVE_NAMESPACE},
+        {"name": "allow-intra-namespace", "from_namespace": POLICY_NAMESPACE},
+        {"name": "allow-control-plane", "from_namespace": "kube-system"},
+    )
 
     # Realistic-sounding names so the agent reads them as legitimate
     # compliance controls rather than as benchmark artifacts.
@@ -420,24 +442,27 @@ srv.serve_forever()
                 "Their backend Services live in the "
                 f"`{self.POLICY_NAMESPACE}` namespace, whose pods are "
                 "isolated by NetworkPolicies: a baseline default-deny "
-                f"(`{self.NETWORK_POLICY_NAME}`) plus a targeted allow "
-                f"(`{self.ALLOW_PARTIAL_POLICY_NAME}`) that admits only "
-                f"metrics scraping from the `{self.OBSERVE_NAMESPACE}` "
-                "namespace. No NetworkPolicy allows ingress from the "
-                "kube-apiserver, which connects from a cluster node "
-                "address because it runs with `hostNetwork: true`. With "
-                "the apiserver's path unallowed, every webhook call is "
-                "dropped and hangs until its individual timeoutSeconds "
-                "expires. The cumulative waiting time exceeds the global "
-                "admission deadline before the per-webhook `Ignore` policy "
-                "can apply. The error message does not name the offending "
-                "webhooks because the failure originates in the apiserver-side "
-                "aggregate deadline rather than any one webhook call. The "
-                "fault is the missing apiserver ingress allow, not the "
-                "presence of the default-deny; the fix is to add that "
-                "allow (or otherwise bring the cumulative timeout under "
-                "the deadline), not to remove the namespace's isolation. "
-                "The "
+                f"(`{self.NETWORK_POLICY_NAME}`) plus several targeted "
+                "allows (metrics scraping from the "
+                f"`{self.OBSERVE_NAMESPACE}` namespace, intra-namespace "
+                "traffic, and a `kube-system` control-plane allow). None "
+                "of them admits the kube-apiserver, which connects from a "
+                "cluster node address because it runs with "
+                "`hostNetwork: true`; in particular the control-plane "
+                "allow is a near-miss that matches `kube-system` pods, not "
+                "the host-network apiserver, so it does not cover the "
+                "admission traffic. With the apiserver's path unallowed, "
+                "every webhook call is dropped and hangs until its "
+                "individual timeoutSeconds expires. The cumulative waiting "
+                "time exceeds the global admission deadline before the "
+                "per-webhook `Ignore` policy can apply. The error message "
+                "does not name the offending webhooks because the failure "
+                "originates in the apiserver-side aggregate deadline rather "
+                "than any one webhook call. The fault is the missing "
+                "apiserver ingress allow, not the presence of the "
+                "default-deny; the fix is to add that allow (or otherwise "
+                "bring the cumulative timeout under the deadline), not to "
+                "remove the namespace's isolation. The "
                 "policy plane includes additional companion "
                 "MutatingWebhookConfigurations (cert-manager, istio, kyverno, "
                 "linkerd-style names) that share the same namespaceSelector "
@@ -477,11 +502,12 @@ srv.serve_forever()
             3. Create four backend Deployments + Services in the policy
                namespace (idempotent).
             4. Wait for backends to be Available.
-            5. Isolate the backends with two NetworkPolicies: a baseline
-               default-deny and a legitimate metrics-scrape allow (from
-               the observe namespace). Neither allows the kube-apiserver,
-               so the apiserver cannot reach the backends. The missing
-               apiserver allow is the fault.
+            5. Isolate the backends with a baseline default-deny plus
+               several realistic targeted allows (metrics from observe,
+               intra-namespace, and a kube-system control-plane allow that
+               looks like it permits the apiserver but does not). None
+               allows the host-network apiserver, so it cannot reach the
+               backends. The missing apiserver allow is the fault.
             6. Create four MutatingWebhookConfigurations scoped to the
                application namespace via ``namespaceSelector``, each
                with its own ``timeoutSeconds`` from ``WEBHOOK_TIMEOUTS_S``.
@@ -516,14 +542,16 @@ srv.serve_forever()
             )
         logger.info(f"All {len(self.WEBHOOK_BACKEND_NAMES)} backend deployments ready in '{self.POLICY_NAMESPACE}'.")
 
-        # Step 5: isolate the backends. The baseline default-deny plus a
-        # legitimate metrics-scrape allow both select the backends; neither
-        # admits the kube-apiserver, so its webhook calls are dropped. Also
-        # remove any apiserver-allow left behind by a prior recover_fault,
-        # so re-injecting (inject -> recover -> inject) reliably re-arms
-        # the fault instead of leaving the path open.
+        # Step 5: isolate the backends. The baseline default-deny plus
+        # several realistic targeted allows (metrics from observe,
+        # intra-namespace, and a control-plane allow that looks like it
+        # permits the apiserver but does not) all select the backends;
+        # none admits the host-network apiserver, so its webhook calls are
+        # dropped. Also remove any apiserver-allow left behind by a prior
+        # recover_fault, so re-injecting (inject -> recover -> inject)
+        # reliably re-arms the fault instead of leaving the path open.
         self._ensure_default_deny_network_policy()
-        self._ensure_partial_allow_network_policy()
+        self._ensure_backend_allow_policies()
         self._remove_apiserver_allow_network_policy()
 
         # Step 6: MutatingWebhookConfigurations (real ones)
@@ -881,38 +909,41 @@ srv.serve_forever()
             else:
                 raise
 
-    def _ensure_partial_allow_network_policy(self) -> None:
-        """Apply (or replace) a legitimate, targeted ingress allow for the
-        backends: traffic from the observe namespace (where Prometheus
-        runs) on the webhook port, so metrics scraping works.
+    def _ensure_backend_allow_policies(self) -> None:
+        """Apply (or replace) the realistic targeted ingress allows from
+        ``BACKEND_ALLOW_POLICIES``. Each admits one source namespace to the
+        backends on the webhook port, modeling a real default-deny
+        namespace that carries several legitimate allows.
 
-        This is a real allow an operator would write, and it is
-        deliberately NOT the apiserver allow. Because it selects the
-        backend pods (``tier: compliance``), it also keeps them isolated
-        if the baseline default-deny is removed: NetworkPolicy is
-        additive and a pod stays isolated while any policy selects it.
-        So this policy is what makes "just delete the default-deny" an
-        insufficient fix."""
-        body = client.V1NetworkPolicy(
-            metadata=client.V1ObjectMeta(name=self.ALLOW_PARTIAL_POLICY_NAME, namespace=self.POLICY_NAMESPACE),
-            spec=client.V1NetworkPolicySpec(
-                pod_selector=client.V1LabelSelector(match_labels=self.BACKEND_TIER_LABEL),
-                policy_types=["Ingress"],
-                ingress=[
-                    client.V1NetworkPolicyIngressRule(
-                        _from=[
-                            client.V1NetworkPolicyPeer(
-                                namespace_selector=client.V1LabelSelector(
-                                    match_labels={"kubernetes.io/metadata.name": self.OBSERVE_NAMESPACE},
+        None of these admits the kube-apiserver (host-network, source is a
+        node tunnel address no namespaceSelector matches), so the apiserver
+        path stays closed. ``allow-control-plane`` is the deliberate
+        near-miss: it looks like it permits the control plane but matches
+        only kube-system pods, not the host-network apiserver. Because each
+        policy selects the backend pods (``tier: compliance``), the
+        backends stay isolated even if the baseline default-deny is
+        removed, so "just delete the default-deny" is an insufficient fix."""
+        for spec in self.BACKEND_ALLOW_POLICIES:
+            body = client.V1NetworkPolicy(
+                metadata=client.V1ObjectMeta(name=spec["name"], namespace=self.POLICY_NAMESPACE),
+                spec=client.V1NetworkPolicySpec(
+                    pod_selector=client.V1LabelSelector(match_labels=self.BACKEND_TIER_LABEL),
+                    policy_types=["Ingress"],
+                    ingress=[
+                        client.V1NetworkPolicyIngressRule(
+                            _from=[
+                                client.V1NetworkPolicyPeer(
+                                    namespace_selector=client.V1LabelSelector(
+                                        match_labels={"kubernetes.io/metadata.name": spec["from_namespace"]},
+                                    )
                                 )
-                            )
-                        ],
-                        ports=[client.V1NetworkPolicyPort(protocol="TCP", port=self.WEBHOOK_BACKEND_PORT)],
-                    )
-                ],
-            ),
-        )
-        self._create_or_replace_network_policy(self.ALLOW_PARTIAL_POLICY_NAME, body)
+                            ],
+                            ports=[client.V1NetworkPolicyPort(protocol="TCP", port=self.WEBHOOK_BACKEND_PORT)],
+                        )
+                    ],
+                ),
+            )
+            self._create_or_replace_network_policy(spec["name"], body)
 
     def _ensure_apiserver_allow_network_policy(self) -> None:
         """Apply (or replace) the allow that recovers the cluster: grant
