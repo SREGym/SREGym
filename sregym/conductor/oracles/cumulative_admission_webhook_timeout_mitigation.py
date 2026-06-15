@@ -7,43 +7,37 @@ ReplicaSet's recreate attempt is blocked by admission), not crashed. A
 pod walk that filters out terminated/absent pods can pass the namespace
 trivially even when the deployment is missing its replica entirely.
 
-The oracle accepts any of several legitimate fix shapes. The simplest is
-to open the default-deny NetworkPolicy in the policy namespace. Other
-accepted fixes include lowering the webhooks' ``timeoutSeconds`` so the
-cumulative total fits below the global admission deadline, narrowing one
-or more webhooks' ``namespaceSelector`` to exclude the application
-namespace, or deleting one or more (but not all) of the webhook
-configurations. The oracle rejects shortcuts that destroy the workload
-(deleting all webhooks, deleting the recommendation deployment, scaling
-to zero) and shortcuts that look like a fix but leave admission still
-broken under fresh pod creation.
+The fault is a *missing* ingress allow for the kube-apiserver, so the
+intended fix is additive: add the allow on the webhook port. Several
+other fixes also work: lower the webhooks' ``timeoutSeconds`` so the
+cumulative total fits below the global admission deadline, narrow one or
+more webhooks' ``namespaceSelector`` to exclude the application
+namespace, or delete one or more (but not all) of the webhook
+configurations. The oracle does not enumerate fix shapes; it confirms a
+working fix at runtime (the probe) and rejects the destructive shortcuts
+(removing the namespace's network isolation, deleting all webhooks,
+deleting or scaling the workload to zero).
 
-The oracle checks four independent properties:
+The oracle checks four properties in order:
 
-1. **Spec is fixed.** At least one of:
-    - The default-deny NetworkPolicy in the policy namespace is absent
-      (the simplest fix and what ``recover_fault`` does).
-    - The default-deny NetworkPolicy now permits ingress from outside
-      the namespace.
-    - The sum of ``timeoutSeconds`` across all SREGym-created webhooks
-      scoped to the application namespace is at most 25s, leaving a
-      5-second safety margin under the ~30s global admission deadline.
-    - At least one webhook's ``namespaceSelector`` no longer matches
-      the application namespace.
-    - At least one (but not all) of the SREGym-created webhook
-      configurations has been deleted.
-2. **Workload intact.** The policy namespace exists, at least one of
+1. **Workload intact.** The policy namespace exists, at least one of
    the SREGym webhook configurations remains (the policy plane must
    remain present), and the application's target deployment exists
    with its original replica count.
+2. **Backends network-isolated.** At least one ingress NetworkPolicy in
+   the policy namespace still selects the webhook backends. This rejects
+   the "open everything up" shortcut: the fault is a missing allow, so
+   the fix must add the allow, not tear down the isolation. (Deleting
+   only the baseline default-deny does not even work, because the
+   metrics-scrape policy keeps the backends isolated.)
 3. **Pod healthy.** The target deployment reports
    ``ready_replicas == spec.replicas``; the Service has at least one
    endpoint.
 4. **Fix verified at runtime.** A fresh probe pod is created in the
    application namespace and observed transitioning to Running within
-   ``PROBE_TIMEOUT_S``. If the probe creation itself fails with a
-   timeout (the same symptom the agent was supposed to fix), this
-   property fails.
+   ``PROBE_TIMEOUT_S``. This is the ground truth that admission works
+   again; if the probe creation itself fails with a timeout (the same
+   symptom the agent was supposed to fix), this property fails.
 """
 
 import contextlib
@@ -62,12 +56,6 @@ logger = logging.getLogger(__name__)
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 3
 
-# Global admission deadline in the kube-apiserver. The upstream default
-# is ~30 seconds. The safe-fix threshold is 25 seconds of cumulative
-# webhook timeoutSeconds, leaving 5 seconds of margin.
-_GLOBAL_ADMISSION_DEADLINE_S = 30
-_CUMULATIVE_TIMEOUT_SAFE_S = 25
-
 # Probe pod
 _PROBE_TIMEOUT_S = 90
 _PROBE_POLL_INTERVAL = 3
@@ -81,10 +69,11 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
         problem.namespace              - application namespace
         problem.TARGET_DEPLOYMENT      - the deployment whose replica is missing
         problem.POLICY_NAMESPACE       - where the webhook backends live
-        problem.NETWORK_POLICY_NAME    - the default-deny policy
         problem.WEBHOOK_BACKEND_NAMES  - names of the 4 webhook configs (used directly,
                                           no prefix); each name is also the name of the
                                           corresponding backend Service in POLICY_NAMESPACE.
+        problem.BACKEND_TIER_LABEL     - label on the backend pods; used to tell whether a
+                                          NetworkPolicy podSelector still isolates the backends.
     """
 
     importance = 1.0
@@ -108,98 +97,119 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
         # Give any agent-triggered rollout a moment to settle.
         self._wait_for_rollout_settle(namespace)
 
-        # 1. Spec is fixed (any of the accepted shapes).
-        spec_ok, spec_reason = self._spec_is_fixed()
-        if not spec_ok:
-            return self._fail(spec_reason)
-
-        # 2. Workload is intact.
+        # 1. Workload intact: deployment present with its replica count, at
+        #    least one webhook remains, policy namespace still exists.
         intact_ok, intact_reason = self._workload_intact()
         if not intact_ok:
             return self._fail(intact_reason)
 
-        # 3. Pod is healthy.
+        # 2. The webhook backends remain network-isolated (the fix must be
+        #    additive: add the missing apiserver allow, not remove isolation).
+        isolated_ok, isolated_reason = self._backends_network_isolated()
+        if not isolated_ok:
+            return self._fail(isolated_reason)
+
+        # 3. Target pod is healthy and its Service has endpoints.
         healthy_ok, healthy_reason = self._pod_healthy()
         if not healthy_ok:
             return self._fail(healthy_reason)
 
-        # 4. Fresh probe pod admits successfully.
+        # 4. A fresh probe pod admits within the deadline. This is the
+        #    ground truth that admission actually works again.
         probe_ok, probe_reason = self._functional_probe()
         if not probe_ok:
             return self._fail(probe_reason)
 
         print(
-            f"✅ All four properties passed: spec in accepted fix shape, policy plane intact, "
+            f"✅ All properties passed: workload intact, backends still isolated, "
             f"'{target_deployment}' deployment fully ready, and a fresh probe pod "
             "was admitted within the deadline."
         )
         return {"success": True}
 
     # ------------------------------------------------------------------
-    # Property 1: spec is fixed
+    # Property: backends remain network-isolated
     # ------------------------------------------------------------------
-    def _spec_is_fixed(self) -> tuple[bool, str]:
-        """At least one of: NetworkPolicy gone / opened, timeouts lowered,
-        namespaceSelector narrowed, or some webhooks deleted."""
+    def _backends_network_isolated(self) -> tuple[bool, str]:
+        """The webhook backends must remain selected by at least one
+        ingress NetworkPolicy in the policy namespace.
+
+        The fault is a *missing* ingress allow for the kube-apiserver, not
+        the presence of a deny. The intended fix is additive: add the
+        allow (or lower the webhook timeouts / narrow their
+        namespaceSelector / remove some webhooks). Tearing down all of the
+        namespace's ingress NetworkPolicies would open the backends but
+        destroy their security isolation, which is not an accepted fix.
+
+        This guards only against the "removed all isolation" shortcut; the
+        functional probe is the arbiter of whether admission actually
+        works for every accepted fix."""
         policy_ns = self.problem.POLICY_NAMESPACE
-        net_policy_name = self.problem.NETWORK_POLICY_NAME
-        backend_names = self.problem.WEBHOOK_BACKEND_NAMES
-        app_namespace = self.problem.namespace
+        try:
+            policies = self.networking_v1.list_namespaced_network_policy(namespace=policy_ns).items
+        except ApiException as e:
+            if e.status == 404:
+                policies = []
+            else:
+                raise
 
-        # Check NetworkPolicy
-        np = self._get_network_policy(net_policy_name, policy_ns)
-        if np is None:
-            return True, "NetworkPolicy deleted (accepted fix shape)"
-        # Allow-all check: an ingress rule with no ``from`` selector (or an empty
-        # ``from`` list) is interpreted by Kubernetes as "allow traffic from any
-        # source." Either form recovers admission.
-        ingress = (np.spec and np.spec.ingress) or []
-        if any(rule.from_ is None or rule.from_ == [] for rule in ingress):
-            return True, "NetworkPolicy permits ingress from anywhere (accepted fix shape)"
-
-        # Inspect surviving SREGym-created webhook configurations
-        survivors = self._list_sregym_webhooks(backend_names)
-        if not survivors:
-            return False, (
-                "All SREGym-created compliance webhooks have been deleted. The policy "
-                "plane is required to remain present; the accepted fixes are to open "
-                "the default-deny NetworkPolicy, lower webhook timeoutSeconds so the "
-                "cumulative sum is under "
-                f"{_CUMULATIVE_TIMEOUT_SAFE_S}s, narrow at least one webhook's "
-                "namespaceSelector to exclude the application namespace, or delete "
-                "one or more (but not all) of the webhooks."
-            )
-
-        # Sum surviving timeouts targeting the application namespace
-        scoped_to_app = [w for w in survivors if self._webhook_targets(w, app_namespace)]
-        cumulative = sum(self._sum_timeout_seconds(w) for w in scoped_to_app)
-        if cumulative <= _CUMULATIVE_TIMEOUT_SAFE_S:
-            return True, (
-                f"Cumulative webhook timeoutSeconds = {cumulative}s, which is below the "
-                f"safe ceiling of {_CUMULATIVE_TIMEOUT_SAFE_S}s (accepted fix shape)"
-            )
-
-        # Or: some webhooks dropped from the app namespace via namespaceSelector
-        original_count = len(backend_names)
-        scoped_count = len(scoped_to_app)
-        if scoped_count < original_count:
-            return True, (
-                f"At least one webhook no longer matches namespaceSelector for "
-                f"'{app_namespace}' ({scoped_count} of {original_count} still scoped) "
-                "(accepted fix shape)"
-            )
+        for np in policies:
+            spec = np.spec
+            if not spec:
+                continue
+            if "Ingress" not in (spec.policy_types or []):
+                continue
+            if self._selector_selects_backends(spec.pod_selector):
+                return True, "Webhook backends remain network-isolated"
 
         return False, (
-            "Spec is not in any accepted fix shape: the default-deny NetworkPolicy "
-            f"'{net_policy_name}' in '{policy_ns}' still blocks ingress, all "
-            f"{original_count} webhooks still target '{app_namespace}', and the "
-            f"cumulative timeoutSeconds is {cumulative}s (must be <= "
-            f"{_CUMULATIVE_TIMEOUT_SAFE_S}s to be safe under the global ~"
-            f"{_GLOBAL_ADMISSION_DEADLINE_S}s admission deadline). Accepted fixes: "
-            "(a) delete or open the NetworkPolicy, (b) lower webhook timeoutSeconds, "
-            "(c) narrow at least one webhook's namespaceSelector, or (d) delete some "
-            "(but not all) webhook configurations."
+            "The webhook backends are no longer isolated by any ingress NetworkPolicy "
+            f"in '{policy_ns}'. Removing the namespace's isolation is not an accepted "
+            "fix. The fault is a missing ingress allow for the kube-apiserver, so the "
+            "fix is to add that allow on the webhook port (or lower the webhook "
+            "timeoutSeconds so the cumulative sum fits under the global admission "
+            "deadline, narrow at least one webhook's namespaceSelector to exclude the "
+            "application namespace, or delete one or more but not all of the webhooks)."
         )
+
+    def _selector_selects_backends(self, pod_selector) -> bool:
+        """Return True if a NetworkPolicy podSelector selects at least one
+        webhook backend pod. An empty selector matches every pod in the
+        namespace (so it includes the backends). Otherwise the selector is
+        evaluated against the backends' concrete label sets,
+        ``{app: <backend>, tier: compliance}``."""
+        if pod_selector is None:
+            return True
+        match_labels = pod_selector.match_labels or {}
+        match_expressions = pod_selector.match_expressions or []
+        if not match_labels and not match_expressions:
+            return True
+        backend_label_sets = [
+            {"app": name, **self.problem.BACKEND_TIER_LABEL} for name in self.problem.WEBHOOK_BACKEND_NAMES
+        ]
+        return any(self._labels_match(labels, match_labels, match_expressions) for labels in backend_label_sets)
+
+    @staticmethod
+    def _labels_match(labels: dict, match_labels: dict, match_expressions) -> bool:
+        """Evaluate a Kubernetes label selector (matchLabels +
+        matchExpressions) against a concrete label set."""
+        for k, v in match_labels.items():
+            if labels.get(k) != v:
+                return False
+        for expr in match_expressions:
+            key, op, values = expr.key, expr.operator, set(expr.values or [])
+            present = key in labels
+            if op == "In" and (not present or labels[key] not in values):
+                return False
+            if op == "NotIn" and present and labels[key] in values:
+                return False
+            if op == "Exists" and not present:
+                return False
+            if op == "DoesNotExist" and present:
+                return False
+            if op not in {"In", "NotIn", "Exists", "DoesNotExist"}:
+                return False
+        return True
 
     # ------------------------------------------------------------------
     # Property 2: workload intact
@@ -356,14 +366,6 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
                 return
             time.sleep(_ROLLOUT_POLL_INTERVAL)
 
-    def _get_network_policy(self, name: str, namespace: str):
-        try:
-            return self.networking_v1.read_namespaced_network_policy(name=name, namespace=namespace)
-        except ApiException as e:
-            if e.status == 404:
-                return None
-            raise
-
     def _list_sregym_webhooks(self, backend_names) -> list:
         """Return the list of SREGym-created MutatingWebhookConfigurations
         that still exist. The webhook config name equals the backend name
@@ -381,24 +383,6 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
                 if e.status != 404:
                     raise
         return result
-
-    @staticmethod
-    def _webhook_targets(webhook_config, app_namespace: str) -> bool:
-        """Return True if any of the webhook config's webhooks selects the
-        application namespace via namespaceSelector matchLabels."""
-        for wh in webhook_config.webhooks or []:
-            ns_sel = wh.namespace_selector
-            if ns_sel is None:
-                continue
-            match_labels = ns_sel.match_labels or {}
-            if match_labels.get("kubernetes.io/metadata.name") == app_namespace:
-                return True
-        return False
-
-    @staticmethod
-    def _sum_timeout_seconds(webhook_config) -> int:
-        """Sum the timeoutSeconds across all webhooks in a single config."""
-        return sum((wh.timeout_seconds or 0) for wh in (webhook_config.webhooks or []))
 
     def _delete_probe_pod(self, name: str, namespace: str) -> None:
         with contextlib.suppress(ApiException):
