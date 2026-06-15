@@ -1,7 +1,10 @@
 import base64
+import contextlib
 import json
 import logging
 import os
+import shlex
+import socket
 import subprocess
 import tempfile
 import time
@@ -16,11 +19,12 @@ from sregym.utils.decorators import mark_fault_injected
 
 logger = logging.getLogger(__name__)
 
-_REGISTRY_CONTAINER = "sregym-private-registry"
+_REGISTRY_DEPLOYMENT = "sregym-private-registry"
+_REGISTRY_HTPASSWD_SECRET = "sregym-private-registry-htpasswd"
 _REGISTRY_USER = "sregym"
 _REGISTRY_PASS = "sregympass"
-_REGISTRY_PORT = 5000  # port on the kind Docker bridge network
-_REGISTRY_HOST_PORT = 5001  # port mapped on the host for docker push
+_REGISTRY_PORT = 5000  # port the in-cluster registry Service listens on
+_LOCAL_PORT_FORWARD_PORT = 15000  # local port used for `kubectl port-forward` during push
 
 _TARGET_DEPLOYMENT = "recommendation"
 _TARGET_CONTAINER = "hotel-reserv-recommendation"
@@ -29,12 +33,14 @@ _IMAGE_SEARCH_KEY = "hotel-reservation"  # substring matched against containerd 
 _SECRET_NAME = "hotel-registry-creds"
 _DECOY_SECRET = "nonexistent-pull-creds"
 
+_APP_NAMESPACE = "hotel-reservation"
+
 _INFRA_NAMESPACE = "infra-registry"
 _MASTER_SECRET_NAME = "private-registry-creds-master"
 _RUNBOOK_CONFIGMAP = "registry-access-runbook"
 
-_DOCKERHUB_BLOCK_CONTAINER = "sregym-dockerhub-block"
-_DOCKERHUB_MIRROR_ALIAS = "dockerhub-mirror.internal"
+_DOCKERHUB_BLOCK_DEPLOYMENT = "sregym-dockerhub-block"
+_DOCKERHUB_BLOCK_CONFIGMAP = "sregym-dockerhub-block-conf"
 _DOCKERHUB_BLOCK_PORT = 80
 _DOCKERHUB_BLOCK_NGINX_CONF = """\
 server {
@@ -45,6 +51,19 @@ server {
     }
 }
 """
+
+# Hostnames a dockerd (cri-dockerd) node resolves to talk to Docker Hub. On these
+# nodes we block public pulls by pointing the hostnames at the in-cluster block
+# Service via /etc/hosts (TLS handshake fails -> pull error), instead of the
+# containerd registry-mirror mechanism used on containerd nodes.
+_DOCKERHUB_BLOCK_HOSTS = [
+    "docker.io",
+    "registry-1.docker.io",
+    "auth.docker.io",
+    "index.docker.io",
+    "production.cloudflare.docker.com",
+]
+_DOCKERHUB_BLOCK_HOSTS_MARKER = "# sregym-dockerhub-block"
 
 
 class MissingImagePullSecretHotelReservation(Problem):
@@ -91,12 +110,13 @@ class MissingImagePullSecretHotelReservation(Problem):
     def inject_fault(self) -> bool:
         logger.info("Injecting MissingImagePullSecret fault...")
 
-        # Step 1: start the private registry on the kind Docker bridge network
+        # Step 1: start the private registry as an in-cluster Deployment+Service
+        self._ensure_namespace(_INFRA_NAMESPACE)
         self._registry_ip = self._start_registry()
         self._private_image = f"{self._registry_ip}:{_REGISTRY_PORT}/hotel-reservation:latest"
         logger.info("Private registry running at %s", self._registry_ip)
 
-        # Step 2: configure containerd on all Kind nodes to allow HTTP pulls from this registry
+        # Step 2: configure containerd on all nodes to allow HTTP pulls from this registry
         self._configure_containerd_insecure(self._registry_ip)
 
         # Step 3: re-pull hotel-reservation from upstream and push it into the private
@@ -133,8 +153,8 @@ class MissingImagePullSecretHotelReservation(Problem):
 
         # Step 7: block public-registry pulls at the containerd mirror level so an
         # agent can't bypass the secret by repointing the image to Docker Hub
-        self._start_dockerhub_block()
-        self._configure_containerd_dockerhub_block()
+        block_ip = self._start_dockerhub_block()
+        self._configure_containerd_dockerhub_block(block_ip)
         logger.info("Public Docker Hub pulls are not allowed")
 
         # Step 8: inject the fault — delete the imagePullSecret
@@ -214,67 +234,234 @@ class MissingImagePullSecretHotelReservation(Problem):
         logger.info("Fault recovered.")
         return True
 
+    # ── K8s API helpers (create-or-replace, idempotent) ───────────────────────
+
+    @staticmethod
+    def _ensure_namespace(name: str) -> None:
+        try:
+            client.CoreV1Api().create_namespace(body=client.V1Namespace(metadata=client.V1ObjectMeta(name=name)))
+        except client.exceptions.ApiException as e:
+            if e.status != 409:
+                raise
+
+    @staticmethod
+    def _ensure_secret(secret: client.V1Secret) -> None:
+        core_v1 = client.CoreV1Api()
+        ns, name = secret.metadata.namespace, secret.metadata.name
+        try:
+            core_v1.create_namespaced_secret(namespace=ns, body=secret)
+        except client.exceptions.ApiException as e:
+            if e.status == 409:
+                core_v1.replace_namespaced_secret(name=name, namespace=ns, body=secret)
+            else:
+                raise
+
+    @staticmethod
+    def _ensure_config_map(cm: client.V1ConfigMap) -> None:
+        core_v1 = client.CoreV1Api()
+        ns, name = cm.metadata.namespace, cm.metadata.name
+        try:
+            core_v1.create_namespaced_config_map(namespace=ns, body=cm)
+        except client.exceptions.ApiException as e:
+            if e.status == 409:
+                core_v1.replace_namespaced_config_map(name=name, namespace=ns, body=cm)
+            else:
+                raise
+
+    @staticmethod
+    def _ensure_deployment(deployment: client.V1Deployment) -> None:
+        apps_v1 = client.AppsV1Api()
+        ns, name = deployment.metadata.namespace, deployment.metadata.name
+        try:
+            apps_v1.create_namespaced_deployment(namespace=ns, body=deployment)
+        except client.exceptions.ApiException as e:
+            if e.status == 409:
+                apps_v1.replace_namespaced_deployment(name=name, namespace=ns, body=deployment)
+            else:
+                raise
+
+    @staticmethod
+    def _ensure_service(service: client.V1Service) -> str:
+        """Create the Service if missing; return its ClusterIP either way."""
+        core_v1 = client.CoreV1Api()
+        ns, name = service.metadata.namespace, service.metadata.name
+        try:
+            created = core_v1.create_namespaced_service(namespace=ns, body=service)
+            return created.spec.cluster_ip
+        except client.exceptions.ApiException as e:
+            if e.status == 409:
+                return core_v1.read_namespaced_service(name=name, namespace=ns).spec.cluster_ip
+            raise
+
+    @staticmethod
+    def _delete_deployment_and_service(name: str, namespace: str) -> None:
+        apps_v1 = client.AppsV1Api()
+        core_v1 = client.CoreV1Api()
+        with contextlib.suppress(client.exceptions.ApiException):
+            apps_v1.delete_namespaced_deployment(name=name, namespace=namespace)
+        with contextlib.suppress(client.exceptions.ApiException):
+            core_v1.delete_namespaced_service(name=name, namespace=namespace)
+
+    # ── Per-node access (kind: docker exec, real cluster: one-shot pod) ───────
+
+    @staticmethod
+    def _get_cluster_nodes() -> list[str]:
+        """Return the names of all nodes in the cluster.
+
+        On Kind, node container names equal the Kubernetes node names, so the
+        existing `docker exec`/`docker cp` branches below keep working unchanged
+        for any node whose name starts with "kind-".
+        """
+        return [n.metadata.name for n in client.CoreV1Api().list_node().items]
+
+    @staticmethod
+    def _get_node_runtime(node_name: str) -> str:
+        """Return "docker" for cri-dockerd nodes, "containerd" otherwise.
+
+        Real clusters provisioned via `scripts/ansible/setup_cluster.yml` use
+        Docker + cri-dockerd as the CRI, so image-pull config must go through
+        `/etc/docker/daemon.json` + `systemctl restart docker` rather than
+        containerd's `certs.d` mechanism.
+        """
+        node = client.CoreV1Api().read_node(name=node_name)
+        runtime_version = (node.status.node_info.container_runtime_version or "") if node.status else ""
+        return "docker" if runtime_version.startswith("docker://") else "containerd"
+
+    @staticmethod
+    def _run_on_node(node_name: str, script: str, timeout: int = 60) -> str:
+        """Run a shell `script` on `node_name` via a one-shot privileged pod.
+
+        Modeled on `kubectl.py:_run_localpv_gc_pod_on_node`: busybox image,
+        privileged, host root mounted at /host, tolerates all taints so it can
+        land on control-plane nodes too. Runs with hostPID so `nsenter -t 1 ...`
+        can reach the host's systemd to restart containerd.
+        """
+        core_v1 = client.CoreV1Api()
+        short_node = node_name.split(".")[0].lower().replace("_", "-")[:40]
+        pod_name = f"sregym-node-op-{short_node}-{int(time.time()) % 100000}"[:63]
+        namespace = "kube-system"
+
+        pod_body = client.V1Pod(
+            metadata=client.V1ObjectMeta(name=pod_name, namespace=namespace, labels={"app": "sregym-node-op"}),
+            spec=client.V1PodSpec(
+                node_name=node_name,
+                restart_policy="Never",
+                host_pid=True,
+                tolerations=[client.V1Toleration(operator="Exists")],
+                automount_service_account_token=False,
+                containers=[
+                    client.V1Container(
+                        name="op",
+                        image="busybox:1.36",
+                        image_pull_policy="IfNotPresent",
+                        command=["sh", "-c", script],
+                        security_context=client.V1SecurityContext(privileged=True),
+                        volume_mounts=[client.V1VolumeMount(name="host", mount_path="/host")],
+                    )
+                ],
+                volumes=[
+                    client.V1Volume(name="host", host_path=client.V1HostPathVolumeSource(path="/", type="Directory")),
+                ],
+            ),
+        )
+
+        with contextlib.suppress(client.exceptions.ApiException):
+            core_v1.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=0)
+        core_v1.create_namespaced_pod(namespace=namespace, body=pod_body)
+
+        try:
+            waited, sleep_s, phase = 0, 2, "Pending"
+            while waited < timeout:
+                pod = core_v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+                phase = (pod.status.phase or "Pending") if pod.status else "Pending"
+                if phase in ("Succeeded", "Failed"):
+                    break
+                time.sleep(sleep_s)
+                waited += sleep_s
+            else:
+                raise TimeoutError(
+                    f"Node-op pod {pod_name} on {node_name} did not finish within {timeout}s (phase={phase})"
+                )
+
+            logs = ""
+            with contextlib.suppress(client.exceptions.ApiException):
+                logs = core_v1.read_namespaced_pod_log(name=pod_name, namespace=namespace)
+            if phase != "Succeeded":
+                raise RuntimeError(
+                    f"Node-op pod {pod_name} on {node_name} ended with phase={phase}; logs: {logs.strip()[:500]}"
+                )
+            return logs
+        finally:
+            with contextlib.suppress(client.exceptions.ApiException):
+                core_v1.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=0)
+
     # ── Registry lifecycle ────────────────────────────────────────────────────
 
     def _start_registry(self) -> str:
-        """Start a password-protected registry:2 on the kind Docker bridge; return its IP."""
+        """Start a password-protected registry:2 as a Deployment+Service in
+        `_INFRA_NAMESPACE`; return the Service's ClusterIP."""
         htpasswd = self._generate_htpasswd(_REGISTRY_USER, _REGISTRY_PASS)
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".htpasswd", delete=False, dir="/tmp") as f:
-            f.write(htpasswd)
-            htpasswd_path = f.name
-        os.chmod(htpasswd_path, 0o644)
-
-        # Remove any leftover container from a previous (failed) run
-        subprocess.run(["docker", "rm", "-f", _REGISTRY_CONTAINER], capture_output=True)
-
-        subprocess.run(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                _REGISTRY_CONTAINER,
-                "--network",
-                "kind",
-                "-p",
-                f"{_REGISTRY_HOST_PORT}:{_REGISTRY_PORT}",
-                "-e",
-                "REGISTRY_AUTH=htpasswd",
-                "-e",
-                "REGISTRY_AUTH_HTPASSWD_REALM=SREGym Registry",
-                "-e",
-                "REGISTRY_AUTH_HTPASSWD_PATH=/auth/htpasswd",
-                "-v",
-                f"{htpasswd_path}:/auth/htpasswd:ro",
-                "registry:2",
-            ],
-            check=True,
-        )
-        time.sleep(2)  # allow registry to initialise before clients connect
-
-        result = subprocess.run(
-            [
-                "docker",
-                "inspect",
-                _REGISTRY_CONTAINER,
-                "--format",
-                "{{.NetworkSettings.Networks.kind.IPAddress}}",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        ip = result.stdout.strip()
-        if not ip:
-            raise RuntimeError(
-                f"Could not determine IP of registry container '{_REGISTRY_CONTAINER}' "
-                "on the kind network. Is the Kind cluster running?"
+        self._ensure_secret(
+            client.V1Secret(
+                metadata=client.V1ObjectMeta(name=_REGISTRY_HTPASSWD_SECRET, namespace=_INFRA_NAMESPACE),
+                type="Opaque",
+                string_data={"htpasswd": htpasswd},
             )
-        return ip
+        )
+        self._ensure_deployment(
+            client.V1Deployment(
+                metadata=client.V1ObjectMeta(
+                    name=_REGISTRY_DEPLOYMENT, namespace=_INFRA_NAMESPACE, labels={"app": _REGISTRY_DEPLOYMENT}
+                ),
+                spec=client.V1DeploymentSpec(
+                    replicas=1,
+                    selector=client.V1LabelSelector(match_labels={"app": _REGISTRY_DEPLOYMENT}),
+                    template=client.V1PodTemplateSpec(
+                        metadata=client.V1ObjectMeta(labels={"app": _REGISTRY_DEPLOYMENT}),
+                        spec=client.V1PodSpec(
+                            containers=[
+                                client.V1Container(
+                                    name="registry",
+                                    image="registry:2",
+                                    ports=[client.V1ContainerPort(container_port=_REGISTRY_PORT)],
+                                    env=[
+                                        client.V1EnvVar(name="REGISTRY_AUTH", value="htpasswd"),
+                                        client.V1EnvVar(name="REGISTRY_AUTH_HTPASSWD_REALM", value="SREGym Registry"),
+                                        client.V1EnvVar(name="REGISTRY_AUTH_HTPASSWD_PATH", value="/auth/htpasswd"),
+                                    ],
+                                    volume_mounts=[
+                                        client.V1VolumeMount(name="htpasswd", mount_path="/auth", read_only=True)
+                                    ],
+                                )
+                            ],
+                            volumes=[
+                                client.V1Volume(
+                                    name="htpasswd",
+                                    secret=client.V1SecretVolumeSource(secret_name=_REGISTRY_HTPASSWD_SECRET),
+                                ),
+                            ],
+                        ),
+                    ),
+                ),
+            )
+        )
+        cluster_ip = self._ensure_service(
+            client.V1Service(
+                metadata=client.V1ObjectMeta(name=_REGISTRY_DEPLOYMENT, namespace=_INFRA_NAMESPACE),
+                spec=client.V1ServiceSpec(
+                    selector={"app": _REGISTRY_DEPLOYMENT},
+                    ports=[client.V1ServicePort(port=_REGISTRY_PORT, target_port=_REGISTRY_PORT)],
+                ),
+            )
+        )
+        self._wait_for_deployment_ready(_REGISTRY_DEPLOYMENT, _INFRA_NAMESPACE, timeout=120)
+        return cluster_ip
 
     @staticmethod
     def _stop_registry() -> None:
-        subprocess.run(["docker", "rm", "-f", _REGISTRY_CONTAINER], capture_output=True)
+        MissingImagePullSecretHotelReservation._delete_deployment_and_service(_REGISTRY_DEPLOYMENT, _INFRA_NAMESPACE)
+        with contextlib.suppress(client.exceptions.ApiException):
+            client.CoreV1Api().delete_namespaced_secret(name=_REGISTRY_HTPASSWD_SECRET, namespace=_INFRA_NAMESPACE)
 
     @staticmethod
     def _generate_htpasswd(user: str, password: str) -> str:
@@ -284,28 +471,10 @@ class MissingImagePullSecretHotelReservation(Problem):
         hashed = bcrypt.hashpw(password.encode(), bcrypt.gensalt())
         return f"{user}:{hashed.decode()}\n"
 
-    # ── Containerd configuration on Kind nodes ────────────────────────────────
-
-    @staticmethod
-    def _get_kind_nodes() -> list[str]:
-        """Return container names of all nodes in the 'kind' Kind cluster."""
-        result = subprocess.run(
-            [
-                "docker",
-                "ps",
-                "--filter",
-                "label=io.x-k8s.kind.cluster=kind",
-                "--format",
-                "{{.Names}}",
-            ],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return [n.strip() for n in result.stdout.strip().splitlines() if n.strip()]
+    # ── Containerd configuration on cluster nodes ─────────────────────────────
 
     def _configure_containerd_insecure(self, registry_ip: str) -> None:
-        """Configure all Kind nodes to pull from the private registry over plain HTTP."""
+        """Configure all nodes to pull from the private registry over plain HTTP."""
         addr = f"{registry_ip}:{_REGISTRY_PORT}"
         certs_dir = f"/etc/containerd/certs.d/{addr}"
         hosts_toml = f'server = "http://{addr}"\n\n[host."http://{addr}"]\n  capabilities = ["pull", "resolve"]\n'
@@ -313,31 +482,47 @@ class MissingImagePullSecretHotelReservation(Problem):
             '\n[plugins."io.containerd.grpc.v1.cri".registry]\n  config_path = "/etc/containerd/certs.d"\n'
         )
         restarted = []
-        for node in self._get_kind_nodes():
-            subprocess.run(["docker", "exec", node, "mkdir", "-p", certs_dir], check=True)
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-                f.write(hosts_toml)
-                tmp = f.name
-            subprocess.run(["docker", "cp", tmp, f"{node}:{certs_dir}/hosts.toml"], check=True)
-            os.unlink(tmp)
-            already = subprocess.run(
-                ["docker", "exec", node, "grep", "-q", "config_path", "/etc/containerd/config.toml"],
-                capture_output=True,
-            )
-            if already.returncode != 0:
-                # -i is required so docker exec attaches stdin and tee receives the input
-                subprocess.run(
-                    ["docker", "exec", "-i", node, "tee", "-a", "/etc/containerd/config.toml"],
-                    input=config_path_snippet,
-                    text=True,
+        for node in self._get_cluster_nodes():
+            if node.startswith("kind-"):
+                subprocess.run(["docker", "exec", node, "mkdir", "-p", certs_dir], check=True)
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
+                    f.write(hosts_toml)
+                    tmp = f.name
+                subprocess.run(["docker", "cp", tmp, f"{node}:{certs_dir}/hosts.toml"], check=True)
+                os.unlink(tmp)
+                already = subprocess.run(
+                    ["docker", "exec", node, "grep", "-q", "config_path", "/etc/containerd/config.toml"],
                     capture_output=True,
-                    check=True,
                 )
-                subprocess.run(
-                    ["docker", "exec", node, "systemctl", "restart", "containerd"],
-                    check=True,
+                if already.returncode != 0:
+                    # -i is required so docker exec attaches stdin and tee receives the input
+                    subprocess.run(
+                        ["docker", "exec", "-i", node, "tee", "-a", "/etc/containerd/config.toml"],
+                        input=config_path_snippet,
+                        text=True,
+                        capture_output=True,
+                        check=True,
+                    )
+                    subprocess.run(
+                        ["docker", "exec", node, "systemctl", "restart", "containerd"],
+                        check=True,
+                    )
+                    restarted.append(node)
+            elif self._get_node_runtime(node) == "docker":
+                # cri-dockerd node: dockerd reads /etc/docker/daemon.json, not
+                # containerd's certs.d.
+                script = self._daemon_json_insecure_registry_script(addr)
+                if "RELOADED" in self._run_on_node(node, script):
+                    restarted.append(node)
+            else:
+                script = (
+                    f"mkdir -p /host{certs_dir} && printf '%s' {shlex.quote(hosts_toml)} > /host{certs_dir}/hosts.toml && "
+                    f"if ! grep -q config_path /host/etc/containerd/config.toml; then "
+                    f"printf '%s' {shlex.quote(config_path_snippet)} >> /host/etc/containerd/config.toml && "
+                    f"nsenter -t 1 -m -u -n -i -- systemctl restart containerd && echo RESTARTED; fi"
                 )
-                restarted.append(node)
+                if "RESTARTED" in self._run_on_node(node, script):
+                    restarted.append(node)
         if restarted:
             logger.info(
                 "Restarted containerd on %d node(s) to activate config_path; waiting 10s...",
@@ -348,64 +533,193 @@ class MissingImagePullSecretHotelReservation(Problem):
     def _remove_containerd_insecure(self, registry_ip: str) -> None:
         addr = f"{registry_ip}:{_REGISTRY_PORT}"
         certs_dir = f"/etc/containerd/certs.d/{addr}"
-        for node in self._get_kind_nodes():
-            subprocess.run(
-                ["docker", "exec", node, "rm", "-rf", certs_dir],
-                capture_output=True,
-            )
+        for node in self._get_cluster_nodes():
+            if node.startswith("kind-"):
+                subprocess.run(
+                    ["docker", "exec", node, "rm", "-rf", certs_dir],
+                    capture_output=True,
+                )
+            elif self._get_node_runtime(node) == "docker":
+                with contextlib.suppress(Exception):
+                    self._run_on_node(node, self._daemon_json_remove_insecure_registry_script(addr))
+            else:
+                with contextlib.suppress(Exception):
+                    self._run_on_node(node, f"rm -rf /host{certs_dir}")
 
-    def _configure_containerd_dockerhub_block(self) -> None:
+    _DOCKER_RELOAD_CMD = "nsenter -t 1 -m -u -n -i -- systemctl reload docker &&"
+
+    @staticmethod
+    def _daemon_json_insecure_registry_script(addr: str) -> str:
+        """Write /etc/docker/daemon.json with "insecure-registries": [addr] and
+        "live-restore": true, then reload docker (cri-dockerd nodes only).
+        """
+        body = json.dumps({"insecure-registries": [addr], "live-restore": True})
+        return (
+            "f=/host/etc/docker/daemon.json; "
+            f"want={shlex.quote(body)}; "
+            f'if [ -f "$f" ] && [ "$(cat "$f")" = "$want" ]; then echo "daemon.json already correct, skipping"; '
+            f'else printf "%s" "$want" > "$f" && '
+            f"{MissingImagePullSecretHotelReservation._DOCKER_RELOAD_CMD} echo RELOADED; fi"
+        )
+
+    @staticmethod
+    def _daemon_json_remove_insecure_registry_script(addr: str) -> str:
+        """Reverse of `_daemon_json_insecure_registry_script`: if daemon.json contains
+        an "insecure-registries" entry (regardless of which addr -- a prior run may
+        have written a different one), replace it with just `{"live-restore": true}`
+        and reload docker."""
+        del addr  # unused: removal is keyed off the presence of "insecure-registries", not a specific addr
+        reverted = json.dumps({"live-restore": True})
+        return (
+            "f=/host/etc/docker/daemon.json; "
+            f'if [ -f "$f" ] && grep -q "insecure-registries" "$f"; then '
+            f"printf '%s' {shlex.quote(reverted)} > \"$f\" && "
+            f"{MissingImagePullSecretHotelReservation._DOCKER_RELOAD_CMD} echo RELOADED; fi"
+        )
+
+    def _configure_containerd_dockerhub_block(self, block_ip: str) -> None:
         """Redirect docker.io pulls to the 403-responder via containerd's mirror mechanism."""
-        addr = f"{_DOCKERHUB_MIRROR_ALIAS}:{_DOCKERHUB_BLOCK_PORT}"
+        addr = f"{block_ip}:{_DOCKERHUB_BLOCK_PORT}"
         hosts_toml = f'server = "http://{addr}"\n\n[host."http://{addr}"]\n  capabilities = ["pull", "resolve"]\n'
-        for node in self._get_kind_nodes():
-            certs_dir = "/etc/containerd/certs.d/docker.io"
-            subprocess.run(["docker", "exec", node, "mkdir", "-p", certs_dir], check=True)
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
-                f.write(hosts_toml)
-                tmp = f.name
-            subprocess.run(["docker", "cp", tmp, f"{node}:{certs_dir}/hosts.toml"], check=True)
-            os.unlink(tmp)
+        certs_dir = "/etc/containerd/certs.d/docker.io"
+        for node in self._get_cluster_nodes():
+            if node.startswith("kind-"):
+                subprocess.run(["docker", "exec", node, "mkdir", "-p", certs_dir], check=True)
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".toml", delete=False) as f:
+                    f.write(hosts_toml)
+                    tmp = f.name
+                subprocess.run(["docker", "cp", tmp, f"{node}:{certs_dir}/hosts.toml"], check=True)
+                os.unlink(tmp)
+            elif self._get_node_runtime(node) == "docker":
+                # Point the Docker Hub hostnames at the block Service via /etc/hosts to block public pulls.
+                hosts_lines = "\n".join(
+                    f"{block_ip} {h} {_DOCKERHUB_BLOCK_HOSTS_MARKER}" for h in _DOCKERHUB_BLOCK_HOSTS
+                )
+                script = f"printf '%s\\n' {shlex.quote(hosts_lines)} >> /host/etc/hosts"
+                self._run_on_node(node, script)
+            else:
+                script = (
+                    f"mkdir -p /host{certs_dir} && printf '%s' {shlex.quote(hosts_toml)} > /host{certs_dir}/hosts.toml"
+                )
+                self._run_on_node(node, script)
 
     @staticmethod
     def _remove_containerd_dockerhub_block() -> None:
         certs_dir = "/etc/containerd/certs.d/docker.io"
-        for node in MissingImagePullSecretHotelReservation._get_kind_nodes():
-            subprocess.run(
-                ["docker", "exec", node, "rm", "-rf", certs_dir],
-                capture_output=True,
+        for node in MissingImagePullSecretHotelReservation._get_cluster_nodes():
+            if node.startswith("kind-"):
+                subprocess.run(
+                    ["docker", "exec", node, "rm", "-rf", certs_dir],
+                    capture_output=True,
+                )
+            elif MissingImagePullSecretHotelReservation._get_node_runtime(node) == "docker":
+                with contextlib.suppress(Exception):
+                    script = f"sed -i '/{_DOCKERHUB_BLOCK_HOSTS_MARKER.replace('/', r'\\/')}/d' /host/etc/hosts"
+                    MissingImagePullSecretHotelReservation._run_on_node(node, script)
+            else:
+                with contextlib.suppress(Exception):
+                    MissingImagePullSecretHotelReservation._run_on_node(node, f"rm -rf /host{certs_dir}")
+
+    def _start_dockerhub_block(self) -> str:
+        """Start the nginx Deployment+Service that returns 403 Forbidden for any
+        request; return the Service's ClusterIP."""
+        self._ensure_config_map(
+            client.V1ConfigMap(
+                metadata=client.V1ObjectMeta(name=_DOCKERHUB_BLOCK_CONFIGMAP, namespace=_INFRA_NAMESPACE),
+                data={"default.conf": _DOCKERHUB_BLOCK_NGINX_CONF},
             )
-
-    def _start_dockerhub_block(self) -> None:
-        """Start the nginx container that returns 403 Forbidden for any request"""
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".conf", delete=False, dir="/tmp") as f:
-            f.write(_DOCKERHUB_BLOCK_NGINX_CONF)
-            conf_path = f.name
-        os.chmod(conf_path, 0o644)
-
-        subprocess.run(["docker", "rm", "-f", _DOCKERHUB_BLOCK_CONTAINER], capture_output=True)
-        subprocess.run(
-            [
-                "docker",
-                "run",
-                "-d",
-                "--name",
-                _DOCKERHUB_BLOCK_CONTAINER,
-                "--network",
-                "kind",
-                "--network-alias",
-                _DOCKERHUB_MIRROR_ALIAS,
-                "-v",
-                f"{conf_path}:/etc/nginx/conf.d/default.conf:ro",
-                "nginx:alpine",
-            ],
-            check=True,
         )
-        time.sleep(2)
+        self._ensure_deployment(
+            client.V1Deployment(
+                metadata=client.V1ObjectMeta(
+                    name=_DOCKERHUB_BLOCK_DEPLOYMENT,
+                    namespace=_INFRA_NAMESPACE,
+                    labels={"app": _DOCKERHUB_BLOCK_DEPLOYMENT},
+                ),
+                spec=client.V1DeploymentSpec(
+                    replicas=1,
+                    selector=client.V1LabelSelector(match_labels={"app": _DOCKERHUB_BLOCK_DEPLOYMENT}),
+                    template=client.V1PodTemplateSpec(
+                        metadata=client.V1ObjectMeta(labels={"app": _DOCKERHUB_BLOCK_DEPLOYMENT}),
+                        spec=client.V1PodSpec(
+                            containers=[
+                                client.V1Container(
+                                    name="nginx",
+                                    image="nginx:alpine",
+                                    ports=[client.V1ContainerPort(container_port=_DOCKERHUB_BLOCK_PORT)],
+                                    volume_mounts=[
+                                        client.V1VolumeMount(
+                                            name="conf", mount_path="/etc/nginx/conf.d", read_only=True
+                                        )
+                                    ],
+                                )
+                            ],
+                            volumes=[
+                                client.V1Volume(
+                                    name="conf",
+                                    config_map=client.V1ConfigMapVolumeSource(name=_DOCKERHUB_BLOCK_CONFIGMAP),
+                                ),
+                            ],
+                        ),
+                    ),
+                ),
+            )
+        )
+        cluster_ip = self._ensure_service(
+            client.V1Service(
+                metadata=client.V1ObjectMeta(name=_DOCKERHUB_BLOCK_DEPLOYMENT, namespace=_INFRA_NAMESPACE),
+                spec=client.V1ServiceSpec(
+                    selector={"app": _DOCKERHUB_BLOCK_DEPLOYMENT},
+                    ports=[client.V1ServicePort(port=_DOCKERHUB_BLOCK_PORT, target_port=_DOCKERHUB_BLOCK_PORT)],
+                ),
+            )
+        )
+        self._wait_for_deployment_ready(_DOCKERHUB_BLOCK_DEPLOYMENT, _INFRA_NAMESPACE, timeout=120)
+        return cluster_ip
 
     @staticmethod
     def _stop_dockerhub_block() -> None:
-        subprocess.run(["docker", "rm", "-f", _DOCKERHUB_BLOCK_CONTAINER], capture_output=True)
+        MissingImagePullSecretHotelReservation._delete_deployment_and_service(
+            _DOCKERHUB_BLOCK_DEPLOYMENT, _INFRA_NAMESPACE
+        )
+        with contextlib.suppress(client.exceptions.ApiException):
+            client.CoreV1Api().delete_namespaced_config_map(name=_DOCKERHUB_BLOCK_CONFIGMAP, namespace=_INFRA_NAMESPACE)
+
+    @staticmethod
+    def _cleanup_duplicate_recommendation_replicasets() -> None:
+        """A prior run's rolling update (image repoint <-> revert) can leave an old
+        ReplicaSet for `_TARGET_DEPLOYMENT` with `replicas > 0`, scale any others
+        besides the primary pod down to 0.
+        """
+        apps_v1 = client.AppsV1Api()
+        rs_list = apps_v1.list_namespaced_replica_set(
+            namespace=_APP_NAMESPACE, label_selector=f"io.kompose.service={_TARGET_DEPLOYMENT}"
+        )
+        owned = [
+            rs
+            for rs in rs_list.items
+            if any(
+                o.kind == "Deployment" and o.name == _TARGET_DEPLOYMENT for o in (rs.metadata.owner_references or [])
+            )
+        ]
+        if len(owned) < 2:
+            return
+
+        def revision(rs: client.V1ReplicaSet) -> int:
+            return int((rs.metadata.annotations or {}).get("deployment.kubernetes.io/revision", "0"))
+
+        owned.sort(key=revision, reverse=True)
+        for rs in owned[1:]:
+            if (rs.spec.replicas or 0) > 0:
+                apps_v1.patch_namespaced_replica_set_scale(
+                    name=rs.metadata.name, namespace=_APP_NAMESPACE, body={"spec": {"replicas": 0}}
+                )
+                logger.info(
+                    "Scaled down stale ReplicaSet '%s' for '%s' (revision %d) to 0",
+                    rs.metadata.name,
+                    _TARGET_DEPLOYMENT,
+                    revision(rs),
+                )
 
     @staticmethod
     def cleanup_leftovers() -> None:
@@ -413,18 +727,14 @@ class MissingImagePullSecretHotelReservation(Problem):
         MissingImagePullSecretHotelReservation._remove_containerd_dockerhub_block()
         MissingImagePullSecretHotelReservation._stop_dockerhub_block()
         MissingImagePullSecretHotelReservation._stop_registry()
+        MissingImagePullSecretHotelReservation._cleanup_duplicate_recommendation_replicasets()
 
     def _create_infra_namespace_and_secret(self) -> None:
         """Create the 'platform team' namespace holding the source-of-truth registry
         credentials, stored as raw fields (not a pre-built dockerconfigjson) so the
         agent must still construct a correct imagePullSecret itself.
         """
-        ns = client.V1Namespace(metadata=client.V1ObjectMeta(name=_INFRA_NAMESPACE))
-        try:
-            self.core_v1.create_namespace(body=ns)
-        except client.exceptions.ApiException as e:
-            if e.status != 409:
-                raise
+        self._ensure_namespace(_INFRA_NAMESPACE)
 
         secret = client.V1Secret(
             metadata=client.V1ObjectMeta(name=_MASTER_SECRET_NAME, namespace=_INFRA_NAMESPACE),
@@ -435,15 +745,7 @@ class MissingImagePullSecretHotelReservation(Problem):
                 "password": _REGISTRY_PASS,
             },
         )
-        try:
-            self.core_v1.create_namespaced_secret(namespace=_INFRA_NAMESPACE, body=secret)
-        except client.exceptions.ApiException as e:
-            if e.status == 409:
-                self.core_v1.replace_namespaced_secret(
-                    name=_MASTER_SECRET_NAME, namespace=_INFRA_NAMESPACE, body=secret
-                )
-            else:
-                raise
+        self._ensure_secret(secret)
 
     def _create_runbook_configmap(self) -> None:
         """Leave a hint ConfigMap pointing at the password registry and the namespace"""
@@ -507,25 +809,59 @@ class MissingImagePullSecretHotelReservation(Problem):
         return image
 
     def _push_image_from_host(self, upstream_ref: str) -> None:
-        """Re-pull the image from upstream and push it to the private registry via host Docker"""
+        """Re-pull the image from upstream and push it to the in-cluster private
+        registry via `kubectl port-forward` (works on kind and real clusters alike,
+        as it only needs API server access)."""
         subprocess.run(["docker", "pull", upstream_ref], check=True)
 
-        host_tag = f"localhost:{_REGISTRY_HOST_PORT}/hotel-reservation:latest"
-        subprocess.run(["docker", "tag", upstream_ref, host_tag], check=True)
-        subprocess.run(
+        local_port = _LOCAL_PORT_FORWARD_PORT
+        port_forward = subprocess.Popen(
             [
-                "docker",
-                "login",
-                f"localhost:{_REGISTRY_HOST_PORT}",
-                "--username",
-                _REGISTRY_USER,
-                "--password-stdin",
+                "kubectl",
+                "port-forward",
+                "-n",
+                _INFRA_NAMESPACE,
+                f"svc/{_REGISTRY_DEPLOYMENT}",
+                f"{local_port}:{_REGISTRY_PORT}",
             ],
-            input=_REGISTRY_PASS,
-            text=True,
-            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-        subprocess.run(["docker", "push", host_tag], check=True)
+        try:
+            # Wait for the port-forward to actually accept connections. Over an
+            # SSH-tunneled apiserver (e.g. the AWS cluster in
+            # `.agent/actual-clusters.md`), establishing the forward can take much
+            # longer than a fixed 2s sleep, leading to "connection refused" on the
+            # first docker command.
+            for _ in range(60):
+                if port_forward.poll() is not None:
+                    raise RuntimeError(f"kubectl port-forward exited early with code {port_forward.returncode}")
+                with contextlib.suppress(OSError), socket.create_connection(("localhost", local_port), timeout=1):
+                    break
+                time.sleep(0.5)
+            else:
+                raise RuntimeError(f"kubectl port-forward did not become ready on localhost:{local_port}")
+
+            host_tag = f"localhost:{local_port}/hotel-reservation:latest"
+            subprocess.run(["docker", "tag", upstream_ref, host_tag], check=True)
+            subprocess.run(
+                [
+                    "docker",
+                    "login",
+                    f"localhost:{local_port}",
+                    "--username",
+                    _REGISTRY_USER,
+                    "--password-stdin",
+                ],
+                input=_REGISTRY_PASS,
+                text=True,
+                check=True,
+            )
+            subprocess.run(["docker", "push", host_tag], check=True)
+        finally:
+            port_forward.terminate()
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                port_forward.wait(timeout=10)
 
     def _create_pull_secret(self) -> None:
         """Create or replace the docker-registry imagePullSecret."""
@@ -611,11 +947,14 @@ class MissingImagePullSecretHotelReservation(Problem):
                 if e.status != 404:
                     raise
 
-    def _wait_for_deployment_ready(self, timeout: int = 120) -> None:
+    def _wait_for_deployment_ready(
+        self, deployment_name: str = _TARGET_DEPLOYMENT, namespace: str | None = None, timeout: int = 120
+    ) -> None:
         """Poll until the rollout is fully complete (replicates `kubectl rollout status`)."""
+        namespace = namespace or self.namespace
         deadline = time.time() + timeout
         while time.time() < deadline:
-            deploy = self.apps_v1.read_namespaced_deployment(name=_TARGET_DEPLOYMENT, namespace=self.namespace)
+            deploy = self.apps_v1.read_namespaced_deployment(name=deployment_name, namespace=namespace)
             desired = deploy.spec.replicas or 1
             status = deploy.status
             observed_current = (status.observed_generation or 0) >= (deploy.metadata.generation or 0)
@@ -625,7 +964,7 @@ class MissingImagePullSecretHotelReservation(Problem):
             if observed_current and updated == desired and total == desired and ready == desired:
                 return
             time.sleep(3)
-        logger.warning("Deployment '%s' rollout not complete after %ds", _TARGET_DEPLOYMENT, timeout)
+        logger.warning("Deployment '%s' rollout not complete after %ds", deployment_name, timeout)
 
     def _create_decoy_pods(self) -> list[str]:
         """Create bare pods that emit FailedToRetrieveImagePullSecret but stay Running."""
