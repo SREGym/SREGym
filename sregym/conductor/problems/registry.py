@@ -72,6 +72,7 @@ from sregym.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinity
 from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodCIDRExhaustionHotelReservation
 from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
 from sregym.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
+from sregym.conductor.problems.psa_restricted_blocks_recreation import PSARestrictedBlocksRecreation
 from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
 from sregym.conductor.problems.readiness_probe_misconfiguration import ReadinessProbeMisconfiguration
@@ -284,6 +285,7 @@ class ProblemRegistry:
 
             "admission_webhook_tls_mismatch_hotel_reservation": lambda: AdmissionWebhookTLSMismatch(app_name="hotel_reservation", faulty_service="recommendation"),
             "mutating_webhook_resource_limits_social_network": MutatingWebhookResourceLimits,
+            "psa_restricted_blocks_recreation_hotel_reservation": lambda: PSARestrictedBlocksRecreation(app_name="hotel_reservation", faulty_service="recommendation"),
             "cumulative_admission_webhook_timeout_hotel_reservation": CumulativeAdmissionWebhookTimeoutHotelReservation,
             "cronjob_sidecar_blocks_completion_hotel_reservation": CronJobSidecarBlocksCompletionHotelReservation,
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
