@@ -27,9 +27,21 @@ class RemoteOSFaultInjector(FaultInjector):
     def _check_is_kind(self):
         """Detect if the cluster is Kind-based."""
         if self._is_kind is None:
-            out = self.kubectl.exec_command("kubectl get nodes")
-            self._is_kind = "kind-worker" in out
+            self._is_kind = self._kind_cluster_name() is not None
         return self._is_kind
+
+    def _kind_cluster_name(self) -> str | None:
+        result = subprocess.run(
+            ["kubectl", "config", "current-context"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return None
+        context = result.stdout.strip()
+        if context.startswith("kind-"):
+            return context.removeprefix("kind-")
+        return None
 
     def _check_remote_host(self):
         """Verify the remote cluster has an inventory file."""
@@ -100,6 +112,22 @@ class RemoteOSFaultInjector(FaultInjector):
 
     def _get_kind_worker_containers(self):
         """Get Kind worker container names."""
+        cluster_name = self._kind_cluster_name()
+        if cluster_name:
+            result = subprocess.run(
+                ["kind", "get", "nodes", "--name", cluster_name],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                print(f"Failed to list Kind nodes for {cluster_name}: {result.stderr.strip()}")
+                return []
+            return [
+                node.strip()
+                for node in result.stdout.strip().splitlines()
+                if node.strip() and "control-plane" not in node
+            ]
+
         result = subprocess.run(
             ["docker", "ps", "--filter", "name=kind-worker", "--format", "{{.Names}}"],
             capture_output=True,
