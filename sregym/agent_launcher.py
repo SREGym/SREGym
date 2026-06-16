@@ -83,7 +83,16 @@ class AgentLauncher:
 
         # Use filtered kubeconfig if set (hides chaos engineering namespaces)
         if self._agent_kubeconfig_path:
+            real_kubeconfig = (
+                env.get("SREGYM_REAL_KUBECONFIG")
+                or env.get("KUBECONFIG")
+                or str(Path("~/.kube/config").expanduser())
+            )
+            env.setdefault("SREGYM_REAL_KUBECONFIG", real_kubeconfig)
             env["KUBECONFIG"] = self._agent_kubeconfig_path
+
+        if self._source_code_path:
+            env["SREGYM_SOURCE_CODE_PATH"] = str(Path(self._source_code_path).resolve())
 
         proc = subprocess.Popen(
             reg.kickoff_command,
@@ -149,6 +158,9 @@ class AgentLauncher:
             label=f"{reg.name}-run",
         )
         exec_input.env.setdefault("AGENT_LOGS_DIR", "/logs")
+        if self._source_code_path:
+            exec_input.env.setdefault("SREGYM_SOURCE_CODE_PATH", "/opt/source")
+            exec_input.env.setdefault("SREGYM_SOURCE_HOST_PATH", str(Path(self._source_code_path).resolve()))
         harness_problem_id = os.environ.get(HARNESS_PROBLEM_ID_ENV)
         if harness_problem_id:
             exec_input.env[HARNESS_PROBLEM_ID_ENV] = harness_problem_id
