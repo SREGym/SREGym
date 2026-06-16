@@ -277,6 +277,14 @@ def driver_loop(
                 os.environ["AGENT_LOGS_DIR"] = str(run_dir.resolve())
                 # Harness-only problem id for client drivers (host + container via AgentLauncher).
                 os.environ[HARNESS_PROBLEM_ID_ENV] = pid
+                source_code_path = getattr(conductor.problem, "source_code_path", None)
+                if source_code_path:
+                    resolved_source = str(Path(source_code_path).resolve())
+                    LAUNCHER.set_source_code_path(resolved_source)
+                    os.environ["SREGYM_SOURCE_CODE_PATH"] = resolved_source
+                else:
+                    LAUNCHER.set_source_code_path(None)
+                    os.environ.pop("SREGYM_SOURCE_CODE_PATH", None)
 
                 reg = get_agent(agent_to_run, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
                 if reg:
@@ -393,6 +401,8 @@ def driver_loop(
                     LAUNCHER.cleanup_agent(agent_to_run)
                     console.log(f"🧹 Cleaned up agent process for {agent_to_run}")
                     os.environ.pop(HARNESS_PROBLEM_ID_ENV, None)
+                    os.environ.pop("SREGYM_SOURCE_CODE_PATH", None)
+                    LAUNCHER.set_source_code_path(None)
 
                 progress.advance(task_id)
 
@@ -450,10 +460,10 @@ def main(args):
     # Push to env so downstream code picks it up
     os.environ["AGENT_MODEL_ID"] = agent_model
     os.environ["JUDGE_MODEL_ID"] = judge_model
-    os.environ["API_HOSTNAME"] = "0.0.0.0"
-    os.environ["API_PORT"] = "8000"
-    os.environ["MCP_SERVER_PORT"] = "9954"
-    os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
+    os.environ.setdefault("API_HOSTNAME", "0.0.0.0")
+    os.environ.setdefault("API_PORT", "8000")
+    os.environ.setdefault("MCP_SERVER_PORT", "9954")
+    os.environ.setdefault("MCP_SERVER_URL", f"http://127.0.0.1:{os.environ['MCP_SERVER_PORT']}")
 
     logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}")
 
