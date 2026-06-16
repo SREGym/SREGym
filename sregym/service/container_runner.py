@@ -196,7 +196,8 @@ class ContainerRunner:
 
         # Mount the real (unproxied) kubeconfig so that workload oracles
         # running inside the container can bypass the filtering proxy.
-        real_kubeconfig = Path(os.path.expanduser("~/.kube/config"))
+        real_kubeconfig_env = os.environ.get("SREGYM_REAL_KUBECONFIG") or os.environ.get("KUBECONFIG")
+        real_kubeconfig = Path(os.path.expanduser(real_kubeconfig_env or "~/.kube/config"))
         if real_kubeconfig.exists():
             args.extend(["-v", f"{real_kubeconfig.resolve()}:/root/.kube/real-config:ro"])
             args.extend(["-e", "SREGYM_REAL_KUBECONFIG=/root/.kube/real-config"])

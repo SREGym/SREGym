@@ -21,6 +21,7 @@ the cloned source is left as-is.
 
 import hashlib
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -50,10 +51,10 @@ def _kind_name_arg() -> str:
     Returns ``""`` for non-kind contexts (preserving prior behaviour and letting
     the SSH/DaemonSet fallbacks handle real clusters).
     """
-    r = subprocess.run(
-        "kubectl config current-context",
-        shell=True, capture_output=True, text=True,
-    )
+    env = os.environ.copy()
+    if env.get("SREGYM_REAL_KUBECONFIG"):
+        env["KUBECONFIG"] = env["SREGYM_REAL_KUBECONFIG"]
+    r = subprocess.run("kubectl config current-context", shell=True, capture_output=True, text=True, env=env)
     ctx = r.stdout.strip()
     if r.returncode == 0 and ctx.startswith("kind-"):
         return f" --name {ctx[len('kind-') :]}"
@@ -529,7 +530,6 @@ spec:
                 return
 
         # Fallback: download tarball
-        ant_version = "1.10.15"
         ant_script = Path(__file__).parents[2] / "tests" / "e2e-testing-scripts" / "ant.sh"
         if ant_script.exists():
             result = subprocess.run(["bash", str(ant_script)], check=False)

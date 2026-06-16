@@ -16,6 +16,7 @@ Both return an image tag that is:
 
 import hashlib
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -40,10 +41,10 @@ def _kind_name_arg() -> str:
     Returns ``""`` for non-kind contexts (preserving prior behaviour and letting
     the SSH/DaemonSet fallbacks handle real clusters).
     """
-    r = subprocess.run(
-        "kubectl config current-context",
-        shell=True, capture_output=True, text=True,
-    )
+    env = os.environ.copy()
+    if env.get("SREGYM_REAL_KUBECONFIG"):
+        env["KUBECONFIG"] = env["SREGYM_REAL_KUBECONFIG"]
+    r = subprocess.run("kubectl config current-context", shell=True, capture_output=True, text=True, env=env)
     ctx = r.stdout.strip()
     if r.returncode == 0 and ctx.startswith("kind-"):
         return f" --name {ctx[len('kind-') :]}"
@@ -192,7 +193,8 @@ class GenericDBBuildManager:
 
     def _build_artifact(self):
         """Run spec.build_cmd inside the resolved build image with the source tree mounted."""
-        import os, tempfile
+        import os
+        import tempfile
         build_image = self._resolve_build_image()
         host_uid = os.getuid()
         host_gid = os.getgid()
@@ -241,7 +243,7 @@ class GenericDBBuildManager:
                     f"Build failed for {self.spec.name}:\n"
                     f"--- stdout ---\n{out}\n--- stderr ---\n{err}"
                 )
-            logger.info(f"[GenericBuildMgr] Build succeeded")
+            logger.info("[GenericBuildMgr] Build succeeded")
         finally:
             os.unlink(script_path)
 
@@ -419,7 +421,8 @@ class GenericDBBuildManager:
 
     @staticmethod
     def _ssh_user() -> str:
-        import getpass, os
+        import getpass
+        import os
         return os.environ.get("SREGYM_CLUSTER_SSH_USER", "") or getpass.getuser()
 
     @staticmethod

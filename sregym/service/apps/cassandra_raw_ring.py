@@ -71,8 +71,10 @@ class CassandraRawRingApplication:
         max_heap: str = "1024M",
         heap_newsize: str = "256M",
         jvm_extra_opts: str = "",
+        startup_prelude: str = "",
         hinted_handoff_enabled: bool = False,
         phi_convict_threshold: int = 5,
+        node_name: str = "",
         service_name: str = "cass",
         statefulset_name: str = "cass",
         extra_pods: list[dict] | None = None,
@@ -86,8 +88,10 @@ class CassandraRawRingApplication:
         self.max_heap = max_heap
         self.heap_newsize = heap_newsize
         self.jvm_extra_opts = jvm_extra_opts
+        self.startup_prelude = startup_prelude
         self.hinted_handoff_enabled = hinted_handoff_enabled
         self.phi_convict_threshold = phi_convict_threshold
+        self.node_name = node_name
         self.service_name = service_name
         self.statefulset_name = statefulset_name
         # Bare pods launched alongside the StatefulSet (e.g. a BOOT-parked joiner or a
@@ -126,13 +130,18 @@ spec:
     def _node_command(self) -> str:
         hh = "true" if self.hinted_handoff_enabled else "false"
         return (
-            "sed -ri 's/^(hinted_handoff_enabled:).*/\\1 " + hh + "/' /etc/cassandra/cassandra.yaml || true\n"
+            self.startup_prelude.rstrip()
+            + ("\n" if self.startup_prelude.strip() else "")
+            + "sed -ri 's/^(hinted_handoff_enabled:).*/\\1 "
+            + hh
+            + "/' /etc/cassandra/cassandra.yaml || true\n"
             "sed -ri 's/^# *(phi_convict_threshold:).*/\\1 " + str(self.phi_convict_threshold) + "/' "
             "/etc/cassandra/cassandra.yaml || true\n"
             "exec docker-entrypoint.sh cassandra -f\n"
         )
 
     def _statefulset_manifest(self) -> str:
+        node_name = f"      nodeName: {self.node_name}\n" if self.node_name else ""
         return f"""
 apiVersion: apps/v1
 kind: StatefulSet
@@ -149,6 +158,7 @@ spec:
       labels: {{ app: cass, role: ring }}
     spec:
       terminationGracePeriodSeconds: 20
+{node_name}      terminationGracePeriodSeconds: 20
       containers:
         - name: cassandra
           image: {self.image}
@@ -169,7 +179,14 @@ spec:
             - |
 {self._indent(self._node_command(), 14)}
           readinessProbe:
-            exec: {{ command: ["bash", "-c", "cqlsh -e 'SELECT now() FROM system.local' >/dev/null 2>&1"] }}
+            exec:
+              command:
+                - bash
+                - -c
+                - |
+                  CQLSH=$(command -v cqlsh || true)
+                  [ -n "$CQLSH" ] || CQLSH=/opt/cassandra/bin/cqlsh
+                  "$CQLSH" -e 'SELECT now() FROM system.local' >/dev/null 2>&1
             initialDelaySeconds: 25
             periodSeconds: 8
             failureThreshold: 40
@@ -199,6 +216,7 @@ spec:
         entrypoint self-seeds the pod (needed for the replace_address guard bugs).
         """
         env = dict(env or {})
+        node_name = f"  nodeName: {self.node_name}\n" if self.node_name else ""
         if set_seeds:
             env.setdefault("CASSANDRA_SEEDS", self.seed_dns())
         env.setdefault("CASSANDRA_CLUSTER_NAME", self.cluster_name)
@@ -219,6 +237,7 @@ metadata:
   labels: {{ app: cass, role: extra }}
 spec:
   terminationGracePeriodSeconds: 10
+{node_name}  terminationGracePeriodSeconds: 10
   containers:
     - name: cassandra
       image: {self.image}
@@ -320,10 +339,20 @@ spec:
     # ── nodetool / cqlsh wrappers ───────────────────────────────────────────────
 
     def nodetool(self, pod: str, args: str, check: bool = False) -> str:
-        return self.exec(pod, f"nodetool {args}", check=check)
+        return self.exec(
+            pod,
+            'NODETOOL=$(command -v nodetool || true); [ -n "$NODETOOL" ] || NODETOOL=/opt/cassandra/bin/nodetool; '
+            f'"$NODETOOL" {args}',
+            check=check,
+        )
 
     def cqlsh(self, pod: str, cql: str, timeout: int = 120) -> str:
-        return self.exec(pod, f"cqlsh -e {shlex.quote(cql)}", timeout=timeout)
+        return self.exec(
+            pod,
+            f'CQLSH=$(command -v cqlsh || true); [ -n "$CQLSH" ] || CQLSH=/opt/cassandra/bin/cqlsh; '
+            f'"$CQLSH" -e {shlex.quote(cql)}',
+            timeout=timeout,
+        )
 
     def disablegossip(self, pod: str) -> str:
         return self.nodetool(pod, "disablegossip")

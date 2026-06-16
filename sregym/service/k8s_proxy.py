@@ -80,14 +80,30 @@ class KubernetesAPIProxy:
             self.api_host = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
             self.api_port = int(os.environ.get("KUBERNETES_SERVICE_PORT", "443"))
         else:
-            # Running outside the cluster — load from kubeconfig
-            # Always load from the default kubeconfig path, ignoring KUBECONFIG env var
-            # This prevents circular dependency if KUBECONFIG points to our proxy
+            # Running outside the cluster — load from kubeconfig. Prefer an explicit
+            # upstream kubeconfig, but avoid following the generated agent proxy config.
             default_kubeconfig = os.path.expanduser("~/.kube/config")
-            config.load_kube_config(config_file=default_kubeconfig)
+            kubeconfig_path = self._upstream_kubeconfig_path(default_kubeconfig)
+            config.load_kube_config(config_file=kubeconfig_path)
             self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
-                kubeconfig_path=default_kubeconfig
+                kubeconfig_path=kubeconfig_path
             )
+
+    def _upstream_kubeconfig_path(self, default_kubeconfig: str) -> str:
+        kubeconfig = os.environ.get("SREGYM_REAL_KUBECONFIG") or os.environ.get("KUBECONFIG")
+        if not kubeconfig:
+            return default_kubeconfig
+        if os.pathsep in kubeconfig:
+            logger.warning("Ignoring multi-file KUBECONFIG for API proxy; using default kubeconfig")
+            return default_kubeconfig
+        kubeconfig_path = os.path.expanduser(kubeconfig)
+        if not os.path.exists(kubeconfig_path):
+            logger.warning(f"Ignoring missing KUBECONFIG for API proxy: {kubeconfig_path}")
+            return default_kubeconfig
+        if os.path.basename(kubeconfig_path).startswith("sregym-agent-kubeconfig-"):
+            logger.warning("Ignoring agent proxy KUBECONFIG for API proxy; using default kubeconfig")
+            return default_kubeconfig
+        return kubeconfig_path
 
     def _load_cluster_config(self, kubeconfig_path: str | None = None):
         """Extract API server connection details from kubeconfig."""
