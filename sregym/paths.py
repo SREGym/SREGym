@@ -29,6 +29,7 @@ TIDB_METADATA = BASE_DIR / "service" / "metadata" / "tidb-with-operator.json"
 FLIGHT_TICKET_METADATA = BASE_DIR / "service" / "metadata" / "flight-ticket.json"
 FLEET_CAST_METADATA = BASE_DIR / "service" / "metadata" / "fleet-cast.json"
 BLUEPRINT_HOTEL_RES_METADATA = BASE_DIR / "service" / "metadata" / "blueprint-hotel-reservation.json"
+CASSANDRA_METADATA = BASE_DIR / "service" / "metadata" / "cassandra.json"
 
 # Khaos DaemonSet
 KHAOS_DS = BASE_DIR / "service" / "khaos.yaml"

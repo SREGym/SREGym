@@ -1,0 +1,24 @@
+{
+    "Name": "Cassandra",
+    "Namespace": "cassandra",
+    "Desc": "Apache Cassandra distributed NoSQL database deployed via the K8ssandra operator (cass-operator). Provides a multi-node Cassandra cluster for testing distributed database bugs.\n\nSource code: The full Cassandra Java source tree may be available inside this container at /opt/source (read-write). If present, you can inspect Java source files to find the root cause of bugs — look especially in src/java/org/apache/cassandra/. You can also modify source files and rebuild Cassandra to apply a fix: run 'ant jar -Duse.jdk11=true' inside /opt/source to recompile, then rebuild and redeploy the Docker image with the patched JAR.",
+    "Supported Operations": [
+        "CQL queries (SELECT, INSERT, UPDATE, DELETE)",
+        "Schema management (CREATE/ALTER/DROP TABLE, KEYSPACE)",
+        "Secondary index queries",
+        "Lightweight transactions (IF NOT EXISTS / IF conditions)",
+        "Compaction and repair operations",
+        "Source code inspection at /opt/source (Java source tree, if mounted)",
+        "Source code modification and Cassandra rebuild via 'ant jar -Duse.jdk11=true' in /opt/source"
+    ],
+    "K8ssandra Config": {
+        "operator_namespace": "k8ssandra-operator",
+        "operator_helm_repo": "k8ssandra",
+        "operator_helm_repo_url": "https://helm.k8ssandra.io/stable",
+        "operator_chart": "k8ssandra/k8ssandra-operator",
+        "cluster_name": "sregym-cassandra",
+        "datacenter_name": "dc1",
+        "cluster_size": 3,
+        "cassandra_version": "4.1.7"
+    }
+}

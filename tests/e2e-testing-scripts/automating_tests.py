@@ -125,24 +125,39 @@ def installations():
     install_git()
 
 
+def _is_local(node: str) -> bool:
+    return node in ("localhost", "127.0.0.1", "::1")
+
+
 def _brew_exists(node: str) -> bool:
-    """Check if Homebrew is installed on a remote node via SSH."""
+    """Check if Homebrew is installed on a node (local or remote via SSH)."""
     try:
-        subprocess.run(
-            [
-                "ssh",
-                "-o",
-                "StrictHostKeyChecking=no",
-                node,
-                "bash -ic 'command -v brew >/dev/null 2>&1'",
-            ],
-            env=ENV,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True,
-            timeout=30,
-        )
+        if _is_local(node):
+            subprocess.run(
+                ["bash", "-ic", "command -v brew >/dev/null 2>&1"],
+                env=ENV,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+                timeout=30,
+            )
+        else:
+            subprocess.run(
+                [
+                    "ssh",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    node,
+                    "bash -ic 'command -v brew >/dev/null 2>&1'",
+                ],
+                env=ENV,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=True,
+                timeout=30,
+            )
         return True
     except (
         subprocess.CalledProcessError,
@@ -311,24 +326,37 @@ def _install_brew_if_needed():
             continue
 
         print(f"[{node}] Installing Homebrew (non-interactive)...")
-        remote_cmd = (
-            "tmux new-session -d -s install_brew "
-            '\'bash -ic "NONINTERACTIVE=1 /bin/bash -c \\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\"; sleep infinity"\''
-        )
 
-        subprocess.run(
-            [
-                "ssh",
-                "-o",
-                "StrictHostKeyChecking=no",
-                node,
-                remote_cmd,
-            ],
-            env=ENV,
-            stdin=subprocess.DEVNULL,
-            timeout=TIMEOUT,
-            check=True,
-        )
+        if _is_local(node):
+            # Run brew install directly on the local machine
+            subprocess.run(
+                [
+                    "bash", "-ic",
+                    'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+                ],
+                env=ENV,
+                stdin=subprocess.DEVNULL,
+                timeout=TIMEOUT,
+                check=True,
+            )
+        else:
+            remote_cmd = (
+                "tmux new-session -d -s install_brew "
+                '\'bash -ic "NONINTERACTIVE=1 /bin/bash -c \\"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\\"; sleep infinity"\''
+            )
+            subprocess.run(
+                [
+                    "ssh",
+                    "-o",
+                    "StrictHostKeyChecking=no",
+                    node,
+                    remote_cmd,
+                ],
+                env=ENV,
+                stdin=subprocess.DEVNULL,
+                timeout=TIMEOUT,
+                check=True,
+            )
         print(f"[{node}] Homebrew installed.")
 
 
@@ -413,13 +441,21 @@ def install_kubectl():
 
     for node in _read_nodes("nodes.txt"):
         print(f"\n=== [Install kubectl] {node} ===")
-        cmd = f'ssh -o StrictHostKeyChecking=no {node} "bash -ic \\"brew install kubectl helm\\""'
-        subprocess.run(
-            cmd,
-            check=True,
-            shell=True,
-            executable="/bin/zsh",
-        )
+        if _is_local(node):
+            subprocess.run(
+                ["bash", "-ic", "brew install kubectl helm"],
+                env=ENV,
+                stdin=subprocess.DEVNULL,
+                check=True,
+            )
+        else:
+            cmd = f'ssh -o StrictHostKeyChecking=no {node} "bash -ic \\"brew install kubectl helm\\""'
+            subprocess.run(
+                cmd,
+                check=True,
+                shell=True,
+                executable="/bin/zsh",
+            )
     print("Kubectl installed successfully on all nodes.")
 
 
@@ -435,12 +471,11 @@ def set_up_environment():
         )
     except Exception:
         pass
-    _read_nodes("nodes.txt")
     commands = [
         "cd ~/SREGym",
         'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"',
         "command -v uv >/dev/null 2>&1 || brew install uv",
-        'uv venv -p "$(command -v python3.12 || command -v python3)"',
+        "UV_VENV_CLEAR=1 uv venv -p \"$(command -v python3.12 || command -v python3)\"",
         "source .venv/bin/activate",
         "uv sync",
     ]

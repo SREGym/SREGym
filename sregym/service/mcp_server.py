@@ -16,7 +16,7 @@ class MCPServer:
     def __init__(self):
         self.namespace = "sregym"
         self.service_name = "mcp-server"
-        self.port = 9954
+        self.port = int(os.getenv("MCP_SERVER_PORT", "9954"))
         self.port_forward_process = None
         self.kubectl = KubeCtl()
 

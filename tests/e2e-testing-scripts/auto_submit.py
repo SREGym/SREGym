@@ -4,6 +4,7 @@ from time import sleep
 
 
 def automatic_submit():
+    sleep(1500000)
     ctr = 0
     while ctr < 10000:
         subprocess.run(

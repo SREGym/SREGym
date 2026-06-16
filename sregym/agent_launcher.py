@@ -30,6 +30,7 @@ class AgentLauncher:
     def __init__(self):
         self._procs: dict[str, AgentProcess] = {}
         self._agent_kubeconfig_path: str | None = None
+        self._source_code_path: str | None = None
         self._use_containers: bool = True
         self._container_runner: ContainerRunner | None = None
 
@@ -39,6 +40,14 @@ class AgentLauncher:
         This is typically the filtered kubeconfig from the K8s proxy.
         """
         self._agent_kubeconfig_path = kubeconfig_path
+
+    def set_source_code_path(self, source_code_path: str | None):
+        """
+        Set the source code path to bind-mount into the agent container.
+        Used for code-level bug fixing (e.g. Cassandra source at a buggy commit).
+        Mounted read-write at /opt/source inside the container so agents can edit and rebuild.
+        """
+        self._source_code_path = source_code_path
 
     def enable_container_isolation(self, force_build: bool = False):
         """Initialize the container runner and build/check the image."""
@@ -126,6 +135,7 @@ class AgentLauncher:
         agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
         self._container_runner.config.logs_path = Path(agent_logs_dir) if agent_logs_dir else Path(f"./logs/{reg.name}")
         self._container_runner.config.workspace_path = None
+        self._container_runner.config.source_code_path = Path(self._source_code_path) if self._source_code_path else None
 
         composite_cmd = self._container_runner.build_composite_command(
             install_script=reg.install_script,

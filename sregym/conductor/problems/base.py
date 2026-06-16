@@ -10,6 +10,7 @@ class Problem(ABC):
         self.fault_injected = False
         self.results = {}
         self.root_cause = None  # root cause of the problem in natural language
+        self.source_code_path = None  # host path to source code for code-level bug investigation
 
         # Optional: attach oracles in subclass
         self.diagnosis_oracle = None
@@ -17,6 +18,10 @@ class Problem(ABC):
 
     def requires_khaos(self) -> bool:
         """Override this method to return True if the problem requires Khaos for fault injection."""
+        return False
+
+    def requires_openebs(self) -> bool:
+        """Override this method to return True if the problem requires OpenEBS storage."""
         return False
 
     @classmethod

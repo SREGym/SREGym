@@ -458,7 +458,9 @@ class KubernetesAPIProxy:
         }
 
         if output_path is None:
-            output_path = os.path.join(tempfile.gettempdir(), "sregym-agent-kubeconfig")
+            output_path = os.path.join(
+                tempfile.gettempdir(), f"sregym-agent-kubeconfig-{self.listen_port}"
+            )
 
         with open(output_path, "w") as f:
             yaml.dump(kubeconfig, f)
