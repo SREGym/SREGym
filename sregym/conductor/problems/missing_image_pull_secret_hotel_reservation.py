@@ -19,10 +19,10 @@ from sregym.utils.decorators import mark_fault_injected
 
 logger = logging.getLogger(__name__)
 
-_REGISTRY_DEPLOYMENT = "sregym-private-registry"
-_REGISTRY_HTPASSWD_SECRET = "sregym-private-registry-htpasswd"
-_REGISTRY_USER = "sregym"
-_REGISTRY_PASS = "sregympass"
+_REGISTRY_DEPLOYMENT = "docker-private-registry"
+_REGISTRY_HTPASSWD_SECRET = "docker-private-registry-htpasswd"
+_REGISTRY_USER = "admin"
+_REGISTRY_PASS = "portable_panda123"
 _REGISTRY_PORT = 5000  # port the in-cluster registry Service listens on
 _LOCAL_PORT_FORWARD_PORT = 15000  # local port used for `kubectl port-forward` during push
 
@@ -34,6 +34,13 @@ _SECRET_NAME = "hotel-registry-creds"
 _DECOY_SECRET = "nonexistent-pull-creds"
 
 _APP_NAMESPACE = "hotel-reservation"
+
+# Annotations stamped on the target Deployment at inject time so a fresh process
+# (cleanup_leftovers, which has no saved instance state after a crash) can fully
+# reverse the fault — restore the original image/pullPolicy and know a fault is active.
+_ANN_ORIGINAL_IMAGE = "sregym.io/original-image"
+_ANN_ORIGINAL_PULL_POLICY = "sregym.io/original-image-pull-policy"
+_ANN_FAULT_ACTIVE = "sregym.io/fault-active"
 
 _INFRA_NAMESPACE = "infra-registry"
 _MASTER_SECRET_NAME = "private-registry-creds-master"
@@ -723,11 +730,168 @@ class MissingImagePullSecretHotelReservation(Problem):
 
     @staticmethod
     def cleanup_leftovers() -> None:
-        """Remove MissingImagePullSecret infrastructure left behind by an interrupted run (e.g. Ctrl+C before recover_fault runs)."""
-        MissingImagePullSecretHotelReservation._remove_containerd_dockerhub_block()
-        MissingImagePullSecretHotelReservation._stop_dockerhub_block()
-        MissingImagePullSecretHotelReservation._stop_registry()
-        MissingImagePullSecretHotelReservation._cleanup_duplicate_recommendation_replicasets()
+        """Remove ALL MissingImagePullSecret state left behind by an interrupted run
+        (e.g. Ctrl+C / crash before recover_fault).
+
+        Runs in a fresh process with no saved instance state, so everything is
+        reconstructed from the cluster itself — Deployment annotations
+        (`sregym.io/original-*`), pod labels, and `certs.d/*:5000` path globs —
+        rather than from `self._original_image` / `self._registry_ip` etc. This makes
+        it a true superset of `recover_fault()`'s teardown.
+        """
+        cls = MissingImagePullSecretHotelReservation
+        # 1. Restore the target Deployment FIRST so its pods stop referencing the
+        #    about-to-be-deleted private registry image (maintainer #6, #7).
+        cls._restore_target_deployment()
+        # 2. Decoy pods in the app namespace (maintainer #5).
+        cls._delete_decoy_pods()
+        # 3. Runbook ConfigMap in the app namespace (maintainer #4).
+        cls._delete_runbook_configmap_static()
+        # 4. Per-node config: /etc/hosts markers + docker.io block (maintainer #1)
+        #    and the private-registry insecure config (maintainer #3).
+        cls._remove_containerd_dockerhub_block()
+        cls._remove_containerd_insecure_all()
+        # 5. infra-registry namespace — registry, htpasswd, master secret, block
+        #    ConfigMap all go with it (maintainer #2). Individual deletes first for
+        #    fast/idempotent teardown, then the namespace as the catch-all.
+        cls._stop_dockerhub_block()
+        cls._stop_registry()
+        cls._delete_infra_namespace_static()
+        # 6. Stale ReplicaSets from prior rolling updates (pre-existing behaviour).
+        cls._cleanup_duplicate_recommendation_replicasets()
+
+    @staticmethod
+    def _restore_target_deployment() -> None:
+        """Restore the target Deployment to its pre-fault image + imagePullPolicy and
+        drop the injected imagePullSecret, using the `sregym.io/original-*` annotations
+        stamped at inject time (maintainer #6, #7).
+
+        Falls back to the app's on-disk manifest image only when the annotation is
+        absent (a pre-existing leftover); if even that is unavailable, leaves the image
+        untouched and warns rather than guessing.
+        """
+        apps_v1 = client.AppsV1Api()
+        try:
+            deploy = apps_v1.read_namespaced_deployment(name=_TARGET_DEPLOYMENT, namespace=_APP_NAMESPACE)
+        except client.exceptions.ApiException as e:
+            if e.status == 404:
+                return
+            raise
+
+        annotations = deploy.metadata.annotations or {}
+        pull_secrets = deploy.spec.template.spec.image_pull_secrets or []
+        containers = deploy.spec.template.spec.containers or []
+        target = next((c for c in containers if c.name == _TARGET_CONTAINER), containers[0] if containers else None)
+        if target is None:
+            return
+
+        points_at_private = bool(target.image) and f":{_REGISTRY_PORT}/" in target.image
+        has_our_secret = any(s.name == _SECRET_NAME for s in pull_secrets)
+        if _ANN_FAULT_ACTIVE not in annotations and not points_at_private and not has_our_secret:
+            return  # nothing we injected is present
+
+        original_image = annotations.get(_ANN_ORIGINAL_IMAGE)
+        original_policy = annotations.get(_ANN_ORIGINAL_PULL_POLICY, "IfNotPresent")
+        if original_image is None and points_at_private:
+            original_image = MissingImagePullSecretHotelReservation._canonical_target_image()
+            if original_image is None:
+                logger.warning(
+                    "Deployment '%s' points at the private registry (%s) but has no '%s' "
+                    "annotation and no on-disk manifest image was found; leaving the image "
+                    "unchanged — manual restore may be required.",
+                    _TARGET_DEPLOYMENT,
+                    target.image,
+                    _ANN_ORIGINAL_IMAGE,
+                )
+
+        if original_image:
+            target.image = original_image
+        target.image_pull_policy = original_policy
+        deploy.spec.template.spec.image_pull_secrets = []
+        for _k in (_ANN_ORIGINAL_IMAGE, _ANN_ORIGINAL_PULL_POLICY, _ANN_FAULT_ACTIVE):
+            annotations.pop(_k, None)
+        deploy.metadata.annotations = annotations
+
+        with contextlib.suppress(client.exceptions.ApiException):
+            apps_v1.replace_namespaced_deployment(name=_TARGET_DEPLOYMENT, namespace=_APP_NAMESPACE, body=deploy)
+            logger.info("Restored Deployment '%s' to pre-fault image/pullPolicy", _TARGET_DEPLOYMENT)
+
+    @staticmethod
+    def _canonical_target_image() -> str | None:
+        """Best-effort: read the target container's image from the app's on-disk K8s
+        manifests. Used only as a fallback when the inject-time annotation is absent."""
+        import glob as _glob
+
+        import yaml
+
+        try:
+            deploy_path = str(HotelReservation().k8s_deploy_path)
+            for path in _glob.glob(os.path.join(deploy_path, "**", "*.y*ml"), recursive=True):
+                with open(path) as fh:
+                    for doc in yaml.safe_load_all(fh):
+                        if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
+                            continue
+                        if (doc.get("metadata") or {}).get("name") != _TARGET_DEPLOYMENT:
+                            continue
+                        spec = ((doc.get("spec") or {}).get("template") or {}).get("spec") or {}
+                        conts = spec.get("containers") or []
+                        match = next(
+                            (c for c in conts if c.get("name") == _TARGET_CONTAINER), conts[0] if conts else None
+                        )
+                        if match and match.get("image"):
+                            return match["image"]
+        except Exception as exc:
+            logger.warning("Could not derive canonical target image from manifests: %s", exc)
+        return None
+
+    @staticmethod
+    def _delete_decoy_pods() -> None:
+        """Delete decoy pods in the app namespace by their label (crash-safe — no need
+        for the saved `self._decoy_pod_names`) (maintainer #5)."""
+        core_v1 = client.CoreV1Api()
+        with contextlib.suppress(client.exceptions.ApiException):
+            pods = core_v1.list_namespaced_pod(namespace=_APP_NAMESPACE, label_selector="custom-logger=true")
+            for pod in pods.items:
+                with contextlib.suppress(client.exceptions.ApiException):
+                    core_v1.delete_namespaced_pod(
+                        name=pod.metadata.name, namespace=_APP_NAMESPACE, grace_period_seconds=0
+                    )
+
+    @staticmethod
+    def _delete_runbook_configmap_static() -> None:
+        """Delete the runbook ConfigMap from the app namespace (maintainer #4)."""
+        with contextlib.suppress(client.exceptions.ApiException):
+            client.CoreV1Api().delete_namespaced_config_map(name=_RUNBOOK_CONFIGMAP, namespace=_APP_NAMESPACE)
+
+    @staticmethod
+    def _delete_infra_namespace_static() -> None:
+        """Delete the infra-registry namespace — takes the master secret, htpasswd
+        secret, and block ConfigMap with it (maintainer #2)."""
+        with contextlib.suppress(client.exceptions.ApiException):
+            client.CoreV1Api().delete_namespace(name=_INFRA_NAMESPACE)
+
+    @staticmethod
+    def _remove_containerd_insecure_all() -> None:
+        """Addr-agnostic removal of the private-registry insecure config left on nodes
+        (maintainer #3). cleanup_leftovers has no saved registry IP, so we key off the
+        fixed registry port (`*:5000`) for containerd certs.d, and off the presence of
+        an `insecure-registries` entry for cri-dockerd daemon.json."""
+        cls = MissingImagePullSecretHotelReservation
+        port = _REGISTRY_PORT
+        for node in cls._get_cluster_nodes():
+            if node.startswith("kind-"):
+                subprocess.run(
+                    ["docker", "exec", node, "sh", "-c", f"rm -rf /etc/containerd/certs.d/*:{port}"],
+                    capture_output=True,
+                )
+            elif cls._get_node_runtime(node) == "docker":
+                with contextlib.suppress(Exception):
+                    # script ignores its addr arg; removal is keyed on the presence of
+                    # "insecure-registries", not a specific address.
+                    cls._run_on_node(node, cls._daemon_json_remove_insecure_registry_script(""))
+            else:
+                with contextlib.suppress(Exception):
+                    cls._run_on_node(node, f"rm -rf /host/etc/containerd/certs.d/*:{port}")
 
     def _create_infra_namespace_and_secret(self) -> None:
         """Create the 'platform team' namespace holding the source-of-truth registry
@@ -919,6 +1083,19 @@ class MissingImagePullSecretHotelReservation(Problem):
                 [client.V1LocalObjectReference(name=_SECRET_NAME)] if add_pull_secret else []
             )
 
+            # Atomically record (inject) or clear (revert) the pre-fault spec on the
+            # Deployment, in the SAME replace as the image repoint, so there is no
+            # window where the image is changed but the original isn't recorded.
+            annotations = deploy.metadata.annotations or {}
+            if add_pull_secret:
+                annotations[_ANN_ORIGINAL_IMAGE] = original_image
+                annotations[_ANN_ORIGINAL_PULL_POLICY] = original_policy or "IfNotPresent"
+                annotations[_ANN_FAULT_ACTIVE] = "true"
+            else:
+                for _k in (_ANN_ORIGINAL_IMAGE, _ANN_ORIGINAL_PULL_POLICY, _ANN_FAULT_ACTIVE):
+                    annotations.pop(_k, None)
+            deploy.metadata.annotations = annotations
+
             try:  # This has been added to avoid race conditions between our read and PUT and rollout controller's version update
                 self.apps_v1.replace_namespaced_deployment(
                     name=_TARGET_DEPLOYMENT, namespace=self.namespace, body=deploy
@@ -975,14 +1152,14 @@ class MissingImagePullSecretHotelReservation(Problem):
                 metadata=client.V1ObjectMeta(
                     name=name,
                     namespace=self.namespace,
-                    labels={"sregym-decoy": "true"},
+                    labels={"custom-logger": "true"},
                 ),
                 spec=client.V1PodSpec(
                     image_pull_secrets=[client.V1LocalObjectReference(name=_DECOY_SECRET)],
                     restart_policy="Always",
                     containers=[
                         client.V1Container(
-                            name="decoy",
+                            name="custom-logger",
                             # Use the same image ref that's actually in the Kind cache —
                             # discovered dynamically in inject_fault() via _resolve_upstream_image()
                             image=self._source_image or _IMAGE_SEARCH_KEY,
