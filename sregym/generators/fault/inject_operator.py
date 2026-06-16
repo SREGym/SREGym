@@ -242,9 +242,7 @@ class K8SOperatorFaultInjector(FaultInjector):
         # provision, and leave PD pods stuck in Pending.
         pd_labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
         print("[FAULT] Deleting PD PVCs to force reprovisioning with the bogus storage class...")
-        self.kubectl.exec_command(
-            f"kubectl delete pvc -n {self.namespace} -l {pd_labels} --wait=false"
-        )
+        self.kubectl.exec_command(f"kubectl delete pvc -n {self.namespace} -l {pd_labels} --wait=false")
         print("[FAULT] Deleting PD StatefulSet so the operator rebuilds it from the updated CR...")
         self.kubectl.exec_command(
             f"kubectl delete statefulset basic-pd -n {self.namespace} --ignore-not-found=true --wait=false"
