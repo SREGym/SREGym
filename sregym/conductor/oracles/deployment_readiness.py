@@ -87,8 +87,7 @@ class DeploymentReadinessOracle(Oracle):
                     return results
                 if container_status.state.terminated and container_status.state.terminated.reason != "Completed":
                     print(
-                        f"❌ Container {container_status.name} terminated: "
-                        f"{container_status.state.terminated.reason}"
+                        f"❌ Container {container_status.name} terminated: {container_status.state.terminated.reason}"
                     )
                     results["success"] = False
                     return results
