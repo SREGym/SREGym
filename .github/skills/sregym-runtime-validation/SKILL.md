@@ -203,6 +203,32 @@ ClusterIP topology with a stale `preferred_ip`, and multi-DC. Add `-Dcassandra.m
 for deterministic gossip conviction on a loaded kind host. **A flattened single-CQL "reproduction" of a
 multi-node bug compiles and registers but silently does NOT reproduce it — strictly worse than the raw ring.**
 
+### Single-node raw-ring reproducers (`CassandraSingleNodeProblem`)
+
+For small live-server Cassandra bugs that do not need the K8ssandra operator, a one-pod raw ring is often the
+fastest benchmark-valid encoding: subclass `CassandraSingleNodeProblem`, set `replicas=1` via the base class, run
+the trigger in `observe_bug()`, set `bug_pattern`, and let `CassandraSingleNodeOracle` classify the captured output.
+Keep the oracle classification tied to the inject-phase observation, not a destructive re-run: reproductions such as
+zero-byte TOC snapshots, thousands of ALTERs, or one-shot startup/config checks can mutate the node enough that a
+second call returns "snapshot already exists", cleanup errors, or unrelated schema failures instead of the documented
+signature.
+
+Useful pitfalls from the new-Cassandra pass:
+
+- Cassandra 5.0 audit-settings bugs need the whole YAML block, not just a replaced line:
+  `audit_logging_options.enabled: true`, a logger, and `included_categories: DCL, ERROR, AUTH`. Without `enabled`
+  and the logger, `system_views.settings` can show an empty value and the bug looks absent.
+- The stock Cassandra 3.11 image has Python 2 plus nested driver/dependency zips. For in-pod prepared-statement
+  reproducers, set `PYTHONPATH` to include:
+  `/opt/cassandra/lib/futures-2.1.6-py2.py3-none-any.zip`,
+  `/opt/cassandra/lib/six-1.7.3-py2.py3-none-any.zip`,
+  `/opt/cassandra/lib/cassandra-driver-internal-only-3.10.zip/cassandra-driver-3.10`, and
+  `/opt/cassandra/lib/cassandra-driver-internal-only-3.11.0-bb96859b.zip/cassandra-driver-3.11.0-bb96859b`.
+  Also write Python-2-compatible scripts and use `next(iter(session.execute(...)))` instead of newer
+  `ResultSet.one()`.
+- Do not add unrecognized cassandra.yaml gates to older images. For example, Cassandra 3.11.10 rejects
+  `enable_drop_compact_storage` as invalid YAML; the CASSANDRA-16712 trigger works on the stock image without it.
+
 ## Disk & teardown discipline (the binding constraint)
 
 Each problem deploys a **3-node** K8ssandra datacenter (`cass-management-api`, ~600MB image ×3 nodes'
