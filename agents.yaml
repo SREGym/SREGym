@@ -55,3 +55,10 @@ agents:
     install_script: null
     agent_version: null
     container_isolation: false
+  - name: copilotcli
+    kickoff_command: .venv/bin/python -m clients.copilotcli.driver
+    kickoff_workdir: .
+    kickoff_env: null
+    install_script: null
+    agent_version: null
+    container_isolation: false

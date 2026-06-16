@@ -1,0 +1,1 @@
+"""Copilot CLI benchmark agent."""
