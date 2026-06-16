@@ -43,8 +43,11 @@ class CassandraRawRingProblem(GenericCustomBuildProblem):
     replicas: int = 2
     num_tokens: int = 16
     jvm_extra_opts: str = ""
+    startup_prelude: str = ""
     hinted_handoff_enabled: bool = False
     extra_pods: list[dict] = []  # bare pods created at deploy time
+    ready_timeout: int = 600
+    node_name: str = ""
 
     # ── Diagnosis metadata ──────────────────────────────────────────────────────
     root_cause_file: str = "source"
@@ -56,7 +59,7 @@ class CassandraRawRingProblem(GenericCustomBuildProblem):
 
     @property
     def image(self) -> str:
-        return f"cassandra:{self.cassandra_version}"
+        return getattr(self, "image_override", "") or f"cassandra:{self.cassandra_version}"
 
     def __init__(self):
         if not self.cassandra_version:
@@ -68,8 +71,11 @@ class CassandraRawRingProblem(GenericCustomBuildProblem):
             replicas=self.replicas,
             num_tokens=self.num_tokens,
             jvm_extra_opts=self.jvm_extra_opts,
+            startup_prelude=self.startup_prelude,
             hinted_handoff_enabled=self.hinted_handoff_enabled,
             extra_pods=list(self.extra_pods),
+            ready_timeout=self.ready_timeout,
+            node_name=self.node_name,
         )
 
         # Run post_deploy() after the ring is up (subclass hook for extra setup).

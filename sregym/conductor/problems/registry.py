@@ -1,3 +1,5 @@
+import importlib
+import inspect
 from pathlib import Path
 
 import yaml
@@ -26,9 +28,10 @@ from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import Eph
 from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
-from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
+from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.generic_custom_build import GenericCustomBuildProblem
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
 from sregym.conductor.problems.incorrect_image import IncorrectImage
@@ -333,8 +336,22 @@ class ProblemRegistry:
             "operator_wrong_operator_image": K8SOperatorWrongOperatorImage,
         }
 # fmt: on
+        self._load_auto_generated()
         self.kubectl = KubeCtl()
         self.non_emulated_cluster_problems = []
+
+    def _load_auto_generated(self):
+        problems_dir = Path(__file__).parent
+        for path in sorted(problems_dir.glob("auto_*.py")):
+            problem_id = path.stem
+            module = importlib.import_module(f"sregym.conductor.problems.{problem_id}")
+            for _, obj in inspect.getmembers(module, inspect.isclass):
+                if obj.__module__ != module.__name__:
+                    continue
+                if not issubclass(obj, GenericCustomBuildProblem) or obj is GenericCustomBuildProblem:
+                    continue
+                self.PROBLEM_REGISTRY.setdefault(problem_id, obj)
+                break
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
