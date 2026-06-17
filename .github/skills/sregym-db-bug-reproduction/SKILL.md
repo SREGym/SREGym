@@ -161,8 +161,8 @@ a `CL=ONE` read is routed to an arbitrary replica and is **not** a reliable per-
 reproduced CASSANDRA-21332, which looked "in-JVM-dtest-only".)
 
 **Evidence bar.** A reproduction needs a **verbatim** buggy signature (exact exception + frame, server
-error, or wrong-result row) plus the A/B control where a fixed image exists. Write it all to
-`.claude/repro-evidence/repro-CASSANDRA-<n>.md`.
+error, or wrong-result row) plus the A/B control where a fixed image exists. Keep the full evidence in
+`.claude/repro-evidence/` as a local, gitignored artifact.
 
 **Dispositions** (use the precise one; all but `reproduced` are clean outcomes): `reproduced` /
 `not-reproducible` (buggy path shadowed by earlier validation or a disabled feature) / `not-observable`
@@ -181,9 +181,10 @@ disk/concurrency discipline when reproducing or generating many at once.
 ## From a reproduced bug to a benchmark Problem
 
 Every reproduced DB bug should become a runnable benchmark Problem. The **authoritative source** for each
-bug is its reproduction evidence log at `.claude/repro-evidence/repro-CASSANDRA-<n>.md` (machine-readable
-mirror: `.claude/repro-evidence/candidate_results.json`). Read it — not memory — for the buggy version, the
-EXACT reproducer steps, the verbatim buggy signature, and the A/B control. Trust the log over recollection.
+bug is its local reproduction evidence log at `.claude/repro-evidence/repro-CASSANDRA-<n>.md`
+(machine-readable mirror: `.claude/repro-evidence/candidate_results.json`). Read it — not memory — for the
+buggy version, the EXACT reproducer steps, the verbatim buggy signature, and the A/B control. Trust the log
+over recollection. The directory is gitignored; summarize merge-worthy conclusions in `validation-findings.md`.
 
 ### Pick a base class
 
