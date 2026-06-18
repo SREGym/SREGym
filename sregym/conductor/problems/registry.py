@@ -40,6 +40,7 @@ from sregym.conductor.problems.missing_service import MissingService
 from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from sregym.conductor.problems.network_policy_block import NetworkPolicyBlock
+from sregym.conductor.problems.node_clock_drift import NodeClockDriftHotelReservation
 from sregym.conductor.problems.node_conntrack_exhaustion import NodeConntrackExhaustionHotelReservation
 from sregym.conductor.problems.operator_misoperation.invalid_affinity_toleration import (
     K8SOperatorInvalidAffinityTolerationFault,
@@ -136,6 +137,7 @@ class ProblemRegistry:
             "missing_service_hotel_reservation": lambda: MissingService(app_name="hotel_reservation", faulty_service="mongodb-rate"),
             "missing_service_social_network": lambda: MissingService(app_name="social_network", faulty_service="user-service"),
             "namespace_memory_limit": NamespaceMemoryLimit,
+            "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
             "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
             "pvc_claim_mismatch": PVCClaimMismatch,
