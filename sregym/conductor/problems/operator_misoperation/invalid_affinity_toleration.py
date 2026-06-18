@@ -13,10 +13,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class K8SOperatorInvalidAffinityTolerationFault(Problem):
     def __init__(self, faulty_service="tidb-app"):
-        self.app = FleetCast()
-        self.namespace = self.app.namespace
-        print("App's namespace:", self.namespace)
-        super().__init__(app=self.app, namespace="tidb-cluster")
+        super().__init__(app=FleetCast(), namespace="tidb-cluster")
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(

@@ -11,10 +11,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 class CartServiceFailure(Problem):
     def __init__(self):
-        self.app = AstronomyShop()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.injector = OtelFaultInjector(namespace=self.namespace)
         self.faulty_service = "cart"
         self.feature_flag = "cartFailure"
@@ -25,7 +23,11 @@ class CartServiceFailure(Problem):
                 f"The `{self.faulty_service}` deployment is experiencing persistent internal errors in its "
                 "request handling path, causing cart operations to fail. Cart reads and updates return errors, and "
                 "downstream checkout paths that require cart state become unreliable. Users observe empty carts, "
-                "failed cart updates, and checkout blocking."
+                "failed cart updates, and checkout blocking. "
+                f"Mechanism: the `flagd-config` ConfigMap in the `{self.namespace}` namespace has the "
+                f'`{self.feature_flag}` feature flag\'s `defaultVariant` set to `"on"`, which activates the '
+                "OpenTelemetry demo's in-app fault path that makes the cart service return an error whenever its "
+                "`EmptyCart` gRPC handler is called."
             ),
         )
         # === Attach evaluation oracles ===
