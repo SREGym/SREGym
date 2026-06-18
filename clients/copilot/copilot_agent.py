@@ -216,7 +216,6 @@ class CopilotCliAgent:
             "copilot",
             "-p",
             instruction,
-            "-s",
             "--allow-all",
             "--no-ask-user",
             "--model",
@@ -224,7 +223,7 @@ class CopilotCliAgent:
             f"--share={self.transcript_path}",
         ]
 
-        logger.info(f"Executing command: copilot -p <instruction> -s --allow-all --no-ask-user --model {model}")
+        logger.info(f"Executing command: copilot -p <instruction> --allow-all --no-ask-user --model {model}")
 
         try:
             with open(self.output_path, "w") as out_file:
