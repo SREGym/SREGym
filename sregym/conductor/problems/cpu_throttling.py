@@ -41,14 +41,16 @@ class CpuThrottling(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         injector = VirtualizationFaultInjector(namespace=self.namespace)
-        injected = injector.inject_cpu_throttle(microservices=[self.faulty_service])
+        injected = injector.inject_cpu_throttle(microservices=[self.faulty_service], all_services=True)
         self.injected_cpu_limit = injected.get(self.faulty_service)
         self.mitigation_oracle.injected_cpu_limit = self.injected_cpu_limit
+        self._patched_services = list(injected.keys())
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
         injector = VirtualizationFaultInjector(namespace=self.namespace)
-        injector.recover_cpu_throttle(microservices=[self.faulty_service])
+        services = getattr(self, "_patched_services", [self.faulty_service])
+        injector.recover_cpu_throttle(microservices=services)
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")

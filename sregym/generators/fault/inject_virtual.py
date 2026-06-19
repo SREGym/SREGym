@@ -346,25 +346,115 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from resource request fault for service: {service}")
 
     # V.8a - Set a tight CPU limit to trigger CFS throttling without crashing the pod
-    def inject_cpu_throttle(self, microservices: list[str], cpu_limit: str | None = None) -> dict[str, str]:
+    def inject_cpu_throttle(
+        self,
+        microservices: list[str],
+        cpu_limit: str | None = None,
+        all_services: bool = False,
+        loose_headroom_factor: float = 2.0,
+    ) -> dict[str, str]:
+        if all_services:
+            all_deps = self._get_all_deployments()
+            limits = self.calibrate_all_limits(
+                services=all_deps,
+                faulty_services=microservices,
+                loose_headroom=loose_headroom_factor,
+            )
+            services_to_patch = all_deps
+        else:
+            services_to_patch = microservices
+            limits = {}
+
         injected = {}
-        for service in microservices:
-            limit = cpu_limit if cpu_limit is not None else self.calibrate_cpu_limit(service)
+        for service in services_to_patch:
+            if cpu_limit is not None and service in microservices:
+                limit = cpu_limit
+            else:
+                limit = limits.get(service) or self.calibrate_cpu_limit(service)
+
             original_deployment_yaml = self._get_deployment_yaml(service)
             deployment_yaml = copy.deepcopy(original_deployment_yaml)
             containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
             for container in containers:
                 resources = container.setdefault("resources", {})
-                # requests must be <= limits, so lower both
-                resources.setdefault("requests", {})["cpu"] = "10m"
+                if service in microservices:
+                    resources.setdefault("requests", {})["cpu"] = "10m"
+                else:
+                    resources.setdefault("requests", {})["cpu"] = limit
                 resources.setdefault("limits", {})["cpu"] = limit
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
             self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
             self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
             self._write_yaml_to_file(service, original_deployment_yaml)
-            print(f"Injected CPU throttle ({limit}) for service: {service}")
+            print(f"Injected CPU limit ({limit}) for service: {service}")
             injected[service] = limit
         return injected
+
+    def calibrate_all_limits(
+        self,
+        services: list[str],
+        faulty_services: list[str],
+        warmup_seconds: int = 30,
+        n_samples: int = 5,
+        sample_window_seconds: int = 7,
+        tight_headroom: float = 1.15,
+        loose_headroom: float = 2.0,
+        cache_path: str = "/tmp/sregym_cpu_calibration.json",
+        fallback: str = "125m",
+    ) -> dict[str, str]:
+        fingerprint = self._cluster_fingerprint()
+        limits = {}
+        uncached = []
+        for service in services:
+            cached = self._read_calibration_cache(cache_path, f"{fingerprint}/{service}")
+            if cached:
+                print(f"[calibration] cached limit for {service}: {cached}")
+                limits[service] = cached
+            else:
+                uncached.append(service)
+
+        if not uncached:
+            return limits
+
+        pods = {s: self._get_running_pod(s) for s in uncached}
+        active = {s: p for s, p in pods.items() if p}
+
+        for service in uncached:
+            if service not in active:
+                print(f"[calibration] no running pod for {service}, using {fallback}")
+                limits[service] = fallback
+
+        if not active:
+            return limits
+
+        print(f"[calibration] sampling {len(active)} services, warmup {warmup_seconds}s...")
+        time.sleep(warmup_seconds)
+
+        readings = [{s: self._read_cpu_stat(p) for s, p in active.items()}]
+        for _ in range(n_samples):
+            time.sleep(sample_window_seconds)
+            readings.append({s: self._read_cpu_stat(p) for s, p in active.items()})
+
+        for service in active:
+            samples = [
+                m
+                for r1, r2 in zip(readings, readings[1:], strict=False)
+                if (m := self._compute_millicores(r1[service], r2[service])) is not None
+            ]
+            if not samples:
+                print(f"[calibration] {service}: sampling failed, using {fallback}")
+                limits[service] = fallback
+                continue
+
+            baseline = max(samples)
+            headroom = tight_headroom if service in faulty_services else loose_headroom
+            limit_m = ((int(baseline * headroom) + 4) // 5) * 5
+            limit = f"{limit_m}m"
+            self._write_calibration_cache(cache_path, f"{fingerprint}/{service}", limit)
+            print(f"[calibration] {service}: baseline={baseline}m headroom={headroom} limit={limit}")
+            limits[service] = limit
+
+        return limits
 
     def calibrate_cpu_limit(
         self,
@@ -390,7 +480,6 @@ class VirtualizationFaultInjector(FaultInjector):
         print(f"[calibration] sampling CPU for {service}, warmup {warmup_seconds}s...")
         time.sleep(warmup_seconds)
 
-        # N+1 readings ,  N adjacent windows; reuses each reading instead of double-sampling
         readings = [self._read_cpu_stat(pod)]
         for _ in range(n_samples):
             time.sleep(sample_window_seconds)
@@ -413,6 +502,12 @@ class VirtualizationFaultInjector(FaultInjector):
         self._write_calibration_cache(cache_path, key, limit)
         print(f"[calibration] {service}: baseline={baseline}m limit={limit}")
         return limit
+
+    def _get_all_deployments(self) -> list[str]:
+        out = self.kubectl.exec_command(
+            f"kubectl get deployments -n {self.namespace} -o jsonpath='{{.items[*].metadata.name}}'"
+        )
+        return out.strip().split() if out.strip() else []
 
     def _cluster_fingerprint(self) -> str:
         nodes = self.kubectl.exec_command("kubectl get nodes -o jsonpath='{.items[*].metadata.name}'")
@@ -2628,33 +2723,29 @@ class VirtualizationFaultInjector(FaultInjector):
             containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
             containers[0]["command"] = ["/bin/sh", "-c"]
             containers[0]["args"] = [f"ulimit -n {limit} && exec {entrypoint_cmd}"]
-            
+
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
             apply_result = self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
             print(f"Apply result for {service}: {apply_result}")
-            
-            self.kubectl.exec_command(
-                f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s"
-            )
+
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
             print(f"Injected FD exhaustion (limit: {limit}) for service: {service}")
 
     def recover_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str):
         """Recover from FD exhaustion by pushing the soft limit to the kernel hard limit."""
         for service in microservices:
             deployment_yaml = self._get_deployment_yaml(service)
-            
+
             containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
             containers[0]["command"] = [entrypoint_cmd]
             containers[0]["args"] = []
-            
+
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
-            
+
             apply_result = self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
             print(f"Recover apply result for {service}: {apply_result}")
-            
-            self.kubectl.exec_command(
-                f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s"
-            )
+
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
             print(f"Recovered FD exhaustion for service: {service}")
 
     ############# HELPER FUNCTIONS ################
