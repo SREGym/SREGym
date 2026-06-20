@@ -14,7 +14,8 @@ NOTE: Time-sync daemon names vary across environments (systemd-timesyncd, chrony
 ntpd, ntp, etc). Rather than guessing a fixed list of names, _advance_node_clock
 dynamically discovers whichever time-sync service is actually running via
 `systemctl list-units` and stops/masks it, so this fault works correctly regardless
-of which daemon a given environment uses.
+of which daemon a given environment uses. recover_fault discovers and restores the
+same way, plus steps the clock back, so the fault is fully reversible.
 """
 
 import base64
@@ -64,6 +65,7 @@ class NodeClockDriftHotelReservation(Problem):
 
         self.target_node = None
         self.injector_pod_name = None
+        self.stopped_services = []
 
         self.app.create_workload()
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
@@ -171,6 +173,15 @@ class NodeClockDriftHotelReservation(Problem):
         Validates the short-lived cert against the node clock every 30 seconds.
         Once the node clock is skewed 30 days forward, openssl verify produces
         x509 certificate expired errors.
+
+        A readiness probe checks for /tmp/sidecar-ready, which is only touched
+        AFTER `apt-get install openssl` finishes. Without this, Kubernetes marks
+        the container "Ready" the instant the process starts, before openssl is
+        actually installed — _wait_for_sidecar_rollout() would then proceed to
+        drift the clock while apt-get is still mid-download, causing apt's own
+        HTTPS connection to the package mirror to start failing once the clock
+        skews (same x509 error class as the fault itself), stalling readiness
+        for several minutes before the sidecar loop ever starts.
         """
         sidecar_cmd = (
             "apt-get update -qq && apt-get install -y -qq openssl && "
@@ -230,6 +241,15 @@ class NodeClockDriftHotelReservation(Problem):
             print(f"[TLS] Warning: Could not patch frontend deployment with sidecar: {e}")
 
     def _wait_for_sidecar_rollout(self, timeout: int = 120) -> None:
+        """Wait until a Running frontend pod exists with the tls-health-check sidecar
+        fully ready (openssl installed, per the readiness probe above).
+
+        The deployment patch in _add_tls_health_check_sidecar() triggers a rolling
+        update. During the rollout, the old pod (no sidecar) and the new pod (with
+        sidecar) can briefly coexist, potentially on DIFFERENT nodes. Selecting a
+        target node before the new pod is fully Running risks drifting the wrong
+        node's clock — one with no sidecar to ever observe the fault.
+        """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
@@ -267,10 +287,11 @@ class NodeClockDriftHotelReservation(Problem):
         self._setup_tls_infrastructure()
         print("TLS infrastructure set up (Secret + CA ConfigMap + verification sidecar)")
 
-        # Wait for the sidecar rollout to fully land before picking a target node,
-        # otherwise might grab the OLD pod's node instead of the NEW one's
+        # Wait for the sidecar rollout to fully land (openssl installed) before
+        # picking a target node, otherwise might grab the OLD pod's node instead
+        # of the NEW one's, or drift the clock before openssl is ready
         self._wait_for_sidecar_rollout()
-        print("Sidecar rollout confirmed Running")
+        print("Sidecar rollout confirmed Running and ready")
 
         self.target_node = self._select_target_node()
         print(f"Target node: {self.target_node}")
@@ -283,11 +304,24 @@ class NodeClockDriftHotelReservation(Problem):
 
     @mark_fault_injected
     def recover_fault(self):
-        print("Fault Recovery (only cleanup)")
+        """Fully reverse the fault: restore the time-sync service(s) that were
+        stopped/masked, step the clock back to cluster time, then clean up
+        injector pods.
+
+        Must run BEFORE cleanup, since the restore pod also needs to land on the
+        same target node via nsenter.
+        """
+        print("Fault Recovery (Node Clock Drift)")
+
+        if self.target_node:
+            self._restore_node_clock(self.target_node)
+        else:
+            print("No target_node recorded; skipping clock/service restore")
+
         self._cleanup_injector_pods()
         print("Cleaned up clock drift injector pods")
 
-    # ── Node Targeting ─────
+    # ── Node Targeting ──────────────────────────────────────────────────────────
 
     def _select_target_node(self) -> str:
         """Select the node running the frontend pod that has the TLS sidecar.
@@ -318,7 +352,11 @@ class NodeClockDriftHotelReservation(Problem):
         )
 
     def _advance_node_clock(self, node: str) -> None:
-        #create priveleged pod that discovers + disables time sync service, advances clock
+        """Create a privileged pod that discovers + disables the active time-sync
+        service, then advances the clock. Records which service(s) were stopped
+        in self.stopped_services so recover_fault can restore exactly those, rather
+        than guessing.
+        """
         advance_cmd = f"""
             set -e
 
@@ -327,6 +365,8 @@ class NodeClockDriftHotelReservation(Problem):
                 systemctl list-units --type=service --state=running --no-legend 2>/dev/null \
                 | awk '{{print $1}}' \
                 | grep -iE 'ntpd|ntp|chrony|timesync' || true)
+
+            echo "DISCOVERED_SERVICES:$TIME_SYNC_SERVICES"
 
             if [ -n "$TIME_SYNC_SERVICES" ]; then
                 echo "Found active time-sync service(s): $TIME_SYNC_SERVICES"
@@ -387,16 +427,114 @@ class NodeClockDriftHotelReservation(Problem):
             self.core_v1.create_namespaced_pod(self.clock_injector_namespace, pod_spec)
             print(f"Created clock-drift injector pod: {pod_name}")
             time.sleep(15)
+
+            # Parse the injector's own logs to find out which service(s) it
+            # actually stopped, so recover_fault restores exactly those.
+            self.stopped_services = []
+            try:
+                logs = self.core_v1.read_namespaced_pod_log(pod_name, self.clock_injector_namespace)
+                for line in logs.splitlines():
+                    if line.startswith("DISCOVERED_SERVICES:"):
+                        services_str = line.split(":", 1)[1].strip()
+                        if services_str:
+                            self.stopped_services = services_str.split()
+                        break
+            except ApiException as e:
+                print(f"Warning: could not read injector logs to determine stopped services: {e}")
+
         except ApiException as e:
             print(f"Failed to create injector pod: {e}")
             raise
 
+    def _restore_node_clock(self, node: str) -> None:
+        """Step the node's clock back by the same offset it was advanced + restore whichever time sync service was masked during injection.
+        """
+        services = self.stopped_services or []
+
+        service_restore_lines = "\n".join(
+            f'echo "Restoring: {svc}"\n'
+            f'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl unmask {svc} || true\n'
+            f'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl start {svc} || true'
+            for svc in services
+        )
+
+        if not service_restore_lines:
+            service_restore_lines = 'echo "No recorded stopped services to restore."'
+
+        restore_cmd = f"""
+            set -e
+
+            {service_restore_lines}
+
+            echo "Stepping clock back by {self.clock_drift_seconds} seconds:"
+            nsenter --target 1 --mount --uts --ipc --net --pid -- date
+            nsenter --target 1 --mount --uts --ipc --net --pid -- \
+                date -s "-{self.clock_drift_seconds} seconds"
+            nsenter --target 1 --mount --uts --ipc --net --pid -- date
+
+            echo "Clock and time-sync service restoration complete."
+        """
+
+        pod_name = f"clock-drift-restore-{int(time.time() * 1000)}"
+
+        pod_spec = {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": pod_name,
+                "namespace": self.clock_injector_namespace,
+                "labels": {"app": "clock-drift-restorer"},
+            },
+            "spec": {
+                "nodeSelector": {"kubernetes.io/hostname": node},
+                "hostNetwork": True,
+                "hostPID": True,
+                "hostIPC": True,
+                "restartPolicy": "Never",
+                "terminationGracePeriodSeconds": 0,
+                "automountServiceAccountToken": False,
+                "containers": [
+                    {
+                        "name": "clock-restore",
+                        "image": self.clock_injector_image,
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["sh", "-c"],
+                        "args": [restore_cmd],
+                        "securityContext": {
+                            "privileged": True,
+                            "capabilities": {"add": ["SYS_TIME", "SYS_ADMIN"]},
+                        },
+                    }
+                ],
+            },
+        }
+
+        try:
+            self.core_v1.create_namespaced_pod(self.clock_injector_namespace, pod_spec)
+            print(f"Created clock-drift restore pod: {pod_name}")
+
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                pod = self.core_v1.read_namespaced_pod(pod_name, self.clock_injector_namespace)
+                if pod.status.phase in ["Succeeded", "Failed"]:
+                    break
+                time.sleep(2)
+
+        except ApiException as e:
+            print(f"Failed to create/run restore pod: {e}")
+        finally:
+            with contextlib.suppress(ApiException):
+                self.core_v1.delete_namespaced_pod(
+                    pod_name, self.clock_injector_namespace, grace_period_seconds=0
+                )
+
     def _cleanup_injector_pods(self) -> None:
-        """Delete all clock manipulation pods."""
+        """Deletes injector + restore pods incase restore_node_clock cleanup didn't finish (race/failed)
+        """
         try:
             pods = self.core_v1.list_namespaced_pod(
                 self.clock_injector_namespace,
-                label_selector="app=clock-drift-injector"
+                label_selector="app in (clock-drift-injector, clock-drift-restorer)"
             ).items
 
             for pod in pods:
@@ -411,7 +549,7 @@ class NodeClockDriftHotelReservation(Problem):
             while time.monotonic() < deadline:
                 pods = self.core_v1.list_namespaced_pod(
                     self.clock_injector_namespace,
-                    label_selector="app=clock-drift-injector"
+                    label_selector="app in (clock-drift-injector, clock-drift-restorer)"
                 ).items
                 if not pods:
                     return
