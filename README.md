@@ -26,6 +26,7 @@ SREGym has been used to simulate real-world cloud failures, such as:
 - Admission webhook TLS mismatch ([postmortem](https://github.com/cert-manager/cert-manager/issues/6350), [simulation](https://github.com/SREGym/SREGym/pull/777))
 - Exhausting conntrack table space crippled a production cluster ([postmortem](https://www.markbetz.net/2023/12/12/exhausting-conntrack-table-space-crippled-our-k8s-cluster), [simulation](https://github.com/SREGym/SREGym/pull/768))
 - GKE ran out of IP addresses ([postmortem](https://deploy.live/blog/when-gke-ran-out-of-ip-addresses), [simulation](https://github.com/SREGym/SREGym/pull/774))
+- Kafka poison pill ([postmortem](https://www.lydtechconsulting.com/blog/kafka-poison-pill), [simulation](https://github.com/SREGym/SREGym/pull/790))
 
 
 <h2 id="📦installation">📦 Installation</h2>
@@ -56,9 +57,10 @@ uv run prek install
 Choose either a) or b) to set up your cluster and then proceed to the next steps.
 
 ### a) Kubernetes Cluster (Recommended)
-SREGym supports any kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself.
+SREGym runs on a self-managed Kubernetes cluster that you provision on Linux hosts you have SSH and root access to (e.g. [CloudLab](https://www.cloudlab.us/), bare-metal machines, or cloud VMs/VPS instances). We provide an Ansible playbook that builds the cluster for you. Follow this [README](./scripts/ansible/README.md) to set it up.
 
-We have an Ansible playbook to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster.
+> [!NOTE]
+> A managed Kubernetes service won't work out of the box, since SREGym's setup needs SSH and root access to the nodes for OS-level cluster configuration. Instead, spin up a few plain VMs/VPS instances and add them to `inventory.yml`.
 
 ### b) Emulated cluster
 SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/) on your local machine. However, not all problems are supported.

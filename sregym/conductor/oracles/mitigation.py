@@ -11,6 +11,11 @@ _ROLLOUT_POLL_INTERVAL = 5
 class MitigationOracle(Oracle):
     importance = 1.0
 
+    def __init__(self, problem):
+        super().__init__(problem)
+        deployments = self.problem.kubectl.list_deployments(self.problem.namespace)
+        self.replica_count = {dep.metadata.name: dep.spec.replicas for dep in deployments.items}
+
     def _wait_for_rollouts(self, kubectl, namespace):
         """Wait for all deployments in the namespace to finish rolling out."""
         deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS
@@ -19,7 +24,7 @@ class MitigationOracle(Oracle):
             all_settled = True
             for dep in deployments.items:
                 status = dep.status
-                desired = dep.spec.replicas or 1
+                desired = dep.spec.replicas if dep.spec.replicas is not None else 1
                 if (
                     (status.updated_replicas or 0) < desired
                     or (status.ready_replicas or 0) < desired
@@ -42,6 +47,26 @@ class MitigationOracle(Oracle):
         # Wait for any in-progress rollouts to finish so we don't evaluate
         # a transient state where old pods are gone and new ones haven't crashed yet.
         self._wait_for_rollouts(kubectl, namespace)
+
+        deployments = kubectl.list_deployments(namespace)
+        current_deps = {dep.metadata.name: dep for dep in deployments.items}
+
+        for name in self.replica_count:
+            if name not in current_deps:
+                print(f"❌ Deployment '{name}' was deleted")
+                results["success"] = False
+                return results
+            dep = current_deps[name]
+            desired = dep.spec.replicas if dep.spec.replicas is not None else 1
+            if desired == 0:
+                print(f"❌ Deployment '{name}' was scaled to 0")
+                results["success"] = False
+                return results
+            ready = dep.status.ready_replicas or 0
+            if ready < desired:
+                print(f"❌ Deployment '{name}' has {ready}/{desired} replicas ready")
+                results["success"] = False
+                return results
 
         pod_list = kubectl.list_pods(namespace)
 
