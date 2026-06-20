@@ -174,6 +174,7 @@ class NodeClockDriftHotelReservation(Problem):
         """
         sidecar_cmd = (
             "apt-get update -qq && apt-get install -y -qq openssl && "
+            "touch /tmp/sidecar-ready && "
             "while true; do "
             "  openssl verify -verbose -CAfile /etc/tls-ca/ca.crt /etc/tls-ca/ca.crt; "
             "  sleep 30; "
@@ -197,6 +198,13 @@ class NodeClockDriftHotelReservation(Problem):
                                 "imagePullPolicy": "IfNotPresent",
                                 "command": ["sh", "-c"],
                                 "args": [sidecar_cmd],
+                                "readinessProbe": {
+                                    "exec": {
+                                        "command": ["test", "-f", "/tmp/sidecar-ready"]
+                                    },
+                                    "initialDelaySeconds": 2,
+                                    "periodSeconds": 3,
+                                },
                                 "volumeMounts": [
                                     {
                                         "name": "tls-ca",
