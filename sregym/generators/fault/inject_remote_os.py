@@ -1,6 +1,7 @@
 """Inject faults at the OS layer via SSH (remote clusters) or docker exec (Kind)."""
 
 import json
+import logging
 import os
 import re
 import shlex
@@ -334,6 +335,134 @@ class RemoteOSFaultInjector(FaultInjector):
             nodes = self._get_worker_node_names()
         for node_name in nodes:
             self.recover_disk_pressure(node_name)
+
+    def recover_clock_drift(self):
+        """Detect leftover clock-drift injector/restore pods from interrupted
+        run, restore affected node by doing: unmask/restart timesync
+        service + clean up of leftover pods
+        """
+        try:
+            leftover_pods_raw = self.kubectl.exec_command(
+                "kubectl get pods -n default "
+                "-l 'app in (clock-drift-injector,clock-drift-restorer)' "
+                "-o jsonpath='{range .items[*]}{.metadata.name}{\" \"}{.spec.nodeName}{\"\\n\"}{end}'"
+            )
+        except Exception as e:
+            print(f"Could not query for leftover clock-drift pods: {e}")
+            return
+
+        leftover_pods_raw = leftover_pods_raw.strip()
+        if not leftover_pods_raw:
+            print("No leftover clock-drift pods found; nothing to do")
+            return
+
+        # node -> set of discovered service names (may be empty if discovery fails)
+        node_to_services: dict[str, set[str]] = {}
+        pod_names = []
+
+        for line in leftover_pods_raw.splitlines():
+            parts = line.strip().split()
+            if not parts:
+                continue
+            pod_name = parts[0]
+            node_name = parts[1] if len(parts) > 1 else None
+            pod_names.append(pod_name)
+
+            if not node_name:
+                continue
+
+            node_to_services.setdefault(node_name, set())
+
+            # Try to recover the exact service name from this pod's own logs
+            try:
+                logs = self.kubectl.exec_command(
+                    f"kubectl logs {pod_name} -n default --ignore-errors"
+                )
+                for log_line in logs.splitlines():
+                    if log_line.startswith("DISCOVERED_SERVICES:"):
+                        services_str = log_line.split(":", 1)[1].strip()
+                        if services_str:
+                            node_to_services[node_name].update(services_str.split())
+                        break
+            except Exception as e:
+                print(f"Could not read logs from {pod_name} to discover service name: {e}")
+
+        print(
+            f"Found {len(pod_names)} leftover clock-drift pod(s) on node(s): "
+            f"{list(node_to_services.keys()) or 'unknown'}. Cleaning up and restoring."
+        )
+
+        for pod_name in pod_names:
+            try:
+                self.kubectl.exec_command(
+                    f"kubectl delete pod {pod_name} -n default --ignore-not-found --grace-period=0 --force"
+                )
+            except Exception as e:
+                print(f"Could not delete leftover pod {pod_name}: {e}")
+
+        for node_name, services in node_to_services.items():
+            self._restore_node_time_sync(node_name, services)
+
+
+    def _restore_node_time_sync(self, node_name: str, known_services: set[str] | None = None):
+        """Run a short-lived privileged pod on `node_name` that unmasks + starts
+        the timesync service
+        """
+        services = known_services or {"systemd-timesyncd", "chrony", "chronyd", "ntp", "ntpd"}
+
+        restore_lines = "\n".join(
+            f'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl unmask {svc} 2>/dev/null || true\n'
+            f'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl start {svc} 2>/dev/null || true'
+            for svc in services
+        )
+
+        restore_cmd = f"""
+            set -e
+            {restore_lines}
+        """
+
+        pod_name = f"clock-drift-leftover-fix-{int(time.time() * 1000)}"
+        pod_yaml = f"""
+    apiVersion: v1
+    kind: Pod
+    metadata:
+    name: {pod_name}
+    namespace: default
+    labels:
+        app: clock-drift-leftover-fixer
+    spec:
+    nodeSelector:
+        kubernetes.io/hostname: {node_name}
+    hostNetwork: true
+    hostPID: true
+    hostIPC: true
+    restartPolicy: Never
+    terminationGracePeriodSeconds: 0
+    automountServiceAccountToken: false
+    containers:
+    - name: fix
+        image: ubuntu:22.04
+        imagePullPolicy: IfNotPresent
+        command: ["sh", "-c"]
+        args: ["{restore_cmd}"]
+        securityContext:
+        privileged: true
+        capabilities:
+            add: ["SYS_TIME", "SYS_ADMIN"]
+    """
+        try:
+            print(f"Restoring time-sync on node {node_name} (services: {services})...")
+            self.kubectl.exec_command("kubectl apply -f -", input_data=pod_yaml)
+            time.sleep(10)
+        except Exception as e:
+            print(f"Could not run clock restore on node {node_name}: {e}")
+        finally:
+            try:
+                self.kubectl.exec_command(
+                    f"kubectl delete pod {pod_name} -n default --ignore-not-found --grace-period=0 --force"
+                )
+            except Exception:
+                pass
 
 
 def main():
