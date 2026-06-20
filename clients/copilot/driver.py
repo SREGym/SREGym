@@ -1,6 +1,6 @@
 """
-OpenCode agent driver for SREGym.
-Entry point for running OpenCode agent on SREGym tasks.
+GitHub Copilot CLI agent driver for SREGym.
+Entry point for running Copilot CLI agent on SREGym tasks.
 """
 
 import argparse
@@ -13,19 +13,36 @@ from pathlib import Path
 
 import requests
 
+from clients.copilot.copilot_agent import CopilotCliAgent
+from clients.harness.problem_id import resolve_problem_id
+from logger import init_logger
+
 # Add SREGym root to path
 sregym_root = Path(__file__).resolve().parents[2]
 if str(sregym_root) not in sys.path:
     sys.path.insert(0, str(sregym_root))
 
-from logger import init_logger  # noqa: E402
 
 init_logger()
 
-from clients.harness.problem_id import resolve_problem_id  # noqa: E402
-from clients.opencode.opencode_agent import OpenCodeAgent  # noqa: E402
+logger = logging.getLogger("all.copilot.driver")
 
-logger = logging.getLogger("all.opencode.driver")
+
+def run_preflight() -> None:
+    """Validate model + credentials by making a minimal Copilot CLI call."""
+    import subprocess
+
+    m = os.environ.get("AGENT_MODEL_ID", "gpt-4.1").split("/")[-1]
+
+    r = subprocess.run(
+        ["copilot", "-p", "say ok", "-s", "--model", m, "--no-ask-user"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if r.returncode:
+        print(r.stdout or r.stderr)
+    sys.exit(r.returncode)
 
 
 def get_api_base_url() -> str:
@@ -54,9 +71,6 @@ def get_app_info() -> dict:
 def wait_for_ready_stage(timeout: int = 300) -> str:
     """
     Wait for conductor to reach a submission-ready stage (diagnosis or mitigation).
-
-    Args:
-        timeout: Maximum seconds to wait
 
     Returns:
         Current stage name
@@ -95,22 +109,30 @@ def wait_for_ready_stage(timeout: int = 300) -> str:
 
 def build_instruction(app_info: dict) -> str:
     """
-    Build the instruction string for OpenCode.
+    Build the instruction string for Copilot CLI.
 
     Args:
         app_info: Application information from conductor
 
     Returns:
-        Instruction string to pass to OpenCode
+        Instruction string to pass to Copilot CLI
     """
     app_name = app_info.get("app_name", "unknown")
     namespace = app_info.get("namespace", "default")
+    namespaces = app_info.get("namespaces") or [namespace]
     descriptions = app_info.get("descriptions", "")
+
+    if len(namespaces) > 1:
+        namespace_block = (
+            f"Namespaces: {', '.join(namespaces)}\n(This scenario spans multiple namespaces; investigate all of them.)"
+        )
+    else:
+        namespace_block = f"Namespace: {namespaces[0]}"
 
     instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
 
 Application: {app_name}
-Namespace: {namespace}
+{namespace_block}
 
 {descriptions}
 
@@ -126,9 +148,8 @@ TASK 1: DIAGNOSIS
 
 TASK 2: MITIGATION
 - Identify the root cause of the issue
-- Implement a fix to resolve the problem autonomously (do not ask for confirmation)
-- After applying the fix, YOU MUST submit with an empty string to trigger validation
-- The submission is REQUIRED - do not exit without submitting
+- Implement a fix to resolve the problem
+- When the fix is applied, submit to trigger validation
 - Your mitigation is evaluated on whether the application is healthy after your changes
 - Your fix is also evaluated on whether it addresses the root cause, not just the symptoms
 
@@ -141,12 +162,11 @@ For DIAGNOSIS stage:
 - Example: POST {get_api_base_url()}/submit with JSON: {{"solution": "The frontend service is crashing due to missing environment variable"}}
 
 For MITIGATION stage:
-- After applying your fix, YOU MUST submit with an EMPTY STRING
+- Submit with an EMPTY STRING after you have applied the fix
 - POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
-- This submission is MANDATORY - the conductor needs it to validate your fix
 
 Important:
-- You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'
+- You have access to kubectl commands to inspect and modify resources in namespace(s): {", ".join(namespaces)}
 - You can query metrics and traces through the available observability tools
 - The conductor API is available at {get_api_base_url()}
 """
@@ -163,7 +183,7 @@ def save_results(
 ) -> None:
     """Save run results to JSON file."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    results_file = logs_dir / f"opencode_results_{problem_id}_{timestamp}.json"
+    results_file = logs_dir / f"copilot_results_{problem_id}_{timestamp}.json"
 
     results = {
         "problem_id": problem_id,
@@ -180,19 +200,19 @@ def save_results(
 
 
 def main():
-    """Main entry point for OpenCode agent driver."""
-    parser = argparse.ArgumentParser(description="Run OpenCode agent on SREGym tasks")
+    """Main entry point for Copilot CLI agent driver."""
+    parser = argparse.ArgumentParser(description="Run Copilot CLI agent on SREGym tasks")
     parser.add_argument(
         "--model",
         type=str,
-        default=os.getenv("AGENT_MODEL_ID", "anthropic/claude-sonnet-4-5"),
-        help="Model to use in format 'provider/model' (default: from AGENT_MODEL_ID env var or anthropic/claude-sonnet-4-5)",
+        default=os.getenv("AGENT_MODEL_ID", "gpt-4.1"),
+        help="Model to use for Copilot CLI (default: from AGENT_MODEL_ID env var or gpt-4.1)",
     )
     parser.add_argument(
         "--logs-dir",
         type=str,
-        default=os.environ.get("AGENT_LOGS_DIR", "./logs/opencode"),
-        help="Directory to store logs (default: ./logs/opencode)",
+        default=os.environ.get("AGENT_LOGS_DIR", "./logs/copilot"),
+        help="Directory to store logs (default: ./logs/copilot)",
     )
     parser.add_argument(
         "--problem-id",
@@ -201,24 +221,30 @@ def main():
         help="Problem ID for artifact naming (default: SREGYM_PROBLEM_ID when launched via main.py)",
     )
     parser.add_argument(
+        "--copilot-home",
+        type=str,
+        default=None,
+        help="Copilot home directory (default: ~/.copilot)",
+    )
+    parser.add_argument(
         "--no-auto-install",
         action="store_true",
-        help="Disable auto-installation of OpenCode CLI if not found",
+        help="Disable auto-installation of Copilot CLI if not found",
     )
 
     args = parser.parse_args()
 
     logger.info("=" * 80)
-    logger.info("Starting OpenCode agent for SREGym")
+    logger.info("Starting Copilot CLI agent for SREGym")
     logger.info(f"Model: {args.model}")
     logger.info(f"Logs directory: {args.logs_dir}")
     logger.info("=" * 80)
 
-    # Check if OpenCode CLI is installed
+    # Check if Copilot CLI is installed
     try:
-        OpenCodeAgent.ensure_installed(auto_install=not args.no_auto_install)
+        CopilotCliAgent.ensure_installed(auto_install=not args.no_auto_install)
     except RuntimeError as e:
-        logger.error(f"OpenCode CLI installation check failed: {e}")
+        logger.error(f"Copilot CLI installation check failed: {e}")
         sys.exit(1)
 
     # Wait for conductor to be ready
@@ -241,16 +267,18 @@ def main():
     # Build instruction
     instruction = build_instruction(app_info)
 
-    # Initialize OpenCode agent
+    # Initialize Copilot CLI agent
     logs_dir = Path(args.logs_dir)
+    copilot_home = Path(args.copilot_home) if args.copilot_home else None
 
-    agent = OpenCodeAgent(
+    agent = CopilotCliAgent(
         logs_dir=logs_dir,
         model_name=args.model,
+        copilot_home=copilot_home,
     )
 
-    # Run OpenCode
-    logger.info("Starting OpenCode execution...")
+    # Run Copilot CLI
+    logger.info("Starting Copilot CLI execution...")
     return_code = agent.run(instruction)
 
     # Get usage metrics
@@ -261,7 +289,7 @@ def main():
 
     # Log summary
     logger.info("=" * 80)
-    logger.info("OpenCode execution completed")
+    logger.info("Copilot CLI execution completed")
     logger.info(f"Return code: {return_code}")
     logger.info(f"Usage metrics: {usage_metrics}")
     logger.info("=" * 80)

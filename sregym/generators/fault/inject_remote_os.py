@@ -1,5 +1,6 @@
 """Inject faults at the OS layer via SSH (remote clusters) or docker exec (Kind)."""
 
+import json
 import os
 import re
 import shlex
@@ -27,9 +28,24 @@ class RemoteOSFaultInjector(FaultInjector):
     def _check_is_kind(self):
         """Detect if the cluster is Kind-based."""
         if self._is_kind is None:
-            out = self.kubectl.exec_command("kubectl get nodes")
-            self._is_kind = "kind-worker" in out
+            nodes = self._get_node_items()
+            if nodes is None:
+                return False
+            self._is_kind = any((node.get("spec", {}).get("providerID") or "").startswith("kind://") for node in nodes)
         return self._is_kind
+
+    def _get_node_items(self):
+        """Return Kubernetes node objects from the current kubectl context."""
+        output = self.kubectl.exec_command("kubectl get nodes -o json")
+        try:
+            return json.loads(output).get("items", [])
+        except (json.JSONDecodeError, AttributeError, TypeError):
+            print("Failed to read Kubernetes node data from kubectl.")
+            return None
+
+    def _is_control_plane_node(self, node):
+        labels = node.get("metadata", {}).get("labels", {})
+        return "node-role.kubernetes.io/control-plane" in labels or "node-role.kubernetes.io/master" in labels
 
     def _check_remote_host(self):
         """Verify the remote cluster has an inventory file."""
@@ -99,16 +115,18 @@ class RemoteOSFaultInjector(FaultInjector):
         return result.stdout
 
     def _get_kind_worker_containers(self):
-        """Get Kind worker container names."""
-        result = subprocess.run(
-            ["docker", "ps", "--filter", "name=kind-worker", "--format", "{{.Names}}"],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            print(f"Failed to list Kind containers: {result.stderr.strip()}")
-            return []
-        containers = [c.strip() for c in result.stdout.strip().splitlines() if c.strip()]
+        """Get Kind worker container names from the current kubectl context."""
+        containers = []
+        nodes = self._get_node_items()
+        if nodes is None:
+            return containers
+        for node in nodes:
+            if self._is_control_plane_node(node):
+                continue
+            provider_id = node.get("spec", {}).get("providerID") or ""
+            if provider_id.startswith("kind://"):
+                containers.append(provider_id.rsplit("/", 1)[-1])
+
         if not containers:
             print("No Kind worker containers found.")
         return containers
@@ -308,7 +326,12 @@ class RemoteOSFaultInjector(FaultInjector):
 
     def recover_disk_pressure_all(self):
         """Strip the nodefs.available eviction threshold on every worker node."""
-        nodes = self._get_kind_worker_containers() if self._check_is_kind() else self._get_worker_node_names()
+        if self._check_is_kind():
+            nodes = self._get_kind_worker_containers()
+        else:
+            if not self._check_remote_host():
+                return
+            nodes = self._get_worker_node_names()
         for node_name in nodes:
             self.recover_disk_pressure(node_name)
 
