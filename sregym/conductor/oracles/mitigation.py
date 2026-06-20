@@ -12,7 +12,7 @@ class MitigationOracle(Oracle):
     importance = 1.0
 
     def __init__(self, problem):
-        self.problem = problem
+        super().__init__(problem)
         deployments = self.problem.kubectl.list_deployments(self.problem.namespace)
         self.replica_count = {dep.metadata.name: dep.spec.replicas for dep in deployments.items}
 
@@ -49,12 +49,22 @@ class MitigationOracle(Oracle):
         self._wait_for_rollouts(kubectl, namespace)
 
         deployments = kubectl.list_deployments(namespace)
-        if len(deployments.items) != len(self.replica_count):
-            results["success"] = False
-            return results
+        current_deps = {dep.metadata.name: dep for dep in deployments.items}
 
-        for dep in deployments.items:
-            if (dep.metadata.name not in self.replica_count) or (dep.status.ready_replicas != self.replica_count[dep.metadata.name]):
+        for name in self.replica_count:
+            if name not in current_deps:
+                print(f"❌ Deployment '{name}' was deleted")
+                results["success"] = False
+                return results
+            dep = current_deps[name]
+            desired = dep.spec.replicas if dep.spec.replicas is not None else 1
+            if desired == 0:
+                print(f"❌ Deployment '{name}' was scaled to 0")
+                results["success"] = False
+                return results
+            ready = dep.status.ready_replicas or 0
+            if ready < desired:
+                print(f"❌ Deployment '{name}' has {ready}/{desired} replicas ready")
                 results["success"] = False
                 return results
 
