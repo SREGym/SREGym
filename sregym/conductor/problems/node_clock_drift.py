@@ -534,7 +534,7 @@ class NodeClockDriftHotelReservation(Problem):
         try:
             pods = self.core_v1.list_namespaced_pod(
                 self.clock_injector_namespace,
-                label_selector="app in (clock-drift-injector, clock-drift-restorer)"
+                label_selector="app in (clock-drift-injector,clock-drift-restorer)"
             ).items
 
             for pod in pods:
@@ -549,7 +549,7 @@ class NodeClockDriftHotelReservation(Problem):
             while time.monotonic() < deadline:
                 pods = self.core_v1.list_namespaced_pod(
                     self.clock_injector_namespace,
-                    label_selector="app in (clock-drift-injector, clock-drift-restorer)"
+                    label_selector="app in (clock-drift-injector,clock-drift-restorer)"
                 ).items
                 if not pods:
                     return

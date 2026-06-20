@@ -66,11 +66,14 @@ class NodeClockDriftMitigationOracle(Oracle):
             return {"success": False, "error": str(e)}
 
     def _find_affected_node(self, namespace: str) -> str:
-        """Find the node with clock drift symptoms."""
         try:
-            pods = self.core_v1.list_namespaced_pod(namespace).items
+            pods = self.core_v1.list_namespaced_pod(
+                namespace,
+                label_selector="io.kompose.service=frontend"
+            ).items
             for pod in pods:
-                if pod.spec.node_name:
+                container_names = [c.name for c in pod.spec.containers]
+                if pod.spec.node_name and "tls-health-check" in container_names:
                     return pod.spec.node_name
             return None
         except ApiException:
