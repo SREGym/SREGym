@@ -338,7 +338,7 @@ class ProblemRegistry:
         }
 # fmt: on
         self.kubectl = KubeCtl()
-        self.non_emulated_cluster_problems = []
+        self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:
