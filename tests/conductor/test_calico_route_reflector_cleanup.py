@@ -50,6 +50,10 @@ def _nodes(*nodes):
     return json.dumps({"items": list(nodes)})
 
 
+def _bgppeers(*names):
+    return json.dumps({"items": [{"metadata": {"name": name}} for name in names]})
+
+
 def _node(name, annotations=None):
     return {
         "metadata": {
@@ -82,6 +86,7 @@ def test_calico_route_reflector_global_cleanup_removes_problem_owned_state(monke
         {
             "kubectl get nodes -o json": _nodes(_node("control-plane-0", {problem.NODE_MARKER_ANNOTATION: "true"})),
             f"kubectl get bgppeer {problem.BGP_PEER_NAME} -o json": _json_resource(labels, name=problem.BGP_PEER_NAME),
+            "kubectl get bgppeers -o json": _bgppeers(problem.BGP_PEER_NAME),
             "kubectl get bgpconfiguration default -o json": _json_resource(labels, name="default"),
             f"kubectl get namespace {problem.PROBE_NAMESPACE} -o json": _json_resource(
                 labels, name=problem.PROBE_NAMESPACE
@@ -108,6 +113,7 @@ def test_calico_route_reflector_global_cleanup_does_not_guess_mesh_when_snapshot
         {
             "kubectl get nodes -o json": _nodes(_node("control-plane-0", {problem.NODE_MARKER_ANNOTATION: "true"})),
             f"kubectl get bgppeer {problem.BGP_PEER_NAME} -o json": _json_resource(labels, name=problem.BGP_PEER_NAME),
+            "kubectl get bgppeers -o json": _bgppeers(problem.BGP_PEER_NAME),
             "kubectl get bgpconfiguration default -o json": _json_resource(name="default"),
         }
     )
@@ -132,6 +138,7 @@ def test_calico_route_reflector_global_cleanup_restores_persisted_snapshot(monke
     state_data = {
         problem.STATE_CONFIG_PREEXISTED_KEY: json.dumps(True),
         problem.STATE_CONFIGURATION_KEY: json.dumps(original_bgp),
+        problem.STATE_BGP_PEERS_KEY: json.dumps(["preexisting-peer"]),
         problem.STATE_PRIMARY_NODE_KEY: "control-plane-0",
         problem.STATE_NODE_LABEL_PREEXISTED_KEY: json.dumps(True),
         problem.STATE_NODE_ANNOTATION_PREEXISTED_KEY: json.dumps(True),
@@ -140,6 +147,7 @@ def test_calico_route_reflector_global_cleanup_restores_persisted_snapshot(monke
     fake = _FakeKubeCtl(
         {
             "kubectl get nodes -o json": _nodes(_node("control-plane-0")),
+            "kubectl get bgppeers -o json": _bgppeers("preexisting-peer", problem.BGP_PEER_NAME, "agent-created-peer"),
             f"kubectl -n {problem.STATE_NAMESPACE} get configmap {problem.STATE_CONFIGMAP_NAME} -o json": json.dumps(
                 {"metadata": {"name": problem.STATE_CONFIGMAP_NAME}, "data": state_data}
             ),
@@ -163,3 +171,30 @@ def test_calico_route_reflector_global_cleanup_restores_persisted_snapshot(monke
         f"kubectl -n {problem.STATE_NAMESPACE} delete configmap {problem.STATE_CONFIGMAP_NAME} --ignore-not-found"
         in fake.commands
     )
+    assert f"kubectl delete bgppeer {problem.BGP_PEER_NAME} --ignore-not-found" in fake.commands
+    assert "kubectl delete bgppeer agent-created-peer --ignore-not-found" in fake.commands
+    assert "kubectl delete bgppeer preexisting-peer --ignore-not-found" not in fake.commands
+
+
+def test_calico_route_reflector_global_cleanup_keeps_unowned_support_namespace(monkeypatch):
+    problem = CalicoRouteReflectorLabelDriftHotelReservation
+    state_data = {
+        problem.STATE_CONFIG_PREEXISTED_KEY: json.dumps(False),
+        problem.STATE_BGP_PEERS_KEY: json.dumps([]),
+    }
+    fake = _FakeKubeCtl(
+        {
+            "kubectl get nodes -o json": _nodes(),
+            "kubectl get bgppeers -o json": _bgppeers(problem.BGP_PEER_NAME),
+            f"kubectl get namespace {problem.PROBE_NAMESPACE} -o json": _json_resource(name=problem.PROBE_NAMESPACE),
+            f"kubectl -n {problem.STATE_NAMESPACE} get configmap {problem.STATE_CONFIGMAP_NAME} -o json": json.dumps(
+                {"metadata": {"name": problem.STATE_CONFIGMAP_NAME}, "data": state_data}
+            ),
+        }
+    )
+    conductor = _conductor(fake, monkeypatch)
+
+    conductor._fix_calico_route_reflector_label_drift()
+
+    assert f"kubectl delete namespace {problem.PROBE_NAMESPACE} --ignore-not-found" not in fake.commands
+    assert f"kubectl delete bgppeer {problem.BGP_PEER_NAME} --ignore-not-found" in fake.commands

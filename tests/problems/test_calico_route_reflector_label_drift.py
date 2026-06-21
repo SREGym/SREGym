@@ -17,6 +17,7 @@ def _problem():
     problem._route_reflector_annotation_preexisted = None
     problem._route_reflector_annotation_value = None
     problem.route_reflector_node = None
+    problem._original_bgppeer_names = None
     problem._app_deployment_replicas = {}
     return problem
 
@@ -84,6 +85,73 @@ def test_cleanup_deletes_bgp_configuration_only_when_problem_created_it():
     problem._delete_support_resources()
 
     assert "kubectl delete bgpconfiguration default --ignore-not-found" in calls
+
+
+def test_capture_bgp_peers_records_preexisting_names():
+    problem = _problem()
+    problem._run = lambda command, *args, **kwargs: subprocess.CompletedProcess(
+        command,
+        0,
+        stdout=json.dumps(
+            {
+                "items": [
+                    {"metadata": {"name": "preexisting-peer-a"}},
+                    {"metadata": {"name": "preexisting-peer-b"}},
+                ]
+            }
+        ),
+        stderr="",
+    )
+
+    problem._capture_bgp_peers()
+
+    assert problem._original_bgppeer_names == {"preexisting-peer-a", "preexisting-peer-b"}
+
+
+def test_capture_bgp_peers_refuses_fixed_name_collision():
+    problem = _problem()
+    problem._run = lambda command, *args, **kwargs: subprocess.CompletedProcess(
+        command,
+        0,
+        stdout=json.dumps({"items": [{"metadata": {"name": problem.BGP_PEER_NAME}}]}),
+        stderr="",
+    )
+
+    with pytest.raises(RuntimeError, match="already exists"):
+        problem._capture_bgp_peers()
+
+
+def test_cleanup_deletes_bgppeers_created_after_snapshot():
+    problem = _problem()
+    problem._original_bgppeer_names = {"preexisting-peer"}
+    calls = []
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(command)
+        if command == "kubectl get bgppeers -o json":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "preexisting-peer"}},
+                            {"metadata": {"name": problem.BGP_PEER_NAME}},
+                            {"metadata": {"name": "agent-created-peer"}},
+                        ]
+                    }
+                ),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    problem._run = fake_run
+
+    problem._delete_support_resources()
+
+    assert f"kubectl delete bgppeer {problem.BGP_PEER_NAME} --ignore-not-found" in calls
+    assert "kubectl delete bgppeer agent-created-peer --ignore-not-found" in calls
+    assert "kubectl delete bgppeer preexisting-peer --ignore-not-found" not in calls
 
 
 def test_cleanup_restores_preexisting_bgp_configuration():
@@ -236,6 +304,7 @@ def test_persist_original_state_writes_generic_configmap_snapshot():
     problem._legacy_label_preexisted = True
     problem._route_reflector_annotation_preexisted = True
     problem._route_reflector_annotation_value = "244.0.0.9"
+    problem._original_bgppeer_names = {"preexisting-peer"}
     applied = []
     problem._apply_manifest = applied.append
     problem._run = lambda command, *args, **kwargs: subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -248,6 +317,7 @@ def test_persist_original_state_writes_generic_configmap_snapshot():
     assert manifest["metadata"]["labels"] == {problem.PROBLEM_LABEL_KEY: problem.PROBLEM_LABEL_VALUE}
     assert json.loads(manifest["data"][problem.STATE_CONFIG_PREEXISTED_KEY]) is True
     assert json.loads(manifest["data"][problem.STATE_CONFIGURATION_KEY])["spec"] == {"nodeToNodeMeshEnabled": True}
+    assert json.loads(manifest["data"][problem.STATE_BGP_PEERS_KEY]) == ["preexisting-peer"]
 
 
 def test_cleanup_restores_persisted_state_after_interrupted_run():
@@ -261,6 +331,7 @@ def test_cleanup_restores_persisted_state_after_interrupted_run():
     state_data = {
         problem.STATE_CONFIG_PREEXISTED_KEY: json.dumps(True),
         problem.STATE_CONFIGURATION_KEY: json.dumps(original_bgp),
+        problem.STATE_BGP_PEERS_KEY: json.dumps(["preexisting-peer"]),
         problem.STATE_PRIMARY_NODE_KEY: "control-plane-0",
         problem.STATE_NODE_LABEL_PREEXISTED_KEY: json.dumps(True),
         problem.STATE_NODE_ANNOTATION_PREEXISTED_KEY: json.dumps(True),
@@ -273,6 +344,20 @@ def test_cleanup_restores_persisted_state_after_interrupted_run():
         calls.append(command)
         if command == f"kubectl -n {problem.STATE_NAMESPACE} get configmap {problem.STATE_CONFIGMAP_NAME} -o json":
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"data": state_data}), stderr="")
+        if command == "kubectl get bgppeers -o json":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "preexisting-peer"}},
+                            {"metadata": {"name": problem.BGP_PEER_NAME}},
+                        ]
+                    }
+                ),
+                stderr="",
+            )
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     problem._run = fake_run
@@ -289,6 +374,7 @@ def test_cleanup_restores_persisted_state_after_interrupted_run():
         f"kubectl -n {problem.STATE_NAMESPACE} delete configmap {problem.STATE_CONFIGMAP_NAME} --ignore-not-found"
         in calls
     )
+    assert f"kubectl delete bgppeer {problem.BGP_PEER_NAME} --ignore-not-found" in calls
 
 
 def test_inject_fault_cleans_residue_before_capturing_baseline():
@@ -299,6 +385,7 @@ def test_inject_fault_cleans_residue_before_capturing_baseline():
     problem._select_nodes = lambda: events.append("select")
     problem._delete_support_resources = lambda: events.append("cleanup")
     problem._capture_bgp_configuration = lambda: events.append("capture_bgp")
+    problem._capture_bgp_peers = lambda: events.append("capture_peers")
     problem._capture_route_reflector_node_state = lambda: events.append("capture_node")
     problem._persist_original_state = lambda: events.append("persist")
     problem._capture_app_deployment_replicas = lambda: events.append("capture_app")
@@ -311,6 +398,7 @@ def test_inject_fault_cleans_residue_before_capturing_baseline():
     problem.inject_fault()
 
     assert events.index("cleanup") < events.index("capture_bgp")
+    assert events.index("capture_bgp") < events.index("capture_peers")
     assert events.index("persist") < events.index("configure")
 
 
@@ -349,11 +437,59 @@ def test_deploy_probe_labels_support_namespace():
     problem.worker_nodes = ["worker-0", "worker-1"]
     manifests = []
     problem._apply_manifest = manifests.append
-    problem._run = lambda command, *args, **kwargs: subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+    problem._run = lambda command, *args, **kwargs: subprocess.CompletedProcess(
+        command,
+        1 if command == f"kubectl get namespace {problem.PROBE_NAMESPACE} -o json" else 0,
+        stdout="",
+        stderr="not found" if command == f"kubectl get namespace {problem.PROBE_NAMESPACE} -o json" else "",
+    )
 
     problem._deploy_probe()
 
     assert f"{problem.PROBLEM_LABEL_KEY}: {problem.PROBLEM_LABEL_VALUE}" in manifests[0]
+
+
+def test_deploy_probe_refuses_unowned_existing_support_namespace():
+    problem = _problem()
+    problem.worker_nodes = ["worker-0", "worker-1"]
+    problem._apply_manifest = lambda manifest: pytest.fail("should not apply probe manifest")
+
+    def fake_run(command, *args, **kwargs):
+        if command == f"kubectl get namespace {problem.PROBE_NAMESPACE} -o json":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps({"metadata": {"labels": {}}}),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    problem._run = fake_run
+
+    with pytest.raises(RuntimeError, match="already exists without"):
+        problem._deploy_probe()
+
+
+def test_cleanup_does_not_delete_unowned_probe_namespace():
+    problem = _problem()
+    calls = []
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(command)
+        if command == f"kubectl get namespace {problem.PROBE_NAMESPACE} -o json":
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=json.dumps({"metadata": {"labels": {}}}),
+                stderr="",
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    problem._run = fake_run
+
+    problem._delete_support_resources()
+
+    assert f"kubectl delete namespace {problem.PROBE_NAMESPACE} --ignore-not-found" not in calls
 
 
 def test_select_nodes_rejects_multiple_control_planes():

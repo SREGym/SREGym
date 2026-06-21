@@ -585,6 +585,11 @@ class Conductor:
                     return None
                 return json.loads(data[key])
 
+            def list_from_state(data, key):
+                if not data or key not in data:
+                    return None
+                return json.loads(data[key])
+
             nodes = (kubectl_json("kubectl get nodes -o json") or {}).get("items", [])
             marked_nodes = [
                 node.get("metadata", {}).get("name")
@@ -594,6 +599,7 @@ class Conductor:
             marked_nodes = [node for node in marked_nodes if node]
 
             bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} -o json")
+            bgppeers = (kubectl_json("kubectl get bgppeers -o json") or {}).get("items", [])
             bgp_config = kubectl_json("kubectl get bgpconfiguration default -o json")
             support_namespace = kubectl_json(f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} -o json")
             state_configmap = kubectl_json(
@@ -605,14 +611,31 @@ class Conductor:
             bgppeer_labeled = has_problem_label(bgppeer)
             bgp_config_labeled = has_problem_label(bgp_config)
             support_namespace_labeled = has_problem_label(support_namespace)
+            original_bgppeer_names = list_from_state(state_data, problem.STATE_BGP_PEERS_KEY)
+            created_bgppeer_names = set()
+            if original_bgppeer_names is not None:
+                original_bgppeer_names = set(original_bgppeer_names)
+                current_bgppeer_names = {
+                    peer.get("metadata", {}).get("name") for peer in bgppeers if peer.get("metadata", {}).get("name")
+                }
+                created_bgppeer_names = current_bgppeer_names - original_bgppeer_names
+            elif bgppeer_labeled:
+                created_bgppeer_names.add(problem.BGP_PEER_NAME)
             residue_found = bool(
-                marked_nodes or bgppeer_labeled or bgp_config_labeled or support_namespace_labeled or state_data
+                marked_nodes
+                or created_bgppeer_names
+                or bgppeer_labeled
+                or bgp_config_labeled
+                or support_namespace_labeled
+                or state_data
             )
             if not residue_found:
                 return
 
-            kubectl.exec_command(f"kubectl delete namespace {self._q(problem.PROBE_NAMESPACE)} --ignore-not-found")
-            kubectl.exec_command(f"kubectl delete bgppeer {self._q(problem.BGP_PEER_NAME)} --ignore-not-found")
+            if support_namespace_labeled:
+                kubectl.exec_command(f"kubectl delete namespace {self._q(problem.PROBE_NAMESPACE)} --ignore-not-found")
+            for bgppeer_name in sorted(created_bgppeer_names):
+                kubectl.exec_command(f"kubectl delete bgppeer {self._q(bgppeer_name)} --ignore-not-found")
 
             bgp_config_preexisted = bool_from_state(state_data, problem.STATE_CONFIG_PREEXISTED_KEY)
             original_bgp_configuration = state_data.get(problem.STATE_CONFIGURATION_KEY)

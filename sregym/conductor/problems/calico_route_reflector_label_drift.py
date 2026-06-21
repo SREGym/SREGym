@@ -43,6 +43,7 @@ class CalicoRouteReflectorLabelDriftHotelReservation(Problem):
     STATE_CONFIGMAP_NAME = "network-case-state"
     STATE_CONFIG_PREEXISTED_KEY = "config_preexisted"
     STATE_CONFIGURATION_KEY = "original_config.json"
+    STATE_BGP_PEERS_KEY = "original_bgp_peers.json"
     STATE_PRIMARY_NODE_KEY = "primary_node"
     STATE_NODE_LABEL_PREEXISTED_KEY = "node_label_preexisted"
     STATE_NODE_ANNOTATION_PREEXISTED_KEY = "node_annotation_preexisted"
@@ -68,6 +69,7 @@ class CalicoRouteReflectorLabelDriftHotelReservation(Problem):
         self.route_reflector_node = None
         self.worker_nodes = []
         self.original_bgp_configuration = None
+        self._original_bgppeer_names = None
         self._bgp_config_preexisted = None
         self._legacy_label_preexisted = None
         self._route_reflector_annotation_preexisted = None
@@ -213,6 +215,27 @@ class CalicoRouteReflectorLabelDriftHotelReservation(Problem):
         self._route_reflector_annotation_preexisted = self.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION in annotations
         self._route_reflector_annotation_value = annotations.get(self.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION)
 
+    def _list_bgppeer_names(self):
+        result = self._run("kubectl get bgppeers -o json", check=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Could not safely list existing Calico BGPPeer resources; "
+                f"refusing to mutate cluster-wide routing state. stderr: {result.stderr.strip()}"
+            )
+        try:
+            peers = json.loads(result.stdout).get("items", [])
+        except json.JSONDecodeError as e:
+            raise RuntimeError("Could not parse existing Calico BGPPeer resources") from e
+        return {peer.get("metadata", {}).get("name") for peer in peers if peer.get("metadata", {}).get("name")}
+
+    def _capture_bgp_peers(self):
+        self._original_bgppeer_names = self._list_bgppeer_names()
+        if self.BGP_PEER_NAME in self._original_bgppeer_names:
+            raise RuntimeError(
+                f"Calico BGPPeer/{self.BGP_PEER_NAME} already exists; "
+                "refusing to overwrite pre-existing cluster routing policy."
+            )
+
     def _state_configmap_command(self, verb):
         return f"kubectl -n {self._q(self.STATE_NAMESPACE)} {verb} configmap {self._q(self.STATE_CONFIGMAP_NAME)}"
 
@@ -222,6 +245,7 @@ class CalicoRouteReflectorLabelDriftHotelReservation(Problem):
         )
         data = {
             self.STATE_CONFIG_PREEXISTED_KEY: json.dumps(bool(self._bgp_config_preexisted)),
+            self.STATE_BGP_PEERS_KEY: json.dumps(sorted(self._original_bgppeer_names or [])),
             self.STATE_PRIMARY_NODE_KEY: self.route_reflector_node or "",
             self.STATE_NODE_LABEL_PREEXISTED_KEY: json.dumps(bool(self._legacy_label_preexisted)),
             self.STATE_NODE_ANNOTATION_PREEXISTED_KEY: json.dumps(bool(self._route_reflector_annotation_preexisted)),
@@ -266,6 +290,9 @@ class CalicoRouteReflectorLabelDriftHotelReservation(Problem):
 
         if not self.route_reflector_node and data.get(self.STATE_PRIMARY_NODE_KEY):
             self.route_reflector_node = data[self.STATE_PRIMARY_NODE_KEY]
+
+        if self._original_bgppeer_names is None and data.get(self.STATE_BGP_PEERS_KEY):
+            self._original_bgppeer_names = set(json.loads(data[self.STATE_BGP_PEERS_KEY]))
 
         if self._legacy_label_preexisted is None and self.STATE_NODE_LABEL_PREEXISTED_KEY in data:
             self._legacy_label_preexisted = json.loads(data[self.STATE_NODE_LABEL_PREEXISTED_KEY])
@@ -343,6 +370,7 @@ class CalicoRouteReflectorLabelDriftHotelReservation(Problem):
         }
 
     def _deploy_probe(self):
+        self._ensure_probe_namespace_available()
         server_node = self.worker_nodes[1]
         client_node = self.worker_nodes[0]
         self._apply_manifest(f"""apiVersion: v1
@@ -575,6 +603,34 @@ spec:
     def _problem_created_bgp_configuration_exists(self):
         return self._resource_has_problem_label("kubectl get bgpconfiguration default -o json")
 
+    def _probe_namespace_owned_by_problem(self):
+        return self._resource_has_problem_label(f"kubectl get namespace {self._q(self.PROBE_NAMESPACE)} -o json")
+
+    def _probe_namespace_exists(self):
+        result = self._run(f"kubectl get namespace {self._q(self.PROBE_NAMESPACE)} -o json", check=False)
+        return result.returncode == 0
+
+    def _ensure_probe_namespace_available(self):
+        if self._probe_namespace_exists() and not self._probe_namespace_owned_by_problem():
+            raise RuntimeError(
+                f"Namespace/{self.PROBE_NAMESPACE} already exists without {self.PROBLEM_LABEL_KEY}="
+                f"{self.PROBLEM_LABEL_VALUE}; refusing to use or delete an unrelated namespace."
+            )
+
+    def _delete_probe_namespace_if_owned(self):
+        if self._probe_namespace_owned_by_problem():
+            self._run(f"kubectl delete namespace {self._q(self.PROBE_NAMESPACE)} --ignore-not-found")
+
+    def _new_bgppeer_names_since_capture(self):
+        if self._original_bgppeer_names is None:
+            return set()
+        return self._list_bgppeer_names() - set(self._original_bgppeer_names)
+
+    def _delete_new_bgppeers_since_capture(self):
+        with contextlib.suppress(Exception):
+            for name in sorted(self._new_bgppeer_names_since_capture()):
+                self._run(f"kubectl delete bgppeer {self._q(name)} --ignore-not-found")
+
     def _node_has_problem_marker(self, node_name):
         if not hasattr(self, "core_v1"):
             return False
@@ -606,7 +662,8 @@ spec:
         # Calico watches these CRDs and node labels; cleanup avoids another
         # DaemonSet restart because recover_fault already restarts calico-node.
         with contextlib.suppress(Exception):
-            self._run(f"kubectl delete namespace {self._q(self.PROBE_NAMESPACE)} --ignore-not-found")
+            self._delete_probe_namespace_if_owned()
+        self._delete_new_bgppeers_since_capture()
         should_delete_bgppeer = self._bgp_config_preexisted is not None or self._problem_created_bgppeer_exists()
         if should_delete_bgppeer:
             with contextlib.suppress(Exception):
@@ -672,6 +729,7 @@ spec:
         self._select_nodes()
         self._delete_support_resources()
         self._capture_bgp_configuration()
+        self._capture_bgp_peers()
         self._capture_route_reflector_node_state()
         self._persist_original_state()
         self._capture_app_deployment_replicas()
