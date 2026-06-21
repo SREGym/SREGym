@@ -482,6 +482,10 @@ class ApplicationFaultInjector(FaultInjector):
 
         patch_body = {
             "spec": {
+                "strategy": {
+                    "type": "Recreate",
+                    "rollingUpdate": None,
+                },
                 "template": {
                     "spec": {
                         "containers": [
@@ -510,7 +514,7 @@ class ApplicationFaultInjector(FaultInjector):
                             }
                         ]
                     }
-                }
+                },
             }
         }
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
@@ -543,6 +547,13 @@ class ApplicationFaultInjector(FaultInjector):
 
         patch_body = {
             "spec": {
+                "strategy": {
+                    "type": "RollingUpdate",
+                    "rollingUpdate": {
+                        "maxUnavailable": "25%",
+                        "maxSurge": "25%",
+                    },
+                },
                 "template": {
                     "spec": {
                         "containers": [
@@ -556,7 +567,7 @@ class ApplicationFaultInjector(FaultInjector):
                             }
                         ]
                     }
-                }
+                },
             }
         }
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)

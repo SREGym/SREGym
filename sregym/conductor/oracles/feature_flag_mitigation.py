@@ -15,15 +15,15 @@ class FeatureFlagMitigationOracle(Oracle):
 
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
-        all_normal = True
         results = {}
+
+        flag_ok = True
+        pods_ok = True
 
         # Check 1: flag must be reverted in ConfigMap
         try:
             get_cm_command = (
-                f"kubectl get configmap {self.configmap_name} "
-                f"-n {namespace} "
-                f"-o jsonpath='{{.data.{self.flag_key}}}'"
+                f"kubectl get configmap {self.configmap_name} -n {namespace} -o jsonpath='{{.data.{self.flag_key}}}'"
             )
             flag_value = kubectl.exec_command(get_cm_command).strip()
 
@@ -31,42 +31,40 @@ class FeatureFlagMitigationOracle(Oracle):
                 print(f"✅ Flag {self.flag_key}={flag_value} is safe")
             else:
                 print(f"❌ Flag {self.flag_key}={flag_value} is still active")
-                all_normal = False
+                flag_ok = False
         except Exception as e:
             print(f"❌ Failed to read ConfigMap {self.configmap_name}: {e}")
-            all_normal = False
+            flag_ok = False
 
-        # Check 2: all pods must be Running and ready
-        if all_normal:
-            try:
-                pod_list = kubectl.list_pods(namespace)
-                for pod in pod_list.items:
-                    if pod.status.phase != "Running":
-                        print(f"❌ Pod {pod.metadata.name} is in phase: {pod.status.phase}")
-                        all_normal = False
-                        break
+        # Check 2: all pods must be Running and ready — runs regardless of Check 1
+        try:
+            pod_list = kubectl.list_pods(namespace)
+            for pod in pod_list.items:
+                if pod.status.phase != "Running":
+                    print(f"❌ Pod {pod.metadata.name} is in phase: {pod.status.phase}")
+                    pods_ok = False
+                    break
 
-                    for container_status in pod.status.container_statuses:
-                        if container_status.state.waiting and container_status.state.waiting.reason:
-                            print(
-                                f"❌ Container {container_status.name} is waiting: "
-                                f"{container_status.state.waiting.reason}"
-                            )
-                            all_normal = False
-                        elif not container_status.ready:
-                            print(f"⚠️ Container {container_status.name} is not ready")
-                            all_normal = False
+                for container_status in pod.status.container_statuses:
+                    if container_status.state.waiting and container_status.state.waiting.reason:
+                        print(
+                            f"❌ Container {container_status.name} is waiting: {container_status.state.waiting.reason}"
+                        )
+                        pods_ok = False
+                    elif not container_status.ready:
+                        print(f"⚠️ Container {container_status.name} is not ready")
+                        pods_ok = False
 
-                    if not all_normal:
-                        break
+                if not pods_ok:
+                    break
 
-                if all_normal:
-                    print("✅ All pods are Running and ready")
+            if pods_ok:
+                print("✅ All pods are Running and ready")
 
-            except Exception as e:
-                print(f"❌ Failed to list pods: {e}")
-                all_normal = False
+        except Exception as e:
+            print(f"❌ Failed to list pods: {e}")
+            pods_ok = False
 
-        results["success"] = all_normal
+        results["success"] = flag_ok and pods_ok
         print(f"Mitigation Result: {'✅ Pass' if results['success'] else '❌ Fail'}")
         return results

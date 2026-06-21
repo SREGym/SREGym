@@ -141,6 +141,7 @@ class ProblemRegistry:
             "auth_miss_mongodb": MongoDBAuthMissing,
             "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
             "feature_flag_latent_bug_hotel_reservation": lambda: FeatureFlagLatentBugHotelReservation(),
+            "pod_cidr_exhaustion_hotel_reservation": lambda: PodCIDRExhaustionHotelReservation(),
             "finalizer_deadlock_controller_hotel_reservation": FinalizerDeadlockController,
             "duplicate_pvc_mounts_astronomy_shop": lambda: DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="frontend"),
             "duplicate_pvc_mounts_hotel_reservation": lambda: DuplicatePVCMounts(app_name="hotel_reservation", faulty_service="frontend"),
