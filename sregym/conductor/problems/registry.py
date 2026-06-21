@@ -16,6 +16,9 @@ from sregym.conductor.problems.cpu_throttling import CpuThrottling
 from sregym.conductor.problems.cronjob_sidecar_blocks_completion import (
     CronJobSidecarBlocksCompletionHotelReservation,
 )
+from sregym.conductor.problems.cumulative_admission_webhook_timeout_hotel_reservation import (
+    CumulativeAdmissionWebhookTimeoutHotelReservation,
+)
 from sregym.conductor.problems.dev_shm_exhaustion_hotel_reservation import DevShmExhaustionHotelReservation
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.edge_request_filter_cpu_saturation import EdgeRequestFilterCPUSaturation
@@ -24,8 +27,8 @@ from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import Eph
 from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
-from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
+from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
@@ -70,6 +73,7 @@ from sregym.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinity
 from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodCIDRExhaustionHotelReservation
 from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
 from sregym.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
+from sregym.conductor.problems.psa_restricted_blocks_recreation import PSARestrictedBlocksRecreation
 from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
 from sregym.conductor.problems.readiness_probe_misconfiguration import ReadinessProbeMisconfiguration
@@ -283,6 +287,8 @@ class ProblemRegistry:
 
             "admission_webhook_tls_mismatch_hotel_reservation": lambda: AdmissionWebhookTLSMismatch(app_name="hotel_reservation", faulty_service="recommendation"),
             "mutating_webhook_resource_limits_social_network": MutatingWebhookResourceLimits,
+            "psa_restricted_blocks_recreation_hotel_reservation": lambda: PSARestrictedBlocksRecreation(app_name="hotel_reservation", faulty_service="recommendation"),
+            "cumulative_admission_webhook_timeout_hotel_reservation": CumulativeAdmissionWebhookTimeoutHotelReservation,
             "cronjob_sidecar_blocks_completion_hotel_reservation": CronJobSidecarBlocksCompletionHotelReservation,
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \

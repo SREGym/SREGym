@@ -118,6 +118,11 @@ class ContainerRunner:
         "GLM_API_KEY",
         # Claude Code
         "CLAUDE_CODE_OAUTH_TOKEN",
+        # GitHub Copilot CLI
+        "COPILOT_GITHUB_TOKEN",
+        "COPILOT_PROVIDER_BASE_URL",
+        "COPILOT_PROVIDER_API_KEY",
+        "COPILOT_PROVIDER_TYPE",
         # SREGym internal
         "AGENT_MODEL_ID",
         "JUDGE_MODEL_ID",
