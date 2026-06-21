@@ -52,11 +52,14 @@ def test_capture_bgp_configuration_refuses_unknown_read_failure():
 def test_cleanup_does_not_delete_bgp_configuration_when_capture_was_not_run():
     problem = _problem()
     calls = []
-    problem._run = lambda command, *args, **kwargs: calls.append(command) or subprocess.CompletedProcess(
-        command,
-        0,
-        stdout="",
-        stderr="",
+    problem._run = lambda command, *args, **kwargs: (
+        calls.append(command)
+        or subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="",
+            stderr="",
+        )
     )
 
     problem._delete_support_resources()
@@ -68,11 +71,14 @@ def test_cleanup_deletes_bgp_configuration_only_when_problem_created_it():
     problem = _problem()
     problem._bgp_config_preexisted = False
     calls = []
-    problem._run = lambda command, *args, **kwargs: calls.append(command) or subprocess.CompletedProcess(
-        command,
-        0,
-        stdout="",
-        stderr="",
+    problem._run = lambda command, *args, **kwargs: (
+        calls.append(command)
+        or subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="",
+            stderr="",
+        )
     )
 
     problem._delete_support_resources()
@@ -91,17 +97,20 @@ def test_cleanup_restores_preexisting_bgp_configuration():
     }
     calls = []
     applied = []
-    problem._run = lambda command, *args, **kwargs: calls.append(command) or subprocess.CompletedProcess(
-        command,
-        0,
-        stdout="",
-        stderr="",
+    problem._run = lambda command, *args, **kwargs: (
+        calls.append(command)
+        or subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="",
+            stderr="",
+        )
     )
     problem._apply_manifest = lambda manifest: applied.append(manifest)
 
     problem._delete_support_resources()
 
-    assert "kubectl delete bgppeer stale-master-route-reflectors --ignore-not-found" in calls
+    assert f"kubectl delete bgppeer {problem.BGP_PEER_NAME} --ignore-not-found" in calls
     assert json.loads(applied[0])["spec"] == {"nodeToNodeMeshEnabled": True}
 
 
@@ -109,11 +118,14 @@ def test_cleanup_does_not_remove_route_reflector_node_state_when_capture_was_not
     problem = _problem()
     problem.route_reflector_node = "control-plane-0"
     calls = []
-    problem._run = lambda command, *args, **kwargs: calls.append(command) or subprocess.CompletedProcess(
-        command,
-        0,
-        stdout="",
-        stderr="",
+    problem._run = lambda command, *args, **kwargs: (
+        calls.append(command)
+        or subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="",
+            stderr="",
+        )
     )
 
     problem._delete_support_resources()
@@ -129,11 +141,14 @@ def test_cleanup_restores_preexisting_route_reflector_node_state():
     problem._route_reflector_annotation_preexisted = True
     problem._route_reflector_annotation_value = "244.0.0.9"
     calls = []
-    problem._run = lambda command, *args, **kwargs: calls.append(command) or subprocess.CompletedProcess(
-        command,
-        0,
-        stdout="node/control-plane-0 updated",
-        stderr="",
+    problem._run = lambda command, *args, **kwargs: (
+        calls.append(command)
+        or subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="node/control-plane-0 updated",
+            stderr="",
+        )
     )
 
     problem._delete_support_resources()
@@ -150,11 +165,14 @@ def test_cleanup_removes_problem_created_route_reflector_node_state():
     problem._legacy_label_preexisted = False
     problem._route_reflector_annotation_preexisted = False
     calls = []
-    problem._run = lambda command, *args, **kwargs: calls.append(command) or subprocess.CompletedProcess(
-        command,
-        0,
-        stdout="node/control-plane-0 updated",
-        stderr="",
+    problem._run = lambda command, *args, **kwargs: (
+        calls.append(command)
+        or subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="node/control-plane-0 updated",
+            stderr="",
+        )
     )
 
     problem._delete_support_resources()
@@ -198,11 +216,102 @@ def test_fresh_cleanup_removes_problem_marked_calico_resources_and_node_state():
 
     problem._delete_support_resources()
 
-    assert "kubectl delete bgppeer stale-master-route-reflectors --ignore-not-found" in calls
+    assert f"kubectl delete bgppeer {problem.BGP_PEER_NAME} --ignore-not-found" in calls
     assert "kubectl delete bgpconfiguration default --ignore-not-found" in calls
     assert "kubectl label node control-plane-0 node-role.kubernetes.io/master-" in calls
     assert "kubectl annotate node control-plane-0 projectcalico.org/RouteReflectorClusterID-" in calls
-    assert "kubectl annotate node control-plane-0 sregym.io/calico-route-reflector-label-drift-" in calls
+    assert f"kubectl annotate node control-plane-0 {problem.NODE_MARKER_ANNOTATION}-" in calls
+
+
+def test_persist_original_state_writes_generic_configmap_snapshot():
+    problem = _problem()
+    problem.route_reflector_node = "control-plane-0"
+    problem._bgp_config_preexisted = True
+    problem.original_bgp_configuration = {
+        "apiVersion": "crd.projectcalico.org/v1",
+        "kind": "BGPConfiguration",
+        "metadata": {"name": "default"},
+        "spec": {"nodeToNodeMeshEnabled": True},
+    }
+    problem._legacy_label_preexisted = True
+    problem._route_reflector_annotation_preexisted = True
+    problem._route_reflector_annotation_value = "244.0.0.9"
+    applied = []
+    problem._apply_manifest = applied.append
+    problem._run = lambda command, *args, **kwargs: subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    problem._persist_original_state()
+
+    manifest = json.loads(applied[0])
+    assert manifest["metadata"]["name"] == problem.STATE_CONFIGMAP_NAME
+    assert manifest["metadata"]["namespace"] == problem.STATE_NAMESPACE
+    assert manifest["metadata"]["labels"] == {problem.PROBLEM_LABEL_KEY: problem.PROBLEM_LABEL_VALUE}
+    assert json.loads(manifest["data"][problem.STATE_CONFIG_PREEXISTED_KEY]) is True
+    assert json.loads(manifest["data"][problem.STATE_CONFIGURATION_KEY])["spec"] == {"nodeToNodeMeshEnabled": True}
+
+
+def test_cleanup_restores_persisted_state_after_interrupted_run():
+    problem = _problem()
+    original_bgp = {
+        "apiVersion": "crd.projectcalico.org/v1",
+        "kind": "BGPConfiguration",
+        "metadata": {"name": "default"},
+        "spec": {"nodeToNodeMeshEnabled": True, "asNumber": 64512},
+    }
+    state_data = {
+        problem.STATE_CONFIG_PREEXISTED_KEY: json.dumps(True),
+        problem.STATE_CONFIGURATION_KEY: json.dumps(original_bgp),
+        problem.STATE_PRIMARY_NODE_KEY: "control-plane-0",
+        problem.STATE_NODE_LABEL_PREEXISTED_KEY: json.dumps(True),
+        problem.STATE_NODE_ANNOTATION_PREEXISTED_KEY: json.dumps(True),
+        problem.STATE_NODE_ANNOTATION_VALUE_KEY: "244.0.0.9",
+    }
+    calls = []
+    applied = []
+
+    def fake_run(command, *args, **kwargs):
+        calls.append(command)
+        if command == f"kubectl -n {problem.STATE_NAMESPACE} get configmap {problem.STATE_CONFIGMAP_NAME} -o json":
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"data": state_data}), stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    problem._run = fake_run
+    problem._apply_manifest = applied.append
+
+    problem._delete_support_resources()
+
+    assert json.loads(applied[0])["spec"] == {"nodeToNodeMeshEnabled": True, "asNumber": 64512}
+    assert "kubectl label node control-plane-0 node-role.kubernetes.io/master= --overwrite" in calls
+    assert (
+        "kubectl annotate node control-plane-0 projectcalico.org/RouteReflectorClusterID=244.0.0.9 --overwrite" in calls
+    )
+    assert (
+        f"kubectl -n {problem.STATE_NAMESPACE} delete configmap {problem.STATE_CONFIGMAP_NAME} --ignore-not-found"
+        in calls
+    )
+
+
+def test_inject_fault_cleans_residue_before_capturing_baseline():
+    problem = _problem()
+    events = []
+    problem._calico_available = lambda: True
+    problem._calico_bgp_dataplane_available = lambda: True
+    problem._select_nodes = lambda: events.append("select")
+    problem._delete_support_resources = lambda: events.append("cleanup")
+    problem._capture_bgp_configuration = lambda: events.append("capture_bgp")
+    problem._capture_route_reflector_node_state = lambda: events.append("capture_node")
+    problem._persist_original_state = lambda: events.append("persist")
+    problem._capture_app_deployment_replicas = lambda: events.append("capture_app")
+    problem._prepare_cross_node_app_path = lambda: events.append("prepare_app")
+    problem._deploy_probe = lambda: events.append("deploy_probe")
+    problem._configure_healthy_route_reflectors_with_legacy_label = lambda: events.append("configure")
+    problem._remove_legacy_route_reflector_label = lambda: events.append("remove_label")
+    problem._wait_for_probe = lambda expect_success, timeout: events.append(f"probe_{expect_success}")
+
+    problem.inject_fault()
+
+    assert events.index("cleanup") < events.index("capture_bgp")
+    assert events.index("persist") < events.index("configure")
 
 
 def test_probe_succeeds_treats_missing_client_pod_as_not_ready():

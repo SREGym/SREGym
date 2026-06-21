@@ -580,6 +580,11 @@ class Conductor:
                 labels = resource.get("metadata", {}).get("labels", {}) or {}
                 return labels.get(problem.PROBLEM_LABEL_KEY) == problem.PROBLEM_LABEL_VALUE
 
+            def bool_from_state(data, key):
+                if not data or key not in data:
+                    return None
+                return json.loads(data[key])
+
             nodes = (kubectl_json("kubectl get nodes -o json") or {}).get("items", [])
             marked_nodes = [
                 node.get("metadata", {}).get("name")
@@ -591,34 +596,67 @@ class Conductor:
             bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} -o json")
             bgp_config = kubectl_json("kubectl get bgpconfiguration default -o json")
             support_namespace = kubectl_json(f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} -o json")
+            state_configmap = kubectl_json(
+                f"kubectl -n {self._q(problem.STATE_NAMESPACE)} get configmap "
+                f"{self._q(problem.STATE_CONFIGMAP_NAME)} -o json"
+            )
+            state_data = (state_configmap or {}).get("data", {}) or {}
 
             bgppeer_labeled = has_problem_label(bgppeer)
             bgp_config_labeled = has_problem_label(bgp_config)
             support_namespace_labeled = has_problem_label(support_namespace)
-            residue_found = bool(marked_nodes or bgppeer_labeled or bgp_config_labeled or support_namespace_labeled)
+            residue_found = bool(
+                marked_nodes or bgppeer_labeled or bgp_config_labeled or support_namespace_labeled or state_data
+            )
             if not residue_found:
                 return
 
             kubectl.exec_command(f"kubectl delete namespace {self._q(problem.PROBE_NAMESPACE)} --ignore-not-found")
             kubectl.exec_command(f"kubectl delete bgppeer {self._q(problem.BGP_PEER_NAME)} --ignore-not-found")
 
-            if bgp_config_labeled:
+            bgp_config_preexisted = bool_from_state(state_data, problem.STATE_CONFIG_PREEXISTED_KEY)
+            original_bgp_configuration = state_data.get(problem.STATE_CONFIGURATION_KEY)
+            if bgp_config_preexisted is True and original_bgp_configuration:
+                kubectl.exec_command("kubectl apply -f -", input_data=original_bgp_configuration)
+            elif bgp_config_preexisted is False or bgp_config_labeled:
                 kubectl.exec_command("kubectl delete bgpconfiguration default --ignore-not-found")
-            elif bgp_config:
-                patch = json.dumps({"spec": {"nodeToNodeMeshEnabled": True}})
-                kubectl.exec_command(f"kubectl patch bgpconfiguration default --type=merge -p {self._q(patch)}")
+
+            state_route_reflector_node = state_data.get(problem.STATE_PRIMARY_NODE_KEY)
+            if state_route_reflector_node and state_route_reflector_node not in marked_nodes:
+                marked_nodes.append(state_route_reflector_node)
+            legacy_label_preexisted = bool_from_state(state_data, problem.STATE_NODE_LABEL_PREEXISTED_KEY)
+            rr_annotation_preexisted = bool_from_state(state_data, problem.STATE_NODE_ANNOTATION_PREEXISTED_KEY)
+            rr_annotation_value = state_data.get(problem.STATE_NODE_ANNOTATION_VALUE_KEY)
 
             for node_name in marked_nodes:
                 quoted_node = self._q(node_name)
-                kubectl.exec_command(f"kubectl label node {quoted_node} {self._q(f'{problem.LEGACY_MASTER_LABEL}-')}")
-                kubectl.exec_command(
-                    f"kubectl annotate node {quoted_node} "
-                    f"{self._q(f'{problem.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION}-')}"
-                )
+                if legacy_label_preexisted is True:
+                    kubectl.exec_command(
+                        f"kubectl label node {quoted_node} {self._q(f'{problem.LEGACY_MASTER_LABEL}=')} --overwrite"
+                    )
+                else:
+                    kubectl.exec_command(
+                        f"kubectl label node {quoted_node} {self._q(f'{problem.LEGACY_MASTER_LABEL}-')}"
+                    )
+
+                if rr_annotation_preexisted is True and rr_annotation_value:
+                    kubectl.exec_command(
+                        f"kubectl annotate node {quoted_node} "
+                        f"{self._q(f'{problem.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION}={rr_annotation_value}')} --overwrite"
+                    )
+                else:
+                    kubectl.exec_command(
+                        f"kubectl annotate node {quoted_node} "
+                        f"{self._q(f'{problem.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION}-')}"
+                    )
                 kubectl.exec_command(
                     f"kubectl annotate node {quoted_node} {self._q(f'{problem.NODE_MARKER_ANNOTATION}-')}"
                 )
 
+            kubectl.exec_command(
+                f"kubectl -n {self._q(problem.STATE_NAMESPACE)} delete configmap "
+                f"{self._q(problem.STATE_CONFIGMAP_NAME)} --ignore-not-found"
+            )
             kubectl.exec_command("kubectl -n kube-system rollout restart ds/calico-node")
             kubectl.exec_command("kubectl -n kube-system rollout status ds/calico-node --timeout=180s")
         except Exception as e:
@@ -649,7 +687,7 @@ class Conductor:
                 '-p \'{"spec":{"disabled":false}}\''
             )
             kubectl.exec_command(
-                "kubectl patch ipamconfig default --type=merge " '-p \'{"spec":{"strictAffinity":false}}\''
+                'kubectl patch ipamconfig default --type=merge -p \'{"spec":{"strictAffinity":false}}\''
             )
             kubectl.exec_command(
                 f"kubectl delete ippool {PodCIDRExhaustionHotelReservation.TINY_POOL_NAME} --ignore-not-found"

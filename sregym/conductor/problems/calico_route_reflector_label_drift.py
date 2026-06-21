@@ -35,20 +35,28 @@ class CalicoRouteReflectorLabelDriftHotelReservation(Problem):
     CURRENT_CONTROL_PLANE_LABEL = "node-role.kubernetes.io/control-plane"
     ROUTE_REFLECTOR_CLUSTER_ID = "244.0.0.1"
     ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION = "projectcalico.org/RouteReflectorClusterID"
-    BGP_PEER_NAME = "stale-master-route-reflectors"
-    PROBLEM_LABEL_KEY = "sregym.io/problem"
-    PROBLEM_LABEL_VALUE = "calico-route-reflector-label-drift"
-    NODE_MARKER_ANNOTATION = "sregym.io/calico-route-reflector-label-drift"
+    BGP_PEER_NAME = "cluster-peer-policy"
+    PROBLEM_LABEL_KEY = "sregym.io/managed-by"
+    PROBLEM_LABEL_VALUE = "network-case"
+    NODE_MARKER_ANNOTATION = "sregym.io/network-case-node"
+    STATE_NAMESPACE = "khaos"
+    STATE_CONFIGMAP_NAME = "network-case-state"
+    STATE_CONFIG_PREEXISTED_KEY = "config_preexisted"
+    STATE_CONFIGURATION_KEY = "original_config.json"
+    STATE_PRIMARY_NODE_KEY = "primary_node"
+    STATE_NODE_LABEL_PREEXISTED_KEY = "node_label_preexisted"
+    STATE_NODE_ANNOTATION_PREEXISTED_KEY = "node_annotation_preexisted"
+    STATE_NODE_ANNOTATION_VALUE_KEY = "node_annotation_value"
     MIN_WORKER_NODES = 2
     CLUSTER_REQUIREMENTS = (
         "Requires a disposable multi-node Calico cluster with BGP CRDs, one control-plane node, "
         "and at least two worker nodes."
     )
 
-    PROBE_NAMESPACE = "platform-health"
-    PROBE_SERVER = "east-west-server"
-    PROBE_CLIENT = "east-west-client"
-    PROBE_LOCAL_SERVER = "same-node-server"
+    PROBE_NAMESPACE = "platform-checks"
+    PROBE_SERVER = "remote-check"
+    PROBE_CLIENT = "check-client"
+    PROBE_LOCAL_SERVER = "local-check"
 
     def __init__(self):
         self.app = HotelReservation()
@@ -205,6 +213,69 @@ class CalicoRouteReflectorLabelDriftHotelReservation(Problem):
         self._route_reflector_annotation_preexisted = self.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION in annotations
         self._route_reflector_annotation_value = annotations.get(self.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION)
 
+    def _state_configmap_command(self, verb):
+        return f"kubectl -n {self._q(self.STATE_NAMESPACE)} {verb} configmap {self._q(self.STATE_CONFIGMAP_NAME)}"
+
+    def _persist_original_state(self):
+        self._run(
+            f"kubectl create namespace {self._q(self.STATE_NAMESPACE)} --dry-run=client -o yaml | kubectl apply -f -"
+        )
+        data = {
+            self.STATE_CONFIG_PREEXISTED_KEY: json.dumps(bool(self._bgp_config_preexisted)),
+            self.STATE_PRIMARY_NODE_KEY: self.route_reflector_node or "",
+            self.STATE_NODE_LABEL_PREEXISTED_KEY: json.dumps(bool(self._legacy_label_preexisted)),
+            self.STATE_NODE_ANNOTATION_PREEXISTED_KEY: json.dumps(bool(self._route_reflector_annotation_preexisted)),
+        }
+        if self.original_bgp_configuration:
+            data[self.STATE_CONFIGURATION_KEY] = json.dumps(self.original_bgp_configuration, sort_keys=True)
+        if self._route_reflector_annotation_value is not None:
+            data[self.STATE_NODE_ANNOTATION_VALUE_KEY] = self._route_reflector_annotation_value
+
+        manifest = {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": self.STATE_CONFIGMAP_NAME,
+                "namespace": self.STATE_NAMESPACE,
+                "labels": {
+                    self.PROBLEM_LABEL_KEY: self.PROBLEM_LABEL_VALUE,
+                },
+            },
+            "data": data,
+        }
+        self._apply_manifest(json.dumps(manifest))
+
+    def _read_persisted_original_state(self):
+        result = self._run(self._state_configmap_command("get") + " -o json", check=False)
+        if result.returncode != 0:
+            return None
+        try:
+            return json.loads(result.stdout).get("data", {}) or {}
+        except json.JSONDecodeError:
+            return None
+
+    def _restore_persisted_original_state(self):
+        data = self._read_persisted_original_state()
+        if not data:
+            return False
+
+        if self._bgp_config_preexisted is None and self.STATE_CONFIG_PREEXISTED_KEY in data:
+            self._bgp_config_preexisted = json.loads(data[self.STATE_CONFIG_PREEXISTED_KEY])
+            if self._bgp_config_preexisted and data.get(self.STATE_CONFIGURATION_KEY):
+                self.original_bgp_configuration = json.loads(data[self.STATE_CONFIGURATION_KEY])
+
+        if not self.route_reflector_node and data.get(self.STATE_PRIMARY_NODE_KEY):
+            self.route_reflector_node = data[self.STATE_PRIMARY_NODE_KEY]
+
+        if self._legacy_label_preexisted is None and self.STATE_NODE_LABEL_PREEXISTED_KEY in data:
+            self._legacy_label_preexisted = json.loads(data[self.STATE_NODE_LABEL_PREEXISTED_KEY])
+
+        if self._route_reflector_annotation_preexisted is None and self.STATE_NODE_ANNOTATION_PREEXISTED_KEY in data:
+            self._route_reflector_annotation_preexisted = json.loads(data[self.STATE_NODE_ANNOTATION_PREEXISTED_KEY])
+            self._route_reflector_annotation_value = data.get(self.STATE_NODE_ANNOTATION_VALUE_KEY)
+
+        return True
+
     def _restart_calico(self):
         self._run("kubectl -n kube-system rollout restart ds/calico-node")
         self._run("kubectl -n kube-system rollout status ds/calico-node --timeout=180s", timeout=210)
@@ -257,7 +328,7 @@ class CalicoRouteReflectorLabelDriftHotelReservation(Problem):
             ]
         )
         self._run(
-            f"kubectl -n {self._q(self.namespace)} patch deployment {self._q(name)} " f"--type=json -p {self._q(patch)}"
+            f"kubectl -n {self._q(self.namespace)} patch deployment {self._q(name)} --type=json -p {self._q(patch)}"
         )
         self._wait_for_deployment_ready(name, self.namespace)
 
@@ -382,8 +453,7 @@ spec:
 
     def _probe_pod_ip(self, app):
         result = self._run(
-            f"kubectl -n {self.PROBE_NAMESPACE} get pod -l app={self._q(app)} "
-            "-o jsonpath='{.items[0].status.podIP}'",
+            f"kubectl -n {self.PROBE_NAMESPACE} get pod -l app={self._q(app)} -o jsonpath='{{.items[0].status.podIP}}'",
             check=False,
         )
         if result.returncode != 0 or not result.stdout.strip():
@@ -447,15 +517,13 @@ spec:
         rr = self.route_reflector_node
         bgp_config_labels = ""
         if self._bgp_config_preexisted is False:
-            bgp_config_labels = "  labels:\n" f"    {self.PROBLEM_LABEL_KEY}: {self.PROBLEM_LABEL_VALUE}\n"
+            bgp_config_labels = f"  labels:\n    {self.PROBLEM_LABEL_KEY}: {self.PROBLEM_LABEL_VALUE}\n"
         self._run(f"kubectl label node {self._q(rr)} {self._q(f'{self.LEGACY_MASTER_LABEL}=')} --overwrite")
         self._run(
             f"kubectl annotate node {self._q(rr)} "
             f"{self._q(f'{self.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION}={self.ROUTE_REFLECTOR_CLUSTER_ID}')} --overwrite"
         )
-        self._run(
-            f"kubectl annotate node {self._q(rr)} " f"{self._q(f'{self.NODE_MARKER_ANNOTATION}=true')} --overwrite"
-        )
+        self._run(f"kubectl annotate node {self._q(rr)} {self._q(f'{self.NODE_MARKER_ANNOTATION}=true')} --overwrite")
         self._apply_manifest(f"""apiVersion: crd.projectcalico.org/v1
 kind: BGPConfiguration
 metadata:
@@ -533,6 +601,8 @@ spec:
         ]
 
     def _delete_support_resources(self):
+        self._restore_persisted_original_state()
+
         # Calico watches these CRDs and node labels; cleanup avoids another
         # DaemonSet restart because recover_fault already restarts calico-node.
         with contextlib.suppress(Exception):
@@ -578,8 +648,10 @@ spec:
             ):
                 with contextlib.suppress(Exception):
                     self._run(
-                        f"kubectl annotate node {self._q(node_name)} " f"{self._q(f'{self.NODE_MARKER_ANNOTATION}-')}"
+                        f"kubectl annotate node {self._q(node_name)} {self._q(f'{self.NODE_MARKER_ANNOTATION}-')}"
                     )
+        with contextlib.suppress(Exception):
+            self._run(self._state_configmap_command("delete") + " --ignore-not-found")
 
     def _cleanup(self):
         self._delete_support_resources()
@@ -590,7 +662,7 @@ spec:
         print("== Fault Injection ==")
         if not self._calico_available():
             raise RuntimeError(
-                "Calico BGP CRDs are required for route-reflector label drift. " f"{self.CLUSTER_REQUIREMENTS}"
+                f"Calico BGP CRDs are required for route-reflector label drift. {self.CLUSTER_REQUIREMENTS}"
             )
         if not self._calico_bgp_dataplane_available():
             raise RuntimeError(
@@ -598,10 +670,11 @@ spec:
                 f"route-reflector label drift problem. {self.CLUSTER_REQUIREMENTS}"
             )
         self._select_nodes()
+        self._delete_support_resources()
         self._capture_bgp_configuration()
         self._capture_route_reflector_node_state()
+        self._persist_original_state()
         self._capture_app_deployment_replicas()
-        self._delete_support_resources()
 
         print("Preparing cross-node Hotel Reservation path")
         self._prepare_cross_node_app_path()

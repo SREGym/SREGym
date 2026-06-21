@@ -9,10 +9,10 @@ class _Problem:
     CURRENT_CONTROL_PLANE_LABEL = "node-role.kubernetes.io/control-plane"
     LEGACY_MASTER_LABEL = "node-role.kubernetes.io/master"
     ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION = "projectcalico.org/RouteReflectorClusterID"
-    PROBE_NAMESPACE = "platform-health"
-    PROBE_CLIENT = "east-west-client"
-    PROBE_SERVER = "east-west-server"
-    PROBE_LOCAL_SERVER = "same-node-server"
+    PROBE_NAMESPACE = "platform-checks"
+    PROBE_CLIENT = "check-client"
+    PROBE_SERVER = "remote-check"
+    PROBE_LOCAL_SERVER = "local-check"
     namespace = "hotel-reservation"
     app = SimpleNamespace(frontend_service="frontend", frontend_port=5000)
     _app_deployment_replicas = {}
@@ -54,7 +54,7 @@ def _oracle(peers, *, nodes):
 
 def test_route_reflector_peer_rejects_unmatched_positive_legacy_selector():
     oracle = _oracle(
-        [_peer("stale-master-route-reflectors", "has(node-role.kubernetes.io/master)")],
+        [_peer("cluster-peer-policy", "has(node-role.kubernetes.io/master)")],
         nodes=[
             _node(
                 "control-plane-0",
@@ -201,7 +201,7 @@ def test_cross_node_probe_requires_same_node_and_cross_node_paths():
     assert oracle._cross_node_probe_ok() is True
     assert any("http://10.0.0.11:8080" in command for command in commands)
     assert any("http://10.0.1.20:8080" in command for command in commands)
-    assert any("http://east-west-server:8080" in command for command in commands)
+    assert any(f"http://{_Problem.PROBE_SERVER}:8080" in command for command in commands)
 
 
 def test_cross_node_probe_rejects_colocated_cross_node_server():

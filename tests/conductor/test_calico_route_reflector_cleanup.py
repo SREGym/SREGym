@@ -12,9 +12,12 @@ class _FakeKubeCtl:
     def __init__(self, responses):
         self.responses = responses
         self.commands = []
+        self.inputs = {}
 
-    def exec_command(self, command):
+    def exec_command(self, command, input_data=None):
         self.commands.append(command)
+        if input_data is not None:
+            self.inputs[command] = input_data
         response = self.responses.get(command)
         if response is None:
             return "Error from server (NotFound): resource not found"
@@ -94,11 +97,11 @@ def test_calico_route_reflector_global_cleanup_removes_problem_owned_state(monke
     assert "kubectl delete bgpconfiguration default --ignore-not-found" in fake.commands
     assert "kubectl label node control-plane-0 node-role.kubernetes.io/master-" in fake.commands
     assert "kubectl annotate node control-plane-0 projectcalico.org/RouteReflectorClusterID-" in fake.commands
-    assert "kubectl annotate node control-plane-0 sregym.io/calico-route-reflector-label-drift-" in fake.commands
+    assert f"kubectl annotate node control-plane-0 {problem.NODE_MARKER_ANNOTATION}-" in fake.commands
     assert "kubectl -n kube-system rollout restart ds/calico-node" in fake.commands
 
 
-def test_calico_route_reflector_global_cleanup_reenables_mesh_when_bgpconfig_preexisted(monkeypatch):
+def test_calico_route_reflector_global_cleanup_does_not_guess_mesh_when_snapshot_is_missing(monkeypatch):
     problem = CalicoRouteReflectorLabelDriftHotelReservation
     labels = {problem.PROBLEM_LABEL_KEY: problem.PROBLEM_LABEL_VALUE}
     fake = _FakeKubeCtl(
@@ -113,8 +116,50 @@ def test_calico_route_reflector_global_cleanup_reenables_mesh_when_bgpconfig_pre
     conductor._fix_calico_route_reflector_label_drift()
 
     assert "kubectl delete bgpconfiguration default --ignore-not-found" not in fake.commands
-    assert any(
-        command.startswith("kubectl patch bgpconfiguration default --type=merge")
-        and '"nodeToNodeMeshEnabled": true' in command
-        for command in fake.commands
+    assert not any(
+        command.startswith("kubectl patch bgpconfiguration default --type=merge") for command in fake.commands
+    )
+
+
+def test_calico_route_reflector_global_cleanup_restores_persisted_snapshot(monkeypatch):
+    problem = CalicoRouteReflectorLabelDriftHotelReservation
+    original_bgp = {
+        "apiVersion": "crd.projectcalico.org/v1",
+        "kind": "BGPConfiguration",
+        "metadata": {"name": "default"},
+        "spec": {"nodeToNodeMeshEnabled": True, "asNumber": 64512},
+    }
+    state_data = {
+        problem.STATE_CONFIG_PREEXISTED_KEY: json.dumps(True),
+        problem.STATE_CONFIGURATION_KEY: json.dumps(original_bgp),
+        problem.STATE_PRIMARY_NODE_KEY: "control-plane-0",
+        problem.STATE_NODE_LABEL_PREEXISTED_KEY: json.dumps(True),
+        problem.STATE_NODE_ANNOTATION_PREEXISTED_KEY: json.dumps(True),
+        problem.STATE_NODE_ANNOTATION_VALUE_KEY: "244.0.0.9",
+    }
+    fake = _FakeKubeCtl(
+        {
+            "kubectl get nodes -o json": _nodes(_node("control-plane-0")),
+            f"kubectl -n {problem.STATE_NAMESPACE} get configmap {problem.STATE_CONFIGMAP_NAME} -o json": json.dumps(
+                {"metadata": {"name": problem.STATE_CONFIGMAP_NAME}, "data": state_data}
+            ),
+        }
+    )
+    conductor = _conductor(fake, monkeypatch)
+
+    conductor._fix_calico_route_reflector_label_drift()
+
+    assert "kubectl apply -f -" in fake.commands
+    assert json.loads(fake.inputs["kubectl apply -f -"])["spec"] == {
+        "nodeToNodeMeshEnabled": True,
+        "asNumber": 64512,
+    }
+    assert "kubectl label node control-plane-0 node-role.kubernetes.io/master= --overwrite" in fake.commands
+    assert (
+        "kubectl annotate node control-plane-0 projectcalico.org/RouteReflectorClusterID=244.0.0.9 --overwrite"
+        in fake.commands
+    )
+    assert (
+        f"kubectl -n {problem.STATE_NAMESPACE} delete configmap {problem.STATE_CONFIGMAP_NAME} --ignore-not-found"
+        in fake.commands
     )

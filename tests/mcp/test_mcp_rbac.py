@@ -25,3 +25,10 @@ def test_mcp_rbac_allows_node_label_and_annotation_repair():
     )
 
     assert {"get", "list", "watch", "patch", "update"}.issubset(set(node_rule["verbs"]))
+
+
+def test_mcp_rbac_allows_endpoint_slice_read_access():
+    discovery_rule = next(rule for rule in _rules() if "discovery.k8s.io" in rule["apiGroups"])
+
+    assert "endpointslices" in discovery_rule["resources"]
+    assert set(discovery_rule["verbs"]) == {"get", "list", "watch"}
