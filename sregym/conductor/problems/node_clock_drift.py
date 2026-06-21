@@ -240,7 +240,7 @@ class NodeClockDriftHotelReservation(Problem):
         except Exception as e:
             print(f"[TLS] Warning: Could not patch frontend deployment with sidecar: {e}")
 
-    def _wait_for_sidecar_rollout(self, timeout: int = 120) -> None:
+    def _wait_for_sidecar_rollout(self, timeout: int = 300) -> None:
         """Wait until a Running frontend pod exists with the tls-health-check sidecar
         fully ready (openssl installed, per the readiness probe above).
 
