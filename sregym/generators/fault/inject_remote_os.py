@@ -423,33 +423,34 @@ class RemoteOSFaultInjector(FaultInjector):
 
         pod_name = f"clock-drift-leftover-fix-{int(time.time() * 1000)}"
         pod_yaml = f"""
-    apiVersion: v1
-    kind: Pod
-    metadata:
-    name: {pod_name}
-    namespace: default
-    labels:
-        app: clock-drift-leftover-fixer
-    spec:
-    nodeSelector:
-        kubernetes.io/hostname: {node_name}
-    hostNetwork: true
-    hostPID: true
-    hostIPC: true
-    restartPolicy: Never
-    terminationGracePeriodSeconds: 0
-    automountServiceAccountToken: false
-    containers:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {pod_name}
+  namespace: default
+  labels:
+    app: clock-drift-leftover-fixer
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: {node_name}
+  hostNetwork: true
+  hostPID: true
+  hostIPC: true
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 0
+  automountServiceAccountToken: false
+  containers:
     - name: fix
-        image: ubuntu:22.04
-        imagePullPolicy: IfNotPresent
-        command: ["sh", "-c"]
-        args: ["{restore_cmd}"]
-        securityContext:
+      image: ubuntu:22.04
+      imagePullPolicy: IfNotPresent
+      command: ["sh", "-c"]
+      args: ["{restore_cmd}"]
+      securityContext:
         privileged: true
         capabilities:
-            add: ["SYS_TIME", "SYS_ADMIN"]
-    """
+          add: ["SYS_TIME", "SYS_ADMIN"]
+"""
+    
         try:
             print(f"Restoring time-sync on node {node_name} (services: {services})...")
             self.kubectl.exec_command("kubectl apply -f -", input_data=pod_yaml)
