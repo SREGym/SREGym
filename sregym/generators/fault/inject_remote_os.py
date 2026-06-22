@@ -373,19 +373,19 @@ class RemoteOSFaultInjector(FaultInjector):
 
             node_to_services.setdefault(node_name, set())
 
-            # Try to recover the exact service name from this pod's own logs
-            try:
-                logs = self.kubectl.exec_command(
-                    f"kubectl logs {pod_name} -n default --ignore-errors"
-                )
-                for log_line in logs.splitlines():
-                    if log_line.startswith("DISCOVERED_SERVICES:"):
-                        services_str = log_line.split(":", 1)[1].strip()
-                        if services_str:
-                            node_to_services[node_name].update(services_str.split())
-                        break
-            except Exception as e:
-                print(f"Could not read logs from {pod_name} to discover service name: {e}")
+            # Try to recover the exact service name from this pod's own logs.
+            # Retry a few times since `kubectl logs` can transiently fail or
+            # return an error string instead of raising (e.g. brief API server
+            # connectivity blips on CloudLab) — without detecting that, the
+            # discovery would silently fall through to the blind multi-name
+            # fallback with no indication anything went wrong.
+            logs = self._read_pod_logs_with_retry(pod_name)
+            for log_line in logs.splitlines():
+                if log_line.startswith("DISCOVERED_SERVICES:"):
+                    services_str = log_line.split(":", 1)[1].strip()
+                    if services_str:
+                        node_to_services[node_name].update(services_str.split())
+                    break
 
         print(
             f"Found {len(pod_names)} leftover clock-drift pod(s) on node(s): "
@@ -403,10 +403,34 @@ class RemoteOSFaultInjector(FaultInjector):
         for node_name, services in node_to_services.items():
             self._restore_node_time_sync(node_name, services)
 
+    def _read_pod_logs_with_retry(
+        self, pod_name: str, namespace: str = "default", retries: int = 3, delay: int = 5
+    ) -> str:
+        """Read pod logs, retrying if the result looks like a connectivity
+        error rather than real log output. kubectl.exec_command can return an
+        error string instead of raising, so this checks the content itself
+        rather than relying on an exception.
+        """
+        for attempt in range(retries):
+            try:
+                logs = self.kubectl.exec_command(f"kubectl logs {pod_name} -n {namespace} --ignore-errors")
+            except Exception as e:
+                print(f"Could not read logs from {pod_name} (attempt {attempt + 1}/{retries}): {e}")
+                logs = ""
+
+            if logs and "Unable to connect to the server" not in logs and "Error from server" not in logs:
+                return logs
+
+            if attempt < retries - 1:
+                print(f"Log read for {pod_name} looked unusable; retrying ({attempt + 1}/{retries})...")
+                time.sleep(delay)
+
+        print(f"Warning: could not get usable logs from {pod_name} after {retries} attempts")
+        return ""
 
     def _restore_node_time_sync(self, node_name: str, known_services: set[str] | None = None):
-        """Run a short-lived privileged pod on `node_name` that unmasks + starts
-        the timesync service
+        """Run a short-lived privileged pod on `node_name` that unmasks + starts the discovered time-sync service directly 
+        measures the node's clock skew against the control plane and steps the clock to correct it immediately
         """
         services = known_services or {"systemd-timesyncd", "chrony", "chronyd", "ntp", "ntpd"}
 
@@ -416,14 +440,28 @@ class RemoteOSFaultInjector(FaultInjector):
             for svc in services
         )
 
+        control_plane_epoch = int(time.time())
+
         restore_cmd = f"""
             set -e
             {restore_lines}
+
+            NODE_EPOCH=$(nsenter --target 1 --mount --uts --ipc --net --pid -- date +%s)
+            SKEW=$((NODE_EPOCH - {control_plane_epoch}))
+            echo "Node clock skew before correction: ${{SKEW}}s"
+
+            if [ "${{SKEW#-}}" -gt 60 ]; then
+                echo "Skew exceeds 60s threshold; forcing clock step..."
+                nsenter --target 1 --mount --uts --ipc --net --pid -- date -s "@{control_plane_epoch}"
+            else
+                echo "Skew within tolerance; no manual step needed."
+            fi
+
+            nsenter --target 1 --mount --uts --ipc --net --pid -- date
         """
 
         pod_name = f"clock-drift-leftover-fix-{int(time.time() * 1000)}"
-        pod_yaml = f"""
-apiVersion: v1
+        pod_yaml = f"""apiVersion: v1
 kind: Pod
 metadata:
   name: {pod_name}
@@ -440,21 +478,34 @@ spec:
   terminationGracePeriodSeconds: 0
   automountServiceAccountToken: false
   containers:
-    - name: fix
-      image: ubuntu:22.04
-      imagePullPolicy: IfNotPresent
-      command: ["sh", "-c"]
-      args: ["{restore_cmd}"]
-      securityContext:
-        privileged: true
-        capabilities:
-          add: ["SYS_TIME", "SYS_ADMIN"]
+  - name: fix
+    image: ubuntu:22.04
+    imagePullPolicy: IfNotPresent
+    command: ["sh", "-c"]
+    args: ["{restore_cmd}"]
+    securityContext:
+      privileged: true
+      capabilities:
+        add: ["SYS_TIME", "SYS_ADMIN"]
 """
-    
         try:
             print(f"Restoring time-sync on node {node_name} (services: {services})...")
             self.kubectl.exec_command("kubectl apply -f -", input_data=pod_yaml)
-            time.sleep(10)
+
+            # Wait for the pod to finish so we can read its output and confirm
+            # the clock was actually corrected, rather than just hoping it was.
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                status = self.kubectl.exec_command(
+                    f"kubectl get pod {pod_name} -n default -o jsonpath='{{.status.phase}}'"
+                ).strip()
+                if status in ("Succeeded", "Failed"):
+                    break
+                time.sleep(2)
+
+            logs = self.kubectl.exec_command(f"kubectl logs {pod_name} -n default --ignore-errors")
+            print(logs)
+
         except Exception as e:
             print(f"Could not run clock restore on node {node_name}: {e}")
         finally:
