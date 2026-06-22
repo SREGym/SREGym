@@ -7,10 +7,11 @@ from sregym.conductor.oracles.base import Oracle
 
 logger = logging.getLogger(__name__)
 
-# The fault gates the image behind a private registry exposed on this port (see
-# `_private_image = f"{ip}:5000/hotel-reservation:latest"` in the problem). The
-# anti-cheat guard requires the running workload to still pull this gated image.
-_GATED_IMAGE_RE = re.compile(r":5000/.*hotel-reservation")
+
+# Can be overriden by problem.target_pod_label to ensure it fits both blueprint_hotel_reservation
+# and astronomy_shop versions of the problems.
+_DEFAULT_POD_LABEL = "io.kompose.service"
+_DEFAULT_GATED_IMAGE_RE = re.compile(r":5000/.*hotel-reservation")
 _IMAGE_PULL_FAILURE_REASONS = {"ImagePullBackOff", "ErrImagePull", "ImageInspectError", "InvalidImageName"}
 
 
@@ -33,12 +34,16 @@ class ImagePullSecretMitigationOracle(Oracle):
         apps_v1 = client.AppsV1Api()
         target_deployment = problem.target_deployment
         target_container = problem.target_container
+        # Per-problem overrides; default to the original hotel-reservation values so
+        # the legacy problem keeps working unchanged.
+        pod_label = getattr(problem, "target_pod_label", None) or _DEFAULT_POD_LABEL
+        gated_image_re = getattr(problem, "gated_image_re", None) or _DEFAULT_GATED_IMAGE_RE
 
         # Primary criterion: the target workload's pods must be Running + Ready with
         # no image-pull failure. Accepts ANY working credential mechanism.
         pods = v1.list_namespaced_pod(
             namespace=namespace,
-            label_selector=f"io.kompose.service={target_deployment}",
+            label_selector=f"{pod_label}={target_deployment}",
         )
         if not pods.items:
             logger.info("No pods found for deployment '%s' — FAIL", target_deployment)
@@ -86,7 +91,7 @@ class ImagePullSecretMitigationOracle(Oracle):
         containers = deploy.spec.template.spec.containers or []
         target = next((c for c in containers if c.name == target_container), containers[0] if containers else None)
         image = (target.image if target else "") or ""
-        if not _GATED_IMAGE_RE.search(image):
+        if not gated_image_re.search(image):
             logger.info("Anti-cheat: target image '%s' is not the gated private-registry image — FAIL", image)
             return {
                 "success": False,

@@ -26,8 +26,8 @@ from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import Eph
 from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
-from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
+from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
@@ -51,7 +51,10 @@ from sregym.conductor.problems.loadgenerator_flood_homepage import LoadGenerator
 from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
-from sregym.conductor.problems.missing_image_pull_secret_hotel_reservation import MissingImagePullSecretHotelReservation
+from sregym.conductor.problems.missing_image_pull_secret_astronomy_shop import MissingImagePullSecretAstronomyShop
+from sregym.conductor.problems.missing_image_pull_secret_blueprint_hotel_reservation import (
+    MissingImagePullSecretBlueprintHotelReservation,
+)
 from sregym.conductor.problems.missing_service import MissingService
 from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
@@ -287,7 +290,8 @@ class ProblemRegistry:
             "mutating_webhook_resource_limits_social_network": MutatingWebhookResourceLimits,
             "cumulative_admission_webhook_timeout_hotel_reservation": CumulativeAdmissionWebhookTimeoutHotelReservation,
             "cronjob_sidecar_blocks_completion_hotel_reservation": CronJobSidecarBlocksCompletionHotelReservation,
-            "missing_image_pull_secret_hotel_reservation": MissingImagePullSecretHotelReservation,
+            "missing_image_pull_secret_astronomy_shop" : MissingImagePullSecretAstronomyShop,
+            "missing_image_pull_secret_blueprint_hotel_reservation": MissingImagePullSecretBlueprintHotelReservation,
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[

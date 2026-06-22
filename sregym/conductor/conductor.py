@@ -615,11 +615,15 @@ class Conductor:
 
         self.logger.info("[FIX] MissingImagePullSecret containerd dockerhub-block leftover if any")
         try:
-            from sregym.conductor.problems.missing_image_pull_secret_hotel_reservation import (
-                MissingImagePullSecretHotelReservation,
+            from sregym.conductor.problems.missing_image_pull_secret_astronomy_shop import (
+                MissingImagePullSecretAstronomyShop,
+            )
+            from sregym.conductor.problems.missing_image_pull_secret_blueprint_hotel_reservation import (
+                MissingImagePullSecretBlueprintHotelReservation,
             )
 
-            MissingImagePullSecretHotelReservation.cleanup_leftovers()
+            MissingImagePullSecretBlueprintHotelReservation.cleanup_leftovers()
+            MissingImagePullSecretAstronomyShop.cleanup_leftovers()
         except Exception as e:
             self.logger.warning(f"Could not clean up MissingImagePullSecret leftovers: {e}")
 
