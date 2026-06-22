@@ -35,6 +35,27 @@ from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
+# Affinity rule shared by the injector and restore pods to hard-prevent
+# scheduling on control-plane nodes, regardless of taints.
+_WORKER_ONLY_AFFINITY = {
+    "nodeAffinity": {
+        "requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [{
+                "matchExpressions": [
+                    {
+                        "key": "node-role.kubernetes.io/control-plane",
+                        "operator": "DoesNotExist",
+                    },
+                    {
+                        "key": "node-role.kubernetes.io/master",  # pre-1.24 clusters
+                        "operator": "DoesNotExist",
+                    },
+                ]
+            }]
+        }
+    }
+}
+
 
 class NodeClockDriftHotelReservation(Problem):
     """Inject node clock drift causing TLS validation failures."""
@@ -73,6 +94,20 @@ class NodeClockDriftHotelReservation(Problem):
 
     def requires_khaos(self) -> bool:
         return False
+
+    # ── Node helpers ────────────────────────────────────────────────────────────
+
+    def _is_control_plane_node(self, node_name: str) -> bool:
+        """Return True if the named node carries a control-plane role label."""
+        try:
+            node = self.core_v1.read_node(node_name)
+            labels = node.metadata.labels or {}
+            return (
+                "node-role.kubernetes.io/control-plane" in labels
+                or "node-role.kubernetes.io/master" in labels  # pre-1.24 clusters
+            )
+        except ApiException:
+            return False
 
     # ── TLS Infrastructure ──────────────────────────────────────────────────────
 
@@ -326,8 +361,9 @@ class NodeClockDriftHotelReservation(Problem):
     def _select_target_node(self) -> str:
         """Select the node running the frontend pod that has the TLS sidecar.
 
-        Must only match a pod that actually has the tls-health-check container,
-        not just any "Running" frontend pod — see _wait_for_sidecar_rollout for why.
+        Must only match a pod that actually has the tls-health-check container
+        on a worker node — see _wait_for_sidecar_rollout for why the sidecar
+        check matters, and _is_control_plane_node for why the role check matters.
         """
         try:
             pods = self.core_v1.list_namespaced_pod(
@@ -343,12 +379,13 @@ class NodeClockDriftHotelReservation(Problem):
                 pod.status.phase == "Running"
                 and pod.spec.node_name
                 and "tls-health-check" in container_names
+                and not self._is_control_plane_node(pod.spec.node_name)
             ):
                 return pod.spec.node_name
 
         raise RuntimeError(
-            f"No running frontend pod with tls-health-check sidecar found with node "
-            f"assignment in namespace '{self.namespace}'"
+            f"No running frontend pod with tls-health-check sidecar found on a "
+            f"worker node in namespace '{self.namespace}'"
         )
 
     def _advance_node_clock(self, node: str) -> None:
@@ -356,6 +393,9 @@ class NodeClockDriftHotelReservation(Problem):
         service, then advances the clock. Records which service(s) were stopped
         in self.stopped_services so recover_fault can restore exactly those, rather
         than guessing.
+
+        The pod carries a nodeAffinity rule that hard-prevents scheduling on
+        control-plane nodes as a second layer of defence beyond _select_target_node.
         """
         advance_cmd = f"""
             set -e
@@ -402,6 +442,7 @@ class NodeClockDriftHotelReservation(Problem):
             },
             "spec": {
                 "nodeSelector": {"kubernetes.io/hostname": node},
+                "affinity": _WORKER_ONLY_AFFINITY,
                 "hostNetwork": True,
                 "hostPID": True,
                 "hostIPC": True,
@@ -447,7 +488,8 @@ class NodeClockDriftHotelReservation(Problem):
             raise
 
     def _restore_node_clock(self, node: str) -> None:
-        """Step the node's clock back by the same offset it was advanced + restore whichever time sync service was masked during injection.
+        """Step the node's clock back by the same offset it was advanced + restore
+        whichever time-sync service was masked during injection.
         """
         services = self.stopped_services or []
 
@@ -487,6 +529,7 @@ class NodeClockDriftHotelReservation(Problem):
             },
             "spec": {
                 "nodeSelector": {"kubernetes.io/hostname": node},
+                "affinity": _WORKER_ONLY_AFFINITY,
                 "hostNetwork": True,
                 "hostPID": True,
                 "hostIPC": True,
@@ -529,7 +572,8 @@ class NodeClockDriftHotelReservation(Problem):
                 )
 
     def _cleanup_injector_pods(self) -> None:
-        """Deletes injector + restore pods incase restore_node_clock cleanup didn't finish (race/failed)
+        """Delete injector + restore pods in case _restore_node_clock cleanup
+        didn't finish (race condition or failure).
         """
         try:
             pods = self.core_v1.list_namespaced_pod(
