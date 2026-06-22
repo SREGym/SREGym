@@ -28,7 +28,7 @@ class Shell:
             input_data = input_data.encode("utf-8")
 
         state = shlex.quote(cls._state_file)
-        #resolves cwd to absolute path instead of relative.
+        # resolves cwd to absolute path instead of relative.
         dir_cmd = f"cd {shlex.quote(os.path.abspath(cwd))} 2>/dev/null; " if cwd else ""
         wrapped = (
             f"[ -f {state} ] && source {state} 2>/dev/null; "
