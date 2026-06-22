@@ -21,8 +21,9 @@ case "$(uname -s)/$(uname -m)" in
         ;;
 esac
 
-if [ -n "$platform_package" ] && ! node -e "require.resolve('$platform_package')" >/dev/null 2>&1; then
-    codex_root="$(npm root -g)/@openai/codex"
+global_node_modules="$(npm root -g)"
+if [ -n "$platform_package" ] && ! NODE_PATH="$global_node_modules" node -e "require.resolve('$platform_package')" >/dev/null 2>&1; then
+    codex_root="$global_node_modules/@openai/codex"
     installed_version="$(node -p "require('$codex_root/package.json').version")"
     echo "[$(date -Iseconds)] Installing missing Codex platform package: $platform_package"
     npm install -g "${platform_package}@npm:@openai/codex@${installed_version}-${platform_suffix}"
