@@ -169,6 +169,8 @@ jobs:
           esac
 
           # First token is the problem ID (or a skip keyword); ignore trailing text.
+          # Strip \r left over from CRLF line endings in PR descriptions.
+          raw=$(printf '%s' "$raw" | tr -d '\r')
           problem_id=$(printf '%s' "$raw" | awk '{print $1}')
           problem_id=${problem_id//\`/}
           problem_id=${problem_id//\"/}

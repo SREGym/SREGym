@@ -27,6 +27,7 @@ init_logger()
 
 import logging  # noqa: E402
 
+from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig  # noqa: E402
 from clients.stratus.stratus_agent.diagnosis_agent import (  # noqa: E402
     single_run_with_predefined_prompts as diagnosis_single_run,
@@ -226,22 +227,6 @@ def get_app_info():
         return app_info
     except Exception as e:
         logger.error(f"[get_app_info] HTTP submission failed: {e}")
-        return "error"
-
-
-def get_curr_problem():
-    ltc = LanggraphToolConfig()
-    url = ltc.benchmark_current_problem
-    try:
-        response = requests.get(url)
-        logger.info(f"Response status: {response.status_code}, text: {response.text}")
-        problem_str = str(response.text)
-        logger.info(f"problem as str: {problem_str}")
-        problem = literal_eval(problem_str)
-        logger.info(f"problem info: {problem}")
-        return problem["problem_id"]
-    except Exception as e:
-        logger.error(f"[get_curr_problem] HTTP submission failed: {e}")
         return "error"
 
 
@@ -720,7 +705,8 @@ async def main():
     # run diagnosis agent 2 times
     # here, running the file's main function should suffice.
     # 1 for noop diagnosis
-    current_problem = get_curr_problem()
+    current_problem = resolve_problem_id()
+    logger.info(f"Problem ID (harness): {current_problem}")
 
     # logger.info("*" * 25 + f" Testing {current_problem} ! " + "*" * 25)
     # logger.info("*" * 25 + f" Testing {current_problem} ! " + "*" * 25)
