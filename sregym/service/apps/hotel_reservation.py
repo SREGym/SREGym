@@ -129,11 +129,6 @@ class HotelReservation(Application):
         if self.mount_failure_scripts:
             self.populate_failure_configmaps()
             self._patch_mongo_failure_script_mounts()
-        else:
-            # Create empty configmaps so the names are visible (minimal noise)
-            # but without any script content that would leak the fault mechanism.
-            self.kubectl.create_or_update_configmap(name="failure-admin-rate", namespace=self.namespace, data={})
-            self.kubectl.create_or_update_configmap(name="failure-admin-geo", namespace=self.namespace, data={})
         self.kubectl.wait_for_ready(self.namespace)
 
     def delete(self):
