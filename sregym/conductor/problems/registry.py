@@ -18,6 +18,9 @@ from sregym.conductor.problems.cronjob_sidecar_blocks_completion import (
 from sregym.conductor.problems.cumulative_admission_webhook_timeout_hotel_reservation import (
     CumulativeAdmissionWebhookTimeoutHotelReservation,
 )
+from sregym.conductor.problems.database_connection_pool_exhaustion_hotel_reservation import (
+    DatabaseConnectionPoolExhaustionHotelReservation,
+)
 from sregym.conductor.problems.dev_shm_exhaustion_hotel_reservation import DevShmExhaustionHotelReservation
 from sregym.conductor.problems.duplicate_pvc_mounts import DuplicatePVCMounts
 from sregym.conductor.problems.edge_request_filter_cpu_saturation import EdgeRequestFilterCPUSaturation
@@ -274,6 +277,7 @@ class ProblemRegistry:
             #     root_cause=_HW_DNS_RESOLVER_FAILURE,
             # ),
             # ==================== DIRECT K8S API ====================
+            "database_connection_pool_exhaustion_hotel_reservation": DatabaseConnectionPoolExhaustionHotelReservation,
             "expired_tls_hotel_reservation": ExpiredTlsHotelReservation,
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
