@@ -22,6 +22,11 @@ def _problem():
     return problem
 
 
+def test_agent_visible_ownership_keys_do_not_leak_harness_name():
+    assert "sregym" not in CalicoRouteReflectorLabelDriftHotelReservation.PROBLEM_LABEL_KEY
+    assert "sregym" not in CalicoRouteReflectorLabelDriftHotelReservation.NODE_MARKER_ANNOTATION
+
+
 def test_capture_bgp_configuration_marks_missing_config_as_created_by_problem():
     problem = _problem()
     problem._run = lambda command, check=False: subprocess.CompletedProcess(
