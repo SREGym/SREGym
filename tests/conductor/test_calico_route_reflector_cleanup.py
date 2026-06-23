@@ -28,6 +28,7 @@ def _conductor(fake_kubectl, monkeypatch):
     conductor = object.__new__(Conductor)
     conductor.logger = SimpleNamespace(
         info=lambda *args, **kwargs: None,
+        error=lambda *args, **kwargs: None,
         warning=lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(conductor_module, "KubeCtl", lambda: fake_kubectl)
@@ -198,3 +199,47 @@ def test_calico_route_reflector_global_cleanup_keeps_unowned_support_namespace(m
 
     assert f"kubectl delete namespace {problem.PROBE_NAMESPACE} --ignore-not-found" not in fake.commands
     assert f"kubectl delete bgppeer {problem.BGP_PEER_NAME} --ignore-not-found" in fake.commands
+
+
+def test_fix_kubernetes_keeps_kubelet_eviction_global_cleanup(monkeypatch):
+    fake = _FakeKubeCtl({})
+    conductor = _conductor(fake, monkeypatch)
+    conductor.kubectl = fake
+    conductor.dm_flakey_manager = SimpleNamespace(teardown_openebs_dm_flakey_infrastructure=lambda: None)
+    remote_calls = []
+    calico_cleanup_calls = []
+
+    class FakeRemoteOSFaultInjector:
+        def recover_kubelet_crash(self):
+            remote_calls.append("recover_kubelet_crash")
+
+        def recover_disk_pressure_all(self):
+            remote_calls.append("recover_disk_pressure_all")
+
+    class FakeVirtualizationFaultInjector:
+        def __init__(self, namespace):
+            self.namespace = namespace
+
+        def recover_daemon_set_image_replacement(self, daemon_set_name, original_image):
+            pass
+
+        def recover_all_nxdomain_templates(self):
+            pass
+
+    monkeypatch.setattr(conductor_module, "RemoteOSFaultInjector", FakeRemoteOSFaultInjector)
+    monkeypatch.setattr(conductor_module, "VirtualizationFaultInjector", FakeVirtualizationFaultInjector)
+    monkeypatch.setattr(
+        Conductor,
+        "_fix_calico_route_reflector_label_drift",
+        lambda self: calico_cleanup_calls.append(True),
+    )
+
+    conductor.fix_kubernetes()
+
+    assert remote_calls == ["recover_kubelet_crash", "recover_disk_pressure_all"]
+    assert (
+        "kubectl delete pods --all-namespaces "
+        "--field-selector=status.phase=Failed,metadata.namespace!=astronomy-shop "
+        "--ignore-not-found=true"
+    ) in fake.commands
+    assert calico_cleanup_calls == [True]
