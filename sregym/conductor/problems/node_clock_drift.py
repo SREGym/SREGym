@@ -277,13 +277,7 @@ class NodeClockDriftHotelReservation(Problem):
 
     def _wait_for_sidecar_rollout(self, timeout: int = 300) -> None:
         """Wait until a Running frontend pod exists with the tls-health-check sidecar
-        fully ready (openssl installed, per the readiness probe above).
-
-        The deployment patch in _add_tls_health_check_sidecar() triggers a rolling
-        update. During the rollout, the old pod (no sidecar) and the new pod (with
-        sidecar) can briefly coexist, potentially on DIFFERENT nodes. Selecting a
-        target node before the new pod is fully Running risks drifting the wrong
-        node's clock — one with no sidecar to ever observe the fault.
+        fully ready
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -340,8 +334,7 @@ class NodeClockDriftHotelReservation(Problem):
     @mark_fault_injected
     def recover_fault(self):
         """Fully reverse the fault: restore the time-sync service(s) that were
-        stopped/masked, step the clock back to cluster time, then clean up
-        injector pods.
+        stopped/masked, step clock back, clean up injector pods
 
         Must run BEFORE cleanup, since the restore pod also needs to land on the
         same target node via nsenter.
@@ -359,11 +352,7 @@ class NodeClockDriftHotelReservation(Problem):
     # ── Node Targeting ──────────────────────────────────────────────────────────
 
     def _select_target_node(self) -> str:
-        """Select the node running the frontend pod that has the TLS sidecar.
-
-        Must only match a pod that actually has the tls-health-check container
-        on a worker node — see _wait_for_sidecar_rollout for why the sidecar
-        check matters, and _is_control_plane_node for why the role check matters.
+        """Select the node running the frontend pod that has the TLS sidecar
         """
         try:
             pods = self.core_v1.list_namespaced_pod(
@@ -390,12 +379,11 @@ class NodeClockDriftHotelReservation(Problem):
 
     def _advance_node_clock(self, node: str) -> None:
         """Create a privileged pod that discovers + disables the active time-sync
-        service, then advances the clock. Records which service(s) were stopped
-        in self.stopped_services so recover_fault can restore exactly those, rather
-        than guessing.
+        service, advances the clock
 
         The pod carries a nodeAffinity rule that hard-prevents scheduling on
         control-plane nodes as a second layer of defence beyond _select_target_node.
+        (shouldn't need as long as control node is tainted)
         """
         advance_cmd = f"""
             set -e

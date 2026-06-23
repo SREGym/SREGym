@@ -373,12 +373,7 @@ class RemoteOSFaultInjector(FaultInjector):
 
             node_to_services.setdefault(node_name, set())
 
-            # Try to recover the exact service name from this pod's own logs.
-            # Retry a few times since `kubectl logs` can transiently fail or
-            # return an error string instead of raising (e.g. brief API server
-            # connectivity blips on CloudLab) — without detecting that, the
-            # discovery would silently fall through to the blind multi-name
-            # fallback with no indication anything went wrong.
+            # Try to recover the exact service name from this pod's own logs
             logs = self._read_pod_logs_with_retry(pod_name)
             for log_line in logs.splitlines():
                 if log_line.startswith("DISCOVERED_SERVICES:"):
@@ -407,9 +402,7 @@ class RemoteOSFaultInjector(FaultInjector):
         self, pod_name: str, namespace: str = "default", retries: int = 3, delay: int = 5
     ) -> str:
         """Read pod logs, retrying if the result looks like a connectivity
-        error rather than real log output. kubectl.exec_command can return an
-        error string instead of raising, so this checks the content itself
-        rather than relying on an exception.
+        error rather than real log output.
         """
         for attempt in range(retries):
             try:
@@ -429,8 +422,8 @@ class RemoteOSFaultInjector(FaultInjector):
         return ""
 
     def _restore_node_time_sync(self, node_name: str, known_services: set[str] | None = None):
-        """Run a short-lived privileged pod on `node_name` that unmasks + starts the discovered time-sync service directly 
-        measures the node's clock skew against the control plane and steps the clock to correct it immediately
+        """Run a short-lived privileged pod on `node_name` that unmasks/starts the
+        discovered time-sync service + steps the clock to correct it 
         """
         services = known_services or {"systemd-timesyncd", "chrony", "chronyd", "ntp", "ntpd"}
 
@@ -442,52 +435,59 @@ class RemoteOSFaultInjector(FaultInjector):
 
         control_plane_epoch = int(time.time())
 
-        restore_cmd = f"""
-            set -e
-            {restore_lines}
+        restore_cmd = f"""set -e
+{restore_lines}
 
-            NODE_EPOCH=$(nsenter --target 1 --mount --uts --ipc --net --pid -- date +%s)
-            SKEW=$((NODE_EPOCH - {control_plane_epoch}))
-            echo "Node clock skew before correction: ${{SKEW}}s"
+NODE_EPOCH=$(nsenter --target 1 --mount --uts --ipc --net --pid -- date +%s)
+SKEW=$((NODE_EPOCH - {control_plane_epoch}))
+echo "Node clock skew before correction: ${{SKEW}}s"
 
-            if [ "${{SKEW#-}}" -gt 60 ]; then
-                echo "Skew exceeds 60s threshold; forcing clock step..."
-                nsenter --target 1 --mount --uts --ipc --net --pid -- date -s "@{control_plane_epoch}"
-            else
-                echo "Skew within tolerance; no manual step needed."
-            fi
+if [ "${{SKEW#-}}" -gt 60 ]; then
+    echo "Skew exceeds 60s threshold; forcing clock step..."
+    nsenter --target 1 --mount --uts --ipc --net --pid -- date -s "@{control_plane_epoch}"
+else
+    echo "Skew within tolerance; no manual step needed."
+fi
 
-            nsenter --target 1 --mount --uts --ipc --net --pid -- date
-        """
+nsenter --target 1 --mount --uts --ipc --net --pid -- date
+"""
 
         pod_name = f"clock-drift-leftover-fix-{int(time.time() * 1000)}"
-        pod_yaml = f"""apiVersion: v1
-kind: Pod
-metadata:
-  name: {pod_name}
-  namespace: default
-  labels:
-    app: clock-drift-leftover-fixer
-spec:
-  nodeSelector:
-    kubernetes.io/hostname: {node_name}
-  hostNetwork: true
-  hostPID: true
-  hostIPC: true
-  restartPolicy: Never
-  terminationGracePeriodSeconds: 0
-  automountServiceAccountToken: false
-  containers:
-  - name: fix
-    image: ubuntu:22.04
-    imagePullPolicy: IfNotPresent
-    command: ["sh", "-c"]
-    args: ["{restore_cmd}"]
-    securityContext:
-      privileged: true
-      capabilities:
-        add: ["SYS_TIME", "SYS_ADMIN"]
-"""
+
+        pod_dict = {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "metadata": {
+                "name": pod_name,
+                "namespace": "default",
+                "labels": {"app": "clock-drift-leftover-fixer"},
+            },
+            "spec": {
+                "nodeSelector": {"kubernetes.io/hostname": node_name},
+                "hostNetwork": True,
+                "hostPID": True,
+                "hostIPC": True,
+                "restartPolicy": "Never",
+                "terminationGracePeriodSeconds": 0,
+                "automountServiceAccountToken": False,
+                "containers": [
+                    {
+                        "name": "fix",
+                        "image": "ubuntu:22.04",
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["sh", "-c"],
+                        "args": [restore_cmd],
+                        "securityContext": {
+                            "privileged": True,
+                            "capabilities": {"add": ["SYS_TIME", "SYS_ADMIN"]},
+                        },
+                    }
+                ],
+            },
+        }
+
+        pod_yaml = yaml.dump(pod_dict, default_flow_style=False)
+
         try:
             print(f"Restoring time-sync on node {node_name} (services: {services})...")
             self.kubectl.exec_command("kubectl apply -f -", input_data=pod_yaml)
