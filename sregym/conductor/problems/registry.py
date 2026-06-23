@@ -26,8 +26,8 @@ from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import Eph
 from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
 from sregym.conductor.problems.failed_readiness_probe import FailedReadinessProbe
 from sregym.conductor.problems.faulty_image_correlated import FaultyImageCorrelated
-from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
+from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad

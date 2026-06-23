@@ -2503,33 +2503,29 @@ class VirtualizationFaultInjector(FaultInjector):
             containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
             containers[0]["command"] = ["/bin/sh", "-c"]
             containers[0]["args"] = [f"ulimit -n {limit} && exec {entrypoint_cmd}"]
-            
+
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
             apply_result = self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
             print(f"Apply result for {service}: {apply_result}")
-            
-            self.kubectl.exec_command(
-                f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s"
-            )
+
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
             print(f"Injected FD exhaustion (limit: {limit}) for service: {service}")
 
     def recover_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str):
         """Recover from FD exhaustion by pushing the soft limit to the kernel hard limit."""
         for service in microservices:
             deployment_yaml = self._get_deployment_yaml(service)
-            
+
             containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
             containers[0]["command"] = [entrypoint_cmd]
             containers[0]["args"] = []
-            
+
             modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
-            
+
             apply_result = self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
             print(f"Recover apply result for {service}: {apply_result}")
-            
-            self.kubectl.exec_command(
-                f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s"
-            )
+
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
             print(f"Recovered FD exhaustion for service: {service}")
 
     ############# HELPER FUNCTIONS ################
