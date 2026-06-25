@@ -1,3 +1,5 @@
+# ruff: noqa: I001
+
 from pathlib import Path
 
 import yaml
@@ -9,6 +11,9 @@ from sregym.conductor.problems.admission_webhook_outage import AdmissionWebhookO
 from sregym.conductor.problems.admission_webhook_tls_mismatch import AdmissionWebhookTLSMismatch
 from sregym.conductor.problems.assign_non_existent_node import AssignNonExistentNode
 from sregym.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
+from sregym.conductor.problems.calico_route_reflector_label_drift import (
+    CalicoRouteReflectorLabelDriftHotelReservation,
+)
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
@@ -105,7 +110,6 @@ from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
 from sregym.service.kubectl import KubeCtl
-
 
 # fmt: off
 class ProblemRegistry:
@@ -284,6 +288,7 @@ class ProblemRegistry:
             "internal_traffic_policy_local_astronomy_shop": InternalTrafficPolicyLocalAstronomyShop,
             "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
             "pod_cidr_exhaustion_hotel_reservation": lambda: PodCIDRExhaustionHotelReservation(),
+            "calico_route_reflector_label_drift_hotel_reservation": CalicoRouteReflectorLabelDriftHotelReservation,
 
             "admission_webhook_tls_mismatch_hotel_reservation": lambda: AdmissionWebhookTLSMismatch(app_name="hotel_reservation", faulty_service="recommendation"),
             "mutating_webhook_resource_limits_social_network": MutatingWebhookResourceLimits,
