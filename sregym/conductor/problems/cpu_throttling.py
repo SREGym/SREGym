@@ -30,8 +30,9 @@ class CpuThrottling(Problem):
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        # calibration warmup(30s) + n_samples(5) * window(7s) = 55s; keep wrk2 alive through it
-        self.app.create_workload(duration=120)
+        # calibration: warmup(30s) + n_samples(5)*window(7s) = 65s
+        # verification: settle(30s) + sample(15s) = 45s  soo total ~110s
+        self.app.create_workload(duration=180)
         self.mitigation_oracle = CpuThrottlingMitigationOracle(
             problem=self,
             faulty_service=self.faulty_service,
@@ -42,6 +43,7 @@ class CpuThrottling(Problem):
         print("== Fault Injection ==")
         injector = VirtualizationFaultInjector(namespace=self.namespace)
         injected = injector.inject_cpu_throttle(microservices=[self.faulty_service], all_services=True)
+        injected = injector.verify_injection(injected=injected, faulty_services=[self.faulty_service])
         self.injected_cpu_limit = injected.get(self.faulty_service)
         self.mitigation_oracle.injected_cpu_limit = self.injected_cpu_limit
         self._patched_services = list(injected.keys())
