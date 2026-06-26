@@ -1,0 +1,25 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: enterprise-proxy-injector
+webhooks:
+  - name: proxy.sregym.io
+    clientConfig:
+      service:
+        name: proxy-webhook-service
+        namespace: webhook-system
+        path: "/mutate"
+      caBundle: LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUR0akNDQXA2Z0F3SUJBZ0lVR0J6aVZoOEppL2xqcTdXMjFDTjZIMlFVNTF3d0RRWUpLb1pJaHZjTkFRRUwKQlFBd016RXhNQzhHQTFVRUF3d29jSEp2ZUhrdGQyVmlhRzl2YXkxelpYSjJhV05sTG5kbFltaHZiMnN0YzNsegpkR1Z0TG5OMll6QWVGdzB5TmpBMk1qSXhOek01TXpsYUZ3MHlOekEyTWpJeE56TTVNemxhTURNeE1UQXZCZ05WCkJBTU1LSEJ5YjNoNUxYZGxZbWh2YjJzdGMyVnlkbWxqWlM1M1pXSm9iMjlyTFhONWMzUmxiUzV6ZG1Nd2dnRWkKTUEwR0NTcUdTSWIzRFFFQkFRVUFBNElCRHdBd2dnRUtBb0lCQVFDZENhTlJtRG8wVXlrZHpYTXdNVzRuTVVkMwpQZVpPZ3M1UGtibk1kQVltdVp0UlhuUSt6eE03bnFDcTE5YzVCUHV5ZXEzWnJIcGtoblAyWFpGVnhmc3hXTWVFCmtQVHZyQnlUeGlzU0RDbVZCaTluQVI5aWZsOE5iazlHcmdWR281UFF3cDI1RlFKTEhpM05kd0VjYjZuZXg4RCsKVzdqQmlWSFMxdHJkbzBZcXNDV2xhd0t1bGJLRjJ2RnFLdkRkaFVTYnUzb1pzR1lGYlpGcjRYemp0c1VFdTNRSwpBdWJZSlFOazJFNGZQVWNyRmQwL2hvZHptd29zaWZrL0JVZEp6ZFZXYWpmL1BWV0ZyL0lMY2VYWVJxWmhJRkpoClEveldRdXpJY0RFank5MUFZUjc2blVvMDdUZ0lZL1QreG1zZUUxVnlvUEJyYVIrejQvZXlGbVZtdlNIL0FnTUIKQUFHamdjRXdnYjR3Q1FZRFZSMFRCQUl3QURBTEJnTlZIUThFQkFNQ0JlQXdFd1lEVlIwbEJBd3dDZ1lJS3dZQgpCUVVIQXdFd2NBWURWUjBSQkdrd1o0SVZjSEp2ZUhrdGQyVmlhRzl2YXkxelpYSjJhV05sZ2lSd2NtOTRlUzEzClpXSm9iMjlyTFhObGNuWnBZMlV1ZDJWaWFHOXZheTF6ZVhOMFpXMkNLSEJ5YjNoNUxYZGxZbWh2YjJzdGMyVnkKZG1salpTNTNaV0pvYjI5ckxYTjVjM1JsYlM1emRtTXdIUVlEVlIwT0JCWUVGQmlCKzVrS2xmQkM1RzNIaC9DRApnUjlMTS9GSU1BMEdDU3FHU0liM0RRRUJDd1VBQTRJQkFRQi93cFdGakdPMTBITEV4N2RBdDJoUERZci93MUNvCnpwWTh0RzcrVElYZVFOS08xUG94NGZSVGQ4NVZjVDE2NFN3bDQ1aU94N01qeVJwbVU4THRITG9rYkVxQS93U2IKaEQ5RUZvOG92VWdrTzNPUGRQeUx6T2hYTmpmV0YybWQ2ck1venpxQXhGbTBZOTVNN1NQOEQrWUtNc1lOSmVRRAplNWp2a2VJdklxYUhWRDlGSWZKRXRKOHoreWZMQWk2cnhtUURXbVJtb2hCS2tEcUdMRFV1b3E5SmNNNWluOUFMCm4vQ3dCbk5LaE9nV2F3czcvOEc1ek9xZ0hmTzVjZEVTRlZHZUZNUWJnWWQzYmkwQ0wyTXZNV3VTbElmR3NiNk4KVHlhTmtaRVlwaXY4a2d0Mk9aM1J5SVpPS0xvSTVhUEEvTXI0cDBlZDdjQ1pDZHJPVklsQW1WYnkKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    namespaceSelector:
+      matchExpressions:
+      - key: kubernetes.io/metadata.name
+        operator: In
+        values: ["default"]
