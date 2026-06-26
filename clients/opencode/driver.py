@@ -198,7 +198,7 @@ def main():
         "--problem-id",
         type=str,
         default=None,
-        help="Problem ID for artifact naming (default: SREGYM_PROBLEM_ID when launched via main.py)",
+        help="Problem ID for artifact naming (default: SREGYM_ARTIFACT_ID in benchmark runs)",
     )
     parser.add_argument(
         "--no-auto-install",
