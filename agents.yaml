@@ -61,3 +61,10 @@ agents:
     install_script: null
     agent_version: null
     container_isolation: false
+  - name: aura
+    kickoff_command: python -m clients.aura.driver
+    kickoff_workdir: .
+    kickoff_env: null
+    install_script: null
+    agent_version: v1.19.1
+    container_isolation: false
