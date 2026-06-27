@@ -48,6 +48,9 @@ from sregym.conductor.problems.khaos_faults import (
     KhaosFaultProblem,
 )
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
+from sregym.conductor.problems.limitrange_quota_exhaustion_hotel_reservation import (
+    LimitRangeQuotaExhaustionHotelReservation,
+)
 from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
@@ -109,6 +112,7 @@ from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
 from sregym.service.kubectl import KubeCtl
+
 
 # fmt: off
 class ProblemRegistry:
@@ -283,6 +287,7 @@ class ProblemRegistry:
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
             "node_conntrack_exhaustion_hotel_reservation": NodeConntrackExhaustionHotelReservation,
             "dev_shm_exhaustion_hotel_reservation": DevShmExhaustionHotelReservation,
+            "limitrange_quota_exhaustion_hotel_reservation": LimitRangeQuotaExhaustionHotelReservation,
             "internal_traffic_policy_local_astronomy_shop": InternalTrafficPolicyLocalAstronomyShop,
             "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
             "pod_cidr_exhaustion_hotel_reservation": lambda: PodCIDRExhaustionHotelReservation(),
