@@ -38,6 +38,7 @@ class ConductorConfig:
 
     deploy_loki: bool = True
     enable_noise: bool = False
+    internet_access: str = "filtered"
 
 
 class Conductor:
@@ -81,6 +82,7 @@ class Conductor:
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
+        self.logger.info(f"Internet access mode: {self.config.internet_access}")
 
         self.stage_sequence: list[dict] = []
         self.current_stage_index: int = 0
