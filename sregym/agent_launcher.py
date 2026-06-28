@@ -11,6 +11,7 @@ from pathlib import Path
 
 from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
+from sregym.service.egress_proxy import CA_BUNDLE_ENV_VARS, NO_PROXY
 
 from .agent_registry import AgentRegistration
 
@@ -32,6 +33,8 @@ class AgentLauncher:
         self._agent_kubeconfig_path: str | None = None
         self._use_containers: bool = True
         self._container_runner: ContainerRunner | None = None
+        self._proxy_url: str | None = None
+        self._proxy_ca_bundle: Path | None = None
 
     def set_agent_kubeconfig(self, kubeconfig_path: str | None):
         """
@@ -39,6 +42,11 @@ class AgentLauncher:
         This is typically the filtered kubeconfig from the K8s proxy.
         """
         self._agent_kubeconfig_path = kubeconfig_path
+
+    def set_proxy(self, url: str | None, ca_bundle: Path | None = None):
+        """Set the egress proxy URL and CA bundle for agent containers."""
+        self._proxy_url = url
+        self._proxy_ca_bundle = ca_bundle
 
     def enable_container_isolation(self, force_build: bool = False):
         """Initialize the container runner and build/check the image."""
@@ -48,6 +56,8 @@ class AgentLauncher:
                 logs_path=Path("./logs"),
                 sregym_apps_path=Path("./SREGym-applications"),
                 sregym_app_subdirs=["socialNetwork/wrk2", "hotelReservation/wrk2"],
+                proxy_url=self._proxy_url,
+                proxy_ca_bundle=self._proxy_ca_bundle,
             )
             self._container_runner = ContainerRunner(config)
             if force_build:
@@ -79,6 +89,18 @@ class AgentLauncher:
         # Use filtered kubeconfig if set (hides chaos engineering namespaces)
         if self._agent_kubeconfig_path:
             env["KUBECONFIG"] = self._agent_kubeconfig_path
+
+        if self._proxy_url:
+            env["http_proxy"] = self._proxy_url
+            env["https_proxy"] = self._proxy_url
+            env["HTTP_PROXY"] = self._proxy_url
+            env["HTTPS_PROXY"] = self._proxy_url
+            env["no_proxy"] = NO_PROXY
+            env["NO_PROXY"] = NO_PROXY
+            if self._proxy_ca_bundle and self._proxy_ca_bundle.exists():
+                ca = str(self._proxy_ca_bundle)
+                for var in CA_BUNDLE_ENV_VARS:
+                    env[var] = ca
 
         proc = subprocess.Popen(
             reg.kickoff_command,
