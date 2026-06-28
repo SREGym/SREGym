@@ -125,7 +125,11 @@ class ContainerRunner:
         "COPILOT_PROVIDER_TYPE",
         # SREGym internal
         "AGENT_MODEL_ID",
+        "AGENT_API_BASE",
+        "AGENT_API_KEY",
         "JUDGE_MODEL_ID",
+        "JUDGE_API_BASE",
+        "JUDGE_API_KEY",
         # Config vars
         "API_HOSTNAME",
         "API_PORT",
