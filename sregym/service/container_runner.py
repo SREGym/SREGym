@@ -1,4 +1,3 @@
-import atexit
 import contextlib
 import logging
 import os
@@ -329,9 +328,6 @@ class ContainerRunner:
         """Start an agent in a container asynchronously. Returns Popen handle."""
         cmd = self.build_docker_command(exec_input)
         logger.info(f"Starting containerized agent [{exec_input.label}]: {exec_input.command[:80]}...")
-
-        for tmp in self._credential_tmps:
-            atexit.register(lambda t=tmp: shutil.rmtree(t, ignore_errors=True))
 
         return subprocess.Popen(
             cmd,
