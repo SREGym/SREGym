@@ -359,13 +359,20 @@ class Conductor:
 
     def _finish_problem(self):
         """
-        Runs problem teardown synchronously: fault recovery, app undeploy, and cluster
-        reconciliation all complete before this method returns.
+        Runs problem teardown synchronously (fault recovery, app undeploy, cluster
+        reconciliation) before returning.
 
-        When called from _submit_evaluate_and_advance() (which runs in an executor
-        thread), start_problem() awaits self._submit_future to ensure the executor —
-        and therefore this cleanup — has fully finished before the next problem starts.
+        Idempotent: safe to call from multiple paths (submit flow via
+        ``_advance_to_next_stage``, and ``main.py`` as a post-exit safety net).
+        The first call runs cleanup; subsequent calls no-op. ``start_problem()``
+        resets the stage to ``"setup"``, so the deploy-retry path still cleans up
+        each failed attempt.
         """
+        if self.submission_stage in ("done", "tearing_down"):
+            self.logger.info(
+                f"[STAGE] _finish_problem already ran/running (submission_stage={self.submission_stage!r}); skipping"
+            )
+            return
         self.logger.info("[STAGE] Done, starting teardown")
         self.submission_stage = "tearing_down"
         self._cleanup_sync()
