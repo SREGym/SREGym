@@ -176,6 +176,8 @@ exclude = [
     ".venv",
     "build",
     "*.egg-info",
+    # Vendored verbatim from Harbor (see sregym/traces/atif/UPSTREAM.md).
+    "sregym/traces/atif",
 ]
 
 [tool.ruff.lint]
