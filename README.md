@@ -138,6 +138,36 @@ Set the required environment variable for your provider before running:
 | AWS Bedrock | `bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0` | `AWS_PROFILE`, `AWS_DEFAULT_REGION` |
 | Azure | `azure/gpt-4o` | `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION` |
 
+#### Local LLMs
+
+Stratus can use local LLMs served through LiteLLM-compatible endpoints. Set the
+agent endpoint with environment variables before running SREGym:
+
+```bash
+export AGENT_API_BASE="http://127.0.0.1:11434"
+python main.py --agent stratus --model ollama_chat/qwen2.5:3b
+```
+
+Set `AGENT_API_KEY` as well if the endpoint requires authentication.
+
+If `--judge-model` is not set, the judge uses the same model as `--model` and
+inherits `AGENT_API_BASE` / `AGENT_API_KEY` when separate judge endpoint env
+vars are not provided.
+
+Set these only when the judge should use a different endpoint or credential:
+
+```bash
+export JUDGE_API_BASE="https://example.test/v1"
+export JUDGE_API_KEY="..."
+python main.py --agent stratus --model ollama_chat/qwen2.5:3b --judge-model gpt-5
+```
+
+On Linux host networking, `http://127.0.0.1:11434` can reach a local model
+server bound to loopback. On Docker Desktop for macOS or WSL, use
+`http://host.docker.internal:11434` if `127.0.0.1` resolves inside the agent
+container instead of the host. The local model server must listen on an address
+reachable from the Docker container.
+
 <details>
 <summary><strong>Provider Examples</strong></summary>
 

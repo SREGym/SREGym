@@ -94,12 +94,6 @@ def _restore_env_var(name: str, previous_value: str | None) -> None:
         os.environ[name] = previous_value
 
 
-def _set_optional_env(name: str, value: str | None) -> None:
-    """Set an env var from an explicit CLI value without clearing existing env config."""
-    if value:
-        os.environ[name] = value
-
-
 def _env_status(name: str) -> str:
     return "set" if os.environ.get(name) else "unset"
 
@@ -496,15 +490,11 @@ def main(args):
     # Push to env so downstream code picks it up
     os.environ["AGENT_MODEL_ID"] = agent_model
     os.environ["JUDGE_MODEL_ID"] = judge_model
-    _set_optional_env("AGENT_API_BASE", getattr(args, "agent_api_base", None))
-    _set_optional_env("AGENT_API_KEY", getattr(args, "agent_api_key", None))
-    judge_api_base = getattr(args, "judge_api_base", None)
-    judge_api_key = getattr(args, "judge_api_key", None)
     if not getattr(args, "judge_model", None):
-        judge_api_base = judge_api_base or os.environ.get("JUDGE_API_BASE") or os.environ.get("AGENT_API_BASE")
-        judge_api_key = judge_api_key or os.environ.get("JUDGE_API_KEY") or os.environ.get("AGENT_API_KEY")
-    _set_optional_env("JUDGE_API_BASE", judge_api_base)
-    _set_optional_env("JUDGE_API_KEY", judge_api_key)
+        if not os.environ.get("JUDGE_API_BASE") and os.environ.get("AGENT_API_BASE"):
+            os.environ["JUDGE_API_BASE"] = os.environ["AGENT_API_BASE"]
+        if not os.environ.get("JUDGE_API_KEY") and os.environ.get("AGENT_API_KEY"):
+            os.environ["JUDGE_API_KEY"] = os.environ["AGENT_API_KEY"]
     os.environ["API_HOSTNAME"] = "0.0.0.0"
     os.environ["API_PORT"] = "8000"
     os.environ["MCP_SERVER_PORT"] = "9954"
@@ -631,30 +621,6 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set)",
-    )
-    parser.add_argument(
-        "--agent-api-base",
-        type=str,
-        default=None,
-        help="Optional API base URL for the agent model endpoint (for example, local Ollama or vLLM)",
-    )
-    parser.add_argument(
-        "--agent-api-key",
-        type=str,
-        default=None,
-        help="Optional API key for the agent model endpoint; prefer AGENT_API_KEY env var for real secrets",
-    )
-    parser.add_argument(
-        "--judge-api-base",
-        type=str,
-        default=None,
-        help="Optional API base URL for the judge model endpoint",
-    )
-    parser.add_argument(
-        "--judge-api-key",
-        type=str,
-        default=None,
-        help="Optional API key for the judge model endpoint; prefer JUDGE_API_KEY env var for real secrets",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."

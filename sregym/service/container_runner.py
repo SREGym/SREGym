@@ -159,14 +159,9 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
-        # On macOS, --network=host is a no-op so the container has its own
-        # network namespace. host.docker.internal routes to the Mac's loopback
-        # via Docker Desktop, so we must override the hostname.
-        # On Linux with --network=host the container shares the host's network
-        # stack directly, so localhost/127.0.0.1 already reaches host services.
-        # host.docker.internal resolves to the bridge IP (172.17.0.1) where
-        # kubectl port-forward is NOT listening, so we must NOT override.
-        if self.config.network_mode == "host" and platform.system() == "Darwin" or self.config.network_mode == "host":
+        # Agent containers use Docker's host alias to reach SREGym services
+        # running on the host, including the MCP port-forward.
+        if self.config.network_mode == "host":
             env_vars["API_HOSTNAME"] = "host.docker.internal"
             mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
             env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
