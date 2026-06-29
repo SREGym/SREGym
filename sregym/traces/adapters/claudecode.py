@@ -33,9 +33,13 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from sregym.traces.adapters._common import (
+    _aggregate_final_metrics,
+    _load_jsonl,
+    _stringify,
+)
 from sregym.traces.atif import (
     Agent,
-    FinalMetrics,
     Metrics,
     Observation,
     ObservationResult,
@@ -92,15 +96,6 @@ def _get_session_dir(run_dir: Path) -> Path | None:
 # --------------------------------------------------------------------------- #
 # Content extraction helpers (ported verbatim)
 # --------------------------------------------------------------------------- #
-def _stringify(value: Any) -> str:
-    if isinstance(value, str):
-        return value
-    try:
-        return json.dumps(value, ensure_ascii=False)
-    except TypeError:
-        return str(value)
-
-
 def _extract_text_reasoning_tool_uses(
     content: Any,
 ) -> tuple[str, str | None, list[dict[str, Any]]]:
@@ -425,18 +420,7 @@ def _convert_session(session_dir: Path, run_dir: Path) -> Trajectory | None:
 
     raw_events: list[dict[str, Any]] = []
     for session_file in session_files:
-        try:
-            with open(session_file, encoding="utf-8") as handle:
-                for line in handle:
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        raw_events.append(json.loads(stripped))
-                    except json.JSONDecodeError as exc:
-                        logger.debug("Skipping malformed JSONL line in %s: %s", session_file, exc)
-        except OSError as exc:
-            logger.debug("Skipping unreadable session file %s: %s", session_file, exc)
+        raw_events.extend(_load_jsonl(session_file))
 
     if not raw_events:
         return None
@@ -719,12 +703,6 @@ def _convert_session(session_dir: Path, run_dir: Path) -> Trajectory | None:
         logger.debug("No valid steps produced from Claude Code session")
         return None
 
-    prompt_values = [s.metrics.prompt_tokens for s in steps if s.metrics and s.metrics.prompt_tokens is not None]
-    completion_values = [
-        s.metrics.completion_tokens for s in steps if s.metrics and s.metrics.completion_tokens is not None
-    ]
-    cached_values = [s.metrics.cached_tokens for s in steps if s.metrics and s.metrics.cached_tokens is not None]
-
     service_tiers: set[str] = set()
     cache_creation_total, cache_read_total = 0, 0
     cache_creation_seen, cache_read_seen = False, False
@@ -754,12 +732,9 @@ def _convert_session(session_dir: Path, run_dir: Path) -> Trajectory | None:
     if not final_extra:
         final_extra = None
 
-    final_metrics = FinalMetrics(
-        total_prompt_tokens=sum(prompt_values) if prompt_values else None,
-        total_completion_tokens=sum(completion_values) if completion_values else None,
-        total_cached_tokens=sum(cached_values) if cached_values else None,
+    final_metrics = _aggregate_final_metrics(
+        steps,
         total_cost_usd=_parse_total_cost_from_stream_json(run_dir),
-        total_steps=len(steps),
         extra=final_extra,
     )
 

@@ -80,3 +80,130 @@ def test_parse_run_path():
     assert info.problem_id == "service_port_conflict_hotel_reservation"
     assert info.run == 3
     assert info.batch == "0629_1125"
+
+
+# --------------------------------------------------------------------------- #
+# Codex dispatch
+# --------------------------------------------------------------------------- #
+
+
+def _codex_session_meta(session_id: str = "codex-sess-1") -> dict:
+    return {
+        "type": "session_meta",
+        "payload": {"id": session_id, "cli_version": "0.1.0"},
+    }
+
+
+def _codex_turn_context(model: str = "gpt-5") -> dict:
+    return {"type": "turn_context", "payload": {"model": model, "turn_id": "turn-1"}}
+
+
+def _codex_turn_started() -> dict:
+    return {"type": "event_msg", "payload": {"type": "turn_started", "turn_id": "turn-1"}}
+
+
+def _codex_reasoning(text: str) -> dict:
+    return {
+        "type": "response_item",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "payload": {"type": "reasoning", "summary": [{"type": "summary_text", "text": text}]},
+    }
+
+
+def _codex_assistant(text: str) -> dict:
+    return {
+        "type": "response_item",
+        "timestamp": "2026-01-01T00:00:01Z",
+        "payload": {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text}],
+        },
+    }
+
+
+def _codex_fn_call(call_id: str, name: str, args: dict) -> dict:
+    return {
+        "type": "response_item",
+        "timestamp": "2026-01-01T00:00:02Z",
+        "payload": {"type": "function_call", "call_id": call_id, "name": name, "arguments": json.dumps(args)},
+    }
+
+
+def _codex_fn_output(call_id: str, output: str) -> dict:
+    return {
+        "type": "response_item",
+        "timestamp": "2026-01-01T00:00:03Z",
+        "payload": {"type": "function_call_output", "call_id": call_id, "output": output},
+    }
+
+
+def _codex_token_count(prompt: int, completion: int, total: int) -> dict:
+    return {
+        "type": "event_msg",
+        "timestamp": "2026-01-01T00:00:04Z",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "last_token_usage": {
+                    "input_tokens": prompt,
+                    "output_tokens": completion,
+                    "cached_input_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": total,
+                },
+                "total_token_usage": {
+                    "input_tokens": prompt,
+                    "output_tokens": completion,
+                    "cached_input_tokens": 0,
+                    "reasoning_output_tokens": 0,
+                    "total_tokens": total,
+                },
+            },
+        },
+    }
+
+
+def _materialize_codex_run(tmp_path: Path) -> Path:
+    """Create a synthetic codex run under a canonical results/ path."""
+    run_dir = tmp_path / "results" / "0629_1959" / "codex" / "service_port_conflict_hotel_reservation" / "run_1"
+    sessions = run_dir / "sessions" / "rollout-20260101000000"
+    sessions.mkdir(parents=True)
+    events = [
+        _codex_session_meta(),
+        _codex_turn_context(),
+        _codex_turn_started(),
+        _codex_reasoning("Diagnosing the issue."),
+        _codex_assistant("Submitting diagnosis."),
+        _codex_fn_call("call_1", "shell", {"command": "curl -sS -X POST http://host/submit"}),
+        _codex_fn_output("call_1", '{"status":"200","message":"Submission received"}'),
+        _codex_token_count(100, 20, 120),
+    ]
+    with (sessions / "session.jsonl").open("w", encoding="utf-8") as fh:
+        for ev in events:
+            fh.write(json.dumps(ev) + "\n")
+    # Results JSON for submitted detection.
+    results_path = run_dir / "codex_results_service_port_conflict_hotel_reservation_20260629_140556.json"
+    results_path.write_text(json.dumps({"success": True}), encoding="utf-8")
+    return run_dir
+
+
+def test_convert_run_dispatches_codex(tmp_path):
+    run_dir = _materialize_codex_run(tmp_path)
+    traj = convert.convert_run(run_dir)
+    assert isinstance(traj, Trajectory)
+    assert traj.agent.name == "codex"
+    Trajectory.model_validate(traj.to_json_dict())
+
+
+def test_codex_extra_sregym_populated(tmp_path):
+    run_dir = _materialize_codex_run(tmp_path)
+    traj = convert.convert_run(run_dir)
+    sregym = traj.extra["sregym"]
+    assert sregym["problem_id"] == "service_port_conflict_hotel_reservation"
+    assert sregym["application"] == "Hotel Reservation"
+    assert sregym["run"] == 1
+    assert sregym["submitted"] is True
+    assert sregym["results_path"].endswith("codex/service_port_conflict_hotel_reservation/run_1")
+    # Diagnosis boundary should be detected (the step with the submit output).
+    assert "diagnosis_submitted_step" in sregym

@@ -1,9 +1,6 @@
 """Tests for the Claude Code -> ATIF adapter.
 
-Asserts the adapter is a faithful, coalescing port of Harbor's converter against
-a REAL Claude Code run fixture (see ``tests/traces/fixtures/claudecode_run/``).
-The fixture exercises the message-id coalescing path: 31 raw ``assistant`` events
-collapse to 13 distinct ``message.id``s (= 13 agent steps).
+Asserts the adapter against a REAL Claude Code run fixture.
 """
 
 import json
@@ -14,20 +11,7 @@ from sregym.traces.atif import Trajectory
 
 FIXTURE = Path(__file__).parent / "fixtures" / "claudecode_run"
 
-# Golden expectations for the committed fixture. To regenerate ALL pinned
-# values after replacing the fixture, run:
-#   .venv/bin/python -c "
-#   from sregym.traces.adapters import claudecode
-#   from pathlib import Path
-#   t=claudecode.to_atif(Path('tests/traces/fixtures/claudecode_run'), sregym_meta={})
-#   agent=sum(s.source=='agent' for s in t.steps)
-#   user=sum(s.source=='user' for s in t.steps)
-#   matched=sum(1 for s in t.steps if s.observation and any(r.source_call_id in {tc.tool_call_id for tc in (s.tool_calls or [])} for r in s.observation.results))
-#   print(f'agent={agent} user={user} total={len(t.steps)} metrics={sum(1 for s in t.steps if s.metrics)} matched={matched} cost={t.final_metrics.total_cost_usd}')
-#   print(f'session_id={t.session_id!r} version={t.agent.version!r} model={t.agent.model_name!r}')
-#   "
-# Also update EXPECTED_DIAGNOSIS_STEP in test_convert.py (first step whose
-# observation carries the Submission received envelope).
+# Golden expectations for the committed fixture
 EXPECTED_AGENT_STEPS = 13  # distinct assistant message.ids (31 raw events coalesce)
 EXPECTED_USER_STEPS = 1
 EXPECTED_TOTAL_STEPS = 14

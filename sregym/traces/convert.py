@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sregym.traces.adapters import claudecode
+from sregym.traces.adapters import claudecode, codex
 from sregym.traces.atif import Trajectory
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 # Tool name (as it appears in the results path) -> adapter ``to_atif`` callable.
 ADAPTERS: dict[str, Callable[..., Trajectory | None]] = {
     "claudecode": claudecode.to_atif,
+    "codex": codex.to_atif,
 }
 
 # Longest-suffix map of problem_id -> canonical application display name.
