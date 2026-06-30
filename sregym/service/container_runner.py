@@ -6,8 +6,28 @@ import subprocess
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 logger = logging.getLogger("all.sregym.container_runner")
+
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _docker_uses_separate_host() -> bool:
+    """Return whether Docker runs outside the host's network namespace."""
+    return platform.system() == "Darwin" or "microsoft" in platform.release().lower()
+
+
+def _replace_loopback_host(url: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.hostname not in LOOPBACK_HOSTS:
+        return url
+
+    userinfo, separator, _ = parsed.netloc.rpartition("@")
+    netloc = f"{userinfo}{separator}host.docker.internal"
+    if parsed.port is not None:
+        netloc += f":{parsed.port}"
+    return urlunsplit(parsed._replace(netloc=netloc))
 
 
 @dataclass
@@ -158,6 +178,10 @@ class ContainerRunner:
 
         if extra_env:
             env_vars.update(extra_env)
+
+        # Docker Desktop containers cannot reach host loopback directly.
+        if _docker_uses_separate_host() and (api_base := env_vars.get("AGENT_API_BASE")):
+            env_vars["AGENT_API_BASE"] = _replace_loopback_host(api_base)
 
         # Agent containers use Docker's host alias to reach SREGym services
         # running on the host, including the MCP port-forward.

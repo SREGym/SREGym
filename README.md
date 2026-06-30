@@ -188,11 +188,9 @@ export JUDGE_API_KEY="..."
 python main.py --agent stratus --model ollama_chat/qwen3-coder:30b --judge-model gpt-5
 ```
 
-On Linux host networking, `http://127.0.0.1:11434` can reach a local model
-server bound to loopback. On Docker Desktop for macOS or WSL, use
-`http://host.docker.internal:11434` if `127.0.0.1` resolves inside the agent
-container instead of the host. The local model server must listen on an address
-reachable from the Docker container.
+SREGym keeps loopback endpoints unchanged with native Linux host networking.
+On Docker Desktop for macOS or WSL, it automatically maps loopback endpoints to
+`host.docker.internal` for the agent container.
 
 <details>
 <summary><strong>Provider Examples</strong></summary>
