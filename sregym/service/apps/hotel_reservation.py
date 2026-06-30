@@ -13,11 +13,12 @@ logger.setLevel(logging.DEBUG)
 
 
 class HotelReservation(Application):
-    def __init__(self):
+    def __init__(self, mount_failure_scripts: bool = True):
         super().__init__(HOTEL_RES_METADATA)
         self.kubectl = KubeCtl()
         self.script_dir = FAULT_SCRIPTS
         self.helm_deploy = False
+        self.mount_failure_scripts = mount_failure_scripts
 
         self.load_app_json()
 
@@ -33,8 +34,26 @@ class HotelReservation(Application):
         self.frontend_service = metadata.get("frontend_service", "frontend")
         self.frontend_port = metadata.get("frontend_port", 5000)
 
+    # Script file lists for failure configmaps (used by populate/clear lifecycle)
+    FAILURE_ADMIN_RATE_SCRIPTS = [
+        "revoke-admin-rate-mongo.sh",
+        "revoke-mitigate-admin-rate-mongo.sh",
+        "remove-admin-mongo.sh",
+        "remove-mitigate-admin-rate-mongo.sh",
+    ]
+    FAILURE_ADMIN_GEO_SCRIPTS = [
+        "revoke-admin-geo-mongo.sh",
+        "revoke-mitigate-admin-geo-mongo.sh",
+        "remove-admin-mongo.sh",
+        "remove-mitigate-admin-geo-mongo.sh",
+    ]
+
     def create_configmaps(self):
-        """Create configmaps for the hotel reservation application."""
+        """Create configmaps for the hotel reservation application.
+
+        Note: failure-admin-{geo,rate} are created as standalone K8s objects (not mounted
+        into pods). They serve as noise/red herrings for unrelated faults.
+        """
         self.kubectl.create_or_update_configmap(
             name="mongo-rate-script",
             namespace=self.namespace,
@@ -47,31 +66,59 @@ class HotelReservation(Application):
             data=self._prepare_configmap_data(["k8s-geo-mongo.sh"]),
         )
 
-        script_files = [
-            "revoke-admin-rate-mongo.sh",
-            "revoke-mitigate-admin-rate-mongo.sh",
-            "remove-admin-mongo.sh",
-            "remove-mitigate-admin-rate-mongo.sh",
-        ]
-
+    def populate_failure_configmaps(self):
+        """Create/fill failure-admin-{geo,rate} configmaps with fault scripts (noise)."""
         self.kubectl.create_or_update_configmap(
             name="failure-admin-rate",
             namespace=self.namespace,
-            data=self._prepare_configmap_data(script_files),
+            data=self._prepare_configmap_data(self.FAILURE_ADMIN_RATE_SCRIPTS),
         )
-
-        script_files = [
-            "revoke-admin-geo-mongo.sh",
-            "revoke-mitigate-admin-geo-mongo.sh",
-            "remove-admin-mongo.sh",
-            "remove-mitigate-admin-geo-mongo.sh",
-        ]
-
         self.kubectl.create_or_update_configmap(
             name="failure-admin-geo",
             namespace=self.namespace,
-            data=self._prepare_configmap_data(script_files),
+            data=self._prepare_configmap_data(self.FAILURE_ADMIN_GEO_SCRIPTS),
         )
+
+    def clear_failure_configmaps(self):
+        """Empty failure-admin-{geo,rate} configmaps (best-effort).
+
+        Removes all script data so agents cannot read fault details.
+        """
+        try:
+            self.kubectl.create_or_update_configmap(
+                name="failure-admin-rate",
+                namespace=self.namespace,
+                data={},
+            )
+            self.kubectl.create_or_update_configmap(
+                name="failure-admin-geo",
+                namespace=self.namespace,
+                data={},
+            )
+        except Exception as e:
+            logger.warning(f"Best-effort clearing of failure configmaps failed: {e}")
+
+    def _patch_mongo_failure_script_mounts(self):
+        """Patch mongodb-geo and mongodb-rate deployments to mount failure configmaps at /scripts.
+
+        Uses JSON patch (append-only) to add the volume and volumeMount without
+        needing to re-specify existing volumes — safer if the YAML changes.
+        """
+        patches = [
+            ("mongodb-geo", "failure-admin-geo"),
+            ("mongodb-rate", "failure-admin-rate"),
+        ]
+        for deployment_name, configmap_name in patches:
+            patch_cmd = (
+                f"kubectl patch deployment {deployment_name} -n {self.namespace} --type=json -p="
+                "'["
+                f'{{"op":"add","path":"/spec/template/spec/volumes/-",'
+                f'"value":{{"name":"failure-script","configMap":{{"name":"{configmap_name}"}}}}}}'
+                f',{{"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-",'
+                f'"value":{{"name":"failure-script","mountPath":"/scripts"}}}}'
+                "]'"
+            )
+            self.kubectl.exec_command(patch_cmd)
 
     def deploy(self):
         """Deploy the Kubernetes configurations."""
@@ -79,6 +126,9 @@ class HotelReservation(Application):
         self.create_namespace()
         self.create_configmaps()
         self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
+        if self.mount_failure_scripts:
+            self.populate_failure_configmaps()
+            self._patch_mongo_failure_script_mounts()
         self.kubectl.wait_for_ready(self.namespace)
 
     def delete(self):
