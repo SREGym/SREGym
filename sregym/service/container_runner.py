@@ -118,6 +118,8 @@ class ContainerRunner:
         "MOONSHOT_API_BASE",
         # GLM
         "GLM_API_KEY",
+        "ZAI_API_KEY",
+        "ZHIPU_API_KEY",
         # Claude Code
         "CLAUDE_CODE_OAUTH_TOKEN",
         # GitHub Copilot CLI

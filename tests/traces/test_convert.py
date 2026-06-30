@@ -207,3 +207,34 @@ def test_codex_extra_sregym_populated(tmp_path):
     assert sregym["results_path"].endswith("codex/service_port_conflict_hotel_reservation/run_1")
     # Diagnosis boundary should be detected (the step with the submit output).
     assert "diagnosis_submitted_step" in sregym
+
+
+# --------------------------------------------------------------------------- #
+# OpenCode dispatch
+# --------------------------------------------------------------------------- #
+
+
+OPCODEX_FIXTURE = Path(__file__).parent / "fixtures" / "opencode_run"
+
+
+def test_convert_run_dispatches_opencode(tmp_path):
+    run_dir = tmp_path / "results" / "b" / "opencode" / "service_port_conflict_hotel_reservation" / "run_1"
+    run_dir.parent.mkdir(parents=True)
+    shutil.copytree(OPCODEX_FIXTURE, run_dir)
+    traj = convert.convert_run(run_dir)
+    assert isinstance(traj, Trajectory)
+    assert traj.agent.name == "opencode"
+    Trajectory.model_validate(traj.to_json_dict())
+
+
+def test_opencode_extra_sregym_populated(tmp_path):
+    run_dir = tmp_path / "results" / "b" / "opencode" / "service_port_conflict_hotel_reservation" / "run_1"
+    run_dir.parent.mkdir(parents=True)
+    shutil.copytree(OPCODEX_FIXTURE, run_dir)
+    traj = convert.convert_run(run_dir)
+    sregym = traj.extra["sregym"]
+    assert sregym["problem_id"] == "service_port_conflict_hotel_reservation"
+    assert sregym["application"] == "Hotel Reservation"
+    assert sregym["run"] == 1
+    assert sregym["submitted"] is True
+    assert "diagnosis_submitted_step" in sregym
