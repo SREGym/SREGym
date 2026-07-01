@@ -9,7 +9,7 @@ import time
 from datetime import UTC, datetime
 from pathlib import Path
 
-from clients.harness.problem_id import HARNESS_PROBLEM_ID_ENV
+from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
 
 from .agent_registry import AgentRegistration
@@ -71,6 +71,10 @@ class AgentLauncher:
         env = os.environ.copy()
         if reg.kickoff_env:
             env.update(reg.kickoff_env)
+        env.pop(HARNESS_PROBLEM_ID_ENV, None)
+        env.pop(HARNESS_ARTIFACT_ID_ENV, None)
+        if harness_artifact_id := os.environ.get(HARNESS_ARTIFACT_ID_ENV):
+            env[HARNESS_ARTIFACT_ID_ENV] = harness_artifact_id
 
         # Use filtered kubeconfig if set (hides chaos engineering namespaces)
         if self._agent_kubeconfig_path:
@@ -119,6 +123,9 @@ class AgentLauncher:
         if self._agent_kubeconfig_path:
             self._container_runner.config.kubeconfig_path = Path(self._agent_kubeconfig_path)
 
+        self._container_runner.config.env_vars.pop(HARNESS_PROBLEM_ID_ENV, None)
+        self._container_runner.config.env_vars.pop(HARNESS_ARTIFACT_ID_ENV, None)
+
         # Set per-agent logs path — also used as the container working directory.
         # If AGENT_LOGS_DIR is set by the orchestrator (e.g. run_1/), mount that
         # host directory to /logs so the agent writes into the right run folder.
@@ -138,10 +145,12 @@ class AgentLauncher:
             env=dict(reg.kickoff_env or {}),
             label=f"{reg.name}-run",
         )
+        exec_input.env.pop(HARNESS_PROBLEM_ID_ENV, None)
+        exec_input.env.pop(HARNESS_ARTIFACT_ID_ENV, None)
         exec_input.env.setdefault("AGENT_LOGS_DIR", "/logs")
-        harness_problem_id = os.environ.get(HARNESS_PROBLEM_ID_ENV)
-        if harness_problem_id:
-            exec_input.env[HARNESS_PROBLEM_ID_ENV] = harness_problem_id
+        harness_artifact_id = os.environ.get(HARNESS_ARTIFACT_ID_ENV)
+        if harness_artifact_id:
+            exec_input.env[HARNESS_ARTIFACT_ID_ENV] = harness_artifact_id
 
         proc = self._container_runner.run_async(exec_input)
         ap = AgentProcess(reg.name, proc)
@@ -179,11 +188,20 @@ class AgentLauncher:
         container_name = getattr(existing, "container_name", None)
         if container_name:
             ContainerRunner.stop_container(container_name, timeout=timeout)
+            self._wait_for_process_exit(existing.proc, timeout)
         else:
             self._terminate_process_group(existing, timeout)
 
         if agent_name in self._procs:
             del self._procs[agent_name]
+
+    @staticmethod
+    def _wait_for_process_exit(proc: subprocess.Popen, timeout: int) -> None:
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=timeout)
 
     def _terminate_process_group(self, ap: AgentProcess, timeout: int) -> None:
         """Kill a shell-launched agent's whole process group, falling back to the
