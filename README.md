@@ -140,8 +140,9 @@ Set the required environment variable for your provider before running:
 
 #### Local LLMs
 
-SREGym supports local models through Ollama and OpenAI-compatible servers such
-as vLLM and LM Studio. The examples below use Ollama.
+SREGym supports local models through Ollama and OpenAI-compatible servers such as vLLM and LM Studio. The examples below use Ollama.
+
+Set `AGENT_API_KEY` as well if the endpoint requires authentication.
 
 **Stratus with Ollama:**
 
@@ -152,45 +153,35 @@ export AGENT_API_BASE="http://127.0.0.1:11434"
 python main.py --agent stratus --model ollama_chat/qwen3-coder:30b
 ```
 
-Set `AGENT_API_KEY` as well if the endpoint requires authentication.
-
 **OpenCode with Ollama:**
 
 OpenCode uses the endpoint's OpenAI-compatible `/v1` API.
 
 ```bash
 export AGENT_API_BASE="http://127.0.0.1:11434/v1"
-export JUDGE_API_BASE="http://127.0.0.1:11434"
-
-python main.py \
-  --agent opencode \
-  --model local/qwen3-coder:30b \
-  --judge-model ollama_chat/qwen3-coder:30b
+python main.py --agent opencode --model local/qwen3-coder:30b
 ```
 
-When `--judge-model` is not set, SREGym reuses the agent model and endpoint for
-the judge. This works directly for Stratus because its model identifier is
-LiteLLM-compatible. OpenCode's `local/` provider is OpenCode-specific, so its
-judge must use a LiteLLM identifier such as `ollama_chat/qwen3-coder:30b`.
+When `--judge-model` is not set, SREGym reuses the agent model and endpoint for the judge. This works directly for Stratus because its model identifier is LiteLLM-compatible. For OpenCode, SREGym normalizes `local/<served-model>` to `openai/<served-model>` for the judge, because OpenCode's `local/` provider uses an OpenAI-compatible endpoint.
 
-For vLLM, LM Studio, or another OpenAI-compatible server, point
-`AGENT_API_BASE` to its `/v1` endpoint and use `openai/<served-model>` with
-Stratus or `local/<served-model>` with OpenCode.
+For vLLM, LM Studio, or another OpenAI-compatible server, point `AGENT_API_BASE` to its `/v1` endpoint and use `openai/<served-model>` with Stratus or `local/<served-model>` with OpenCode.
+
+To use a different LiteLLM judge provider, pass `--judge-model` explicitly:
+
+```bash
+export JUDGE_API_BASE="http://127.0.0.1:11434"
+python main.py --agent opencode --model local/qwen3-coder:30b --judge-model ollama_chat/qwen3-coder:30b
+```
 
 **Separate judge endpoint:**
 
-Set `JUDGE_API_BASE` and `JUDGE_API_KEY` when the judge uses a different
-endpoint or credential:
+Set `JUDGE_API_BASE` and `JUDGE_API_KEY` when the judge uses a different endpoint or credential:
 
 ```bash
 export JUDGE_API_BASE="https://example.test/v1"
 export JUDGE_API_KEY="..."
 python main.py --agent stratus --model ollama_chat/qwen3-coder:30b --judge-model gpt-5
 ```
-
-SREGym keeps loopback endpoints unchanged with native Linux host networking.
-On Docker Desktop for macOS or WSL, it automatically maps loopback endpoints to
-`host.docker.internal` for the agent container.
 
 <details>
 <summary><strong>Provider Examples</strong></summary>
