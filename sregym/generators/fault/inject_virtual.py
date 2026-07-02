@@ -1,6 +1,8 @@
 """Inject faults at the virtualization layer: K8S, Docker, etc."""
 
+import contextlib
 import copy
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -342,6 +344,307 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(apply_command)
 
             print(f"Recovered from resource request fault for service: {service}")
+
+    # V.8a - Set a tight CPU limit to trigger CFS throttling without crashing the pod
+    def inject_cpu_throttle(
+        self,
+        microservices: list[str],
+        cpu_limit: str | None = None,
+        all_services: bool = False,
+        loose_headroom_factor: float = 2.0,
+    ) -> dict[str, str]:
+        if all_services:
+            all_deps = self._get_all_deployments()
+            limits = self.calibrate_all_limits(
+                services=all_deps,
+                faulty_services=microservices,
+                loose_headroom=loose_headroom_factor,
+            )
+            services_to_patch = all_deps
+        else:
+            services_to_patch = microservices
+            limits = {}
+
+        injected = {}
+        for service in services_to_patch:
+            if cpu_limit is not None and service in microservices:
+                limit = cpu_limit
+            else:
+                limit = limits.get(service) or self.calibrate_cpu_limit(service)
+
+            original_deployment_yaml = self._get_deployment_yaml(service)
+            deployment_yaml = copy.deepcopy(original_deployment_yaml)
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            for container in containers:
+                resources = container.setdefault("resources", {})
+                if service in microservices:
+                    resources.setdefault("requests", {})["cpu"] = "10m"
+                else:
+                    resources.setdefault("requests", {})["cpu"] = limit
+                resources.setdefault("limits", {})["cpu"] = limit
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+            self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
+            self._write_yaml_to_file(service, original_deployment_yaml)
+            print(f"Injected CPU limit ({limit}) for service: {service}")
+            injected[service] = limit
+        return injected
+
+    def calibrate_all_limits(
+        self,
+        services: list[str],
+        faulty_services: list[str],
+        warmup_seconds: int = 30,
+        n_samples: int = 5,
+        sample_window_seconds: int = 7,
+        tight_headroom: float = 1.15,
+        loose_headroom: float = 2.0,
+        cache_path: str = "/tmp/sregym_cpu_calibration.json",
+        fallback: str = "125m",
+    ) -> dict[str, str]:
+        fingerprint = self._cluster_fingerprint()
+        limits = {}
+        uncached = []
+        for service in services:
+            cached = self._read_calibration_cache(cache_path, f"{fingerprint}/{service}")
+            if cached:
+                print(f"[calibration] cached limit for {service}: {cached}")
+                limits[service] = cached
+            else:
+                uncached.append(service)
+
+        if not uncached:
+            return limits
+
+        pods = {s: self._get_running_pod(s) for s in uncached}
+        active = {s: p for s, p in pods.items() if p}
+
+        for service in uncached:
+            if service not in active:
+                print(f"[calibration] no running pod for {service}, using {fallback}")
+                limits[service] = fallback
+
+        if not active:
+            return limits
+
+        print(f"[calibration] sampling {len(active)} services, warmup {warmup_seconds}s...")
+        time.sleep(warmup_seconds)
+
+        readings = [{s: self._read_cpu_stat(p) for s, p in active.items()}]
+        for _ in range(n_samples):
+            time.sleep(sample_window_seconds)
+            readings.append({s: self._read_cpu_stat(p) for s, p in active.items()})
+
+        for service in active:
+            samples = [
+                m
+                for r1, r2 in zip(readings, readings[1:], strict=False)
+                if (m := self._compute_millicores(r1[service], r2[service])) is not None
+            ]
+            if not samples:
+                print(f"[calibration] {service}: sampling failed, using {fallback}")
+                limits[service] = fallback
+                continue
+
+            baseline = max(samples)
+            headroom = tight_headroom if service in faulty_services else loose_headroom
+            limit_m = ((int(baseline * headroom) + 4) // 5) * 5
+            limit = f"{limit_m}m"
+            self._write_calibration_cache(cache_path, f"{fingerprint}/{service}", limit)
+            print(f"[calibration] {service}: baseline={baseline}m headroom={headroom} limit={limit}")
+            limits[service] = limit
+
+        return limits
+
+    def calibrate_cpu_limit(
+        self,
+        service: str,
+        warmup_seconds: int = 30,
+        n_samples: int = 5,
+        sample_window_seconds: int = 5,
+        headroom_factor: float = 1.15,
+        cache_path: str = "/tmp/sregym_cpu_calibration.json",
+        fallback: str = "125m",
+    ) -> str:
+        key = f"{self._cluster_fingerprint()}/{service}"
+        cached = self._read_calibration_cache(cache_path, key)
+        if cached:
+            print(f"[calibration] cached limit for {service}: {cached}")
+            return cached
+
+        pod = self._get_running_pod(service)
+        if not pod:
+            print(f"[calibration] no running pod for {service}, falling back to {fallback}")
+            return fallback
+
+        print(f"[calibration] sampling CPU for {service}, warmup {warmup_seconds}s...")
+        time.sleep(warmup_seconds)
+
+        readings = [self._read_cpu_stat(pod)]
+        for _ in range(n_samples):
+            time.sleep(sample_window_seconds)
+            readings.append(self._read_cpu_stat(pod))
+
+        samples = [
+            m
+            for s1, s2 in zip(readings, readings[1:], strict=False)
+            if (m := self._compute_millicores(s1, s2)) is not None
+        ]
+
+        if not samples:
+            print(f"[calibration] sampling failed, falling back to {fallback}")
+            return fallback
+
+        baseline = max(samples)
+        limit_m = ((int(baseline * headroom_factor) + 4) // 5) * 5
+        limit = f"{limit_m}m"
+
+        self._write_calibration_cache(cache_path, key, limit)
+        print(f"[calibration] {service}: baseline={baseline}m limit={limit}")
+        return limit
+
+    def _get_all_deployments(self) -> list[str]:
+        out = self.kubectl.exec_command(
+            f"kubectl get deployments -n {self.namespace} -o jsonpath='{{.items[*].metadata.name}}'"
+        )
+        return out.strip().split() if out.strip() else []
+
+    def _cluster_fingerprint(self) -> str:
+        nodes = self.kubectl.exec_command("kubectl get nodes -o jsonpath='{.items[*].metadata.name}'")
+        return hashlib.md5(nodes.encode()).hexdigest()[:8]
+
+    def _get_running_pod(self, service: str) -> str | None:
+        out = self.kubectl.exec_command(
+            f"kubectl get pod -n {self.namespace} -l io.kompose.service={service} "
+            f"--field-selector=status.phase=Running -o jsonpath='{{.items[0].metadata.name}}' 2>/dev/null"
+        )
+        return out.strip() or None
+
+    def _read_cpu_stat(self, pod: str) -> dict:
+        out = self.kubectl.exec_command(
+            f"kubectl exec {pod} -n {self.namespace} -- cat /sys/fs/cgroup/cpu.stat 2>/dev/null"
+        )
+        result = {}
+        for line in (out or "").strip().splitlines():
+            parts = line.split()
+            if len(parts) == 2:
+                with contextlib.suppress(ValueError):
+                    result[parts[0]] = int(parts[1])
+        return result
+
+    def _compute_millicores(self, s1: dict, s2: dict) -> int | None:
+        delta_usage = s2.get("usage_usec", 0) - s1.get("usage_usec", 0)
+        delta_periods = s2.get("nr_periods", 0) - s1.get("nr_periods", 0)
+        if delta_periods == 0:
+            return None
+        # usage_usec / (periods * 100ms) → millicores
+        return int(delta_usage / (delta_periods * 100))
+
+    def _read_calibration_cache(self, path: str, key: str) -> str | None:
+        try:
+            with open(path) as f:
+                return json.load(f).get(key)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+
+    def _write_calibration_cache(self, path: str, key: str, value: str) -> None:
+        try:
+            with open(path) as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            data = {}
+        data[key] = value
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+    def verify_injection(
+        self,
+        injected: dict[str, str],
+        faulty_services: list[str],
+        settle_seconds: int = 30,
+        sample_seconds: int = 15,
+        min_faulty_throttle: float = 0.05,
+        max_clean_throttle: float = 0.10,
+        headroom_bump: float = 1.5,
+        cache_path: str = "/tmp/sregym_cpu_calibration.json",
+    ) -> dict[str, str]:
+        """Sample throttle rates after injection and auto-correct services that
+        are throttling unexpectedly (e.g. due to thundering-herd like startup spikes).
+
+        Returns the (possibly updated) injected limits dict.
+        """
+        print(f"[verify] settling {settle_seconds}s before measuring throttle rates...")
+        time.sleep(settle_seconds)
+
+        pods = {s: self._get_running_pod(s) for s in injected}
+        active = {s: p for s, p in pods.items() if p}
+
+        if not active:
+            print("[verify] no running pods found, skipping")
+            return injected
+
+        s1 = {s: self._read_cpu_stat(p) for s, p in active.items()}
+        time.sleep(sample_seconds)
+        s2 = {s: self._read_cpu_stat(p) for s, p in active.items()}
+
+        to_fix: dict[str, float] = {}
+        for service in active:
+            r1, r2 = s1[service], s2[service]
+            delta_throttled = r2.get("nr_throttled", 0) - r1.get("nr_throttled", 0)
+            delta_periods = r2.get("nr_periods", 0) - r1.get("nr_periods", 0)
+            if delta_periods == 0:
+                continue
+            throttle_rate = delta_throttled / delta_periods
+
+            if service in faulty_services:
+                if throttle_rate < min_faulty_throttle:
+                    print(
+                        f"[verify] WARNING: {service} throttle_rate={throttle_rate:.1%} "
+                        f"< {min_faulty_throttle:.0%} — fault may not be visible"
+                    )
+                else:
+                    print(f"[verify] {service}: throttle_rate={throttle_rate:.1%} (faulty, expected)")
+            else:
+                if throttle_rate > max_clean_throttle:
+                    print(
+                        f"[verify] {service}: throttle_rate={throttle_rate:.1%} too high "
+                        f"(limit={injected[service]}) — bumping limit"
+                    )
+                    to_fix[service] = throttle_rate
+                else:
+                    print(f"[verify] {service}: throttle_rate={throttle_rate:.1%} (clean)")
+
+        if not to_fix:
+            print("[verify] all services within expected throttle bands")
+            return injected
+
+        fingerprint = self._cluster_fingerprint()
+        for service in to_fix:
+            old_mc = int(injected[service][:-1])
+            new_mc = ((int(old_mc * headroom_bump) + 4) // 5) * 5
+            new_limit = f"{new_mc}m"
+            print(f"[verify] {service}: {injected[service]} -> {new_limit}")
+
+            original_yaml = self._get_deployment_yaml(service)
+            deployment_yaml = copy.deepcopy(original_yaml)
+            for container in deployment_yaml["spec"]["template"]["spec"]["containers"]:
+                resources = container.setdefault("resources", {})
+                resources.setdefault("requests", {})["cpu"] = new_limit
+                resources.setdefault("limits", {})["cpu"] = new_limit
+            modified_path = self._write_yaml_to_file(service, deployment_yaml)
+            self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl apply -f {modified_path} -n {self.namespace}")
+            self._write_yaml_to_file(service, original_yaml)
+            self._write_calibration_cache(cache_path, f"{fingerprint}/{service}", new_limit)
+            injected[service] = new_limit
+
+        return injected
+
+    def recover_cpu_throttle(self, microservices: list[str]):
+        for service in microservices:
+            self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl apply -f /tmp/{service}_modified.yaml -n {self.namespace}")
+            print(f"Recovered from CPU throttle fault for service: {service}")
 
     # V.9 - Manually patch a service's selector to include an additional label
     def inject_wrong_service_selector(self, microservices: list[str]):
