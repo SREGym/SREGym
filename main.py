@@ -94,6 +94,46 @@ def _restore_env_var(name: str, previous_value: str | None) -> None:
         os.environ[name] = previous_value
 
 
+def _env_status(name: str) -> str:
+    return "set" if os.environ.get(name) else "unset"
+
+
+def _is_opencode_local_model(agent: str | None, model: str) -> bool:
+    return agent == "opencode" and model.startswith("local/")
+
+
+def _normalize_opencode_local_model_for_litellm(model: str) -> str:
+    return f"openai/{model.split('/', 1)[1]}"
+
+
+def _configure_model_environment(args) -> tuple[str, str]:
+    agent_model = args.model
+    raw_judge_model = args.judge_model or args.model
+    normalizes_opencode_local_judge = _is_opencode_local_model(args.agent, raw_judge_model)
+    judge_model = (
+        _normalize_opencode_local_model_for_litellm(raw_judge_model)
+        if normalizes_opencode_local_judge
+        else raw_judge_model
+    )
+
+    os.environ["AGENT_MODEL_ID"] = agent_model
+    os.environ["JUDGE_MODEL_ID"] = judge_model
+
+    if not getattr(args, "judge_model", None) or normalizes_opencode_local_judge:
+        if not os.environ.get("JUDGE_API_BASE") and os.environ.get("AGENT_API_BASE"):
+            os.environ["JUDGE_API_BASE"] = os.environ["AGENT_API_BASE"]
+        if not os.environ.get("JUDGE_API_KEY") and os.environ.get("AGENT_API_KEY"):
+            os.environ["JUDGE_API_KEY"] = os.environ["AGENT_API_KEY"]
+
+    if normalizes_opencode_local_judge:
+        if not os.environ.get("JUDGE_API_BASE"):
+            raise ValueError("AGENT_API_BASE or JUDGE_API_BASE is required to use an OpenCode local model as the judge")
+        if not os.environ.get("JUDGE_API_KEY"):
+            os.environ["JUDGE_API_KEY"] = "dummy"
+
+    return agent_model, judge_model
+
+
 @contextlib.contextmanager
 def _artifact_environment(run: RunArtifacts):
     previous = {
@@ -477,21 +517,19 @@ def main(args):
     # set up the logger
     init_logger()
 
-    agent_model = args.model
-    judge_model = args.judge_model or args.model
+    agent_model, judge_model = _configure_model_environment(args)
 
     if args.noise:
         logger.info("Noise injection enabled.")
-
-    # Push to env so downstream code picks it up
-    os.environ["AGENT_MODEL_ID"] = agent_model
-    os.environ["JUDGE_MODEL_ID"] = judge_model
     os.environ["API_HOSTNAME"] = "0.0.0.0"
     os.environ["API_PORT"] = "8000"
     os.environ["MCP_SERVER_PORT"] = "9954"
     os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
 
-    logger.info(f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}")
+    logger.info(
+        f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
+        f"agent_api_base: {_env_status('AGENT_API_BASE')}, judge_api_base: {_env_status('JUDGE_API_BASE')}"
+    )
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (

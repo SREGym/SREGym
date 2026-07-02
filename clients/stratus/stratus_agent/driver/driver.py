@@ -53,19 +53,11 @@ logger.setLevel(logging.DEBUG)
 
 
 def run_preflight() -> None:
-    """Validate model + credentials by making a minimal litellm call."""
-    import litellm
+    """Validate model, endpoint, credentials, and tool calling."""
+    from clients.stratus.stratus_agent.driver.preflight import run_stratus_preflight
 
-    litellm.drop_params = True
-    litellm.modify_params = True
-    litellm.suppress_debug_info = True  # ty:ignore[invalid-assignment]
     try:
-        litellm.completion(
-            model=os.environ["AGENT_MODEL_ID"],
-            messages=[{"role": "user", "content": "say ok"}],
-            max_tokens=3,
-            num_retries=0,
-        )
+        run_stratus_preflight()
         print("ok")
     except Exception as e:
         print(f"preflight failed: {e}")
