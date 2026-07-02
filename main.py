@@ -81,6 +81,23 @@ def run_preflight_check(
     logger.info(f"✅ Pre-flight check passed for '{agent_name}'")
 
 
+def run_judge_preflight_check() -> None:
+    """Validate the judge model and credentials through its LiteLLM backend."""
+    from llm_backend.init_backend import get_llm_backend_for_judge
+
+    logger.info("🔍 Running pre-flight check for judge model...")
+    try:
+        get_llm_backend_for_judge().inference("Say ok.", system_prompt="Reply with exactly 'ok'.")
+    except Exception as e:
+        logger.error(f"❌ Judge pre-flight check failed: {e}")
+        logger.error(
+            "The judge uses LiteLLM. Ensure the model is LiteLLM-compatible or pass a compatible --judge-model."
+        )
+        sys.exit(1)
+
+    logger.info("✅ Judge pre-flight check passed")
+
+
 def get_current_datetime_formatted():
     now = datetime.now()
     formatted_datetime = now.strftime("%m%d_%H%M")
@@ -530,6 +547,9 @@ def main(args):
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
         f"agent_api_base: {_env_status('AGENT_API_BASE')}, judge_api_base: {_env_status('JUDGE_API_BASE')}"
     )
+
+    if not args.use_external_harness:
+        run_judge_preflight_check()
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (
