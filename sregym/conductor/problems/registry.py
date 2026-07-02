@@ -56,6 +56,10 @@ from sregym.conductor.problems.loadgenerator_flood_homepage import LoadGenerator
 from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
+from sregym.conductor.problems.missing_image_pull_secret_astronomy_shop import MissingImagePullSecretAstronomyShop
+from sregym.conductor.problems.missing_image_pull_secret_blueprint_hotel_reservation import (
+    MissingImagePullSecretBlueprintHotelReservation,
+)
 from sregym.conductor.problems.missing_service import MissingService
 from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
@@ -293,6 +297,8 @@ class ProblemRegistry:
             "psa_restricted_blocks_recreation_hotel_reservation": lambda: PSARestrictedBlocksRecreation(app_name="hotel_reservation", faulty_service="recommendation"),
             "cumulative_admission_webhook_timeout_hotel_reservation": CumulativeAdmissionWebhookTimeoutHotelReservation,
             "cronjob_sidecar_blocks_completion_hotel_reservation": CronJobSidecarBlocksCompletionHotelReservation,
+            "missing_image_pull_secret_astronomy_shop" : MissingImagePullSecretAstronomyShop,
+            "missing_image_pull_secret_blueprint_hotel_reservation": MissingImagePullSecretBlueprintHotelReservation,
             # ==================== MULTIPLE INDEPENDENT FAILURES ====================
             # "port_misconfig_revoke_auth_wrong_svc_selector": \
             #     lambda: MultipleIndependentFailures(problems=[
