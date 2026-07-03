@@ -48,6 +48,12 @@ agents:
     install_script: null
     agent_version: null
     container_isolation: false
+  - name: copilot
+    kickoff_command: python -m clients.copilot.driver
+    kickoff_workdir: .
+    kickoff_env: null
+    install_script: install-copilot.sh
+    agent_version: null
   - name: demo
     kickoff_command: python -m clients.demo.driver
     kickoff_workdir: .

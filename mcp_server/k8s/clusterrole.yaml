@@ -26,9 +26,14 @@ rules:
   - apiGroups: [""]
     resources:
       - namespaces
-      - nodes
       - persistentvolumes
     verbs: ["get", "list", "watch"]
+
+  # Nodes - agents may need to repair labels/annotations during network recovery
+  - apiGroups: [""]
+    resources:
+      - nodes
+    verbs: ["get", "list", "watch", "patch", "update"]
 
   # Apps API group
   - apiGroups: ["apps"]
@@ -67,6 +72,12 @@ rules:
       - networkpolicies
     verbs: ["get", "list", "watch", "create", "delete", "patch", "update"]
 
+  # Discovery API group - read-only service backend inspection
+  - apiGroups: ["discovery.k8s.io"]
+    resources:
+      - endpointslices
+    verbs: ["get", "list", "watch"]
+
   # Admission registration — needed for problems that simulate admission
   # webhook outages (e.g., admission_webhook_outage_*). Excludes create so
   # the framework still controls when webhook configs appear.
@@ -80,6 +91,11 @@ rules:
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources:
       - clusterroles
+    verbs: ["get", "list", "watch", "patch", "update"]
+
+  # RBAC bindings remain read-only.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
       - clusterrolebindings
       - roles
       - rolebindings
@@ -107,6 +123,8 @@ rules:
       - ipamhandles
       - ipreservations
       - blockaffinities
+      - bgpconfigurations
+      - bgppeers
       - felixconfigurations
       - clusterinformations
       - caliconodestatuses

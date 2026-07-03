@@ -4,9 +4,9 @@ from abc import ABC, abstractmethod
 
 
 class Problem(ABC):
-    def __init__(self, app, namespace: str):
+    def __init__(self, app, namespace: str | None = None):
         self.app = app
-        self.namespace = namespace
+        self.namespace = app.namespace if namespace is None else namespace
         self.fault_injected = False
         self.results = {}
         self.root_cause = None  # root cause of the problem in natural language

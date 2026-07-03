@@ -22,8 +22,8 @@ from logger import init_logger  # noqa: E402
 
 init_logger()
 
-from clients.opencode.opencode_agent import OpenCodeAgent  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
+from clients.opencode.opencode_agent import OpenCodeAgent  # noqa: E402
 
 logger = logging.getLogger("all.opencode.driver")
 
@@ -198,7 +198,7 @@ def main():
         "--problem-id",
         type=str,
         default=None,
-        help="Problem ID for artifact naming (default: SREGYM_PROBLEM_ID when launched via main.py)",
+        help="Problem ID for artifact naming (default: SREGYM_ARTIFACT_ID in benchmark runs)",
     )
     parser.add_argument(
         "--no-auto-install",
