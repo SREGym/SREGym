@@ -6,8 +6,28 @@ import subprocess
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 logger = logging.getLogger("all.sregym.container_runner")
+
+LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def _docker_uses_separate_host() -> bool:
+    """Return whether Docker runs outside the host's network namespace."""
+    return platform.system() == "Darwin" or "microsoft" in platform.release().lower()
+
+
+def _replace_loopback_host(url: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.hostname not in LOOPBACK_HOSTS:
+        return url
+
+    userinfo, separator, _ = parsed.netloc.rpartition("@")
+    netloc = f"{userinfo}{separator}host.docker.internal"
+    if parsed.port is not None:
+        netloc += f":{parsed.port}"
+    return urlunsplit(parsed._replace(netloc=netloc))
 
 
 @dataclass
@@ -125,7 +145,11 @@ class ContainerRunner:
         "COPILOT_PROVIDER_TYPE",
         # SREGym internal
         "AGENT_MODEL_ID",
+        "AGENT_API_BASE",
+        "AGENT_API_KEY",
         "JUDGE_MODEL_ID",
+        "JUDGE_API_BASE",
+        "JUDGE_API_KEY",
         # Config vars
         "API_HOSTNAME",
         "API_PORT",
@@ -155,14 +179,13 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
-        # On macOS, --network=host is a no-op so the container has its own
-        # network namespace. host.docker.internal routes to the Mac's loopback
-        # via Docker Desktop, so we must override the hostname.
-        # On Linux with --network=host the container shares the host's network
-        # stack directly, so localhost/127.0.0.1 already reaches host services.
-        # host.docker.internal resolves to the bridge IP (172.17.0.1) where
-        # kubectl port-forward is NOT listening, so we must NOT override.
-        if self.config.network_mode == "host" and platform.system() == "Darwin" or self.config.network_mode == "host":
+        # Docker Desktop containers cannot reach host loopback directly.
+        if _docker_uses_separate_host() and (api_base := env_vars.get("AGENT_API_BASE")):
+            env_vars["AGENT_API_BASE"] = _replace_loopback_host(api_base)
+
+        # Agent containers use Docker's host alias to reach SREGym services
+        # running on the host, including the MCP port-forward.
+        if self.config.network_mode == "host":
             env_vars["API_HOSTNAME"] = "host.docker.internal"
             mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
             env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
