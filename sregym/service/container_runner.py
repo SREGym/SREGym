@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from sregym.service.egress_proxy import CA_BUNDLE_ENV_VARS, NO_PROXY
+
 logger = logging.getLogger("all.sregym.container_runner")
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
@@ -52,6 +54,8 @@ class ContainerConfig:
     env_vars: dict = field(default_factory=dict)
     cpus: float = 4.0
     memory: str = "8g"
+    proxy_url: str | None = None
+    proxy_ca_bundle: Path | None = None
 
 
 class ContainerRunner:
@@ -190,6 +194,18 @@ class ContainerRunner:
             mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
             env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
 
+        if self.config.proxy_url:
+            env_vars["http_proxy"] = self.config.proxy_url
+            env_vars["https_proxy"] = self.config.proxy_url
+            env_vars["HTTP_PROXY"] = self.config.proxy_url
+            env_vars["HTTPS_PROXY"] = self.config.proxy_url
+            env_vars["no_proxy"] = NO_PROXY
+            env_vars["NO_PROXY"] = NO_PROXY
+            if self.config.proxy_ca_bundle:
+                ca_bundle_container = "/etc/ssl/certs/sregym-ca-bundle.pem"
+                for var in CA_BUNDLE_ENV_VARS:
+                    env_vars[var] = ca_bundle_container
+
         for key, value in env_vars.items():
             flags.extend(["-e", f"{key}={value}"])
         return flags
@@ -238,6 +254,10 @@ class ContainerRunner:
         codex_dir = Path.home() / ".codex"
         if codex_dir.is_dir():
             args.extend(["-v", f"{codex_dir.resolve()}:/root/.codex"])
+
+        # Mount combined CA bundle (system CAs + proxy CA) for MITM TLS
+        if self.config.proxy_ca_bundle and self.config.proxy_ca_bundle.exists():
+            args.extend(["-v", f"{self.config.proxy_ca_bundle.resolve()}:/etc/ssl/certs/sregym-ca-bundle.pem:ro"])
 
         # Mount workspace directory for agent output (logs, results, trajectories)
         if self.config.workspace_path:

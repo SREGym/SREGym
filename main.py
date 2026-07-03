@@ -30,6 +30,7 @@ from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput
+from sregym.service.egress_proxy import DEFAULT_DENY_DOMAINS, EgressProxy
 
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
@@ -551,6 +552,18 @@ def main(args):
     if not args.use_external_harness:
         run_judge_preflight_check()
 
+    # Start egress proxy if internet access is restricted
+    internet_access = args.internet_access
+    egress_proxy = None
+    if internet_access != "on":
+        deny = list(DEFAULT_DENY_DOMAINS) if internet_access == "filtered" else []
+        egress_proxy = EgressProxy(mode=internet_access, deny_domains=deny)
+        port = egress_proxy.start()
+        LAUNCHER.set_proxy(f"http://host.docker.internal:{port}", ca_bundle=egress_proxy.ca_bundle_path)
+        logger.info(f"🛡️ Internet access: {internet_access} (proxy port {port})")
+    else:
+        logger.info("🌐 Internet access: unrestricted")
+
     # Only build/check agent container image if the agent requires it
     agent_reg = (
         get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
@@ -568,7 +581,11 @@ def main(args):
         install_script=agent_reg.install_script if agent_reg else None,
     )
 
-    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
+    conductor_config = ConductorConfig(
+        deploy_loki=not args.use_external_harness,
+        enable_noise=args.noise,
+        internet_access=internet_access,
+    )
     conductor = Conductor(config=conductor_config)
 
     # Start the driver in the background; it will call request_shutdown() when finished
@@ -611,6 +628,14 @@ def main(args):
 
         # Give driver a moment to finish setting results
         driver_thread.join(timeout=5)
+
+        # Log blocked requests (read from file while proxy is still up),
+        # then stop the process and clean up temp files.
+        if egress_proxy:
+            for req in egress_proxy.blocked_requests():
+                logger.info(f"🚫 {req}")
+            egress_proxy.stop()
+            egress_proxy.cleanup()
 
     # When API shuts down, collect results from driver
     results = _driver_results
@@ -698,6 +723,13 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Resume from a previous results CSV file. Problems already in the CSV will be skipped.",
+    )
+    parser.add_argument(
+        "--internet-access",
+        type=str,
+        choices=["on", "off", "filtered"],
+        default="filtered",
+        help="Agent internet access: 'on' (unrestricted), 'off' (cluster-only), 'filtered' (deny SREGym repo, default)",
     )
     args = parser.parse_args()
 
