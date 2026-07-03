@@ -626,15 +626,17 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"[verify] {service}: {injected[service]} -> {new_limit}")
 
             original_yaml = self._get_deployment_yaml(service)
-            deployment_yaml = copy.deepcopy(original_yaml)
-            for container in deployment_yaml["spec"]["template"]["spec"]["containers"]:
-                resources = container.setdefault("resources", {})
-                resources.setdefault("requests", {})["cpu"] = new_limit
-                resources.setdefault("limits", {})["cpu"] = new_limit
-            modified_path = self._write_yaml_to_file(service, deployment_yaml)
-            self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
-            self.kubectl.exec_command(f"kubectl apply -f {modified_path} -n {self.namespace}")
-            self._write_yaml_to_file(service, original_yaml)
+            containers_patch = [
+                {
+                    "name": c["name"],
+                    "resources": {"requests": {"cpu": new_limit}, "limits": {"cpu": new_limit}},
+                }
+                for c in original_yaml["spec"]["template"]["spec"]["containers"]
+            ]
+            patch = json.dumps({"spec": {"template": {"spec": {"containers": containers_patch}}}})
+            self.kubectl.exec_command(
+                f"kubectl patch deployment {service} -n {self.namespace} --type=strategic -p '{patch}'"
+            )
             self._write_calibration_cache(cache_path, f"{fingerprint}/{service}", new_limit)
             injected[service] = new_limit
 
