@@ -59,14 +59,17 @@ class NightlyRebalanceOOMMitigationOracle(MitigationOracle):
 
     def _memory_limit_sane(self, service: str, namespace: str) -> bool:
         original = getattr(self.problem, "_original_memory_limit", None)
-        threshold = _parse_mem_to_bytes(original) if original else _FALLBACK_FLOOR_BYTES
+        target = getattr(self.problem, "_target_container", None)
         dep = self.problem.kubectl.get_deployment(service, namespace)
         for container in dep.spec.template.spec.containers:
+            if target is not None and container.name != target:
+                continue
             limits = (container.resources.limits or {}) if container.resources else {}
             mem = limits.get("memory")
-            if mem is None:
-                continue
-            if _parse_mem_to_bytes(mem) < threshold:
+            if original is not None:
+                if mem is None or _parse_mem_to_bytes(mem) < _parse_mem_to_bytes(original):
+                    return False
+            elif mem is not None and _parse_mem_to_bytes(mem) < _FALLBACK_FLOOR_BYTES:
                 return False
         return True
 
