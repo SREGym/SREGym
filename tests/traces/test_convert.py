@@ -238,3 +238,70 @@ def test_opencode_extra_sregym_populated(tmp_path):
     assert sregym["run"] == 1
     assert sregym["submitted"] is True
     assert "diagnosis_submitted_step" in sregym
+
+
+# --------------------------------------------------------------------------- #
+# Copilot dispatch
+# --------------------------------------------------------------------------- #
+
+
+COPILOT_FLAT_FIXTURE = Path(__file__).parent / "fixtures" / "copilot_run_flat"
+
+
+def _materialize_copilot_run(tmp_path: Path) -> Path:
+    """Create a copilot run under a canonical results/ path, with a submit marker."""
+    run_dir = tmp_path / "results" / "b" / "copilot" / "service_port_conflict_hotel_reservation" / "run_1"
+    run_dir.mkdir(parents=True)
+    shutil.copy(
+        COPILOT_FLAT_FIXTURE / "copilot-cli.jsonl",
+        run_dir / "copilot-cli.jsonl",
+    )
+    # Append a tool_use + tool_result carrying the conductor submit response so
+    # the submitted flag + diagnosis boundary are exercised.
+    with open(run_dir / "copilot-cli.jsonl", "a") as f:
+        f.write(
+            json.dumps(
+                {
+                    "type": "tool_use",
+                    "id": "sub1",
+                    "name": "bash",
+                    "input": {"command": "curl -X POST http://host/submit"},
+                }
+            )
+            + "\n"
+        )
+        f.write(
+            json.dumps(
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "sub1",
+                    "content": '{"status":"200","message":"Submission received"}',
+                }
+            )
+            + "\n"
+        )
+    # A copilot results JSON like the client writes.
+    results_path = run_dir / "copilot_results_service_port_conflict_hotel_reservation_20260704_131952.json"
+    results_path.write_text(json.dumps({"success": True}))
+    return run_dir
+
+
+def test_convert_run_dispatches_copilot(tmp_path):
+    run_dir = _materialize_copilot_run(tmp_path)
+    traj = convert.convert_run(run_dir)
+    assert isinstance(traj, Trajectory)
+    assert traj.agent.name == "copilot"
+    Trajectory.model_validate(traj.to_json_dict())
+
+
+def test_copilot_extra_sregym_populated(tmp_path):
+    run_dir = _materialize_copilot_run(tmp_path)
+    traj = convert.convert_run(run_dir)
+    sregym = traj.extra["sregym"]
+    assert sregym["problem_id"] == "service_port_conflict_hotel_reservation"
+    assert sregym["application"] == "Hotel Reservation"
+    assert sregym["run"] == 1
+    assert sregym["results_path"].endswith("copilot/service_port_conflict_hotel_reservation/run_1")
+    # Submission marker in the tool result -> submitted True + boundary detected.
+    assert sregym["submitted"] is True
+    assert "diagnosis_submitted_step" in sregym

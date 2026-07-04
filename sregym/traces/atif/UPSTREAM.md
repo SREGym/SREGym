@@ -34,3 +34,27 @@ upstream commit and re-apply the import rewrite, then bump the commit above.
 - `subagent_trajectory_ref.py` — `SubagentTrajectoryRef`
 - `tool_call.py` — `ToolCall`
 - `trajectory.py` — `Trajectory` (root model, `extra="forbid"`)
+
+## Ported adapters (`sregym/traces/adapters/`)
+
+The per-tool adapters are **clean ports** of Harbor's installed-agent converters
+(`src/harbor/agents/installed/`, same upstream commit) into standalone pure
+functions with no `harbor` dependency. Each `to_atif(run_dir, *, sregym_meta)`
+returns a validated `Trajectory` and stores `sregym_meta` under `extra.sregym`.
+
+| Adapter | Harbor source | Notes |
+| :-- | :-- | :-- |
+| `claudecode.py` | `claude_code.py` | session-dir JSONL |
+| `codex.py` | `codex.py` | session-dir JSONL; api-call grouping |
+| `opencode.py` | `opencode.py` | exported session JSON |
+| `copilot.py` | `copilot_cli.py` | `copilot-cli.jsonl`; flat + session-event schemas |
+
+### Deliberate deviations from Harbor
+
+- **`copilot.py` emits `ATIF-v1.7`**, not Harbor's hardcoded `ATIF-v1.6` — to
+  match the other adapters and the vendored models (the converter uses
+  `ObservationResult.extra`, a v1.7 field).
+- **`copilot.py` maps reasoning to first-class `reasoning_content`**: real
+  Copilot output carries the turn's reasoning in `assistant.message.data.reasoningText`
+  (Harbor leaves it in `extra`) and also emits duplicate standalone
+  `assistant.reasoning` events (which we skip). Grounded in `results/0704_2011`.

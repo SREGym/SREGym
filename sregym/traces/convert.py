@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from sregym.traces.adapters import claudecode, codex, opencode
+from sregym.traces.adapters import copilot as copilot_adapter
 from sregym.traces.atif import Trajectory
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ ADAPTERS: dict[str, Callable[..., Trajectory | None]] = {
     "claudecode": claudecode.to_atif,
     "codex": codex.to_atif,
     "opencode": opencode.to_atif,
+    "copilot": copilot_adapter.to_atif,
 }
 
 # Longest-suffix map of problem_id -> canonical application display name.
