@@ -305,3 +305,37 @@ def test_copilot_extra_sregym_populated(tmp_path):
     # Submission marker in the tool result -> submitted True + boundary detected.
     assert sregym["submitted"] is True
     assert "diagnosis_submitted_step" in sregym
+
+
+# --------------------------------------------------------------------------- #
+# Stratus dispatch
+# --------------------------------------------------------------------------- #
+
+
+STRATUS_FIXTURE = Path(__file__).parent / "fixtures" / "stratus_run"
+
+
+def test_convert_run_dispatches_stratus(tmp_path):
+    run_dir = tmp_path / "results" / "b" / "stratus" / "service_port_conflict_hotel_reservation" / "run_1"
+    run_dir.parent.mkdir(parents=True)
+    shutil.copytree(STRATUS_FIXTURE, run_dir)
+    traj = convert.convert_run(run_dir)
+    assert isinstance(traj, Trajectory)
+    assert traj.agent.name == "stratus"
+    Trajectory.model_validate(traj.to_json_dict())
+
+
+def test_stratus_extra_sregym_populated(tmp_path):
+    run_dir = tmp_path / "results" / "b" / "stratus" / "service_port_conflict_hotel_reservation" / "run_1"
+    run_dir.parent.mkdir(parents=True)
+    shutil.copytree(STRATUS_FIXTURE, run_dir)
+    traj = convert.convert_run(run_dir)
+    sregym = traj.extra["sregym"]
+    assert sregym["problem_id"] == "service_port_conflict_hotel_reservation"
+    assert sregym["application"] == "Hotel Reservation"
+    assert sregym["run"] == 1
+    # Adapter-populated keys survive convert.py's merge.
+    assert [s["stage"] for s in sregym["stages"]][0] == "diagnosis"
+    assert sregym["submitted"] is True
+    # Stage-derived boundary (Stratus's submit marker differs from the generic one).
+    assert sregym["diagnosis_submitted_step"] > 0

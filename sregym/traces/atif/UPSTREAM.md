@@ -48,6 +48,19 @@ returns a validated `Trajectory` and stores `sregym_meta` under `extra.sregym`.
 | `codex.py` | `codex.py` | session-dir JSONL; api-call grouping |
 | `opencode.py` | `opencode.py` | exported session JSON |
 | `copilot.py` | `copilot_cli.py` | `copilot-cli.jsonl`; flat + session-event schemas |
+| `stratus.py` | *(none — bespoke)* | SREGym's own LangGraph agent; see below |
+
+### `stratus.py` is bespoke (no Harbor source)
+
+Stratus is SREGym's own agent, so there is no Harbor converter to port. The
+adapter is built from Stratus's emitted trajectory
+(`clients/stratus/stratus_agent/driver/driver.py::save_combined_trajectory`):
+cumulative LangGraph snapshots (last event per stage = full stage history),
+multi-stage (`diagnosis` / `mitigation_attempt_N`) concatenated into one ATIF
+trajectory with per-stage boundaries under `extra.sregym.stages`. Because it's
+our agent, the emitter was extended to serialize `tool_call_id` (id-based tool
+matching, with positional fallback for older runs) and `usage_metadata` /
+`response_metadata` (per-step token `Metrics`).
 
 ### Deliberate deviations from Harbor
 

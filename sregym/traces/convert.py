@@ -20,6 +20,7 @@ from typing import Any
 
 from sregym.traces.adapters import claudecode, codex, opencode
 from sregym.traces.adapters import copilot as copilot_adapter
+from sregym.traces.adapters import stratus as stratus_adapter
 from sregym.traces.atif import Trajectory
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,7 @@ ADAPTERS: dict[str, Callable[..., Trajectory | None]] = {
     "codex": codex.to_atif,
     "opencode": opencode.to_atif,
     "copilot": copilot_adapter.to_atif,
+    "stratus": stratus_adapter.to_atif,
 }
 
 # Longest-suffix map of problem_id -> canonical application display name.
@@ -224,9 +226,15 @@ def convert_run(run_dir: Path | str) -> Trajectory | None:
     boundary = _find_diagnosis_submitted_step(trajectory)
     if boundary is not None:
         sregym_meta["diagnosis_submitted_step"] = boundary
-    # Merge rather than overwrite so an adapter that populates other top-level
-    # extra keys is not silently wiped.
-    merged = {**(trajectory.extra or {}), "sregym": sregym_meta}
+    # Merge rather than overwrite so an adapter that enriches ``extra.sregym``
+    # (e.g. stratus adds per-stage ``stages``) is not silently wiped. The
+    # convert-level meta (path, application, result-JSON submitted) wins on key
+    # collisions, but adapter-only keys are preserved.
+    adapter_sregym = (trajectory.extra or {}).get("sregym", {})
+    if isinstance(adapter_sregym, dict):
+        sregym_meta = {**adapter_sregym, **sregym_meta}
+    other_extra = {k: v for k, v in (trajectory.extra or {}).items() if k != "sregym"}
+    merged = {**other_extra, "sregym": sregym_meta}
     trajectory.extra = merged or None
 
     # Per-document unique id (ATIF v1.7: optional on root but recommended for
