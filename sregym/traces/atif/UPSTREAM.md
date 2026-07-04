@@ -48,6 +48,7 @@ returns a validated `Trajectory` and stores `sregym_meta` under `extra.sregym`.
 | `codex.py` | `codex.py` | session-dir JSONL; api-call grouping |
 | `opencode.py` | `opencode.py` | exported session JSON |
 | `copilot.py` | `copilot_cli.py` | `copilot-cli.jsonl`; flat + session-event schemas |
+| `gemini.py` | `gemini_cli.py` | archived `sessions/**/session-*.json`; legacy JSON + JSONL |
 | `stratus.py` | *(none — bespoke)* | SREGym's own LangGraph agent; see below |
 
 ### `stratus.py` is bespoke (no Harbor source)

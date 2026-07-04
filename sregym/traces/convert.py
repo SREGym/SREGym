@@ -20,6 +20,7 @@ from typing import Any
 
 from sregym.traces.adapters import claudecode, codex, opencode
 from sregym.traces.adapters import copilot as copilot_adapter
+from sregym.traces.adapters import gemini as gemini_adapter
 from sregym.traces.adapters import stratus as stratus_adapter
 from sregym.traces.atif import Trajectory
 
@@ -32,6 +33,7 @@ ADAPTERS: dict[str, Callable[..., Trajectory | None]] = {
     "opencode": opencode.to_atif,
     "copilot": copilot_adapter.to_atif,
     "stratus": stratus_adapter.to_atif,
+    "gemini": gemini_adapter.to_atif,
 }
 
 # Longest-suffix map of problem_id -> canonical application display name.

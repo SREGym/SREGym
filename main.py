@@ -52,6 +52,7 @@ def run_preflight_check(
         "codex": "clients.codex.driver",
         "copilot": "clients.copilot.driver",
         "opencode": "clients.opencode.driver",
+        "gemini": "clients.geminicli.driver",
     }
 
     module_path = agent_driver_modules.get(agent_name)
