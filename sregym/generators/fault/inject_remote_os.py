@@ -252,13 +252,15 @@ class RemoteOSFaultInjector(FaultInjector):
         self, node_name: str, threshold: float | None = None, margin_pct: int = 10
     ) -> float | None:
         """Raise kubelet's nodefs.available eviction threshold above the node's current free-space ratio.
-        Pods evict regardless of actual disk usage. Threshold is computed dynamically from kubelet
-        stats summary (current_free + margin_pct, capped at 99%) unless explicitly overridden.
+
+        Pods evict regardless of actual disk usage. Threshold is computed dynamically from kubelet stats summary (current_free + margin_pct, capped at 99%) unless explicitly overridden.
+
         Returns the threshold percent applied (e.g. 75.0), or None if the node wasn't found.
         """
         if threshold is None:
             try:
                 free_pct = self.kubectl.get_node_free_pct(node_name)
+                
             except Exception as e:
                 raise RuntimeError(
                     f"Cannot read kubelet stats summary for node {node_name} ({e!r}); "
