@@ -1,5 +1,4 @@
 """Inject faults at the OS layer via SSH (remote clusters) or docker exec (Kind)."""
-
 import json
 import logging
 import os
@@ -7,25 +6,19 @@ import re
 import shlex
 import subprocess
 import time
-
 import paramiko
 import yaml
 from paramiko.client import AutoAddPolicy
-
 from sregym.generators.fault.base import FaultInjector
 from sregym.paths import BASE_DIR
 from sregym.service.kubectl import KubeCtl
-
 NODE_NOT_READY_TIMEOUT = 120  # seconds
 NODE_NOT_READY_POLL_INTERVAL = 5  # seconds
-
-
 class RemoteOSFaultInjector(FaultInjector):
     def __init__(self):
         self.kubectl = KubeCtl()
         self.worker_info = None
         self._is_kind = None
-
     def _check_is_kind(self):
         """Detect if the cluster is Kind-based."""
         if self._is_kind is None:
@@ -34,7 +27,6 @@ class RemoteOSFaultInjector(FaultInjector):
                 return False
             self._is_kind = any((node.get("spec", {}).get("providerID") or "").startswith("kind://") for node in nodes)
         return self._is_kind
-
     def _get_node_items(self):
         """Return Kubernetes node objects from the current kubectl context."""
         output = self.kubectl.exec_command("kubectl get nodes -o json")
@@ -43,35 +35,28 @@ class RemoteOSFaultInjector(FaultInjector):
         except (json.JSONDecodeError, AttributeError, TypeError):
             print("Failed to read Kubernetes node data from kubectl.")
             return None
-
     def _is_control_plane_node(self, node):
         labels = node.get("metadata", {}).get("labels", {})
         return "node-role.kubernetes.io/control-plane" in labels or "node-role.kubernetes.io/master" in labels
-
     def _check_remote_host(self):
         """Verify the remote cluster has an inventory file."""
         if not os.path.exists(f"{BASE_DIR}/../scripts/ansible/inventory.yml"):
             print("Inventory file not found: " + f"{BASE_DIR}/../scripts/ansible/inventory.yml")
             return False
         return True
-
     def _get_remote_worker_info(self):
         """Read worker node SSH info from the Ansible inventory."""
         if self.worker_info:
             return self.worker_info
-
         worker_info = {}
         with open(f"{BASE_DIR}/../scripts/ansible/inventory.yml") as f:
             inventory = yaml.safe_load(f)
-
         variables = inventory.get("all", {}).get("vars", {})
         children = inventory.get("all", {}).get("children", {})
         workers = children.get("worker_nodes", {}).get("hosts", {})
-
         if not workers:
             print("No worker nodes found in inventory.")
             return None
-
         for name, info in workers.items():
             host = info["ansible_host"]
             user = self._replace_variables(info["ansible_user"], variables)
@@ -79,19 +64,14 @@ class RemoteOSFaultInjector(FaultInjector):
                 print(f"Warning: Unresolved variables in {name} user: {user}")
                 continue
             worker_info[host] = user
-
         self.worker_info = worker_info
         return self.worker_info
-
     def _replace_variables(self, text: str, variables: dict) -> str:
         """Replace {{ variable_name }} with actual values from variables dict."""
-
         def replace_var(match):
             var_name = match.group(1).strip()
             return str(variables[var_name]) if var_name in variables else match.group(0)
-
         return re.sub(r"\{\{\s*(\w+)\s*\}\}", replace_var, text)
-
     def _ssh_exec(self, host: str, user: str, command: str):
         """Run a command on a remote host via SSH."""
         ssh = paramiko.SSHClient()
@@ -103,7 +83,6 @@ class RemoteOSFaultInjector(FaultInjector):
             return stdout.read().decode()
         finally:
             ssh.close()
-
     def _docker_exec(self, container: str, command: str):
         """Run a command inside a Docker container (for Kind nodes)."""
         result = subprocess.run(
@@ -114,7 +93,6 @@ class RemoteOSFaultInjector(FaultInjector):
         if result.returncode != 0:
             print(f"docker exec failed on {container}: {result.stderr.strip()}")
         return result.stdout
-
     def _get_kind_worker_containers(self):
         """Get Kind worker container names from the current kubectl context."""
         containers = []
@@ -127,11 +105,9 @@ class RemoteOSFaultInjector(FaultInjector):
             provider_id = node.get("spec", {}).get("providerID") or ""
             if provider_id.startswith("kind://"):
                 containers.append(provider_id.rsplit("/", 1)[-1])
-
         if not containers:
             print("No Kind worker containers found.")
         return containers
-
     def _get_worker_node_names(self):
         """Return list of worker node names from kubectl."""
         output = self.kubectl.exec_command("kubectl get nodes --no-headers")
@@ -140,7 +116,6 @@ class RemoteOSFaultInjector(FaultInjector):
             for line in output.strip().splitlines()
             if len(line.split()) >= 3 and "control-plane" not in line.split()[2]
         ]
-
     def _node_exec(self, node_name: str, command: str):
         """Run a command on a remote worker node via SSH, mapping node name to inventory host."""
         worker_info = self._get_remote_worker_info()
@@ -154,7 +129,6 @@ class RemoteOSFaultInjector(FaultInjector):
         # Fallback: use first worker
         host, user = next(iter(worker_info.items()))
         return self._ssh_exec(host, user, f"sudo sh -c {shlex.quote(command)}")
-
     def _wait_for_worker_nodes(self, target_status="NotReady", timeout=NODE_NOT_READY_TIMEOUT):
         """Poll until all worker nodes reach the target status ('Ready' or 'NotReady')."""
         output = self.kubectl.exec_command("kubectl get nodes --no-headers")
@@ -163,11 +137,9 @@ class RemoteOSFaultInjector(FaultInjector):
             parts = line.split()
             if len(parts) >= 3 and "control-plane" not in parts[2]:
                 worker_node_names.add(parts[0])
-
         if not worker_node_names:
             print("No worker nodes found in cluster.")
             return
-
         print(f"Waiting for worker nodes {worker_node_names} to become {target_status}...")
         start = time.time()
         while time.time() - start < timeout:
@@ -183,9 +155,7 @@ class RemoteOSFaultInjector(FaultInjector):
                 print(f"All worker nodes are {target_status}.")
                 return
             time.sleep(NODE_NOT_READY_POLL_INTERVAL)
-
         print(f"Timed out after {timeout}s waiting for nodes to become {target_status}.")
-
     def inject_kubelet_crash(self):
         """Force-kill kubelet and stop the service on all worker nodes."""
         if self._check_is_kind():
@@ -206,9 +176,7 @@ class RemoteOSFaultInjector(FaultInjector):
                 print(f"Killing kubelet on {host}...")
                 self._ssh_exec(host, user, "sudo kill -9 $(pgrep -x kubelet) 2>/dev/null; sudo systemctl stop kubelet")
                 print(f"Kubelet stopped on {host}")
-
         self._wait_for_worker_nodes("NotReady")
-
     def recover_kubelet_crash(self):
         """Restart kubelet on all worker nodes."""
         if self._check_is_kind():
@@ -229,9 +197,7 @@ class RemoteOSFaultInjector(FaultInjector):
                 print(f"Starting kubelet on {host}...")
                 self._ssh_exec(host, user, "sudo systemctl start kubelet")
                 print(f"Kubelet started on {host}")
-
         self._wait_for_worker_nodes("Ready")
-
     def _wait_for_single_node(
         self, node_name: str, target_status: str = "Ready", timeout: int = NODE_NOT_READY_TIMEOUT
     ):
@@ -247,30 +213,24 @@ class RemoteOSFaultInjector(FaultInjector):
                     return
             time.sleep(NODE_NOT_READY_POLL_INTERVAL)
         print(f"Timed out after {timeout}s waiting for {node_name} to become {target_status}.")
-
     def inject_disk_pressure(
         self, node_name: str, threshold: float | None = None, margin_pct: int = 10
     ) -> float | None:
         """Raise kubelet's nodefs.available eviction threshold above the node's current free-space ratio.
-
         Pods evict regardless of actual disk usage. Threshold is computed dynamically from kubelet
         stats summary (current_free + margin_pct, capped at 99%) unless explicitly overridden.
-
         Returns the threshold percent applied (e.g. 75.0), or None if the node wasn't found.
         """
         if threshold is None:
             try:
                 free_pct = self.kubectl.get_node_free_pct(node_name)
-
             except Exception as e:
                 raise RuntimeError(
                     f"Cannot read kubelet stats summary for node {node_name} ({e!r}); "
                     f"refusing to guess a threshold — pass `threshold=` explicitly to override."
                 ) from e
-
             threshold = float(min(99, free_pct + margin_pct))
             print(f"Node {node_name} free={free_pct}% -> threshold={threshold}%")
-
         value = f'"{threshold}%"'
         # Use %% to escape % in printf format string
         printf_value = value.replace("%", "%%")
@@ -301,10 +261,8 @@ class RemoteOSFaultInjector(FaultInjector):
                 return None
             print(f"Inducing disk pressure on {node_name} (threshold {threshold}%)...")
             self._node_exec(node_name, script)
-
         self._wait_for_single_node(node_name, target_status="Ready")
         return threshold
-
     def recover_disk_pressure(self, node_name: str):
         """Restore the kubelet eviction threshold and restart kubelet."""
         script = "CFG=/var/lib/kubelet/config.yaml && sed -i '/nodefs.available:/d' \"$CFG\"; systemctl restart kubelet"
@@ -322,9 +280,7 @@ class RemoteOSFaultInjector(FaultInjector):
                 return
             print(f"Recovering disk pressure on {node_name}...")
             self._node_exec(node_name, script)
-
         self._wait_for_single_node(node_name, target_status="Ready")
-
     def recover_disk_pressure_all(self):
         """Strip the nodefs.available eviction threshold on every worker node."""
         if self._check_is_kind():
@@ -335,7 +291,6 @@ class RemoteOSFaultInjector(FaultInjector):
             nodes = self._get_worker_node_names()
         for node_name in nodes:
             self.recover_disk_pressure(node_name)
-
     def recover_clock_drift(self):
         """Detect leftover clock-drift injector/restore pods from interrupted
         run, restore affected node by doing: unmask/restart timesync
@@ -344,22 +299,19 @@ class RemoteOSFaultInjector(FaultInjector):
         try:
             leftover_pods_raw = self.kubectl.exec_command(
                 "kubectl get pods -n default "
-                "-l 'app in (clock-drift-injector,clock-drift-restorer)' "
+                "-l app=node-probe "
                 "-o jsonpath='{range .items[*]}{.metadata.name}{\" \"}{.spec.nodeName}{\"\\n\"}{end}'"
             )
         except Exception as e:
-            print(f"Could not query for leftover clock-drift pods: {e}")
+            print(f"Could not query for leftover node-probe pods: {e}")
             return
-
         leftover_pods_raw = leftover_pods_raw.strip()
         if not leftover_pods_raw:
-            print("No leftover clock-drift pods found; nothing to do")
+            print("No leftover node-probe pods found; nothing to do")
             return
-
         # node -> set of discovered service names (may be empty if discovery fails)
         node_to_services: dict[str, set[str]] = {}
         pod_names = []
-
         for line in leftover_pods_raw.splitlines():
             parts = line.strip().split()
             if not parts:
@@ -367,12 +319,9 @@ class RemoteOSFaultInjector(FaultInjector):
             pod_name = parts[0]
             node_name = parts[1] if len(parts) > 1 else None
             pod_names.append(pod_name)
-
             if not node_name:
                 continue
-
             node_to_services.setdefault(node_name, set())
-
             # Try to recover the exact service name from this pod's own logs
             logs = self._read_pod_logs_with_retry(pod_name)
             for log_line in logs.splitlines():
@@ -381,12 +330,10 @@ class RemoteOSFaultInjector(FaultInjector):
                     if services_str:
                         node_to_services[node_name].update(services_str.split())
                     break
-
         print(
-            f"Found {len(pod_names)} leftover clock-drift pod(s) on node(s): "
+            f"Found {len(pod_names)} leftover node-probe pod(s) on node(s): "
             f"{list(node_to_services.keys()) or 'unknown'}. Cleaning up and restoring."
         )
-
         for pod_name in pod_names:
             try:
                 self.kubectl.exec_command(
@@ -394,10 +341,8 @@ class RemoteOSFaultInjector(FaultInjector):
                 )
             except Exception as e:
                 print(f"Could not delete leftover pod {pod_name}: {e}")
-
         for node_name, services in node_to_services.items():
             self._restore_node_time_sync(node_name, services)
-
     def _read_pod_logs_with_retry(
         self, pod_name: str, namespace: str = "default", retries: int = 3, delay: int = 5
     ) -> str:
@@ -410,57 +355,45 @@ class RemoteOSFaultInjector(FaultInjector):
             except Exception as e:
                 print(f"Could not read logs from {pod_name} (attempt {attempt + 1}/{retries}): {e}")
                 logs = ""
-
             if logs and "Unable to connect to the server" not in logs and "Error from server" not in logs:
                 return logs
-
             if attempt < retries - 1:
                 print(f"Log read for {pod_name} looked unusable; retrying ({attempt + 1}/{retries})...")
                 time.sleep(delay)
-
         print(f"Warning: could not get usable logs from {pod_name} after {retries} attempts")
         return ""
-
     def _restore_node_time_sync(self, node_name: str, known_services: set[str] | None = None):
         """Run a short-lived privileged pod on `node_name` that unmasks/starts the
         discovered time-sync service + steps the clock to correct it 
         """
         services = known_services or {"systemd-timesyncd", "chrony", "chronyd", "ntp", "ntpd"}
-
         restore_lines = "\n".join(
             f'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl unmask {svc} 2>/dev/null || true\n'
             f'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl start {svc} 2>/dev/null || true'
             for svc in services
         )
-
         control_plane_epoch = int(time.time())
-
         restore_cmd = f"""set -e
 {restore_lines}
-
 NODE_EPOCH=$(nsenter --target 1 --mount --uts --ipc --net --pid -- date +%s)
 SKEW=$((NODE_EPOCH - {control_plane_epoch}))
 echo "Node clock skew before correction: ${{SKEW}}s"
-
 if [ "${{SKEW#-}}" -gt 60 ]; then
     echo "Skew exceeds 60s threshold; forcing clock step..."
     nsenter --target 1 --mount --uts --ipc --net --pid -- date -s "@{control_plane_epoch}"
 else
     echo "Skew within tolerance; no manual step needed."
 fi
-
 nsenter --target 1 --mount --uts --ipc --net --pid -- date
 """
-
-        pod_name = f"clock-drift-leftover-fix-{int(time.time() * 1000)}"
-
+        pod_name = f"node-probe-{int(time.time() * 1000)}"
         pod_dict = {
             "apiVersion": "v1",
             "kind": "Pod",
             "metadata": {
                 "name": pod_name,
                 "namespace": "default",
-                "labels": {"app": "clock-drift-leftover-fixer"},
+                "labels": {"app": "node-probe"},
             },
             "spec": {
                 "nodeSelector": {"kubernetes.io/hostname": node_name},
@@ -485,13 +418,10 @@ nsenter --target 1 --mount --uts --ipc --net --pid -- date
                 ],
             },
         }
-
         pod_yaml = yaml.dump(pod_dict, default_flow_style=False)
-
         try:
             print(f"Restoring time-sync on node {node_name} (services: {services})...")
             self.kubectl.exec_command("kubectl apply -f -", input_data=pod_yaml)
-
             # Wait for the pod to finish so we can read its output and confirm
             # the clock was actually corrected, rather than just hoping it was.
             deadline = time.monotonic() + 30
@@ -502,10 +432,8 @@ nsenter --target 1 --mount --uts --ipc --net --pid -- date
                 if status in ("Succeeded", "Failed"):
                     break
                 time.sleep(2)
-
             logs = self.kubectl.exec_command(f"kubectl logs {pod_name} -n default --ignore-errors")
             print(logs)
-
         except Exception as e:
             print(f"Could not run clock restore on node {node_name}: {e}")
         finally:
@@ -515,8 +443,6 @@ nsenter --target 1 --mount --uts --ipc --net --pid -- date
                 )
             except Exception:
                 pass
-
-
 def main():
     injector = RemoteOSFaultInjector()
     print("Injecting kubelet crash...")
@@ -524,7 +450,5 @@ def main():
     input("Press Enter to recover...")
     print("Recovering...")
     injector.recover_kubelet_crash()
-
-
 if __name__ == "__main__":
     main()
