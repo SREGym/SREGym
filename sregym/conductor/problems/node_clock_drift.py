@@ -30,6 +30,7 @@ from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 # Affinity rule shared by the injector and restore pods to hard-prevent
 # scheduling on control-plane nodes, regardless of taints.
+
 _WORKER_ONLY_AFFINITY = {
     "nodeAffinity": {
         "requiredDuringSchedulingIgnoredDuringExecution": {
@@ -56,6 +57,7 @@ class NodeClockDriftHotelReservation(Problem):
     clock_drift_seconds = 86400 * 30
     clock_injector_namespace = "default"
     clock_injector_image = "ubuntu:22.04"
+
     def __init__(self):
         self.app = HotelReservation()
         super().__init__(app=self.app, namespace=self.app.namespace)
@@ -79,8 +81,10 @@ class NodeClockDriftHotelReservation(Problem):
         self.app.create_workload()
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = NodeClockDriftMitigationOracle(self)
+
     def requires_khaos(self) -> bool:
         return False
+
     # ── Node helpers ────────────────────────────────────────────────────────────
     def _is_control_plane_node(self, node_name: str) -> bool:
         """Return True if the named node carries a control-plane role label."""
@@ -93,6 +97,7 @@ class NodeClockDriftHotelReservation(Problem):
             )
         except ApiException:
             return False
+
     # ── TLS Infrastructure ──────────────────────────────────────────────────────
     def _generate_self_signed_cert(self) -> tuple[str, str, str]:
         """Generate a self-signed TLS certificate valid for only 1 day.
@@ -120,6 +125,7 @@ class NodeClockDriftHotelReservation(Problem):
             cert_b64 = base64.b64encode(cert_file.read_bytes()).decode()
             key_b64 = base64.b64encode(key_file.read_bytes()).decode()
             return cert_b64, key_b64, cert_pem
+
     def _setup_tls_infrastructure(self) -> None:
         """Create TLS Secret, CA ConfigMap, and sidecar for the frontend.
         The self-signed cert is stored in two places:
@@ -172,6 +178,7 @@ class NodeClockDriftHotelReservation(Problem):
             else:
                 raise
         self._add_tls_health_check_sidecar()
+
     def _add_tls_health_check_sidecar(self) -> None:
         """
         Validates the short-lived cert against the node clock every 30 seconds.
@@ -241,6 +248,7 @@ class NodeClockDriftHotelReservation(Problem):
             print("[TLS] Added TLS verification sidecar to frontend deployment")
         except Exception as e:
             print(f"[TLS] Warning: Could not patch frontend deployment with sidecar: {e}")
+
     def _wait_for_sidecar_rollout(self, timeout: int = 600) -> None:
         """Wait until a Running frontend pod exists with the tls-health-check sidecar
         fully ready, on a worker node.
@@ -270,6 +278,7 @@ class NodeClockDriftHotelReservation(Problem):
             f"Timed out after {timeout}s waiting for a Running frontend pod "
             f"with the tls-health-check sidecar to appear on a worker node."
         )
+
     # ── Fault Injection ─────────────────────────────────────────────────────────
     @mark_fault_injected
     def inject_fault(self):
@@ -301,6 +310,7 @@ class NodeClockDriftHotelReservation(Problem):
             print("No target_node recorded; skipping clock/service restore")
         self._cleanup_injector_pods()
         print("Cleaned up clock drift injector pods")
+
     # ── Node Targeting ──────────────────────────────────────────────────────────
     def _select_target_node(self) -> str:
         """Select the node running the frontend pod that has the TLS sidecar
@@ -325,6 +335,7 @@ class NodeClockDriftHotelReservation(Problem):
             f"No running frontend pod with tls-health-check sidecar found on a "
             f"worker node in namespace '{self.namespace}'"
         )
+
     def _advance_node_clock(self, node: str) -> None:
         """Create a privileged pod that discovers + disables the active time-sync
         service, advances the clock
@@ -411,6 +422,7 @@ class NodeClockDriftHotelReservation(Problem):
         except ApiException as e:
             print(f"Failed to create node probe pod: {e}")
             raise
+
     def _restore_node_clock(self, node: str) -> None:
         """Step the node's clock back to cluster time and restore the time-sync service.
 
@@ -523,6 +535,7 @@ fi
                 self.core_v1.delete_namespaced_pod(
                     pod_name, self.clock_injector_namespace, grace_period_seconds=0
                 )
+                
     def _cleanup_injector_pods(self) -> None:
         """Delete injector + restore pods in case _restore_node_clock cleanup
         didn't finish (race condition or failure).

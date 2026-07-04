@@ -1,14 +1,22 @@
 """Mitigation oracle for node clock drift causing TLS failures."""
+
 import time
+
 from kubernetes import client
 from kubernetes.client.rest import ApiException
+
 from sregym.conductor.oracles.base import Oracle
+
+
 class NodeClockDriftMitigationOracle(Oracle):
     #Verifying that node clock has been restored to cluster's time (real time)
+
     importance = 1.0
+
     def __init__(self, problem):
         super().__init__(problem)
         self.core_v1 = client.CoreV1Api()
+
     def evaluate(self) -> dict:
         print("== Node Clock Drift Mitigation Evaluation ==")
         results = {}
@@ -47,6 +55,7 @@ class NodeClockDriftMitigationOracle(Oracle):
         except Exception as e:
             print(f"Error during mitigation evaluation: {e}")
             return {"success": False, "error": str(e)}
+
     def _find_affected_node(self, namespace: str) -> str:
         try:
             pods = self.core_v1.list_namespaced_pod(
@@ -60,6 +69,7 @@ class NodeClockDriftMitigationOracle(Oracle):
             return None
         except ApiException:
             return None
+
     def _check_clock_skew(self, node_name: str) -> int | None:
         """Calculate clock skew between conductor (control plane) and the node."""
         try:
@@ -71,6 +81,7 @@ class NodeClockDriftMitigationOracle(Oracle):
         except Exception as e:
             print(f"Error checking clock skew: {e}")
             return None
+
     def _get_node_time(self, node_name: str) -> int | None:
         """Get current time from the specified node via a privileged pod."""
         pod_name = f"time-check-{int(time.time() * 1000)}"
@@ -118,6 +129,7 @@ class NodeClockDriftMitigationOracle(Oracle):
                 self.core_v1.delete_namespaced_pod(pod_name, "default", grace_period_seconds=0)
             except Exception:
                 pass
+                
     def _check_pod_health(self, namespace: str, target_node: str) -> bool:
         """Check if pods on the target node are healthy with no TLS-related failures."""
         try:
