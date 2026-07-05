@@ -75,6 +75,7 @@ from sregym.conductor.problems.payment_service_unreachable import PaymentService
 from sregym.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
 from sregym.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodCIDRExhaustionHotelReservation
+from sregym.conductor.problems.postgres_lock_contention_product_catalog import PostgresLockContentionProductCatalog
 from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
 from sregym.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
 from sregym.conductor.problems.psa_restricted_blocks_recreation import PSARestrictedBlocksRecreation
@@ -167,6 +168,7 @@ class ProblemRegistry:
             "missing_service_social_network": lambda: MissingService(app_name="social_network", faulty_service="user-service"),
             "namespace_memory_limit": NamespaceMemoryLimit,
             "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
+            "postgres_lock_contention_product_catalog": PostgresLockContentionProductCatalog,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
             "priority_preemption_cascade_hotel_reservation": PriorityPreemptionCascadeHotelReservation,
             "pvc_claim_mismatch": PVCClaimMismatch,
