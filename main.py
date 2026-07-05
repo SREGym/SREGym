@@ -31,6 +31,7 @@ from sregym.conductor.constants import StartProblemResult
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput
 from sregym.traces import postprocess as trace_postprocess
+from sregym.traces import store as trace_store
 
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
@@ -487,6 +488,13 @@ def driver_loop(
                     trajectory_path = trace_postprocess.write_trajectory(published_run_dir)
                     if trajectory_path is not None:
                         logger.info(f"📝 ATIF trajectory written to {trajectory_path}")
+                        try:
+                            trace_store.ingest_trajectory_file(
+                                trajectory_path,
+                                base_dir.parent / trace_store.DEFAULT_DB_PATH,  # results/traces.db
+                            )
+                        except Exception as exc:  # defensive: never abort a run
+                            logger.warning(f"⚠️ ATIF trajectory DB ingest failed: {exc}")
                     else:
                         logger.warning(f"⚠️ ATIF trajectory conversion skipped for {published_run_dir}")
 

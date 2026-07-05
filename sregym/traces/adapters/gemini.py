@@ -210,7 +210,7 @@ def _reasoning_from_thoughts(thoughts: list[dict[str, Any]] | None) -> str | Non
 def _observation_content(result: list[Any] | None) -> str | None:
     """Extract observation text from a toolCall ``result`` array.
 
-    ponytail: image parts fold to a ``[image]`` placeholder rather than being
+    Image parts fold to a ``[image]`` placeholder rather than being
     saved to disk (adapter stays pure); add real image handling only if a run
     actually produces images.
     """
