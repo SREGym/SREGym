@@ -111,6 +111,7 @@ from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
 from sregym.service.kubectl import KubeCtl
 
+
 # fmt: off
 class ProblemRegistry:
     def __init__(self):

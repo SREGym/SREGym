@@ -40,7 +40,7 @@ PROVIDER_ENV_VARS: dict[str, list[str]] = {
     "xai": ["XAI_API_KEY"],
     # OpenCode native providers (no API key needed - uses opencode.ai)
     "opencode": [],
-    "zai-coding-plan": [],
+    "zai-coding-plan": ["ZAI_API_KEY"],
 }
 
 
@@ -385,7 +385,7 @@ class OpenCodeAgent:
 
         # Build command
         escaped_instruction = shlex.quote(instruction)
-        command = f"opencode --model {self.model_name} run --format=json {escaped_instruction}"
+        command = f"opencode --model={self.model_name} run --format=json --thinking {escaped_instruction}"
 
         logger.info(f"Executing command: {command}")
 
