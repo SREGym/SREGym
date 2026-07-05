@@ -218,3 +218,170 @@ def test_roundtrip_real_fixtures(tmp_path, fixture):
     got = store.get(orig.trajectory_id, db)
     assert got is not None
     assert got.model_dump(exclude_none=True, mode="json") == orig.model_dump(exclude_none=True, mode="json")
+
+
+def _sample_atif_all_leaves(trajectory_id: str = "full") -> dict:
+    """One doc touching every JSONB column + coercion path, so CI (not just the
+    gitignored real fixtures) exercises multimodal parts, per-token arrays,
+    subagent refs, is_copied_context, llm_call_count=0 dispatch, and
+    continued_trajectory_ref."""
+    return {
+        "schema_version": "ATIF-v1.7",
+        "trajectory_id": trajectory_id,
+        "agent": {
+            "name": "codex",
+            "version": "1.0",
+            "tool_definitions": [{"type": "function", "function": {"name": "f"}}],
+            "extra": {"v": 1},
+        },
+        "steps": [
+            {
+                "step_id": 1,
+                "source": "user",
+                "message": [
+                    {"type": "text", "text": "look"},
+                    {"type": "image", "source": {"media_type": "image/png", "path": "a.png"}},
+                ],
+            },
+            {
+                "step_id": 2,
+                "source": "agent",
+                "message": "ok",
+                "is_copied_context": True,
+                "llm_call_count": 2,
+                "reasoning_content": "think",
+                "tool_calls": [
+                    {"tool_call_id": "c1", "function_name": "f", "arguments": {"a": 1}, "extra": {"timeout": 30}}
+                ],
+                "observation": {
+                    "results": [
+                        {
+                            "source_call_id": "c1",
+                            "content": [
+                                {"type": "text", "text": "out"},
+                                {"type": "image", "source": {"media_type": "image/jpeg", "path": "b.jpg"}},
+                            ],
+                            "extra": {"score": 0.9},
+                        },
+                        {
+                            "source_call_id": None,
+                            "subagent_trajectory_ref": [
+                                {"trajectory_id": "sub-x", "session_id": "s", "extra": {"k": "v"}}
+                            ],
+                        },
+                    ]
+                },
+                "metrics": {
+                    "prompt_tokens": 10,
+                    "prompt_token_ids": [1, 2, 3],
+                    "completion_token_ids": [4, 5],
+                    "logprobs": [-0.1, -0.2],
+                    "extra": {"m": 1},
+                },
+                "extra": {"s": 1},
+            },
+            {"step_id": 3, "source": "agent", "message": "dispatch", "llm_call_count": 0, "is_copied_context": False},
+        ],
+        "continued_trajectory_ref": "next.json",
+        "final_metrics": {"total_steps": 3, "extra": {"agg": 1}},
+        "extra": {"sregym": {"problem_id": "p1", "run": 1}},
+    }
+
+
+def test_all_variable_leaves_roundtrip(tmp_path):
+    """CI guard: every JSONB column + coercion path round-trips byte-identically.
+
+    Runs unconditionally (unlike the gitignored real-fixture test), so a
+    regression in any variable-leaf column is caught on a clean checkout.
+    """
+    db = tmp_path / "traces.db"
+    orig = Trajectory.model_validate(_sample_atif_all_leaves())
+    store.upsert(orig, db)
+    got = store.get("full", db)
+    assert got is not None
+    assert got.model_dump(exclude_none=True, mode="json") == orig.model_dump(exclude_none=True, mode="json")
+
+
+def test_subagent_array_order_preserved(tmp_path):
+    """Subagents must reconstruct in their original array order, not id-sorted."""
+    db = tmp_path / "traces.db"
+    doc = {
+        "schema_version": "ATIF-v1.7",
+        "trajectory_id": "root",
+        "agent": {"name": "a", "version": "1"},
+        "steps": [{"step_id": 1, "source": "agent", "message": "x"}],
+        "subagent_trajectories": [
+            {
+                "schema_version": "ATIF-v1.7",
+                "trajectory_id": "zzz",
+                "agent": {"name": "s", "version": "1"},
+                "steps": [{"step_id": 1, "source": "agent", "message": "z"}],
+            },
+            {
+                "schema_version": "ATIF-v1.7",
+                "trajectory_id": "aaa",
+                "agent": {"name": "s", "version": "1"},
+                "steps": [{"step_id": 1, "source": "agent", "message": "a"}],
+            },
+        ],
+    }
+    orig = Trajectory.model_validate(doc)
+    store.upsert(orig, db)
+    got = store.get("root", db)
+    assert [s.trajectory_id for s in got.subagent_trajectories] == ["zzz", "aaa"]
+    assert got.model_dump(exclude_none=True, mode="json") == orig.model_dump(exclude_none=True, mode="json")
+
+
+def test_nested_subagent_roundtrip(tmp_path):
+    """Depth-2 nesting (root -> sub -> inner) round-trips with correct linkage."""
+    db = tmp_path / "traces.db"
+    doc = {
+        "schema_version": "ATIF-v1.7",
+        "trajectory_id": "root",
+        "agent": {"name": "a", "version": "1"},
+        "steps": [{"step_id": 1, "source": "agent", "message": "x"}],
+        "subagent_trajectories": [
+            {
+                "schema_version": "ATIF-v1.7",
+                "trajectory_id": "root/a",
+                "agent": {"name": "s", "version": "1"},
+                "steps": [{"step_id": 1, "source": "agent", "message": "mid"}],
+                "subagent_trajectories": [
+                    {
+                        "schema_version": "ATIF-v1.7",
+                        "trajectory_id": "root/a/inner",
+                        "agent": {"name": "s2", "version": "1"},
+                        "steps": [{"step_id": 1, "source": "agent", "message": "deep"}],
+                    }
+                ],
+            }
+        ],
+    }
+    orig = Trajectory.model_validate(doc)
+    store.upsert(orig, db)
+    got = store.get("root", db)
+    assert got.subagent_trajectories[0].subagent_trajectories[0].trajectory_id == "root/a/inner"
+    assert got.model_dump(exclude_none=True, mode="json") == orig.model_dump(exclude_none=True, mode="json")
+
+
+def test_query_include_subagents(tmp_path):
+    db = tmp_path / "traces.db"
+    store.upsert(Trajectory.model_validate(_sample_with_subagent("root")), db)
+    # Default: only root trajectories.
+    assert {s.trajectory_id for s in store.query(db_path=db)} == {"root"}
+    # include_subagents surfaces the embedded subagent row too.
+    assert {s.trajectory_id for s in store.query(include_subagents=True, db_path=db)} == {"root", "root/sub-1"}
+
+
+def test_get_subagent_directly(tmp_path):
+    db = tmp_path / "traces.db"
+    store.upsert(Trajectory.model_validate(_sample_with_subagent("root")), db)
+    sub = store.get("root/sub-1", db)
+    assert sub is not None
+    assert sub.trajectory_id == "root/sub-1"
+
+
+def test_stats_empty_db(tmp_path):
+    db = tmp_path / "traces.db"
+    store.init_db(db)
+    assert store.stats(db) == {"total": 0, "by_problem": {}, "by_agent": {}}

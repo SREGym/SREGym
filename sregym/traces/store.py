@@ -80,6 +80,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS trajectories (
     trajectory_id            TEXT PRIMARY KEY,
     parent_trajectory_id     TEXT REFERENCES trajectories(trajectory_id) ON DELETE CASCADE,
+    sibling_seq              INTEGER,            -- order within parent's subagent_trajectories[]
     session_id               TEXT,
     schema_version           TEXT NOT NULL,
     agent_name               TEXT NOT NULL,
@@ -108,7 +109,7 @@ CREATE TABLE IF NOT EXISTS trajectories (
 );
 
 CREATE TABLE IF NOT EXISTS steps (
-    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    id                   INTEGER PRIMARY KEY,
     trajectory_id        TEXT NOT NULL REFERENCES trajectories(trajectory_id) ON DELETE CASCADE,
     step_id              INTEGER NOT NULL,
     timestamp            TEXT,
@@ -133,7 +134,7 @@ CREATE TABLE IF NOT EXISTS steps (
 );
 
 CREATE TABLE IF NOT EXISTS tool_calls (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    id            INTEGER PRIMARY KEY,
     step_pk       INTEGER NOT NULL REFERENCES steps(id) ON DELETE CASCADE,
     seq           INTEGER NOT NULL,
     tool_call_id  TEXT NOT NULL,
@@ -143,7 +144,7 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 );
 
 CREATE TABLE IF NOT EXISTS observation_results (
-    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    id             INTEGER PRIMARY KEY,
     step_pk        INTEGER NOT NULL REFERENCES steps(id) ON DELETE CASCADE,
     seq            INTEGER NOT NULL,
     source_call_id TEXT,
@@ -246,6 +247,7 @@ def _insert_trajectory(
     trajectory: Trajectory,
     *,
     parent_trajectory_id: str | None,
+    sibling_seq: int | None = None,
 ) -> None:
     """Insert one trajectory + its steps/tool_calls/observations; recurse subagents."""
     if not trajectory.trajectory_id:
@@ -261,7 +263,7 @@ def _insert_trajectory(
     conn.execute(
         """
         INSERT INTO trajectories (
-            trajectory_id, parent_trajectory_id, session_id, schema_version,
+            trajectory_id, parent_trajectory_id, sibling_seq, session_id, schema_version,
             agent_name, agent_version, model_name, problem_id, application,
             batch, run, results_path, submitted, diagnosis_submitted_step,
             num_steps, total_prompt_tokens, total_completion_tokens,
@@ -269,13 +271,14 @@ def _insert_trajectory(
             continued_trajectory_ref, tool_definitions, agent_extra,
             final_metrics_extra, extra
         ) VALUES (
-            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
             jsonb(?), jsonb(?), jsonb(?), jsonb(?)
         )
         """,
         (
             trajectory.trajectory_id,
             parent_trajectory_id,
+            sibling_seq,
             trajectory.session_id,
             trajectory.schema_version,
             agent.name,
@@ -306,8 +309,8 @@ def _insert_trajectory(
     for step in trajectory.steps:
         _insert_step(conn, trajectory.trajectory_id, step)
 
-    for sub in trajectory.subagent_trajectories or []:
-        _insert_trajectory(conn, sub, parent_trajectory_id=trajectory.trajectory_id)
+    for seq, sub in enumerate(trajectory.subagent_trajectories or []):
+        _insert_trajectory(conn, sub, parent_trajectory_id=trajectory.trajectory_id, sibling_seq=seq)
 
 
 def _insert_step(conn: sqlite3.Connection, trajectory_id: str, step: Step) -> None:
@@ -424,26 +427,44 @@ def _load(value: Any) -> Any:
     return json.loads(value)
 
 
-def _build_metrics(conn: sqlite3.Connection, row: sqlite3.Row) -> Metrics | None:
-    """Reassemble per-step Metrics from step columns, or None if all empty."""
-    step_pk = row["id"]
-    prompt_token_ids = _load(_col_json(conn, "steps", "prompt_token_ids", step_pk))
-    completion_token_ids = _load(_col_json(conn, "steps", "completion_token_ids", step_pk))
-    logprobs = _load(_col_json(conn, "steps", "logprobs", step_pk))
-    metrics_extra = _load(_col_json(conn, "steps", "metrics_extra", step_pk))
+def _build_metrics(row: sqlite3.Row) -> Metrics | None:
+    """Reassemble per-step Metrics from step columns, or None if all empty.
+
+    JSONB columns arrive already decoded to JSON text (the step SELECT wraps them
+    in ``json(col)``), so ``_load`` just parses the text.
+    """
     fields = {
         "prompt_tokens": row["prompt_tokens"],
         "completion_tokens": row["completion_tokens"],
         "cached_tokens": row["cached_tokens"],
         "cost_usd": row["cost_usd"],
-        "prompt_token_ids": prompt_token_ids,
-        "completion_token_ids": completion_token_ids,
-        "logprobs": logprobs,
-        "extra": metrics_extra,
+        "prompt_token_ids": _load(row["prompt_token_ids"]),
+        "completion_token_ids": _load(row["completion_token_ids"]),
+        "logprobs": _load(row["logprobs"]),
+        "extra": _load(row["metrics_extra"]),
     }
     if all(v is None for v in fields.values()):
         return None
     return Metrics(**fields)
+
+
+# Every read SELECT wraps JSONB columns in ``json(col) AS col`` so the fetched
+# row already carries decodable JSON text -- no per-column re-fetch.
+_STEP_COLS = (
+    "id, step_id, timestamp, source, model_name, reasoning_effort, message, "
+    "json(message_parts) AS message_parts, reasoning_content, llm_call_count, "
+    "is_copied_context, prompt_tokens, completion_tokens, cached_tokens, cost_usd, "
+    "json(prompt_token_ids) AS prompt_token_ids, "
+    "json(completion_token_ids) AS completion_token_ids, json(logprobs) AS logprobs, "
+    "json(metrics_extra) AS metrics_extra, json(extra) AS extra"
+)
+_TRAJ_COLS = (
+    "trajectory_id, session_id, schema_version, agent_name, agent_version, "
+    "model_name, total_prompt_tokens, total_completion_tokens, total_cached_tokens, "
+    "total_cost_usd, total_steps, notes, continued_trajectory_ref, "
+    "json(tool_definitions) AS tool_definitions, json(agent_extra) AS agent_extra, "
+    "json(final_metrics_extra) AS final_metrics_extra, json(extra) AS extra"
+)
 
 
 def _build_step(conn: sqlite3.Connection, row: sqlite3.Row) -> Step:
@@ -451,7 +472,7 @@ def _build_step(conn: sqlite3.Connection, row: sqlite3.Row) -> Step:
 
     message: str | list[ContentPart]
     if row["message_parts"] is not None:
-        message = [ContentPart.model_validate(p) for p in _load(_json_text(conn, "steps", "message_parts", step_pk))]
+        message = [ContentPart.model_validate(p) for p in _load(row["message_parts"])]
     else:
         message = row["message"] if row["message"] is not None else ""
 
@@ -459,18 +480,20 @@ def _build_step(conn: sqlite3.Connection, row: sqlite3.Row) -> Step:
         ToolCall(
             tool_call_id=tc["tool_call_id"],
             function_name=tc["function_name"],
-            arguments=_load(_col_json(conn, "tool_calls", "arguments", tc["id"])) or {},
-            extra=_load(_col_json(conn, "tool_calls", "extra", tc["id"])),
+            arguments=_load(tc["arguments"]) or {},
+            extra=_load(tc["extra"]),
         )
         for tc in conn.execute(
-            "SELECT id, tool_call_id, function_name FROM tool_calls WHERE step_pk = ? ORDER BY seq",
+            "SELECT tool_call_id, function_name, json(arguments) AS arguments, "
+            "json(extra) AS extra FROM tool_calls WHERE step_pk = ? ORDER BY seq",
             (step_pk,),
         )
     ]
 
     obs_rows = list(
         conn.execute(
-            "SELECT id, source_call_id, content, content_parts, subagent_ref, extra "
+            "SELECT source_call_id, content, json(content_parts) AS content_parts, "
+            "json(subagent_ref) AS subagent_ref, json(extra) AS extra "
             "FROM observation_results WHERE step_pk = ? ORDER BY seq",
             (step_pk,),
         )
@@ -480,24 +503,18 @@ def _build_step(conn: sqlite3.Connection, row: sqlite3.Row) -> Step:
         results = []
         for orow in obs_rows:
             if orow["content_parts"] is not None:
-                content: Any = [
-                    ContentPart.model_validate(p)
-                    for p in _load(_col_json(conn, "observation_results", "content_parts", orow["id"]))
-                ]
+                content: Any = [ContentPart.model_validate(p) for p in _load(orow["content_parts"])]
             else:
                 content = orow["content"]
             subagent_ref = None
             if orow["subagent_ref"] is not None:
-                subagent_ref = [
-                    SubagentTrajectoryRef.model_validate(r)
-                    for r in _load(_col_json(conn, "observation_results", "subagent_ref", orow["id"]))
-                ]
+                subagent_ref = [SubagentTrajectoryRef.model_validate(r) for r in _load(orow["subagent_ref"])]
             results.append(
                 ObservationResult(
                     source_call_id=orow["source_call_id"],
                     content=content,
                     subagent_trajectory_ref=subagent_ref,
-                    extra=_load(_col_json(conn, "observation_results", "extra", orow["id"])),
+                    extra=_load(orow["extra"]),
                 )
             )
         observation = Observation(results=results)
@@ -513,22 +530,11 @@ def _build_step(conn: sqlite3.Connection, row: sqlite3.Row) -> Step:
         reasoning_content=row["reasoning_content"],
         tool_calls=tool_calls or None,
         observation=observation,
-        metrics=_build_metrics(conn, row),
+        metrics=_build_metrics(row),
         llm_call_count=row["llm_call_count"],
         is_copied_context=None if is_copied is None else bool(is_copied),
-        extra=_load(_col_json(conn, "steps", "extra", step_pk)),
+        extra=_load(row["extra"]),
     )
-
-
-def _col_json(conn: sqlite3.Connection, table: str, column: str, row_id: int) -> str | None:
-    """Read a single JSONB column back as JSON text via ``json(col)``."""
-    r = conn.execute(f"SELECT json({column}) AS v FROM {table} WHERE id = ?", (row_id,)).fetchone()
-    return r["v"] if r else None
-
-
-# ``message_parts`` needs the same json() decode; kept as a thin alias so the
-# call site above reads clearly.
-_json_text = _col_json
 
 
 def get(trajectory_id: str, db_path: Path | str = DEFAULT_DB_PATH) -> Trajectory | None:
@@ -544,12 +550,12 @@ def get(trajectory_id: str, db_path: Path | str = DEFAULT_DB_PATH) -> Trajectory
 
 
 def _get(conn: sqlite3.Connection, trajectory_id: str) -> Trajectory | None:
-    trow = conn.execute("SELECT * FROM trajectories WHERE trajectory_id = ?", (trajectory_id,)).fetchone()
+    trow = conn.execute(f"SELECT {_TRAJ_COLS} FROM trajectories WHERE trajectory_id = ?", (trajectory_id,)).fetchone()
     if trow is None:
         return None
 
     step_rows = conn.execute(
-        "SELECT * FROM steps WHERE trajectory_id = ? ORDER BY step_id", (trajectory_id,)
+        f"SELECT {_STEP_COLS} FROM steps WHERE trajectory_id = ? ORDER BY step_id", (trajectory_id,)
     ).fetchall()
     steps = [_build_step(conn, srow) for srow in step_rows]
 
@@ -560,7 +566,7 @@ def _get(conn: sqlite3.Connection, trajectory_id: str) -> Trajectory | None:
         "total_cached_tokens": trow["total_cached_tokens"],
         "total_cost_usd": trow["total_cost_usd"],
         "total_steps": trow["total_steps"],
-        "extra": _load(_traj_json(conn, "final_metrics_extra", trajectory_id)),
+        "extra": _load(trow["final_metrics_extra"]),
     }
     if any(v is not None for v in fm_fields.values()):
         fm = FinalMetrics(**fm_fields)
@@ -569,15 +575,15 @@ def _get(conn: sqlite3.Connection, trajectory_id: str) -> Trajectory | None:
         name=trow["agent_name"],
         version=trow["agent_version"],
         model_name=trow["model_name"],
-        tool_definitions=_load(_traj_json(conn, "tool_definitions", trajectory_id)),
-        extra=_load(_traj_json(conn, "agent_extra", trajectory_id)),
+        tool_definitions=_load(trow["tool_definitions"]),
+        extra=_load(trow["agent_extra"]),
     )
 
-    # Re-nest embedded subagents.
+    # Re-nest embedded subagents in their original array order (sibling_seq).
     sub_ids = [
         r["trajectory_id"]
         for r in conn.execute(
-            "SELECT trajectory_id FROM trajectories WHERE parent_trajectory_id = ? ORDER BY trajectory_id",
+            "SELECT trajectory_id FROM trajectories WHERE parent_trajectory_id = ? ORDER BY sibling_seq, trajectory_id",
             (trajectory_id,),
         )
     ]
@@ -593,17 +599,9 @@ def _get(conn: sqlite3.Connection, trajectory_id: str) -> Trajectory | None:
         notes=trow["notes"],
         final_metrics=fm,
         continued_trajectory_ref=trow["continued_trajectory_ref"],
-        extra=_load(_traj_json(conn, "extra", trajectory_id)),
+        extra=_load(trow["extra"]),
         subagent_trajectories=subagents or None,
     )
-
-
-def _traj_json(conn: sqlite3.Connection, column: str, trajectory_id: str) -> str | None:
-    """Read a JSONB column on the trajectories table by trajectory_id."""
-    r = conn.execute(
-        f"SELECT json({column}) AS v FROM trajectories WHERE trajectory_id = ?", (trajectory_id,)
-    ).fetchone()
-    return r["v"] if r else None
 
 
 # --- Query / stats ----------------------------------------------------------
