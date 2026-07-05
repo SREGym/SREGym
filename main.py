@@ -30,6 +30,8 @@ from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput
+from sregym.traces import postprocess as trace_postprocess
+from sregym.traces import store as trace_store
 
 LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
@@ -50,6 +52,8 @@ def run_preflight_check(
         "claudecode": "clients.claudecode.driver",
         "codex": "clients.codex.driver",
         "copilot": "clients.copilot.driver",
+        "opencode": "clients.opencode.driver",
+        "gemini": "clients.geminicli.driver",
     }
 
     module_path = agent_driver_modules.get(agent_name)
@@ -478,6 +482,21 @@ def driver_loop(
                         f"⏳ Attempt {attempt} of {n_attempts} for problem {pid} complete - "
                         f"Intermediate results written to {tmp_path}; artifacts published to {published_run_dir}"
                     )
+                    # Normalize the agent's raw logs into an ATIF trajectory.json
+                    # right after publication. Non-fatal: a conversion failure or
+                    # an unsupported tool must never break the run.
+                    trajectory_path = trace_postprocess.write_trajectory(published_run_dir)
+                    if trajectory_path is not None:
+                        logger.info(f"📝 ATIF trajectory written to {trajectory_path}")
+                        try:
+                            trace_store.ingest_trajectory_file(
+                                trajectory_path,
+                                base_dir.parent / trace_store.DEFAULT_DB_PATH,  # results/traces.db
+                            )
+                        except Exception as exc:  # defensive: never abort a run
+                            logger.warning(f"⚠️ ATIF trajectory DB ingest failed: {exc}")
+                    else:
+                        logger.warning(f"⚠️ ATIF trajectory conversion skipped for {published_run_dir}")
 
                 if attempt == n_attempts:
                     final_csv_path = base_dir / agent_to_run / pid / f"{pid}_{agent_to_run}_results.csv"

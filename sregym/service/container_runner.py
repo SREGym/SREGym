@@ -2,7 +2,9 @@ import contextlib
 import logging
 import os
 import platform
+import shutil
 import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -136,6 +138,8 @@ class ContainerRunner:
         "MOONSHOT_API_BASE",
         # GLM
         "GLM_API_KEY",
+        "ZAI_API_KEY",
+        "ZHIPU_API_KEY",
         # Claude Code
         "CLAUDE_CODE_OAUTH_TOKEN",
         # GitHub Copilot CLI
@@ -165,6 +169,35 @@ class ContainerRunner:
 
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
+        self._credential_tmps: list[str] = []
+
+    def _mount_codex_credentials(self, args: list[str]) -> None:
+        """Mount Codex auth into a throwaway tempdir
+
+        Copies only auth.json + config.toml and never sessions/logs/telemetry
+        so each container gets isolated state that dies with it.
+        """
+        codex_dir = Path.home() / ".codex"
+        if not codex_dir.is_dir():
+            return
+
+        tmp = tempfile.mkdtemp(prefix="sregym-codex-")
+        auth_src = codex_dir / "auth.json"
+        # Reject symlinks + check readability (files may be root-owned from container writes).
+        if auth_src.is_symlink() or not auth_src.is_file() or not os.access(auth_src, os.R_OK):
+            shutil.rmtree(tmp, ignore_errors=True)
+            return
+
+        shutil.copy2(auth_src, Path(tmp) / "auth.json")
+
+        args.extend(["-v", f"{tmp}:/root/.codex"])
+        self._credential_tmps.append(tmp)
+
+    def cleanup_credential_tmps(self) -> None:
+        """Remove throwaway credential directories."""
+        for tmp in self._credential_tmps:
+            shutil.rmtree(tmp, ignore_errors=True)
+        self._credential_tmps = []
 
     def _build_env_flags(self, extra_env: dict[str, str] | None = None) -> list[str]:
         flags = []
@@ -233,11 +266,7 @@ class ContainerRunner:
         if aws_dir.is_dir():
             args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
 
-        # Mount Codex credentials directory for subscription-based auth
-        # (read-write so the CLI can update its model cache and telemetry)
-        codex_dir = Path.home() / ".codex"
-        if codex_dir.is_dir():
-            args.extend(["-v", f"{codex_dir.resolve()}:/root/.codex"])
+        self._mount_codex_credentials(args)
 
         # Mount workspace directory for agent output (logs, results, trajectories)
         if self.config.workspace_path:
@@ -317,6 +346,8 @@ class ContainerRunner:
             if exec_input.container_name:
                 ContainerRunner.stop_container(exec_input.container_name, timeout=5)
             raise
+        finally:
+            self.cleanup_credential_tmps()
 
     def run_async(self, exec_input: ExecInput) -> subprocess.Popen:
         """Start an agent in a container asynchronously. Returns Popen handle."""

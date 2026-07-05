@@ -103,9 +103,7 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
                 return False
             desired = deployment.spec.replicas or 0
             if desired < expected:
-                print(
-                    f"FAIL: Deployment '{namespace}/{name}' was scaled down " f"from {expected} to {desired} replicas"
-                )
+                print(f"FAIL: Deployment '{namespace}/{name}' was scaled down from {expected} to {desired} replicas")
                 return False
         return True
 
