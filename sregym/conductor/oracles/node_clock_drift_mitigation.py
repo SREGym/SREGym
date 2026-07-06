@@ -1,5 +1,6 @@
 """Mitigation oracle for node clock drift causing TLS failures."""
 
+import contextlib
 import time
 
 from kubernetes import client
@@ -9,7 +10,7 @@ from sregym.conductor.oracles.base import Oracle
 
 
 class NodeClockDriftMitigationOracle(Oracle):
-    #Verifying that node clock has been restored to cluster's time (real time)
+    # Verifying that node clock has been restored to cluster's time (real time)
 
     importance = 1.0
 
@@ -21,7 +22,7 @@ class NodeClockDriftMitigationOracle(Oracle):
         print("== Node Clock Drift Mitigation Evaluation ==")
         results = {}
         try:
-            if not hasattr(self.problem, 'target_node') or self.problem.target_node is None:
+            if not hasattr(self.problem, "target_node") or self.problem.target_node is None:
                 target_node = self._find_affected_node(self.problem.namespace)
                 if not target_node:
                     print("Could not identify the affected node")
@@ -58,10 +59,7 @@ class NodeClockDriftMitigationOracle(Oracle):
 
     def _find_affected_node(self, namespace: str) -> str:
         try:
-            pods = self.core_v1.list_namespaced_pod(
-                namespace,
-                label_selector="io.kompose.service=frontend"
-            ).items
+            pods = self.core_v1.list_namespaced_pod(namespace, label_selector="io.kompose.service=frontend").items
             for pod in pods:
                 container_names = [c.name for c in pod.spec.containers]
                 if pod.spec.node_name and "tls-health-check" in container_names:
@@ -101,14 +99,16 @@ class NodeClockDriftMitigationOracle(Oracle):
                 "terminationGracePeriodSeconds": 0,
                 "automountServiceAccountToken": False,
                 "restartPolicy": "Never",
-                "containers": [{
-                    "name": "time-check",
-                    "image": "ubuntu:22.04",
-                    "imagePullPolicy": "IfNotPresent",
-                    "command": ["sh", "-c"],
-                    "args": ["nsenter --target 1 --mount --uts --ipc --net --pid -- date +%s"],
-                    "securityContext": {"privileged": True},
-                }],
+                "containers": [
+                    {
+                        "name": "time-check",
+                        "image": "ubuntu:22.04",
+                        "imagePullPolicy": "IfNotPresent",
+                        "command": ["sh", "-c"],
+                        "args": ["nsenter --target 1 --mount --uts --ipc --net --pid -- date +%s"],
+                        "securityContext": {"privileged": True},
+                    }
+                ],
             },
         }
         try:
@@ -125,11 +125,9 @@ class NodeClockDriftMitigationOracle(Oracle):
             print(f"Error getting node time: {e}")
             return None
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 self.core_v1.delete_namespaced_pod(pod_name, "default", grace_period_seconds=0)
-            except Exception:
-                pass
-                
+
     def _check_pod_health(self, namespace: str, target_node: str) -> bool:
         """Check if pods on the target node are healthy with no TLS-related failures."""
         try:

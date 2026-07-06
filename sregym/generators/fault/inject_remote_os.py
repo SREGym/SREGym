@@ -1,7 +1,7 @@
 """Inject faults at the OS layer via SSH (remote clusters) or docker exec (Kind)."""
 
+import contextlib
 import json
-import logging
 import os
 import re
 import shlex
@@ -260,7 +260,7 @@ class RemoteOSFaultInjector(FaultInjector):
         if threshold is None:
             try:
                 free_pct = self.kubectl.get_node_free_pct(node_name)
-                
+
             except Exception as e:
                 raise RuntimeError(
                     f"Cannot read kubelet stats summary for node {node_name} ({e!r}); "
@@ -344,7 +344,7 @@ class RemoteOSFaultInjector(FaultInjector):
             leftover_pods_raw = self.kubectl.exec_command(
                 "kubectl get pods -n default "
                 "-l app=node-probe "
-                "-o jsonpath='{range .items[*]}{.metadata.name}{\" \"}{.spec.nodeName}{\"\\n\"}{end}'"
+                '-o jsonpath=\'{range .items[*]}{.metadata.name}{" "}{.spec.nodeName}{"\\n"}{end}\''
             )
         except Exception as e:
             print(f"Could not query for leftover node-probe pods: {e}")
@@ -427,8 +427,8 @@ class RemoteOSFaultInjector(FaultInjector):
         services = known_services or {"systemd-timesyncd", "chrony", "chronyd", "ntp", "ntpd"}
 
         restore_lines = "\n".join(
-            f'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl unmask {svc} 2>/dev/null || true\n'
-            f'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl start {svc} 2>/dev/null || true'
+            f"nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl unmask {svc} 2>/dev/null || true\n"
+            f"nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl start {svc} 2>/dev/null || true"
             for svc in services
         )
 
@@ -508,12 +508,10 @@ nsenter --target 1 --mount --uts --ipc --net --pid -- date
         except Exception as e:
             print(f"Could not run clock restore on node {node_name}: {e}")
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 self.kubectl.exec_command(
                     f"kubectl delete pod {pod_name} -n default --ignore-not-found --grace-period=0 --force"
                 )
-            except Exception:
-                pass
 
 
 def main():

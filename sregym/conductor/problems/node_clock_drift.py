@@ -1,7 +1,7 @@
 """Node clock drift causing TLS handshake failures on Hotel Reservation.
 RFC: A worker node's system clock is significantly advanced (by disabling NTP and manually
 advancing the clock). All pods on that node fail outbound TLS connections with
-'certificate has expired or is not yet valid', even though the certificates are valid. 
+'certificate has expired or is not yet valid', even though the certificates are valid.
 Recovery requires restoring the node's clock to cluster time and re-enabling NTP.
 A short-lived TLS certificate (1-day validity) is deployed alongside workload,
 sidecar on frontend pod validates the cert every 30 seconds. After node clock drift, cert
@@ -14,38 +14,44 @@ dynamically discovers whichever time-sync service is actually running via
 of which daemon a given environment uses. recover_fault discovers and restores the
 same way, plus steps the clock back, so the fault is fully reversible.
 """
+
 import base64
 import contextlib
 import subprocess
 import tempfile
 import time
 from pathlib import Path
+
 from kubernetes import client
 from kubernetes.client.rest import ApiException
+
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.node_clock_drift_mitigation import NodeClockDriftMitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
+
 # Affinity rule shared by the injector and restore pods to hard-prevent
 # scheduling on control-plane nodes, regardless of taints.
 
 _WORKER_ONLY_AFFINITY = {
     "nodeAffinity": {
         "requiredDuringSchedulingIgnoredDuringExecution": {
-            "nodeSelectorTerms": [{
-                "matchExpressions": [
-                    {
-                        "key": "node-role.kubernetes.io/control-plane",
-                        "operator": "DoesNotExist",
-                    },
-                    {
-                        "key": "node-role.kubernetes.io/master",  # pre-1.24 clusters
-                        "operator": "DoesNotExist",
-                    },
-                ]
-            }]
+            "nodeSelectorTerms": [
+                {
+                    "matchExpressions": [
+                        {
+                            "key": "node-role.kubernetes.io/control-plane",
+                            "operator": "DoesNotExist",
+                        },
+                        {
+                            "key": "node-role.kubernetes.io/master",  # pre-1.24 clusters
+                            "operator": "DoesNotExist",
+                        },
+                    ]
+                }
+            ]
         }
     }
 }
@@ -54,6 +60,7 @@ _NODE_PROBE_LABEL = "node-probe"
 
 class NodeClockDriftHotelReservation(Problem):
     """Inject node clock drift causing TLS validation failures."""
+
     clock_drift_seconds = 86400 * 30
     clock_injector_namespace = "default"
     clock_injector_image = "ubuntu:22.04"
@@ -114,13 +121,26 @@ class NodeClockDriftHotelReservation(Problem):
                 check=True,
                 capture_output=True,
             )
-            subprocess.run([
-                "openssl", "req", "-x509", "-new", "-nodes",
-                "-key", str(key_file),
-                "-sha256", "-days", "1",
-                "-subj", "/CN=hotel-reservation.local",
-                "-out", str(cert_file),
-            ], check=True, capture_output=True)
+            subprocess.run(
+                [
+                    "openssl",
+                    "req",
+                    "-x509",
+                    "-new",
+                    "-nodes",
+                    "-key",
+                    str(key_file),
+                    "-sha256",
+                    "-days",
+                    "1",
+                    "-subj",
+                    "/CN=hotel-reservation.local",
+                    "-out",
+                    str(cert_file),
+                ],
+                check=True,
+                capture_output=True,
+            )
             cert_pem = cert_file.read_text()
             cert_b64 = base64.b64encode(cert_file.read_bytes()).decode()
             key_b64 = base64.b64encode(key_file.read_bytes()).decode()
@@ -220,9 +240,7 @@ class NodeClockDriftHotelReservation(Problem):
                                 "command": ["sh", "-c"],
                                 "args": [sidecar_cmd],
                                 "readinessProbe": {
-                                    "exec": {
-                                        "command": ["test", "-f", "/tmp/sidecar-ready"]
-                                    },
+                                    "exec": {"command": ["test", "-f", "/tmp/sidecar-ready"]},
                                     "initialDelaySeconds": 2,
                                     "periodSeconds": 3,
                                 },
@@ -257,8 +275,7 @@ class NodeClockDriftHotelReservation(Problem):
         while time.monotonic() < deadline:
             try:
                 pods = self.core_v1.list_namespaced_pod(
-                    self.namespace,
-                    label_selector="io.kompose.service=frontend"
+                    self.namespace, label_selector="io.kompose.service=frontend"
                 ).items
             except Exception:
                 pods = self.core_v1.list_namespaced_pod(self.namespace).items
@@ -296,6 +313,7 @@ class NodeClockDriftHotelReservation(Problem):
         print(f"Advanced system clock on {self.target_node} by {self.clock_drift_seconds}s (30 days)")
         time.sleep(10)
         print("Node clock skewed. x509 certificate errors will now appear in sidecar log")
+
     @mark_fault_injected
     def recover_fault(self):
         """Fully reverse the fault: restore the time-sync service(s) that were
@@ -313,13 +331,9 @@ class NodeClockDriftHotelReservation(Problem):
 
     # ── Node Targeting ──────────────────────────────────────────────────────────
     def _select_target_node(self) -> str:
-        """Select the node running the frontend pod that has the TLS sidecar
-        """
+        """Select the node running the frontend pod that has the TLS sidecar"""
         try:
-            pods = self.core_v1.list_namespaced_pod(
-                self.namespace,
-                label_selector="io.kompose.service=frontend"
-            ).items
+            pods = self.core_v1.list_namespaced_pod(self.namespace, label_selector="io.kompose.service=frontend").items
         except Exception:
             pods = self.core_v1.list_namespaced_pod(self.namespace).items
         for pod in pods:
@@ -439,12 +453,14 @@ class NodeClockDriftHotelReservation(Problem):
         if services:
             service_restore_block = "\n".join(
                 f'echo "Restoring: {svc}"\n'
-                f'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl unmask {svc} || true\n'
-                f'nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl start {svc} || true'
+                f"nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl unmask {svc} || true\n"
+                f"nsenter --target 1 --mount --uts --ipc --net --pid -- systemctl start {svc} || true"
                 for svc in services
             )
         else:
-            print("Warning: no recorded stopped services — falling back to dynamic discovery of masked time-sync services.")
+            print(
+                "Warning: no recorded stopped services — falling back to dynamic discovery of masked time-sync services."
+            )
             service_restore_block = """
 MASKED=$(nsenter --target 1 --mount --uts --ipc --net --pid -- \\
     systemctl list-unit-files --state=masked --no-legend 2>/dev/null \\
@@ -532,31 +548,25 @@ fi
             print(f"Failed to create/run restore probe: {e}")
         finally:
             with contextlib.suppress(ApiException):
-                self.core_v1.delete_namespaced_pod(
-                    pod_name, self.clock_injector_namespace, grace_period_seconds=0
-                )
-                
+                self.core_v1.delete_namespaced_pod(pod_name, self.clock_injector_namespace, grace_period_seconds=0)
+
     def _cleanup_injector_pods(self) -> None:
         """Delete injector + restore pods in case _restore_node_clock cleanup
         didn't finish (race condition or failure).
         """
         try:
             pods = self.core_v1.list_namespaced_pod(
-                self.clock_injector_namespace,
-                label_selector=f"app={_NODE_PROBE_LABEL}"
+                self.clock_injector_namespace, label_selector=f"app={_NODE_PROBE_LABEL}"
             ).items
             for pod in pods:
                 with contextlib.suppress(ApiException):
                     self.core_v1.delete_namespaced_pod(
-                        pod.metadata.name,
-                        self.clock_injector_namespace,
-                        grace_period_seconds=0
+                        pod.metadata.name, self.clock_injector_namespace, grace_period_seconds=0
                     )
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
                 pods = self.core_v1.list_namespaced_pod(
-                    self.clock_injector_namespace,
-                    label_selector=f"app={_NODE_PROBE_LABEL}"
+                    self.clock_injector_namespace, label_selector=f"app={_NODE_PROBE_LABEL}"
                 ).items
                 if not pods:
                     return
