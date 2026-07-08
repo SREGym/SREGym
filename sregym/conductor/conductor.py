@@ -219,6 +219,18 @@ class Conductor:
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
+
+        # Snapshot environmental alerts before injecting the fault, so a
+        # mitigation oracle can ignore chronic noise (e.g. ContainerCPUThrottling
+        # from the astronomy-shop Grafana sidecar, SREGym#745) and grade only the
+        # injected fault. Duck-typed so only oracles that support it are affected.
+        mitigation_oracle = getattr(problem, "mitigation_oracle", None)
+        if mitigation_oracle is not None and hasattr(mitigation_oracle, "capture_baseline"):
+            try:
+                mitigation_oracle.capture_baseline()
+            except Exception:
+                self.logger.exception("Failed to capture mitigation alert baseline; continuing without it.")
+
         problem.inject_fault()
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
