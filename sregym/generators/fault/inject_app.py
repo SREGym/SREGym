@@ -458,14 +458,14 @@ class ApplicationFaultInjector(FaultInjector):
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
 
-    
     # A.8 feature_flag_experimental_routing: swap frontend image + set flag to trigger retry storm under load
     def inject_feature_flag_experimental_routing(
         self,
         deployment_name: str = "frontend",
         configmap_name: str = "frontend-runtime-config",
         flag_key: str = "SEARCH_BACKEND_VERSION",
-        experimental_image: str = "sharqm/hotelreservation:experimental-routing-v3",        ):
+        experimental_image: str = "sharqm/hotelreservation:experimental-routing-v3",
+    ):
         """Set the feature flag in a ConfigMap and swap the frontend image to the
         experimental-routing build. When the flag is active, the frontend's gRPC
         clients use an aggressive short-timeout/high-retry path that, under the
@@ -520,10 +520,12 @@ class ApplicationFaultInjector(FaultInjector):
         for container in deployment.spec.template.spec.containers:
             if container.name == f"hotel-reserv-{deployment_name}":
                 container.image = original_image
-                
+
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
         print(f"Restored {deployment_name} image to {original_image} and set {flag_key}=false env")
         time.sleep(10)
+
+
 if __name__ == "__main__":
     namespace = "hotel-reservation"
     # microservices = ["geo"]

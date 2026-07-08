@@ -47,7 +47,7 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
         print(f"Probing frontend via pod {probe_pod}...")
 
         success_count = 0
-        for i in range(self.probe_attempts):
+        for _i in range(self.probe_attempts):
             cmd = (
                 f"kubectl exec {probe_pod} -n {namespace} -- "
                 f"wget -S -q -O /dev/null "
@@ -66,7 +66,9 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
             print("✅ Frontend /hotels endpoint returning 200 OK")
             results["success"] = True
         else:
-            print(f"❌ Frontend /hotels endpoint returning errors ({self.probe_attempts - success_count}/{self.probe_attempts} failed)")
+            print(
+                f"❌ Frontend /hotels endpoint returning errors ({self.probe_attempts - success_count}/{self.probe_attempts} failed)"
+            )
             results["success"] = False
 
         return results
