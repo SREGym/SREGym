@@ -61,6 +61,7 @@ from sregym.conductor.problems.multiple_failures import MultipleIndependentFailu
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from sregym.conductor.problems.network_policy_block import NetworkPolicyBlock
+from sregym.conductor.problems.node_clock_drift import NodeClockDriftHotelReservation
 from sregym.conductor.problems.node_conntrack_exhaustion import NodeConntrackExhaustionHotelReservation
 from sregym.conductor.problems.operator_misoperation.invalid_affinity_toleration import (
     K8SOperatorInvalidAffinityTolerationFault,
@@ -167,6 +168,7 @@ class ProblemRegistry:
             "missing_service_hotel_reservation": lambda: MissingService(app_name="hotel_reservation", faulty_service="mongodb-rate"),
             "missing_service_social_network": lambda: MissingService(app_name="social_network", faulty_service="user-service"),
             "namespace_memory_limit": NamespaceMemoryLimit,
+            "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
             "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
             "postgres_lock_contention_product_catalog": PostgresLockContentionProductCatalog,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
@@ -344,7 +346,7 @@ class ProblemRegistry:
         }
 # fmt: on
         self.kubectl = KubeCtl()
-        self.non_emulated_cluster_problems = []
+        self.non_emulated_cluster_problems = ["node_clock_drift_hotel_reservation"]
 
     def get_problem_instance(self, problem_id: str):
         if problem_id not in self.PROBLEM_REGISTRY:

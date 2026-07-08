@@ -755,6 +755,13 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
 
+        self.logger.info("[FIX] Clock drift leftover if any")
+        try:
+            injector = RemoteOSFaultInjector()
+            injector.recover_clock_drift()
+        except Exception as e:
+            self.logger.warning(f"Could not fix leftover clock drift state: {e}")
+
         self.logger.info("Fix Kubernetes completed.")
 
     def deploy_app(self):
