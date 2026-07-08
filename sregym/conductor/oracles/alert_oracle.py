@@ -70,8 +70,7 @@ class AlertOracle(Oracle):
             raw = subprocess.check_output(cmd, text=True, timeout=15)
             payload = json.loads(raw)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-            print(f"⚠️  Failed to query Prometheus alerts: {exc}")
-            return []
+            raise RuntimeError("Failed to query Prometheus alerts") from exc
 
         firing = []
         for alert in payload.get("data", {}).get("alerts", []):

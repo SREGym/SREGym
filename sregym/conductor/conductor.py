@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import json
 import logging
 import shlex
 import shutil
@@ -358,13 +359,20 @@ class Conductor:
 
     def _finish_problem(self):
         """
-        Runs problem teardown synchronously: fault recovery, app undeploy, and cluster
-        reconciliation all complete before this method returns.
+        Runs problem teardown synchronously (fault recovery, app undeploy, cluster
+        reconciliation) before returning.
 
-        When called from _submit_evaluate_and_advance() (which runs in an executor
-        thread), start_problem() awaits self._submit_future to ensure the executor —
-        and therefore this cleanup — has fully finished before the next problem starts.
+        Idempotent: safe to call from multiple paths (submit flow via
+        ``_advance_to_next_stage``, and ``main.py`` as a post-exit safety net).
+        The first call runs cleanup; subsequent calls no-op. ``start_problem()``
+        resets the stage to ``"setup"``, so the deploy-retry path still cleans up
+        each failed attempt.
         """
+        if self.submission_stage in ("done", "tearing_down"):
+            self.logger.info(
+                f"[STAGE] _finish_problem already ran/running (submission_stage={self.submission_stage!r}); skipping"
+            )
+            return
         self.logger.info("[STAGE] Done, starting teardown")
         self.submission_stage = "tearing_down"
         self._cleanup_sync()
@@ -552,6 +560,138 @@ class Conductor:
 
         return {"status": "ok", "message": "Submission received"}
 
+    @staticmethod
+    def _q(value):
+        return shlex.quote(str(value))
+
+    def _fix_calico_route_reflector_label_drift(self):
+        self.logger.info("[FIX] Calico route-reflector label drift leftovers if any")
+        try:
+            from sregym.conductor.problems.calico_route_reflector_label_drift import (
+                CalicoRouteReflectorLabelDriftHotelReservation,
+            )
+
+            problem = CalicoRouteReflectorLabelDriftHotelReservation
+            kubectl = KubeCtl()
+
+            def kubectl_json(command):
+                output = kubectl.exec_command(command)
+                try:
+                    return json.loads(output)
+                except json.JSONDecodeError:
+                    return None
+
+            def has_problem_label(resource):
+                if not resource:
+                    return False
+                labels = resource.get("metadata", {}).get("labels", {}) or {}
+                return labels.get(problem.PROBLEM_LABEL_KEY) == problem.PROBLEM_LABEL_VALUE
+
+            def bool_from_state(data, key):
+                if not data or key not in data:
+                    return None
+                return json.loads(data[key])
+
+            def list_from_state(data, key):
+                if not data or key not in data:
+                    return None
+                return json.loads(data[key])
+
+            nodes = (kubectl_json("kubectl get nodes -o json") or {}).get("items", [])
+            marked_nodes = [
+                node.get("metadata", {}).get("name")
+                for node in nodes
+                if (node.get("metadata", {}).get("annotations", {}) or {}).get(problem.NODE_MARKER_ANNOTATION) == "true"
+            ]
+            marked_nodes = [node for node in marked_nodes if node]
+
+            bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} -o json")
+            bgppeers = (kubectl_json("kubectl get bgppeers -o json") or {}).get("items", [])
+            bgp_config = kubectl_json("kubectl get bgpconfiguration default -o json")
+            support_namespace = kubectl_json(f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} -o json")
+            state_configmap = kubectl_json(
+                f"kubectl -n {self._q(problem.STATE_NAMESPACE)} get configmap "
+                f"{self._q(problem.STATE_CONFIGMAP_NAME)} -o json"
+            )
+            state_data = (state_configmap or {}).get("data", {}) or {}
+
+            bgppeer_labeled = has_problem_label(bgppeer)
+            bgp_config_labeled = has_problem_label(bgp_config)
+            support_namespace_labeled = has_problem_label(support_namespace)
+            original_bgppeer_names = list_from_state(state_data, problem.STATE_BGP_PEERS_KEY)
+            created_bgppeer_names = set()
+            if original_bgppeer_names is not None:
+                original_bgppeer_names = set(original_bgppeer_names)
+                current_bgppeer_names = {
+                    peer.get("metadata", {}).get("name") for peer in bgppeers if peer.get("metadata", {}).get("name")
+                }
+                created_bgppeer_names = current_bgppeer_names - original_bgppeer_names
+            elif bgppeer_labeled:
+                created_bgppeer_names.add(problem.BGP_PEER_NAME)
+            residue_found = bool(
+                marked_nodes
+                or created_bgppeer_names
+                or bgppeer_labeled
+                or bgp_config_labeled
+                or support_namespace_labeled
+                or state_data
+            )
+            if not residue_found:
+                return
+
+            if support_namespace_labeled:
+                kubectl.exec_command(f"kubectl delete namespace {self._q(problem.PROBE_NAMESPACE)} --ignore-not-found")
+            for bgppeer_name in sorted(created_bgppeer_names):
+                kubectl.exec_command(f"kubectl delete bgppeer {self._q(bgppeer_name)} --ignore-not-found")
+
+            bgp_config_preexisted = bool_from_state(state_data, problem.STATE_CONFIG_PREEXISTED_KEY)
+            original_bgp_configuration = state_data.get(problem.STATE_CONFIGURATION_KEY)
+            if bgp_config_preexisted is True and original_bgp_configuration:
+                kubectl.exec_command("kubectl apply -f -", input_data=original_bgp_configuration)
+            elif bgp_config_preexisted is False or bgp_config_labeled:
+                kubectl.exec_command("kubectl delete bgpconfiguration default --ignore-not-found")
+
+            state_route_reflector_node = state_data.get(problem.STATE_PRIMARY_NODE_KEY)
+            if state_route_reflector_node and state_route_reflector_node not in marked_nodes:
+                marked_nodes.append(state_route_reflector_node)
+            legacy_label_preexisted = bool_from_state(state_data, problem.STATE_NODE_LABEL_PREEXISTED_KEY)
+            rr_annotation_preexisted = bool_from_state(state_data, problem.STATE_NODE_ANNOTATION_PREEXISTED_KEY)
+            rr_annotation_value = state_data.get(problem.STATE_NODE_ANNOTATION_VALUE_KEY)
+
+            for node_name in marked_nodes:
+                quoted_node = self._q(node_name)
+                if legacy_label_preexisted is True:
+                    kubectl.exec_command(
+                        f"kubectl label node {quoted_node} {self._q(f'{problem.LEGACY_MASTER_LABEL}=')} --overwrite"
+                    )
+                else:
+                    kubectl.exec_command(
+                        f"kubectl label node {quoted_node} {self._q(f'{problem.LEGACY_MASTER_LABEL}-')}"
+                    )
+
+                if rr_annotation_preexisted is True and rr_annotation_value:
+                    kubectl.exec_command(
+                        f"kubectl annotate node {quoted_node} "
+                        f"{self._q(f'{problem.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION}={rr_annotation_value}')} --overwrite"
+                    )
+                else:
+                    kubectl.exec_command(
+                        f"kubectl annotate node {quoted_node} "
+                        f"{self._q(f'{problem.ROUTE_REFLECTOR_CLUSTER_ID_ANNOTATION}-')}"
+                    )
+                kubectl.exec_command(
+                    f"kubectl annotate node {quoted_node} {self._q(f'{problem.NODE_MARKER_ANNOTATION}-')}"
+                )
+
+            kubectl.exec_command(
+                f"kubectl -n {self._q(problem.STATE_NAMESPACE)} delete configmap "
+                f"{self._q(problem.STATE_CONFIGMAP_NAME)} --ignore-not-found"
+            )
+            kubectl.exec_command("kubectl -n kube-system rollout restart ds/calico-node")
+            kubectl.exec_command("kubectl -n kube-system rollout status ds/calico-node --timeout=180s")
+        except Exception as e:
+            self.logger.warning(f"Could not fix Calico route-reflector label drift state: {e}")
+
     def fix_kubernetes(self):
         self.logger.info("Fixing Kubernetes... to normal state.")
         self.logger.info("[FIX] Imbalance leftover if any")
@@ -568,7 +708,7 @@ class Conductor:
         self.logger.info("[FIX] KubeletEvictionThresholdMisconfig leftover if any")
         injector.recover_disk_pressure_all()
         # Delete Failed pods left by the eviction loop. Skip the app namespace
-        # undeploy_app() tears down the application namespace anyway
+        # because undeploy_app() tears down the application namespace anyway.
         from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
 
         self.kubectl.exec_command(
@@ -600,6 +740,8 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not fix Calico IPPool state: {e}")
 
+        self._fix_calico_route_reflector_label_drift()
+
         self.logger.info("[FIX] Stale CoreDNS NXDOMAIN templates if any")
         injector = VirtualizationFaultInjector(namespace="kube-system")
         try:
@@ -612,6 +754,13 @@ class Conductor:
             self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
         except Exception as e:
             self.logger.warning(f"Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
+
+        self.logger.info("[FIX] Clock drift leftover if any")
+        try:
+            injector = RemoteOSFaultInjector()
+            injector.recover_clock_drift()
+        except Exception as e:
+            self.logger.warning(f"Could not fix leftover clock drift state: {e}")
 
         self.logger.info("Fix Kubernetes completed.")
 
