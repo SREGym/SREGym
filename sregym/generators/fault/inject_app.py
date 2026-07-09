@@ -192,7 +192,10 @@ class ApplicationFaultInjector(FaultInjector):
 
         valkey_pod = valkey_pods[0]
         print(f"[🔓] Found Valkey pod: {valkey_pod}")
-        command = f"kubectl exec -n {self.namespace} {valkey_pod} -- valkey-cli CONFIG SET requirepass ''"
+        command = (
+            f"kubectl exec -n {self.namespace} {valkey_pod} -- "
+            "env VALKEYCLI_AUTH=invalid_pass valkey-cli CONFIG SET requirepass ''"
+        )
         result = self.kubectl.exec_command(command)
         print(f"[✅] Recovery result: {result}")
 
