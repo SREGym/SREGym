@@ -2622,7 +2622,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             pods = self.kubectl.core_v1_api.list_namespaced_pod(self.namespace, label_selector=label_selector)
 
-            target_pods = [pod.metadata.name for pod in pods.items if (label_selector or service in pod.metadata.name)]
+            target_pods = [pod for pod in pods.items if (label_selector or service in pod.metadata.name)]
 
             if not target_pods:
                 time.sleep(sleep)
@@ -2632,14 +2632,9 @@ class VirtualizationFaultInjector(FaultInjector):
             state_ok = True
 
             for pod in target_pods:
-                try:
-                    resolv = self.kubectl.exec_command(
-                        f"kubectl exec {pod} -n {self.namespace} -- cat /etc/resolv.conf"
-                    )
-                except Exception:
-                    state_ok = False
-                    break
-                has_external = external_ns in resolv
+                dns_config = pod.spec.dns_config
+                nameservers = dns_config.nameservers if dns_config and dns_config.nameservers else []
+                has_external = external_ns in nameservers
 
                 if expect_external != has_external:
                     state_ok = False
