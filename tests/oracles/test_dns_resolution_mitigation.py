@@ -12,12 +12,30 @@ def _service(name, selector=None):
     )
 
 
-def _deployment(name="frontend", *, available=1, dns_policy="ClusterFirst", dns_config=None):
+def _deployment(
+    name="frontend",
+    *,
+    generation=1,
+    observed_generation=1,
+    replicas=1,
+    updated=1,
+    ready=1,
+    available=1,
+    unavailable=0,
+    dns_policy="ClusterFirst",
+    dns_config=None,
+):
     pod_spec = SimpleNamespace(dns_policy=dns_policy, dns_config=dns_config)
     return SimpleNamespace(
-        metadata=SimpleNamespace(name=name),
-        spec=SimpleNamespace(template=SimpleNamespace(spec=pod_spec)),
-        status=SimpleNamespace(available_replicas=available),
+        metadata=SimpleNamespace(name=name, generation=generation),
+        spec=SimpleNamespace(replicas=replicas, template=SimpleNamespace(spec=pod_spec)),
+        status=SimpleNamespace(
+            observed_generation=observed_generation,
+            updated_replicas=updated,
+            ready_replicas=ready,
+            available_replicas=available,
+            unavailable_replicas=unavailable,
+        ),
     )
 
 
@@ -64,6 +82,7 @@ def _oracle(kubectl, faulty_service="frontend"):
     )
     oracle = DNSResolutionMitigationOracle(problem)
     oracle.poll_interval_seconds = 0
+    oracle.rollout_timeout_seconds = 0
     return oracle
 
 
@@ -114,6 +133,27 @@ def test_rejects_unavailable_source_deployment():
     kubectl = _KubeCtl(
         services=[_service("frontend", {"app": "frontend"})],
         deployments={"frontend": _deployment(available=0)},
+        core_v1=core_v1,
+    )
+
+    assert _oracle(kubectl).evaluate()["success"] is False
+    assert core_v1.created_pods == []
+
+
+def test_rejects_available_old_replicas_before_current_rollout_completes():
+    core_v1 = _CoreV1()
+    kubectl = _KubeCtl(
+        services=[_service("frontend", {"app": "frontend"})],
+        deployments={
+            "frontend": _deployment(
+                generation=2,
+                observed_generation=1,
+                updated=0,
+                ready=1,
+                available=1,
+                unavailable=1,
+            )
+        },
         core_v1=core_v1,
     )
 

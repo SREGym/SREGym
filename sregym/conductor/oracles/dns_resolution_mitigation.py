@@ -10,7 +10,37 @@ from sregym.conductor.oracles.base import Oracle
 class DNSResolutionMitigationOracle(Oracle):
     importance = 1.0
     probe_timeout_seconds = 60
+    rollout_timeout_seconds = 120
     poll_interval_seconds = 2
+
+    @staticmethod
+    def _rollout_complete(deployment) -> bool:
+        desired = deployment.spec.replicas
+        if desired is None:
+            desired = 1
+        if desired < 1:
+            return False
+
+        generation = deployment.metadata.generation or 0
+        status = deployment.status
+        return (
+            (status.observed_generation or 0) >= generation
+            and (status.updated_replicas or 0) == desired
+            and (status.ready_replicas or 0) == desired
+            and (status.available_replicas or 0) == desired
+            and (status.unavailable_replicas or 0) == 0
+        )
+
+    def _wait_for_current_rollout(self, deployment):
+        deadline = time.monotonic() + self.rollout_timeout_seconds
+        while True:
+            if self._rollout_complete(deployment):
+                return deployment
+            if time.monotonic() >= deadline:
+                return None
+
+            time.sleep(self.poll_interval_seconds)
+            deployment = self.problem.kubectl.get_deployment(deployment.metadata.name, self.problem.namespace)
 
     def _find_service_and_deployment(self, services):
         faulty_service = self.problem.faulty_service
@@ -92,9 +122,9 @@ class DNSResolutionMitigationOracle(Oracle):
                 print(f"❌ Service or Deployment {self.problem.faulty_service or '<with selector>'} not found.")
                 return {"success": False}
 
-            available = deployment.status.available_replicas or 0
-            if available < 1:
-                print(f"❌ Deployment {deployment.metadata.name} has no available replicas.")
+            deployment = self._wait_for_current_rollout(deployment)
+            if deployment is None:
+                print("❌ Affected Deployment did not complete its current rollout.")
                 return {"success": False}
 
             dns_name = f"{service.metadata.name}.{namespace}.svc.cluster.local"
