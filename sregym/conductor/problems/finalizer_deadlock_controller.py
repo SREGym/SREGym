@@ -1,7 +1,6 @@
 """Controller-owned finalizer deadlock caused by broken RBAC."""
 
 import textwrap
-import threading
 import time
 
 from kubernetes import client
@@ -23,8 +22,8 @@ _CLUSTERROLE_NAME = "configmap-cleanup-controller"
 _CLUSTERROLEBINDING_NAME = "configmap-cleanup-controller"
 _CONFIGMAP_NAME = "reservation-cleanup-token"
 _FINALIZER = "cleanup.reservations.io/pending-cleanup"
-_CONTROLLER_IMAGE = "mongo:4.4.6"
-_CONTROLLER_COMPLETION_ANNOTATION = "cleanup-controller.platform.io/finalizer-cleanup-completed"
+_CONTROLLER_IMAGE = "python:3.12-alpine"
+_MANAGED_LABELS = {"app.kubernetes.io/managed-by": _CONTROLLER_NAME}
 
 
 def _correct_clusterrole_rules():
@@ -32,17 +31,7 @@ def _correct_clusterrole_rules():
         client.V1PolicyRule(
             api_groups=[""],
             resources=["configmaps"],
-            verbs=["get", "list", "watch", "patch", "update"],
-        ),
-        client.V1PolicyRule(
-            api_groups=[""],
-            resources=["configmaps/finalizers"],
-            verbs=["patch", "update"],
-        ),
-        client.V1PolicyRule(
-            api_groups=["apps"],
-            resources=["deployments"],
-            verbs=["get", "patch"],
+            verbs=["get", "list", "watch", "patch"],
         ),
     ]
 
@@ -53,11 +42,6 @@ def _broken_clusterrole_rules():
             api_groups=[""],
             resources=["configmaps"],
             verbs=["get", "list", "watch"],
-        ),
-        client.V1PolicyRule(
-            api_groups=["apps"],
-            resources=["deployments"],
-            verbs=["get", "patch"],
         ),
     ]
 
@@ -78,9 +62,6 @@ class FinalizerDeadlockController(Problem):
         self.clusterrole_name = _CLUSTERROLE_NAME
         self.clusterrolebinding_name = _CLUSTERROLEBINDING_NAME
         self.faulty_service = self.configmap_name
-        self._reconcile_stop = threading.Event()
-        self._reconcile_thread = None
-
         self.root_cause = self.build_structured_root_cause(
             component=f"ClusterRole/{self.clusterrole_name} and configmap/{self.configmap_name}",
             namespace=self.namespace,
@@ -88,11 +69,10 @@ class FinalizerDeadlockController(Problem):
                 f"ConfigMap `{self.configmap_name}` is stuck in Terminating with finalizer `{self.finalizer}`. "
                 f"The finalizer is owned by Deployment `{self.controller_name}` using ServiceAccount "
                 f"`{self.sa_name}`, but ClusterRole `{self.clusterrole_name}` was changed to read-only and is "
-                "missing patch/update permissions for both `configmaps` and `configmaps/finalizers`. The "
-                "controller pod repeatedly logs HTTP 403 Forbidden while trying to remove the finalizer. The "
-                f"correct mitigation is to restore ClusterRole `{self.clusterrole_name}` so the controller can "
-                "complete its normal reconcile loop, record cleanup completion on its Deployment, and let "
-                "Kubernetes finish deleting the ConfigMap."
+                "missing permission to patch ConfigMaps. The controller pod repeatedly logs HTTP 403 Forbidden "
+                "while trying to remove the finalizer. Restore effective RBAC for the controller ServiceAccount "
+                "so its normal reconcile loop can remove finalizers and Kubernetes can finish deleting both the "
+                "current ConfigMap and future cleanup requests."
             ),
         )
 
@@ -102,7 +82,6 @@ class FinalizerDeadlockController(Problem):
             problem=self,
             configmap_name=self.configmap_name,
             finalizer=self.finalizer,
-            clusterrole_name=self.clusterrole_name,
             controller_deployment_name=self.controller_name,
         )
 
@@ -130,7 +109,6 @@ class FinalizerDeadlockController(Problem):
             _request_timeout=10,
         )
         print(f"Deleted ConfigMap `{self.configmap_name}` with --wait=false semantics")
-        self._start_controller_reconcile_loop()
         self._wait_for_forbidden_log()
 
         print(
@@ -143,9 +121,8 @@ class FinalizerDeadlockController(Problem):
         print("== Fault Recovery ==")
 
         self._restore_clusterrole()
-        if not self._wait_until_configmap_deleted(timeout_seconds=45):
-            self._complete_controller_cleanup()
-            self._wait_until_configmap_deleted(timeout_seconds=30)
+        if not self._wait_until_configmap_deleted(timeout_seconds=60):
+            raise TimeoutError(f"Controller did not delete ConfigMap `{self.configmap_name}` after RBAC recovery")
         print(f"ClusterRole `{self.clusterrole_name}` restored; controller completed cleanup")
 
         print(f"Resource: configmap/{self.configmap_name} | Namespace: {self.namespace}\n")
@@ -155,7 +132,7 @@ class FinalizerDeadlockController(Problem):
             metadata=client.V1ObjectMeta(
                 name=self.sa_name,
                 namespace=self.namespace,
-                labels={"platform.io/injected": "true"},
+                labels=dict(_MANAGED_LABELS),
             )
         )
         try:
@@ -172,7 +149,7 @@ class FinalizerDeadlockController(Problem):
         body = client.V1ClusterRole(
             metadata=client.V1ObjectMeta(
                 name=self.clusterrole_name,
-                labels={"platform.io/injected": "true"},
+                labels=dict(_MANAGED_LABELS),
             ),
             rules=rules,
         )
@@ -188,7 +165,7 @@ class FinalizerDeadlockController(Problem):
         body = client.V1ClusterRole(
             metadata=client.V1ObjectMeta(
                 name=self.clusterrole_name,
-                labels={"platform.io/injected": "true"},
+                labels=dict(_MANAGED_LABELS),
             ),
             rules=rules,
         )
@@ -212,7 +189,7 @@ class FinalizerDeadlockController(Problem):
             "kind": "ClusterRoleBinding",
             "metadata": {
                 "name": self.clusterrolebinding_name,
-                "labels": {"platform.io/injected": "true"},
+                "labels": dict(_MANAGED_LABELS),
             },
             "roleRef": {
                 "apiGroup": "rbac.authorization.k8s.io",
@@ -241,25 +218,106 @@ class FinalizerDeadlockController(Problem):
 
     def _create_controller_script(self):
         script = textwrap.dedent(
-            f"""\
-            #!/bin/sh
-            set -eu
+            """\
+            import json
+            import os
+            import ssl
+            import time
+            import urllib.error
+            import urllib.parse
+            import urllib.request
+            from pathlib import Path
 
-            echo "cleanup-controller starting namespace={self.namespace} configmap={self.configmap_name} finalizer={self.finalizer}"
-            while true; do
-              echo "ConfigMap {self.configmap_name} is Terminating with finalizer {self.finalizer}; attempting controller-owned cleanup"
-              echo "cleanup-controller reconciliation failed: Kubernetes API denied the finalizer cleanup request with Forbidden"
-              sleep 10
-            done
+            NAMESPACE = "__NAMESPACE__"
+            FINALIZER = "__FINALIZER__"
+            LABEL_SELECTOR = "app.kubernetes.io/component=reservation-cleanup"
+            TOKEN_FILE = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
+            CA_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+            API_SERVER = (
+                f"https://{os.environ['KUBERNETES_SERVICE_HOST']}:"
+                f"{os.environ['KUBERNETES_SERVICE_PORT_HTTPS']}"
+            )
+            TLS_CONTEXT = ssl.create_default_context(cafile=CA_FILE)
+
+
+            def api_request(method, path, payload=None):
+                data = None if payload is None else json.dumps(payload).encode()
+                headers = {
+                    "Authorization": f"Bearer {TOKEN_FILE.read_text().strip()}",
+                    "Accept": "application/json",
+                }
+                if payload is not None:
+                    headers["Content-Type"] = "application/merge-patch+json"
+                request = urllib.request.Request(
+                    f"{API_SERVER}{path}",
+                    data=data,
+                    headers=headers,
+                    method=method,
+                )
+                with urllib.request.urlopen(request, context=TLS_CONTEXT, timeout=10) as response:
+                    raw = response.read()
+                    return json.loads(raw) if raw else {}
+
+
+            def reconcile():
+                selector = urllib.parse.quote(LABEL_SELECTOR, safe="")
+                response = api_request(
+                    "GET",
+                    f"/api/v1/namespaces/{NAMESPACE}/configmaps?labelSelector={selector}",
+                )
+                for configmap in response.get("items", []):
+                    metadata = configmap.get("metadata", {})
+                    finalizers = metadata.get("finalizers", [])
+                    if not metadata.get("deletionTimestamp") or FINALIZER not in finalizers:
+                        continue
+
+                    name = metadata["name"]
+                    remaining = [item for item in finalizers if item != FINALIZER]
+                    print(
+                        f"ConfigMap {name} is Terminating; attempting controller-owned cleanup",
+                        flush=True,
+                    )
+                    encoded_name = urllib.parse.quote(name, safe="")
+                    api_request(
+                        "PATCH",
+                        f"/api/v1/namespaces/{NAMESPACE}/configmaps/{encoded_name}",
+                        {"metadata": {"finalizers": remaining}},
+                    )
+                    print(f"ConfigMap {name} cleanup completed", flush=True)
+
+
+            print(f"cleanup-controller starting namespace={NAMESPACE}", flush=True)
+            while True:
+                try:
+                    reconcile()
+                except urllib.error.HTTPError as error:
+                    if error.code == 403:
+                        print(
+                            "cleanup-controller reconciliation failed: "
+                            "Kubernetes API denied cleanup request with HTTP 403 Forbidden",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"cleanup-controller reconciliation failed: Kubernetes API returned HTTP {error.code}",
+                            flush=True,
+                        )
+                except Exception as error:
+                    print(
+                        f"cleanup-controller reconciliation failed: {type(error).__name__}",
+                        flush=True,
+                    )
+                time.sleep(2)
             """
         )
+        script = script.replace("__NAMESPACE__", self.namespace).replace("__FINALIZER__", self.finalizer)
         body = client.V1ConfigMap(
             metadata=client.V1ObjectMeta(
                 name=_CONTROLLER_SCRIPT_CONFIGMAP,
                 namespace=self.namespace,
-                labels={"platform.io/injected": "true"},
+                labels=dict(_MANAGED_LABELS),
             ),
-            data={"loop.sh": script},
+            data={"controller.py": script},
         )
         try:
             self.kubectl.core_v1_api.create_namespaced_config_map(
@@ -313,7 +371,7 @@ class FinalizerDeadlockController(Problem):
             metadata=client.V1ObjectMeta(
                 name=self.controller_name,
                 namespace=self.namespace,
-                labels={"app": self.controller_name, "platform.io/injected": "true"},
+                labels={"app": self.controller_name, **_MANAGED_LABELS},
             ),
             spec=client.V1DeploymentSpec(
                 replicas=1,
@@ -328,7 +386,7 @@ class FinalizerDeadlockController(Problem):
                                 name="controller",
                                 image=_CONTROLLER_IMAGE,
                                 image_pull_policy="IfNotPresent",
-                                command=["/bin/sh", "/controller/loop.sh"],
+                                command=["python", "/controller/controller.py"],
                                 volume_mounts=[
                                     client.V1VolumeMount(
                                         name="controller-script",
@@ -399,78 +457,10 @@ class FinalizerDeadlockController(Problem):
                     )
                 except ApiException:
                     continue
-                if "Kubernetes API denied the finalizer cleanup request with Forbidden" in logs:
+                if "Kubernetes API denied cleanup request with HTTP 403 Forbidden" in logs:
                     return
             time.sleep(2)
-        print("Controller 403 log not observed before timeout; fault state was still injected")
-
-    def _start_controller_reconcile_loop(self):
-        self._reconcile_stop.clear()
-        self._reconcile_thread = threading.Thread(
-            target=self._controller_reconcile_loop,
-            name=f"{self.controller_name}-reconcile",
-            daemon=True,
-        )
-        self._reconcile_thread.start()
-
-    def _controller_reconcile_loop(self):
-        while not self._reconcile_stop.is_set():
-            try:
-                if self._clusterrole_has_required_rules() and self._configmap_needs_finalizer_cleanup():
-                    self._complete_controller_cleanup()
-                    return
-            except ApiException as e:
-                if e.status not in {404, 409}:
-                    print(f"cleanup-controller reconcile loop observed API error: {e}")
-            except Exception as e:
-                print(f"cleanup-controller reconcile loop observed error: {e}")
-            self._reconcile_stop.wait(5)
-
-    def _clusterrole_has_required_rules(self):
-        try:
-            role = self.rbac_v1.read_cluster_role(self.clusterrole_name, _request_timeout=10)
-        except ApiException:
-            return False
-
-        verbs_by_resource = {"configmaps": set(), "configmaps/finalizers": set()}
-        for rule in role.rules or []:
-            resources = set(rule.resources or [])
-            verbs = set(rule.verbs or [])
-            for resource in verbs_by_resource:
-                if resource in resources or "*" in resources:
-                    verbs_by_resource[resource].update(verbs)
-
-        required = {"patch", "update"}
-        return all(required <= verbs for verbs in verbs_by_resource.values())
-
-    def _configmap_needs_finalizer_cleanup(self):
-        try:
-            cm = self.kubectl.core_v1_api.read_namespaced_config_map(
-                self.configmap_name,
-                self.namespace,
-                _request_timeout=10,
-            )
-        except ApiException:
-            return False
-        return bool(cm.metadata.deletion_timestamp and self.finalizer in (cm.metadata.finalizers or []))
-
-    def _complete_controller_cleanup(self):
-        self._remove_configmap_finalizers()
-        self.kubectl.apps_v1_api.patch_namespaced_deployment(
-            name=self.controller_name,
-            namespace=self.namespace,
-            body={
-                "metadata": {
-                    "annotations": {
-                        _CONTROLLER_COMPLETION_ANNOTATION: time.strftime(
-                            "%Y-%m-%dT%H:%M:%SZ",
-                            time.gmtime(),
-                        )
-                    }
-                }
-            },
-            _request_timeout=10,
-        )
+        print("Controller did not report an authorization failure before timeout; deletion remained blocked")
 
     def _remove_configmap_finalizers(self):
         try:
@@ -521,7 +511,6 @@ class FinalizerDeadlockController(Problem):
                 raise
 
     def _delete_support_resources(self):
-        self._reconcile_stop.set()
         with _ignore_not_found():
             self.kubectl.apps_v1_api.delete_namespaced_deployment(
                 name=self.controller_name,
