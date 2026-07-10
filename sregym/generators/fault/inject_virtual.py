@@ -1433,7 +1433,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_rolling_update_misconfigured(self, microservices: list[str]):
         for service in microservices:
-            original_yaml_path = f"/tmp/{service}_modified.yaml"
+            original_yaml_path = f"/tmp/{service}-orig.yaml"
 
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
             delete_result = self.kubectl.exec_command(delete_command)
@@ -1442,6 +1442,8 @@ class VirtualizationFaultInjector(FaultInjector):
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
             apply_result = self.kubectl.exec_command(apply_command)
             print(f"Restored original deployment {service}: {apply_result}")
+
+            self.kubectl.exec_command(f"kubectl rollout status deployment/{service} -n {self.namespace} --timeout=120s")
 
     def inject_namespace_memory_limit(self, deployment_name: str, namespace: str, memory_limit: str):
         # Create memory resource quota FIRST so new pods are rejected
