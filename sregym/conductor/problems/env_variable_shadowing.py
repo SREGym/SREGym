@@ -1,7 +1,7 @@
 import copy
 
+from sregym.conductor.oracles.env_variable_shadowing_mitigation import EnvVariableShadowingMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.kubectl import KubeCtl
@@ -30,7 +30,7 @@ class EnvVariableShadowing(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
-        self.mitigation_oracle = MitigationOracle(problem=self)
+        self.mitigation_oracle = EnvVariableShadowingMitigationOracle(problem=self)
         self._baseline_template = None
 
     def _capture_baseline_template(self):
