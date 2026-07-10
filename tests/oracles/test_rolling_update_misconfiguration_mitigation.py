@@ -127,7 +127,7 @@ def test_accepts_safe_strategy_after_stable_probe_rollout(monkeypatch):
     assert probe_container["imagePullPolicy"] == "IfNotPresent"
     restored_template = kubectl.patches[1]["spec"]["template"]
     assert restored_template["spec"]["initContainers"] is None
-    assert restored_template["metadata"]["annotations"]["sregym.io/rollout-probe"] is None
+    assert restored_template["metadata"]["annotations"]["rollout-readiness-check"] is None
 
 
 def test_rejects_zero_availability_during_probe(monkeypatch):
@@ -179,5 +179,5 @@ def test_restore_preserves_the_repaired_template():
 
     restored_template = kubectl.patches[0]["spec"]["template"]
     assert restored_template["metadata"]["annotations"]["agent.example/repair"] == "kept"
-    assert restored_template["metadata"]["annotations"]["sregym.io/rollout-probe"] is None
+    assert restored_template["metadata"]["annotations"]["rollout-readiness-check"] is None
     assert restored_template["spec"]["initContainers"] == original_template["spec"]["initContainers"]

@@ -65,13 +65,13 @@ class DNSResolutionMitigationOracle(Oracle):
         namespace = self.problem.namespace
         core_v1 = self.problem.kubectl.core_v1_api
         source_spec = deployment.spec.template.spec
-        pod_name = f"dns-mitigation-probe-{time.time_ns()}"[:63]
+        pod_name = f"dns-readiness-check-{time.time_ns()}"[:63]
         script = f"nslookup {dns_name} >/dev/null && echo DNS_OK"
         pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=pod_name,
                 namespace=namespace,
-                labels={"app": "dns-mitigation-probe"},
+                labels={"app": "dns-readiness-check"},
             ),
             spec=client.V1PodSpec(
                 restart_policy="Never",

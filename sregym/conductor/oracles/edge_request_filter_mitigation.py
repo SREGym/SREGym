@@ -126,7 +126,7 @@ class EdgeRequestFilterMitigationOracle(Oracle):
         service_port = service_ports[0].port
         base_url = f"http://{service_name}.{namespace}.svc.cluster.local:{service_port}"
         crafted_url = f"{base_url}/?waf={self.problem.crafted_payload}"
-        pod_name = f"edge-filter-mitigation-probe-{time.time_ns()}"[:63]
+        pod_name = f"frontend-filter-check-{time.time_ns()}"[:63]
         request_timeout = self.request_timeout_seconds
         script = (
             "set -eu; "
@@ -140,7 +140,7 @@ class EdgeRequestFilterMitigationOracle(Oracle):
             metadata=client.V1ObjectMeta(
                 name=pod_name,
                 namespace=namespace,
-                labels={"app": "edge-filter-mitigation-probe"},
+                labels={"app": "frontend-filter-check"},
             ),
             spec=client.V1PodSpec(
                 restart_policy="Never",

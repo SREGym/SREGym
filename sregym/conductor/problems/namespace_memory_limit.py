@@ -162,7 +162,6 @@ class NamespaceMemoryLimit(Problem):
                 "metadata": {
                     "name": self.QUOTA_NAME,
                     "namespace": self.namespace,
-                    "labels": {"sregym.io/fault": "namespace-memory-limit"},
                 },
                 "spec": {"hard": {"memory": self.MEMORY_LIMIT}},
             }

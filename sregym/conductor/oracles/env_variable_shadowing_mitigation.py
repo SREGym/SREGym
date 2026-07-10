@@ -122,7 +122,7 @@ class EnvVariableShadowingMitigationOracle(Oracle):
 
         service_port = service_ports[0].port
         url = f"http://{service_name}.{namespace}.svc.cluster.local:{service_port}/"
-        pod_name = f"env-shadowing-mitigation-probe-{time.time_ns()}"[:63]
+        pod_name = f"frontend-content-check-{time.time_ns()}"[:63]
         script = (
             "set -eu; "
             f"wget -q -T {self.request_timeout_seconds} -t 1 -O /tmp/frontend '{url}'; "
@@ -133,7 +133,7 @@ class EnvVariableShadowingMitigationOracle(Oracle):
             metadata=client.V1ObjectMeta(
                 name=pod_name,
                 namespace=namespace,
-                labels={"app": "env-shadowing-mitigation-probe"},
+                labels={"app": "frontend-content-check"},
             ),
             spec=client.V1PodSpec(
                 restart_policy="Never",

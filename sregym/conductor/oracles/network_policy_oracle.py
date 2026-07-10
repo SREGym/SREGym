@@ -108,7 +108,7 @@ class NetworkPolicyMitigationOracle(Oracle):
         if not source_labels:
             print(f"[FAIL] Service '{frontend_service}' has no selector for the probe's network identity")
             return False
-        pod_name = f"network-policy-mitigation-probe-{time.time_ns()}"[:63]
+        pod_name = f"recommendation-connectivity-check-{time.time_ns()}"[:63]
         target_dns = f"{target_service}.{namespace}.svc.cluster.local"
         url = (
             f"http://{frontend_service}.{namespace}.svc.cluster.local:{frontend_port}/recommendations"

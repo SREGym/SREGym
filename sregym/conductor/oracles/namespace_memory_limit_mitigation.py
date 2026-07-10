@@ -111,13 +111,13 @@ class NamespaceMemoryLimitMitigationOracle(Oracle):
 
         service_port = service_ports[0].port
         target = f"{service_name}.{namespace}.svc.cluster.local"
-        pod_name = f"namespace-memory-mitigation-probe-{time.time_ns()}"[:63]
+        pod_name = f"search-admission-check-{time.time_ns()}"[:63]
         script = f"nc -z -w {self.connection_timeout_seconds} '{target}' {service_port} && echo SEARCH_OK"
         pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=pod_name,
                 namespace=namespace,
-                labels={"app": "namespace-memory-mitigation-probe"},
+                labels={"app": "search-admission-check"},
             ),
             spec=client.V1PodSpec(
                 restart_policy="Never",

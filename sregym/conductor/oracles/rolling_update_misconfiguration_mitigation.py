@@ -119,7 +119,7 @@ class RollingUpdateMitigationOracle(Oracle):
             "spec": {
                 "template": {
                     "metadata": {
-                        "annotations": {"sregym.io/rollout-probe": str(time.time_ns())},
+                        "annotations": {"rollout-readiness-check": str(time.time_ns())},
                     },
                     "spec": {
                         "initContainers": [
@@ -143,8 +143,8 @@ class RollingUpdateMitigationOracle(Oracle):
 
         metadata = template.setdefault("metadata", {})
         annotations = metadata.get("annotations") or {}
-        if "sregym.io/rollout-probe" not in annotations:
-            annotations["sregym.io/rollout-probe"] = None
+        if "rollout-readiness-check" not in annotations:
+            annotations["rollout-readiness-check"] = None
         metadata["annotations"] = annotations
 
         pod_spec = template.setdefault("spec", {})

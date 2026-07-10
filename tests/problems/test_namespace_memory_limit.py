@@ -147,7 +147,6 @@ def test_injection_creates_owned_quota_and_deletes_only_active_replica_sets():
             "metadata": {
                 "name": "memory-limit-quota",
                 "namespace": "hotel-reservation",
-                "labels": {"sregym.io/fault": "namespace-memory-limit"},
             },
             "spec": {"hard": {"memory": "1Gi"}},
         }
