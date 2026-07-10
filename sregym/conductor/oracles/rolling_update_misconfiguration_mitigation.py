@@ -1,3 +1,4 @@
+import copy
 import json
 import math
 import os
@@ -99,6 +100,20 @@ class RollingUpdateMitigationOracle(Oracle):
         print(f"❌ Timed out waiting for deployment/{self.deployment_name} rollout")
         return False
 
+    def _patch_deployment(self, patch: dict) -> str:
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tmp:
+                yaml.safe_dump(patch, tmp)
+                tmp_path = tmp.name
+            return self.kubectl.exec_command(
+                f"kubectl patch deployment {self.deployment_name} -n {self.namespace} "
+                f"--type=merge --patch-file {tmp_path}"
+            )
+        finally:
+            if tmp_path is not None:
+                os.unlink(tmp_path)
+
     def _apply_rollout_probe(self) -> None:
         probe_patch = {
             "spec": {
@@ -110,7 +125,8 @@ class RollingUpdateMitigationOracle(Oracle):
                         "initContainers": [
                             {
                                 "name": "hang-init",
-                                "image": "busybox",
+                                "image": "busybox:1.36",
+                                "imagePullPolicy": "IfNotPresent",
                                 "command": ["/bin/sh", "-c", "sleep 15"],
                             }
                         ]
@@ -119,23 +135,30 @@ class RollingUpdateMitigationOracle(Oracle):
             }
         }
 
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as tmp:
-                yaml.safe_dump(probe_patch, tmp)
-                tmp_path = tmp.name
-            output = self.kubectl.exec_command(
-                f"kubectl patch deployment {self.deployment_name} -n {self.namespace} "
-                f"--type=merge --patch-file {tmp_path}"
-            )
-            print(f"Patched rollout probe: {output}")
-        finally:
-            if tmp_path is not None:
-                os.unlink(tmp_path)
+        output = self._patch_deployment(probe_patch)
+        print(f"Patched rollout probe: {output}")
+
+    def _restore_pod_template(self, original_template: dict) -> None:
+        template = copy.deepcopy(original_template)
+
+        metadata = template.setdefault("metadata", {})
+        annotations = metadata.get("annotations") or {}
+        if "sregym.io/rollout-probe" not in annotations:
+            annotations["sregym.io/rollout-probe"] = None
+        metadata["annotations"] = annotations
+
+        pod_spec = template.setdefault("spec", {})
+        if "initContainers" not in pod_spec:
+            pod_spec["initContainers"] = None
+
+        output = self._patch_deployment({"spec": {"template": template}})
+        print(f"Restored repaired pod template: {output}")
 
     def evaluate(self) -> dict:
         print("== Rolling Update Mitigation Evaluation ==")
 
+        original_template = None
+        probe_applied = False
         try:
             output = self.kubectl.exec_command(
                 f"kubectl get deployment {self.deployment_name} -n {self.namespace} -o yaml"
@@ -143,6 +166,11 @@ class RollingUpdateMitigationOracle(Oracle):
             deployment = yaml.safe_load(output)
             if not isinstance(deployment, dict):
                 print("❌ Mitigation failed: deployment output was not valid YAML")
+                return {"success": False}
+
+            original_template = copy.deepcopy((deployment.get("spec") or {}).get("template"))
+            if not isinstance(original_template, dict):
+                print("❌ Mitigation failed: deployment has no pod template")
                 return {"success": False}
 
             if not self._strategy_preserves_availability(deployment):
@@ -156,6 +184,7 @@ class RollingUpdateMitigationOracle(Oracle):
 
             print("🔄 Triggering controlled slow rollout")
             self._apply_rollout_probe()
+            probe_applied = True
             probe_deployment = self._get_deployment_json()
             probe_generation = (probe_deployment.get("metadata") or {}).get("generation", 0)
             if probe_generation <= initial_generation:
@@ -170,3 +199,9 @@ class RollingUpdateMitigationOracle(Oracle):
         except Exception as e:
             print(f"❌ Error during evaluation: {e}")
             return {"success": False}
+        finally:
+            if probe_applied and original_template is not None:
+                try:
+                    self._restore_pod_template(original_template)
+                except Exception as exc:
+                    print(f"⚠️ Failed to restore repaired pod template: {exc}")

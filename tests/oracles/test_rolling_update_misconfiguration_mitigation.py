@@ -25,6 +25,17 @@ def _deployment(
         "metadata": {"name": "custom-service", "generation": generation},
         "spec": {
             "replicas": replicas,
+            "template": {
+                "metadata": {"labels": {"app": "custom-service"}},
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "custom-service-main",
+                            "image": "python:3.9-slim",
+                        }
+                    ]
+                },
+            },
             "strategy": {
                 "type": "RollingUpdate",
                 "rollingUpdate": {
@@ -48,6 +59,7 @@ class _KubeCtl:
         self.initial_deployment = initial_deployment
         self.json_deployments = list(json_deployments)
         self.patch_commands = []
+        self.patches = []
 
     def exec_command(self, command):
         if command.endswith("-o yaml"):
@@ -58,6 +70,9 @@ class _KubeCtl:
             return json.dumps(self.json_deployments.pop(0))
         if "--patch-file" in command:
             self.patch_commands.append(command)
+            patch_path = command.split("--patch-file ", 1)[1]
+            with open(patch_path) as patch_file:
+                self.patches.append(yaml.safe_load(patch_file))
             return "deployment.apps/custom-service patched\n"
         raise AssertionError(f"Unexpected command: {command}")
 
@@ -106,7 +121,13 @@ def test_accepts_safe_strategy_after_stable_probe_rollout(monkeypatch):
     )
 
     assert _oracle(kubectl).evaluate()["success"] is True
-    assert len(kubectl.patch_commands) == 1
+    assert len(kubectl.patch_commands) == 2
+    probe_container = kubectl.patches[0]["spec"]["template"]["spec"]["initContainers"][0]
+    assert probe_container["image"] == "busybox:1.36"
+    assert probe_container["imagePullPolicy"] == "IfNotPresent"
+    restored_template = kubectl.patches[1]["spec"]["template"]
+    assert restored_template["spec"]["initContainers"] is None
+    assert restored_template["metadata"]["annotations"]["sregym.io/rollout-probe"] is None
 
 
 def test_rejects_zero_availability_during_probe(monkeypatch):
@@ -130,6 +151,7 @@ def test_rejects_zero_availability_during_probe(monkeypatch):
     kubectl = _KubeCtl(initial, [initial, probe_started, outage])
 
     assert _oracle(kubectl).evaluate()["success"] is False
+    assert len(kubectl.patch_commands) == 2
 
 
 def test_rejects_probe_that_does_not_advance_generation(monkeypatch):
@@ -138,3 +160,24 @@ def test_rejects_probe_that_does_not_advance_generation(monkeypatch):
     kubectl = _KubeCtl(initial, [initial, initial])
 
     assert _oracle(kubectl).evaluate()["success"] is False
+    assert len(kubectl.patch_commands) == 2
+
+
+def test_restore_preserves_the_repaired_template():
+    original_template = _deployment()["spec"]["template"]
+    original_template["metadata"]["annotations"] = {"agent.example/repair": "kept"}
+    original_template["spec"]["initContainers"] = [
+        {
+            "name": "agent-setup",
+            "image": "busybox:1.36",
+            "command": ["sh", "-c", "true"],
+        }
+    ]
+    kubectl = _KubeCtl(_deployment(), [])
+
+    _oracle(kubectl)._restore_pod_template(original_template)
+
+    restored_template = kubectl.patches[0]["spec"]["template"]
+    assert restored_template["metadata"]["annotations"]["agent.example/repair"] == "kept"
+    assert restored_template["metadata"]["annotations"]["sregym.io/rollout-probe"] is None
+    assert restored_template["spec"]["initContainers"] == original_template["spec"]["initContainers"]
