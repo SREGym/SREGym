@@ -1,3 +1,4 @@
+import copy
 import json
 import textwrap
 
@@ -34,6 +35,7 @@ class EdgeRequestFilterCPUSaturation(Problem):
         self.driver_interval_seconds = 0.05
         self.driver_log = "/tmp/edge-traffic-replay.log"
         self.driver_pid = "/tmp/edge-traffic-replay.pid"
+        self._baseline_template = None
         self.root_cause = self.build_structured_root_cause(
             component=self.faulty_service,
             namespace=self.namespace,
@@ -48,6 +50,25 @@ class EdgeRequestFilterCPUSaturation(Problem):
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = EdgeRequestFilterMitigationOracle(problem=self)
+
+    def _capture_baseline_template(self):
+        if self._baseline_template is not None:
+            return
+
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        self._baseline_template = copy.deepcopy(deployment.spec.template)
+
+    def _restore_baseline_template(self):
+        if self._baseline_template is None:
+            raise RuntimeError("Cannot recover edge filter fault without a captured baseline template")
+
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        deployment.spec.template = copy.deepcopy(self._baseline_template)
+        self.kubectl.apps_v1_api.replace_namespaced_deployment(
+            name=self.faulty_service,
+            namespace=self.namespace,
+            body=deployment,
+        )
 
     def _edge_filter_script(self) -> str:
         return textwrap.dedent(
@@ -211,19 +232,44 @@ class EdgeRequestFilterCPUSaturation(Problem):
         )
 
     def _stop_crafted_traffic(self):
-        command = (
-            f"if [ -f {self.driver_pid} ]; then "
-            f"kill \\$(cat {self.driver_pid}) 2>/dev/null || true; "
-            f"rm -f {self.driver_pid}; "
-            "fi"
-        )
+        marker_split = max(1, len(self.process_marker) // 2)
+        marker_prefix = self.process_marker[:marker_split]
+        marker_suffix = self.process_marker[marker_split:]
+        cleanup = textwrap.dedent(
+            f"""
+            import os
+            import signal
+
+            marker = {marker_prefix!r} + {marker_suffix!r}
+            marker_bytes = marker.encode()
+            for entry in os.listdir("/proc"):
+                if not entry.isdigit() or int(entry) == os.getpid():
+                    continue
+                try:
+                    with open(f"/proc/{{entry}}/cmdline", "rb") as command_file:
+                        command = command_file.read()
+                    if marker_bytes in command:
+                        os.kill(int(entry), signal.SIGTERM)
+                except (FileNotFoundError, PermissionError, ProcessLookupError):
+                    pass
+
+            for path in ({self.driver_pid!r}, {self.driver_log!r}):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+            """
+        ).strip()
+        launcher = f"exec({cleanup!r})"
         self.kubectl.exec_command(
-            f"kubectl exec deployment/{self.traffic_source} -n {self.namespace} -- /bin/sh -c {json.dumps(command)}"
+            f"kubectl exec deployment/{self.traffic_source} -n {self.namespace} "
+            f"-c {self.traffic_source} -- /usr/local/bin/python3 -c {json.dumps(launcher)}"
         )
 
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
+        self._capture_baseline_template()
         self._patch_edge_proxy()
         self._start_crafted_traffic()
         self.kubectl.wait_for_ready(self.namespace, max_wait=180)
@@ -236,11 +282,12 @@ class EdgeRequestFilterCPUSaturation(Problem):
     def recover_fault(self):
         print("== Fault Recovery ==")
         self._stop_crafted_traffic()
-        self.kubectl.exec_command(f"kubectl rollout undo deployment/{self.faulty_service} -n {self.namespace}")
+        self._restore_baseline_template()
         self.kubectl.exec_command(
             f"kubectl rollout status deployment/{self.faulty_service} -n {self.namespace} --timeout=120s"
         )
+        self._baseline_template = None
         print(
-            f"Recovered: stopped crafted requests and rolled back deployment/{self.faulty_service} "
+            f"Recovered: stopped crafted requests and restored deployment/{self.faulty_service} "
             f"in namespace {self.namespace}\n"
         )
