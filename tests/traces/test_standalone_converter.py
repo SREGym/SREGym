@@ -20,8 +20,6 @@ from atif_converter import (
     convert,
     detect_agent,
 )
-from sregym.traces.adapters import claudecode, codex, copilot, gemini, opencode, stratus
-from sregym.traces.atif import Trajectory as LegacyTrajectory
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -133,45 +131,6 @@ def test_deliberately_wrong_agent_raises_conversion_error():
     claude_file = SESSION_CASES[0][1]
     with pytest.raises(ConversionFailedError):
         convert(claude_file, agent="codex")
-
-
-def _normalized_payload(trajectory: Trajectory) -> dict:
-    payload = trajectory.to_json_dict()
-    if payload.get("agent", {}).get("name") == "claudecode":
-        payload.get("final_metrics", {}).pop("total_cost_usd", None)
-
-    extra = payload.get("extra")
-    if isinstance(extra, dict):
-        integration_meta = extra.pop("sregym", None)
-        if integration_meta is None:
-            integration_meta = extra.pop("stratus", None)
-        if integration_meta is not None:
-            extra["_normalized_stratus_meta"] = integration_meta
-        if not extra:
-            payload.pop("extra")
-    return payload
-
-
-@pytest.mark.parametrize(
-    ("agent", "run_dir", "session_file", "legacy_adapter"),
-    [
-        ("claudecode", FIXTURES / "claudecode_run", SESSION_CASES[0][1], claudecode),
-        ("codex", FIXTURES / "codex_run", SESSION_CASES[1][1], codex),
-        ("copilot", FIXTURES / "copilot_run_real", SESSION_CASES[3][1], copilot),
-        ("gemini", FIXTURES / "gemini_run", SESSION_CASES[4][1], gemini),
-        ("opencode", FIXTURES / "opencode_run", SESSION_CASES[5][1], opencode),
-        ("stratus", FIXTURES / "stratus_run", SESSION_CASES[6][1], stratus),
-    ],
-)
-def test_sregym_wrapper_matches_standalone_output(agent, run_dir, session_file, legacy_adapter):
-    standalone = convert(session_file, agent=agent)
-    wrapped = legacy_adapter.to_atif(run_dir)
-    assert wrapped is not None
-    assert _normalized_payload(wrapped) == _normalized_payload(standalone)
-
-
-def test_legacy_model_import_is_the_standalone_type():
-    assert LegacyTrajectory is Trajectory
 
 
 def test_standalone_package_has_no_sregym_imports():

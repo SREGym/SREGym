@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from atif_converter import Trajectory
 from sregym.traces import convert
-from sregym.traces.atif import Trajectory
 
 FIXTURE_RUN = Path(__file__).parent / "fixtures" / "claudecode_run"
 
@@ -331,6 +331,7 @@ def test_stratus_extra_sregym_populated(tmp_path):
     shutil.copytree(STRATUS_FIXTURE, run_dir)
     traj = convert.convert_run(run_dir)
     sregym = traj.extra["sregym"]
+    assert "stratus" not in traj.extra
     assert sregym["problem_id"] == "service_port_conflict_hotel_reservation"
     assert sregym["application"] == "Hotel Reservation"
     assert sregym["run"] == 1

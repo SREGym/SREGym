@@ -229,8 +229,6 @@ packages = [
     "atif_converter.atif",
     "sregym",
     "sregym.traces",
-    "sregym.traces.adapters",
-    "sregym.traces.atif",
     "clients",
     "scripts",
     "llm_backend",
