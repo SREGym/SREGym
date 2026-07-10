@@ -7,7 +7,7 @@ into standalone, pure functions with no dependency on ``harbor`` or
 
 The standalone conversion reads a native Claude Code session JSONL file and
 produces one validated ATIF ``Trajectory`` covering the whole session. The
-SREGym compatibility layer can merge multiple archived fragments.
+SREGym integration layer can merge multiple archived fragments.
 
 Key behavior ported verbatim from Harbor:
 

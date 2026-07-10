@@ -29,6 +29,15 @@ def test_convert_run_dispatches_claudecode(tmp_path):
     Trajectory.model_validate(traj.to_json_dict())
 
 
+def test_malformed_claudecode_session_is_non_fatal(tmp_path):
+    run_dir = tmp_path / "results" / "b" / "claudecode" / "problem" / "run_1"
+    session_dir = run_dir / "sessions" / "projects" / "project" / "session"
+    session_dir.mkdir(parents=True)
+    (session_dir / "session.jsonl").write_text("[]\n", encoding="utf-8")
+
+    assert convert.convert_run(run_dir) is None
+
+
 def test_extra_sregym_populated(tmp_path):
     run_dir = _canonical_run_dir(tmp_path)
     traj = convert.convert_run(run_dir)

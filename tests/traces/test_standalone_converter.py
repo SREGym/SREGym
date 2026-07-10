@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -110,6 +111,13 @@ def test_public_failure_contract(tmp_path: Path):
     with pytest.raises(UnsupportedFormatError, match="no recognizable JSON"):
         convert(malformed)
 
+    invalid_utf8 = tmp_path / "invalid-utf8.jsonl"
+    invalid_utf8.write_bytes(b"\xff\xfe\x00")
+    with pytest.raises(UnsupportedFormatError, match="not readable UTF-8 JSON"):
+        detect_agent(invalid_utf8)
+    with pytest.raises(UnsupportedFormatError, match="not readable UTF-8 JSON"):
+        convert(invalid_utf8)
+
     unknown = tmp_path / "unknown.json"
     unknown.write_text('{"hello": "world"}', encoding="utf-8")
     with pytest.raises(UnsupportedFormatError, match="could not detect"):
@@ -117,6 +125,21 @@ def test_public_failure_contract(tmp_path: Path):
 
     with pytest.raises(UnsupportedAgentError, match="unsupported agent"):
         convert(unknown, agent="other")
+
+
+def test_generic_message_record_is_not_misidentified_as_copilot(tmp_path: Path):
+    session_file = tmp_path / "generic.jsonl"
+    session_file.write_text('{"type":"message","content":"hello"}\n', encoding="utf-8")
+
+    with pytest.raises(UnsupportedFormatError, match="could not detect"):
+        detect_agent(session_file)
+
+
+def test_jsonl_detection_does_not_read_the_entire_file():
+    codex_file = SESSION_CASES[1][1]
+
+    with patch.object(Path, "read_text", side_effect=AssertionError("unexpected full-file read")):
+        assert detect_agent(codex_file) == "codex"
 
 
 def test_recognized_but_unconvertible_file_raises(tmp_path: Path):

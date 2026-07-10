@@ -142,22 +142,28 @@ def _find_session_file(run_dir: Path, tool: str) -> Path | None:
 
 def _convert_native_run(run_dir: Path, tool: str) -> Trajectory | None:
     """Convert the native artifact selected from one canonical SREGym run."""
-    if tool == "claudecode":
-        session_files = _find_claudecode_session_files(run_dir)
-        if not session_files:
-            return None
-        return claudecode.convert_files(
-            session_files,
-            total_cost_usd=_claudecode_total_cost_usd(run_dir),
-        )
-
-    session_file = _find_session_file(run_dir, tool)
-    if session_file is None:
-        return None
     try:
+        if tool == "claudecode":
+            session_files = _find_claudecode_session_files(run_dir)
+            if not session_files:
+                return None
+            return claudecode.convert_files(
+                session_files,
+                total_cost_usd=_claudecode_total_cost_usd(run_dir),
+            )
+
+        session_file = _find_session_file(run_dir, tool)
+        if session_file is None:
+            return None
         return convert_session(session_file, agent=tool)
     except AtifConverterError as exc:
-        logger.debug("Could not convert %s session %s: %s", tool, session_file, exc)
+        logger.debug("Could not convert %s run %s: %s", tool, run_dir, exc)
+        return None
+    except Exception as exc:
+        # Claude's multi-file API is intentionally lower-level than the public
+        # convert() dispatcher, so normalize any unexpected adapter failure to
+        # SREGym's established non-fatal conversion behavior here.
+        logger.debug("Could not convert %s run %s: %s", tool, run_dir, exc, exc_info=True)
         return None
 
 

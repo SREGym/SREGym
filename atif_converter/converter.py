@@ -45,38 +45,85 @@ def _require_file(session_file: Path | str) -> Path:
 
 
 def _load_detection_records(path: Path) -> tuple[dict | None, list[dict]]:
-    """Load a single JSON object or a bounded prefix of a JSONL stream."""
-    text = path.read_text(encoding="utf-8")
-    if not text.strip():
-        raise UnsupportedFormatError(f"session file is empty: {path}")
+    """Load a JSON document or inspect a bounded prefix of a JSONL stream."""
+    records: list[dict] = []
+    nonblank_lines = 0
+    first_payload: object | None = None
+    first_line_parsed = False
+    first_line_starts_json = False
+    prefix_truncated = False
 
     try:
+        with path.open(encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+
+                nonblank_lines += 1
+                if nonblank_lines == 1:
+                    first_line_starts_json = stripped[0] in "[{"
+
+                try:
+                    payload = json.loads(stripped)
+                except json.JSONDecodeError:
+                    payload = None
+                else:
+                    if nonblank_lines == 1:
+                        first_payload = payload
+                        first_line_parsed = True
+                    if isinstance(payload, dict):
+                        records.append(payload)
+
+                if nonblank_lines >= 200:
+                    prefix_truncated = True
+                    break
+    except FileNotFoundError:
+        # Preserve the public API's normal missing-file behavior even if the
+        # file disappears between _require_file() and this read.
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise UnsupportedFormatError(f"session file is not readable UTF-8 JSON: {path}") from exc
+
+    if nonblank_lines == 0:
+        raise UnsupportedFormatError(f"session file is empty: {path}")
+
+    # A complete object on the first line is either a one-line JSON document or
+    # the first JSONL record. Reaching another nonblank line distinguishes the
+    # latter without loading the rest of a potentially large session file.
+    if first_line_parsed and isinstance(first_payload, dict):
+        if not prefix_truncated and nonblank_lines == 1:
+            return first_payload, [first_payload]
+        return None, records
+
+    if first_line_parsed and isinstance(first_payload, list) and not prefix_truncated and nonblank_lines == 1:
+        return None, [item for item in first_payload if isinstance(item, dict)][:200]
+
+    # Non-JSON preamble lines occur in captured CLI streams. Once recognizable
+    # records follow, treat the input as JSONL rather than rereading the file.
+    if records and not first_line_starts_json:
+        return None, records
+
+    # A leading incomplete "{" or "[" normally means a pretty-printed JSON
+    # document. These formats need the complete payload for structural checks.
+    try:
+        text = path.read_text(encoding="utf-8")
         payload = json.loads(text)
+    except FileNotFoundError:
+        raise
+    except (OSError, UnicodeError) as exc:
+        raise UnsupportedFormatError(f"session file is not readable UTF-8 JSON: {path}") from exc
     except json.JSONDecodeError:
-        payload = None
+        if records:
+            return None, records
+        raise UnsupportedFormatError(f"session file contains no recognizable JSON records: {path}") from None
 
     if isinstance(payload, dict):
         return payload, [payload]
     if isinstance(payload, list):
         records = [item for item in payload if isinstance(item, dict)]
         return None, records[:200]
-
-    records: list[dict] = []
-    for line in text.splitlines():
-        if len(records) >= 200:
-            break
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            record = json.loads(stripped)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict):
-            records.append(record)
-    if not records:
-        raise UnsupportedFormatError(f"session file contains no recognizable JSON records: {path}")
-    return None, records
+    raise UnsupportedFormatError(f"session file contains no recognizable JSON records: {path}")
 
 
 def _looks_like_opencode(root: dict | None) -> bool:
@@ -124,16 +171,32 @@ def _looks_like_claudecode(records: list[dict]) -> bool:
 
 
 def _looks_like_copilot(records: list[dict]) -> bool:
-    dotted_types = {
-        "assistant.message",
-        "assistant.reasoning",
-        "user.message",
-        "tool.execution_complete",
-        "result",
-    }
-    flat_types = {"message", "tool_use", "tool_result", "usage"}
-    record_types = {record.get("type") for record in records}
-    return bool(record_types & dotted_types) or bool(record_types & flat_types)
+    for record in records:
+        record_type = record.get("type")
+        data = record.get("data")
+
+        # Copilot's session-event schema consistently wraps mapped event data
+        # in an object. Event names alone (especially "result") are too
+        # generic to identify the format safely.
+        if record_type in {
+            "assistant.message",
+            "assistant.reasoning",
+            "user.message",
+            "tool.execution_complete",
+        } and isinstance(data, dict):
+            return True
+
+        # The older flat schema uses generic event names, so also require the
+        # fields that make each record structurally useful to the adapter.
+        if record_type == "message" and record.get("role") in {"user", "assistant"} and "content" in record:
+            return True
+        if record_type == "tool_use" and isinstance(record.get("id"), str) and isinstance(record.get("name"), str):
+            return True
+        if record_type == "tool_result" and isinstance(record.get("tool_use_id"), str) and "content" in record:
+            return True
+        if record_type == "usage" and any(key in record for key in ("input_tokens", "output_tokens")):
+            return True
+    return False
 
 
 def detect_agent(session_file: Path | str) -> AgentName:

@@ -59,7 +59,7 @@ adapter is built from Stratus's emitted trajectory
 cumulative LangGraph snapshots (last event per stage = full stage history),
 multi-stage (`diagnosis` / `mitigation_attempt_N`) concatenated into one ATIF
 trajectory with per-stage boundaries under `extra.stratus.stages`. SREGym's
-compatibility wrapper maps that metadata back to `extra.sregym`. Because it's
+run converter maps that metadata back to `extra.sregym`. Because it's
 our agent, the emitter was extended to serialize `tool_call_id` (id-based tool
 matching, with positional fallback for older runs) and `usage_metadata` /
 `response_metadata` (per-step token `Metrics`).
