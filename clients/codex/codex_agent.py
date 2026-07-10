@@ -354,6 +354,18 @@ class CodexAgent:
             return process.returncode
 
         finally:
+            # Copy session files into the run dir
+            try:
+                session_src = Path(env.get("CODEX_HOME", "")) / "sessions"
+                session_dst = self.logs_dir / "sessions"
+                if session_src.is_dir() and session_src.resolve() != session_dst.resolve():
+                    if session_dst.exists():
+                        shutil.rmtree(session_dst)
+                    shutil.copytree(session_src, session_dst)
+                    logger.info(f"Copied codex sessions from {session_src} to {session_dst}")
+            except Exception as exc:
+                logger.warning(f"Failed to copy codex sessions: {exc}")
+
             # Only cleanup auth file if we created one (API key auth)
             if using_api_key:
                 self._cleanup_auth()
