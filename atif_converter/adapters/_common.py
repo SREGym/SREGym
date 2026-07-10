@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from sregym.traces.atif import FinalMetrics, Step
+from ..atif import FinalMetrics, Step
 
 logger = logging.getLogger(__name__)
 

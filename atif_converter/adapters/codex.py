@@ -1,7 +1,7 @@
 """Codex CLI -> ATIF v1.7 adapter.
 
 A clean port of Harbor's ``Codex._convert_events_to_trajectory`` and its
-helpers (upstream commit ``fd1a8ea``; see ``sregym/traces/atif/UPSTREAM.md``)
+helpers (upstream commit ``fd1a8ea``; see ``atif_converter/atif/UPSTREAM.md``)
 into standalone, pure functions with no dependency on ``harbor`` or
 ``BaseInstalledAgent``.
 
@@ -32,8 +32,7 @@ import logging
 from pathlib import Path
 from typing import Any, Literal
 
-from sregym.traces.adapters._common import _load_jsonl
-from sregym.traces.atif import (
+from ..atif import (
     Agent,
     FinalMetrics,
     Metrics,
@@ -43,42 +42,11 @@ from sregym.traces.atif import (
     ToolCall,
     Trajectory,
 )
+from ._common import _load_jsonl
 
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "codex"
-
-
-# --------------------------------------------------------------------------- #
-# Session-directory discovery
-# --------------------------------------------------------------------------- #
-def _get_session_dir(run_dir: Path) -> Path | None:
-    """Identify the Codex session directory containing the primary JSONL log.
-
-    Ported from Harbor's ``_get_session_dir``: looks under ``<run_dir>/sessions/``
-    for the deepest directory containing session files.
-    """
-    sessions_root = run_dir / "sessions"
-    if not sessions_root.exists():
-        return None
-
-    session_dirs = [d for d in sessions_root.rglob("*") if d.is_dir()]
-    if not session_dirs:
-        return None
-
-    max_depth = max(len(d.parts) for d in session_dirs)
-    session_dirs = [d for d in session_dirs if len(d.parts) == max_depth]
-    if not session_dirs:
-        return None
-
-    if len(session_dirs) != 1:
-        logger.debug(
-            "Expected exactly 1 Codex session, found %d in %s",
-            len(session_dirs),
-            run_dir,
-        )
-        return None
-    return session_dirs[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -456,14 +424,9 @@ def _extract_final_metrics(raw_events: list[dict[str, Any]], total_steps: int) -
 # --------------------------------------------------------------------------- #
 # Main conversion
 # --------------------------------------------------------------------------- #
-def _convert_session(session_dir: Path) -> Trajectory | None:
-    """Convert Codex session JSONL events into an ATIF trajectory."""
-    session_files = list(session_dir.glob("*.jsonl"))
-    if not session_files:
-        logger.debug("No Codex session files found in %s", session_dir)
-        return None
-
-    session_file = session_files[0]
+def convert_file(session_file: Path | str) -> Trajectory | None:
+    """Convert one Codex session JSONL file into an ATIF trajectory."""
+    session_file = Path(session_file)
     raw_events = _load_jsonl(session_file)
     if not raw_events:
         return None
@@ -473,7 +436,7 @@ def _convert_session(session_dir: Path) -> Trajectory | None:
     session_id = (
         session_meta.get("payload", {}).get("id")
         if session_meta and isinstance(session_meta, dict)
-        else session_dir.name
+        else session_file.parent.name
     )
 
     agent_version = "unknown"
@@ -728,33 +691,3 @@ def _convert_session(session_dir: Path) -> Trajectory | None:
         steps=steps,
         final_metrics=final_metrics,
     )
-
-
-def to_atif(run_dir: Path | str, *, sregym_meta: dict[str, Any] | None = None) -> Trajectory | None:
-    """Convert a Codex run directory into a validated ATIF ``Trajectory``.
-
-    Args:
-        run_dir: Canonical run directory
-            (``results/<batch>/codex/<problem_id>/run_<n>/``).
-        sregym_meta: Optional SREGym metadata to attach under ``extra.sregym``.
-            Assembly of the full ``extra.sregym`` payload (application mapping,
-            boundary detection) is the responsibility of ``convert.py``; this
-            adapter only stores whatever dict it is handed.
-
-    Returns:
-        A validated ``Trajectory``, or ``None`` if no convertible session exists.
-    """
-    run_dir = Path(run_dir)
-    session_dir = _get_session_dir(run_dir)
-    if not session_dir:
-        logger.debug("No Codex session directory found in %s", run_dir)
-        return None
-
-    trajectory = _convert_session(session_dir)
-    if trajectory is None:
-        return None
-
-    if sregym_meta:
-        trajectory.extra = {"sregym": dict(sregym_meta)}
-
-    return trajectory

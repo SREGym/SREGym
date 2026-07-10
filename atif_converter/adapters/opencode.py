@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sregym.traces.atif import (
+from ..atif import (
     Agent,
     FinalMetrics,
     Metrics,
@@ -241,38 +241,6 @@ def _convert_from_session(session_path: Path) -> Trajectory | None:
 # --------------------------------------------------------------------------- #
 # Main entry point
 # --------------------------------------------------------------------------- #
-def to_atif(run_dir: Path | str, *, sregym_meta: dict[str, Any] | None = None) -> Trajectory | None:
-    """Convert an OpenCode run directory into a validated ATIF ``Trajectory``.
-
-    Reads the exported session JSON (``sessions/**/*.json``). If no session was
-    exported (e.g. ``opencode export`` failed), returns ``None`` — the client's
-    ``export_session()`` is the reliability point, same as codex's session copy.
-
-    Args:
-        run_dir: Canonical run directory
-            (``results/<batch>/opencode/<problem_id>/run_<n>/``).
-        sregym_meta: Optional SREGym metadata to attach under ``extra.sregym``.
-
-    Returns:
-        A validated ``Trajectory``, or ``None`` if no session JSON exists.
-    """
-    run_dir = Path(run_dir)
-
-    sessions_root = run_dir / "sessions"
-    if not sessions_root.is_dir():
-        logger.debug("No OpenCode sessions directory found in %s", run_dir)
-        return None
-
-    session_files = sorted(sessions_root.rglob("session-*.json"))
-    if not session_files:
-        logger.debug("No OpenCode session JSON found in %s", sessions_root)
-        return None
-
-    trajectory = _convert_from_session(session_files[0])
-    if trajectory is None:
-        return None
-
-    if sregym_meta:
-        trajectory.extra = {"sregym": dict(sregym_meta)}
-
-    return trajectory
+def convert_file(session_file: Path | str) -> Trajectory | None:
+    """Convert one exported OpenCode session JSON file to ATIF."""
+    return _convert_from_session(Path(session_file))

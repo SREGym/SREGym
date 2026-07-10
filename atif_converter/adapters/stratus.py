@@ -4,7 +4,7 @@ Stratus is SREGym's own LangGraph agent, so \u2014 unlike claudecode/codex/openc
 copilot \u2014 there is **no Harbor converter to port**. This adapter is bespoke,
 built from Stratus's emitted trajectory format.
 
-Input: ``<run_dir>/<ts>_<problem>_stratus_agent_trajectory.jsonl`` written by
+Input: ``<ts>_<problem>_stratus_agent_trajectory.jsonl`` written by
 ``clients/stratus/stratus_agent/driver/driver.py::save_combined_trajectory``.
 NDJSON:
 
@@ -22,7 +22,7 @@ Key facts (confirmed against a real run):
   convert only that, per stage (iterating every snapshot would duplicate).
 - **Stages are sequential phases** (``diagnosis``, ``mitigation_attempt_0``, ...).
   We concatenate them into one ATIF trajectory and record per-stage boundaries
-  under ``extra.sregym.stages``.
+  under ``extra.stratus.stages``.
 - **Messages** are LangChain-serialized: ``type`` is the class name
   (``SystemMessage`` / ``HumanMessage`` / ``AIMessage`` / ``ToolMessage``),
   ``content`` is the text, ``AIMessage.tool_calls`` = ``[{name, args, id}]``.
@@ -41,8 +41,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from sregym.traces.adapters._common import _load_jsonl, _stringify
-from sregym.traces.atif import (
+from ..atif import (
     Agent,
     FinalMetrics,
     Metrics,
@@ -52,22 +51,11 @@ from sregym.traces.atif import (
     ToolCall,
     Trajectory,
 )
+from ._common import _load_jsonl, _stringify
 
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "stratus"
-
-
-# --------------------------------------------------------------------------- #
-# trajectory-file discovery
-# --------------------------------------------------------------------------- #
-def _find_trajectory_file(run_dir: Path) -> Path | None:
-    """Locate the Stratus trajectory JSONL within a run directory (newest if several)."""
-    candidates = sorted(run_dir.glob("*_stratus_agent_trajectory.jsonl"))
-    if not candidates:
-        return None
-    # Newest by name (filenames are timestamp-prefixed) / mtime as tiebreak.
-    return max(candidates, key=lambda p: (p.name, p.stat().st_mtime))
 
 
 # --------------------------------------------------------------------------- #
@@ -280,25 +268,9 @@ def _aggregate_final_metrics(steps: list[Step]) -> FinalMetrics | None:
     )
 
 
-def to_atif(run_dir: Path | str, *, sregym_meta: dict[str, Any] | None = None) -> Trajectory | None:
-    """Convert a Stratus run directory into a validated ATIF ``Trajectory``.
-
-    Args:
-        run_dir: Canonical run directory
-            (``results/<batch>/stratus/<problem_id>/run_<n>/``) containing a
-            ``*_stratus_agent_trajectory.jsonl``.
-        sregym_meta: Optional SREGym metadata to attach under ``extra.sregym``;
-            per-stage boundaries are added under ``extra.sregym.stages``.
-
-    Returns:
-        A validated ``Trajectory``, or ``None`` if no convertible trajectory exists.
-    """
-    run_dir = Path(run_dir)
-    traj_file = _find_trajectory_file(run_dir)
-    if traj_file is None:
-        logger.debug("No Stratus trajectory JSONL found in %s", run_dir)
-        return None
-
+def convert_file(session_file: Path | str) -> Trajectory | None:
+    """Convert one Stratus combined-trajectory JSONL file to ATIF."""
+    traj_file = Path(session_file)
     records = _load_jsonl(traj_file)
     if not records:
         return None
@@ -311,17 +283,16 @@ def to_atif(run_dir: Path | str, *, sregym_meta: dict[str, Any] | None = None) -
         return None
     steps, stage_summaries = converted
 
-    sregym: dict[str, Any] = dict(sregym_meta or {})
-    sregym["stages"] = stage_summaries
+    stratus_meta: dict[str, Any] = {"stages": stage_summaries}
     # Run-level submitted = any stage submitted.
-    sregym.setdefault("submitted", any(s["submitted"] for s in stage_summaries))
+    stratus_meta["submitted"] = any(s["submitted"] for s in stage_summaries)
     # The diagnosis->mitigation boundary is explicit in Stratus's stage structure
     # (the generic "Submission received" marker doesn't apply — Stratus's submit
     # tool emits "Submission complete"). Record the last step of the diagnosis
     # stage as the boundary so consumers can split the two phases.
     diagnosis = next((s for s in stage_summaries if s["stage"] == "diagnosis"), None)
     if diagnosis is not None:
-        sregym.setdefault("diagnosis_submitted_step", diagnosis["last_step"])
+        stratus_meta["diagnosis_submitted_step"] = diagnosis["last_step"]
 
     return Trajectory(
         schema_version="ATIF-v1.7",
@@ -329,5 +300,5 @@ def to_atif(run_dir: Path | str, *, sregym_meta: dict[str, Any] | None = None) -
         agent=Agent(name=AGENT_NAME, version="unknown"),
         steps=steps,
         final_metrics=_aggregate_final_metrics(steps),
-        extra={"sregym": sregym},
+        extra={"stratus": stratus_meta},
     )
