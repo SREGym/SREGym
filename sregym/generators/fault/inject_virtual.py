@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import yaml
+from kubernetes.client.rest import ApiException
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.paths import TARGET_MICROSERVICES
@@ -1162,13 +1163,87 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from liveness probe misconfiguration fault for service: {service}")
 
     # Duplicate PVC mounts multiple replicas share ReadWriteOnce PVC causing mount conflict
+    def _storage_baseline_path(self, service: str) -> Path:
+        return Path("/tmp") / f"deployment-state-{self.namespace}-{service}.yaml"
+
+    @staticmethod
+    def _reapplicable_deployment_manifest(deployment_yaml: dict) -> dict:
+        manifest = copy.deepcopy(deployment_yaml)
+        manifest.pop("status", None)
+
+        metadata = manifest.setdefault("metadata", {})
+        for field in (
+            "creationTimestamp",
+            "generation",
+            "managedFields",
+            "resourceVersion",
+            "selfLink",
+            "uid",
+        ):
+            metadata.pop(field, None)
+
+        annotations = metadata.get("annotations") or {}
+        annotations.pop("deployment.kubernetes.io/revision", None)
+        annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+        if annotations:
+            metadata["annotations"] = annotations
+        else:
+            metadata.pop("annotations", None)
+        return manifest
+
+    def _save_storage_baseline(self, service: str, deployment_yaml: dict) -> Path:
+        path = self._storage_baseline_path(service)
+        path.write_text(yaml.safe_dump(self._reapplicable_deployment_manifest(deployment_yaml)))
+        return path
+
+    def _legacy_statefulset_claims(self, service: str) -> list[str]:
+        try:
+            statefulset = self.kubectl.apps_v1_api.read_namespaced_stateful_set(
+                name=service,
+                namespace=self.namespace,
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                return []
+            raise
+
+        prefixes = [
+            f"{template.metadata.name}-{service}-" for template in statefulset.spec.volume_claim_templates or []
+        ]
+        if not prefixes:
+            return []
+
+        claims = self.kubectl.core_v1_api.list_namespaced_persistent_volume_claim(self.namespace)
+        return [
+            claim.metadata.name
+            for claim in claims.items
+            if any(claim.metadata.name.startswith(prefix) for prefix in prefixes)
+        ]
+
     def inject_duplicate_pvc_mounts(self, microservices: list[str]):
         for service in microservices:
-            deployment_yaml = self._get_deployment_yaml(service)
-            # original_yaml = copy.deepcopy(deployment_yaml)
+            original_deployment_yaml = self._get_deployment_yaml(service)
+            deployment_yaml = copy.deepcopy(original_deployment_yaml)
 
             # Create a single PVC that every replica will try to use
             pvc_name = f"{service}-pvc"
+            try:
+                self.kubectl.core_v1_api.read_namespaced_persistent_volume_claim(
+                    name=pvc_name,
+                    namespace=self.namespace,
+                )
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+            else:
+                raise RuntimeError(
+                    f"Refusing to replace pre-existing PersistentVolumeClaim '{pvc_name}' "
+                    f"in namespace '{self.namespace}'"
+                )
+
+            baseline_path = self._save_storage_baseline(service, original_deployment_yaml)
+            print(f"Saved the current Deployment configuration to {baseline_path}")
+
             pvc_manifest = {
                 "apiVersion": "v1",
                 "kind": "PersistentVolumeClaim",
@@ -1237,65 +1312,47 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_duplicate_pvc_mounts(self, microservices: list[str]):
         for service in microservices:
-            deployment_yaml = self._get_deployment_yaml(service)
+            baseline_path = self._storage_baseline_path(service)
+            if not baseline_path.exists():
+                raise RuntimeError(f"Saved Deployment configuration is missing: {baseline_path}")
 
-            delete_result = self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
-            print(f"Delete result for {service}: {delete_result}")
-
-            template = deployment_yaml["spec"]["template"]
-            replicas = max(deployment_yaml["spec"].get("replicas", 1), 2)
-            selector = deployment_yaml["spec"]["selector"]
-
-            pod_spec = template["spec"]
-
-            existing_volumes = pod_spec.get("volumes", [])
-            config_volumes = [vol for vol in existing_volumes if "configMap" in vol]
-            pod_spec["volumes"] = config_volumes
-
-            if pod_spec.get("containers"):
-                containers = pod_spec["containers"]
-                if containers:
-                    existing_mounts = containers[0].get("volumeMounts", [])
-                    config_mounts = [mount for mount in existing_mounts if mount.get("name") != f"{service}-volume"]
-
-                    config_mounts.append({"name": "data-volume", "mountPath": f"/{service}-data"})
-                    containers[0]["volumeMounts"] = config_mounts
-
-            # Convert Deployment to StatefulSet
-            statefulset_yaml = {
-                "apiVersion": "apps/v1",
-                "kind": "StatefulSet",
-                "metadata": {
-                    "name": service,
-                    "namespace": self.namespace,
-                    "labels": deployment_yaml.get("metadata", {}).get("labels", {}),
-                },
-                "spec": {
-                    "serviceName": service,
-                    "replicas": replicas,
-                    "selector": selector,
-                    "template": template,
-                    "volumeClaimTemplates": [
-                        {
-                            "metadata": {"name": "data-volume", "namespace": self.namespace},
-                            "spec": {
-                                "accessModes": ["ReadWriteOnce"],
-                                "resources": {"requests": {"storage": "1Gi"}},
-                            },
-                        }
-                    ],
-                },
-            }
-
-            ss_path = self._write_yaml_to_file(service, statefulset_yaml)
-            apply_result = self.kubectl.exec_command(f"kubectl apply -f {ss_path} -n {self.namespace}")
-            print(f"Apply result for {service}: {apply_result}")
-
+            legacy_claims = self._legacy_statefulset_claims(service)
             self.kubectl.exec_command(
-                f"kubectl rollout status statefulset/{service} -n {self.namespace} --timeout=120s"
+                f"kubectl delete statefulset {service} -n {self.namespace} "
+                "--ignore-not-found=true --wait=true --timeout=120s"
+            )
+            self.kubectl.exec_command(
+                f"kubectl delete deployment {service} -n {self.namespace} "
+                "--ignore-not-found=true --wait=true --timeout=120s"
             )
 
-            print(f"Converted {service} to StatefulSet with unique PVC per replica and scaled to {replicas}")
+            injected_claims = [f"{service}-pvc", *legacy_claims]
+            for claim_name in dict.fromkeys(injected_claims):
+                self.kubectl.exec_command(
+                    f"kubectl delete pvc {claim_name} -n {self.namespace} "
+                    "--ignore-not-found=true --wait=true --timeout=120s"
+                )
+
+            remaining_claims = {
+                claim.metadata.name
+                for claim in self.kubectl.core_v1_api.list_namespaced_persistent_volume_claim(self.namespace).items
+            }
+            not_deleted = remaining_claims.intersection(injected_claims)
+            if not_deleted:
+                raise RuntimeError(f"Could not remove injected storage claims: {sorted(not_deleted)}")
+
+            apply_result = self.kubectl.exec_command(f"kubectl apply -f {baseline_path} -n {self.namespace}")
+            print(f"Restore result for {service}: {apply_result}")
+            self.kubectl.get_deployment(service, self.namespace)
+            self.kubectl.exec_command(f"kubectl rollout status deployment/{service} -n {self.namespace} --timeout=120s")
+            self.kubectl.wait_for_ready(
+                self.namespace,
+                service_names=service,
+                max_wait=180,
+            )
+            baseline_path.unlink()
+
+            print(f"Restored the original Deployment and removed injected storage for {service}")
 
     # Inject environment variable shadowing fault
     def inject_env_variable_shadowing(self, microservices: list[str]):
