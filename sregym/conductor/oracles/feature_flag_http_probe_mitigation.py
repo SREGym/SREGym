@@ -1,5 +1,6 @@
 """HTTP probe mitigation oracle for feature flag latent bug problem."""
 
+import re
 import time
 
 from sregym.conductor.oracles.base import Oracle
@@ -19,8 +20,13 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
         self.probe_attempts = probe_attempts
 
     def _get_probe_pod(self) -> str | None:
-        """Find a Running pod to use as the probe origin."""
+        """Find the consul pod as a reliable probe origin — always present
+        in hotel-reservation and guaranteed to have wget."""
         pod_list = self.problem.kubectl.list_pods(self.problem.namespace)
+        for pod in pod_list.items:
+            if pod.status.phase == "Running" and pod.metadata.name and pod.metadata.name.startswith("consul"):
+                return pod.metadata.name
+        # Fallback: any running non-frontend, non-wrk2 pod
         for pod in pod_list.items:
             if (
                 pod.status.phase == "Running"
@@ -55,7 +61,7 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
                 f" 2>&1 || true"
             )
             result = kubectl.exec_command(cmd)
-            if "200" in str(result):
+            if re.search(r"HTTP/\S+ 200", str(result)):
                 success_count += 1
             time.sleep(0.5)
 

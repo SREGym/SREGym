@@ -472,7 +472,7 @@ class ApplicationFaultInjector(FaultInjector):
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
 
-    # A.8 feature_flag_experimental_routing: swap frontend image + set flag to trigger retry storm under load
+    # A.7 feature_flag_experimental_routing: swap frontend image + set flag to activate dormant error path
     def inject_feature_flag_experimental_routing(
         self,
         deployment_name: str = "frontend",
@@ -481,9 +481,9 @@ class ApplicationFaultInjector(FaultInjector):
         experimental_image: str = "sharqm/hotelreservation:experimental-routing-v3",
     ):
         """Set the feature flag in a ConfigMap and swap the frontend image to the
-        experimental-routing build. When the flag is active, the frontend's gRPC
-        clients use an aggressive short-timeout/high-retry path that, under the
-        existing workload, triggers a retry storm and elevated request latency."""
+        experimental-routing build. When the flag is active, the frontend's search
+        handler returns HTTP 500 on every hotel search request while all pods
+        remain Running."""
 
         self.kubectl.create_or_update_configmap(
             name=configmap_name,
@@ -510,9 +510,14 @@ class ApplicationFaultInjector(FaultInjector):
                         ),
                     )
                 )
+        deployment.spec.strategy = client.V1DeploymentStrategy(type="Recreate")
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
         print(f"Swapped {deployment_name} image to {experimental_image} and set {flag_key}=true env")
-        time.sleep(10)
+        # Wait for rollout to complete so fault is deterministically live before returning
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout=120s"
+        )
+        time.sleep(5)
 
     def recover_feature_flag_experimental_routing(
         self,
@@ -535,9 +540,19 @@ class ApplicationFaultInjector(FaultInjector):
             if container.name == f"hotel-reserv-{deployment_name}":
                 container.image = original_image
 
+        deployment.spec.strategy = client.V1DeploymentStrategy(
+            type="RollingUpdate",
+            rolling_update=client.V1RollingUpdateDeployment(
+                max_unavailable="25%",
+                max_surge="25%",
+            ),
+        )
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
         print(f"Restored {deployment_name} image to {original_image} and set {flag_key}=false env")
-        time.sleep(10)
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout=120s"
+        )
+        time.sleep(5)
 
 
 if __name__ == "__main__":

@@ -59,6 +59,12 @@ class FeatureFlagLatentBugHotelReservation(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         injector = ApplicationFaultInjector(namespace=self.namespace)
+        # Capture original image before swapping so recovery restores the correct one
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        for container in deployment.spec.template.spec.containers:
+            if container.name == f"hotel-reserv-{self.faulty_service}":
+                self.original_image = container.image
+                break
         injector.inject_feature_flag_experimental_routing(
             deployment_name=self.faulty_service,
             configmap_name=self.configmap_name,
@@ -75,5 +81,6 @@ class FeatureFlagLatentBugHotelReservation(Problem):
             deployment_name=self.faulty_service,
             configmap_name=self.configmap_name,
             flag_key=self.flag_key,
+            original_image=getattr(self, "original_image", "yinfangchen/hotelreservation:latest"),
         )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}")
