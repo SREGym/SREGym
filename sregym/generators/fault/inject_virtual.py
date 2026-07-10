@@ -2246,12 +2246,12 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def inject_tor_network_partition(self, microservices: list[str]):
         """Inject a network partition using NetworkChaos."""
-        chaos_resource_name = "tor-router-partition"  # Name of the NetworkChaos object
-        tor_node_label_key = "sregym.io/tor-node"  # Node label used to fix pods to faulty vs healthy groups
-        tor_pod_group_label_key = "sregym.io/tor-group"  # Pod label used by NetworkChaos selectors
+        chaos_resource_name = "network-segment-policy"
+        tor_node_label_key = "network-segment"
+        tor_pod_group_label_key = "network-segment"
 
-        faulty_group = "faulty"
-        healthy_group = "healthy"
+        faulty_group = "segment-a"
+        healthy_group = "segment-b"
 
         if not microservices:
             raise ValueError("inject_tor_network_partition requires a non-empty `microservices` list (faulty group).")
@@ -2361,9 +2361,9 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_tor_network_partition(self, microservices: list[str]):
         """Recover form network partition created by inject_tor_network_partition() above."""
-        chaos_resource_name = "tor-router-partition"  # Name of the NetworkChaos object
-        tor_node_label_key = "sregym.io/tor-node"  # Node label used to fix pods to faulty vs healthy groups
-        tor_pod_group_label_key = "sregym.io/tor-group"  # Pod label used by NetworkChaos selectors
+        chaos_resource_name = "network-segment-policy"
+        tor_node_label_key = "network-segment"
+        tor_pod_group_label_key = "network-segment"
 
         # Delete NetworkChaos first to restore network
         self.kubectl.exec_command(
