@@ -8,8 +8,11 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class ServiceWrongPodSelectionHotelReservation(Problem):
+    FRONTEND_SERVICE_PORT = 5000
+
     def __init__(self):
         self.frontend_service = "frontend"
+        self.expected_service_port = self.FRONTEND_SERVICE_PORT
         self.wrong_deployment = "search"
         self.route_label_key = "service-route"
         self.route_label_value = "frontend"
