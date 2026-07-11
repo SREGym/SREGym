@@ -2,7 +2,7 @@
 
 A clean port of Harbor's ``CopilotCli._convert_jsonl_to_trajectory`` and its
 helpers (upstream commit ``fd1a8ea``, ``src/harbor/agents/installed/copilot_cli.py``;
-see ``sregym/traces/atif/UPSTREAM.md``) into standalone, pure functions
+see ``atif_converter/atif/UPSTREAM.md``) into standalone, pure functions
 with no dependency on ``harbor`` or ``BaseInstalledAgent``.
 
 The conversion reads the Copilot CLI **JSONL** output (``copilot-cli.jsonl``,
@@ -40,7 +40,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from sregym.traces.atif import (
+from ..atif import (
     Agent,
     FinalMetrics,
     Metrics,
@@ -55,10 +55,8 @@ logger = logging.getLogger(__name__)
 
 AGENT_NAME = "copilot"
 
+
 # The client captures the JSON stream here (see clients/copilot/copilot_agent.py).
-_JSONL_FILENAME = "copilot-cli.jsonl"
-
-
 # --------------------------------------------------------------------------- #
 # Content extraction helpers (ported verbatim from Harbor's static methods)
 # --------------------------------------------------------------------------- #
@@ -497,40 +495,6 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
 # --------------------------------------------------------------------------- #
 # Public entrypoint
 # --------------------------------------------------------------------------- #
-def _find_jsonl(run_dir: Path) -> Path | None:
-    """Locate the Copilot CLI JSONL output within a run directory."""
-    candidate = run_dir / _JSONL_FILENAME
-    if candidate.exists():
-        return candidate
-    return None
-
-
-def to_atif(run_dir: Path | str, *, sregym_meta: dict[str, Any] | None = None) -> Trajectory | None:
-    """Convert a Copilot CLI run directory into a validated ATIF ``Trajectory``.
-
-    Args:
-        run_dir: Canonical run directory
-            (``results/<batch>/copilot/<problem_id>/run_<n>/``) containing
-            ``copilot-cli.jsonl``.
-        sregym_meta: Optional SREGym metadata to attach under ``extra.sregym``.
-            Assembly of the full payload (application mapping, boundary
-            detection) is done by ``convert.py``; this adapter stores it verbatim.
-
-    Returns:
-        A validated ``Trajectory``, or ``None`` if no convertible JSONL exists.
-    """
-    run_dir = Path(run_dir)
-    jsonl_path = _find_jsonl(run_dir)
-    if jsonl_path is None:
-        logger.debug("No Copilot CLI JSONL (%s) found in %s", _JSONL_FILENAME, run_dir)
-        return None
-
-    raw_events = _read_copilot_cli_jsonl(jsonl_path)
-    trajectory = _convert_events(raw_events)
-    if trajectory is None:
-        return None
-
-    if sregym_meta:
-        trajectory.extra = {"sregym": dict(sregym_meta)}
-
-    return trajectory
+def convert_file(session_file: Path | str) -> Trajectory | None:
+    """Convert one Copilot CLI JSONL output file to ATIF."""
+    return _convert_events(_read_copilot_cli_jsonl(Path(session_file)))

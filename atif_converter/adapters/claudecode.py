@@ -1,13 +1,13 @@
 """Claude Code -> ATIF v1.7 adapter.
 
 A clean port of Harbor's ``ClaudeCode._convert_events_to_trajectory`` and its
-helpers (upstream commit ``fd1a8ea``; see ``sregym/traces/atif/UPSTREAM.md``)
+helpers (upstream commit ``fd1a8ea``; see ``atif_converter/atif/UPSTREAM.md``)
 into standalone, pure functions with no dependency on ``harbor`` or
 ``BaseInstalledAgent``.
 
-The conversion reads a single run directory (the canonical
-``results/<batch>/claudecode/<problem_id>/run_<n>/``) and produces one validated
-ATIF ``Trajectory`` covering the whole session.
+The standalone conversion reads a native Claude Code session JSONL file and
+produces one validated ATIF ``Trajectory`` covering the whole session. The
+SREGym integration layer can merge multiple archived fragments.
 
 Key behavior ported verbatim from Harbor:
 
@@ -17,8 +17,8 @@ Key behavior ported verbatim from Harbor:
   and usage is counted once per ``message.id`` (``last_usage_by_msg_id`` +
   ``seen_message_ids``). Without this, steps and token totals inflate.
 - **usage lives in ``message.usage``**, not top-level.
-- **cost** is read from the ``{"type":"result", "total_cost_usd": ...}`` line in
-  ``claude-code.txt`` (the only place it appears).
+- **cost** may be supplied by an integration that has access to Claude's
+  separate stream output; a session file alone does not contain it.
 
 The one intentional deviation from Harbor: ``agent.extra`` set-valued fields
 (``cwds`` / ``git_branches`` / ``agent_ids``) are coerced to sorted lists so the
@@ -33,12 +33,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from sregym.traces.adapters._common import (
-    _aggregate_final_metrics,
-    _load_jsonl,
-    _stringify,
-)
-from sregym.traces.atif import (
+from ..atif import (
     Agent,
     Metrics,
     Observation,
@@ -47,50 +42,15 @@ from sregym.traces.atif import (
     ToolCall,
     Trajectory,
 )
+from ._common import (
+    _aggregate_final_metrics,
+    _load_jsonl,
+    _stringify,
+)
 
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "claudecode"
-
-
-# --------------------------------------------------------------------------- #
-# Session-directory discovery
-# --------------------------------------------------------------------------- #
-def _get_session_dir(run_dir: Path) -> Path | None:
-    """Identify the Claude session directory containing the primary JSONL log.
-
-    Ported from Harbor's ``_get_session_dir``: looks under
-    ``<run_dir>/sessions/projects/`` for a project dir containing ``*.jsonl``
-    files (excluding ``subagents`` parents).
-    """
-    sessions_root = run_dir / "sessions"
-    if not sessions_root.exists():
-        return None
-
-    project_root = sessions_root / "projects"
-    if not project_root.is_dir():
-        return None
-
-    all_session_dirs: list[Path] = []
-    for project_dir in project_root.iterdir():
-        if not project_dir.is_dir():
-            continue
-        jsonl_files = list(project_dir.rglob("*.jsonl"))
-        if not jsonl_files:
-            continue
-        session_dirs = list({f.parent for f in jsonl_files if "subagents" not in f.parent.parts})
-        all_session_dirs.extend(session_dirs)
-
-    if not all_session_dirs:
-        return None
-    if len(all_session_dirs) == 1:
-        return all_session_dirs[0]
-
-    logger.debug(
-        "Multiple Claude Code session directories found in %s; could not identify the correct one",
-        run_dir,
-    )
-    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -242,32 +202,6 @@ def _format_tool_result(
     return (result_text or None), metadata
 
 
-def _parse_total_cost_from_stream_json(run_dir: Path) -> float | None:
-    """Extract authoritative ``total_cost_usd`` from ``claude-code.txt``."""
-    stream_path = run_dir / "claude-code.txt"
-    try:
-        content = stream_path.read_text(encoding="utf-8")
-    except OSError:
-        return None
-    for line in content.splitlines():
-        line = line.strip()
-        if not line or not line.startswith("{"):
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if event.get("type") == "result":
-            cost = event.get("total_cost_usd")
-            if cost is None:
-                return None
-            try:
-                return float(cost)
-            except (TypeError, ValueError):
-                return None
-    return None
-
-
 # --------------------------------------------------------------------------- #
 # Normalized-event -> Step
 # --------------------------------------------------------------------------- #
@@ -412,10 +346,20 @@ def _convert_event_to_step(event: dict[str, Any], step_id: int, default_model_na
 # --------------------------------------------------------------------------- #
 # Main conversion
 # --------------------------------------------------------------------------- #
-def _convert_session(session_dir: Path, run_dir: Path) -> Trajectory | None:
-    session_files = list(session_dir.glob("*.jsonl"))
+def convert_files(
+    session_files: list[Path],
+    *,
+    total_cost_usd: float | None = None,
+) -> Trajectory | None:
+    """Convert one logical Claude Code session from one or more JSONL files.
+
+    ``session_files`` supports SREGym's existing archived-session behavior,
+    where multiple top-level JSONL fragments may belong to the same session.
+    Standalone callers normally use :func:`convert_file` instead.
+    """
+    session_files = [Path(path) for path in session_files]
     if not session_files:
-        logger.debug("No Claude Code session files found in %s", session_dir)
+        logger.debug("No Claude Code session files supplied")
         return None
 
     raw_events: list[dict[str, Any]] = []
@@ -442,7 +386,7 @@ def _convert_session(session_dir: Path, run_dir: Path) -> Trajectory | None:
     if not events:
         return None
 
-    session_id = session_dir.name
+    session_id = session_files[0].parent.name
     for event in events:
         sid = event.get("sessionId")
         if isinstance(sid, str):
@@ -734,7 +678,7 @@ def _convert_session(session_dir: Path, run_dir: Path) -> Trajectory | None:
 
     final_metrics = _aggregate_final_metrics(
         steps,
-        total_cost_usd=_parse_total_cost_from_stream_json(run_dir),
+        total_cost_usd=total_cost_usd,
         extra=final_extra,
     )
 
@@ -752,31 +696,6 @@ def _convert_session(session_dir: Path, run_dir: Path) -> Trajectory | None:
     )
 
 
-def to_atif(run_dir: Path | str, *, sregym_meta: dict[str, Any] | None = None) -> Trajectory | None:
-    """Convert a Claude Code run directory into a validated ATIF ``Trajectory``.
-
-    Args:
-        run_dir: Canonical run directory
-            (``results/<batch>/claudecode/<problem_id>/run_<n>/``).
-        sregym_meta: Optional SREGym metadata to attach under ``extra.sregym``.
-            Assembly of the full ``extra.sregym`` payload (application mapping,
-            boundary detection) is the responsibility of ``convert.py``; this
-            adapter only stores whatever dict it is handed.
-
-    Returns:
-        A validated ``Trajectory``, or ``None`` if no convertible session exists.
-    """
-    run_dir = Path(run_dir)
-    session_dir = _get_session_dir(run_dir)
-    if not session_dir:
-        logger.debug("No Claude Code session directory found in %s", run_dir)
-        return None
-
-    trajectory = _convert_session(session_dir, run_dir)
-    if trajectory is None:
-        return None
-
-    if sregym_meta:
-        trajectory.extra = {"sregym": dict(sregym_meta)}
-
-    return trajectory
+def convert_file(session_file: Path | str) -> Trajectory | None:
+    """Convert one Claude Code session JSONL file to ATIF."""
+    return convert_files([Path(session_file)])

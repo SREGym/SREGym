@@ -176,8 +176,8 @@ exclude = [
     ".venv",
     "build",
     "*.egg-info",
-    # Vendored verbatim from Harbor (see sregym/traces/atif/UPSTREAM.md).
-    "sregym/traces/atif",
+    # Vendored verbatim from Harbor (see atif_converter/atif/UPSTREAM.md).
+    "atif_converter/atif",
 ]
 
 [tool.ruff.lint]
@@ -202,7 +202,7 @@ ignore = [
 "clients/stratus/stratus_agent/driver/driver.py" = ["E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["sregym", "clients", "provisioner", "scripts"]
+known-first-party = ["atif_converter", "sregym", "clients", "provisioner", "scripts"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -223,7 +223,21 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["sregym", "clients", "scripts", "llm_backend", "logger"]
+packages = [
+    "atif_converter",
+    "atif_converter.adapters",
+    "atif_converter.atif",
+    "sregym",
+    "sregym.traces",
+    "clients",
+    "scripts",
+    "llm_backend",
+    "logger",
+]
+
+[tool.setuptools.package-data]
+atif_converter = ["README.md"]
+"atif_converter.atif" = ["UPSTREAM.md"]
 
 [tool.uv.sources]
 geni-lib-xlab = { path = "scripts/geni_lib/mod/geni_lib_xlab-1.0.0.tar.gz" }
