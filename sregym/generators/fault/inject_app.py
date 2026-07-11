@@ -524,7 +524,7 @@ class ApplicationFaultInjector(FaultInjector):
         deployment_name: str = "frontend",
         configmap_name: str = "frontend-runtime-config",
         flag_key: str = "SEARCH_BACKEND_VERSION",
-        original_image: str = "yinfangchen/hotelreservation:latest",
+        original_image: str | None = None,
     ):
         """Revert the flag and restore the original frontend image."""
 
@@ -534,6 +534,9 @@ class ApplicationFaultInjector(FaultInjector):
             data={flag_key: "false"},
         )
         print(f"ConfigMap {configmap_name} reverted: {flag_key}=false")
+
+        if original_image is None:
+            raise ValueError("original_image must be provided")
 
         deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
         for container in deployment.spec.template.spec.containers:

@@ -55,6 +55,18 @@ class FeatureFlagLatentBugHotelReservation(Problem):
             FeatureFlagHttpProbeMitigationOracle(problem=self),
         )
 
+    def _get_original_image(self) -> str:
+        """Return the original frontend image — captured at inject time if available,
+        otherwise read from the live deployment as fallback."""
+        if hasattr(self, "original_image"):
+            return self.original_image
+        # Fallback: read from live deployment (works if recovery runs without prior injection)
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        for container in deployment.spec.template.spec.containers:
+            if container.name == f"hotel-reserv-{self.faulty_service}":
+                return container.image
+        raise RuntimeError(f"Cannot determine original image for {self.faulty_service} — manual recovery required")
+
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
