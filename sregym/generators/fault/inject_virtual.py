@@ -453,7 +453,7 @@ class VirtualizationFaultInjector(FaultInjector):
             fqdn = f"{service}.{self.namespace}.svc.cluster.local"
 
             # Get configmap as structured data
-            cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+            cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
             cm_data = yaml.safe_load(cm_yaml)
             corefile = cm_data["data"]["Corefile"]
 
@@ -463,7 +463,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 self.recover_service_dns_resolution_failure([service])
 
                 # Re-fetch after recovery
-                cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+                cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
                 cm_data = yaml.safe_load(cm_yaml)
                 corefile = cm_data["data"]["Corefile"]
 
@@ -479,8 +479,7 @@ class VirtualizationFaultInjector(FaultInjector):
             # Find the position of "kubernetes" word
             kubernetes_pos = corefile.find("kubernetes")
             if kubernetes_pos == -1:
-                print("Could not locate 'kubernetes' plugin in Corefile")
-                return
+                raise RuntimeError("Could not locate 'kubernetes' plugin in CoreDNS Corefile")
 
             # Find the start of the line containing "kubernetes"
             line_start = corefile.rfind("\n", 0, kubernetes_pos)
@@ -497,11 +496,17 @@ class VirtualizationFaultInjector(FaultInjector):
             # Apply using temporary file
             tmp_file_path = self._write_yaml_to_file("coredns", cm_data)
 
-            self.kubectl.exec_command(f"kubectl apply -f {tmp_file_path}")
+            self.kubectl.exec_command_checked(f"kubectl apply -f {tmp_file_path}")
 
             # Restart CoreDNS
-            self.kubectl.exec_command("kubectl -n kube-system rollout restart deployment coredns")
-            self.kubectl.exec_command("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout restart deployment coredns")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+
+            corefile_after = yaml.safe_load(
+                self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
+            )["data"]["Corefile"]
+            if start_line_id not in corefile_after:
+                raise RuntimeError(f"CoreDNS did not retain the NXDOMAIN rule for {fqdn}")
 
             print(f"Injected Service DNS Resolution Failure fault for service: {service}")
 
@@ -510,7 +515,7 @@ class VirtualizationFaultInjector(FaultInjector):
             fqdn = f"{service}.{self.namespace}.svc.cluster.local"
 
             # Get configmap as structured data
-            cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+            cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
             cm_data = yaml.safe_load(cm_yaml)
             corefile = cm_data["data"]["Corefile"]
 
@@ -542,25 +547,29 @@ class VirtualizationFaultInjector(FaultInjector):
                 new_lines.append(line)
 
             if skip_block:
-                print("WARNING: Template block was not properly closed")
-                return
+                raise RuntimeError("CoreDNS NXDOMAIN template block was not properly closed")
 
             new_corefile = "\n".join(new_lines)
 
             # Verify if the removal worked
             if start_line_id in new_corefile:
-                print("ERROR: Template was not successfully removed!")
-                return
+                raise RuntimeError("CoreDNS NXDOMAIN template was not successfully removed")
 
             cm_data["data"]["Corefile"] = new_corefile
 
             # Apply using temporary file
             tmp_file_path = self._write_yaml_to_file("coredns", cm_data)
-            self.kubectl.exec_command(f"kubectl apply -f {tmp_file_path}")
+            self.kubectl.exec_command_checked(f"kubectl apply -f {tmp_file_path}")
 
             # Restart CoreDNS
-            self.kubectl.exec_command("kubectl -n kube-system rollout restart deployment coredns")
-            self.kubectl.exec_command("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout restart deployment coredns")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+
+            corefile_after = yaml.safe_load(
+                self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
+            )["data"]["Corefile"]
+            if start_line_id in corefile_after:
+                raise RuntimeError(f"CoreDNS still contains the NXDOMAIN rule for {fqdn}")
 
             print(f"Recovered Service DNS Resolution Failure fault for service: {service}")
 

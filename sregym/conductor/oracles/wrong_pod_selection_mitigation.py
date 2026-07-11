@@ -71,6 +71,19 @@ class WrongPodSelectionMitigationOracle(Oracle):
                 return False
         return True
 
+    def _active_replica_sets(self, deployment_name: str) -> set[str]:
+        replica_sets = self.problem.kubectl.get_matching_replicasets(
+            self.problem.namespace,
+            deployment_name,
+        )
+        return {replica_set.metadata.name for replica_set in replica_sets if (replica_set.spec.replicas or 0) > 0}
+
+    @staticmethod
+    def _owned_by_replica_set(pod, replica_sets: set[str]) -> bool:
+        return any(
+            owner.kind == "ReplicaSet" and owner.name in replica_sets for owner in pod.metadata.owner_references or []
+        )
+
     def _run_connectivity_probe(self) -> bool:
         namespace = self.problem.namespace
         service_name = self.problem.frontend_service
@@ -139,11 +152,20 @@ class WrongPodSelectionMitigationOracle(Oracle):
             print(f"Service {service_name} has no Ready endpoint pods")
             return {"success": False}
 
+        active_frontend_replica_sets = self._active_replica_sets(service_name)
+        if not active_frontend_replica_sets:
+            print(f"Deployment {service_name} has no active ReplicaSet.")
+            return {"success": False}
+
         wrong_pods = []
         for pod_name in selected_pods:
             pod = kubectl.core_v1_api.read_namespaced_pod(pod_name, namespace)
             labels = pod.metadata.labels or {}
-            if labels.get("io.kompose.service") != expected_pod_label:
+            if (
+                pod.metadata.deletion_timestamp is not None
+                or labels.get("io.kompose.service") != expected_pod_label
+                or not self._owned_by_replica_set(pod, active_frontend_replica_sets)
+            ):
                 wrong_pods.append(pod_name)
 
         if wrong_pods:
