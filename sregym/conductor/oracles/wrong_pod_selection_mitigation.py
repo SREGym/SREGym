@@ -62,6 +62,10 @@ class WrongPodSelectionMitigationOracle(Oracle):
                     return False
                 raise
 
+            if deployment.spec.replicas is not None and deployment.spec.replicas < 1:
+                print(f"Required Deployment {name} is scaled to zero.")
+                return False
+
             if self._wait_for_current_rollout(deployment) is None:
                 print(f"Required Deployment {name} is not fully rolled out and Ready.")
                 return False
