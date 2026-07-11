@@ -61,12 +61,12 @@ class DNSResolutionMitigationOracle(Oracle):
                     raise
         return None, None
 
-    def _run_dns_probe(self, deployment, dns_name: str) -> bool:
+    def _run_dns_probe(self, deployment, dns_name: str, service_port: int) -> bool:
         namespace = self.problem.namespace
         core_v1 = self.problem.kubectl.core_v1_api
         source_spec = deployment.spec.template.spec
         pod_name = f"dns-readiness-check-{time.time_ns()}"[:63]
-        script = f"nslookup {dns_name} >/dev/null && echo DNS_OK"
+        script = f"nslookup {dns_name} >/dev/null && nc -z -w 5 {dns_name} {service_port} && echo DNS_OK"
         pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=pod_name,
@@ -127,12 +127,21 @@ class DNSResolutionMitigationOracle(Oracle):
                 print("❌ Affected Deployment did not complete its current rollout.")
                 return {"success": False}
 
-            dns_name = f"{service.metadata.name}.{namespace}.svc.cluster.local"
-            if not self._run_dns_probe(deployment, dns_name):
-                print(f"[❌] Failed DNS resolution for {dns_name}")
+            service_ports = service.spec.ports or []
+            if not service_ports or service_ports[0].port is None:
+                print(f"❌ Service {service.metadata.name} has no usable port.")
                 return {"success": False}
 
-            print(f"[✅] Successfully resolved {dns_name} using deployment/{deployment.metadata.name} DNS settings")
+            dns_name = f"{service.metadata.name}.{namespace}.svc.cluster.local"
+            service_port = service_ports[0].port
+            if not self._run_dns_probe(deployment, dns_name, service_port):
+                print(f"[❌] Failed DNS resolution or TCP connection for {dns_name}:{service_port}")
+                return {"success": False}
+
+            print(
+                f"[✅] Successfully resolved and connected to {dns_name}:{service_port} "
+                f"using deployment/{deployment.metadata.name} DNS settings"
+            )
             return {"success": True}
         except Exception as exc:
             print(f"❌ Error checking DNS resolution: {exc}")

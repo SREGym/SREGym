@@ -5,10 +5,13 @@ from kubernetes.client.rest import ApiException
 from sregym.conductor.oracles.dns_resolution_mitigation import DNSResolutionMitigationOracle
 
 
-def _service(name, selector=None):
+def _service(name, selector=None, port=9090):
     return SimpleNamespace(
         metadata=SimpleNamespace(name=name),
-        spec=SimpleNamespace(selector=selector),
+        spec=SimpleNamespace(
+            selector=selector,
+            ports=[] if port is None else [SimpleNamespace(port=port)],
+        ),
     )
 
 
@@ -101,6 +104,8 @@ def test_checks_only_the_faulty_service_fqdn():
     assert len(core_v1.created_pods) == 1
     command = core_v1.created_pods[0][1].spec.containers[0].command[-1]
     assert "frontend.astronomy-shop.svc.cluster.local" in command
+    assert "nslookup frontend.astronomy-shop.svc.cluster.local" in command
+    assert "nc -z -w 5 frontend.astronomy-shop.svc.cluster.local 9090" in command
     assert "unrelated-broken-service" not in command
 
 
@@ -133,6 +138,32 @@ def test_rejects_unavailable_source_deployment():
     kubectl = _KubeCtl(
         services=[_service("frontend", {"app": "frontend"})],
         deployments={"frontend": _deployment(available=0)},
+        core_v1=core_v1,
+    )
+
+    assert _oracle(kubectl).evaluate()["success"] is False
+    assert core_v1.created_pods == []
+
+
+def test_rejects_successful_dns_lookup_when_tcp_connection_fails():
+    core_v1 = _CoreV1(phase="Failed", logs="")
+    kubectl = _KubeCtl(
+        services=[_service("frontend", {"app": "frontend"}, port=8080)],
+        deployments={"frontend": _deployment()},
+        core_v1=core_v1,
+    )
+
+    assert _oracle(kubectl).evaluate()["success"] is False
+    command = core_v1.created_pods[0][1].spec.containers[0].command[-1]
+    assert "nslookup frontend.astronomy-shop.svc.cluster.local" in command
+    assert "nc -z -w 5 frontend.astronomy-shop.svc.cluster.local 8080" in command
+
+
+def test_rejects_service_without_a_usable_port():
+    core_v1 = _CoreV1()
+    kubectl = _KubeCtl(
+        services=[_service("frontend", {"app": "frontend"}, port=None)],
+        deployments={"frontend": _deployment()},
         core_v1=core_v1,
     )
 
