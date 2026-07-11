@@ -13,28 +13,15 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sregym.traces.adapters import claudecode, codex, opencode
-from sregym.traces.adapters import copilot as copilot_adapter
-from sregym.traces.adapters import gemini as gemini_adapter
-from sregym.traces.adapters import stratus as stratus_adapter
-from sregym.traces.atif import Trajectory
+from atif_converter import SUPPORTED_AGENTS, AtifConverterError, Trajectory
+from atif_converter import convert as convert_session
+from atif_converter.adapters import claudecode
 
 logger = logging.getLogger(__name__)
-
-# Tool name (as it appears in the results path) -> adapter ``to_atif`` callable.
-ADAPTERS: dict[str, Callable[..., Trajectory | None]] = {
-    "claudecode": claudecode.to_atif,
-    "codex": codex.to_atif,
-    "opencode": opencode.to_atif,
-    "copilot": copilot_adapter.to_atif,
-    "stratus": stratus_adapter.to_atif,
-    "gemini": gemini_adapter.to_atif,
-}
 
 # Longest-suffix map of problem_id -> canonical application display name.
 # Suffixes mirror the ``app_name=`` keys in
@@ -68,6 +55,116 @@ _SUBMISSION_RESPONSE_KEYS = ("message", "text")
 # content the adapter builds may wrap this with ``[stdout]`` / ``[metadata]``
 # sections, so we search for the object rather than parse the whole blob.
 _SUBMISSION_OBJ_RE = re.compile(r"\{[^{}]*\bSubmission received\b[^{}]*\}")
+
+
+def _find_claudecode_session_files(run_dir: Path) -> list[Path]:
+    """Find all top-level JSONL fragments for one archived Claude session."""
+    project_root = run_dir / "sessions" / "projects"
+    if not project_root.is_dir():
+        return []
+
+    session_dirs: list[Path] = []
+    for project_dir in project_root.iterdir():
+        if project_dir.is_dir():
+            jsonl_files = list(project_dir.rglob("*.jsonl"))
+            session_dirs.extend({path.parent for path in jsonl_files if "subagents" not in path.parent.parts})
+    if len(session_dirs) != 1:
+        if session_dirs:
+            logger.debug("Expected one Claude Code session directory in %s, found %d", run_dir, len(session_dirs))
+        return []
+    return list(session_dirs[0].glob("*.jsonl"))
+
+
+def _claudecode_total_cost_usd(run_dir: Path) -> float | None:
+    """Read Claude's authoritative cost from its separate stream output."""
+    try:
+        lines = (run_dir / "claude-code.txt").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        if not line.strip().startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") != "result" or event.get("total_cost_usd") is None:
+            continue
+        try:
+            return float(event["total_cost_usd"])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _find_codex_session_file(run_dir: Path) -> Path | None:
+    sessions_root = run_dir / "sessions"
+    if not sessions_root.exists():
+        return None
+    session_dirs = [path for path in sessions_root.rglob("*") if path.is_dir()]
+    if not session_dirs:
+        return None
+    max_depth = max(len(path.parts) for path in session_dirs)
+    deepest = [path for path in session_dirs if len(path.parts) == max_depth]
+    if len(deepest) != 1:
+        return None
+    files = list(deepest[0].glob("*.jsonl"))
+    return files[0] if files else None
+
+
+def _find_gemini_session_file(run_dir: Path) -> Path | None:
+    sessions_root = run_dir / "sessions"
+    if not sessions_root.exists():
+        return None
+    candidates = list(sessions_root.rglob("session-*.json")) + list(sessions_root.rglob("session-*.jsonl"))
+    if not candidates:
+        candidates = list(sessions_root.rglob("*.json")) + list(sessions_root.rglob("*.jsonl"))
+    return max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
+
+
+def _find_session_file(run_dir: Path, tool: str) -> Path | None:
+    """Resolve a canonical SREGym run directory to its native session file."""
+    if tool == "codex":
+        return _find_codex_session_file(run_dir)
+    if tool == "copilot":
+        path = run_dir / "copilot-cli.jsonl"
+        return path if path.is_file() else None
+    if tool == "gemini":
+        return _find_gemini_session_file(run_dir)
+    if tool == "opencode":
+        candidates = sorted((run_dir / "sessions").rglob("session-*.json"))
+        return candidates[0] if candidates else None
+    if tool == "stratus":
+        candidates = sorted(run_dir.glob("*_stratus_agent_trajectory.jsonl"))
+        return max(candidates, key=lambda path: (path.name, path.stat().st_mtime)) if candidates else None
+    return None
+
+
+def _convert_native_run(run_dir: Path, tool: str) -> Trajectory | None:
+    """Convert the native artifact selected from one canonical SREGym run."""
+    try:
+        if tool == "claudecode":
+            session_files = _find_claudecode_session_files(run_dir)
+            if not session_files:
+                return None
+            return claudecode.convert_files(
+                session_files,
+                total_cost_usd=_claudecode_total_cost_usd(run_dir),
+            )
+
+        session_file = _find_session_file(run_dir, tool)
+        if session_file is None:
+            return None
+        return convert_session(session_file, agent=tool)
+    except AtifConverterError as exc:
+        logger.debug("Could not convert %s run %s: %s", tool, run_dir, exc)
+        return None
+    except Exception as exc:
+        # Claude's multi-file API is intentionally lower-level than the public
+        # convert() dispatcher, so normalize any unexpected adapter failure to
+        # SREGym's established non-fatal conversion behavior here.
+        logger.debug("Could not convert %s run %s: %s", tool, run_dir, exc, exc_info=True)
+        return None
 
 
 @dataclass(frozen=True)
@@ -211,14 +308,13 @@ def convert_run(run_dir: Path | str) -> Trajectory | None:
     run_dir = Path(run_dir)
     info = parse_run_path(run_dir)
 
-    adapter = ADAPTERS.get(info.tool)
-    if adapter is None:
+    if info.tool not in SUPPORTED_AGENTS:
         logger.debug("No ATIF adapter for tool %r (%s)", info.tool, run_dir)
         return None
 
     sregym_meta = build_sregym_meta(run_dir, info)
 
-    trajectory = adapter(run_dir, sregym_meta=sregym_meta)
+    trajectory = _convert_native_run(run_dir, info.tool)
     if trajectory is None:
         return None
 
@@ -232,10 +328,16 @@ def convert_run(run_dir: Path | str) -> Trajectory | None:
     # (e.g. stratus adds per-stage ``stages``) is not silently wiped. The
     # convert-level meta (path, application, result-JSON submitted) wins on key
     # collisions, but adapter-only keys are preserved.
-    adapter_sregym = (trajectory.extra or {}).get("sregym", {})
+    other_extra = dict(trajectory.extra or {})
+    adapter_sregym = other_extra.pop("sregym", {})
     if isinstance(adapter_sregym, dict):
         sregym_meta = {**adapter_sregym, **sregym_meta}
-    other_extra = {k: v for k, v in (trajectory.extra or {}).items() if k != "sregym"}
+
+    # The standalone Stratus adapter exposes neutral stage metadata. SREGym
+    # owns the domain-specific namespace, so fold it into extra.sregym here.
+    stratus_meta = other_extra.pop("stratus", None)
+    if isinstance(stratus_meta, dict):
+        sregym_meta = {**stratus_meta, **sregym_meta}
     merged = {**other_extra, "sregym": sregym_meta}
     trajectory.extra = merged or None
 

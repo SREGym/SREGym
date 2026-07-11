@@ -4,8 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from sregym.traces.atif.content import ContentPart
-from sregym.traces.atif.subagent_trajectory_ref import SubagentTrajectoryRef
+from .content import ContentPart
+from .subagent_trajectory_ref import SubagentTrajectoryRef
 
 
 class ObservationResult(BaseModel):

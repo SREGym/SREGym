@@ -15,7 +15,7 @@ Agent Trajectory Interchange Format (ATIF) reference implementation.
 
 The only modification is the import rewrite:
 
-    harbor.models.trajectories  ->  sregym.traces.atif
+    harbor.models.trajectories  ->  atif_converter.atif
 
 All model logic, field definitions, validators, and `to_json_dict()` are kept
 **verbatim**. Do not hand-edit these files; to update, re-vendor from a newer
@@ -35,12 +35,12 @@ upstream commit and re-apply the import rewrite, then bump the commit above.
 - `tool_call.py` — `ToolCall`
 - `trajectory.py` — `Trajectory` (root model, `extra="forbid"`)
 
-## Ported adapters (`sregym/traces/adapters/`)
+## Ported adapters (`atif_converter/adapters/`)
 
 The per-tool adapters are **clean ports** of Harbor's installed-agent converters
 (`src/harbor/agents/installed/`, same upstream commit) into standalone pure
-functions with no `harbor` dependency. Each `to_atif(run_dir, *, sregym_meta)`
-returns a validated `Trajectory` and stores `sregym_meta` under `extra.sregym`.
+functions with no `harbor` or SREGym dependency. Each adapter accepts the
+native agent session file and returns a validated `Trajectory`.
 
 | Adapter | Harbor source | Notes |
 | :-- | :-- | :-- |
@@ -58,7 +58,8 @@ adapter is built from Stratus's emitted trajectory
 (`clients/stratus/stratus_agent/driver/driver.py::save_combined_trajectory`):
 cumulative LangGraph snapshots (last event per stage = full stage history),
 multi-stage (`diagnosis` / `mitigation_attempt_N`) concatenated into one ATIF
-trajectory with per-stage boundaries under `extra.sregym.stages`. Because it's
+trajectory with per-stage boundaries under `extra.stratus.stages`. SREGym's
+run converter maps that metadata back to `extra.sregym`. Because it's
 our agent, the emitter was extended to serialize `tool_call_id` (id-based tool
 matching, with positional fallback for older runs) and `usage_metadata` /
 `response_metadata` (per-step token `Metrics`).

@@ -9,9 +9,9 @@ event types, and empty sessions dir.
 import json
 from pathlib import Path
 
+from atif_converter import Trajectory
+from atif_converter.adapters import codex
 from sregym.traces import convert
-from sregym.traces.adapters import codex
-from sregym.traces.atif import Trajectory
 
 
 def _write_session(run_dir: Path, records: list[dict]) -> None:
@@ -21,6 +21,10 @@ def _write_session(run_dir: Path, records: list[dict]) -> None:
     with (sessions / "session.jsonl").open("w", encoding="utf-8") as fh:
         for rec in records:
             fh.write(json.dumps(rec) + "\n")
+
+
+def _session_file(run_dir: Path) -> Path:
+    return run_dir / "sessions" / "rollout-20260101000000" / "session.jsonl"
 
 
 def _session_meta(session_id: str = "sess-1", cli_version: str = "0.1.0") -> dict:
@@ -146,14 +150,14 @@ def test_no_sessions_returns_none(tmp_path):
     """Without a sessions/ dir, the adapter returns None gracefully."""
     run_dir = _canonical_run_dir(tmp_path)
     run_dir.mkdir(parents=True)
-    assert codex.to_atif(run_dir) is None
+    assert codex.convert_file(_session_file(run_dir)) is None
 
 
 def test_empty_sessions_dir_returns_none(tmp_path):
     """sessions/ dir exists but has no .jsonl files -> None."""
     run_dir = _canonical_run_dir(tmp_path)
     (run_dir / "sessions").mkdir(parents=True)
-    assert codex.to_atif(run_dir) is None
+    assert codex.convert_file(_session_file(run_dir)) is None
 
 
 def test_unknown_event_types_are_skipped_gracefully(tmp_path):
@@ -177,7 +181,7 @@ def test_unknown_event_types_are_skipped_gracefully(tmp_path):
             _token_count(prompt=150, completion=5, total=155),
         ],
     )
-    traj = codex.to_atif(run_dir)
+    traj = codex.convert_file(_session_file(run_dir))
     assert isinstance(traj, Trajectory)
     assert traj.agent.name == "codex"
     agent_steps = [s for s in traj.steps if s.source == "agent"]
@@ -199,7 +203,7 @@ def test_orphan_function_call_output_becomes_tool_step(tmp_path):
             _token_count(),
         ],
     )
-    traj = codex.to_atif(run_dir)
+    traj = codex.convert_file(_session_file(run_dir))
     assert isinstance(traj, Trajectory)
     # The orphan output creates its own tool_call step within the same API call group.
     tool_steps = [s for s in traj.steps if s.tool_calls]
@@ -283,7 +287,7 @@ def test_round_trip_through_model_validate(tmp_path):
             _token_count(),
         ],
     )
-    traj = codex.to_atif(run_dir, sregym_meta={"problem_id": "p", "run": 1})
+    traj = codex.convert_file(_session_file(run_dir))
     assert isinstance(traj, Trajectory)
     # Round-trip: serialize -> validate.
     data = traj.to_json_dict()
@@ -304,6 +308,6 @@ def test_missing_model_name_does_not_crash(tmp_path):
             _token_count(),
         ],
     )
-    traj = codex.to_atif(run_dir)
+    traj = codex.convert_file(_session_file(run_dir))
     assert isinstance(traj, Trajectory)
     assert traj.agent.model_name is None
