@@ -467,47 +467,16 @@ class ApplicationFaultInjector(FaultInjector):
                         c.env[i].value = "-Xmx300M -Xms300M"
 
                 c.env.append(client.V1EnvVar(name="KAFKA_PRODUCER_ID_EXPIRATION_MS", value="3600000"))
+                c.env.append(client.V1EnvVar(name="KAFKA_MESSAGE_MAX_BYTES", value="20971520"))
                 break
         
         self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
 
         deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
 
-        script = textwrap.dedent(
-            """
-            from confluent_kafka import Consumer
-
-            c = Consumer({
-                'bootstrap.servers': 'kafka:9092',
-                'group.id': 'order-monitor',
-                'auto.offset.reset': 'earliest'
-            })
-
-            c.subscribe(['orders'])
-
-            count = 0
-            while True:
-                msg = c.poll(1.0)
-                if msg is None:
-                    continue
-                if msg.error():
-                    print(f'Error: {msg.error()}', flush=True)
-                    continue
-                count += 1
-                if count <= 5:
-                    print(f'Message: {msg.value()}', flush=True)
-                if count % 100 == 0:
-                    print(f'Received {count} messages, latest offset: {msg.offset()}', flush=True)
-            """).strip()
-
-        encoded = base64.b64encode(script.encode()).decode()
-
-        consumer = client.V1Container(name="order-consumer", image="python:3.12-slim", command=["sh", "-c", f"pip install confluent-kafka && python3 -u -c \"import base64; exec(base64.b64decode('{encoded}'))\""])
-
         producer = client.V1Container(name="order-creator", image="vsmart06/order-creator:latest")
 
         deployment.spec.template.spec.containers.append(producer)
-        deployment.spec.template.spec.containers.append(consumer)
 
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
 
@@ -518,26 +487,31 @@ class ApplicationFaultInjector(FaultInjector):
         for c in kafka_dep.spec.template.spec.containers:
             if "kafka" in c.name:
                 flag = 0
-                temp = None
+                temp = [None, None]
                 for i, e in enumerate(c.env):
                     if e.name == "KAFKA_HEAP_OPTS":
                         c.env[i].value = "-Xmx400M -Xms400M"
                         flag += 1
                     
                     elif e.name == "KAFKA_PRODUCER_ID_EXPIRATION_MS":
-                        temp = i
+                        temp[0] = i
+                        flag += 1
+                        
+                    elif e.name == "KAFKA_MESSAGE_MAX_BYTES":
+                        temp[1] = i
                         flag += 1
 
-                    if flag == 2:
+                    if flag == 3:
                         break
                 
-                c.env.pop(temp)
+                c.env.pop(temp[0])
+                c.env.pop(temp[1])
         
         self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
 
         deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
 
-        deployment.spec.template.spec.containers = [x for x in deployment.spec.template.spec.containers if x.name not in ["order-creator", "order-consumer"]]
+        deployment.spec.template.spec.containers = [x for x in deployment.spec.template.spec.containers if x.name !=  "order-creator"]
 
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
 
