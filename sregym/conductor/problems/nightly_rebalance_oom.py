@@ -18,6 +18,7 @@ from sregym.utils.decorators import mark_fault_injected
 class NightlyRebalanceOOM(Problem):
     actor_name = "vpa-updater"
     actor_namespace = "kube-system"
+    app_namespace = "hotel-reservation"
     policy_configmap = "vpa-updater-policy"
     schedule = "* * * * *"
     squeeze_memory = "4Mi"
@@ -59,11 +60,11 @@ class NightlyRebalanceOOM(Problem):
         limits = (container.resources.limits or {}) if container.resources else {}
         self._original_memory_limit = limits.get("memory")
 
-        self._delete_cronjob()  # clear any leftover actor from a crashed prior run (idempotent)
+        self._teardown_actor()
         self._create_rbac()
         self._create_policy_configmap()
         self._create_cronjob()
-        self._apply_squeeze()  # squeeze once now so we don't wait up to a minute for the first tick
+        self._apply_squeeze()
         self._wait_for_target_unhealthy(timeout=180)
         print(
             f"Service: {self.faulty_service} | squeeze={self.squeeze_memory} | actor={self.actor_namespace}/{self.actor_name}\n"
@@ -72,9 +73,7 @@ class NightlyRebalanceOOM(Problem):
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self._delete_cronjob()
-        self._wait_for_actor_gone(timeout=90)
-        self._delete_rbac()
+        self._teardown_actor()
         self._restore_memory_limit()
         print(f"Recovered: removed {self.actor_name} CronJob and restored deployment/{self.faulty_service}\n")
 
@@ -178,37 +177,55 @@ class NightlyRebalanceOOM(Problem):
         }
         client.BatchV1Api().create_namespaced_cron_job(self.actor_namespace, body)
 
-    def _delete_cronjob(self):
+    def _teardown_actor(self):
+        self._delete_cron_and_jobs()
+        self._wait_for_actor_gone(timeout=90)
+        self._delete_actor_config_and_rbac()
+
+    def _delete_cron_and_jobs(self):
         batch = client.BatchV1Api()
         with self._ignore_not_found():
-            batch.delete_namespaced_cron_job(self.actor_name, self.actor_namespace, propagation_policy="Background")
+            batch.delete_namespaced_cron_job(self.actor_name, self.actor_namespace, propagation_policy="Foreground")
         with self._ignore_not_found():
-            batch.delete_collection_namespaced_job(self.actor_namespace, label_selector=f"app={self.actor_name}")
-        with self._ignore_not_found():
-            self.kubectl.core_v1_api.delete_namespaced_config_map(self.policy_configmap, self.actor_namespace)
+            batch.delete_collection_namespaced_job(
+                self.actor_namespace, label_selector=f"app={self.actor_name}", propagation_policy="Foreground"
+            )
 
-    def _wait_for_actor_gone(self, timeout: int = 90):
+    def _delete_actor_config_and_rbac(self):
+        core, rbac = self.kubectl.core_v1_api, client.RbacAuthorizationV1Api()
+        with self._ignore_not_found():
+            core.delete_namespaced_config_map(self.policy_configmap, self.actor_namespace)
+        with self._ignore_not_found():
+            rbac.delete_namespaced_role_binding(self.actor_name, self.namespace)
+        with self._ignore_not_found():
+            rbac.delete_namespaced_role(self.actor_name, self.namespace)
+        with self._ignore_not_found():
+            core.delete_namespaced_service_account(self.actor_name, self.actor_namespace)
+
+    @classmethod
+    def _wait_for_actor_gone(cls, timeout: int = 90):
         batch, core = client.BatchV1Api(), client.CoreV1Api()
-        label = f"app={self.actor_name}"
+        label = f"app={cls.actor_name}"
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             cron_gone = False
             try:
-                batch.read_namespaced_cron_job(self.actor_name, self.actor_namespace)
+                batch.read_namespaced_cron_job(cls.actor_name, cls.actor_namespace)
             except ApiException as e:
                 if e.status != 404:
                     raise
                 cron_gone = True
-            jobs = batch.list_namespaced_job(self.actor_namespace, label_selector=label).items
-            pods = core.list_namespaced_pod(self.actor_namespace, label_selector=label).items
+            jobs = batch.list_namespaced_job(cls.actor_namespace, label_selector=label).items
+            pods = core.list_namespaced_pod(cls.actor_namespace, label_selector=label).items
             if cron_gone and not jobs and not pods:
                 return
             time.sleep(3)
-        print(f"Actor {self.actor_namespace}/{self.actor_name} not fully gone after {timeout}s; restoring anyway")
+        print(f"Actor {cls.actor_namespace}/{cls.actor_name} not fully gone after {timeout}s; proceeding")
 
     @classmethod
     def cleanup_leftover_actor(cls):
         batch, core = client.BatchV1Api(), client.CoreV1Api()
+        rbac = client.RbacAuthorizationV1Api()
 
         def ignore_404(fn, *args, **kwargs):
             try:
@@ -217,10 +234,18 @@ class NightlyRebalanceOOM(Problem):
                 if e.status != 404:
                     raise
 
-        ignore_404(batch.delete_namespaced_cron_job, cls.actor_name, cls.actor_namespace, propagation_policy="Background")
-        ignore_404(batch.delete_collection_namespaced_job, cls.actor_namespace, label_selector=f"app={cls.actor_name}")
-        ignore_404(core.delete_namespaced_service_account, cls.actor_name, cls.actor_namespace)
+        ignore_404(batch.delete_namespaced_cron_job, cls.actor_name, cls.actor_namespace, propagation_policy="Foreground")
+        ignore_404(
+            batch.delete_collection_namespaced_job,
+            cls.actor_namespace,
+            label_selector=f"app={cls.actor_name}",
+            propagation_policy="Foreground",
+        )
+        cls._wait_for_actor_gone(timeout=90)
         ignore_404(core.delete_namespaced_config_map, cls.policy_configmap, cls.actor_namespace)
+        ignore_404(core.delete_namespaced_service_account, cls.actor_name, cls.actor_namespace)
+        ignore_404(rbac.delete_namespaced_role_binding, cls.actor_name, cls.app_namespace)
+        ignore_404(rbac.delete_namespaced_role, cls.actor_name, cls.app_namespace)
 
     def _create_rbac(self):
         core, rbac = self.kubectl.core_v1_api, client.RbacAuthorizationV1Api()
@@ -245,15 +270,6 @@ class NightlyRebalanceOOM(Problem):
                     ],
                 },
             )
-
-    def _delete_rbac(self):
-        core, rbac = self.kubectl.core_v1_api, client.RbacAuthorizationV1Api()
-        with self._ignore_not_found():
-            rbac.delete_namespaced_role_binding(self.actor_name, self.namespace)
-        with self._ignore_not_found():
-            rbac.delete_namespaced_role(self.actor_name, self.namespace)
-        with self._ignore_not_found():
-            core.delete_namespaced_service_account(self.actor_name, self.actor_namespace)
 
     @contextmanager
     def _ignore_not_found(self):

@@ -1,5 +1,7 @@
 """Mitigation oracle for NightlyRebalanceOOM."""
 
+import time
+
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
@@ -29,11 +31,6 @@ class NightlyRebalanceOOMMitigationOracle(MitigationOracle):
         service = self.problem.faulty_service
         namespace = self.problem.namespace
 
-        if self._rebalancer_active():
-            print(f"❌ {self.problem.actor_name} CronJob still active; squeeze will recur")
-            results["success"] = False
-            return results
-
         if not self._memory_limit_sane(service, namespace):
             print(f"❌ Memory limit on deployment/{service} is still below the restored baseline")
             results["success"] = False
@@ -44,7 +41,12 @@ class NightlyRebalanceOOMMitigationOracle(MitigationOracle):
             results["success"] = False
             return results
 
-        print("✅ Rebalancer stopped, memory limit restored, target service healthy")
+        if self._rebalancer_active() and not self._survives_next_tick(service, namespace):
+            print(f"❌ {self.problem.actor_name} CronJob still active and re-applies an unsafe limit")
+            results["success"] = False
+            return results
+
+        print("✅ Memory limit restored and target service durably healthy")
         results["success"] = True
         return results
 
@@ -56,6 +58,20 @@ class NightlyRebalanceOOMMitigationOracle(MitigationOracle):
                 return False
             raise
         return not bool(cj.spec.suspend)
+
+    def _survives_next_tick(self, service: str, namespace: str, timeout: int = 150, poll: int = 5) -> bool:
+        batch = client.BatchV1Api()
+        actor_ns = self.problem.actor_namespace
+        label = f"app={self.problem.actor_name}"
+        baseline = {j.metadata.name for j in batch.list_namespaced_job(actor_ns, label_selector=label).items}
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            fresh = [j for j in batch.list_namespaced_job(actor_ns, label_selector=label).items
+                     if j.metadata.name not in baseline]
+            if any((j.status.succeeded or 0) or (j.status.failed or 0) for j in fresh):
+                break
+            time.sleep(poll)
+        return self._memory_limit_sane(service, namespace) and self._target_pods_healthy(service, namespace)
 
     def _memory_limit_sane(self, service: str, namespace: str) -> bool:
         original = getattr(self.problem, "_original_memory_limit", None)
