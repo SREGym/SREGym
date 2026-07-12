@@ -464,7 +464,7 @@ class ApplicationFaultInjector(FaultInjector):
             if "kafka" in c.name:
                 for i, e in enumerate(c.env):
                     if e.name == "KAFKA_HEAP_OPTS":
-                        c.env[i].value = "-Xmx300M -Xms300M"
+                        c.env[i].value = "-Xmx300M -Xms300M -XX:+ExitOnOutOfMemoryError"
 
                 c.env.append(client.V1EnvVar(name="KAFKA_PRODUCER_ID_EXPIRATION_MS", value="3600000"))
                 c.env.append(client.V1EnvVar(name="KAFKA_MESSAGE_MAX_BYTES", value="20971520"))
