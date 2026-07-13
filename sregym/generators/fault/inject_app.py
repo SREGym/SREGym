@@ -471,6 +471,87 @@ class ApplicationFaultInjector(FaultInjector):
 
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
+    
+    def inject_kafka_producer_leak(self, deployment_name: str = "checkout"):
+        kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
+        for c in kafka_dep.spec.template.spec.containers:
+            if "kafka" in c.name:
+                c.env.append(client.V1EnvVar(name="KAFKA_MESSAGE_MAX_BYTES", value="20971520"))
+                break
+        
+        self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+
+        script = textwrap.dedent(
+            """
+            from confluent_kafka import Producer
+            import threading
+            import os
+
+            def task(thread_id: int):
+                payload_size = int(os.environ.get('PAYLOAD_SIZE_BYTES', '10000000'))
+                payload = os.urandom(payload_size)
+
+                conf = {
+                    'bootstrap.servers': 'kafka:9092',
+                    'message.max.bytes': payload_size + 1000,
+                    'queue.buffering.max.kbytes': (payload_size * 2) // 1024,
+                    'enable.idempotence': 'true',
+                }
+
+                while True:
+                    try:
+                        producer = Producer(conf)
+                        producer.produce('orders', payload)
+                        producer.poll(0)
+                    except BufferError:
+                        producer.poll(0.1)
+            
+            threads = []
+            for i in range(20):
+                t = threading.Thread(target=task, args=(i,))
+                t.start()
+                threads.append(t)
+            
+            for t in threads:
+                t.join()
+            """).strip()
+
+        encoded = base64.b64encode(script.encode()).decode()
+
+        producer = client.V1Container(name="order-creator", image="python:3.12-slim", command=["sh", "-c", f"pip install confluent-kafka && python3 -u -c \"import base64; exec(base64.b64decode('{encoded}'))\""])
+
+        deployment.spec.template.spec.containers.append(producer)
+
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+
+        print(f"Injected sidecar container 'order-creator' in '{deployment_name}'")
+    
+    def recover_kafka_producer_leak(self, deployment_name: str = "checkout"):
+        kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
+        for c in kafka_dep.spec.template.spec.containers:
+            if "kafka" in c.name:
+                temp = None
+                for i, e in enumerate(c.env):                        
+                    if e.name == "KAFKA_MESSAGE_MAX_BYTES":
+                        temp = i
+                        break
+                
+                if temp is not None:
+                    c.env.pop(temp)
+        
+        self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+
+        deployment.spec.template.spec.containers = [x for x in deployment.spec.template.spec.containers if x.name !=  "order-creator"]
+
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+
+        self.kubectl.exec_command(f"kubectl delete pod -l app.kubernetes.io/name={deployment_name} -n {self.namespace}")
+
+        print(f"Removed sidecar container 'order-creator' from '{deployment_name}'")
 
 
 if __name__ == "__main__":

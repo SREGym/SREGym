@@ -42,6 +42,7 @@ from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.init_container_dependency_hang import InitContainerDependencyHang
 from sregym.conductor.problems.internal_traffic_policy_local import InternalTrafficPolicyLocalAstronomyShop
 from sregym.conductor.problems.kafka_poison_pill_hol_block import KafkaPoisonPillHOLBlock
+from sregym.conductor.problems.kafka_producer_leak import KafkaProducerLeak
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
 from sregym.conductor.problems.khaos_faults import (
     KhaosFaultName,
@@ -123,6 +124,7 @@ class ProblemRegistry:
             # --- REGULAR APPLICATION PROBLEMS ---
             "incorrect_image": IncorrectImage,
             "incorrect_port_assignment": IncorrectPortAssignment,
+            "kafka_producer_leak": KafkaProducerLeak,
             "unschedulable_incorrect_port_assignment": lambda: IncorrectPortAssignment(unschedulable=True),
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
             "missing_env_variable_astronomy_shop": lambda: MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend" ),
