@@ -476,11 +476,6 @@ class ApplicationFaultInjector(FaultInjector):
         kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
         for c in kafka_dep.spec.template.spec.containers:
             if "kafka" in c.name:
-                for i, e in enumerate(c.env):
-                    if e.name == "KAFKA_HEAP_OPTS":
-                        c.env[i].value = "-Xmx300M -Xms300M -XX:+ExitOnOutOfMemoryError"
-
-                c.env.append(client.V1EnvVar(name="KAFKA_PRODUCER_ID_EXPIRATION_MS", value="3600000"))
                 c.env.append(client.V1EnvVar(name="KAFKA_MESSAGE_MAX_BYTES", value="20971520"))
                 break
         
@@ -488,7 +483,44 @@ class ApplicationFaultInjector(FaultInjector):
 
         deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
 
-        producer = client.V1Container(name="order-creator", image="vsmart06/order-creator:latest")
+        script = textwrap.dedent(
+            """
+            from confluent_kafka import Producer
+            import threading
+            import os
+
+            def task(thread_id: int):
+                payload_size = int(os.environ.get('PAYLOAD_SIZE_BYTES', '10000000'))
+                payload = os.urandom(payload_size)
+
+                conf = {
+                    'bootstrap.servers': 'kafka:9092',
+                    'message.max.bytes': payload_size + 1000,
+                    'queue.buffering.max.kbytes': (payload_size * 2) // 1024,
+                    'enable.idempotence': 'true',
+                }
+
+                while True:
+                    try:
+                        producer = Producer(conf)
+                        producer.produce('orders', payload)
+                        producer.poll(0)
+                    except BufferError:
+                        producer.poll(0.1)
+            
+            threads = []
+            for i in range(20):
+                t = threading.Thread(target=task, args=(i,))
+                t.start()
+                threads.append(t)
+            
+            for t in threads:
+                t.join()
+            """).strip()
+
+        encoded = base64.b64encode(script.encode()).decode()
+
+        producer = client.V1Container(name="order-creator", image="python:3.12-slim", command=["sh", "-c", f"pip install confluent-kafka && python3 -u -c \"import base64; exec(base64.b64decode('{encoded}'))\""])
 
         deployment.spec.template.spec.containers.append(producer)
 
@@ -501,25 +533,12 @@ class ApplicationFaultInjector(FaultInjector):
         for c in kafka_dep.spec.template.spec.containers:
             if "kafka" in c.name:
                 flag = 0
-                temp = [None, None]
-                for i, e in enumerate(c.env):
-                    if e.name == "KAFKA_HEAP_OPTS":
-                        c.env[i].value = "-Xmx400M -Xms400M"
-                        flag += 1
-                    
-                    elif e.name == "KAFKA_PRODUCER_ID_EXPIRATION_MS":
-                        temp[0] = i
-                        flag += 1
-                        
-                    elif e.name == "KAFKA_MESSAGE_MAX_BYTES":
-                        temp[1] = i
-                        flag += 1
-
-                    if flag == 3:
-                        break
+                temp = None
+                for i, e in enumerate(c.env):                        
+                    if e.name == "KAFKA_MESSAGE_MAX_BYTES":
+                        temp = i
                 
-                c.env.pop(temp[0])
-                c.env.pop(temp[1])
+                c.env.pop(temp)
         
         self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
 
