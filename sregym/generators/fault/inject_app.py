@@ -528,17 +528,18 @@ class ApplicationFaultInjector(FaultInjector):
 
         print(f"Injected sidecar container 'order-creator' in '{deployment_name}'")
     
-    def recover_kafka_producer_leak(self, deployment_name: str):
+    def recover_kafka_producer_leak(self, deployment_name: str = "checkout"):
         kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
         for c in kafka_dep.spec.template.spec.containers:
             if "kafka" in c.name:
-                flag = 0
                 temp = None
                 for i, e in enumerate(c.env):                        
                     if e.name == "KAFKA_MESSAGE_MAX_BYTES":
                         temp = i
+                        break
                 
-                c.env.pop(temp)
+                if temp is not None:
+                    c.env.pop(temp)
         
         self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
 
@@ -547,6 +548,8 @@ class ApplicationFaultInjector(FaultInjector):
         deployment.spec.template.spec.containers = [x for x in deployment.spec.template.spec.containers if x.name !=  "order-creator"]
 
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+
+        self.kubectl.exec_command(f"kubectl delete pod -l app.kubernetes.io/name={deployment_name} -n {self.namespace}")
 
         print(f"Removed sidecar container 'order-creator' from '{deployment_name}'")
 
