@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, Field
 
-from sregym.traces.atif.observation_result import ObservationResult
+from .observation_result import ObservationResult
 
 
 class Observation(BaseModel):

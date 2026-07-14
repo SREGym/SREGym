@@ -9,9 +9,9 @@ and unreadable/malformed lines.
 import json
 from pathlib import Path
 
+from atif_converter import Trajectory
+from atif_converter.adapters import claudecode
 from sregym.traces import convert
-from sregym.traces.adapters import claudecode
-from sregym.traces.atif import Trajectory
 
 
 def _write_session(run_dir: Path, records: list[dict], *, project: str = "-app") -> None:
@@ -21,6 +21,10 @@ def _write_session(run_dir: Path, records: list[dict], *, project: str = "-app")
     with (logs / "session.jsonl").open("w", encoding="utf-8") as fh:
         for rec in records:
             fh.write(json.dumps(rec) + "\n")
+
+
+def _session_file(run_dir: Path, project: str = "-app") -> Path:
+    return run_dir / "sessions" / "projects" / project / "session.jsonl"
 
 
 def _assistant(msg_id: str, content: list[dict], *, ts: str, usage: dict | None = None) -> dict:
@@ -151,7 +155,7 @@ def test_orphan_tool_result_becomes_a_step(tmp_path):
             },
         ],
     )
-    traj = claudecode.to_atif(run_dir)
+    traj = claudecode.convert_file(_session_file(run_dir))
     assert traj is not None
     Trajectory.model_validate(traj.to_json_dict())
     ghost = [s for s in traj.steps if s.tool_calls and any(tc.tool_call_id == "ghost" for tc in s.tool_calls)]

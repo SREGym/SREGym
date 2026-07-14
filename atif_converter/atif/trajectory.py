@@ -4,9 +4,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from sregym.traces.atif.agent import Agent
-from sregym.traces.atif.final_metrics import FinalMetrics
-from sregym.traces.atif.step import Step
+from .agent import Agent
+from .final_metrics import FinalMetrics
+from .step import Step
 
 
 class Trajectory(BaseModel):

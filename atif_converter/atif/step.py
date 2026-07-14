@@ -5,10 +5,10 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from sregym.traces.atif.content import ContentPart
-from sregym.traces.atif.metrics import Metrics
-from sregym.traces.atif.observation import Observation
-from sregym.traces.atif.tool_call import ToolCall
+from .content import ContentPart
+from .metrics import Metrics
+from .observation import Observation
+from .tool_call import ToolCall
 
 
 class Step(BaseModel):
