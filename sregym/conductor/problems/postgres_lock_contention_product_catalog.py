@@ -77,8 +77,9 @@ class PostgresLockContentionProductCatalog(Problem):
         # Deploying the lock-holder (takes ACCESS EXCLUSIVE on catalog.products).
         self.kubectl.apply_configs(self.namespace, self.manifest_path)
 
+        # Fail loudly if the lock never actually blocks a read
         if not self._wait_until(lambda: self._catalog_read_status() == "locked", timeout=180):
-            logger.warning("Lock not confirmed held within timeout; fault may not be fully established.")
+            raise RuntimeError("lock not confirmed within timeout; fault injection failed")
 
         logger.info("Postgres lock-contention fault injected.")
         return True
@@ -113,15 +114,20 @@ class PostgresLockContentionProductCatalog(Problem):
 
         self._wait_until(released, timeout=120)
 
+        # NOTE: we deliberately do NOT restore the memory limit to its original
+        # 100Mi here. Restoring it restarts the postgres pod, which transiently
+        # wipes catalog.products.
+
+        # This does not leak across runs because astronomy-shop is undeployed
+        # and redeployed fresh every run, so postgres always starts at 100Mi
         logger.info("Postgres lock-contention fault recovered.")
         return True
 
-    """
-    Terminate any backend holding an ACCESS EXCLUSIVE lock on
-    catalog.products, which releases the lock immediately.
-    """
-
     def _terminate_lock_holder_backend(self) -> None:
+        """
+        Terminate any backend holding an ACCESS EXCLUSIVE lock on
+        catalog.products, which releases the lock immediately.
+        """
         sql = (
             "SELECT pg_terminate_backend(l.pid) "
             "FROM pg_locks l "
@@ -136,11 +142,8 @@ class PostgresLockContentionProductCatalog(Problem):
         )
         self.kubectl.exec_command(cmd)
 
-    """
-    Patch the postgres container's memory limit (index-based JSON patch)
-    """
-
     def _set_postgres_memory(self, memory: str) -> None:
+        """Patch the postgres container's memory limit (index-based JSON patch)."""
         patch = (
             f"kubectl -n {self.namespace} patch deploy {self.POSTGRES_DEPLOY} --type=json "
             f'-p=\'[{{"op":"replace",'
@@ -149,26 +152,24 @@ class PostgresLockContentionProductCatalog(Problem):
         )
         self.kubectl.exec_command(patch)
 
-    """ True if the problem's app namespace currently exists. """
-
     def _namespace_exists(self) -> bool:
+        """True if the problem's app namespace currently exists."""
         out = self.kubectl.exec_command(f"kubectl get namespace {self.namespace} --no-headers --ignore-not-found")
         return self.namespace in out
 
-    """
-    Probe whether catalog.products is readable:
-
-    Runs a read with a short lock_timeout and echoes a READ_OK sentinel only
-    when psql exits 0, so a failing query (lock timeout, missing table,
-    connection error) can never be mistaken for success by matching text.
-
-    Returns one of:
-        "ok"     - the table was read (no conflicting lock held)
-        "locked" - the read was blocked by a lock (lock_timeout fired)
-        "other"  - some other failure (postgres restarting, table missing, ...)
-    """
-
     def _catalog_read_status(self) -> str:
+        """
+        Probe whether catalog.products is readable:
+
+        Runs a read with a short lock_timeout and echoes a READ_OK sentinel only
+        when psql exits 0, so a failing query (lock timeout, missing table,
+        connection error) can never be mistaken for success by matching text.
+
+        Returns one of:
+            "ok"     - the table was read (no conflicting lock held)
+            "locked" - the read was blocked by a lock (lock_timeout fired)
+            "other"  - some other failure (postgres restarting, table missing, ...)
+        """
         cmd = (
             f"kubectl exec -n {self.namespace} deploy/{self.POSTGRES_DEPLOY} -- "
             'sh -c "env PGPASSWORD=otel psql -U root -d otel -v ON_ERROR_STOP=1 -t -A '
@@ -182,10 +183,9 @@ class PostgresLockContentionProductCatalog(Problem):
             return "locked"
         return "other"
 
-    """ Poll `predicate` until it returns True or `timeout` seconds elapse. """
-
     @staticmethod
     def _wait_until(predicate, timeout: int = 120, interval: int = 3) -> bool:
+        """Poll `predicate` until it returns True or `timeout` seconds elapse."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
