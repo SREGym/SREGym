@@ -6,10 +6,11 @@ Asserts the adapter against a REAL Codex run fixture.
 import json
 from pathlib import Path
 
-from sregym.traces.adapters import codex
-from sregym.traces.atif import Trajectory
+from atif_converter import Trajectory
+from atif_converter.adapters import codex
 
 FIXTURE = Path(__file__).parent / "fixtures" / "codex_run"
+SESSION_FILE = next((FIXTURE / "sessions").rglob("*.jsonl"))
 
 # Golden expectations for the committed fixture
 EXPECTED_AGENT_STEPS = 21
@@ -21,7 +22,7 @@ EXPECTED_METRICS_STEPS = 21
 
 
 def _convert() -> Trajectory:
-    return codex.to_atif(FIXTURE, sregym_meta={"problem_id": "p", "run": 1})
+    return codex.convert_file(SESSION_FILE)
 
 
 def test_to_atif_returns_validated_trajectory():
@@ -88,8 +89,5 @@ def test_to_json_dict_is_json_serializable():
     Trajectory.model_validate(data)
 
 
-def test_extra_sregym_attached():
-    traj = codex.to_atif(FIXTURE, sregym_meta={"problem_id": "hotel", "run": 2})
-    assert traj.extra is not None
-    assert traj.extra["sregym"]["problem_id"] == "hotel"
-    assert traj.extra["sregym"]["run"] == 2
+def test_standalone_conversion_has_no_sregym_metadata():
+    assert _convert().extra is None

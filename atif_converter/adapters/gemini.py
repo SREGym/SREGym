@@ -1,7 +1,7 @@
 """Gemini CLI -> ATIF v1.7 adapter.
 
 A clean port of Harbor's ``GeminiCli._convert_gemini_to_atif`` and
-``_load_gemini_session`` (see ``sregym/traces/atif/UPSTREAM.md``) into
+``_load_gemini_session`` (see ``atif_converter/atif/UPSTREAM.md``) into
 standalone, pure functions with no dependency on ``harbor`` or
 ``BaseInstalledAgent``.
 
@@ -41,8 +41,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from sregym.traces.adapters._common import _stringify
-from sregym.traces.atif import (
+from ..atif import (
     Agent,
     FinalMetrics,
     Metrics,
@@ -52,31 +51,11 @@ from sregym.traces.atif import (
     ToolCall,
     Trajectory,
 )
+from ._common import _stringify
 
 logger = logging.getLogger(__name__)
 
 AGENT_NAME = "gemini"
-
-
-# --------------------------------------------------------------------------- #
-# Session-file discovery
-# --------------------------------------------------------------------------- #
-def _find_session_file(run_dir: Path) -> Path | None:
-    """Find the archived Gemini session JSON under ``<run_dir>/sessions/``.
-
-    The geminicli client archives to ``sessions/YYYY/MM/DD/session-<id>.json``.
-    Returns the most-recently-modified match, or None.
-    """
-    sessions_root = run_dir / "sessions"
-    if not sessions_root.exists():
-        return None
-    candidates = list(sessions_root.rglob("session-*.json")) + list(sessions_root.rglob("session-*.jsonl"))
-    if not candidates:
-        # Fallback: any json/jsonl under sessions/.
-        candidates = list(sessions_root.rglob("*.json")) + list(sessions_root.rglob("*.jsonl"))
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
 
 
 # --------------------------------------------------------------------------- #
@@ -356,34 +335,11 @@ def _convert(gemini_trajectory: dict[str, Any]) -> Trajectory | None:
 # --------------------------------------------------------------------------- #
 # Public entrypoint
 # --------------------------------------------------------------------------- #
-def to_atif(run_dir: Path | str, *, sregym_meta: dict[str, Any] | None = None) -> Trajectory | None:
-    """Convert a Gemini CLI run directory into a validated ATIF ``Trajectory``.
-
-    Args:
-        run_dir: Canonical run directory
-            (``results/<batch>/gemini/<problem_id>/run_<n>/``) containing an
-            archived ``sessions/**/session-*.json``.
-        sregym_meta: Optional SREGym metadata to attach under ``extra.sregym``.
-
-    Returns:
-        A validated ``Trajectory``, or ``None`` if no convertible session exists.
-    """
-    run_dir = Path(run_dir)
-    session_file = _find_session_file(run_dir)
-    if session_file is None:
-        logger.debug("No Gemini session JSON found in %s", run_dir)
-        return None
-
+def convert_file(session_file: Path | str) -> Trajectory | None:
+    """Convert one Gemini CLI session JSON or JSONL file to ATIF."""
+    session_file = Path(session_file)
     gemini_trajectory = _load_gemini_session(session_file)
     if gemini_trajectory is None:
         logger.debug("Could not parse Gemini session at %s", session_file)
         return None
-
-    trajectory = _convert(gemini_trajectory)
-    if trajectory is None:
-        return None
-
-    if sregym_meta:
-        trajectory.extra = {"sregym": dict(sregym_meta)}
-
-    return trajectory
+    return _convert(gemini_trajectory)

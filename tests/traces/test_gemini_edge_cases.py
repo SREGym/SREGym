@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-from sregym.traces.adapters import gemini
-from sregym.traces.atif import Trajectory
+from atif_converter import Trajectory
+from atif_converter.adapters import gemini
 
 
 def _run_dir(tmp_path: Path) -> Path:
@@ -21,22 +21,26 @@ def _write_session(run_dir: Path, obj_or_lines) -> None:
         p.write_text(json.dumps(obj_or_lines))
 
 
+def _session_file(run_dir: Path) -> Path:
+    return run_dir / "sessions" / "2026" / "07" / "05" / "session-x.json"
+
+
 def test_no_sessions_dir_returns_none(tmp_path):
     d = tmp_path / "results" / "b" / "gemini" / "p" / "run_1"
     d.mkdir(parents=True)
-    assert gemini.to_atif(d, sregym_meta={"problem_id": "p", "run": 1}) is None
+    assert gemini.convert_file(_session_file(d)) is None
 
 
 def test_empty_session_returns_none(tmp_path):
     run_dir = _run_dir(tmp_path)
     _write_session(run_dir, {"sessionId": "x", "messages": []})
-    assert gemini.to_atif(run_dir) is None
+    assert gemini.convert_file(_session_file(run_dir)) is None
 
 
 def test_empty_file_returns_none(tmp_path):
     run_dir = _run_dir(tmp_path)
     (run_dir / "sessions" / "2026" / "07" / "05" / "session-x.json").write_text("")
-    assert gemini.to_atif(run_dir) is None
+    assert gemini.convert_file(_session_file(run_dir)) is None
 
 
 def test_tool_call_with_no_result(tmp_path):
@@ -55,7 +59,7 @@ def test_tool_call_with_no_result(tmp_path):
             ],
         },
     )
-    t = gemini.to_atif(run_dir)
+    t = gemini.convert_file(_session_file(run_dir))
     step = t.steps[1]
     assert step.tool_calls[0].tool_call_id == "c1"
     # observation result exists but content is None (no result yet)
@@ -69,7 +73,7 @@ def test_gemini_message_without_tokens(tmp_path):
         run_dir,
         {"sessionId": "x", "messages": [{"type": "gemini", "content": "hi"}]},
     )
-    t = gemini.to_atif(run_dir)
+    t = gemini.convert_file(_session_file(run_dir))
     assert t.steps[0].metrics is None
     assert t.final_metrics.total_prompt_tokens is None
 
@@ -86,7 +90,7 @@ def test_content_as_parts_list(tmp_path):
         },
     )
     # user-only session -> at least one user step
-    t = gemini.to_atif(run_dir)
+    t = gemini.convert_file(_session_file(run_dir))
     assert t.steps[0].message == "line1\nline2"
 
 
@@ -120,7 +124,7 @@ def test_image_part_folds_to_placeholder(tmp_path):
             ],
         },
     )
-    t = gemini.to_atif(run_dir)
+    t = gemini.convert_file(_session_file(run_dir))
     content = t.steps[1].observation.results[0].content
     assert content == "done\n[image]"
 
@@ -137,7 +141,7 @@ def test_jsonl_rewind_drops_rewound_messages(tmp_path):
             {"type": "gemini", "id": "m3", "content": "good path"},
         ],
     )
-    t = gemini.to_atif(run_dir)
+    t = gemini.convert_file(_session_file(run_dir))
     msgs = [s.message for s in t.steps]
     assert "bad path" not in msgs
     assert "good path" in msgs
@@ -151,15 +155,15 @@ def test_malformed_jsonl_line_skipped(tmp_path):
         json.dumps({"$set": {"sessionId": "s"}}) + "\n"
         "this is not json {\n" + json.dumps({"type": "user", "id": "m1", "content": "hi"}) + "\n"
     )
-    t = gemini.to_atif(run_dir)
+    t = gemini.convert_file(_session_file(run_dir))
     assert t is not None
     assert t.steps[0].message == "hi"
 
 
-def test_sregym_meta_absent_leaves_extra_unset(tmp_path):
+def test_standalone_extra_unset(tmp_path):
     run_dir = _run_dir(tmp_path)
     _write_session(run_dir, {"sessionId": "x", "messages": [{"type": "user", "content": "hi"}]})
-    t = gemini.to_atif(run_dir)
+    t = gemini.convert_file(_session_file(run_dir))
     assert t.extra is None
 
 
@@ -188,7 +192,7 @@ def test_roundtrip_with_tool_and_reasoning(tmp_path):
             ],
         },
     )
-    t = gemini.to_atif(run_dir)
+    t = gemini.convert_file(_session_file(run_dir))
     Trajectory.model_validate(json.loads(json.dumps(t.to_json_dict())))
 
 
@@ -216,7 +220,7 @@ def test_jsonl_message_update_applied(tmp_path):
             },
         ],
     )
-    t = gemini.to_atif(run_dir)
+    t = gemini.convert_file(_session_file(run_dir))
     agent = next(s for s in t.steps if s.source == "agent")
     assert agent.tool_calls is not None and agent.tool_calls[0].tool_call_id == "c1"
     assert agent.observation.results[0].content == "patched"
