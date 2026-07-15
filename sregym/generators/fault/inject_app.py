@@ -478,7 +478,7 @@ class ApplicationFaultInjector(FaultInjector):
         deployment_name: str = "frontend",
         configmap_name: str = "frontend-runtime-config",
         flag_key: str = "SEARCH_BACKEND_VERSION",
-        experimental_image: str = "sharqm/hotelreservation:experimental-routing-v3",
+        experimental_image: str = "sharqm/hotelreservation:experimental-routing-v4",
     ):
         """Set the feature flag in a ConfigMap and swap the frontend image to the
         experimental-routing build. When the flag is active, the frontend's search
