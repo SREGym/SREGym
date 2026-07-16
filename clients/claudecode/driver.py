@@ -41,8 +41,13 @@ def run_preflight() -> None:
     if env.get("CLAUDE_CODE_OAUTH_TOKEN"):
         env.pop("ANTHROPIC_API_KEY", None)
 
+    command = ["claude", "-p", "say ok", "--model", m]
+    reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+    if reasoning_effort:
+        command.extend(["--effort", reasoning_effort])
+
     r = subprocess.run(
-        ["claude", "-p", "say ok", "--model", m, "--max-turns", "1"],
+        command,
         capture_output=True,
         text=True,
         timeout=60,

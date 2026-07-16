@@ -130,6 +130,7 @@ def _normalize_opencode_local_model_for_litellm(model: str) -> str:
 def _configure_model_environment(args) -> tuple[str, str]:
     agent_model = args.model
     raw_judge_model = args.judge_model or args.model
+    reasoning_effort = getattr(args, "reasoning_effort", None)
     normalizes_opencode_local_judge = _is_opencode_local_model(args.agent, raw_judge_model)
     judge_model = (
         _normalize_opencode_local_model_for_litellm(raw_judge_model)
@@ -139,6 +140,10 @@ def _configure_model_environment(args) -> tuple[str, str]:
 
     os.environ["AGENT_MODEL_ID"] = agent_model
     os.environ["JUDGE_MODEL_ID"] = judge_model
+    if reasoning_effort:
+        os.environ["AGENT_REASONING_EFFORT"] = reasoning_effort
+    else:
+        os.environ.pop("AGENT_REASONING_EFFORT", None)
 
     if not getattr(args, "judge_model", None) or normalizes_opencode_local_judge:
         if not os.environ.get("JUDGE_API_BASE") and os.environ.get("AGENT_API_BASE"):
@@ -564,6 +569,7 @@ def main(args):
 
     logger.info(
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
+        f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
         f"agent_api_base: {_env_status('AGENT_API_BASE')}, judge_api_base: {_env_status('JUDGE_API_BASE')}"
     )
 
@@ -686,6 +692,12 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set)",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
+        default=None,
+        help="Reasoning effort for Codex, Copilot, OpenCode, and Claude Code (uses the agent default when omitted)",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
