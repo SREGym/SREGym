@@ -15,10 +15,11 @@ class MitigationOracle(Oracle):
         super().__init__(problem)
         deployments = self.problem.kubectl.list_deployments(self.problem.namespace)
         self.replica_count = {dep.metadata.name: dep.spec.replicas for dep in deployments.items}
+        self.rollout_time = _ROLLOUT_SETTLE_SECONDS
 
     def _wait_for_rollouts(self, kubectl, namespace):
         """Wait for all deployments in the namespace to finish rolling out."""
-        deadline = time.monotonic() + _ROLLOUT_SETTLE_SECONDS
+        deadline = time.monotonic() + self.rollout_time
         while time.monotonic() < deadline:
             deployments = kubectl.list_deployments(namespace)
             all_settled = True

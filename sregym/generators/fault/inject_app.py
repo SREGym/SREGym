@@ -472,11 +472,20 @@ class ApplicationFaultInjector(FaultInjector):
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
     
-    def inject_kafka_producer_leak(self, deployment_name: str = "checkout"):
+    def inject_kafka_producer_leak(self, deployment_name: str = "checkout") -> list:
+        limits = [None, None]
+
         kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
         for c in kafka_dep.spec.template.spec.containers:
             if "kafka" in c.name:
                 c.env.append(client.V1EnvVar(name="KAFKA_MESSAGE_MAX_BYTES", value="20971520"))
+
+                for e in c.env:
+                    if e.name == "KAFKA_HEAP_OPTS":
+                        limits[0] = e.value
+                        break
+
+                limits[1] = c.resources.limits.get("memory") if c.resources and c.resources.limits else None
                 break
         
         self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
@@ -526,7 +535,11 @@ class ApplicationFaultInjector(FaultInjector):
 
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
 
+        time.sleep(90)
+
         print(f"Injected sidecar container 'order-creator' in '{deployment_name}'")
+
+        return limits
     
     def recover_kafka_producer_leak(self, deployment_name: str = "checkout"):
         kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)

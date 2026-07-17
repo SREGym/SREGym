@@ -35,7 +35,7 @@ class KafkaProducerLeak(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         injector = ApplicationFaultInjector(namespace=self.namespace)
-        injector.inject_kafka_producer_leak(self.faulty_service)
+        self.heap_limit, self.memory_limit = injector.inject_kafka_producer_leak(self.faulty_service)
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
