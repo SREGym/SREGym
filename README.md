@@ -21,6 +21,10 @@ SREGym is an AI-native platform to enable the design, development, and evaluatio
 
 SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architectured with AI-native usability and extensibility as first-class principles. The SREGym benchmark suites contain 90 different SRE problems. It supports all the problems from AIOpsLab and ITBench, and includes new problems such as OS-level faults, metastable failures, and concurrent failures. See our [problem set](https://sregym.com/problems) for a complete list of problems.
 
+### Start with SREGym-Lite
+
+[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 20 well-tested problems with varied difficulty that are easy to run. It is the recommended starting point for new users and can run easily on the [KIND](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
+
 SREGym has been used to simulate real-world cloud failures, such as:
 - Cloudflare WAF regex rules exhausted CPU ([postmortem](https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019), [simulation](https://github.com/SREGym/SREGym/pull/773))
 - Admission webhook TLS mismatch ([postmortem](https://github.com/cert-manager/cert-manager/issues/6350), [simulation](https://github.com/SREGym/SREGym/pull/777))
@@ -35,7 +39,6 @@ SREGym has been used to simulate real-world cloud failures, such as:
 - Python >= 3.12
 - [Docker](https://docs.docker.com/get-docker/)
 - [Helm](https://helm.sh/docs/intro/install/) >= 4.0
-- [brew](https://brew.sh/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [uv](https://github.com/astral-sh/uv)
 - [kind](https://kind.sigs.k8s.io/) (if running locally)
@@ -99,14 +102,19 @@ export AWS_PROFILE="bedrock"
 export AWS_DEFAULT_REGION="us-east-2"
 ```
 
-2. Run the benchmark:
+2. Run the full benchmark:
 ```bash
-python main.py --agent stratus --model gpt-5
+uv run main.py --agent stratus --model gpt-5
+```
+
+Or start with SREGym-Lite:
+```bash
+uv run main.py --suite sregym-lite --agent stratus --model gpt-5
 ```
 
 Use `--judge-model` to override the judge model separately (defaults to `--model`):
 ```bash
-python main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627
+uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627
 ```
 
 #### Container Isolation
@@ -116,7 +124,7 @@ Agents always run in isolated Docker containers, preventing access to SREGym int
 Use `--force-build` to rebuild the container image after updating dependencies or agent code:
 
 ```bash
-python main.py --agent codex --model gpt-5 --force-build
+uv run main.py --agent codex --model gpt-5 --force-build
 ```
 
 ### Model Selection
@@ -150,7 +158,7 @@ Set `AGENT_API_KEY` as well if the endpoint requires authentication.
 ollama pull qwen3-coder:30b
 
 export AGENT_API_BASE="http://127.0.0.1:11434"
-python main.py --agent stratus --model ollama_chat/qwen3-coder:30b
+uv run main.py --agent stratus --model ollama_chat/qwen3-coder:30b
 ```
 
 **OpenCode with Ollama:**
@@ -159,7 +167,7 @@ OpenCode uses the endpoint's OpenAI-compatible `/v1` API.
 
 ```bash
 export AGENT_API_BASE="http://127.0.0.1:11434/v1"
-python main.py --agent opencode --model local/qwen3-coder:30b
+uv run main.py --agent opencode --model local/qwen3-coder:30b
 ```
 
 When `--judge-model` is not set, SREGym reuses the agent model and endpoint for the judge. This works directly for Stratus because its model identifier is LiteLLM-compatible. For OpenCode, SREGym normalizes `local/<served-model>` to `openai/<served-model>` for the judge, because OpenCode's `local/` provider uses an OpenAI-compatible endpoint.
@@ -170,7 +178,7 @@ To use a different LiteLLM judge provider, pass `--judge-model` explicitly:
 
 ```bash
 export JUDGE_API_BASE="http://127.0.0.1:11434"
-python main.py --agent opencode --model local/qwen3-coder:30b --judge-model ollama_chat/qwen3-coder:30b
+uv run main.py --agent opencode --model local/qwen3-coder:30b --judge-model ollama_chat/qwen3-coder:30b
 ```
 
 **Separate judge endpoint:**
@@ -180,7 +188,7 @@ Set `JUDGE_API_BASE` and `JUDGE_API_KEY` when the judge uses a different endpoin
 ```bash
 export JUDGE_API_BASE="https://example.test/v1"
 export JUDGE_API_KEY="..."
-python main.py --agent stratus --model ollama_chat/qwen3-coder:30b --judge-model gpt-5
+uv run main.py --agent stratus --model ollama_chat/qwen3-coder:30b --judge-model gpt-5
 ```
 
 <details>
@@ -188,22 +196,22 @@ python main.py --agent stratus --model ollama_chat/qwen3-coder:30b --judge-model
 
 **OpenAI:**
 ```bash
-python main.py --agent stratus --model gpt-5
+uv run main.py --agent stratus --model gpt-5
 ```
 
 **Anthropic:**
 ```bash
-python main.py --agent stratus --model anthropic/claude-sonnet-4-6
+uv run main.py --agent stratus --model anthropic/claude-sonnet-4-6
 ```
 
 **Google:**
 ```bash
-python main.py --agent stratus --model gemini/gemini-2.5-pro
+uv run main.py --agent stratus --model gemini/gemini-2.5-pro
 ```
 
 **AWS Bedrock:**
 ```bash
-python main.py --agent stratus --model bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+uv run main.py --agent stratus --model bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
 ```
 
 **Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.
