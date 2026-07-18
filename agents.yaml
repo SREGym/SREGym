@@ -61,3 +61,14 @@ agents:
     install_script: null
     agent_version: null
     container_isolation: false
+  - name: opensre
+    kickoff_command: python -m clients.opensre.driver
+    kickoff_workdir: .
+    kickoff_env:
+      OPENSRE_EXECUTOR: "claudecode"
+      OPENSRE_DIAGNOSIS_ONLY: "0"
+    install_script: null
+    agent_version: null
+    # Runs on the host: the `opensre` CLI is installed at ~/.local/bin, not in a
+    # container, and it spawns a host executor (e.g. claudecode) for mitigation.
+    container_isolation: false
