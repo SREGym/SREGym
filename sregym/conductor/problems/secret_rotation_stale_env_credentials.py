@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
     """Rotate product-catalog database credentials without refreshing the running pod environment."""
 
+    SOURCE_POD_UID_ANNOTATION = "credential-source-pod-uid"
+    _POSTGRES_ROTATION_ATTEMPTS = 3
     _POSTGRES_PASSWORD_CHECK_ATTEMPTS = 3
     _POSTGRES_PASSWORD_CHECK_INTERVAL_SECONDS = 3
     _VERIFY_TIMEOUT_SECONDS = 30
@@ -133,9 +135,17 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
 
     def _rotate_postgres_password(self, from_password: str, to_password: str) -> None:
         """Rotate the PostgreSQL password for the application user."""
-        output = self._postgres_exec(from_password, f"ALTER USER {self.db_user} WITH PASSWORD '{to_password}';")
-        if "ALTER ROLE" not in output:
-            raise RuntimeError(f"Failed to rotate PostgreSQL password for {self.db_user}: {output}")
+        last_output = ""
+        for attempt in range(self._POSTGRES_ROTATION_ATTEMPTS):
+            last_output = self._postgres_exec(
+                from_password,
+                f"ALTER USER {self.db_user} WITH PASSWORD '{to_password}';",
+            )
+            if "ALTER ROLE" in last_output or self._postgres_accepts_password(to_password):
+                return
+            if attempt < self._POSTGRES_ROTATION_ATTEMPTS - 1:
+                time.sleep(self._POSTGRES_PASSWORD_CHECK_INTERVAL_SECONDS)
+        raise RuntimeError(f"Failed to rotate PostgreSQL password for {self.db_user}: {last_output}")
 
     def _drop_postgres_connections(self, password: str) -> None:
         """Terminate existing app DB sessions so product-catalog reconnect."""
@@ -223,6 +233,30 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
                 return pod
         return fallback
 
+    def _get_stale_product_catalog_pod_uid(self) -> str | None:
+        """Read the credential source pod identity from Deployment metadata."""
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        annotations = deployment.metadata.annotations or {}
+        return annotations.get(self.SOURCE_POD_UID_ANNOTATION)
+
+    def _set_stale_product_catalog_pod_uid(self, pod_uid: str) -> None:
+        """Persist the credential source pod identity without changing the pod template."""
+        self.kubectl.apps_v1_api.patch_namespaced_deployment(
+            name=self.faulty_service,
+            namespace=self.namespace,
+            body={"metadata": {"annotations": {self.SOURCE_POD_UID_ANNOTATION: pod_uid}}},
+        )
+        self.stale_product_catalog_pod_uid = pod_uid
+
+    def _clear_stale_product_catalog_pod_uid(self) -> None:
+        """Remove the credential source marker after the pod is refreshed."""
+        self.kubectl.apps_v1_api.patch_namespaced_deployment(
+            name=self.faulty_service,
+            namespace=self.namespace,
+            body={"metadata": {"annotations": {self.SOURCE_POD_UID_ANNOTATION: None}}},
+        )
+        self.stale_product_catalog_pod_uid = None
+
     def _get_product_catalog_env(self) -> str | None:
         """Infer product-catalog's effective DB env value from Deployment, Secret, and pod UID."""
         pod = self._get_product_catalog_pod()
@@ -244,7 +278,8 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
             if secret_ref.get("name") != self.secret_name or secret_ref.get("key") != self.secret_key:
                 return None
             secret_conn = self._get_secret_conn_string()
-            if secret_conn == self.new_conn and pod.metadata.uid == self.stale_product_catalog_pod_uid:
+            stale_pod_uid = self.stale_product_catalog_pod_uid or self._get_stale_product_catalog_pod_uid()
+            if secret_conn == self.new_conn and pod.metadata.uid == stale_pod_uid:
                 return self.old_conn
             return secret_conn
         return None
@@ -290,7 +325,7 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         self._set_product_catalog_literal_env(self.old_conn)
         self._run(f"kubectl delete secret {self.secret_name} -n {self.namespace} --ignore-not-found")
         self._rollout_restart(self.faulty_service)
-        self.stale_product_catalog_pod_uid = None
+        self._clear_stale_product_catalog_pod_uid()
 
     @mark_fault_injected
     def inject_fault(self):
@@ -305,7 +340,9 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         self._set_product_catalog_secret_env()
         self._rollout_restart(self.faulty_service)
         pod = self._get_product_catalog_pod()
-        self.stale_product_catalog_pod_uid = pod.metadata.uid if pod else None
+        if pod is None or not pod.metadata.uid:
+            raise RuntimeError("Could not identify the baseline product-catalog pod")
+        self._set_stale_product_catalog_pod_uid(pod.metadata.uid)
 
         product_env = self._get_product_catalog_env()
         if product_env != self.old_conn:
@@ -359,6 +396,6 @@ class SecretRotationStaleEnvCredentialsAstronomyShop(Problem):
         self._set_literal_db_clients_password(self.new_password)
         self._set_product_catalog_secret_env()
         self._rollout_restart(self.faulty_service)
-        self.stale_product_catalog_pod_uid = None
+        self._clear_stale_product_catalog_pod_uid()
 
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
