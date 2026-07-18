@@ -39,6 +39,20 @@ class LiteLLMBackend:
         litellm.drop_params = True
         litellm.modify_params = True
 
+    def _uses_anthropic_cache_control(self) -> bool:
+        """Whether to inject ``cache_control`` breakpoints (Anthropic-only).
+
+        Matches Claude/Anthropic/Bedrock-Claude model ids, plus any model routed
+        through an Anthropic-compatible endpoint (e.g. Moonshot's ``/anthropic``).
+        Providers with automatic prefix caching (OpenAI, Gemini, DeepSeek, etc.)
+        need nothing and are excluded.
+        """
+        m = (self.model_name or "").lower()
+        if "anthropic" in m or "claude" in m:
+            return True
+        base = (self.api_base or "").lower()
+        return "anthropic" in base or base.endswith("/anthropic") or "/anthropic/" in base
+
     def inference(
         self,
         messages: str | list[SystemMessage | HumanMessage | AIMessage],
@@ -79,6 +93,16 @@ class LiteLLMBackend:
             model_config["api_base"] = self.api_base
         if self.max_tokens is not None:
             model_config["max_tokens"] = self.max_tokens
+
+        # Anthropic prompt caching (rolling: system prefix + last message).
+        # Nested under model_kwargs; ignored for non-Anthropic via drop_params.
+        if self._uses_anthropic_cache_control():
+            model_config["model_kwargs"] = {
+                "cache_control_injection_points": [
+                    {"location": "message", "role": "system"},
+                    {"location": "message", "index": -1},
+                ]
+            }
 
         llm = ChatLiteLLM(**model_config)
 

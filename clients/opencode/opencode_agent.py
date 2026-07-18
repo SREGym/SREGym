@@ -34,12 +34,13 @@ PROVIDER_ENV_VARS: dict[str, list[str]] = {
     "groq": ["GROQ_API_KEY"],
     "huggingface": ["HF_TOKEN"],
     "llama": ["LLAMA_API_KEY"],
+    "local": [],
     "mistral": ["MISTRAL_API_KEY"],
     "openai": ["OPENAI_API_KEY"],
     "xai": ["XAI_API_KEY"],
     # OpenCode native providers (no API key needed - uses opencode.ai)
     "opencode": [],
-    "zai-coding-plan": [],
+    "zai-coding-plan": ["ZAI_API_KEY"],
 }
 
 
@@ -330,8 +331,36 @@ class OpenCodeAgent:
                 env[var] = os.environ[var]
                 has_auth = True
 
-        if not has_auth:
+        if env_vars and not has_auth:
             logger.warning(f"No authentication found for provider '{self.provider}'. Expected one of: {env_vars}")
+
+        if self.provider == "local":
+            if not env.get("AGENT_API_BASE"):
+                raise ValueError("AGENT_API_BASE is required for local OpenCode models")
+
+            model = self.model_name.split("/", 1)[1]
+            options = {"baseURL": "{env:AGENT_API_BASE}"}
+            if env.get("AGENT_API_KEY"):
+                options["apiKey"] = "{env:AGENT_API_KEY}"
+
+            config_path = self.logs_dir / "opencode.json"
+            with open(config_path, "w") as config_file:
+                json.dump(
+                    {
+                        "$schema": "https://opencode.ai/config.json",
+                        "provider": {
+                            "local": {
+                                "npm": "@ai-sdk/openai-compatible",
+                                "name": "Local",
+                                "options": options,
+                                "models": {model: {"name": model}},
+                            }
+                        },
+                    },
+                    config_file,
+                    indent=2,
+                )
+            env["OPENCODE_CONFIG"] = str(config_path)
 
         # Enable fake VCS for OpenCode (required for non-git directories)
         env["OPENCODE_FAKE_VCS"] = "git"
@@ -356,7 +385,7 @@ class OpenCodeAgent:
 
         # Build command
         escaped_instruction = shlex.quote(instruction)
-        command = f"opencode --model {self.model_name} run --format=json {escaped_instruction}"
+        command = f"opencode --model={self.model_name} run --format=json --thinking {escaped_instruction}"
 
         logger.info(f"Executing command: {command}")
 

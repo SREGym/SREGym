@@ -11,8 +11,10 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class MongoDBUserUnregistered(Problem):
+    """Remove admin user from MongoDB — the agent must diagnose auth failure without seeing the scripts."""
+
     def __init__(self, faulty_service: str = "mongodb-geo"):
-        super().__init__(app=HotelReservation())
+        super().__init__(app=HotelReservation(mount_failure_scripts=False))
         self.kubectl = KubeCtl()
         self.faulty_service = faulty_service
         # NOTE: change the faulty service to mongodb-rate to create another scenario

@@ -8,6 +8,7 @@ if str(sregym_core_path) not in sys.path:
     sys.path.insert(0, str(sregym_core_path))
 
 import asyncio  # noqa: E402
+import contextlib  # noqa: E402
 import json  # noqa: E402
 import time  # noqa: E402
 
@@ -53,19 +54,11 @@ logger.setLevel(logging.DEBUG)
 
 
 def run_preflight() -> None:
-    """Validate model + credentials by making a minimal litellm call."""
-    import litellm
+    """Validate model, endpoint, credentials, and tool calling."""
+    from clients.stratus.stratus_agent.driver.preflight import run_stratus_preflight
 
-    litellm.drop_params = True
-    litellm.modify_params = True
-    litellm.suppress_debug_info = True  # ty:ignore[invalid-assignment]
     try:
-        litellm.completion(
-            model=os.environ["AGENT_MODEL_ID"],
-            messages=[{"role": "user", "content": "say ok"}],
-            max_tokens=3,
-            num_retries=0,
-        )
+        run_stratus_preflight()
         print("ok")
     except Exception as e:
         print(f"preflight failed: {e}")
@@ -106,6 +99,15 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
             "type": message.__class__.__name__,
             "content": message.content,
         }
+        # Preserve the tool-call id (and name) on ToolMessages so tool results can
+        # be correlated back to the issuing tool call by id during ATIF conversion.
+        # LangChain drops these from the default dict, and the call<->result link is
+        # otherwise only positional (fragile for parallel calls).
+        if message.__class__.__name__ == "ToolMessage":
+            if getattr(message, "tool_call_id", None):
+                msg_dict["tool_call_id"] = message.tool_call_id
+            if getattr(message, "name", None):
+                msg_dict["name"] = message.name
         # Properly serialize tool calls
         if hasattr(message, "tool_calls") and message.tool_calls:
             serialized_tool_calls = []
@@ -122,6 +124,19 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
                         }
                     )
             msg_dict["tool_calls"] = serialized_tool_calls
+
+        # Preserve per-message token usage + model/cost so ATIF conversion can
+        # populate Metrics. AIMessages produced by ChatLiteLLM.invoke() carry
+        # usage_metadata ({input_tokens, output_tokens, total_tokens, ...}) and
+        # response_metadata ({model_name, ...}); both are JSON-serializable dicts.
+        usage_metadata = getattr(message, "usage_metadata", None)
+        if usage_metadata:
+            with contextlib.suppress(Exception):
+                msg_dict["usage_metadata"] = json.loads(json.dumps(usage_metadata, default=str))
+        response_metadata = getattr(message, "response_metadata", None)
+        if response_metadata:
+            with contextlib.suppress(Exception):
+                msg_dict["response_metadata"] = json.loads(json.dumps(response_metadata, default=str))
 
         # Properly serialize additional_kwargs
         if hasattr(message, "additional_kwargs") and message.additional_kwargs:

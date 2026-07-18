@@ -111,16 +111,19 @@ class GeminiCliAgent:
         return self.logs_dir / "sessions"
 
     def _find_session_file(self) -> Path | None:
-        """Find the most recent Gemini session file."""
+        """Find the most recent Gemini session file.
+
+        Gemini CLI writes sessions under ``~/.gemini/tmp/<hash>/chats/`` as
+        ``session-*.json`` (older) or ``session-*.jsonl`` (v0.40+). Search both
+        extensions and fall back to a recursive scan, matching Harbor's copy
+        step — the narrow ``*/chats/*.json`` glob alone misses newer JSONL
+        sessions and any layout change.
+        """
         tmp_dir = self.gemini_home / "tmp"
         if not tmp_dir.exists():
             return None
 
-        # Gemini stores sessions in: ~/.gemini/tmp/*/chats/session-*.json
-        session_files = list(tmp_dir.glob("*/chats/session-*.json"))
-        if not session_files:
-            # Fallback to old location
-            session_files = list(tmp_dir.glob("session-*.json"))
+        session_files = [p for pat in ("session-*.json", "session-*.jsonl") for p in tmp_dir.rglob(pat)]
         if not session_files:
             return None
 
@@ -142,7 +145,9 @@ class GeminiCliAgent:
 
             # Extract session ID from filename (session-2026-02-04T16-12-e580aecd.json -> e580aecd)
             session_id = session_file.stem.split("-")[-1] if "-" in session_file.stem else session_file.stem
-            archived_path = session_subdir / f"session-{session_id}.json"
+            # Preserve the real extension (.json or .jsonl); the ATIF adapter
+            # handles both shapes.
+            archived_path = session_subdir / f"session-{session_id}{session_file.suffix}"
             shutil.copy(session_file, archived_path)
             logger.info(f"Archived session to {archived_path}")
 
@@ -213,6 +218,11 @@ class GeminiCliAgent:
 
         # Build environment variables
         env = os.environ.copy()
+
+        # Headless/automated runs: the working dir isn't interactively "trusted",
+        # which otherwise downgrades approval mode and blocks tool calls. This is
+        # the documented env var for headless environments.
+        env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
 
         # Auth environment variables
         auth_vars = [

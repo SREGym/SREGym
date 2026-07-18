@@ -32,7 +32,6 @@ class ApplicationFaultInjector(FaultInjector):
         for service in target_services:
             if service in microservices:
                 pods = self.kubectl.list_pods(self.namespace)
-                # print(pods)
                 target_mongo_pods = [pod.metadata.name for pod in pods.items if service in pod.metadata.name]
                 print(f"Target MongoDB Pods: {target_mongo_pods}")
 
@@ -44,12 +43,11 @@ class ApplicationFaultInjector(FaultInjector):
                 ]
                 print(f"Target Service Pods: {target_service_pods}")
 
+                script = self._read_fault_script(
+                    "revoke-admin-rate-mongo.sh" if service == "mongodb-rate" else "revoke-admin-geo-mongo.sh"
+                )
                 for pod in target_mongo_pods:
-                    if service == "mongodb-rate":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-admin-rate-mongo.sh"
-                    elif service == "mongodb-geo":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-admin-geo-mongo.sh"
-                    result = self.kubectl.exec_command(revoke_command)
+                    result = self._exec_script_in_pod(pod, script)
                     print(f"Injection result for {service}: {result}")
 
                 self.delete_service_pods(target_service_pods)
@@ -68,19 +66,21 @@ class ApplicationFaultInjector(FaultInjector):
                 target_service_pods = [
                     pod.metadata.name for pod in pods.items if self.mongo_service_pod_map[service] in pod.metadata.name
                 ]
+
+                script = self._read_fault_script(
+                    "revoke-mitigate-admin-rate-mongo.sh"
+                    if service == "mongodb-rate"
+                    else "revoke-mitigate-admin-geo-mongo.sh"
+                )
                 for pod in target_mongo_pods:
-                    if service == "mongodb-rate":
-                        recover_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-mitigate-admin-rate-mongo.sh"
-                    elif service == "mongodb-geo":
-                        recover_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-mitigate-admin-geo-mongo.sh"
-                    result = self.kubectl.exec_command(recover_command)
+                    result = self._exec_script_in_pod(pod, script)
                     print(f"Recovery result for {service}: {result}")
 
                 self.delete_service_pods(target_service_pods)
 
     # A.2 - storage_user_unregistered: User not registered in MongoDB - Storage/Net
     def inject_storage_user_unregistered(self, microservices: list[str]):
-        """Inject a fault to create an unregistered user in MongoDB."""
+        """Inject a fault to remove the admin user from MongoDB."""
         target_services = ["mongodb-rate", "mongodb-geo"]
         for service in target_services:
             if service in microservices:
@@ -93,11 +93,10 @@ class ApplicationFaultInjector(FaultInjector):
                     for pod in pods.items
                     if pod.metadata.name.startswith(self.mongo_service_pod_map[service])
                 ]
+
+                script = self._read_fault_script("remove-admin-mongo.sh")
                 for pod in target_mongo_pods:
-                    revoke_command = (
-                        f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/remove-admin-mongo.sh"
-                    )
-                    result = self.kubectl.exec_command(revoke_command)
+                    result = self._exec_script_in_pod(pod, script)
                     print(f"Injection result for {service}: {result}")
 
                 self.delete_service_pods(target_service_pods)
@@ -115,15 +114,30 @@ class ApplicationFaultInjector(FaultInjector):
                     for pod in pods.items
                     if pod.metadata.name.startswith(self.mongo_service_pod_map[service])
                 ]
+
+                script = self._read_fault_script(
+                    "remove-mitigate-admin-rate-mongo.sh"
+                    if service == "mongodb-rate"
+                    else "remove-mitigate-admin-geo-mongo.sh"
+                )
                 for pod in target_mongo_pods:
-                    if service == "mongodb-rate":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/remove-mitigate-admin-rate-mongo.sh"
-                    elif service == "mongodb-geo":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/remove-mitigate-admin-geo-mongo.sh"
-                    result = self.kubectl.exec_command(revoke_command)
+                    result = self._exec_script_in_pod(pod, script)
                     print(f"Recovery result for {service}: {result}")
 
                 self.delete_service_pods(target_service_pods)
+
+    def _read_fault_script(self, filename: str) -> str:
+        """Read a fault script from the scripts directory."""
+        from sregym.paths import FAULT_SCRIPTS
+
+        script_path = FAULT_SCRIPTS / filename
+        with open(script_path) as f:
+            return f.read()
+
+    def _exec_script_in_pod(self, pod: str, script: str) -> str:
+        """Execute a script inside a pod by piping it via stdin."""
+        command = f"kubectl exec -i {pod} -n {self.namespace} -- /bin/bash"
+        return self.kubectl.exec_command(command, input_data=script)
 
     # A.3 - misconfig_app: pull the buggy config of the application image - Misconfig
     def inject_misconfig_app(self, microservices: list[str]):

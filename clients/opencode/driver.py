@@ -28,6 +28,34 @@ from clients.opencode.opencode_agent import OpenCodeAgent  # noqa: E402
 logger = logging.getLogger("all.opencode.driver")
 
 
+def run_preflight() -> None:
+    """Validate model + credentials by making a minimal OpenCode CLI call."""
+    import subprocess
+
+    m = os.environ["AGENT_MODEL_ID"]
+    env = os.environ.copy()
+    env["OPENCODE_FAKE_VCS"] = "git"
+
+    r = subprocess.run(
+        [
+            "opencode",
+            f"--model={m}",
+            "run",
+            "--format=json",
+            "--thinking",
+            "say ok",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+        stdin=subprocess.DEVNULL,
+    )
+    if r.returncode:
+        print(r.stdout or r.stderr)
+    sys.exit(r.returncode)
+
+
 def get_api_base_url() -> str:
     """Get the conductor API base URL."""
     host = os.getenv("API_HOSTNAME", "localhost")
