@@ -1,7 +1,7 @@
 """Problem: admission webhook outage blocks pod admission in an app namespace.
 
 This models the failure archetype where a ValidatingWebhookConfiguration with
-``failurePolicy: Fail`` points at a backend whose pods are unavailable, so every
+``failurePolicy: Fail`` points at a backend Service that is missing, so every
 admission request to the webhook fails and the kube-apiserver rejects the
 intercepted operations. Two well-documented public postmortems of this class
 of failure are Jetstack's 2019 GKE admission-webhook outage (listed on k8s.af)
@@ -15,20 +15,22 @@ attempt hits the broken webhook and is rejected, so the deployment stays
 under-replicated even though its spec, image, and resources are healthy.
 
 Three valid mitigations: delete the webhook config, change ``failurePolicy``
-to ``Ignore``, or repair the backend service. ``DeploymentReadinessOracle``
-accepts any of them because each restores the affected Deployment's
-``ready_replicas`` to its desired count. The generic ``MitigationOracle``
-is unsuitable here: when admission blocks pod creation, the missing pod is
-absent from the namespace's pod list and the per-pod walk reports false
-success.
+to ``Ignore``, or repair the backend service. The mitigation oracle accepts
+any of them only after a controlled deletion proves that the Deployment can
+admit a different replacement pod and restore its current Service endpoint.
+This catches a broken webhook reinstalled after an old pod became healthy.
 """
 
+import json
 import time
+from pathlib import Path
 
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
-from sregym.conductor.oracles.deployment_readiness import DeploymentReadinessOracle
+from sregym.conductor.oracles.admission_webhook_outage_mitigation import (
+    AdmissionWebhookOutageMitigationOracle,
+)
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -77,7 +79,7 @@ class AdmissionWebhookOutage(Problem):
                 f"A cluster-scoped ValidatingWebhookConfiguration named `{self.WEBHOOK_NAME}` has been installed "
                 f"with `failurePolicy: Fail` and a `namespaceSelector` scoped to the `{self.namespace}` namespace. "
                 "The webhook intercepts pod CREATE operations, but its `clientConfig.service` points at a backend "
-                f"service `{self.BACKEND_SVC_NAMESPACE}/{self.BACKEND_SVC_NAME}` that has no endpoints, so every "
+                f"Service `{self.BACKEND_SVC_NAMESPACE}/{self.BACKEND_SVC_NAME}` that does not exist, so every "
                 "admission request times out and the kube-apiserver rejects the request with a `failed calling "
                 f"webhook` error. As a result, the ReplicaSet controlling the `{self.faulty_service}` deployment "
                 "cannot recreate pods after they are deleted, leaving the deployment under-replicated. The "
@@ -91,10 +93,84 @@ class AdmissionWebhookOutage(Problem):
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.app.create_workload()
-        # Use DeploymentReadinessOracle, not the generic MitigationOracle: the fault
-        # makes the affected pod absent from the namespace's pod list, so a per-pod
-        # health walk reports false success even when the fault is unmitigated.
-        self.mitigation_oracle = DeploymentReadinessOracle(problem=self)
+        self.mitigation_oracle = AdmissionWebhookOutageMitigationOracle(problem=self)
+
+    def _webhook_state_path(self) -> Path:
+        return Path("/tmp") / f"webhook-state-{self.namespace}-{self.WEBHOOK_NAME}.json"
+
+    @staticmethod
+    def _strip_runtime_metadata(configuration: dict) -> dict:
+        metadata = configuration.setdefault("metadata", {})
+        for field in (
+            "creationTimestamp",
+            "generation",
+            "managedFields",
+            "resourceVersion",
+            "selfLink",
+            "uid",
+        ):
+            metadata.pop(field, None)
+        return configuration
+
+    def _capture_webhook_baseline(self) -> Path:
+        state_path = self._webhook_state_path()
+        if state_path.exists():
+            return state_path
+
+        try:
+            existing = self.admission_api.read_validating_webhook_configuration(name=self.WEBHOOK_NAME)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            state = {"existed": False}
+        else:
+            state = {
+                "existed": True,
+                "configuration": client.ApiClient().sanitize_for_serialization(existing),
+            }
+
+        state_path.write_text(json.dumps(state, sort_keys=True))
+        return state_path
+
+    def _restore_webhook_baseline(self) -> Path:
+        state_path = self._webhook_state_path()
+        if not state_path.exists():
+            raise RuntimeError(f"Saved webhook configuration is missing: {state_path}")
+
+        state = json.loads(state_path.read_text())
+        if not state["existed"]:
+            try:
+                self.admission_api.delete_validating_webhook_configuration(name=self.WEBHOOK_NAME)
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+            return state_path
+
+        baseline = self._strip_runtime_metadata(state["configuration"])
+        try:
+            current = self.admission_api.read_validating_webhook_configuration(name=self.WEBHOOK_NAME)
+        except ApiException as exc:
+            if exc.status != 404:
+                raise
+            self.admission_api.create_validating_webhook_configuration(body=baseline)
+        else:
+            baseline["metadata"]["resourceVersion"] = current.metadata.resource_version
+            self.admission_api.replace_validating_webhook_configuration(
+                name=self.WEBHOOK_NAME,
+                body=baseline,
+            )
+        return state_path
+
+    def _wait_for_target_ready(self) -> None:
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/{self.faulty_service} -n {self.namespace} --timeout=120s"
+        )
+        self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        self.kubectl.wait_for_ready(
+            self.namespace,
+            service_names=self.faulty_service,
+            max_wait=180,
+        )
 
     def _build_webhook_body(self) -> dict:
         return {
@@ -113,7 +189,7 @@ class AdmissionWebhookOutage(Problem):
                         },
                         # caBundle intentionally omitted: the apiserver will fall back
                         # to its system trust roots, so the failure surfaces at the
-                        # backend lookup step ("no endpoints for service ..."), not at
+                        # backend lookup step ("service not found"), not at
                         # the cert parsing step. This matches the documented narrative
                         # of a webhook backend that is down.
                     },
@@ -141,6 +217,7 @@ class AdmissionWebhookOutage(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
 
+        self._capture_webhook_baseline()
         webhook = self._build_webhook_body()
         try:
             self.admission_api.create_validating_webhook_configuration(body=webhook)
@@ -176,12 +253,8 @@ class AdmissionWebhookOutage(Problem):
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        try:
-            self.admission_api.delete_validating_webhook_configuration(name=self.WEBHOOK_NAME)
-            print(f"Deleted ValidatingWebhookConfiguration: {self.WEBHOOK_NAME}")
-        except ApiException as e:
-            if e.status == 404:
-                print(f"ValidatingWebhookConfiguration {self.WEBHOOK_NAME} already absent")
-            else:
-                raise
+        state_path = self._restore_webhook_baseline()
+        self._wait_for_target_ready()
+        state_path.unlink()
+        print(f"Restored the previous ValidatingWebhookConfiguration state for: {self.WEBHOOK_NAME}")
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")

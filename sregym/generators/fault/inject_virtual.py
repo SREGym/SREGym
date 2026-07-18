@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 
 import yaml
+from kubernetes.client.rest import ApiException
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.paths import TARGET_MICROSERVICES
@@ -452,7 +453,7 @@ class VirtualizationFaultInjector(FaultInjector):
             fqdn = f"{service}.{self.namespace}.svc.cluster.local"
 
             # Get configmap as structured data
-            cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+            cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
             cm_data = yaml.safe_load(cm_yaml)
             corefile = cm_data["data"]["Corefile"]
 
@@ -462,7 +463,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 self.recover_service_dns_resolution_failure([service])
 
                 # Re-fetch after recovery
-                cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+                cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
                 cm_data = yaml.safe_load(cm_yaml)
                 corefile = cm_data["data"]["Corefile"]
 
@@ -478,8 +479,7 @@ class VirtualizationFaultInjector(FaultInjector):
             # Find the position of "kubernetes" word
             kubernetes_pos = corefile.find("kubernetes")
             if kubernetes_pos == -1:
-                print("Could not locate 'kubernetes' plugin in Corefile")
-                return
+                raise RuntimeError("Could not locate 'kubernetes' plugin in CoreDNS Corefile")
 
             # Find the start of the line containing "kubernetes"
             line_start = corefile.rfind("\n", 0, kubernetes_pos)
@@ -496,11 +496,17 @@ class VirtualizationFaultInjector(FaultInjector):
             # Apply using temporary file
             tmp_file_path = self._write_yaml_to_file("coredns", cm_data)
 
-            self.kubectl.exec_command(f"kubectl apply -f {tmp_file_path}")
+            self.kubectl.exec_command_checked(f"kubectl apply -f {tmp_file_path}")
 
             # Restart CoreDNS
-            self.kubectl.exec_command("kubectl -n kube-system rollout restart deployment coredns")
-            self.kubectl.exec_command("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout restart deployment coredns")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+
+            corefile_after = yaml.safe_load(
+                self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
+            )["data"]["Corefile"]
+            if start_line_id not in corefile_after:
+                raise RuntimeError(f"CoreDNS did not retain the NXDOMAIN rule for {fqdn}")
 
             print(f"Injected Service DNS Resolution Failure fault for service: {service}")
 
@@ -509,7 +515,7 @@ class VirtualizationFaultInjector(FaultInjector):
             fqdn = f"{service}.{self.namespace}.svc.cluster.local"
 
             # Get configmap as structured data
-            cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+            cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
             cm_data = yaml.safe_load(cm_yaml)
             corefile = cm_data["data"]["Corefile"]
 
@@ -541,25 +547,29 @@ class VirtualizationFaultInjector(FaultInjector):
                 new_lines.append(line)
 
             if skip_block:
-                print("WARNING: Template block was not properly closed")
-                return
+                raise RuntimeError("CoreDNS NXDOMAIN template block was not properly closed")
 
             new_corefile = "\n".join(new_lines)
 
             # Verify if the removal worked
             if start_line_id in new_corefile:
-                print("ERROR: Template was not successfully removed!")
-                return
+                raise RuntimeError("CoreDNS NXDOMAIN template was not successfully removed")
 
             cm_data["data"]["Corefile"] = new_corefile
 
             # Apply using temporary file
             tmp_file_path = self._write_yaml_to_file("coredns", cm_data)
-            self.kubectl.exec_command(f"kubectl apply -f {tmp_file_path}")
+            self.kubectl.exec_command_checked(f"kubectl apply -f {tmp_file_path}")
 
             # Restart CoreDNS
-            self.kubectl.exec_command("kubectl -n kube-system rollout restart deployment coredns")
-            self.kubectl.exec_command("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout restart deployment coredns")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+
+            corefile_after = yaml.safe_load(
+                self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
+            )["data"]["Corefile"]
+            if start_line_id in corefile_after:
+                raise RuntimeError(f"CoreDNS still contains the NXDOMAIN rule for {fqdn}")
 
             print(f"Recovered Service DNS Resolution Failure fault for service: {service}")
 
@@ -1095,7 +1105,7 @@ class VirtualizationFaultInjector(FaultInjector):
         for service in microservices:
             original_yaml_path = f"/tmp/{service}_modified.yaml"
 
-            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace} --ignore-not-found=true"
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
 
             delete_result = self.kubectl.exec_command(delete_command)
@@ -1162,13 +1172,87 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from liveness probe misconfiguration fault for service: {service}")
 
     # Duplicate PVC mounts multiple replicas share ReadWriteOnce PVC causing mount conflict
+    def _storage_baseline_path(self, service: str) -> Path:
+        return Path("/tmp") / f"deployment-state-{self.namespace}-{service}.yaml"
+
+    @staticmethod
+    def _reapplicable_deployment_manifest(deployment_yaml: dict) -> dict:
+        manifest = copy.deepcopy(deployment_yaml)
+        manifest.pop("status", None)
+
+        metadata = manifest.setdefault("metadata", {})
+        for field in (
+            "creationTimestamp",
+            "generation",
+            "managedFields",
+            "resourceVersion",
+            "selfLink",
+            "uid",
+        ):
+            metadata.pop(field, None)
+
+        annotations = metadata.get("annotations") or {}
+        annotations.pop("deployment.kubernetes.io/revision", None)
+        annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+        if annotations:
+            metadata["annotations"] = annotations
+        else:
+            metadata.pop("annotations", None)
+        return manifest
+
+    def _save_storage_baseline(self, service: str, deployment_yaml: dict) -> Path:
+        path = self._storage_baseline_path(service)
+        path.write_text(yaml.safe_dump(self._reapplicable_deployment_manifest(deployment_yaml)))
+        return path
+
+    def _legacy_statefulset_claims(self, service: str) -> list[str]:
+        try:
+            statefulset = self.kubectl.apps_v1_api.read_namespaced_stateful_set(
+                name=service,
+                namespace=self.namespace,
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                return []
+            raise
+
+        prefixes = [
+            f"{template.metadata.name}-{service}-" for template in statefulset.spec.volume_claim_templates or []
+        ]
+        if not prefixes:
+            return []
+
+        claims = self.kubectl.core_v1_api.list_namespaced_persistent_volume_claim(self.namespace)
+        return [
+            claim.metadata.name
+            for claim in claims.items
+            if any(claim.metadata.name.startswith(prefix) for prefix in prefixes)
+        ]
+
     def inject_duplicate_pvc_mounts(self, microservices: list[str]):
         for service in microservices:
-            deployment_yaml = self._get_deployment_yaml(service)
-            # original_yaml = copy.deepcopy(deployment_yaml)
+            original_deployment_yaml = self._get_deployment_yaml(service)
+            deployment_yaml = copy.deepcopy(original_deployment_yaml)
 
             # Create a single PVC that every replica will try to use
             pvc_name = f"{service}-pvc"
+            try:
+                self.kubectl.core_v1_api.read_namespaced_persistent_volume_claim(
+                    name=pvc_name,
+                    namespace=self.namespace,
+                )
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+            else:
+                raise RuntimeError(
+                    f"Refusing to replace pre-existing PersistentVolumeClaim '{pvc_name}' "
+                    f"in namespace '{self.namespace}'"
+                )
+
+            baseline_path = self._save_storage_baseline(service, original_deployment_yaml)
+            print(f"Saved the current Deployment configuration to {baseline_path}")
+
             pvc_manifest = {
                 "apiVersion": "v1",
                 "kind": "PersistentVolumeClaim",
@@ -1237,65 +1321,47 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_duplicate_pvc_mounts(self, microservices: list[str]):
         for service in microservices:
-            deployment_yaml = self._get_deployment_yaml(service)
+            baseline_path = self._storage_baseline_path(service)
+            if not baseline_path.exists():
+                raise RuntimeError(f"Saved Deployment configuration is missing: {baseline_path}")
 
-            delete_result = self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
-            print(f"Delete result for {service}: {delete_result}")
-
-            template = deployment_yaml["spec"]["template"]
-            replicas = max(deployment_yaml["spec"].get("replicas", 1), 2)
-            selector = deployment_yaml["spec"]["selector"]
-
-            pod_spec = template["spec"]
-
-            existing_volumes = pod_spec.get("volumes", [])
-            config_volumes = [vol for vol in existing_volumes if "configMap" in vol]
-            pod_spec["volumes"] = config_volumes
-
-            if pod_spec.get("containers"):
-                containers = pod_spec["containers"]
-                if containers:
-                    existing_mounts = containers[0].get("volumeMounts", [])
-                    config_mounts = [mount for mount in existing_mounts if mount.get("name") != f"{service}-volume"]
-
-                    config_mounts.append({"name": "data-volume", "mountPath": f"/{service}-data"})
-                    containers[0]["volumeMounts"] = config_mounts
-
-            # Convert Deployment to StatefulSet
-            statefulset_yaml = {
-                "apiVersion": "apps/v1",
-                "kind": "StatefulSet",
-                "metadata": {
-                    "name": service,
-                    "namespace": self.namespace,
-                    "labels": deployment_yaml.get("metadata", {}).get("labels", {}),
-                },
-                "spec": {
-                    "serviceName": service,
-                    "replicas": replicas,
-                    "selector": selector,
-                    "template": template,
-                    "volumeClaimTemplates": [
-                        {
-                            "metadata": {"name": "data-volume", "namespace": self.namespace},
-                            "spec": {
-                                "accessModes": ["ReadWriteOnce"],
-                                "resources": {"requests": {"storage": "1Gi"}},
-                            },
-                        }
-                    ],
-                },
-            }
-
-            ss_path = self._write_yaml_to_file(service, statefulset_yaml)
-            apply_result = self.kubectl.exec_command(f"kubectl apply -f {ss_path} -n {self.namespace}")
-            print(f"Apply result for {service}: {apply_result}")
-
+            legacy_claims = self._legacy_statefulset_claims(service)
             self.kubectl.exec_command(
-                f"kubectl rollout status statefulset/{service} -n {self.namespace} --timeout=120s"
+                f"kubectl delete statefulset {service} -n {self.namespace} "
+                "--ignore-not-found=true --wait=true --timeout=120s"
+            )
+            self.kubectl.exec_command(
+                f"kubectl delete deployment {service} -n {self.namespace} "
+                "--ignore-not-found=true --wait=true --timeout=120s"
             )
 
-            print(f"Converted {service} to StatefulSet with unique PVC per replica and scaled to {replicas}")
+            injected_claims = [f"{service}-pvc", *legacy_claims]
+            for claim_name in dict.fromkeys(injected_claims):
+                self.kubectl.exec_command(
+                    f"kubectl delete pvc {claim_name} -n {self.namespace} "
+                    "--ignore-not-found=true --wait=true --timeout=120s"
+                )
+
+            remaining_claims = {
+                claim.metadata.name
+                for claim in self.kubectl.core_v1_api.list_namespaced_persistent_volume_claim(self.namespace).items
+            }
+            not_deleted = remaining_claims.intersection(injected_claims)
+            if not_deleted:
+                raise RuntimeError(f"Could not remove injected storage claims: {sorted(not_deleted)}")
+
+            apply_result = self.kubectl.exec_command(f"kubectl apply -f {baseline_path} -n {self.namespace}")
+            print(f"Restore result for {service}: {apply_result}")
+            self.kubectl.get_deployment(service, self.namespace)
+            self.kubectl.exec_command(f"kubectl rollout status deployment/{service} -n {self.namespace} --timeout=120s")
+            self.kubectl.wait_for_ready(
+                self.namespace,
+                service_names=service,
+                max_wait=180,
+            )
+            baseline_path.unlink()
+
+            print(f"Restored the original Deployment and removed injected storage for {service}")
 
     # Inject environment variable shadowing fault
     def inject_env_variable_shadowing(self, microservices: list[str]):
@@ -1368,6 +1434,30 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from environment variable shadowing fault for service: {service}")
 
+    def _wait_for_deployment_rollout(self, service: str, timeout: int = 120, sleep: int = 2) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            deployment = self.kubectl.apps_v1_api.read_namespaced_deployment(service, self.namespace)
+            desired = deployment.spec.replicas
+            if desired is None:
+                desired = 1
+
+            status = deployment.status
+            generation = deployment.metadata.generation or 0
+            if (
+                desired > 0
+                and (status.observed_generation or 0) >= generation
+                and (status.updated_replicas or 0) == desired
+                and (status.ready_replicas or 0) == desired
+                and (status.available_replicas or 0) == desired
+                and (status.unavailable_replicas or 0) == 0
+            ):
+                return
+
+            time.sleep(sleep)
+
+        raise TimeoutError(f"Deployment '{service}' did not complete its healthy baseline rollout within {timeout}s")
+
     # Inject Rolling Update Misconfiguration
     def inject_rolling_update_misconfigured(self, microservices: list[str]):
         import tempfile
@@ -1404,6 +1494,8 @@ class VirtualizationFaultInjector(FaultInjector):
                 yaml.safe_dump(base_dep, tmp)
                 path0 = tmp.name
             self.kubectl.exec_command(f"kubectl apply -f {path0} -n {self.namespace}")
+            self._wait_for_deployment_rollout(service)
+            print(f"Healthy baseline rollout completed for `{service}`")
 
             orig_path = f"/tmp/{service}-orig.yaml"
             with open(orig_path, "w") as f:
@@ -1416,7 +1508,8 @@ class VirtualizationFaultInjector(FaultInjector):
             }
             init = {
                 "name": "hang-init",
-                "image": "busybox",
+                "image": "busybox:1.36",
+                "imagePullPolicy": "IfNotPresent",
                 "command": ["/bin/sh", "-c", "sleep infinity"],
             }
             dep.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {}).setdefault(
@@ -1433,7 +1526,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_rolling_update_misconfigured(self, microservices: list[str]):
         for service in microservices:
-            original_yaml_path = f"/tmp/{service}_modified.yaml"
+            original_yaml_path = f"/tmp/{service}-orig.yaml"
 
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
             delete_result = self.kubectl.exec_command(delete_command)
@@ -1443,32 +1536,7 @@ class VirtualizationFaultInjector(FaultInjector):
             apply_result = self.kubectl.exec_command(apply_command)
             print(f"Restored original deployment {service}: {apply_result}")
 
-    def inject_namespace_memory_limit(self, deployment_name: str, namespace: str, memory_limit: str):
-        # Create memory resource quota FIRST so new pods are rejected
-        quota_body = {
-            "apiVersion": "v1",
-            "kind": "ResourceQuota",
-            "metadata": {"name": "memory-limit-quota", "namespace": namespace},
-            "spec": {"hard": {"memory": memory_limit}},
-        }
-        self.kubectl.apply_resource(quota_body)
-
-        # Then delete associated ReplicaSet to trigger pod recreation
-        rs_list = self.kubectl.get_matching_replicasets(namespace, deployment_name)
-        if not rs_list:
-            raise RuntimeError(f"No ReplicaSet found for deployment {deployment_name} in {namespace}")
-        rs_name = rs_list[0].metadata.name
-        self.kubectl.delete_replicaset(name=rs_name, namespace=namespace)
-
-    def recover_namespace_memory_limit(self, deployment_name: str, namespace: str):
-        # Remove all memory-based quotas
-        quotas = self.kubectl.get_resource_quotas(namespace)
-        for quota in quotas:
-            if "memory" in quota.spec.hard:
-                self.kubectl.delete_resource_quota(name=quota.metadata.name, namespace=namespace)
-
-        # Scale deployment to 1 replica (if needed)
-        self.kubectl.scale_deployment(name=deployment_name, namespace=namespace, replicas=1)
+            self.kubectl.exec_command(f"kubectl rollout status deployment/{service} -n {self.namespace} --timeout=120s")
 
     def deploy_custom_service(self, service_name: str, script_path: str):
         print(f"Deploying {service_name} Service...................................")
@@ -2187,12 +2255,12 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def inject_tor_network_partition(self, microservices: list[str]):
         """Inject a network partition using NetworkChaos."""
-        chaos_resource_name = "tor-router-partition"  # Name of the NetworkChaos object
-        tor_node_label_key = "sregym.io/tor-node"  # Node label used to fix pods to faulty vs healthy groups
-        tor_pod_group_label_key = "sregym.io/tor-group"  # Pod label used by NetworkChaos selectors
+        chaos_resource_name = "network-segment-policy"
+        tor_node_label_key = "network-segment"
+        tor_pod_group_label_key = "network-segment"
 
-        faulty_group = "faulty"
-        healthy_group = "healthy"
+        faulty_group = "segment-a"
+        healthy_group = "segment-b"
 
         if not microservices:
             raise ValueError("inject_tor_network_partition requires a non-empty `microservices` list (faulty group).")
@@ -2302,9 +2370,9 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_tor_network_partition(self, microservices: list[str]):
         """Recover form network partition created by inject_tor_network_partition() above."""
-        chaos_resource_name = "tor-router-partition"  # Name of the NetworkChaos object
-        tor_node_label_key = "sregym.io/tor-node"  # Node label used to fix pods to faulty vs healthy groups
-        tor_pod_group_label_key = "sregym.io/tor-group"  # Pod label used by NetworkChaos selectors
+        chaos_resource_name = "network-segment-policy"
+        tor_node_label_key = "network-segment"
+        tor_pod_group_label_key = "network-segment"
 
         # Delete NetworkChaos first to restore network
         self.kubectl.exec_command(
@@ -2622,7 +2690,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             pods = self.kubectl.core_v1_api.list_namespaced_pod(self.namespace, label_selector=label_selector)
 
-            target_pods = [pod.metadata.name for pod in pods.items if (label_selector or service in pod.metadata.name)]
+            target_pods = [pod for pod in pods.items if (label_selector or service in pod.metadata.name)]
 
             if not target_pods:
                 time.sleep(sleep)
@@ -2632,14 +2700,9 @@ class VirtualizationFaultInjector(FaultInjector):
             state_ok = True
 
             for pod in target_pods:
-                try:
-                    resolv = self.kubectl.exec_command(
-                        f"kubectl exec {pod} -n {self.namespace} -- cat /etc/resolv.conf"
-                    )
-                except Exception:
-                    state_ok = False
-                    break
-                has_external = external_ns in resolv
+                dns_config = pod.spec.dns_config
+                nameservers = dns_config.nameservers if dns_config and dns_config.nameservers else []
+                has_external = external_ns in nameservers
 
                 if expect_external != has_external:
                     state_ok = False
