@@ -1,13 +1,18 @@
 """
-ProcessOracle: spec-driven evidence evaluation for agent tool-call traces.
+ProcessOracle: spec-driven causal-chain evaluation for agent tool-call traces.
 
-An agent passes if it:
-  1. Completed at least one full investigation path defined in the spec (known paths), OR
-  2. Collected sufficient evidence via a novel path — evaluated by LLM fallback.
+An agent passes when it demonstrates evidence of both:
+  1. The observable fault symptom (first node in the causal chain), and
+  2. The root cause at the injection point (last node in the causal chain).
 
-AND it has at least one corroboration check satisfied.
+Score reflects coverage of the full causal chain between symptom and root cause,
+mirroring the Node F1 / Edge F1 metrics from process-level RCA evaluation.
 
-The spec YAML is the artifact contributed alongside each new fault.
+Reasoning failure flags surface specific investigation shortfalls:
+  RF-08  evidential insufficiency  symptom reached, root cause never touched
+  RF-05  spurious attribution      root cause reached, symptom never demonstrated
+  RF-13  anchoring bias            misleading signal seen, no escape to correct path
+
 """
 
 from __future__ import annotations
@@ -18,6 +23,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
 
 # ---------------------------------------------------------------------------
 # Data model
@@ -36,27 +42,35 @@ class TraceEvent:
 
 
 @dataclass
-class PathResult:
-    path_id: str
-    description: str
-    matched: bool
+class ChainNodeResult:
+    node_id: str
+    component: str
+    touched: bool
     signals_matched: list[str] = field(default_factory=list)
     signals_missed: list[str] = field(default_factory=list)
+    signals_leaked: list[tuple[str, int, int]] = field(default_factory=list)
 
 
 @dataclass
 class ProcessOracleResult:
     passed: bool
     score: float
-    path_taken: str | None
-    corroboration_met: bool
-    path_results: list[PathResult]
-    novel_path_used: bool
-    novel_path_sufficient: bool | None
+
+    symptom_reached: bool
+    root_cause_reached: bool
+    node_f1: float
+    edge_f1: float
+    chain_results: list[ChainNodeResult]
+
+    rf08_evidential_insufficiency: bool
+    rf05_spurious_attribution: bool
+    rf13_anchoring_risk: bool
+
     report: str
     tool_call_count: int
     unique_command_count: int
-    anchoring_risk: bool
+    baseline_run_count: int = 0
+    unverifiable_nodes: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -78,15 +92,20 @@ def _matches(text: str, pattern: str) -> bool:
     return bool(re.search(pattern, text, re.IGNORECASE))
 
 
-def _check_signal(signal: dict, trace: list[TraceEvent], within_event: TraceEvent | None = None) -> bool:
+def _check_signal(
+    signal: dict,
+    trace: list[TraceEvent],
+    within_event: TraceEvent | None = None,
+) -> bool:
     """
-    Return True if the signal is satisfied.
+    Return True if the signal is satisfied anywhere in the trace (or within
+    a single event when within_event is supplied).
 
     signal keys:
-      field: "command" | "result" | "any"
-      pattern: regex
+      field:           "command" | "result" | "any"
+      pattern:         regex
       numeric_nonzero: bool  (result must contain "<pattern> <N>" where N > 0)
-      across_calls: bool     (pattern can appear in any call, not just within_event)
+      across_calls:    bool  (pattern may appear in any call, ignores within_event)
     """
     pattern = signal["pattern"]
     field_name = signal.get("field", "any")
@@ -117,56 +136,72 @@ def _check_signal(signal: dict, trace: list[TraceEvent], within_event: TraceEven
     return False
 
 
+def _signal_fires(signal: dict, trace: list[TraceEvent]) -> bool:
+    if signal.get("across_calls", False):
+        return _check_signal(signal, trace)
+    return any(_check_signal(signal, trace, te) for te in trace)
+
+
+def _node_unverifiable(result: ChainNodeResult) -> bool:
+    """
+    A node is unverifiable when the baseline gate rejected every signal it had,
+    leaving nothing that can separate the faulty trace from a healthy one. This
+    is a spec defect, not an agent failure: the node's touched=False carries no
+    information about the agent, so agent-facing reasoning-failure flags for it
+    are suppressed.
+    """
+    return bool(result.signals_leaked) and not result.signals_matched and not result.signals_missed
+
+
 # ---------------------------------------------------------------------------
-# Path / corroboration evaluation
+# Chain node evaluation
 # ---------------------------------------------------------------------------
 
 
-def _evaluate_path(path_spec: dict, trace: list[TraceEvent]) -> PathResult:
-    signals = path_spec.get("signals", [])
-    matched = []
-    missed = []
+def _evaluate_chain_node(
+    node_spec: dict,
+    trace: list[TraceEvent],
+    baseline_runs: list[list[TraceEvent]] | None = None,
+) -> ChainNodeResult:
+    """
+    Evaluate one causal-chain node against the agent trace.
+
+    When a baseline corpus of healthy runs is supplied, any signal that also
+    fires on the baseline is non-discriminative: it cannot separate the faulty
+    trace from a normal one, so it is rejected and excluded from the node's
+    coverage requirement. A node is credited only when it retains at least one
+    discriminative signal and every surviving signal is matched.
+    """
+    baseline_runs = baseline_runs or []
+    signals = node_spec.get("signals", [])
+    matched: list[str] = []
+    missed: list[str] = []
+    leaked: list[tuple[str, int, int]] = []
 
     for sig in signals:
-        across = sig.get("across_calls", False)
-        ok = _check_signal(sig, trace) if across else any(_check_signal(sig, trace, te) for te in trace)
-        (matched if ok else missed).append(sig["pattern"])
+        pattern = sig["pattern"]
+        leak_count = sum(1 for run in baseline_runs if _signal_fires(sig, run))
+        if leak_count > 0:
+            leaked.append((pattern, leak_count, len(baseline_runs)))
+            continue
+        (matched if _signal_fires(sig, trace) else missed).append(pattern)
 
-    return PathResult(
-        path_id=path_spec["id"],
-        description=path_spec["description"],
-        matched=len(missed) == 0 and len(matched) > 0,
+    return ChainNodeResult(
+        node_id=node_spec["id"],
+        component=node_spec.get("component", ""),
+        touched=len(missed) == 0 and len(matched) > 0,
         signals_matched=matched,
         signals_missed=missed,
+        signals_leaked=leaked,
     )
 
 
-def _evaluate_corroboration(corroboration_specs: list[dict], trace: list[TraceEvent]) -> bool:
-    for cor in corroboration_specs:
-        result = _evaluate_path(cor, trace)
-        if result.matched:
-            return True
-    return False
-
-
 # ---------------------------------------------------------------------------
-# Novel path LLM fallback
+# Anchoring risk detection (RF-13)
 # ---------------------------------------------------------------------------
-
-
-def _has_any_evidence(trace: list[TraceEvent], keywords: list[str]) -> bool:
-    for te in trace:
-        text = (te.command + " " + te.result).lower()
-        if any(k.lower() in text for k in keywords):
-            return True
-    return False
 
 
 def _detect_anchoring_risk(anchoring_traps: list[dict], trace: list[TraceEvent]) -> bool:
-    """
-    Return True if the agent triggered a misleading signal (anchoring trap)
-    and never followed up with a deeper investigation (escape signal).
-    """
     for trap in anchoring_traps:
         misleading = trap.get("misleading_signal", {})
         if not _check_signal(misleading, trace):
@@ -179,45 +214,18 @@ def _detect_anchoring_risk(anchoring_traps: list[dict], trace: list[TraceEvent])
     return False
 
 
-def _llm_novel_path_analysis(trace: list[TraceEvent], spec: dict) -> bool:
-    try:
-        from langchain_core.messages import HumanMessage, SystemMessage
-
-        from llm_backend.init_backend import get_llm_backend_for_judge
-    except ImportError:
-        return False
-
-    backend = get_llm_backend_for_judge()
-    if backend is None:
-        return False
-
-    prompt = spec.get("novel_path_prompt", "")
-    if not prompt:
-        return False
-
-    trace_text = "\n".join(f"[{te.tool_name}] CMD: {te.command[:200]}\nRESULT: {te.result[:400]}" for te in trace)
-
-    messages = [
-        SystemMessage(content="You are evaluating SRE agent investigation quality."),
-        HumanMessage(content=f"{prompt}\n\n--- TOOL CALL TRACE ---\n{trace_text}"),
-    ]
-
-    try:
-        resp = backend.inference(messages)
-        clean = re.sub(r"```(?:json)?\s*|\s*```", "", resp.content.strip())
-        data = json.loads(clean)
-        return bool(data.get("sufficient", False))
-    except Exception:
-        return False
-
-
 # ---------------------------------------------------------------------------
 # Core oracle
 # ---------------------------------------------------------------------------
 
 
 class ProcessOracle:
-    def __init__(self, spec: dict | None = None, spec_path: Path | str | None = None):
+    def __init__(
+        self,
+        spec: dict | None = None,
+        spec_path: Path | str | None = None,
+        baseline_paths: list[Path | str] | None = None,
+    ) -> None:
         if spec is not None:
             self._spec = spec
         elif spec_path is not None:
@@ -225,118 +233,141 @@ class ProcessOracle:
         else:
             raise ValueError("Either spec or spec_path must be provided")
 
+        self._baseline_runs: list[list[TraceEvent]] = []
+        for bp in baseline_paths or []:
+            self._baseline_runs.append(self._load_trace(Path(bp)))
+
     @classmethod
-    def for_problem(cls, problem_id: str) -> ProcessOracle:
+    def for_problem(
+        cls,
+        problem_id: str,
+        baseline_paths: list[Path | str] | None = None,
+        use_baseline: bool = True,
+    ) -> ProcessOracle:
         specs_dir = Path(__file__).parent / "llm_as_a_judge" / "process_specs"
         path = specs_dir / f"{problem_id}.yaml"
         if not path.exists():
             raise FileNotFoundError(f"No process spec found for {problem_id} at {path}")
-        return cls(spec_path=path)
+        if baseline_paths is None and use_baseline:
+            baseline_paths = sorted(
+                (specs_dir / "baselines").glob(f"{problem_id}__healthy_run*.json")
+            )
+        return cls(spec_path=path, baseline_paths=baseline_paths or None)
 
     def evaluate(self, trajectory_path: Path | str) -> ProcessOracleResult:
-        trace = self._extract_trace(self._load_jsonl(Path(trajectory_path)))
+        trace = self._load_trace(Path(trajectory_path))
 
-        known_paths = self._spec.get("investigation_paths", [])
-        path_results = [_evaluate_path(p, trace) for p in known_paths]
-        matched_path = next((r for r in path_results if r.matched), None)
+        chain = self._spec.get("causal_chain", [])
+        chain_results = [
+            _evaluate_chain_node(node, trace, self._baseline_runs) for node in chain
+        ]
 
-        corroboration_met = _evaluate_corroboration(self._spec.get("corroboration", []), trace)
+        n = len(chain_results)
+        nodes_touched = sum(1 for r in chain_results if r.touched)
+        node_f1 = round(nodes_touched / n, 3) if n > 0 else 0.0
 
-        novel_path_used = False
-        novel_path_sufficient = None
+        edges_covered = sum(
+            1
+            for i in range(n - 1)
+            if chain_results[i].touched and chain_results[i + 1].touched
+        )
+        edge_f1 = round(edges_covered / (n - 1), 3) if n > 1 else 0.0
 
-        evidence_keywords = self._spec.get("evidence_keywords", [])
-        if matched_path is None and _has_any_evidence(trace, evidence_keywords):
-            novel_path_used = True
-            novel_path_sufficient = _llm_novel_path_analysis(trace, self._spec)
+        symptom_reached = chain_results[0].touched if chain_results else False
+        root_cause_reached = chain_results[-1].touched if chain_results else False
 
-        known_path_ok = matched_path is not None
-        novel_ok = novel_path_used and novel_path_sufficient is True
-        evidence_ok = known_path_ok or novel_ok
-
-        passed = evidence_ok and corroboration_met
+        passed = symptom_reached and root_cause_reached
         score = round(
-            (0.7 if evidence_ok else 0.0) + (0.3 if corroboration_met else 0.0),
+            0.3 * float(symptom_reached)
+            + 0.4 * node_f1
+            + 0.3 * float(root_cause_reached),
             2,
         )
 
+        symptom_unverifiable = (
+            _node_unverifiable(chain_results[0]) if chain_results else False
+        )
+        root_unverifiable = (
+            _node_unverifiable(chain_results[-1]) if chain_results else False
+        )
+        unverifiable_nodes = [r.node_id for r in chain_results if _node_unverifiable(r)]
+
+        rf08 = symptom_reached and not root_cause_reached and not root_unverifiable
+        rf05 = root_cause_reached and not symptom_reached and not symptom_unverifiable
+        rf13 = _detect_anchoring_risk(self._spec.get("anchoring_traps", []), trace)
+
         unique_command_count = len({te.command for te in trace if te.command})
-        anchoring_risk = _detect_anchoring_risk(self._spec.get("anchoring_traps", []), trace)
 
         return ProcessOracleResult(
             passed=passed,
             score=score,
-            path_taken=matched_path.path_id if matched_path else ("novel" if novel_ok else None),
-            corroboration_met=corroboration_met,
-            path_results=path_results,
-            novel_path_used=novel_path_used,
-            novel_path_sufficient=novel_path_sufficient,
+            symptom_reached=symptom_reached,
+            root_cause_reached=root_cause_reached,
+            node_f1=node_f1,
+            edge_f1=edge_f1,
+            chain_results=chain_results,
+            rf08_evidential_insufficiency=rf08,
+            rf05_spurious_attribution=rf05,
+            rf13_anchoring_risk=rf13,
             report=self._build_report(
                 passed,
                 score,
-                matched_path,
-                path_results,
-                corroboration_met,
-                novel_path_used,
-                novel_path_sufficient,
+                symptom_reached,
+                root_cause_reached,
+                node_f1,
+                edge_f1,
+                chain_results,
+                rf08,
+                rf05,
+                rf13,
                 trace,
-                anchoring_risk,
+                len(self._baseline_runs),
+                unverifiable_nodes,
             ),
             tool_call_count=len(trace),
             unique_command_count=unique_command_count,
-            anchoring_risk=anchoring_risk,
+            baseline_run_count=len(self._baseline_runs),
+            unverifiable_nodes=unverifiable_nodes,
         )
 
     # ------------------------------------------------------------------
-    # Trace extraction (handles both claudecode Bash and stratus MCP formats)
+    # Trace loading (ATIF-v1.x)
     # ------------------------------------------------------------------
 
-    def _load_jsonl(self, path: Path) -> list[dict]:
-        events = []
-        with path.open() as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    events.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-        return events
+    def _load_trace(self, path: Path) -> list[TraceEvent]:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict) or not str(data.get("schema_version", "")).startswith("ATIF"):
+            raise ValueError(f"{path} is not an ATIF trace (missing or wrong schema_version)")
+        return self._extract_trace_atif(data)
 
-    def _extract_trace(self, raw_events: list[dict]) -> list[TraceEvent]:
-        final: dict[str, dict] = {}
-        for ev in raw_events:
-            if ev.get("type") != "event":
-                continue
-            stage = ev.get("stage", "")
-            if stage not in final or ev.get("event_index", -1) > final[stage].get("event_index", -1):
-                final[stage] = ev
-
+    def _extract_trace_atif(self, data: dict) -> list[TraceEvent]:
         trace: list[TraceEvent] = []
-        pending: dict[str, TraceEvent] = {}
+        for step in data.get("steps", []):
+            if step.get("source") != "agent":
+                continue
+            tool_calls = step.get("tool_calls") or []
+            observation = step.get("observation") or {}
+            results = observation.get("results") or []
 
-        for ev in final.values():
-            for msg in ev.get("messages", []):
-                role = msg.get("role", "")
-                if role == "assistant":
-                    for tc in msg.get("tool_calls", []):
-                        te = TraceEvent(tool_name=tc.get("name", ""), args=tc.get("args", {}))
-                        tid = tc.get("id", "")
-                        if tid:
-                            pending[tid] = te
-                        else:
-                            trace.append(te)
-                elif role == "tool":
-                    tid = msg.get("tool_use_id", "")
-                    result = msg.get("content", "")
-                    if tid in pending:
-                        pending[tid].result = result
-                        trace.append(pending.pop(tid))
-                    else:
-                        trace.append(TraceEvent(tool_name="unknown", args={}, result=result))
+            result_by_id: dict[str, str] = {}
+            for r in results:
+                cid = r.get("source_call_id")
+                content = r.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(
+                        p.get("text", "")
+                        for p in content
+                        if isinstance(p, dict) and p.get("type") == "text"
+                    )
+                if cid is not None:
+                    result_by_id[cid] = str(content)
 
-        trace.extend(pending.values())
+            for tc in tool_calls:
+                tool_name = tc.get("function_name", "")
+                args = tc.get("arguments") or {}
+                call_id = tc.get("tool_call_id", "")
+                result = result_by_id.get(call_id, "")
+                trace.append(TraceEvent(tool_name=tool_name, args=args, result=result))
         return trace
 
     # ------------------------------------------------------------------
@@ -345,44 +376,59 @@ class ProcessOracle:
 
     def _build_report(
         self,
-        passed,
-        score,
-        matched_path,
-        path_results,
-        corroboration_met,
-        novel_path_used,
-        novel_path_sufficient,
-        trace,
-        anchoring_risk,
+        passed: bool,
+        score: float,
+        symptom_reached: bool,
+        root_cause_reached: bool,
+        node_f1: float,
+        edge_f1: float,
+        chain_results: list[ChainNodeResult],
+        rf08: bool,
+        rf05: bool,
+        rf13: bool,
+        trace: list[TraceEvent],
+        baseline_run_count: int = 0,
+        unverifiable_nodes: list[str] | None = None,
     ) -> str:
+        unverifiable_nodes = unverifiable_nodes or []
         unique_cmds = len({te.command for te in trace if te.command})
         lines = [
             f"ProcessOracle: {'PASS' if passed else 'FAIL'} (score={score:.2f})",
             f"Tool calls: {len(trace)}  unique commands: {unique_cmds}",
-            f"Anchoring risk: {'YES — saw misleading signal, no deeper follow-up' if anchoring_risk else 'no'}",
-            "",
-            "Investigation paths:",
+            f"Node F1: {node_f1:.3f}  Edge F1: {edge_f1:.3f}",
         ]
-        for pr in path_results:
-            tag = "MATCH" if pr.matched else "miss"
-            lines.append(f"  [{tag}] {pr.path_id}: {pr.description}")
-            if pr.signals_missed:
-                lines.append(f"         missing signals: {pr.signals_missed}")
-
-        if novel_path_used:
-            tag = "PASS" if novel_path_sufficient else "FAIL"
-            lines.append(f"  [novel path → LLM: {tag}]")
+        if baseline_run_count:
+            lines.append(
+                f"Baseline gate: {baseline_run_count} healthy run(s) "
+                "(signals that also fire on the baseline are rejected)"
+            )
+        lines += ["", "Causal chain:"]
+        for r in chain_results:
+            tag = "TOUCH" if r.touched else "miss "
+            lines.append(f"  [{tag}] {r.node_id}: {r.component}")
+            if r.signals_missed:
+                lines.append(f"          missing signals: {r.signals_missed}")
+            for pattern, cnt, tot in r.signals_leaked:
+                lines.append(
+                    f"          baseline-leak (rejected): {pattern!r} "
+                    f"matched {cnt}/{tot} healthy run(s)"
+                )
 
         lines += [
             "",
-            f"Corroboration: {'met' if corroboration_met else 'NOT MET'}",
+            "Reasoning failures:",
+            f"  RF-08 evidential insufficiency:  {'YES' if rf08 else 'no'}",
+            f"  RF-05 spurious attribution:      {'YES' if rf05 else 'no'}",
+            f"  RF-13 anchoring risk:            {'YES' if rf13 else 'no'}",
         ]
-
-        if matched_path:
-            lines.append(f"Path taken: {matched_path.path_id}")
-        elif novel_path_sufficient:
-            lines.append("Path taken: novel (LLM-validated)")
-        else:
-            lines.append("Path taken: none — insufficient evidence")
-
+        if unverifiable_nodes:
+            lines += [
+                "",
+                "Spec quality:",
+                f"  Non-discriminative nodes (all signals rejected by baseline): "
+                f"{unverifiable_nodes}",
+                "  These nodes cannot judge the agent until their signals are "
+                "tightened;",
+                "  reasoning-failure flags for them are suppressed.",
+            ]
         return "\n".join(lines)
