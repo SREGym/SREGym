@@ -21,16 +21,17 @@ SREGym is an AI-native platform to enable the design, development, and evaluatio
 
 SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architectured with AI-native usability and extensibility as first-class principles. The SREGym benchmark suites contain 90 different SRE problems. It supports all the problems from AIOpsLab and ITBench, and includes new problems such as OS-level faults, metastable failures, and concurrent failures. See our [problem set](https://sregym.com/problems) for a complete list of problems.
 
-### Start with SREGym-Lite
-
-[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 20 well-tested problems with varied difficulty that are easy to run. It is the recommended starting point for new users and can run easily on the [KIND](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
-
 SREGym has been used to simulate real-world cloud failures, such as:
 - Cloudflare WAF regex rules exhausted CPU ([postmortem](https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019), [simulation](https://github.com/SREGym/SREGym/pull/773))
 - Admission webhook TLS mismatch ([postmortem](https://github.com/cert-manager/cert-manager/issues/6350), [simulation](https://github.com/SREGym/SREGym/pull/777))
 - Exhausting conntrack table space crippled a production cluster ([postmortem](https://www.markbetz.net/2023/12/12/exhausting-conntrack-table-space-crippled-our-k8s-cluster), [simulation](https://github.com/SREGym/SREGym/pull/768))
 - GKE ran out of IP addresses ([postmortem](https://deploy.live/blog/when-gke-ran-out-of-ip-addresses), [simulation](https://github.com/SREGym/SREGym/pull/774))
 - Kafka poison pill ([postmortem](https://www.lydtechconsulting.com/blog/kafka-poison-pill), [simulation](https://github.com/SREGym/SREGym/pull/790))
+- The Reddit Pi-Day Outage ([postmortem](https://www.reddit.com/r/RedditEng/comments/11xx5o0/you_broke_reddit_the_piday_outage/), [simulation](https://github.com/SREGym/SREGym/pull/828))
+
+<h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
+
+[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 20 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
 
 
 <h2 id="📦installation">📦 Installation</h2>
