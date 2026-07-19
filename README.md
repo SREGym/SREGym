@@ -29,7 +29,7 @@ SREGym has been used to simulate real-world cloud failures, such as:
 - Kafka poison pill ([postmortem](https://www.lydtechconsulting.com/blog/kafka-poison-pill), [simulation](https://github.com/SREGym/SREGym/pull/790))
 - The Reddit Pi-Day Outage ([postmortem](https://www.reddit.com/r/RedditEng/comments/11xx5o0/you_broke_reddit_the_piday_outage/), [simulation](https://github.com/SREGym/SREGym/pull/828))
 
-### Start with SREGym-Lite
+<h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
 
 [SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 20 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
 
