@@ -241,6 +241,8 @@ python-database
 
 # LLM traces
 *.jsonl
+# Keep committed test fixtures (session logs the trace converter reads).
+!tests/**/fixtures/**/*.jsonl
 sregym/generators/noise/noise_config.yaml
 results/
 logs/

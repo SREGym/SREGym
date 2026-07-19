@@ -721,10 +721,19 @@ class KubeCtl:
             logger.error("Command failed (exit %d): %s\n  stderr: %s", e.returncode, command, stderr.strip())
             return stderr
 
-        # if out.stderr:
-        #     return out.stderr.decode("utf-8")
-        # else:
-        #     return out.stdout.decode("utf-8")
+    def exec_command_checked(self, command: str, input_data=None):
+        """Execute kubectl and raise when the command exits unsuccessfully."""
+        if input_data is not None:
+            input_data = input_data.encode("utf-8")
+
+        try:
+            out = subprocess.run(command, shell=True, check=True, capture_output=True, input=input_data)
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.decode("utf-8", errors="replace").strip()
+            logger.error("Command failed (exit %d): %s\n  stderr: %s", exc.returncode, command, stderr)
+            raise RuntimeError(f"Command failed (exit {exc.returncode}): {command}: {stderr}") from exc
+
+        return out.stdout.decode("utf-8")
 
     def get_node_architectures(self):
         """Return a set of CPU architectures from all nodes in the cluster."""

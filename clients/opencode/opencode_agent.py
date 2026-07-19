@@ -40,7 +40,7 @@ PROVIDER_ENV_VARS: dict[str, list[str]] = {
     "xai": ["XAI_API_KEY"],
     # OpenCode native providers (no API key needed - uses opencode.ai)
     "opencode": [],
-    "zai-coding-plan": [],
+    "zai-coding-plan": ["ZAI_API_KEY"],
 }
 
 
@@ -367,6 +367,16 @@ class OpenCodeAgent:
 
         return env
 
+    def _build_command(self, instruction: str) -> str:
+        """Build the OpenCode command, preserving the CLI's default variant when unset."""
+        escaped_instruction = shlex.quote(instruction)
+        reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+        variant_arg = f" --variant {shlex.quote(reasoning_effort)}" if reasoning_effort else ""
+        return (
+            f"opencode --model={shlex.quote(self.model_name)} run --format=json --thinking"
+            f"{variant_arg} {escaped_instruction}"
+        )
+
     def run(self, instruction: str, export_session: bool = True) -> int:
         """
         Run the OpenCode agent with the given instruction.
@@ -383,9 +393,7 @@ class OpenCodeAgent:
 
         env = self._build_env()
 
-        # Build command
-        escaped_instruction = shlex.quote(instruction)
-        command = f"opencode --model {self.model_name} run --format=json {escaped_instruction}"
+        command = self._build_command(instruction)
 
         logger.info(f"Executing command: {command}")
 

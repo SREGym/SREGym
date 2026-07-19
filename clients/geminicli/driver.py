@@ -28,6 +28,34 @@ from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 logger = logging.getLogger("all.geminicli.driver")
 
 
+def run_preflight() -> None:
+    """Validate model + credentials by making a minimal Gemini CLI call.
+
+    Gemini CLI reads credentials (GEMINI_API_KEY / GOOGLE_API_KEY /
+    GOOGLE_APPLICATION_CREDENTIALS / Vertex vars) from the environment, which the
+    subprocess inherits; a missing/invalid key surfaces as a non-zero exit here.
+    """
+    import subprocess
+
+    m = os.environ.get("AGENT_MODEL_ID", "gemini-2.5-pro").split("/")[-1]
+
+    # Trust the workspace for this headless call (matches GeminiCliAgent.run);
+    # otherwise Gemini CLI downgrades approval mode and the call is blocked.
+    env = os.environ.copy()
+    env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
+
+    r = subprocess.run(
+        ["gemini", "-p", "say ok", "-y", "-m", m],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    if r.returncode:
+        print(r.stdout or r.stderr)
+    sys.exit(r.returncode)
+
+
 def get_api_base_url() -> str:
     """Get the conductor API base URL."""
     host = os.getenv("API_HOSTNAME", "localhost")

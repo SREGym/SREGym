@@ -18,6 +18,7 @@ class CopilotCliAgent:
     """
 
     _OUTPUT_FILENAME = "copilot-cli.txt"
+    _JSONL_FILENAME = "copilot-cli.jsonl"
 
     @staticmethod
     def check_installation() -> bool:
@@ -94,8 +95,13 @@ class CopilotCliAgent:
 
     @property
     def output_path(self) -> Path:
-        """Path to Copilot CLI output file."""
+        """Path to Copilot CLI plain-text debug output file."""
         return self.logs_dir / self._OUTPUT_FILENAME
+
+    @property
+    def jsonl_path(self) -> Path:
+        """Path to Copilot CLI JSONL output (structured, for ATIF conversion)."""
+        return self.logs_dir / self._JSONL_FILENAME
 
     @property
     def otel_dir(self) -> Path:
@@ -156,6 +162,26 @@ class CopilotCliAgent:
         logger.info(f"Extracted usage metrics: {metrics}")
         return metrics
 
+    def _build_command(self, instruction: str) -> list[str]:
+        """Build the Copilot command, preserving the CLI's default effort when unset."""
+        model = self.model_name.split("/")[-1]
+        command = [
+            "copilot",
+            "-p",
+            instruction,
+            "--allow-all",
+            "--no-ask-user",
+            "--model",
+            model,
+            "--output-format",
+            "json",
+            f"--share={self.transcript_path}",
+        ]
+        reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+        if reasoning_effort:
+            command.extend(["--reasoning-effort", reasoning_effort])
+        return command
+
     def run(self, instruction: str) -> int:
         """
         Run the Copilot CLI agent with the given instruction.
@@ -211,22 +237,25 @@ class CopilotCliAgent:
             if os.environ.get(var):
                 env[var] = os.environ[var]
 
-        # Build command
-        command = [
-            "copilot",
-            "-p",
-            instruction,
-            "--allow-all",
-            "--no-ask-user",
-            "--model",
-            model,
-            f"--share={self.transcript_path}",
-        ]
+        # Build command.
+        # `--output-format json` makes Copilot emit JSONL (one JSON object per
+        # line) so the trace can be converted to ATIF via a clean port of
+        # Harbor's converter. The structured stream is captured to
+        # ``copilot-cli.jsonl``; a plain-text copy is kept in ``copilot-cli.txt``
+        # for human debugging (Harbor keeps both the same way).
+        command = self._build_command(instruction)
+        reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
 
-        logger.info(f"Executing command: copilot -p <instruction> --allow-all --no-ask-user --model {model}")
+        logger.info(
+            f"Executing command: copilot -p <instruction> --allow-all --no-ask-user "
+            f"--model {model} --output-format json"
+            + (f" --reasoning-effort {reasoning_effort}" if reasoning_effort else "")
+        )
 
         try:
-            with open(self.output_path, "w") as out_file:
+            # stderr is merged into stdout (matches Harbor's ``2>&1``); the
+            # converter skips any non-JSON lines that result.
+            with open(self.jsonl_path, "w") as out_file:
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
@@ -244,6 +273,12 @@ class CopilotCliAgent:
                         print(line, end="", flush=True)
 
                 process.wait()
+
+            # Keep a plain-text debug copy alongside the JSONL.
+            try:
+                self.output_path.write_text(self.jsonl_path.read_text())
+            except OSError as copy_err:
+                logger.debug(f"Could not write plain-text debug copy: {copy_err}")
 
             logger.info(f"Copilot CLI finished with return code: {process.returncode}")
             return process.returncode

@@ -181,6 +181,7 @@ class AgentLauncher:
         existing.proc.poll()
         if existing.proc.returncode is not None:
             del self._procs[agent_name]
+            self._cleanup_container_runner_tmps()
             return
 
         # Branch on the per-process container_name (not the global runner): a
@@ -194,6 +195,7 @@ class AgentLauncher:
 
         if agent_name in self._procs:
             del self._procs[agent_name]
+        self._cleanup_container_runner_tmps()
 
     @staticmethod
     def _wait_for_process_exit(proc: subprocess.Popen, timeout: int) -> None:
@@ -202,6 +204,10 @@ class AgentLauncher:
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=timeout)
+
+    def _cleanup_container_runner_tmps(self) -> None:
+        if self._container_runner:
+            self._container_runner.cleanup_credential_tmps()
 
     def _terminate_process_group(self, ap: AgentProcess, timeout: int) -> None:
         """Kill a shell-launched agent's whole process group, falling back to the
