@@ -14,6 +14,7 @@ import pytest
 from sregym.conductor.conductor import Conductor
 from sregym.conductor.oracles import mitigation
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.mitigation import MitigationOracle
 
 
@@ -205,6 +206,30 @@ def test_conductor_captures_baseline_before_injecting_the_fault():
 
     assert calls == ["baseline", "inject"]
     assert conductor.fault_injected is True
+
+
+def test_conductor_captures_baseline_through_nested_compounded_oracles(kubectl):
+    problem = _Problem(kubectl)
+    child_oracles = [MitigationOracle(problem), MitigationOracle(problem)]
+    inner_oracle = CompoundedOracle(problem, *child_oracles)
+    problem.mitigation_oracle = CompoundedOracle(problem, inner_oracle)
+    problem.inject_fault = lambda: None
+    problem.diagnosis_oracle = None
+    conductor = SimpleNamespace(
+        current_problem=problem,
+        logger=SimpleNamespace(info=lambda *a, **k: None),
+        fault_injected=False,
+    )
+    _deploy_two(kubectl)
+
+    Conductor._inject_fault(conductor)
+
+    assert all(oracle.replica_count == {"web-a": 1, "web-b": 1} for oracle in child_oracles)
+    kubectl.set_state(
+        [_deployment("web-a"), _deployment("web-b", replicas=0, ready=0, updated=0)],
+        [_pod("web-a-1")],
+    )
+    assert problem.mitigation_oracle.evaluate()["success"] is False
 
 
 def test_conductor_tolerates_a_problem_without_a_mitigation_oracle():
