@@ -219,6 +219,13 @@ class Conductor:
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
+
+        # Snapshot the healthy cluster before breaking it. The oracle is built
+        # in Problem.__init__, which runs before deploy_app(), so this is the
+        # first point at which the app actually exists.
+        if getattr(problem, "mitigation_oracle", None):
+            problem.mitigation_oracle.capture_baseline()
+
         problem.inject_fault()
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True

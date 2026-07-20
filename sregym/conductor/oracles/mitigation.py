@@ -13,6 +13,19 @@ class MitigationOracle(Oracle):
 
     def __init__(self, problem):
         super().__init__(problem)
+        # Populated by capture_baseline() once the app is deployed. It cannot be
+        # filled in here: the Problem is built before deploy_app(), so the
+        # namespace is still empty and every replica check below would be
+        # skipped, letting "scale to 0" and "delete the deployment" pass.
+        self.replica_count = {}
+
+    def capture_baseline(self) -> None:
+        """Capture pre-injection Deployments in the problem namespace.
+
+        This is not a full resource baseline: Services and resources created by
+        inject_fault() are outside it. Faults that must preserve or validate
+        those resources need a custom mitigation oracle.
+        """
         deployments = self.problem.kubectl.list_deployments(self.problem.namespace)
         self.replica_count = {dep.metadata.name: dep.spec.replicas for dep in deployments.items}
 
