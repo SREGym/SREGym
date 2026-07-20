@@ -20,6 +20,12 @@ class MitigationOracle(Oracle):
         self.replica_count = {}
 
     def capture_baseline(self) -> None:
+        """Capture pre-injection Deployments in the problem namespace.
+
+        This is not a full resource baseline: Services and resources created by
+        inject_fault() are outside it. Faults that must preserve or validate
+        those resources need a custom mitigation oracle.
+        """
         deployments = self.problem.kubectl.list_deployments(self.problem.namespace)
         self.replica_count = {dep.metadata.name: dep.spec.replicas for dep in deployments.items}
 
