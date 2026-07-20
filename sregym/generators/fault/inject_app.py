@@ -9,6 +9,8 @@ from kubernetes import client
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.kubectl import KubeCtl
 
+FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE = "ghcr.io/sregym/hotel-reservation:latest"
+
 
 class ApplicationFaultInjector(FaultInjector):
     def __init__(self, namespace: str):
@@ -481,7 +483,7 @@ class ApplicationFaultInjector(FaultInjector):
         deployment_name: str = "frontend",
         configmap_name: str = "frontend-runtime-config",
         flag_key: str = "SEARCH_BACKEND_VERSION",
-        experimental_image: str = "sharqm/hotelreservation:experimental-routing-v4",
+        experimental_image: str = FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE,
     ):
         """Set the feature flag in a ConfigMap and swap the frontend image to the
         experimental-routing build. When the flag is active, the frontend's search
