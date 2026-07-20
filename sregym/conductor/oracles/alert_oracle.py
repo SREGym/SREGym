@@ -40,6 +40,11 @@ class AlertOracle(Oracle):
         self.poll_interval_seconds = poll_interval_seconds
         self.buffer_seconds = buffer_seconds
         self.exclude_alerts = set(exclude_alerts or [])
+        # Alert names already firing before the fault was injected (environmental
+        # noise unrelated to the agent). Populated by ``capture_baseline`` and
+        # ignored during evaluation. ``None`` means no baseline was captured, in
+        # which case no baseline filtering is applied. See SREGym#745.
+        self._baseline_alertnames = None
 
     # ------------------------------------------------------------------
     # Prometheus query helpers
@@ -77,11 +82,43 @@ class AlertOracle(Oracle):
             if alert.get("state") != "firing":
                 continue
             labels = alert.get("labels", {})
-            if labels.get("namespace") == namespace:
-                if labels.get("alertname") in self.exclude_alerts:
-                    continue
-                firing.append(alert)
+            if labels.get("namespace") != namespace:
+                continue
+            alertname = labels.get("alertname")
+            if alertname in self.exclude_alerts:
+                continue
+            # Skip alerts that were already firing before fault injection. They
+            # are environmental noise, not the agent's responsibility. Alerts the
+            # agent newly triggers are absent from the baseline and still caught.
+            if self._baseline_alertnames is not None and alertname in self._baseline_alertnames:
+                continue
+            firing.append(alert)
         return firing
+
+    def capture_baseline(self) -> None:
+        """Snapshot alerts already firing in the namespace before fault injection.
+
+        Called by the conductor right before ``inject_fault`` (while the app is
+        deployed and healthy but the fault is not yet active). The captured alert
+        names are environmental/chronic noise unrelated to the injected fault —
+        for example ``ContainerCPUThrottling`` from the astronomy-shop Grafana
+        sidecar (see SREGym#745) — and are ignored when grading mitigation so the
+        oracle measures the agent's work, not pre-existing noise. Alerts the agent
+        newly triggers are not in this baseline and are still caught.
+        """
+        namespace = self.problem.namespace
+        # ``_baseline_alertnames`` is still ``None`` here, so this query applies no
+        # baseline filtering and returns the true pre-existing firing set.
+        pre_existing = {alert.get("labels", {}).get("alertname") for alert in self._query_firing_alerts(namespace)}
+        pre_existing.discard(None)
+        self._baseline_alertnames = pre_existing
+        if pre_existing:
+            print(
+                f"📋 AlertOracle baseline for {namespace}: ignoring pre-existing alerts "
+                f"[{', '.join(sorted(pre_existing))}]"
+            )
+        else:
+            print(f"📋 AlertOracle baseline for {namespace}: no pre-existing alerts")
 
     def _query_max_alert_for_duration(self) -> float:
         """Return the longest *for* duration (seconds) across all Prometheus alert rules.
