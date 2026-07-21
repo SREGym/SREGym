@@ -35,15 +35,17 @@ class NightlyRebalanceOOM(Problem):
         self._original_memory_limit = None
 
         self.root_cause = self.build_structured_root_cause(
-            component=f"{self.actor_name} CronJob ({self.actor_namespace}) + deployment/{self.faulty_service}",
-            namespace=self.namespace,
+            component=f"{self.actor_name} CronJob ({self.actor_namespace})",
+            namespace=self.actor_namespace,
             description=(
-                f"A scheduled capacity controller (`{self.actor_name}` CronJob in `{self.actor_namespace}`) "
-                f"periodically patches deployment `{self.faulty_service}` memory limit down to `{self.squeeze_memory}`, "
-                "below its startup working set, so the container is OOMKilled during init and stays in "
-                "CrashLoopBackOff. The crashed pod emits no metrics or logs of its own. Raising the limit is reverted "
-                f"on the controller's next tick; a durable fix must suspend or remove the `{self.actor_name}` CronJob "
-                f"AND restore a sane memory limit on `{self.faulty_service}`."
+                f"The fault originates from the scheduled `{self.actor_name}` CronJob in `{self.actor_namespace}`, "
+                f"which periodically patches deployment `{self.faulty_service}` memory limit down to "
+                f"`{self.squeeze_memory}`. The `{self.faulty_service}` deployment is the affected victim: that "
+                "limit is below its startup working set, so the container is OOMKilled during init and stays in "
+                "CrashLoopBackOff. A diagnosis that only names the deployment's OOMKilled pod or bad memory limit "
+                f"without identifying the recurring `{self.actor_name}` actor is incomplete. A durable fix must "
+                f"suspend/remove the `{self.actor_name}` CronJob or correct its policy, and restore a sane memory "
+                f"limit on `{self.faulty_service}`."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
@@ -171,7 +173,7 @@ class NightlyRebalanceOOM(Problem):
                                 "containers": [container],
                             },
                         }
-                    }
+                    },
                 },
             },
         }
@@ -234,7 +236,9 @@ class NightlyRebalanceOOM(Problem):
                 if e.status != 404:
                     raise
 
-        ignore_404(batch.delete_namespaced_cron_job, cls.actor_name, cls.actor_namespace, propagation_policy="Foreground")
+        ignore_404(
+            batch.delete_namespaced_cron_job, cls.actor_name, cls.actor_namespace, propagation_policy="Foreground"
+        )
         ignore_404(
             batch.delete_collection_namespaced_job,
             cls.actor_namespace,
