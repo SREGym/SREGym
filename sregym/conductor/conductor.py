@@ -859,8 +859,11 @@ class Conductor:
             for ns in app_namespaces:
                 self.jaeger.create_external_name_service(ns)
 
-        problem.app.start_workload()
-        self.logger.info("[ENV] Start workload")
+        if problem.run_default_workload:
+            problem.app.start_workload()
+            self.logger.info("[ENV] Start workload")
+        else:
+            self.logger.info("[ENV] Default application workload disabled for this problem")
 
     def undeploy_app(self):
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""

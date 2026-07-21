@@ -87,6 +87,7 @@ from sregym.conductor.problems.resource_request import ResourceRequestTooLarge, 
 from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
+from sregym.conductor.problems.search_rate_retry_collapse import SearchRateRetryCollapse
 from sregym.conductor.problems.secret_rotation_stale_env_credentials import (
     SecretRotationStaleEnvCredentialsAstronomyShop,
 )
@@ -142,6 +143,7 @@ class ProblemRegistry:
             "capacity_decrease_rpc_retry_storm": CapacityDecreaseRPCRetryStorm,
             "gc_capacity_degradation": GCCapacityDegradation,
             "load_spike_rpc_retry_storm": LoadSpikeRPCRetryStorm,
+            "search_rate_retry_collapse_hotel_reservation": SearchRateRetryCollapse,
             # --- REGULAR VIRTUALIZATION PROBLEMS ---
             "assign_to_non_existent_node": AssignNonExistentNode,
             "auth_miss_mongodb": MongoDBAuthMissing,

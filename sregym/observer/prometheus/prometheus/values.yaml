@@ -1168,6 +1168,14 @@ extraScrapeConfigs: |
       - target_label: __address__
         replacement: prometheus-prometheus-blackbox-exporter:9115
 
+  - job_name: 'hotel-reservation-application'
+    static_configs:
+      - targets:
+          - search.hotel-reservation:9092
+          - rate.hotel-reservation:9091
+        labels:
+          namespace: hotel-reservation
+
   - job_name: 'blackbox-social-network'
     metrics_path: /probe
     params:

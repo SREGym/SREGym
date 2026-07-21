@@ -4,6 +4,8 @@ from abc import ABC, abstractmethod
 
 
 class Problem(ABC):
+    run_default_workload = True
+
     def __init__(self, app, namespace: str | None = None):
         self.app = app
         self.namespace = app.namespace if namespace is None else namespace

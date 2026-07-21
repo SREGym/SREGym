@@ -17,9 +17,18 @@ class LLMAsAJudgeOracle(Oracle):
         api_key: str | None = None,
         temperature: float = 0.0,
         max_tokens: int = 4096,
+        minimum_dimension_scores: dict[str, float] | None = None,
     ):
         super().__init__(problem)
         self.expected = expected if expected else ""
+        self.minimum_dimension_scores = minimum_dimension_scores or {}
+        invalid_scores = {
+            dimension_id: score
+            for dimension_id, score in self.minimum_dimension_scores.items()
+            if not 0.0 <= score <= 1.0
+        }
+        if invalid_scores:
+            raise ValueError(f"dimension score floors must be between 0 and 1: {invalid_scores}")
 
         # Initialize the LLM judge
         self.judge = DiagnosisJudge(
@@ -68,12 +77,28 @@ class LLMAsAJudgeOracle(Oracle):
 
             # Use composite score (0.0-1.0) scaled to 0-100
             acc = round(report.composite_score * 100.0, 2)
-            is_correct = report.verdict == JudgmentResult.TRUE
+            dimension_scores = {dimension.dimension_id: dimension.score for dimension in report.dimensions}
+            unmet_dimension_scores = {
+                dimension_id: (dimension_scores.get(dimension_id, 0.0), minimum_score)
+                for dimension_id, minimum_score in self.minimum_dimension_scores.items()
+                if dimension_scores.get(dimension_id, 0.0) < minimum_score
+            }
+            is_correct = report.verdict == JudgmentResult.TRUE and not unmet_dimension_scores
+            effective_verdict = JudgmentResult.TRUE if is_correct else JudgmentResult.FALSE
+            reasoning = report.reasoning
+            if unmet_dimension_scores:
+                detail = ", ".join(
+                    f"{dimension_id}={actual:.2f} (requires {minimum:.2f})"
+                    for dimension_id, (actual, minimum) in unmet_dimension_scores.items()
+                )
+                reasoning = f"{reasoning} Required dimension score not met: {detail}."
 
             if is_correct:
-                print(f"✅ Correct diagnosis: {report.verdict.value} (score: {acc:.1f}/100)")
+                print(f"✅ Correct diagnosis: {effective_verdict.value} (score: {acc:.1f}/100)")
             else:
-                print(f"❌ Incorrect diagnosis: {report.verdict.value} (score: {acc:.1f}/100)")
+                print(f"❌ Incorrect diagnosis: {effective_verdict.value} (score: {acc:.1f}/100)")
+                if unmet_dimension_scores:
+                    print(f"   Required dimension score not met: {detail}")
                 print(
                     f"   Expected: {self.expected[:100]}..."
                     if len(self.expected) > 100
@@ -82,8 +107,8 @@ class LLMAsAJudgeOracle(Oracle):
                 print(f"   Got: {solution[:100]}..." if len(solution) > 100 else f"   Got: {solution}")
 
             # Include dimension breakdown in results
-            results["judgment"] = report.verdict.value
-            results["reasoning"] = report.reasoning
+            results["judgment"] = effective_verdict.value
+            results["reasoning"] = reasoning
             results["success"] = is_correct
             results["accuracy"] = acc
             results["composite_score"] = report.composite_score
