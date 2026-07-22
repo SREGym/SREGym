@@ -222,6 +222,9 @@ all:
     kafka_queue_problems_hotel_reservation:
     - diagnosis
     - mitigation
+    kafka_producer_leak:
+    - diagnosis
+    - mitigation
     loadgenerator_flood_homepage:
     - diagnosis
     - mitigation
