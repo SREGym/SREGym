@@ -1,0 +1,27 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "steps": [
+    {
+      "source": "agent",
+      "tool_calls": [
+        {"tool_call_id": "tc1", "function_name": "Bash", "arguments": {"command": "kubectl get deployment geo -n hotel-reservation -o jsonpath='{.spec.template.spec.containers[0].resources}'"}}
+      ],
+      "observation": {
+        "results": [
+          {"source_call_id": "tc1", "content": "{\"limits\":{\"cpu\":\"40m\"},\"requests\":{\"cpu\":\"40m\"}}"}
+        ]
+      }
+    },
+    {
+      "source": "agent",
+      "tool_calls": [
+        {"tool_call_id": "tc2", "function_name": "submit", "arguments": {"solution": "The CPU limit is 40m which is too low. Raise it."}}
+      ],
+      "observation": {
+        "results": [
+          {"source_call_id": "tc2", "content": "{\"status\": \"submitted\"}"}
+        ]
+      }
+    }
+  ]
+}
