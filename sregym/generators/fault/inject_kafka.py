@@ -1,6 +1,9 @@
-"""Inject a data-plane (Kafka) poison-pill / head-of-line-block fault."""
+"""Build and operate a small Kafka-backed order validation pipeline."""
 
+import base64
+import json
 import logging
+import shlex
 import time
 
 from kubernetes import client
@@ -11,6 +14,7 @@ from sregym.service.kubectl import KubeCtl
 logger = logging.getLogger("all.sregym.inject_kafka")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
+
 
 CONSUMER_SCRIPT = r"""
 import json
@@ -28,7 +32,6 @@ BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 TOPIC = os.environ.get("ORDERS_TOPIC", "orders-fulfillment")
 OUTPUT_TOPIC = os.environ.get("OUTPUT_TOPIC", "orders-processed")
 GROUP = os.environ.get("CONSUMER_GROUP", "orders-validator")
-LENIENT = os.environ.get("LENIENT", "").lower() in ("1", "true", "yes")
 
 _shutdown = False
 
@@ -42,7 +45,7 @@ def process(value):
     obj = json.loads(value.decode("utf-8"))
     if "order_id" not in obj:
         raise ValueError("record has no 'order_id' field")
-    return obj["order_id"]
+    return obj
 
 
 def main():
@@ -71,136 +74,67 @@ def main():
             continue
 
         if first:
-            log.info("RESUMING FROM offset=%d", msg.offset())
+            log.info("resuming partition at offset=%d", msg.offset())
             first = False
 
         try:
-            order_id = process(msg.value())
+            order = process(msg.value())
         except Exception as exc:
-            log.error("unprocessable record at offset=%d: %s", msg.offset(), exc)
-            if not LENIENT:
-                log.error("cannot advance past offset=%d -- head-of-line block", msg.offset())
-                blocked = 0
-                while not _shutdown:
-                    time.sleep(1)
-                    blocked += 1
-                    if blocked % 15 == 0:
-                        log.error("still blocked on unprocessable record at offset=%d", msg.offset())
-                break
-            consumer.commit(message=msg, asynchronous=False)
-            log.info("skipped unprocessable record COMMITTED offset=%d", msg.offset() + 1)
-            continue
+            log.error("record validation failed at offset=%d: %s", msg.offset(), exc)
+            log.error("partition processing paused at offset=%d", msg.offset())
+            blocked = 0
+            while not _shutdown:
+                time.sleep(1)
+                blocked += 1
+                if blocked % 15 == 0:
+                    log.error("partition remains paused at offset=%d", msg.offset())
+            break
 
-        out.produce(OUTPUT_TOPIC, value=str(msg.offset()).encode("utf-8"))
+        result = json.dumps(
+            {"source_offset": msg.offset(), "order_id": order["order_id"]},
+            separators=(",", ":"),
+        )
+        out.produce(OUTPUT_TOPIC, value=result.encode("utf-8"))
         out.flush(10)
         consumer.commit(message=msg, asynchronous=False)
-        log.info("processed order_id=%s COMMITTED offset=%d", order_id, msg.offset() + 1)
+        log.info("processed order_id=%s committed_offset=%d", order["order_id"], msg.offset() + 1)
 
     out.flush(10)
     consumer.close()
-    log.info("orders-validator stopped; left consumer group")
+    log.info("orders-validator stopped")
 
 
 if __name__ == "__main__":
     main()
 """
 
+
 PRODUCER_SCRIPT = r"""
 import json
 import logging
 import os
 import time
+import uuid
 
 from confluent_kafka import Producer
-from confluent_kafka.admin import AdminClient, NewTopic
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("order-stream")
 
 BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
 TOPIC = os.environ.get("ORDERS_TOPIC", "orders-fulfillment")
-OUTPUT_TOPIC = os.environ.get("OUTPUT_TOPIC", "orders-processed")
-GROUP = os.environ.get("CONSUMER_GROUP", "orders-validator")
-SEED_COUNT = int(os.environ.get("SEED_RECORD_COUNT", "20"))
-POISON_RECORD = os.environ.get("POISON_RECORD", "CORRUPTED-RECORD-NOT-VALID-JSON-POISON-PILL")
 INTERVAL = float(os.environ.get("PRODUCE_INTERVAL_SEC", "2.0"))
 
 
-def wait_for_broker(admin):
-    for _ in range(60):
-        try:
-            if admin.list_topics(timeout=10).brokers:
-                return
-        except Exception as exc:
-            log.info("waiting for kafka broker: %s", exc)
-        time.sleep(5)
-    raise RuntimeError("kafka broker not reachable at " + BOOTSTRAP)
-
-
-def reset_consumer_group(admin):
-    try:
-        for _, fut in admin.delete_consumer_groups([GROUP]).items():
-            try:
-                fut.result()
-                log.info("deleted stale consumer group %s", GROUP)
-            except Exception as exc:
-                log.info("consumer group %s not deleted (ok): %s", GROUP, exc)
-    except Exception as exc:
-        log.info("delete_consumer_groups skipped (ok): %s", exc)
-
-
-def ensure_fresh_topic(admin, topic):
-    if topic in admin.list_topics(timeout=20).topics:
-        log.info("deleting existing topic %s", topic)
-        for _, fut in admin.delete_topics([topic], operation_timeout=30).items():
-            try:
-                fut.result()
-            except Exception as exc:
-                log.warning("delete_topics: %s", exc)
-        for _ in range(30):
-            if topic not in admin.list_topics(timeout=20).topics:
-                break
-            time.sleep(2)
-
-    for attempt in range(10):
-        for _, fut in admin.create_topics(
-            [NewTopic(topic, num_partitions=1, replication_factor=1)]
-        ).items():
-            try:
-                fut.result()
-            except Exception as exc:
-                log.warning("create_topics %s attempt %d: %s", topic, attempt + 1, exc)
-        if topic in admin.list_topics(timeout=20).topics:
-            log.info("topic %s is ready (1 partition)", topic)
-            return
-        time.sleep(3)
-    raise RuntimeError("could not create fresh topic " + topic)
-
-
 def main():
-    admin = AdminClient({"bootstrap.servers": BOOTSTRAP})
-    wait_for_broker(admin)
-    reset_consumer_group(admin)
-    ensure_fresh_topic(admin, TOPIC)
-    ensure_fresh_topic(admin, OUTPUT_TOPIC)
-
     producer = Producer({"bootstrap.servers": BOOTSTRAP, "enable.idempotence": True})
-
-    for i in range(SEED_COUNT):
-        record = json.dumps({"order_id": "seed-%d" % i, "amount": (i % 7) + 1})
-        producer.produce(TOPIC, value=record.encode("utf-8"))
-    producer.produce(TOPIC, value=POISON_RECORD.encode("utf-8"))
-    producer.flush(30)
-    log.info("SEED COMPLETE seeded=%d poison_offset=%d", SEED_COUNT, SEED_COUNT)
-
-    seq = SEED_COUNT + 1
     while True:
-        record = json.dumps({"order_id": "ord-%d" % seq, "amount": (seq % 7) + 1})
+        order_id = "ORD-" + uuid.uuid4().hex[:12].upper()
+        record = json.dumps({"order_id": order_id, "amount": 1 + int(uuid.uuid4().hex[:2], 16) % 7})
         producer.produce(TOPIC, value=record.encode("utf-8"))
         producer.poll(0)
-        producer.flush(5)
-        log.info("produced order_id=ord-%d", seq)
-        seq += 1
+        producer.flush(10)
+        log.info("published order_id=%s", order_id)
         time.sleep(INTERVAL)
 
 
@@ -208,58 +142,259 @@ if __name__ == "__main__":
     main()
 """
 
-ARCHIVER_SCRIPT = r"""
-import logging
-import os
+
+class KafkaBrokerClient:
+    """Run bounded Kafka administration and data-plane inspection commands."""
+
+    _BIN_DIR = "/opt/kafka/bin"
+    _SUCCESS_MARKER = "__STREAM_ADMIN_OK__"
+    _BROKER_LABEL = "app.kubernetes.io/name"
+    _BROKER_LABEL_VALUE = "kafka"
+
+    def __init__(self, kubectl: KubeCtl, namespace: str):
+        self.kubectl = kubectl
+        self.namespace = namespace
+
+    def _broker_pod_name(self) -> str:
+        pods = self.kubectl.list_pods(self.namespace).items
+        candidates = [
+            pod
+            for pod in pods
+            if (pod.metadata.labels or {}).get(self._BROKER_LABEL) == self._BROKER_LABEL_VALUE
+            and pod.status.phase == "Running"
+            and pod.metadata.deletion_timestamp is None
+        ]
+        if not candidates:
+            raise RuntimeError("no running Kafka broker pod found")
+        return candidates[0].metadata.name
+
+    def _pipeline_pod_name(self) -> str:
+        pods = self.kubectl.list_pods(self.namespace).items
+        candidates = [
+            pod
+            for pod in pods
+            if (pod.metadata.labels or {}).get("app") == "order-stream"
+            and pod.status.phase == "Running"
+            and pod.metadata.deletion_timestamp is None
+        ]
+        if not candidates:
+            raise RuntimeError("no running order-stream pod found")
+        return candidates[0].metadata.name
+
+    def _run(self, script: str, args: list[str], input_data: str | None = None) -> str:
+        if not script.startswith("kafka-") or not script.endswith(".sh"):
+            raise ValueError(f"unsupported Kafka command: {script}")
+
+        command = ["kubectl", "exec"]
+        if input_data is not None:
+            command.append("-i")
+        command.extend(
+            [
+                "-n",
+                self.namespace,
+                self._broker_pod_name(),
+                "--",
+                "env",
+                "KAFKA_HEAP_OPTS=-Xms32m -Xmx64m",
+                "KAFKA_OPTS=",
+                f"{self._BIN_DIR}/{script}",
+                *args,
+            ]
+        )
+        shell_command = " ".join(shlex.quote(part) for part in command)
+        shell_command += f" && printf '\\n{self._SUCCESS_MARKER}\\n'"
+        output = self.kubectl.exec_command(shell_command, input_data=input_data)
+        if self._SUCCESS_MARKER not in output:
+            raise RuntimeError(f"Kafka command {script} failed: {output.strip()[-1000:]}")
+        return output.replace(self._SUCCESS_MARKER, "").strip()
+
+    def delete_group(self, group: str) -> None:
+        try:
+            self._run(
+                "kafka-consumer-groups.sh",
+                ["--bootstrap-server", "kafka:9092", "--delete", "--group", group],
+            )
+        except RuntimeError as exc:
+            if "does not exist" not in str(exc) and "not found" not in str(exc):
+                raise
+
+    def recreate_topic(self, topic: str) -> None:
+        try:
+            self._run(
+                "kafka-topics.sh",
+                ["--bootstrap-server", "kafka:9092", "--delete", "--topic", topic],
+            )
+            time.sleep(2)
+        except RuntimeError as exc:
+            if "does not exist" not in str(exc) and "UnknownTopicOrPartition" not in str(exc):
+                raise
+
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            try:
+                self._run(
+                    "kafka-topics.sh",
+                    [
+                        "--bootstrap-server",
+                        "kafka:9092",
+                        "--create",
+                        "--topic",
+                        topic,
+                        "--partitions",
+                        "1",
+                        "--replication-factor",
+                        "1",
+                    ],
+                )
+                return
+            except RuntimeError as exc:
+                if "already exists" not in str(exc) and "marked for deletion" not in str(exc):
+                    raise
+                time.sleep(2)
+        raise TimeoutError(f"Kafka topic {topic!r} was not recreated within 60 seconds")
+
+    def publish_lines(self, topic: str, records: list[str]) -> None:
+        self._run(
+            "kafka-console-producer.sh",
+            ["--bootstrap-server", "kafka:9092", "--topic", topic],
+            input_data="\n".join(records) + "\n",
+        )
+
+    def reset_group_offset(self, group: str, topic: str, offset: int) -> None:
+        output = self._run(
+            "kafka-consumer-groups.sh",
+            [
+                "--bootstrap-server",
+                "kafka:9092",
+                "--group",
+                group,
+                "--topic",
+                f"{topic}:0",
+                "--reset-offsets",
+                "--to-offset",
+                str(offset),
+                "--execute",
+            ],
+        )
+        if topic not in output or str(offset) not in output:
+            raise RuntimeError(f"Kafka did not confirm the requested group offset: {output}")
+
+    def pipeline_snapshot(self, source_topic: str, output_topic: str, group: str) -> dict:
+        """Read both topics and the committed offset from an application pod.
+
+        The broker has a tight 600 MiB limit and already reserves a 400 MiB JVM
+        heap. Repeatedly launching Kafka's Java CLI inside that container can
+        OOM the broker even when the CLI heap is constrained. The ordinary
+        producer already has the native Python Kafka client installed, so
+        read-only evaluation runs there in one bounded process instead.
+        """
+        probe = r"""
+import base64
+import json
+import sys
 import uuid
 
 from confluent_kafka import Consumer, TopicPartition
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-log = logging.getLogger("orders-archiver")
-
-BOOTSTRAP = os.environ.get("KAFKA_BOOTSTRAP", "kafka:9092")
-OUTPUT_TOPIC = os.environ.get("OUTPUT_TOPIC", "orders-processed")
+source_topic, output_topic, target_group = sys.argv[1:4]
 
 
-def main():
+def read_partition(topic):
     consumer = Consumer(
         {
-            "bootstrap.servers": BOOTSTRAP,
-            "group.id": "orders-archiver-" + uuid.uuid4().hex,
+            "bootstrap.servers": "kafka:9092",
+            "group.id": "orders-read-" + uuid.uuid4().hex,
             "enable.auto.commit": False,
         }
     )
-    consumer.assign([TopicPartition(OUTPUT_TOPIC, 0, 0)])
-    log.info("orders-archiver started bootstrap=%s topic=%s", BOOTSTRAP, OUTPUT_TOPIC)
-    while True:
-        msg = consumer.poll(1.0)
-        if msg is None:
-            continue
-        if msg.error():
-            log.warning("archiver error: %s", msg.error())
-            continue
-        log.info("AUDIT src_offset=%s", msg.value().decode("utf-8"))
+    partition = TopicPartition(topic, 0, 0)
+    consumer.assign([partition])
+    _, high = consumer.get_watermark_offsets(partition, timeout=10, cached=False)
+    records = []
+    while len(records) < high:
+        message = consumer.poll(2.0)
+        if message is None:
+            raise RuntimeError("timed out reading " + topic)
+        if message.error():
+            raise RuntimeError(str(message.error()))
+        if message.offset() >= high:
+            break
+        records.append(
+            {
+                "offset": message.offset(),
+                "value": base64.b64encode(message.value() or b"").decode("ascii"),
+            }
+        )
+    consumer.close()
+    return records
 
 
-if __name__ == "__main__":
-    main()
+position_reader = Consumer(
+    {
+        "bootstrap.servers": "kafka:9092",
+        "group.id": target_group,
+        "enable.auto.commit": False,
+    }
+)
+position = position_reader.committed([TopicPartition(source_topic, 0)], timeout=10)[0].offset
+position_reader.close()
+
+# Capture the output high-watermark first. Any result present there must have
+# a corresponding source record, and the subsequent source read will include
+# it even while the live pipeline continues advancing.
+output_records = read_partition(output_topic)
+source_records = read_partition(source_topic)
+state = {
+    "source": source_records,
+    "output": output_records,
+    "group_offset": None if position < 0 else position,
+}
+print("STREAM_STATE=" + json.dumps(state, separators=(",", ":")))
 """
+        encoded = base64.b64encode(probe.encode("utf-8")).decode("ascii")
+        python = f"import base64;exec(base64.b64decode({encoded!r}))"
+        command = [
+            "kubectl",
+            "exec",
+            "-n",
+            self.namespace,
+            self._pipeline_pod_name(),
+            "--",
+            "python",
+            "-c",
+            python,
+            source_topic,
+            output_topic,
+            group,
+        ]
+        shell_command = " ".join(shlex.quote(part) for part in command)
+        shell_command += f" && printf '\\n{self._SUCCESS_MARKER}\\n'"
+        output = self.kubectl.exec_command(shell_command)
+        if self._SUCCESS_MARKER not in output:
+            raise RuntimeError(f"Kafka pipeline inspection failed: {output.strip()[-1000:]}")
+        for line in output.splitlines():
+            if line.startswith("STREAM_STATE="):
+                state = json.loads(line.removeprefix("STREAM_STATE="))
+                for key in ("source", "output"):
+                    for record in state[key]:
+                        record["value"] = base64.b64decode(record["value"]).decode("utf-8")
+                return state
+        raise RuntimeError("Kafka pipeline inspection returned no state")
 
 
 class KafkaFaultInjector(FaultInjector):
-    """Injects a poison-pill / head-of-line-block fault into a Kafka stream."""
+    """Create a Kafka order stream whose consumer is blocked by one invalid record."""
 
     TOPIC = "orders-fulfillment"
     OUTPUT_TOPIC = "orders-processed"
     CONSUMER_GROUP = "orders-validator"
     CONSUMER_DEPLOYMENT = "orders-validator"
     PRODUCER_DEPLOYMENT = "order-stream"
-    ARCHIVER_DEPLOYMENT = "orders-archiver"
+    LEGACY_ARCHIVER_DEPLOYMENT = "orders-archiver"
     SCRIPTS_CONFIGMAP = "orders-pipeline-scripts"
 
-    SEED_RECORD_COUNT = 20
-    POISON_RECORD = "CORRUPTED-RECORD-NOT-VALID-JSON-POISON-PILL"
+    INITIAL_RECORD_COUNT = 20
+    INVALID_RECORD = '{"order_id":"ORD-100020","amount":'
 
     PIPELINE_IMAGE = "python:3.12-slim"
     CONFLUENT_KAFKA_VERSION = "2.5.3"
@@ -267,97 +402,92 @@ class KafkaFaultInjector(FaultInjector):
     def __init__(self, namespace: str):
         self.namespace = namespace
         self.kubectl = KubeCtl()
-        self.poison_offset = self.SEED_RECORD_COUNT
+        self.broker = KafkaBrokerClient(self.kubectl, namespace)
+        self.blocked_offset = self.INITIAL_RECORD_COUNT
+
+    @classmethod
+    def initial_records(cls) -> list[str]:
+        return [
+            json.dumps({"order_id": f"ORD-{100000 + index}", "amount": (index % 7) + 1})
+            for index in range(cls.INITIAL_RECORD_COUNT)
+        ]
 
     def inject(self) -> int:
-        logger.info("[Kafka FI] Applying pipeline scripts ConfigMap")
+        logger.info("[Kafka pipeline] Removing any previous order-stream workloads")
+        for name in (
+            self.PRODUCER_DEPLOYMENT,
+            self.CONSUMER_DEPLOYMENT,
+            self.LEGACY_ARCHIVER_DEPLOYMENT,
+        ):
+            self._delete_deployment(name)
+        self._wait_pipeline_pods_gone()
+
+        logger.info("[Kafka pipeline] Creating fresh topics and consumer position")
+        self.broker.delete_group(self.CONSUMER_GROUP)
+        self.broker.recreate_topic(self.TOPIC)
+        self.broker.recreate_topic(self.OUTPUT_TOPIC)
+
+        records = [*self.initial_records(), self.INVALID_RECORD]
+        self.broker.publish_lines(self.TOPIC, records)
+
+        logger.info("[Kafka pipeline] Applying ordinary producer and validator workloads")
         self._apply_configmap()
-
-        logger.info("[Kafka FI] Deploying producer (creates topics + seeds poison record)")
-        self._apply_pipeline_deployment(
-            name=self.PRODUCER_DEPLOYMENT,
-            script="producer.py",
-            extra_env=[
-                {"name": "SEED_RECORD_COUNT", "value": str(self.SEED_RECORD_COUNT)},
-                {"name": "POISON_RECORD", "value": self.POISON_RECORD},
-            ],
-        )
+        self._apply_pipeline_deployment(name=self.PRODUCER_DEPLOYMENT, script="producer.py")
         self._wait_deployment_ready(self.PRODUCER_DEPLOYMENT)
-        logger.info("[Kafka FI] Waiting for the producer to finish seeding the topics")
-        self._wait_for_log(self.PRODUCER_DEPLOYMENT, "SEED COMPLETE", timeout=420)
-
-        logger.info("[Kafka FI] Deploying archiver (records processed offsets)")
-        self._apply_pipeline_deployment(name=self.ARCHIVER_DEPLOYMENT, script="archiver.py", extra_env=[])
-        self._wait_deployment_ready(self.ARCHIVER_DEPLOYMENT)
-
-        logger.info("[Kafka FI] Deploying consumer (will stall on the poison record)")
-        self._apply_pipeline_deployment(name=self.CONSUMER_DEPLOYMENT, script="consumer.py", extra_env=[])
+        self._apply_pipeline_deployment(name=self.CONSUMER_DEPLOYMENT, script="consumer.py")
         self._wait_deployment_ready(self.CONSUMER_DEPLOYMENT)
-        logger.info("[Kafka FI] Waiting for the consumer to stall on the poison record")
-        self._wait_for_log(self.CONSUMER_DEPLOYMENT, "head-of-line block", timeout=420)
-        logger.info("[Kafka FI] Fault is live; consumer is halted at offset %d", self.poison_offset)
-        return self.poison_offset
+        self._wait_for_log(self.CONSUMER_DEPLOYMENT, "partition processing paused", timeout=420)
+        logger.info("[Kafka pipeline] Validator is paused at source offset %d", self.blocked_offset)
+        return self.blocked_offset
 
     def recover(self) -> None:
-        """Recover by switching the consumer to lenient (skip-poison) mode.
-
-        Scaling the consumer to zero before patching avoids a rolling update,
-        which would otherwise surge a temporary pod that advances the offset.
-        With replicas at zero the patch only updates the template; scaling back
-        to one then starts a single lenient pod that resumes at the poison
-        offset, skips it, and drains the backlog. The producer and archiver are
-        left running; all injected objects are removed at namespace teardown.
-        """
-        logger.info("[Kafka FI] Recovery: switching consumer to lenient skip-poison mode")
+        """Move the inactive consumer group past the invalid record, then restart it."""
+        logger.info("[Kafka pipeline] Recovery: stopping the validator")
         self._scale_consumer(0)
         self._wait_consumer_pods_gone()
-        self._patch_consumer_lenient()
+        next_offset = self.blocked_offset + 1
+        self.broker.reset_group_offset(self.CONSUMER_GROUP, self.TOPIC, next_offset)
+        logger.info("[Kafka pipeline] Consumer group advanced to offset %d", next_offset)
         self._scale_consumer(1)
         self._wait_deployment_ready(self.CONSUMER_DEPLOYMENT)
-        logger.info("[Kafka FI] Recovery complete: consumer skips the poison record and the pipeline drains")
 
     def _scale_consumer(self, replicas: int) -> None:
         self.kubectl.apps_v1_api.patch_namespaced_deployment(
             self.CONSUMER_DEPLOYMENT, self.namespace, {"spec": {"replicas": replicas}}
         )
 
+    def _pipeline_pods(self, names: set[str]):
+        return [
+            pod
+            for pod in self.kubectl.list_pods(self.namespace).items
+            if (pod.metadata.labels or {}).get("app") in names
+        ]
+
+    def _wait_pipeline_pods_gone(self, timeout: int = 120) -> None:
+        names = {
+            self.PRODUCER_DEPLOYMENT,
+            self.CONSUMER_DEPLOYMENT,
+            self.LEGACY_ARCHIVER_DEPLOYMENT,
+        }
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if not self._pipeline_pods(names):
+                return
+            time.sleep(3)
+        raise TimeoutError("previous Kafka pipeline pods did not terminate")
+
     def _wait_consumer_pods_gone(self, timeout: int = 120) -> None:
         deadline = time.time() + timeout
         while time.time() < deadline:
-            pods = [
-                pod
-                for pod in self.kubectl.list_pods(self.namespace).items
-                if (pod.metadata.labels or {}).get("app") == self.CONSUMER_DEPLOYMENT
-            ]
-            if not pods:
+            if not self._pipeline_pods({self.CONSUMER_DEPLOYMENT}):
                 return
             time.sleep(3)
-
-    def _patch_consumer_lenient(self) -> None:
-        patch = {
-            "spec": {
-                "template": {
-                    "spec": {
-                        "containers": [
-                            {
-                                "name": self.CONSUMER_DEPLOYMENT,
-                                "env": [{"name": "LENIENT", "value": "true"}],
-                            }
-                        ]
-                    }
-                }
-            }
-        }
-        self.kubectl.apps_v1_api.patch_namespaced_deployment(self.CONSUMER_DEPLOYMENT, self.namespace, patch)
+        raise TimeoutError("orders-validator pods did not terminate")
 
     def _apply_configmap(self) -> None:
         body = client.V1ConfigMap(
             metadata=client.V1ObjectMeta(name=self.SCRIPTS_CONFIGMAP, namespace=self.namespace),
-            data={
-                "consumer.py": CONSUMER_SCRIPT,
-                "producer.py": PRODUCER_SCRIPT,
-                "archiver.py": ARCHIVER_SCRIPT,
-            },
+            data={"consumer.py": CONSUMER_SCRIPT, "producer.py": PRODUCER_SCRIPT},
         )
         api = self.kubectl.core_v1_api
         try:
@@ -367,7 +497,7 @@ class KafkaFaultInjector(FaultInjector):
                 raise
             api.replace_namespaced_config_map(self.SCRIPTS_CONFIGMAP, self.namespace, body)
 
-    def _apply_pipeline_deployment(self, name: str, script: str, extra_env: list[dict]) -> None:
+    def _apply_pipeline_deployment(self, name: str, script: str) -> None:
         install_cmd = (
             f"pip install --no-cache-dir --quiet --retries 5 "
             f"confluent-kafka=={self.CONFLUENT_KAFKA_VERSION} && exec python /scripts/{script}"
@@ -375,9 +505,14 @@ class KafkaFaultInjector(FaultInjector):
         env = [
             {"name": "KAFKA_BOOTSTRAP", "value": "kafka:9092"},
             {"name": "ORDERS_TOPIC", "value": self.TOPIC},
-            {"name": "OUTPUT_TOPIC", "value": self.OUTPUT_TOPIC},
-            {"name": "CONSUMER_GROUP", "value": self.CONSUMER_GROUP},
-        ] + extra_env
+        ]
+        if name == self.CONSUMER_DEPLOYMENT:
+            env.extend(
+                [
+                    {"name": "OUTPUT_TOPIC", "value": self.OUTPUT_TOPIC},
+                    {"name": "CONSUMER_GROUP", "value": self.CONSUMER_GROUP},
+                ]
+            )
 
         manifest = {
             "apiVersion": "apps/v1",
@@ -426,7 +561,7 @@ class KafkaFaultInjector(FaultInjector):
             self.kubectl.apps_v1_api.delete_namespaced_deployment(name, self.namespace)
         except client.exceptions.ApiException as exc:
             if exc.status != 404:
-                logger.warning("[Kafka FI] delete deployment %s: %r", name, exc)
+                logger.warning("[Kafka pipeline] delete deployment %s: %r", name, exc)
 
     def _wait_deployment_ready(self, name: str, timeout: int = 420) -> None:
         api = self.kubectl.apps_v1_api
@@ -435,7 +570,7 @@ class KafkaFaultInjector(FaultInjector):
             dep = api.read_namespaced_deployment(name, self.namespace)
             desired = dep.spec.replicas or 1
             if (dep.status.ready_replicas or 0) >= desired:
-                logger.info("[Kafka FI] Deployment '%s' is ready", name)
+                logger.info("[Kafka pipeline] Deployment '%s' is ready", name)
                 return
             time.sleep(5)
         raise TimeoutError(

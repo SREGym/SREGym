@@ -18,6 +18,10 @@ class CompoundedOracle(Oracle):
                 raise ValueError(f"Duplicate oracle key: {key}")
             self.oracles[key] = oracle
 
+    def capture_baseline(self) -> None:
+        for oracle in self.oracles.values():
+            oracle.capture_baseline()
+
     def evaluate(self, *args, **kwargs):
         result = {
             "success": True,

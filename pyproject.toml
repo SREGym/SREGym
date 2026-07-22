@@ -68,7 +68,7 @@ dependencies = [
     "langchain-litellm>=0.2.2",
     "langgraph>=0.4.7",
     "langsmith>=0.3.43",
-    "litellm>=1.75.0",
+    "litellm>=1.91.0",
     "markdown-it-py==3.0.0",
     "markupsafe==3.0.2",
     "mcp[cli]>=1.9.1",
@@ -135,7 +135,7 @@ dependencies = [
     "sniffio==1.3.1",
     "starlette==0.46.2",
     "termcolor==3.1.0",
-    "tiktoken==0.7.0",
+    "tiktoken>=0.8.0",
     "tqdm==4.67.1",
     "typer==0.16.0",
     "typing-extensions==4.13.2",
@@ -176,6 +176,8 @@ exclude = [
     ".venv",
     "build",
     "*.egg-info",
+    # Vendored verbatim from Harbor (see atif_converter/atif/UPSTREAM.md).
+    "atif_converter/atif",
 ]
 
 [tool.ruff.lint]
@@ -200,7 +202,7 @@ ignore = [
 "clients/stratus/stratus_agent/driver/driver.py" = ["E402"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["sregym", "clients", "provisioner", "scripts"]
+known-first-party = ["atif_converter", "sregym", "clients", "provisioner", "scripts"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -221,7 +223,21 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["sregym", "clients", "scripts", "llm_backend", "logger"]
+packages = [
+    "atif_converter",
+    "atif_converter.adapters",
+    "atif_converter.atif",
+    "sregym",
+    "sregym.traces",
+    "clients",
+    "scripts",
+    "llm_backend",
+    "logger",
+]
+
+[tool.setuptools.package-data]
+atif_converter = ["README.md"]
+"atif_converter.atif" = ["UPSTREAM.md"]
 
 [tool.uv.sources]
 geni-lib-xlab = { path = "scripts/geni_lib/mod/geni_lib_xlab-1.0.0.tar.gz" }

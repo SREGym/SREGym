@@ -303,7 +303,7 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
         transitions to Running within the deadline. If admission is still
         broken (i.e., the fix was not real), this fails."""
         app_namespace = self.problem.namespace
-        probe_name = f"oracle-probe-{secrets.token_hex(4)}"
+        probe_name = f"admission-readiness-check-{secrets.token_hex(4)}"
         body = client.V1Pod(
             metadata=client.V1ObjectMeta(name=probe_name, namespace=app_namespace),
             spec=client.V1PodSpec(
