@@ -1,0 +1,38 @@
+# Lock-holder for the postgres_lock_contention_product_catalog problem.
+
+# Simulates a stuck migration / idle-in-transaction that holds an ACCESS
+# EXCLUSIVE lock on catalog.products.
+
+# The shell loop re-acquires the lock if the connection ever drops (e.g., a DB
+# restart), so the fault survives for the whole run instead of self-releasing.
+
+# apply_configs() drops this into the problem's namespace (astronomy-shop), so
+# no `namespace:` field is set here.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: pg-lock-holder
+  labels:
+    sregym-fault: postgres-lock-contention
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        sregym-fault: postgres-lock-contention
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: lock-holder
+          image: postgres:17.6
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "[lock-holder] acquiring ACCESS EXCLUSIVE on catalog.products";
+              while true; do
+                PGPASSWORD=otel psql \
+                  -h postgresql.astronomy-shop.svc.cluster.local -U root -d otel \
+                  -c "BEGIN; LOCK TABLE catalog.products IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(3600);";
+                echo "[lock-holder] connection dropped; reconnecting in 2s...";
+                sleep 2;
+              done
