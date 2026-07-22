@@ -762,6 +762,14 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
 
+        self.logger.info("[FIX] NightlyRebalanceOOM kube-system actor leftover if any")
+        try:
+            from sregym.conductor.problems.nightly_rebalance_oom import NightlyRebalanceOOM
+
+            NightlyRebalanceOOM.cleanup_leftover_actor()
+        except Exception as e:
+            self.logger.warning(f"Could not clean up NightlyRebalanceOOM actor: {e}")
+
         self.logger.info("[FIX] Clock drift leftover if any")
         try:
             injector = RemoteOSFaultInjector()
