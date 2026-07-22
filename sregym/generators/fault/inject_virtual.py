@@ -1118,6 +1118,56 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from readiness probe misconfiguration fault for service: {service}")
 
+    # V.14_b - Inject a readiness probe missing binary fault
+    def inject_readiness_probe_missing_binary(self, microservices: list[str]):
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+            original_deployment_yaml = copy.deepcopy(deployment_yaml)
+
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            initial_delay = 5
+
+            for container in containers:
+                container["readinessProbe"] = {
+                    "exec": {"command": ["/usr/local/bin/healthcheck", "-port", "8085"]},
+                    "initialDelaySeconds": initial_delay,
+                    "periodSeconds": 5,
+                    "failureThreshold": 1,
+                }
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {modified_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            # Save the *original* deployment YAML for recovery
+            self._write_yaml_to_file(service, original_deployment_yaml)
+
+            print(f"Injected readiness probe missing binary fault for service: {service}")
+
+    def recover_readiness_probe_missing_binary(self, microservices: list[str]):
+        for service in microservices:
+            original_yaml_path = f"/tmp/{service}_modified.yaml"
+
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
+
+            delete_result = self.kubectl.exec_command(delete_command)
+            print(f"Delete result for {service}: {delete_result}")
+
+            apply_result = self.kubectl.exec_command(apply_command)
+            print(f"Apply result for {service}: {apply_result}")
+
+            self.kubectl.wait_for_ready(self.namespace)
+
+            print(f"Recovered from readiness probe missing binary fault for service: {service}")
+
     # V.15 - Inject a liveness probe misconfiguration fault
     def inject_liveness_probe_misconfiguration(self, microservices: list[str]):
         for service in microservices:
