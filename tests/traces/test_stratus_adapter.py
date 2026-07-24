@@ -13,8 +13,8 @@ Stratus is SREGym's own agent (no Harbor source). Two fixtures:
 import json
 from pathlib import Path
 
-from sregym.traces.adapters import stratus
-from sregym.traces.atif import Trajectory
+from atif_converter import Trajectory
+from atif_converter.adapters import stratus
 
 FIXTURES = Path(__file__).parent / "fixtures"
 REAL = FIXTURES / "stratus_run"
@@ -22,7 +22,7 @@ IDS = FIXTURES / "stratus_run_ids"
 
 
 def _convert(fixture: Path) -> Trajectory:
-    return stratus.to_atif(fixture, sregym_meta={"problem_id": "p", "run": 1})
+    return stratus.convert_file(next(fixture.glob("*_stratus_agent_trajectory.jsonl")))
 
 
 # --------------------------------------------------------------------------- #
@@ -38,7 +38,7 @@ def test_real_returns_validated_trajectory():
 
 def test_real_stage_concatenation():
     t = _convert(REAL)
-    stages = t.extra["sregym"]["stages"]
+    stages = t.extra["stratus"]["stages"]
     assert [s["stage"] for s in stages] == [
         "diagnosis",
         "mitigation_attempt_0",
@@ -85,11 +85,11 @@ def test_real_no_metrics_pre_fix():
 
 def test_real_submitted_and_boundary():
     t = _convert(REAL)
-    sregym = t.extra["sregym"]
-    assert sregym["submitted"] is True
+    stratus_meta = t.extra["stratus"]
+    assert stratus_meta["submitted"] is True
     # diagnosis stage ends at its last step.
-    diag = next(s for s in sregym["stages"] if s["stage"] == "diagnosis")
-    assert sregym["diagnosis_submitted_step"] == diag["last_step"]
+    diag = next(s for s in stratus_meta["stages"] if s["stage"] == "diagnosis")
+    assert stratus_meta["diagnosis_submitted_step"] == diag["last_step"]
 
 
 def test_real_roundtrips():
@@ -103,7 +103,7 @@ def test_real_roundtrips():
 def test_ids_shape():
     t = _convert(IDS)
     assert len(t.steps) == 8
-    assert [s["stage"] for s in t.extra["sregym"]["stages"]] == [
+    assert [s["stage"] for s in t.extra["stratus"]["stages"]] == [
         "diagnosis",
         "mitigation_attempt_0",
     ]
@@ -140,7 +140,5 @@ def test_ids_roundtrips():
     Trajectory.model_validate(json.loads(json.dumps(t.to_json_dict())))
 
 
-def test_sregym_meta_injected():
-    t = _convert(IDS)
-    assert t.extra["sregym"]["problem_id"] == "p"
-    assert t.extra["sregym"]["run"] == 1
+def test_standalone_uses_neutral_stratus_metadata():
+    assert "stratus" in _convert(IDS).extra

@@ -34,8 +34,13 @@ def run_preflight() -> None:
 
     m = os.environ.get("AGENT_MODEL_ID", "gpt-4.1").split("/")[-1]
 
+    command = ["copilot", "-p", "say ok", "-s", "--model", m, "--no-ask-user"]
+    reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+    if reasoning_effort:
+        command.extend(["--reasoning-effort", reasoning_effort])
+
     r = subprocess.run(
-        ["copilot", "-p", "say ok", "-s", "--model", m, "--no-ask-user"],
+        command,
         capture_output=True,
         text=True,
         timeout=60,

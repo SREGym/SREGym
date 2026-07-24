@@ -8,6 +8,7 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput
 from sregym.traces import postprocess as trace_postprocess
@@ -130,6 +132,7 @@ def _normalize_opencode_local_model_for_litellm(model: str) -> str:
 def _configure_model_environment(args) -> tuple[str, str]:
     agent_model = args.model
     raw_judge_model = args.judge_model or args.model
+    reasoning_effort = getattr(args, "reasoning_effort", None)
     normalizes_opencode_local_judge = _is_opencode_local_model(args.agent, raw_judge_model)
     judge_model = (
         _normalize_opencode_local_model_for_litellm(raw_judge_model)
@@ -139,6 +142,10 @@ def _configure_model_environment(args) -> tuple[str, str]:
 
     os.environ["AGENT_MODEL_ID"] = agent_model
     os.environ["JUDGE_MODEL_ID"] = judge_model
+    if reasoning_effort:
+        os.environ["AGENT_REASONING_EFFORT"] = reasoning_effort
+    else:
+        os.environ.pop("AGENT_REASONING_EFFORT", None)
 
     if not getattr(args, "judge_model", None) or normalizes_opencode_local_judge:
         if not os.environ.get("JUDGE_API_BASE") and os.environ.get("AGENT_API_BASE"):
@@ -174,7 +181,7 @@ def _artifact_environment(run: RunArtifacts):
 
 def driver_loop(
     conductor: Conductor,
-    problem_filter: str | None = None,
+    problem_selection: Sequence[str] | None = None,
     agent_to_run: str | None = None,
     use_external_harness: bool = False,
     n_attempts: int = 1,
@@ -187,7 +194,7 @@ def driver_loop(
 
     Args:
         conductor: The Conductor instance
-        problem_filter: Optional problem ID to run. If specified, only this problem will be run.
+        problem_selection: Optional ordered problem IDs to run. If omitted, use the registry's default selection.
         agent_to_run: Agent name to run (required unless use_external_harness is True).
         use_external_harness: If True, inject fault and exit without running evaluation logic.
         n_attempts: Number of end-to-end attempts to run each problem.
@@ -219,15 +226,22 @@ def driver_loop(
 
         all_results_for_agent = []
 
-        # Get all problem IDs and filter if needed
+        # Get all problem IDs and apply an explicit CLI selection when supplied.
         problem_ids = conductor.problems.get_problem_ids()
         all_problem_ids = conductor.problems.get_problem_ids(all=True)
-        if problem_filter:
-            if problem_filter not in all_problem_ids:
-                console.log(f"⚠️  Problem '{problem_filter}' not found in registry. Available problems: {problem_ids}")
+        if problem_selection is not None:
+            unknown_problem_ids = set(problem_selection) - set(all_problem_ids)
+            if unknown_problem_ids:
+                console.log(
+                    f"⚠️  Problems not found in registry: {sorted(unknown_problem_ids)}. "
+                    f"Available problems: {all_problem_ids}"
+                )
                 sys.exit(1)
-            problem_ids = [problem_filter]
-            console.log(f"🎯 Running single problem: {problem_filter}")
+            problem_ids = list(problem_selection)
+            if len(problem_ids) == 1:
+                console.log(f"🎯 Running single problem: {problem_ids[0]}")
+            else:
+                console.log(f"🎯 Running selected benchmark suite: {len(problem_ids)} problems")
 
         # sanity check: are there any specified problem ids that do not exist in the registry?
         unknown_problem_ids = set(problem_ids) - set(all_problem_ids)
@@ -522,7 +536,7 @@ def driver_loop(
 
 def _run_driver_and_shutdown(
     conductor: Conductor,
-    problem_filter: str | None = None,
+    problem_selection: Sequence[str] | None = None,
     agent_to_run: str | None = None,
     use_external_harness: bool = False,
     n_attempts: int = 1,
@@ -533,7 +547,7 @@ def _run_driver_and_shutdown(
     try:
         results = driver_loop(
             conductor,
-            problem_filter=problem_filter,
+            problem_selection=problem_selection,
             agent_to_run=agent_to_run,
             use_external_harness=use_external_harness,
             n_attempts=n_attempts,
@@ -564,6 +578,7 @@ def main(args):
 
     logger.info(
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
+        f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
         f"agent_api_base: {_env_status('AGENT_API_BASE')}, judge_api_base: {_env_status('JUDGE_API_BASE')}"
     )
 
@@ -590,12 +605,17 @@ def main(args):
     conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
     conductor = Conductor(config=conductor_config)
 
+    suite = getattr(args, "suite", None)
+    problem_selection = (args.problem,) if args.problem else PROBLEM_SETS.get(suite)
+    if suite:
+        logger.info(f"Running {suite}: {len(problem_selection)} problems")
+
     # Start the driver in the background; it will call request_shutdown() when finished
     driver_thread = threading.Thread(
         target=_run_driver_and_shutdown,
         args=(
             conductor,
-            args.problem,
+            problem_selection,
             args.agent,
             args.use_external_harness,
             args.n_attempts,
@@ -661,13 +681,19 @@ def main(args):
 
 
 if __name__ == "__main__":
-    # Parse command-line arguments
     parser = argparse.ArgumentParser(description="Run SREGym benchmark suite")
-    parser.add_argument(
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument(
         "--problem",
         type=str,
         default=None,
         help="Run only a specific problem by its ID (e.g., 'target_port')",
+    )
+    selection.add_argument(
+        "--suite",
+        choices=tuple(PROBLEM_SETS),
+        default=None,
+        help="Run a named problem set (e.g., 'sregym-lite')",
     )
     parser.add_argument(
         "--agent",
@@ -686,6 +712,12 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set)",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
+        default=None,
+        help="Reasoning effort for Codex, Copilot, OpenCode, and Claude Code (uses the agent default when omitted)",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
@@ -720,8 +752,9 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Validate that n_attempts is positive
     if args.n_attempts is not None and args.n_attempts < 1:
         parser.error("--n-attempts must be a positive integer")
+    if args.use_external_harness and args.suite:
+        parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
 
     main(args)

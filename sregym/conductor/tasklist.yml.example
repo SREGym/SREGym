@@ -54,6 +54,9 @@ all:
     configmap_drift_hotel_reservation:
     - diagnosis
     - mitigation
+    feature_flag_latent_bug_hotel_reservation:
+    - diagnosis
+    - mitigation
     duplicate_pvc_mounts_astronomy_shop:
     - diagnosis
     - mitigation
@@ -217,6 +220,9 @@ all:
     - diagnosis
     - mitigation
     kafka_queue_problems_hotel_reservation:
+    - diagnosis
+    - mitigation
+    kafka_producer_leak:
     - diagnosis
     - mitigation
     loadgenerator_flood_homepage:
