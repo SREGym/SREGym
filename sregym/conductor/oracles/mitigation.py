@@ -18,6 +18,7 @@ class MitigationOracle(Oracle):
         # namespace is still empty and every replica check below would be
         # skipped, letting "scale to 0" and "delete the deployment" pass.
         self.replica_count = {}
+        self.rollout_time = _ROLLOUT_SETTLE_SECONDS
 
     def capture_baseline(self) -> None:
         """Capture pre-injection Deployments in the problem namespace.
