@@ -36,6 +36,14 @@ class PostgresLockContentionProductCatalog(Problem):
     # Raising the limit so the fault is pure lock contention. (We do NOT restore it on recovery: see recover_fault.)
     FAULT_MEMORY_LIMIT = "512Mi"
 
+    # The lock-holder runs in the hidden `khaos` namespace, which k8s_proxy filters
+    # out of the agent's view. Keeping it outside the agent's Kubernetes credential
+    # scope (per the RFC) means the agent cannot see or delete this helper and must
+    # mitigate through the database (pg_terminate_backend on the blocking session).
+    HOLDER_NAMESPACE = "khaos"
+    HOLDER_JOB = "catalog-maintenance"
+    HOLDER_SELECTOR = "app=catalog-maintenance"
+
     def __init__(self):
         super().__init__(app=AstronomyShop())
 
@@ -74,8 +82,11 @@ class PostgresLockContentionProductCatalog(Problem):
             f"kubectl rollout status deploy/{self.POSTGRES_DEPLOY} -n {self.namespace} --timeout=180s"
         )
 
-        # Deploying the lock-holder (takes ACCESS EXCLUSIVE on catalog.products).
-        self.kubectl.apply_configs(self.namespace, self.manifest_path)
+        # Deploy the lock-holder into the hidden khaos namespace (out of the agent's
+        # scope). khaos persists across runs, so we clear any stale holder first
+        self._ensure_holder_namespace()
+        self.kubectl.exec_command(f"kubectl delete job {self.HOLDER_JOB} -n {self.HOLDER_NAMESPACE} --ignore-not-found")
+        self.kubectl.apply_configs(self.HOLDER_NAMESPACE, self.manifest_path)
 
         # Fail loudly if the lock never actually blocks a read
         if not self._wait_until(lambda: self._catalog_read_status() == "locked", timeout=180):
@@ -88,23 +99,22 @@ class PostgresLockContentionProductCatalog(Problem):
     def recover_fault(self) -> bool:
         logger.info("Recovering from Postgres lock-contention fault...")
 
-        # If the app namespace is already gone (e.g. an upstream deploy failure
-        # tore it down), there is nothing to recover. So we return early instead of
-        # flooding errors against a missing namespace.
-        if not self._namespace_exists():
-            logger.info("Namespace '%s' not present; nothing to recover.", self.namespace)
-            return True
-
-        # Stopping the lock-holder from reconnecting: delete the Job and force-delete
-        # its pod (otherwise its shell loop simply re-acquires the lock).
-        self.kubectl.delete_configs(self.namespace, self.manifest_path)
+        # Always remove the lock-holder from khaos first (khaos persists across
+        # runs, so a leftover holder would re-block the next run).
+        self.kubectl.delete_configs(self.HOLDER_NAMESPACE, self.manifest_path)
         self.kubectl.exec_command(
-            f"kubectl delete pod -n {self.namespace} "
-            "-l sregym-fault=postgres-lock-contention --force --grace-period=0 --ignore-not-found"
+            f"kubectl delete pod -n {self.HOLDER_NAMESPACE} "
+            f"-l {self.HOLDER_SELECTOR} --force --grace-period=0 --ignore-not-found"
         )
 
-        # Deleting the pod is NOT enough: the Postgres backend holding the lock is
-        # parked in pg_sleep() and never notices the client is gone.
+        # If the app namespace is already gone (e.g. an upstream deploy failure
+        # tore it down), there is no postgres backend left to clean up.
+        if not self._namespace_exists():
+            logger.info("Namespace '%s' not present; nothing more to recover.", self.namespace)
+            return True
+
+        # Deleting the holder is NOT enough on its own, because the Postgres backend holding
+        # the lock is parked in pg_sleep() and never notices the client is gone.
 
         # Actively terminate that backend: the same action an SRE/agent
         # takes (pg_terminate_backend), retrying until reads succeed again.
@@ -156,6 +166,12 @@ class PostgresLockContentionProductCatalog(Problem):
         """True if the problem's app namespace currently exists."""
         out = self.kubectl.exec_command(f"kubectl get namespace {self.namespace} --no-headers --ignore-not-found")
         return self.namespace in out
+
+    def _ensure_holder_namespace(self) -> None:
+        """Create the hidden khaos namespace if absent (idempotent)."""
+        self.kubectl.exec_command(
+            f"kubectl get ns {self.HOLDER_NAMESPACE} >/dev/null 2>&1 || kubectl create ns {self.HOLDER_NAMESPACE}"
+        )
 
     def _catalog_read_status(self) -> str:
         """

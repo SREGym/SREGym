@@ -3,36 +3,42 @@
 # Simulates a stuck migration / idle-in-transaction that holds an ACCESS
 # EXCLUSIVE lock on catalog.products.
 
-# The shell loop re-acquires the lock if the connection ever drops (e.g., a DB
-# restart), so the fault survives for the whole run instead of self-releasing.
+# It acquires the lock exactly ONCE and holds it in a single session for the
+# whole run. If the holding session is terminated (pg_terminate_backend),
+# the container exits and backoffLimit: 0 keeps the Job from starting a replacement,
+# so terminating the backend is a permanent fix.
 
-# apply_configs() drops this into the problem's namespace (astronomy-shop), so
-# no `namespace:` field is set here.
+# The problem applies this into the hidden `khaos` namespace (outside the
+# agent's Kubernetes credential scope, filtered by k8s_proxy), so the agent
+# cannot see or delete this helper and must mitigate through the database
+# itself. The namespace is passed at apply time, so no `namespace:` field is set.
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: pg-lock-holder
+  name: catalog-maintenance
   labels:
-    sregym-fault: postgres-lock-contention
+    app: catalog-maintenance
 spec:
-  backoffLimit: 6
+  backoffLimit: 0
   template:
     metadata:
       labels:
-        sregym-fault: postgres-lock-contention
+        app: catalog-maintenance
     spec:
       restartPolicy: Never
       containers:
-        - name: lock-holder
+        - name: maintenance
           image: postgres:17.6
           command: ["sh", "-c"]
           args:
             - |
-              echo "[lock-holder] acquiring ACCESS EXCLUSIVE on catalog.products";
-              while true; do
-                PGPASSWORD=otel psql \
-                  -h postgresql.astronomy-shop.svc.cluster.local -U root -d otel \
-                  -c "BEGIN; LOCK TABLE catalog.products IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(3600);";
-                echo "[lock-holder] connection dropped; reconnecting in 2s...";
+              # Wait until the database accepts connections, then acquire the
+              # lock once and hold it in a single session until terminated.
+              until PGPASSWORD=otel psql \
+                -h postgresql.astronomy-shop.svc.cluster.local -U root -d otel \
+                -c "SELECT 1" >/dev/null 2>&1; do
                 sleep 2;
               done
+              PGPASSWORD=otel psql \
+                -h postgresql.astronomy-shop.svc.cluster.local -U root -d otel \
+                -c "BEGIN; LOCK TABLE catalog.products IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(86400);"
