@@ -8,6 +8,20 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class CpuThrottling(Problem):
+    # Vary the stateless application tier so the target cannot be identified by
+    # comparing it with a uniform 1-core baseline. Stateful dependencies are
+    # deliberately excluded: resizing their pod templates breaks existing
+    # database/cache connections and creates an unrelated outage.
+    CPU_LIMIT_DECOYS = [
+        "profile",
+        "rate",
+        "recommendation",
+        "reservation",
+        "search",
+        "user",
+        "frontend",
+    ]
+
     def __init__(self, faulty_service: str = "geo"):
         self.app_name = "hotel_reservation"
         self.faulty_service = faulty_service
@@ -22,16 +36,18 @@ class CpuThrottling(Problem):
             description=(
                 f"The `{self.faulty_service}` deployment has a CPU limit set too low for its normal operation. "
                 "The Linux CFS scheduler throttles the container whenever it exceeds its quota within a "
-                "100ms scheduling window, causing severe latency increases on search paths that depend on "
-                "this service. Crucially, `kubectl top pods` shows CPU usage well below the limit — the "
+                "100ms scheduling window, delaying bursts and causing intermittent tail latency on search paths "
+                "that depend on this service. Crucially, `kubectl top pods` shows CPU usage well below the limit — the "
                 "throttling is silent at the kubectl level but visible in the container's cgroup stats "
                 "(`cpu.stat`: high `nr_throttled`) and in the Prometheus `ContainerCPUThrottling` alert. "
                 "The fix is to raise the CPU limit to a value that accommodates burst traffic, or remove it entirely."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        # calibration: warmup(30s) + n_samples(5)*window(7s) = 65s
-        # verification: settle(30s) + sample(15s) = 45s  soo total ~110s
+        # Calibration is deliberately fresh for every injection. Its sampling
+        # floor is 65s (30s warmup + 5x7s windows); remote cgroup reads normally
+        # make calibration take about 2-4 minutes, with bounded retries taking longer.
+        # Verification repeats a settle/sample cycle when a service needs more headroom.
         self.app.create_workload(duration=180)
         self.mitigation_oracle = CpuThrottlingMitigationOracle(
             problem=self,
@@ -42,11 +58,21 @@ class CpuThrottling(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         injector = VirtualizationFaultInjector(namespace=self.namespace)
-        injected = injector.inject_cpu_throttle(microservices=[self.faulty_service], all_services=True)
-        injected = injector.verify_injection(injected=injected, faulty_services=[self.faulty_service])
+        injected = {}
+        try:
+            injected = injector.inject_cpu_throttle(
+                microservices=[self.faulty_service],
+                additional_services=self.CPU_LIMIT_DECOYS,
+            )
+            self._patched_services = list(injected)
+            injected = injector.verify_injection(injected=injected, faulty_services=[self.faulty_service])
+        except Exception:
+            if injected:
+                print("CPU-throttling verification failed; restoring original resources")
+                injector.recover_cpu_throttle(microservices=list(injected))
+            raise
         self.injected_cpu_limit = injected.get(self.faulty_service)
         self.mitigation_oracle.injected_cpu_limit = self.injected_cpu_limit
-        self._patched_services = list(injected.keys())
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
 
     @mark_fault_injected
