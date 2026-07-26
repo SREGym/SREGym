@@ -392,10 +392,10 @@ class VirtualizationFaultInjector(FaultInjector):
                 containers = copy.deepcopy(original_deployment_yaml["spec"]["template"]["spec"]["containers"])
                 for container in containers:
                     resources = container.setdefault("resources", {})
-                    if service in microservices:
-                        resources.setdefault("requests", {})["cpu"] = "10m"
-                    else:
-                        resources.setdefault("requests", {})["cpu"] = limit
+                    # Give the target and decoys the same request/limit shape.
+                    # The CPU limit still controls CFS throttling; a unique
+                    # request-to-limit mismatch would reveal the target.
+                    resources.setdefault("requests", {})["cpu"] = limit
                     resources.setdefault("limits", {})["cpu"] = limit
 
                 self._patch_cpu_resources(service, containers)

@@ -65,7 +65,7 @@ def test_injection_patches_only_target_and_explicit_decoys(monkeypatch, tmp_path
     assert [name for name, _, _ in injector.kubectl.patches] == ["geo", "frontend"]
 
     geo_resources = injector.kubectl.patches[0][2]["spec"]["template"]["spec"]["containers"][0]["resources"]
-    assert geo_resources["requests"]["cpu"] == "10m"
+    assert geo_resources["requests"]["cpu"] == "200m"
     assert geo_resources["limits"]["cpu"] == "200m"
     assert geo_resources["limits"]["memory"] == "64Mi"
     assert geo_resources["$patch"] == "replace"
