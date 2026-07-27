@@ -9,6 +9,8 @@ from kubernetes import client
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.kubectl import KubeCtl
 
+FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE = "ghcr.io/sregym/hotel-reservation:latest"
+
 
 class ApplicationFaultInjector(FaultInjector):
     def __init__(self, namespace: str):
@@ -192,7 +194,10 @@ class ApplicationFaultInjector(FaultInjector):
 
         valkey_pod = valkey_pods[0]
         print(f"[🔓] Found Valkey pod: {valkey_pod}")
-        command = f"kubectl exec -n {self.namespace} {valkey_pod} -- valkey-cli CONFIG SET requirepass ''"
+        command = (
+            f"kubectl exec -n {self.namespace} {valkey_pod} -- "
+            "env VALKEYCLI_AUTH=invalid_pass valkey-cli CONFIG SET requirepass ''"
+        )
         result = self.kubectl.exec_command(command)
         print(f"[✅] Recovery result: {result}")
 
@@ -471,6 +476,202 @@ class ApplicationFaultInjector(FaultInjector):
 
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
+    
+    def inject_kafka_producer_leak(self, deployment_name: str = "checkout") -> list:
+        limits = [None, None]
+
+        kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
+        for c in kafka_dep.spec.template.spec.containers:
+            if "kafka" in c.name:
+                c.env.append(client.V1EnvVar(name="KAFKA_MESSAGE_MAX_BYTES", value="20971520"))
+
+                for e in c.env:
+                    if e.name == "KAFKA_HEAP_OPTS":
+                        limits[0] = e.value
+                        break
+
+                limits[1] = c.resources.limits.get("memory") if c.resources and c.resources.limits else None
+                break
+        
+        self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+
+        script = textwrap.dedent(
+            """
+            from confluent_kafka import Producer
+            import threading
+            import os
+
+            def task(thread_id: int):
+                payload_size = int(os.environ.get('PAYLOAD_SIZE_BYTES', '10000000'))
+                payload = os.urandom(payload_size)
+
+                conf = {
+                    'bootstrap.servers': 'kafka:9092',
+                    'message.max.bytes': payload_size + 1000,
+                    'queue.buffering.max.kbytes': (payload_size * 2) // 1024,
+                    'enable.idempotence': 'true',
+                }
+
+                while True:
+                    try:
+                        producer = Producer(conf)
+                        producer.produce('orders', payload)
+                        producer.poll(0)
+                    except BufferError:
+                        producer.poll(0.1)
+            
+            threads = []
+            for i in range(20):
+                t = threading.Thread(target=task, args=(i,))
+                t.start()
+                threads.append(t)
+            
+            for t in threads:
+                t.join()
+            """).strip()
+
+        encoded = base64.b64encode(script.encode()).decode()
+
+        producer = client.V1Container(name="order-creator", image="python:3.12-slim", command=["sh", "-c", f"pip install confluent-kafka && python3 -u -c \"import base64; exec(base64.b64decode('{encoded}'))\""])
+
+        deployment.spec.template.spec.containers.append(producer)
+
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+
+        deadline = time.monotonic() + 120
+        while time.monotonic() < deadline:
+            pods = self.kubectl.list_pods(self.namespace)
+            rcnt = None
+            for p in pods.items:
+                if "kafka" in p.metadata.name:
+                    for c in (p.status.container_statuses or []):
+                        if "kafka" in c.name:
+                            rcnt = c.restart_count
+                            break
+                    break
+
+            if rcnt:
+                break
+
+            time.sleep(5)
+        else:
+            raise TimeoutError("Kafka did not restart within 120 seconds after producer injection")
+
+        print(f"Injected sidecar container 'order-creator' in '{deployment_name}'")
+
+        return limits
+    
+    def recover_kafka_producer_leak(self, deployment_name: str = "checkout"):
+        kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
+        for c in kafka_dep.spec.template.spec.containers:
+            if "kafka" in c.name:
+                temp = None
+                for i, e in enumerate(c.env):                        
+                    if e.name == "KAFKA_MESSAGE_MAX_BYTES":
+                        temp = i
+                        break
+                
+                if temp is not None:
+                    c.env.pop(temp)
+        
+        self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+
+        deployment.spec.template.spec.containers = [x for x in deployment.spec.template.spec.containers if x.name !=  "order-creator"]
+
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+
+        self.kubectl.exec_command(f"kubectl delete pod -l app.kubernetes.io/name={deployment_name} -n {self.namespace}")
+
+        print(f"Removed sidecar container 'order-creator' from '{deployment_name}'")
+
+    # A.7 feature_flag_experimental_routing: swap frontend image + set flag to activate dormant error path
+    def inject_feature_flag_experimental_routing(
+        self,
+        deployment_name: str = "frontend",
+        configmap_name: str = "frontend-runtime-config",
+        flag_key: str = "SEARCH_BACKEND_VERSION",
+        experimental_image: str = FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE,
+    ):
+        """Set the feature flag in a ConfigMap and swap the frontend image to the
+        experimental-routing build. When the flag is active, the frontend's search
+        handler returns HTTP 500 on every hotel search request while all pods
+        remain Running."""
+
+        self.kubectl.create_or_update_configmap(
+            name=configmap_name,
+            namespace=self.namespace,
+            data={flag_key: "true"},
+        )
+        print(f"ConfigMap {configmap_name} set: {flag_key}=true")
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        for container in deployment.spec.template.spec.containers:
+            if container.name == f"hotel-reserv-{deployment_name}":
+                container.image = experimental_image
+                if not container.env:
+                    container.env = []
+                container.env = [e for e in container.env if e.name != flag_key]
+                container.env.append(
+                    client.V1EnvVar(
+                        name=flag_key,
+                        value_from=client.V1EnvVarSource(
+                            config_map_key_ref=client.V1ConfigMapKeySelector(
+                                name=configmap_name,
+                                key=flag_key,
+                            )
+                        ),
+                    )
+                )
+        deployment.spec.strategy = client.V1DeploymentStrategy(type="Recreate")
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        print(f"Swapped {deployment_name} image to {experimental_image} and set {flag_key}=true env")
+        # Wait for rollout to complete so fault is deterministically live before returning
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout=120s"
+        )
+        time.sleep(5)
+
+    def recover_feature_flag_experimental_routing(
+        self,
+        deployment_name: str = "frontend",
+        configmap_name: str = "frontend-runtime-config",
+        flag_key: str = "SEARCH_BACKEND_VERSION",
+        original_image: str | None = None,
+    ):
+        """Revert the flag and restore the original frontend image."""
+
+        self.kubectl.create_or_update_configmap(
+            name=configmap_name,
+            namespace=self.namespace,
+            data={flag_key: "false"},
+        )
+        print(f"ConfigMap {configmap_name} reverted: {flag_key}=false")
+
+        if original_image is None:
+            raise ValueError("original_image must be provided")
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        for container in deployment.spec.template.spec.containers:
+            if container.name == f"hotel-reserv-{deployment_name}":
+                container.image = original_image
+
+        deployment.spec.strategy = client.V1DeploymentStrategy(
+            type="RollingUpdate",
+            rolling_update=client.V1RollingUpdateDeployment(
+                max_unavailable="25%",
+                max_surge="25%",
+            ),
+        )
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        print(f"Restored {deployment_name} image to {original_image} and set {flag_key}=false env")
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout=120s"
+        )
+        time.sleep(5)
 
 
 if __name__ == "__main__":

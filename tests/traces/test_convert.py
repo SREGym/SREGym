@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from atif_converter import Trajectory
 from sregym.traces import convert
-from sregym.traces.atif import Trajectory
 
 FIXTURE_RUN = Path(__file__).parent / "fixtures" / "claudecode_run"
 
@@ -27,6 +27,15 @@ def test_convert_run_dispatches_claudecode(tmp_path):
     assert traj.agent.name == "claudecode"
     # Validates (round-trips through the model).
     Trajectory.model_validate(traj.to_json_dict())
+
+
+def test_malformed_claudecode_session_is_non_fatal(tmp_path):
+    run_dir = tmp_path / "results" / "b" / "claudecode" / "problem" / "run_1"
+    session_dir = run_dir / "sessions" / "projects" / "project" / "session"
+    session_dir.mkdir(parents=True)
+    (session_dir / "session.jsonl").write_text("[]\n", encoding="utf-8")
+
+    assert convert.convert_run(run_dir) is None
 
 
 def test_extra_sregym_populated(tmp_path):
@@ -331,6 +340,7 @@ def test_stratus_extra_sregym_populated(tmp_path):
     shutil.copytree(STRATUS_FIXTURE, run_dir)
     traj = convert.convert_run(run_dir)
     sregym = traj.extra["sregym"]
+    assert "stratus" not in traj.extra
     assert sregym["problem_id"] == "service_port_conflict_hotel_reservation"
     assert sregym["application"] == "Hotel Reservation"
     assert sregym["run"] == 1

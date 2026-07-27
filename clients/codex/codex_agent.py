@@ -278,6 +278,26 @@ class CodexAgent:
             logger.error(f"Trajectory conversion failed: {exc}")
             return None
 
+    def _build_command(self, instruction: str) -> list[str]:
+        """Build the Codex command, preserving the CLI's default effort when unset."""
+        model = self.model_name.split("/")[-1]
+        command = [
+            "codex",
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "--model",
+            model,
+            "--json",
+            "--enable",
+            "unified_exec",
+        ]
+        reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+        if reasoning_effort:
+            command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
+        command.extend(["--", instruction])
+        return command
+
     def run(self, instruction: str) -> int:
         """
         Run the Codex agent with the given instruction.
@@ -290,30 +310,17 @@ class CodexAgent:
         """
         # Extract model name (remove provider prefix if present)
         model = self.model_name.split("/")[-1]
+        reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
 
         logger.info(f"Running Codex with instruction: {instruction}")
         logger.info(f"Using model: {model}")
+        logger.info(f"Using reasoning effort: {reasoning_effort or 'Codex default'}")
 
         # Setup authentication
         using_api_key = self._setup_auth()
 
         try:
-            # Build Codex command
-            command = [
-                "codex",
-                "exec",
-                "--dangerously-bypass-approvals-and-sandbox",
-                "--skip-git-repo-check",
-                "--model",
-                model,
-                "--json",
-                "--enable",
-                "unified_exec",
-                "-c",
-                "model_reasoning_effort=high",
-                "--",  # end of flags
-                instruction,
-            ]
+            command = self._build_command(instruction)
 
             logger.info(f"Executing command: {' '.join(command)}")
 

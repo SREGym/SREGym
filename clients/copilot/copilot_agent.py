@@ -162,6 +162,26 @@ class CopilotCliAgent:
         logger.info(f"Extracted usage metrics: {metrics}")
         return metrics
 
+    def _build_command(self, instruction: str) -> list[str]:
+        """Build the Copilot command, preserving the CLI's default effort when unset."""
+        model = self.model_name.split("/")[-1]
+        command = [
+            "copilot",
+            "-p",
+            instruction,
+            "--allow-all",
+            "--no-ask-user",
+            "--model",
+            model,
+            "--output-format",
+            "json",
+            f"--share={self.transcript_path}",
+        ]
+        reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+        if reasoning_effort:
+            command.extend(["--reasoning-effort", reasoning_effort])
+        return command
+
     def run(self, instruction: str) -> int:
         """
         Run the Copilot CLI agent with the given instruction.
@@ -223,22 +243,13 @@ class CopilotCliAgent:
         # Harbor's converter. The structured stream is captured to
         # ``copilot-cli.jsonl``; a plain-text copy is kept in ``copilot-cli.txt``
         # for human debugging (Harbor keeps both the same way).
-        command = [
-            "copilot",
-            "-p",
-            instruction,
-            "--allow-all",
-            "--no-ask-user",
-            "--model",
-            model,
-            "--output-format",
-            "json",
-            f"--share={self.transcript_path}",
-        ]
+        command = self._build_command(instruction)
+        reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
 
         logger.info(
             f"Executing command: copilot -p <instruction> --allow-all --no-ask-user "
             f"--model {model} --output-format json"
+            + (f" --reasoning-effort {reasoning_effort}" if reasoning_effort else "")
         )
 
         try:

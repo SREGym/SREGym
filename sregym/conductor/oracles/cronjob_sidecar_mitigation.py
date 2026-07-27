@@ -22,18 +22,20 @@ The oracle checks four independent properties:
 
 1. **Spec is fixed.** The CronJob's jobTemplate now uses the native sidecar
    pattern.
-2. **Active Jobs are bounded.** No more than ``MAX_ACTIVE_JOBS`` Jobs from this
-   CronJob are currently in the ``active`` phase. (Accumulation has been
-   reversed.)
+2. **Accumulated Jobs are gone.** Active Jobs created from the old regular-
+   sidecar template are rejected. A small number of current-template Jobs may
+   be active at a schedule boundary.
 3. **App still healthy.** Every Deployment in the namespace reports
    ``ready_replicas == spec.replicas``. We check Deployment status directly
    rather than walking pods so ``Succeeded`` Job pods don't produce false
    negatives.
-4. **Fix actually works at runtime.** At least one Job owned by the CronJob
-   has reached ``status.succeeded >= 1``. This proves the agent's patch is
-   not just plausibly shaped, it really makes the Job complete.
+4. **Current template works at runtime.** The oracle creates one fresh Job from
+   the current CronJob template and requires that exact Job to succeed. Old
+   completed Jobs cannot satisfy this proof.
 """
 
+import contextlib
+import copy
 import time
 
 from kubernetes import client
@@ -43,14 +45,12 @@ from sregym.conductor.oracles.base import Oracle
 
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 5
-_MAX_ACTIVE_JOBS = 2  # allow the most-recent in-flight Job(s); reject accumulation
+_MAX_ACTIVE_JOBS = 2  # allow legitimate schedule-boundary overlap after rejecting stale templates
 
-# How long to wait for at least one Job to reach Complete after the spec is
-# fixed. With ``schedule: * * * * *`` the next Job spawns within ~60s. With a
-# correctly-configured native sidecar, the Job's pod goes to ``Succeeded``
-# within one terminationGracePeriodSeconds window (default 30s) after the
-# primary exits. 150s leaves headroom for the schedule boundary.
-_BEHAVIOR_PROOF_TIMEOUT_S = 150
+# How long to wait for the controlled Job created from the current template.
+# A correctly configured native sidecar should let the Job reach Succeeded
+# within one terminationGracePeriodSeconds window (default 30s).
+_BEHAVIOR_PROOF_TIMEOUT_S = 90
 _BEHAVIOR_PROOF_POLL_INTERVAL_S = 5
 
 
@@ -72,7 +72,7 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
     # ------------------------------------------------------------------
     # Public entry point
     # ------------------------------------------------------------------
-    def evaluate(self) -> dict:
+    def evaluate(self, *args, **kwargs) -> dict:
         print("== CronJob Sidecar Mitigation Evaluation ==")
 
         kubectl = self.problem.kubectl
@@ -105,8 +105,15 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
                 "delete its functional purpose."
             )
 
-        # 2. Are active Jobs bounded?
-        n_active = self._count_active_jobs(cronjob_name, namespace)
+        # 2. Were Jobs created from the old, blocking template cleaned up?
+        active_jobs = self._active_jobs(cronjob_name, namespace)
+        stale_jobs = [job.metadata.name for job in active_jobs if not self._job_spec_is_safe(job.spec)]
+        if stale_jobs:
+            return self._fail(
+                f"Active Jobs still use the old blocking sidecar template and must be cleaned up: {sorted(stale_jobs)}"
+            )
+
+        n_active = len(active_jobs)
         if n_active > _MAX_ACTIVE_JOBS:
             return self._fail(
                 f"{n_active} Jobs owned by '{cronjob_name}' are still active "
@@ -121,25 +128,20 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
                 "agent's mitigation produced collateral damage to the application."
             )
 
-        # 4. Does the fix actually work? Wait for at least one Job to
-        # complete. With the native sidecar pattern the kubelet SIGTERMs the
-        # restartable init container after the primary exits, and the pod
-        # goes to Succeeded; if the patch is shaped wrong (e.g. sidecar
-        # still in containers, or restartPolicy not set), no Job will ever
-        # reach Complete and this check fails.
-        print(f"Waiting up to {_BEHAVIOR_PROOF_TIMEOUT_S}s for a Job to reach Complete...")
-        if not self._wait_for_completed_job(cronjob_name, namespace):
+        # 4. Prove the current template, not historical Job state. Create one
+        # controlled Job directly from the current CronJob's Job template.
+        print(f"Waiting up to {_BEHAVIOR_PROOF_TIMEOUT_S}s for the current template to complete a Job...")
+        if not self._run_controlled_job(cj, namespace):
             return self._fail(
-                f"Spec looks fixed but no Job owned by '{cronjob_name}' has reached "
-                f"status.succeeded within {_BEHAVIOR_PROOF_TIMEOUT_S}s. Check that the "
-                "sidecar is in initContainers with restartPolicy=Always (not just moved), "
-                "and that no other container is also blocking termination."
+                f"The current template for '{cronjob_name}' did not complete a fresh Job within "
+                f"{_BEHAVIOR_PROOF_TIMEOUT_S}s. Check that the real sidecar is functional and uses "
+                "the native sidecar lifecycle."
             )
 
         print(
             f"✅ Spec fixed ({self._fix_description(cj)}); "
             f"{n_active} active Jobs ≤ {_MAX_ACTIVE_JOBS}; app healthy; "
-            "at least one Job reached Complete (fix verified at runtime)"
+            "a fresh Job reached Complete (current template verified at runtime)"
         )
         return {"success": True}
 
@@ -178,13 +180,11 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
         """Return True only if the CronJob has been converted to the K8s 1.28+
         native sidecar pattern.
 
-        The accepted post-fix shape: at least one container in
-        ``spec.jobTemplate.spec.template.spec.initContainers`` has
-        ``restartPolicy: Always``. With the ``SidecarContainers`` feature gate
-        (beta-default-on in 1.29, GA in 1.33), the kubelet treats such an init
-        container as a sidecar and sends it SIGTERM after the regular
-        containers exit, allowing the Pod to reach ``Succeeded`` and the Job
-        to reach ``Complete``.
+        The accepted post-fix shape keeps the named primary container and moves
+        the named fluent-bit container from regular ``containers`` to
+        ``initContainers`` with ``restartPolicy: Always``. The CronJob must
+        remain enabled on its original schedule, without a Job or Pod active
+        deadline.
 
         Explicitly rejected shapes:
 
@@ -197,54 +197,96 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
         """
         if cronjob is None:
             return False
+        if bool(cronjob.spec.suspend):
+            return False
+        if cronjob.spec.schedule != self.problem.SCHEDULE:
+            return False
+        return self._job_spec_is_safe(cronjob.spec.job_template.spec)
 
-        pod_spec = cronjob.spec.job_template.spec.template.spec
+    def _job_spec_is_safe(self, job_spec) -> bool:
+        if (job_spec.active_deadline_seconds or 0) > 0:
+            return False
 
-        return any(getattr(ic, "restart_policy", None) == "Always" for ic in pod_spec.init_containers or [])
+        pod_spec = job_spec.template.spec
+        if (pod_spec.active_deadline_seconds or 0) > 0:
+            return False
+
+        regular_names = [container.name for container in pod_spec.containers or []]
+        native_sidecars = [
+            container
+            for container in pod_spec.init_containers or []
+            if container.name == self.problem.SIDECAR_CONTAINER
+        ]
+        return (
+            self.problem.PRIMARY_CONTAINER in regular_names
+            and self.problem.SIDECAR_CONTAINER not in regular_names
+            and len(native_sidecars) == 1
+            and native_sidecars[0].restart_policy == "Always"
+        )
 
     def _fix_description(self, cronjob) -> str:
         if cronjob is None:
             return "CronJob deleted (rejected)"
         jts = cronjob.spec.job_template.spec
         pod_spec = jts.template.spec
-        for ic in pod_spec.init_containers or []:
-            if getattr(ic, "restart_policy", None) == "Always":
-                return f"native sidecar ({ic.name})"
+        for init_container in pod_spec.init_containers or []:
+            if (
+                init_container.name == self.problem.SIDECAR_CONTAINER
+                and getattr(init_container, "restart_policy", None) == "Always"
+            ):
+                return f"native sidecar ({init_container.name})"
         if (jts.active_deadline_seconds or 0) > 0:
             return f"activeDeadlineSeconds={jts.active_deadline_seconds} (rejected)"
         if len(pod_spec.containers or []) <= 1:
             return "sidecar removed (rejected)"
         return "unmitigated"
 
-    def _wait_for_completed_job(self, cronjob_name, namespace) -> bool:
-        """Poll until at least one Job owned by the CronJob reports
-        ``status.succeeded >= 1``, or the timeout expires."""
-        deadline = time.monotonic() + _BEHAVIOR_PROOF_TIMEOUT_S
-        last_state = None
-        while time.monotonic() < deadline:
-            jobs = self.batch_v1.list_namespaced_job(namespace=namespace)
-            owned = [j for j in jobs.items if self._owned_by_cronjob(j, cronjob_name)]
-            n_succeeded = sum(1 for j in owned if (j.status.succeeded or 0) >= 1)
-            n_active = sum(1 for j in owned if (j.status.active or 0) > 0)
-            state = (len(owned), n_active, n_succeeded)
-            if state != last_state:
-                print(f"  [behavior-check] owned={state[0]} active={state[1]} succeeded={state[2]}")
-                last_state = state
-            if n_succeeded >= 1:
-                return True
-            time.sleep(_BEHAVIOR_PROOF_POLL_INTERVAL_S)
-        return False
+    def _run_controlled_job(self, cronjob, namespace: str) -> bool:
+        """Create one Job from the current CronJob template and require success."""
+        job_name = f"audit-log-archiver-run-{time.time_ns()}"[:63]
+        job = client.V1Job(
+            metadata=client.V1ObjectMeta(
+                name=job_name,
+                namespace=namespace,
+                labels={
+                    "app.kubernetes.io/name": self.problem.cronjob_name,
+                    "app.kubernetes.io/managed-by": self.problem.cronjob_name,
+                },
+            ),
+            spec=copy.deepcopy(cronjob.spec.job_template.spec),
+        )
 
-    def _count_active_jobs(self, cronjob_name, namespace) -> int:
-        """Count Jobs owned by the CronJob whose ``.status.active`` is non-zero."""
+        created = False
+        deadline = time.monotonic() + _BEHAVIOR_PROOF_TIMEOUT_S
+        try:
+            self.batch_v1.create_namespaced_job(namespace=namespace, body=job)
+            created = True
+            while time.monotonic() < deadline:
+                current = self.batch_v1.read_namespaced_job(name=job_name, namespace=namespace)
+                if (current.status.succeeded or 0) >= 1:
+                    print(f"  [behavior-check] Job '{job_name}' reached Complete")
+                    return True
+                if (current.status.failed or 0) >= 1:
+                    print(f"  [behavior-check] Job '{job_name}' failed")
+                    return False
+                time.sleep(_BEHAVIOR_PROOF_POLL_INTERVAL_S)
+            return False
+        except ApiException as error:
+            print(f"  [behavior-check] Could not run Job '{job_name}': {error}")
+            return False
+        finally:
+            if created:
+                with contextlib.suppress(ApiException):
+                    self.batch_v1.delete_namespaced_job(
+                        name=job_name,
+                        namespace=namespace,
+                        propagation_policy="Foreground",
+                    )
+
+    def _active_jobs(self, cronjob_name, namespace) -> list:
+        """Return active Jobs owned by the target CronJob."""
         jobs = self.batch_v1.list_namespaced_job(namespace=namespace)
-        n = 0
-        for j in jobs.items:
-            if not self._owned_by_cronjob(j, cronjob_name):
-                continue
-            if (j.status.active or 0) > 0:
-                n += 1
-        return n
+        return [job for job in jobs.items if self._owned_by_cronjob(job, cronjob_name) and (job.status.active or 0) > 0]
 
     @staticmethod
     def _owned_by_cronjob(job, cronjob_name: str) -> bool:

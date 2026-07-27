@@ -8,15 +8,15 @@ test_gemini_edge_cases.py.
 import json
 from pathlib import Path
 
-from sregym.traces.adapters import gemini
-from sregym.traces.atif import Trajectory
+from atif_converter import Trajectory
+from atif_converter.adapters import gemini
 
 FIXTURES = Path(__file__).parent / "fixtures"
 REAL = FIXTURES / "gemini_run"
 
 
 def _convert(fixture: Path) -> Trajectory:
-    return gemini.to_atif(fixture, sregym_meta={"problem_id": "p", "run": 1})
+    return gemini.convert_file(next((fixture / "sessions").rglob("session-*")))
 
 
 def test_real_returns_validated_trajectory():
@@ -74,6 +74,5 @@ def test_real_roundtrips():
     Trajectory.model_validate(json.loads(json.dumps(t.to_json_dict())))
 
 
-def test_real_sregym_meta_injected():
-    t = _convert(REAL)
-    assert t.extra["sregym"] == {"problem_id": "p", "run": 1}
+def test_standalone_conversion_has_no_sregym_metadata():
+    assert _convert(REAL).extra is None

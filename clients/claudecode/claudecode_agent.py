@@ -337,6 +337,7 @@ class ClaudeCodeAgent:
 
         # Set model name
         env["ANTHROPIC_MODEL"] = model
+        reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
 
         # Pass through MAX_THINKING_TOKENS if set
         if "MAX_THINKING_TOKENS" in os.environ:
@@ -350,8 +351,10 @@ class ClaudeCodeAgent:
             "stream-json",
             "-p",
             instruction,
-            "--allowedTools",
-        ] + self.ALLOWED_TOOLS
+        ]
+        if reasoning_effort:
+            command.extend(["--effort", reasoning_effort])
+        command.extend(["--allowedTools", *self.ALLOWED_TOOLS])
 
         logger.info(f"Executing command: {' '.join(command)}")
 

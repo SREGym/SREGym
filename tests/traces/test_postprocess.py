@@ -4,8 +4,8 @@ import json
 import shutil
 from pathlib import Path
 
+from atif_converter import Trajectory
 from sregym.traces import postprocess
-from sregym.traces.atif import Trajectory
 
 FIXTURE_RUN = Path(__file__).parent / "fixtures" / "claudecode_run"
 

@@ -7,10 +7,11 @@ Uses a REAL OpenCode run fixture. Primary source is the exported session JSON
 import json
 from pathlib import Path
 
-from sregym.traces.adapters import opencode
-from sregym.traces.atif import Trajectory
+from atif_converter import Trajectory
+from atif_converter.adapters import opencode
 
 FIXTURE = Path(__file__).parent / "fixtures" / "opencode_run"
+SESSION_FILE = next((FIXTURE / "sessions").rglob("session-*.json"))
 
 EXPECTED_AGENT_STEPS = 13
 EXPECTED_USER_STEPS = 1
@@ -22,7 +23,7 @@ EXPECTED_REASONING_STEPS = 12
 
 
 def _convert() -> Trajectory:
-    return opencode.to_atif(FIXTURE, sregym_meta={"problem_id": "p", "run": 1})
+    return opencode.convert_file(SESSION_FILE)
 
 
 def test_to_atif_returns_validated_trajectory():
@@ -105,8 +106,5 @@ def test_to_json_dict_is_json_serializable():
     Trajectory.model_validate(data)
 
 
-def test_extra_sregym_attached():
-    traj = opencode.to_atif(FIXTURE, sregym_meta={"problem_id": "hotel", "run": 2})
-    assert traj.extra is not None
-    assert traj.extra["sregym"]["problem_id"] == "hotel"
-    assert traj.extra["sregym"]["run"] == 2
+def test_standalone_conversion_has_no_sregym_metadata():
+    assert _convert().extra is None

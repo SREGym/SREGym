@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from sregym.traces.atif import (
+from atif_converter import (
     Agent,
     ContentPart,
     FinalMetrics,

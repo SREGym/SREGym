@@ -32,12 +32,12 @@ def run_preflight() -> None:
     """Validate model + credentials by making a minimal Codex CLI call."""
     import subprocess
 
-    home = Path("/root/.codex")
+    home = Path(os.environ.get("CODEX_HOME", "/root/.codex"))
     auth = home / "auth.json"
     key = os.environ.get("OPENAI_API_KEY", "")
 
     if not auth.exists() and not key:
-        print("missing ~/.codex/auth.json and OPENAI_API_KEY")
+        print(f"missing {auth} and OPENAI_API_KEY")
         sys.exit(1)
 
     if not auth.exists():
@@ -48,17 +48,21 @@ def run_preflight() -> None:
     env = dict(os.environ)
     env["CODEX_HOME"] = str(home)
 
+    command = [
+        "codex",
+        "exec",
+        "--model",
+        m,
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--skip-git-repo-check",
+    ]
+    reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+    if reasoning_effort:
+        command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
+    command.extend(["--", "say ok"])
+
     r = subprocess.run(
-        [
-            "codex",
-            "exec",
-            "--model",
-            m,
-            "--dangerously-bypass-approvals-and-sandbox",
-            "--skip-git-repo-check",
-            "--",
-            "say ok",
-        ],
+        command,
         capture_output=True,
         text=True,
         timeout=60,

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from atif_converter import Trajectory
 from sregym.traces import store
-from sregym.traces.atif import Trajectory
 
 # Real normalized trajectories on disk (gitignored). Present when runs have been
 # postprocessed locally; absent on a clean checkout — the fixture test self-skips.
