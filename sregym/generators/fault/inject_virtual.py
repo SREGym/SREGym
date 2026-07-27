@@ -18,6 +18,7 @@ class VirtualizationFaultInjector(FaultInjector):
         super().__init__(namespace)
         self.namespace = namespace
         self.kubectl = KubeCtl()
+        self.apps_v1_api = self.kubectl.apps_v1_api
         self.mongo_service_pod_map = {
             "url-shorten-mongodb": "url-shorten-service",
         }
@@ -2527,6 +2528,64 @@ class VirtualizationFaultInjector(FaultInjector):
 
             self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
             print(f"Recovered FD exhaustion for service: {service}")
+
+    # V.14 - Inject stale hostAliases DNS poisoning
+    def _inject_stale_hostaliases(self, microservice: str, target_host: str, blackhole_ip: str):
+        """Inject hostAliases into deployment pod spec to poison DNS resolution for target host."""
+        patch = [
+            {
+                "op": "add",
+                "path": "/spec/template/spec/hostAliases",
+                "value": [
+                    {
+                        "ip": blackhole_ip,
+                        "hostnames": [target_host],
+                    }
+                ],
+            }
+        ]
+        self.apps_v1_api.patch_namespaced_deployment(
+            name=microservice,
+            namespace=self.namespace,
+            body=patch,
+        )
+        print(f"Injected stale_hostaliases patch on {microservice} -> {target_host} ({blackhole_ip})")
+
+    def _recover_stale_hostaliases(self, microservice: str):
+        """Remove hostAliases from deployment pod spec."""
+        patch = [
+            {
+                "op": "remove",
+                "path": "/spec/template/spec/hostAliases",
+            }
+        ]
+        try:
+            self.apps_v1_api.patch_namespaced_deployment(
+                name=microservice,
+                namespace=self.namespace,
+                body=patch,
+            )
+            print(f"Recovered stale_hostaliases patch on {microservice}")
+        except Exception as e:
+            print(f"Warning: Failed to remove hostAliases from {microservice}: {e}")
+
+    def _inject(self, fault_type: str, microservices: list[str] = None, duration: str = None, **kwargs):
+        if fault_type == "stale_hostaliases":
+            microservice = microservices[0] if microservices else "frontend"
+            target_host = kwargs.get("target_host", "productcatalogservice")
+            blackhole_ip = kwargs.get("blackhole_ip", "127.0.0.1")
+            self._inject_stale_hostaliases(
+                microservice=microservice, target_host=target_host, blackhole_ip=blackhole_ip
+            )
+        else:
+            super()._inject(fault_type, microservices, duration)
+
+    def _recover(self, fault_type: str, microservices: list[str] = None, **kwargs):
+        if fault_type == "stale_hostaliases":
+            microservice = microservices[0] if microservices else "frontend"
+            self._recover_stale_hostaliases(microservice=microservice)
+        else:
+            super()._recover(fault_type, microservices)
 
     ############# HELPER FUNCTIONS ################
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
