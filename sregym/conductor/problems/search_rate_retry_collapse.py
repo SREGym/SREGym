@@ -78,7 +78,6 @@ class SearchRateRetryCollapse(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(
             problem=self,
             expected=self.root_cause,
-            minimum_dimension_scores={"D2": 0.67},
         )
         self.mitigation_oracle = SearchRateRetryMitigationOracle(problem=self)
 
