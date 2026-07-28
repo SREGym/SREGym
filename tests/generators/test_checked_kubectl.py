@@ -20,3 +20,13 @@ def test_checked_command_raises_on_nonzero_exit(monkeypatch):
 
     with pytest.raises(RuntimeError, match="apply rejected"):
         KubeCtl().exec_command_checked("kubectl apply")
+
+
+def test_checked_command_raises_on_timeout(monkeypatch):
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired("kubectl exec", 30)
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+
+    with pytest.raises(RuntimeError, match="timed out after 30s"):
+        KubeCtl().exec_command_checked("kubectl exec pod -- command", timeout=30)

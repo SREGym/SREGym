@@ -1,0 +1,44 @@
+# Lock-holder for the postgres_lock_contention_product_catalog problem.
+
+# Simulates a stuck migration / idle-in-transaction that holds an ACCESS
+# EXCLUSIVE lock on catalog.products.
+
+# It acquires the lock exactly ONCE and holds it in a single session for the
+# whole run. If the holding session is terminated (pg_terminate_backend),
+# the container exits and backoffLimit: 0 keeps the Job from starting a replacement,
+# so terminating the backend is a permanent fix.
+
+# The problem applies this into the hidden `khaos` namespace (outside the
+# agent's Kubernetes credential scope, filtered by k8s_proxy), so the agent
+# cannot see or delete this helper and must mitigate through the database
+# itself. The namespace is passed at apply time, so no `namespace:` field is set.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: catalog-maintenance
+  labels:
+    app: catalog-maintenance
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app: catalog-maintenance
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: maintenance
+          image: postgres:17.6
+          command: ["sh", "-c"]
+          args:
+            - |
+              # Wait until the database accepts connections, then acquire the
+              # lock once and hold it in a single session until terminated.
+              until PGPASSWORD=otel psql \
+                -h postgresql.astronomy-shop.svc.cluster.local -U root -d otel \
+                -c "SELECT 1" >/dev/null 2>&1; do
+                sleep 2;
+              done
+              PGPASSWORD=otel psql \
+                -h postgresql.astronomy-shop.svc.cluster.local -U root -d otel \
+                -c "BEGIN; LOCK TABLE catalog.products IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(86400);"
