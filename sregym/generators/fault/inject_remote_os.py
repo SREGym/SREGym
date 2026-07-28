@@ -208,10 +208,14 @@ class RemoteOSFaultInjector(FaultInjector):
             worker_info = self._get_remote_worker_info()
             if not worker_info:
                 return
-            for host, user in worker_info.items():
-                print(f"Killing kubelet on {host}...")
-                self._ssh_exec(host, user, "sudo kill -9 $(pgrep -x kubelet) 2>/dev/null; sudo systemctl stop kubelet")
-                print(f"Kubelet stopped on {host}")
+            for node_name, target in worker_info.items():
+                print(f"Killing kubelet on {node_name}...")
+                self._ssh_exec(
+                    target["host"],
+                    target["user"],
+                    "sudo kill -9 $(pgrep -x kubelet) 2>/dev/null; sudo systemctl stop kubelet",
+                )
+                print(f"Kubelet stopped on {node_name}")
 
         self._wait_for_worker_nodes("NotReady")
 
@@ -231,10 +235,10 @@ class RemoteOSFaultInjector(FaultInjector):
             worker_info = self._get_remote_worker_info()
             if not worker_info:
                 return
-            for host, user in worker_info.items():
-                print(f"Starting kubelet on {host}...")
-                self._ssh_exec(host, user, "sudo systemctl start kubelet")
-                print(f"Kubelet started on {host}")
+            for node_name, target in worker_info.items():
+                print(f"Starting kubelet on {node_name}...")
+                self._ssh_exec(target["host"], target["user"], "sudo systemctl start kubelet")
+                print(f"Kubelet started on {node_name}")
 
         self._wait_for_worker_nodes("Ready")
 
