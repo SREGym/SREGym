@@ -2,15 +2,15 @@
 
 import contextlib
 import json
-import os
 import re
 import shlex
 import subprocess
 import time
+from pathlib import Path
 
 import paramiko
 import yaml
-from paramiko.client import AutoAddPolicy
+from paramiko.client import RejectPolicy
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.paths import BASE_DIR
@@ -21,10 +21,13 @@ NODE_NOT_READY_POLL_INTERVAL = 5  # seconds
 
 
 class RemoteOSFaultInjector(FaultInjector):
-    def __init__(self):
+    def __init__(self, inventory_path: str | Path | None = None):
         self.kubectl = KubeCtl()
         self.worker_info = None
         self._is_kind = None
+        self._inventory_path = Path(
+            inventory_path or f"{BASE_DIR}/../scripts/ansible/inventory.yml"
+        )
 
     def _check_is_kind(self):
         """Detect if the cluster is Kind-based."""
@@ -50,8 +53,8 @@ class RemoteOSFaultInjector(FaultInjector):
 
     def _check_remote_host(self):
         """Verify the remote cluster has an inventory file."""
-        if not os.path.exists(f"{BASE_DIR}/../scripts/ansible/inventory.yml"):
-            print("Inventory file not found: " + f"{BASE_DIR}/../scripts/ansible/inventory.yml")
+        if not self._inventory_path.exists():
+            print("Inventory file not found: " + str(self._inventory_path))
             return False
         return True
 
@@ -61,7 +64,7 @@ class RemoteOSFaultInjector(FaultInjector):
             return self.worker_info
 
         worker_info = {}
-        with open(f"{BASE_DIR}/../scripts/ansible/inventory.yml") as f:
+        with self._inventory_path.open() as f:
             inventory = yaml.safe_load(f)
 
         variables = inventory.get("all", {}).get("vars", {})
@@ -78,7 +81,7 @@ class RemoteOSFaultInjector(FaultInjector):
             if "{{" in user:
                 print(f"Warning: Unresolved variables in {name} user: {user}")
                 continue
-            worker_info[host] = user
+            worker_info[name] = {"host": host, "user": user}
 
         self.worker_info = worker_info
         return self.worker_info
@@ -95,7 +98,8 @@ class RemoteOSFaultInjector(FaultInjector):
     def _ssh_exec(self, host: str, user: str, command: str):
         """Run a command on a remote host via SSH."""
         ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(AutoAddPolicy())
+        ssh.load_system_host_keys()
+        ssh.set_missing_host_key_policy(RejectPolicy())
         try:
             ssh.connect(host, username=user)
             stdin, stdout, stderr = ssh.exec_command(command)
@@ -147,13 +151,15 @@ class RemoteOSFaultInjector(FaultInjector):
         if not worker_info:
             print(f"No remote worker info available for {node_name}")
             return ""
-        # Match node name to inventory host (inventory keys are IPs/hostnames)
-        for host, user in worker_info.items():
-            if node_name in host or host in node_name:
-                return self._ssh_exec(host, user, f"sudo sh -c {shlex.quote(command)}")
-        # Fallback: use first worker
-        host, user = next(iter(worker_info.items()))
-        return self._ssh_exec(host, user, f"sudo sh -c {shlex.quote(command)}")
+        target = worker_info.get(node_name)
+        if target is None:
+            print(f"No exact inventory mapping for Kubernetes node {node_name}")
+            return ""
+        return self._ssh_exec(
+            target["host"],
+            target["user"],
+            f"sudo sh -c {shlex.quote(command)}",
+        )
 
     def _wait_for_worker_nodes(self, target_status="NotReady", timeout=NODE_NOT_READY_TIMEOUT):
         """Poll until all worker nodes reach the target status ('Ready' or 'NotReady')."""
