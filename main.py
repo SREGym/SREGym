@@ -571,10 +571,13 @@ def main(args):
 
     if args.noise:
         logger.info("Noise injection enabled.")
-    os.environ["API_HOSTNAME"] = "0.0.0.0"
-    os.environ["API_PORT"] = "8000"
-    os.environ["MCP_SERVER_PORT"] = "9954"
-    os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
+    os.environ.setdefault("API_HOSTNAME", "0.0.0.0")
+    os.environ.setdefault("API_PORT", "8000")
+    os.environ.setdefault("MCP_SERVER_PORT", "9954")
+    os.environ.setdefault(
+        "MCP_SERVER_URL",
+        f"http://127.0.0.1:{os.environ['MCP_SERVER_PORT']}",
+    )
 
     logger.info(
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
@@ -602,7 +605,10 @@ def main(args):
         install_script=agent_reg.install_script if agent_reg else None,
     )
 
-    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
+    conductor_config = ConductorConfig(
+        deploy_loki=not args.use_external_harness and not args.skip_loki,
+        enable_noise=args.noise,
+    )
     conductor = Conductor(config=conductor_config)
 
     suite = getattr(args, "suite", None)
@@ -726,6 +732,11 @@ if __name__ == "__main__":
         "--noise",
         action="store_true",
         help="Enable transient noise injection via Chaos Mesh during problem runs",
+    )
+    parser.add_argument(
+        "--skip-loki",
+        action="store_true",
+        help="Skip Loki and Promtail deployment for a reduced observer-stack smoke run",
     )
     parser.add_argument(
         "--n-attempts",
