@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: webhook-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: proxy-webhook-server
+  namespace: webhook-system
+  labels:
+    app: proxy-webhook
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: proxy-webhook
+  template:
+    metadata:
+      labels:
+        app: proxy-webhook
+    spec:
+      containers:
+      - name: webhook
+        image: proxy-webhook:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 443
+        volumeMounts:
+        - name: webhook-certs
+          mountPath: /etc/webhook/certs
+          readOnly: true
+      volumes:
+      - name: webhook-certs
+        secret:
+          secretName: proxy-webhook-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: proxy-webhook-service
+  namespace: webhook-system
+spec:
+  ports:
+  - port: 443
+    targetPort: 443
+  selector:
+    app: proxy-webhook
