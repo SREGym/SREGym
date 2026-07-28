@@ -78,8 +78,9 @@ class PostgresLockContentionProductCatalog(Problem):
         # Give postgres headroom so the connection pile-up behind the lock
         # does not OOM-kill it.
         self._set_postgres_memory(self.FAULT_MEMORY_LIMIT)
-        self.kubectl.exec_command(
-            f"kubectl rollout status deploy/{self.POSTGRES_DEPLOY} -n {self.namespace} --timeout=180s"
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deploy/{self.POSTGRES_DEPLOY} -n {self.namespace} --timeout=180s",
+            timeout=200,
         )
 
         # Deploy the lock-holder into the hidden khaos namespace (out of the agent's
@@ -160,7 +161,7 @@ class PostgresLockContentionProductCatalog(Problem):
             f'"path":"/spec/template/spec/containers/0/resources/limits/memory",'
             f'"value":"{memory}"}}]\''
         )
-        self.kubectl.exec_command(patch)
+        self.kubectl.exec_command_checked(patch, timeout=30)
 
     def _namespace_exists(self) -> bool:
         """True if the problem's app namespace currently exists."""
