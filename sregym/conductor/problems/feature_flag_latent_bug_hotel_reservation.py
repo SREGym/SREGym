@@ -2,12 +2,12 @@
 
 Inspired by the Fastly June 8, 2021 outage: a configuration change activates a
 latent bug that only manifests under specific circumstances (here, incoming
-requests). The frontend runs a custom image with a dormant code path that, when
+requests). The shared application image contains a dormant code path that, when
 SEARCH_BACKEND_VERSION is true, returns HTTP 500 errors on every
 search request. With the flag off the service behaves normally. With the flag on
 AND requests arriving, the service returns errors to users while all pods remain
-Running — no crash, no CrashLoopBackOff. The fix is to revert the flag and
-restore the original frontend image.
+Running — no crash, no CrashLoopBackOff. The fix is to revert the flag and roll
+out the frontend so the corrected configuration takes effect.
 """
 
 from sregym.conductor.oracles.compound import CompoundedOracle
@@ -16,7 +16,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
-from sregym.service.apps.hotel_reservation import HotelReservation
+from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE, HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -42,8 +42,8 @@ class FeatureFlagLatentBugHotelReservation(Problem):
                 "frontend returns HTTP 500 errors on every hotel search request. All pods "
                 "remain Running throughout — the failure is visible only at the service "
                 "level as elevated error rates on the /hotels endpoint. The fix is to "
-                f"revert `{self.flag_key}` to false in the ConfigMap and restore the "
-                "original frontend image so the dormant path is no longer activated."
+                f"revert `{self.flag_key}` to false in the ConfigMap and roll out the "
+                "frontend so the dormant path is no longer activated."
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
@@ -93,6 +93,6 @@ class FeatureFlagLatentBugHotelReservation(Problem):
             deployment_name=self.faulty_service,
             configmap_name=self.configmap_name,
             flag_key=self.flag_key,
-            original_image=getattr(self, "original_image", "yinfangchen/hotelreservation:latest"),
+            original_image=getattr(self, "original_image", HOTEL_RESERVATION_APPLICATION_IMAGE),
         )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}")
