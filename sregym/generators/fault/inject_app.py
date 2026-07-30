@@ -7,9 +7,10 @@ import time
 from kubernetes import client
 
 from sregym.generators.fault.base import FaultInjector
+from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE
 from sregym.service.kubectl import KubeCtl
 
-FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE = "ghcr.io/sregym/hotel-reservation:latest"
+FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE = HOTEL_RESERVATION_APPLICATION_IMAGE
 
 
 class ApplicationFaultInjector(FaultInjector):
@@ -164,7 +165,7 @@ class ApplicationFaultInjector(FaultInjector):
             if deployment:
                 for container in deployment.spec.template.spec.containers:
                     if container.name == f"hotel-reserv-{service}":
-                        container.image = "yinfangchen/hotelreservation:latest"
+                        container.image = HOTEL_RESERVATION_APPLICATION_IMAGE
                 self.kubectl.update_deployment(service, self.namespace, deployment)
 
     # A.4 valkey_auth_disruption: Invalidate the password in valkey so dependent services cannot work
@@ -476,7 +477,7 @@ class ApplicationFaultInjector(FaultInjector):
 
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
-    
+
     def inject_kafka_producer_leak(self, deployment_name: str = "checkout") -> list:
         limits = [None, None]
 
@@ -492,7 +493,7 @@ class ApplicationFaultInjector(FaultInjector):
 
                 limits[1] = c.resources.limits.get("memory") if c.resources and c.resources.limits else None
                 break
-        
+
         self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
 
         deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
@@ -521,20 +522,29 @@ class ApplicationFaultInjector(FaultInjector):
                         producer.poll(0)
                     except BufferError:
                         producer.poll(0.1)
-            
+
             threads = []
             for i in range(20):
                 t = threading.Thread(target=task, args=(i,))
                 t.start()
                 threads.append(t)
-            
+
             for t in threads:
                 t.join()
-            """).strip()
+            """
+        ).strip()
 
         encoded = base64.b64encode(script.encode()).decode()
 
-        producer = client.V1Container(name="order-creator", image="python:3.12-slim", command=["sh", "-c", f"pip install confluent-kafka && python3 -u -c \"import base64; exec(base64.b64decode('{encoded}'))\""])
+        producer = client.V1Container(
+            name="order-creator",
+            image="python:3.12-slim",
+            command=[
+                "sh",
+                "-c",
+                f"pip install confluent-kafka && python3 -u -c \"import base64; exec(base64.b64decode('{encoded}'))\"",
+            ],
+        )
 
         deployment.spec.template.spec.containers.append(producer)
 
@@ -546,7 +556,7 @@ class ApplicationFaultInjector(FaultInjector):
             rcnt = None
             for p in pods.items:
                 if "kafka" in p.metadata.name:
-                    for c in (p.status.container_statuses or []):
+                    for c in p.status.container_statuses or []:
                         if "kafka" in c.name:
                             rcnt = c.restart_count
                             break
@@ -562,25 +572,27 @@ class ApplicationFaultInjector(FaultInjector):
         print(f"Injected sidecar container 'order-creator' in '{deployment_name}'")
 
         return limits
-    
+
     def recover_kafka_producer_leak(self, deployment_name: str = "checkout"):
         kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
         for c in kafka_dep.spec.template.spec.containers:
             if "kafka" in c.name:
                 temp = None
-                for i, e in enumerate(c.env):                        
+                for i, e in enumerate(c.env):
                     if e.name == "KAFKA_MESSAGE_MAX_BYTES":
                         temp = i
                         break
-                
+
                 if temp is not None:
                     c.env.pop(temp)
-        
+
         self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
 
         deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
 
-        deployment.spec.template.spec.containers = [x for x in deployment.spec.template.spec.containers if x.name !=  "order-creator"]
+        deployment.spec.template.spec.containers = [
+            x for x in deployment.spec.template.spec.containers if x.name != "order-creator"
+        ]
 
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
 
@@ -588,7 +600,7 @@ class ApplicationFaultInjector(FaultInjector):
 
         print(f"Removed sidecar container 'order-creator' from '{deployment_name}'")
 
-    # A.7 feature_flag_experimental_routing: swap frontend image + set flag to activate dormant error path
+    # A.7 feature_flag_experimental_routing: set a flag to activate a dormant error path
     def inject_feature_flag_experimental_routing(
         self,
         deployment_name: str = "frontend",
@@ -596,10 +608,9 @@ class ApplicationFaultInjector(FaultInjector):
         flag_key: str = "SEARCH_BACKEND_VERSION",
         experimental_image: str = FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE,
     ):
-        """Set the feature flag in a ConfigMap and swap the frontend image to the
-        experimental-routing build. When the flag is active, the frontend's search
-        handler returns HTTP 500 on every hotel search request while all pods
-        remain Running."""
+        """Set the feature flag and ensure the frontend uses the build containing
+        the dormant path. When active, the path returns HTTP 500 on every hotel
+        search request while the pod remains Running."""
 
         self.kubectl.create_or_update_configmap(
             name=configmap_name,
@@ -628,7 +639,7 @@ class ApplicationFaultInjector(FaultInjector):
                 )
         deployment.spec.strategy = client.V1DeploymentStrategy(type="Recreate")
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
-        print(f"Swapped {deployment_name} image to {experimental_image} and set {flag_key}=true env")
+        print(f"Set {deployment_name} image to {experimental_image} and set {flag_key}=true env")
         # Wait for rollout to complete so fault is deterministically live before returning
         self.kubectl.exec_command(
             f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout=120s"
@@ -642,7 +653,7 @@ class ApplicationFaultInjector(FaultInjector):
         flag_key: str = "SEARCH_BACKEND_VERSION",
         original_image: str | None = None,
     ):
-        """Revert the flag and restore the original frontend image."""
+        """Revert the flag, remove its pod environment reference, and restore the image."""
 
         self.kubectl.create_or_update_configmap(
             name=configmap_name,
@@ -658,6 +669,7 @@ class ApplicationFaultInjector(FaultInjector):
         for container in deployment.spec.template.spec.containers:
             if container.name == f"hotel-reserv-{deployment_name}":
                 container.image = original_image
+                container.env = [env for env in (container.env or []) if env.name != flag_key]
 
         deployment.spec.strategy = client.V1DeploymentStrategy(
             type="RollingUpdate",
@@ -667,7 +679,7 @@ class ApplicationFaultInjector(FaultInjector):
             ),
         )
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
-        print(f"Restored {deployment_name} image to {original_image} and set {flag_key}=false env")
+        print(f"Restored {deployment_name} image to {original_image} and removed the {flag_key} env reference")
         self.kubectl.exec_command(
             f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout=120s"
         )
