@@ -1,0 +1,56 @@
+problem_id: valkey_auth_disruption
+fault_summary: >-
+  The valkey-cart server in the astronomy-shop namespace has its requirepass
+  configuration changed at runtime via kubectl exec valkey-cli CONFIG SET
+  requirepass 'invalid_pass'. The valkey-cart deployment spec does not set a
+  password, so the cart service connects without AUTH or with the wrong
+  credentials and receives NOAUTH or WRONGPASS errors. The cart service enters
+  a crash loop because it cannot connect to its backing store.
+
+root_cause:
+  resource: "valkey-cart runtime config — requirepass set to invalid_pass"
+  mechanism: >-
+    CONFIG SET requirepass applies immediately to the running valkey process
+    without restarting the container; no Kubernetes manifest reflects the
+    change. The cart application's connection pool is either unauthenticated
+    or uses the wrong password, so every valkey command returns an auth error.
+    Restoring requirepass to empty (CONFIG SET requirepass '') or updating the
+    application credentials to match resolves the disruption.
+
+causal_chain:
+  - id: symptom
+    component: "Deployment/cart (CrashLoopBackOff)"
+    description: >-
+      The agent observes cart pods crash-looping. This is the service-level
+      impact and is distinguished from a healthy pod listing by the crash
+      state itself, not merely by the cart/valkey service name (which appears
+      in every healthy get-pods output).
+    signals:
+      - field: result
+        pattern: "cart.*CrashLoopBackOff|cart.*Back-off restarting"
+
+  - id: intermediate_connection_failure
+    component: "cart pod logs — client cannot connect to valkey"
+    description: >-
+      The cart service uses the .NET StackExchange.Redis client, which wraps
+      the raw NOAUTH/WRONGPASS reply and surfaces it as a generic connection
+      failure. The observable effect in cart logs is therefore the connection
+      error, not the auth string. Matching the effect the client actually
+      emits (Chain-of-Event) rather than the swallowed internal error.
+    signals:
+      - field: result
+        pattern: "[Ww]asn.t able to connect to redis|connect to redis|RedisConnection"
+
+  - id: root_cause
+    component: "valkey-cart runtime — enforces AUTH though no password is declared"
+    description: >-
+      The valkey-cart server logs NOAUTH/WRONGPASS for every command, proving
+      the backend is up and rejecting on authentication. Since the valkey-cart
+      deployment spec declares no password, the requirepass must have been set
+      at runtime (CONFIG SET). The injected password value itself is never
+      observable because a client cannot authenticate to read CONFIG GET, so
+      the server-side auth rejection is the tightest reachable root-cause
+      evidence.
+    signals:
+      - field: result
+        pattern: "NOAUTH|WRONGPASS|invalid_pass"
