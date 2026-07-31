@@ -21,6 +21,7 @@ SREGYM_LITE_PROBLEMS = (
     "wrong_dns_policy_astronomy_shop",
     "wrong_service_selector_social_network",
     "rolling_update_misconfigured_social_network",
+    "search_rate_retry_collapse_hotel_reservation",
 )
 
 PROBLEM_SETS = {"sregym-lite": SREGYM_LITE_PROBLEMS}
