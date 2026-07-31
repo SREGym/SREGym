@@ -1,10 +1,10 @@
 # SREGym-Lite
 
-SREGym-Lite is a curated set of 20 well-tested problems with varied difficulty and failure mechanisms. The problems were selected to be easy and reliable to run, making Lite a practical starting point before running the full benchmark.
+SREGym-Lite is a curated set of 21 well-tested problems with varied difficulty and failure mechanisms. The problems were selected to be easy and reliable to run, making Lite a practical starting point before running the full benchmark.
 
 SREGym-Lite can run using SREGym's existing [KIND](https://kind.sigs.k8s.io/) setup on a machine with 8 vCPU and 16 GB of memory.
 
-To keep setup reliable and resource requirements manageable, the problem set excludes TrainTicket, hardware, metastable, and other faults that are difficult to run consistently on all machines.
+To keep setup reliable and resource requirements manageable, the problem set excludes TrainTicket, hardware, and other faults that are difficult to run consistently on all machines.
 
 ## Hardware requirements
 
@@ -80,3 +80,4 @@ The normal runner options, including `--judge-model`, `--reasoning-effort`, `--n
 - `wrong_dns_policy_astronomy_shop`
 - `wrong_service_selector_social_network`
 - `rolling_update_misconfigured_social_network`
+- `search_rate_retry_collapse_hotel_reservation`
