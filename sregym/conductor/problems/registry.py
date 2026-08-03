@@ -85,6 +85,7 @@ from sregym.conductor.problems.readiness_probe_misconfiguration import Readiness
 from sregym.conductor.problems.resource_request import ResourceRequestTooLarge, ResourceRequestTooSmall
 from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
+from sregym.conductor.problems.ungraceful_pod_termination import UngracefulPodTermination
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
 from sregym.conductor.problems.secret_rotation_stale_env_credentials import (
     SecretRotationStaleEnvCredentialsAstronomyShop,
@@ -181,6 +182,7 @@ class ProblemRegistry:
             "hpa_missing_effective_cpu_request_hotel_reservation": lambda: HPAMissingEffectiveCPURequest(),
             "rolling_update_misconfigured_hotel_reservation": lambda: RollingUpdateMisconfigured(app_name="hotel_reservation"),
             "rolling_update_misconfigured_social_network": lambda: RollingUpdateMisconfigured(app_name="social_network"),
+            "ungraceful_pod_termination_hotel_reservation": lambda: UngracefulPodTermination(app_name="hotel_reservation"),
             "scale_pod_zero_social_net": ScalePodSocialNet,
             "service_dns_resolution_failure_astronomy_shop": lambda: ServiceDNSResolutionFailure(app_name="astronomy_shop", faulty_service="frontend"),
             "service_dns_resolution_failure_social_network": lambda: ServiceDNSResolutionFailure(app_name="social_network", faulty_service="user-service"),
