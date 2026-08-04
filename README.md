@@ -31,7 +31,7 @@ SREGym has been used to simulate real-world cloud failures, such as:
 
 <h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
 
-[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 20 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
+[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 21 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
 
 
 <h2 id="📦installation">📦 Installation</h2>

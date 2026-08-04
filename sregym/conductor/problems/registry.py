@@ -17,6 +17,7 @@ from sregym.conductor.problems.calico_route_reflector_label_drift import (
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
+from sregym.conductor.problems.cpu_throttling import CpuThrottling
 from sregym.conductor.problems.cronjob_sidecar_blocks_completion import (
     CronJobSidecarBlocksCompletionHotelReservation,
 )
@@ -83,6 +84,7 @@ from sregym.conductor.problems.payment_service_unreachable import PaymentService
 from sregym.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
 from sregym.conductor.problems.pod_anti_affinity_deadlock import PodAntiAffinityDeadlock
 from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodCIDRExhaustionHotelReservation
+from sregym.conductor.problems.postgres_lock_contention_product_catalog import PostgresLockContentionProductCatalog
 from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
 from sregym.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
 from sregym.conductor.problems.psa_restricted_blocks_recreation import PSARestrictedBlocksRecreation
@@ -93,6 +95,7 @@ from sregym.conductor.problems.resource_request import ResourceRequestTooLarge, 
 from sregym.conductor.problems.revoke_auth import MongoDBRevokeAuth
 from sregym.conductor.problems.rolling_update_misconfigured import RollingUpdateMisconfigured
 from sregym.conductor.problems.scale_pod import ScalePodSocialNet
+from sregym.conductor.problems.search_rate_retry_collapse import SearchRateRetryCollapse
 from sregym.conductor.problems.secret_rotation_stale_env_credentials import (
     SecretRotationStaleEnvCredentialsAstronomyShop,
 )
@@ -149,10 +152,12 @@ class ProblemRegistry:
             "capacity_decrease_rpc_retry_storm": CapacityDecreaseRPCRetryStorm,
             "gc_capacity_degradation": GCCapacityDegradation,
             "load_spike_rpc_retry_storm": LoadSpikeRPCRetryStorm,
+            "search_rate_retry_collapse_hotel_reservation": SearchRateRetryCollapse,
             # --- REGULAR VIRTUALIZATION PROBLEMS ---
             "assign_to_non_existent_node": AssignNonExistentNode,
             "auth_miss_mongodb": MongoDBAuthMissing,
             "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
+            "cfs_cpu_throttling_hotel_reservation": lambda: CpuThrottling(faulty_service="geo"),
             "feature_flag_latent_bug_hotel_reservation": lambda: FeatureFlagLatentBugHotelReservation(),
             "finalizer_deadlock_controller_hotel_reservation": FinalizerDeadlockController,
             "duplicate_pvc_mounts_astronomy_shop": lambda: DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="frontend"),
@@ -179,6 +184,7 @@ class ProblemRegistry:
             "nightly_rebalance_oom_hotel_reservation": lambda: NightlyRebalanceOOM(faulty_service="recommendation"),
             "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
             "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,
+            "postgres_lock_contention_product_catalog": PostgresLockContentionProductCatalog,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
             "priority_preemption_cascade_hotel_reservation": PriorityPreemptionCascadeHotelReservation,
             "pvc_claim_mismatch": PVCClaimMismatch,
