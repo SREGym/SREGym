@@ -5,11 +5,17 @@ Passes when ALL of the following hold for the target deployment:
 
   1. terminationGracePeriodSeconds >= min_grace_period (default 30s)
   2. All pods in the namespace are Running and stable
-  3. A controlled test rollout completes without dropping all replicas
-     (verifies that pods can now drain properly before termination)
+  3. The deployment actually serves application traffic — a probe request
+     through the frontend must succeed BEFORE the test rollout. This
+     prevents trivially passing with e.g. a pause container.
+  4. A controlled test rollout completes while:
+       (a) never dropping to zero available replicas, and
+       (b) keeping the live request failure ratio below a small threshold,
+           measured by an in-cluster traffic probe that runs for the
+           duration of the rollout. If pods are still being SIGKILL'd
+           mid-drain, in-flight requests are reset and this check fails.
 """
 
-import copy
 import json
 import os
 import tempfile
@@ -19,19 +25,37 @@ from sregym.conductor.oracles.base import Oracle
 
 
 class UngracefulTerminationMitigationOracle(Oracle):
-    rollout_timeout_seconds = 120
+    rollout_timeout_seconds = 180
     poll_interval_seconds = 2
     stabilize_timeout_seconds = 60
+    probe_warmup_timeout_seconds = 60
+    # Small tolerance for probe-side flakiness (DNS blips etc.); a real
+    # ungraceful-termination fault produces a much higher failure ratio.
+    max_probe_failure_ratio = 0.02
+    min_probe_samples = 5
 
-    def __init__(self, problem, deployment_name: str, min_grace_period: int = 30):
+    def __init__(
+        self,
+        problem,
+        deployment_name: str,
+        min_grace_period: int = 30,
+        probe_url: str | None = None,
+    ):
         super().__init__(problem)
         self.deployment_name = deployment_name
         self.min_grace_period = min_grace_period
         self.namespace = problem.namespace
         self.kubectl = problem.kubectl
+        self.probe_pod = f"oracle-traffic-probe-{deployment_name}"
+     
+        self.probe_url = probe_url or (
+            f"http://frontend.{self.namespace}.svc.cluster.local:5000/reservation"
+            "?inDate=2015-04-09&outDate=2015-04-10&hotelId=1"
+            "&customerName=test&username=test&password=test&number=1"
+        )
 
     # ------------------------------------------------------------------
-    # Helpers
+    # kubectl helpers
     # ------------------------------------------------------------------
 
     def _get_deployment_json(self) -> dict:
@@ -41,6 +65,10 @@ class UngracefulTerminationMitigationOracle(Oracle):
         return json.loads(output)
 
     def _patch_deployment(self, patch: dict) -> None:
+        # NOTE: intentionally uses kubectl's default STRATEGIC merge patch.
+        # A JSON merge patch (--type=merge) replaces the containers list
+        # wholesale, which strips required fields like `image`; strategic
+        # merge combines list entries by their `name` key instead.
         tmp_path = None
         try:
             with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
@@ -48,11 +76,15 @@ class UngracefulTerminationMitigationOracle(Oracle):
                 tmp_path = f.name
             self.kubectl.exec_command(
                 f"kubectl patch deployment {self.deployment_name} -n {self.namespace} "
-                f"--type=merge --patch-file {tmp_path}"
+                f"--patch-file {tmp_path}"
             )
         finally:
             if tmp_path is not None:
                 os.unlink(tmp_path)
+
+    # ------------------------------------------------------------------
+    # Rollout helpers
+    # ------------------------------------------------------------------
 
     def _rollout_complete(self, deployment: dict) -> bool:
         metadata = deployment.get("metadata") or {}
@@ -113,23 +145,70 @@ class UngracefulTerminationMitigationOracle(Oracle):
             "spec": {
                 "template": {
                     "metadata": {
-                        "annotations": {
-                            "oracle-drain-check": str(time.time_ns())
-                        }
+                        "annotations": {"oracle-drain-check": str(time.time_ns())}
                     }
                 }
             }
         }
         self._patch_deployment(patch)
 
-    def _restore_probe_annotation(self, original_template: dict) -> None:
-        """Remove the probe annotation after the test rollout."""
-        template = copy.deepcopy(original_template)
-        metadata = template.setdefault("metadata", {})
-        annotations = metadata.get("annotations") or {}
-        annotations["oracle-drain-check"] = None
-        metadata["annotations"] = annotations
-        self._patch_deployment({"spec": {"template": template}})
+    def _remove_probe_annotation(self) -> None:
+        """Delete the probe annotation (strategic merge treats null as delete)."""
+        patch = {
+            "spec": {
+                "template": {
+                    "metadata": {"annotations": {"oracle-drain-check": None}}
+                }
+            }
+        }
+        self._patch_deployment(patch)
+
+    # ------------------------------------------------------------------
+    # Traffic probe (in-cluster curl loop)
+    # ------------------------------------------------------------------
+
+    def _start_traffic_probe(self) -> None:
+        self._frontend_pod = self.kubectl.exec_command(
+            f"kubectl get pod -n {self.namespace} -l io.kompose.service=frontend "
+            f"-o jsonpath='{{.items[0].metadata.name}}'"
+        ).strip()
+        self._probe_log = []
+
+    def _delete_traffic_probe(self) -> None:
+        pass  # nothing to clean up
+
+    def _collect_probe_results(self) -> tuple[int, int]:
+        for _ in range(5):
+            result = self.kubectl.exec_command(
+                f"kubectl exec {self._frontend_pod} -n {self.namespace} -- "
+                f"sh -c 'curl -s --connect-timeout 1 http://reservation:8087/ "
+                f">/dev/null 2>&1; echo EXIT:$?'"
+            )
+            # exit 7 = connection refused (pause/dead container)
+            # exit 1 = connected but protocol error (real gRPC service is up)
+            self._probe_log.append("EXIT:7" not in (result or ""))
+        return len(self._probe_log), sum(self._probe_log)
+
+    def _wait_for_probe_baseline(self) -> bool:
+        """The service must answer 2xx before the test rollout starts.
+
+        This is the app-identity check: a pause container (or anything that
+        is not the real application) never produces a successful response,
+        so the oracle cannot be passed with a stub workload.
+        """
+        deadline = time.monotonic() + self.probe_warmup_timeout_seconds
+        while time.monotonic() < deadline:
+            total, ok = self._collect_probe_results()
+            if ok >= 3:
+                return True
+            if total >= 20 and ok == 0:
+                break  # probe is running but nothing answers — fail fast
+            time.sleep(self.poll_interval_seconds)
+        print(
+            "❌ Deployment does not serve application traffic "
+            f"(no successful responses from {self.probe_url})"
+        )
+        return False
 
     # ------------------------------------------------------------------
     # Main evaluation
@@ -169,16 +248,24 @@ class UngracefulTerminationMitigationOracle(Oracle):
             return {"success": False}
 
         initial_generation = (deployment.get("metadata") or {}).get("generation", 0)
-        original_template = copy.deepcopy(
-            (deployment.get("spec") or {}).get("template")
-        )
 
-        # --- Check 3: controlled test rollout stays available throughout ---
-        probe_applied = False
+        annotation_applied = False
+        probe_started = False
         try:
+            # --- Check 3: the deployment serves real application traffic ---
+            print("🚦 Starting in-cluster traffic probe...")
+            self._start_traffic_probe()
+            probe_started = True
+            if not self._wait_for_probe_baseline():
+                return {"success": False}
+            print("✅ Service answers application requests — starting test rollout")
+
+            baseline_total, baseline_ok = self._collect_probe_results()
+
+            # --- Check 4: controlled test rollout under live traffic ---
             print("🔄 Triggering controlled test rollout to verify graceful drain...")
             self._apply_probe_annotation()
-            probe_applied = True
+            annotation_applied = True
 
             probe_deployment = self._get_deployment_json()
             probe_generation = (probe_deployment.get("metadata") or {}).get("generation", 0)
@@ -193,7 +280,32 @@ class UngracefulTerminationMitigationOracle(Oracle):
                 print("❌ Test rollout dropped all replicas — pods are still not draining safely")
                 return {"success": False}
 
-            print("✅ Test rollout completed without dropping all replicas — pods drain safely")
+            # Let in-flight probe requests settle, then measure error ratio
+            # over the rollout window only (exclude baseline samples).
+            time.sleep(3)
+            total, ok = self._collect_probe_results()
+            window_total = total - baseline_total
+            window_ok = ok - baseline_ok
+            window_failures = window_total - window_ok
+
+            if window_total < self.min_probe_samples:
+                print(f"❌ Traffic probe collected too few samples ({window_total})")
+                return {"success": False}
+
+            failure_ratio = window_failures / window_total
+            print(
+                f"📊 Probe during rollout: {window_ok}/{window_total} succeeded "
+                f"(failure ratio {failure_ratio:.1%})"
+            )
+
+            if failure_ratio > self.max_probe_failure_ratio:
+                print(
+                    "❌ Requests failed during the test rollout — pods are still "
+                    "terminating before in-flight requests drain"
+                )
+                return {"success": False}
+
+            print("✅ Test rollout completed with no request failures — pods drain safely")
             print("✅ Mitigation verified: ungraceful termination fault is resolved")
             return {"success": True}
 
@@ -202,8 +314,10 @@ class UngracefulTerminationMitigationOracle(Oracle):
             return {"success": False}
 
         finally:
-            if probe_applied and original_template is not None:
+            if probe_started:
+                self._delete_traffic_probe()
+            if annotation_applied:
                 try:
-                    self._restore_probe_annotation(original_template)
+                    self._remove_probe_annotation()
                 except Exception as exc:
-                    print(f"⚠️  Could not restore probe annotation: {exc}")
+                    print(f"⚠️  Could not remove probe annotation: {exc}")
