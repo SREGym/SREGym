@@ -8,7 +8,7 @@ from sregym.conductor.oracles.base import Oracle
 
 
 class DuplicatePVCMountsMitigationOracle(Oracle):
-    """Verify that the target Deployment and its Jaeger query endpoint recovered."""
+    """Verify that the target Deployment and its current Jaeger pod recovered."""
 
     importance = 1.0
     rollout_timeout_seconds = 120
@@ -31,6 +31,7 @@ class DuplicatePVCMountsMitigationOracle(Oracle):
         status = deployment.status
         return (
             (status.observed_generation or 0) >= generation
+            and (status.replicas or 0) == desired
             and (status.updated_replicas or 0) == desired
             and (status.ready_replicas or 0) == desired
             and (status.available_replicas or 0) == desired
@@ -58,7 +59,16 @@ class DuplicatePVCMountsMitigationOracle(Oracle):
             for owner in pod.metadata.owner_references or []
         )
 
-    def _has_current_ready_endpoint(self) -> bool:
+    @staticmethod
+    def _pod_ready(pod) -> bool:
+        container_statuses = pod.status.container_statuses or []
+        return (
+            pod.status.phase == "Running"
+            and bool(container_statuses)
+            and all(status.ready for status in container_statuses)
+        )
+
+    def _current_ready_pod_ip(self) -> str | None:
         namespace = self.problem.namespace
         service_name = self.problem.faulty_service
         replica_sets = self.problem.kubectl.get_matching_replicasets(namespace, service_name)
@@ -67,51 +77,28 @@ class DuplicatePVCMountsMitigationOracle(Oracle):
         }
         if not active_replica_sets:
             print(f"[FAIL] Deployment '{service_name}' has no active ReplicaSet")
-            return False
+            return None
 
-        current_pods = {
-            pod.metadata.name
+        ready_pods = [
+            pod
             for pod in self.problem.kubectl.list_pods(namespace).items
-            if pod.metadata.deletion_timestamp is None and self._owned_by_active_replica_set(pod, active_replica_sets)
-        }
-        if not current_pods:
-            print(f"[FAIL] Deployment '{service_name}' has no current pods")
-            return False
-
-        endpoints = self.problem.kubectl.core_v1_api.read_namespaced_endpoints(
-            name=service_name,
-            namespace=namespace,
-        )
-        ready_current_pods = {
-            address.target_ref.name
-            for subset in endpoints.subsets or []
-            for address in subset.addresses or []
-            if address.target_ref is not None
-            and address.target_ref.kind == "Pod"
-            and address.target_ref.name in current_pods
-        }
-        if not ready_current_pods:
-            print(f"[FAIL] Service '{service_name}' has no ready endpoint from its current ReplicaSet")
-            return False
-        return True
-
-    def _run_query_check(self) -> bool:
-        namespace = self.problem.namespace
-        service_name = self.problem.faulty_service
-        core_v1 = self.problem.kubectl.core_v1_api
-        service = core_v1.read_namespaced_service(name=service_name, namespace=namespace)
-        query_ports = [
-            port
-            for port in service.spec.ports or []
-            if port.port == self.query_port and (port.protocol or "TCP") == "TCP"
+            if pod.metadata.deletion_timestamp is None
+            and self._owned_by_active_replica_set(pod, active_replica_sets)
+            and self._pod_ready(pod)
+            and pod.status.pod_ip
         ]
-        if not query_ports:
-            print(f"[FAIL] Service '{service_name}' does not expose TCP port {self.query_port}")
-            return False
+        if not ready_pods:
+            print(f"[FAIL] Deployment '{service_name}' has no Ready pod from its active ReplicaSet")
+            return None
+
+        return ready_pods[0].status.pod_ip
+
+    def _run_query_check(self, target_ip: str) -> bool:
+        namespace = self.problem.namespace
+        core_v1 = self.problem.kubectl.core_v1_api
 
         pod_name = f"service-content-check-{time.time_ns()}"[:63]
-        target = f"{service_name}.{namespace}.svc.cluster.local"
-        url = f"http://{target}:{self.query_port}/api/services"
+        url = f"http://{target_ip}:{self.query_port}/api/services"
         script = (
             f"response=$(wget -q -T 10 -O - '{url}') && "
             "printf '%s' \"$response\" | grep -q '\"data\"' && "
@@ -179,15 +166,16 @@ class DuplicatePVCMountsMitigationOracle(Oracle):
                 print(f"[FAIL] Deployment '{service_name}' did not complete its current rollout")
                 return {"success": False}
 
-            if not self._has_current_ready_endpoint():
+            target_ip = self._current_ready_pod_ip()
+            if target_ip is None:
                 return {"success": False}
 
-            if not self._run_query_check():
-                print(f"[FAIL] Jaeger query endpoint for Service '{service_name}' did not respond correctly")
+            if not self._run_query_check(target_ip):
+                print(f"[FAIL] Current Jaeger pod for Deployment '{service_name}' did not respond correctly")
                 return {"success": False}
         except Exception as exc:
             print(f"[FAIL] Error checking storage recovery: {exc}")
             return {"success": False}
 
-        print(f"[PASS] Deployment '{service_name}' is fully ready and serving Jaeger queries")
+        print(f"[PASS] Deployment '{service_name}' is fully ready and its current pod is serving Jaeger queries")
         return {"success": True}
