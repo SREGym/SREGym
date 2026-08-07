@@ -756,6 +756,26 @@ class Conductor:
         except Exception as e:
             self.logger.error(f"Failed to recover CoreDNS NXDOMAIN templates: {e}")
 
+        self.logger.info("[FIX] Calico CRDs missing (calico-kube-controllers crash-loop) if any")
+        try:
+            self._repair_calico_crds()
+        except Exception as e:
+            self.logger.warning(f"Could not repair Calico CRDs: {e}")
+
+        self.logger.info("[FIX] MissingImagePullSecret containerd dockerhub-block leftover if any")
+        try:
+            from sregym.conductor.problems.missing_image_pull_secret_astronomy_shop import (
+                MissingImagePullSecretAstronomyShop,
+            )
+            from sregym.conductor.problems.missing_image_pull_secret_blueprint_hotel_reservation import (
+                MissingImagePullSecretBlueprintHotelReservation,
+            )
+
+            MissingImagePullSecretBlueprintHotelReservation.cleanup_leftovers()
+            MissingImagePullSecretAstronomyShop.cleanup_leftovers()
+        except Exception as e:
+            self.logger.warning(f"Could not clean up MissingImagePullSecret leftovers: {e}")
+
         self.logger.info("[FIX] Leftover dm-flakey infrastructure if any")
         try:
             self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
@@ -779,6 +799,43 @@ class Conductor:
 
         self.logger.info("Fix Kubernetes completed.")
 
+    # Cluster-scoped CRDs that exist at startup, but are wiped off on etcd churn specifically
+    # on AWS kubeadm clusters (possibly due to write-flush latency on AWS EBS and race conditions as
+    # described later on)
+    _CALICO_MANIFEST_URL = "https://raw.githubusercontent.com/projectcalico/calico/v3.29.3/manifests/calico.yaml"
+    _CALICO_REQUIRED_CRDS = (
+        "tiers.crd.projectcalico.org",
+        "adminnetworkpolicies.policy.networking.k8s.io",
+    )
+
+    def _repair_calico_crds(self):
+        """Re-apply the Calico manifest if calico-kube-controllers' required CRDs are
+        missing. No-op on clusters not running manifest-based Calico (e.g. kind /
+        kindnet), and idempotent when the CRDs are already present."""
+        deploy = self.kubectl.exec_command(
+            "kubectl get deploy -n kube-system calico-kube-controllers --ignore-not-found -o name"
+        )
+        if "calico-kube-controllers" not in (deploy or ""):
+            return  # not a Calico cluster -- nothing to repair
+
+        missing = [
+            crd
+            for crd in self._CALICO_REQUIRED_CRDS
+            if crd not in (self.kubectl.exec_command(f"kubectl get crd {crd} --ignore-not-found -o name") or "")
+        ]
+        if not missing:
+            return
+
+        self.logger.warning(
+            f"Calico CRDs missing {missing}; re-applying Calico manifest to recover calico-kube-controllers"
+        )
+        self.kubectl.exec_command(f"kubectl apply -f {self._CALICO_MANIFEST_URL}")
+        # Force a fresh pod so it picks up the recreated CRDs immediately instead of
+        # waiting out its CrashLoopBackOff backoff (which can be minutes).
+        self.kubectl.exec_command(
+            "kubectl delete pod -n kube-system -l k8s-app=calico-kube-controllers --ignore-not-found"
+        )
+
     def deploy_app(self):
         """Kubectl + Prometheus + problem.app deployment."""
         problem = self.current_problem
@@ -796,17 +853,40 @@ class Conductor:
             self._baseline_captured = True
 
         self.logger.info("[DEPLOY] Setting up metrics-server…")
-        self.kubectl.exec_command(
-            "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
-            "releases/latest/download/components.yaml"
+        # Re-applying metrics-server's components.yaml on every run re-registers the
+        # v1beta1.metrics.k8s.io APIService, which forces the apiserver to rebuild its
+        # aggregated discovery. On the AWS kubeadm cluster that resync races and drops
+        # Calico's tiers.crd.projectcalico.org / adminnetworkpolicies CRDs from etcd,
+        # leaving calico-kube-controllers in CrashLoopBackOff and timing out the
+        # wait_for_ready("kube-system") down the line. Only apply when metrics-server is not
+        # already installed so the resync (and CRD loss) does not recur on every problem run.
+        metrics_installed = "metrics-server" in (
+            self.kubectl.exec_command("kubectl get deploy -n kube-system metrics-server --ignore-not-found -o name")
+            or ""
         )
-        self.kubectl.exec_command(
-            "kubectl -n kube-system patch deployment metrics-server "
-            "--type=json -p='["
-            '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"},'
-            '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
-            "]'"
-        )
+        if metrics_installed:
+            self.logger.info(
+                "[DEPLOY] metrics-server already installed; skipping re-apply (avoids CRD-discovery resync)"
+            )
+        else:
+            self.kubectl.exec_command(
+                "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
+                "releases/latest/download/components.yaml"
+            )
+            self.kubectl.exec_command(
+                "kubectl -n kube-system patch deployment metrics-server "
+                "--type=json -p='["
+                '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"},'
+                '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
+                "]'"
+            )
+        # Safety net: if a prior run's apply already dropped the Calico CRDs, recreate
+        # them here (after the metrics-server apply that can trigger the loss) so the
+        # kube-system readiness check below does not trip.
+        try:
+            self._repair_calico_crds()
+        except Exception as e:
+            self.logger.warning(f"Could not repair Calico CRDs before kube-system wait: {e}")
         self.kubectl.wait_for_ready("kube-system")
 
         # Only deploy Khaos if the problem requires it
@@ -816,11 +896,20 @@ class Conductor:
 
         self.logger.info("[DEPLOY] Setting up OpenEBS…")
         self._preflight_openebs_udev_mount()
-        self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
-        self.kubectl.exec_command(
-            "kubectl patch storageclass openebs-hostpath "
-            '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
+        # Same rationale as metrics-server above: re-applying openebs-operator.yaml
+        # re-establishes its CRDs and triggers the apiserver discovery resync that drops
+        # the Calico CRDs, skipping the re-apply once OpenEBS is installed.
+        openebs_installed = "openebs-hostpath" in (
+            self.kubectl.exec_command("kubectl get sc openebs-hostpath --ignore-not-found -o name") or ""
         )
+        if openebs_installed:
+            self.logger.info("[DEPLOY] OpenEBS already installed; skipping re-apply (avoids CRD-discovery resync)")
+        else:
+            self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
+            self.kubectl.exec_command(
+                "kubectl patch storageclass openebs-hostpath "
+                '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
+            )
         self.kubectl.wait_for_ready("openebs")
         self._ensure_openebs_device_storageclass()
 
