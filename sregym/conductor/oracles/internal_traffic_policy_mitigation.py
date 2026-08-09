@@ -3,8 +3,9 @@
 Passes when **either**:
 * ``spec.internalTrafficPolicy`` on the ``recommendation`` Service is no longer
   ``Local`` (i.e. changed to ``Cluster`` or the field was removed), **or**
-* Every worker node has at least one Running ``recommendation`` pod (making
-  ``Local`` safe because no caller is left without a local backend).
+* Every worker node has at least one Ready ``recommendation`` Service endpoint
+  (making ``Local`` safe because no caller is left without a usable local
+  backend).
 
 After the policy/topology check clears, a TCP connectivity probe (busybox
 ``nc``) is run from a worker node that had no local pod during injection to
@@ -26,6 +27,7 @@ class InternalTrafficPolicyMitigationOracle(Oracle):
     def __init__(self, problem):
         super().__init__(problem)
         self.core_v1 = client.CoreV1Api()
+        self.discovery_v1 = client.DiscoveryV1Api()
 
     def evaluate(self) -> dict:
         print("== InternalTrafficPolicy Mitigation Evaluation ==")
@@ -40,17 +42,17 @@ class InternalTrafficPolicyMitigationOracle(Oracle):
         print(f"service/{self.problem.FAULTY_SERVICE} internalTrafficPolicy={policy}")
 
         worker_nodes = self.problem.worker_nodes()
-        nodes_with_pod = self._nodes_with_running_pod()
-        uncovered_nodes = [n for n in worker_nodes if n not in nodes_with_pod]
+        nodes_with_endpoint = self._nodes_with_ready_endpoint()
+        uncovered_nodes = [n for n in worker_nodes if n not in nodes_with_endpoint]
 
         print(f"Worker nodes: {worker_nodes}")
-        print(f"Nodes with running pod: {sorted(nodes_with_pod)}")
+        print(f"Nodes with Ready service endpoint: {sorted(nodes_with_endpoint)}")
         print(f"Uncovered nodes: {uncovered_nodes}")
 
         if policy == "Local" and uncovered_nodes:
             print(
                 f"Fault still active: internalTrafficPolicy=Local and "
-                f"{len(uncovered_nodes)} worker node(s) have no local pod."
+                f"{len(uncovered_nodes)} worker node(s) have no Ready local endpoint."
             )
             return {
                 "success": False,
@@ -58,7 +60,7 @@ class InternalTrafficPolicyMitigationOracle(Oracle):
                 "uncovered_nodes": uncovered_nodes,
             }
 
-        probe_node = self._pick_probe_node(worker_nodes, nodes_with_pod)
+        probe_node = self._pick_probe_node(worker_nodes, nodes_with_endpoint)
         print(f"Running connectivity probe from node: {probe_node}")
         probe_ok = self._connectivity_probe(probe_node)
 
@@ -70,19 +72,25 @@ class InternalTrafficPolicyMitigationOracle(Oracle):
             "probe_ok": probe_ok,
         }
 
-    def _nodes_with_running_pod(self) -> set[str]:
-        pods = self.core_v1.list_namespaced_pod(
+    def _nodes_with_ready_endpoint(self) -> set[str]:
+        """Return nodes containing an endpoint the Service can actually use."""
+        slices = self.discovery_v1.list_namespaced_endpoint_slice(
             self.problem.namespace,
-            label_selector=self.problem.POD_LABEL_SELECTOR,
+            label_selector=f"kubernetes.io/service-name={self.problem.FAULTY_SERVICE}",
         )
-        return {pod.spec.node_name for pod in pods.items if pod.status.phase == "Running" and pod.spec.node_name}
+        return {
+            endpoint.node_name
+            for endpoint_slice in slices.items
+            for endpoint in (endpoint_slice.endpoints or [])
+            if endpoint.node_name and endpoint.conditions is not None and endpoint.conditions.ready is True
+        }
 
-    def _pick_probe_node(self, worker_nodes: list[str], nodes_with_pod: set[str]) -> str:
+    def _pick_probe_node(self, worker_nodes: list[str], nodes_with_endpoint: set[str]) -> str:
         """Prefer victim_node, then first uncovered node, then last worker."""
         victim = getattr(self.problem, "victim_node", None)
         if victim and victim in worker_nodes:
             return victim
-        uncovered = [n for n in worker_nodes if n not in nodes_with_pod]
+        uncovered = [n for n in worker_nodes if n not in nodes_with_endpoint]
         if uncovered:
             return uncovered[0]
         return worker_nodes[-1]

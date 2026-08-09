@@ -219,6 +219,13 @@ class Conductor:
     def _inject_fault(self):
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
+
+        # Snapshot the healthy cluster before breaking it. The oracle is built
+        # in Problem.__init__, which runs before deploy_app(), so this is the
+        # first point at which the app actually exists.
+        if getattr(problem, "mitigation_oracle", None):
+            problem.mitigation_oracle.capture_baseline()
+
         problem.inject_fault()
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
@@ -755,6 +762,21 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
 
+        self.logger.info("[FIX] NightlyRebalanceOOM kube-system actor leftover if any")
+        try:
+            from sregym.conductor.problems.nightly_rebalance_oom import NightlyRebalanceOOM
+
+            NightlyRebalanceOOM.cleanup_leftover_actor()
+        except Exception as e:
+            self.logger.warning(f"Could not clean up NightlyRebalanceOOM actor: {e}")
+
+        self.logger.info("[FIX] Clock drift leftover if any")
+        try:
+            injector = RemoteOSFaultInjector()
+            injector.recover_clock_drift()
+        except Exception as e:
+            self.logger.warning(f"Could not fix leftover clock drift state: {e}")
+
         self.logger.info("Fix Kubernetes completed.")
 
     def deploy_app(self):
@@ -845,8 +867,11 @@ class Conductor:
             for ns in app_namespaces:
                 self.jaeger.create_external_name_service(ns)
 
-        problem.app.start_workload()
-        self.logger.info("[ENV] Start workload")
+        if problem.run_default_workload:
+            problem.app.start_workload()
+            self.logger.info("[ENV] Start workload")
+        else:
+            self.logger.info("[ENV] Default application workload disabled for this problem")
 
     def undeploy_app(self):
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""

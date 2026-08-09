@@ -367,6 +367,12 @@ jobs:
                 `The validation run did not produce a summary — it likely crashed before ` +
                 `completing. Check the [workflow logs](${runUrl}).`;
             }
+
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
             const existing = comments.find(c => c.body && c.body.includes(marker));
             if (existing) {
               await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });

@@ -1,184 +1,112 @@
-# Building your own image
+# Running SREGym with KIND
 
-This document provides detailed, step-by-step instructions for building your own kind image to deploy SREGym.
+SREGym supports KIND on Linux, WSL2, and macOS. The provided setup creates one control-plane node, three worker nodes, and installs Calico for networking and NetworkPolicy support.
 
----
+## Requirements
 
-## Table of Contents
+Install the dependencies listed in the [main README](../README.md): Python 3.12 or newer, Docker, KIND, kubectl, Helm 4.0 or newer, and uv.
 
-- [Overview](#overview)
-- [System Compatibility](#system-compatibility)
-- [Prerequisites](#prerequisites)
-  - [WSL2 and Ubuntu Setup](#wsl2-and-ubuntu-setup)
-  - [Install Docker](#install-docker)
-  - [Install kind](#install-kind)
-  - [Install kubectl](#install-kubectl)
-  - [Install Helm](#install-helm)
-- [Deployment Steps](#deployment-steps)
-  - [1. Build the Custom KIND Image](#1-build-the-custom-kind-image)
-  - [2. (Optional) Push the Image to Dockerhub](#2-optional-push-the-image-to-dockerhub)
-  - [3. Create a kind Kubernetes Cluster](#4-create-a-kind-kubernetes-cluster)
-- [Troubleshooting](#troubleshooting)
-- [Conclusion](#conclusion)
+## Linux and WSL2 host settings
 
----
+KIND nodes share the host's inotify limits. On Linux and WSL2, low defaults can cause system pods to crash with `too many open files`.
 
-## **Overview**
-SREGym is deployed using **containerized components** and Kubernetes manifests. This guide provides a step-by-step deployment process, covering:
-
-- Setting up **WSL2 (Windows Subsystem for Linux) or native Ubuntu 24.04**.
-- Installing **Docker, kind, kubectl, Helm, Lua, Luarocks, and Luasocket**.
-- Building a custom **kind image** and deploying SREGym into a **local Kubernetes cluster**.
-
----
-
-## **System Compatibility**
-This setup has been successfully verified on the following environments:
-1. **WSL2 Ubuntu**
-   ```
-   Linux Warrens-Laptop 5.15.167.4-microsoft-standard-WSL2 #1 SMP Tue Nov 5 00:21:55 UTC 2024 x86_64 GNU/Linux
-   ```
-2. **Ubuntu 24.04 LTS (Cloud/Local Machine)**
-   ```
-   Linux ubuntu-s-4vcpu-8gb-sfo3-01 6.8.0-52-generic #53-Ubuntu SMP PREEMPT_DYNAMIC Sat Jan 11 00:06:25 UTC 2025 x86_64 GNU/Linux
-   ```
-
----
-
-## **Prerequisites**
-
-### **WSL2 and Ubuntu Setup**
-Ensure that WSL2 is enabled on Windows and Ubuntu is installed. Follow the official [Microsoft WSL guide](https://learn.microsoft.com/en-us/windows/wsl/install).
-
-
-### **Install Docker**
-Docker is required to run Kubernetes and containers. Install Docker Desktop for WSL2 if using WSL2 Ubuntu, follow the [official Docker WSL documentation](https://docs.docker.com/desktop/wsl/).
-
-For native Ubuntu, install Docker using the following commands, follow the [official Docker installation guide](https://docs.docker.com/engine/install/ubuntu/).
-
-### **Install kind**
-Install kind (Kubernetes IN Docker) to create a local Kubernetes cluster:
-```bash
-curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
-chmod +x ./kind
-sudo mv ./kind /usr/local/bin/kind
-```
-
-For more installation options and documentation, see [kind documentation](https://kind.sigs.k8s.io/docs/user/quick-start/).
-### **Install kubectl**
-Install **kubectl** to interact with Kubernetes clusters:
-```bash
-sudo apt-get update
-# apt-transport-https may be a dummy package; if so, you can skip that package
-sudo apt-get install -y apt-transport-https ca-certificates curl gnupg
-
-# If the folder `/etc/apt/keyrings` does not exist, it should be created before the curl command, read the note below.
-# sudo mkdir -p -m 755 /etc/apt/keyrings
-curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key | sudo gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-sudo chmod 644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg # allow unprivileged APT programs to read this keyring
-
-# This overwrites any existing configuration in /etc/apt/sources.list.d/kubernetes.list
-echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /' | sudo tee /etc/apt/sources.list.d/kubernetes.list
-sudo chmod 644 /etc/apt/sources.list.d/kubernetes.list   # helps tools such as command-not-found to work correctly
-
-sudo apt-get update
-sudo apt-get install -y kubectl
-```
-
-For further guidance, refer to [kubectl linux installation docs](https://kubernetes.io/docs/tasks/tools/install-kubectl-linux/).
-
-### Install Helm
-
-Install Helm to manage Kubernetes applications:
+Set the recommended values before creating the cluster:
 
 ```bash
-curl https://baltocdn.com/helm/signing.asc | gpg --dearmor | sudo tee /usr/share/keyrings/helm.gpg > /dev/null
-sudo apt-get install apt-transport-https --yes
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main" | sudo tee /etc/apt/sources.list.d/helm-stable-debian.list
-sudo apt-get update
-sudo apt-get install helm
+sudo sysctl -w fs.inotify.max_user_instances=1024
+sudo sysctl -w fs.inotify.max_user_watches=1048576
 ```
 
-For more information, see the [Helm installation guide](https://helm.sh/docs/intro/install/).
-
-### Configure Host Kernel Parameters
-
-Kind cluster nodes share the host kernel's inotify limits. The default
-`fs.inotify.max_user_instances=128` is insufficient for multi-node clusters and
-will cause kube-system pods (kube-proxy, etc.) to crash with "too many open
-files". Run this before creating your cluster:
-
-    sudo sysctl -w fs.inotify.max_user_instances=1024
-    sudo sysctl -w fs.inotify.max_user_watches=1048576
-
-To make persistent across reboots:
-
-    echo "fs.inotify.max_user_instances=1024" | sudo tee /etc/sysctl.d/99-kind.conf
-    echo "fs.inotify.max_user_watches=1048576" | sudo tee -a /etc/sysctl.d/99-kind.conf
-    sudo sysctl --system
-
----
-
-## Deployment Steps
-
-### 1. Build the Custom KIND Image
-
-The Dockerfile in this directory is designed specifically for Ubuntu running under WSL2 (amd64). **Please refer to this Dockerfile** to build an image that is compatible with your own machine
-
-Build the custom image using:
+To keep the values after rebooting:
 
 ```bash
-docker build -t your_dockerhub_username/aiopslab-kind:latest -f kind/Dockerfile .
+echo "fs.inotify.max_user_instances=1024" | sudo tee /etc/sysctl.d/99-sregym-kind.conf
+echo "fs.inotify.max_user_watches=1048576" | sudo tee -a /etc/sysctl.d/99-sregym-kind.conf
+sudo sysctl --system
 ```
-> **Note:** Replace `your_dockerhub_username` with your Docker Hub account if pushing the image.
 
-### 2. (Optional) Push the Image to Dockerhub
+These host commands are not needed on macOS.
 
-If you wish to publish your custom image and have it referenced by the kind configuration file, push it to Docker Hub:
+## Create the cluster
+
+From the repository root, run the command matching your machine:
 
 ```bash
-docker push your_dockerhub_username/aiopslab-kind:latest
+# x86-64 Linux, WSL2, or Intel Mac
+bash kind/setup_kind_cluster.sh x86
+
+# ARM64 Linux or Apple silicon Mac
+bash kind/setup_kind_cluster.sh arm
 ```
 
-Remember to update the `kind-config.yaml` file with your image name if you are using your own published image.
+The script:
 
+1. creates the four-node KIND cluster using the matching architecture image;
+2. installs Calico;
+3. waits for Calico and all nodes to become ready; and
+4. clears the previous SREGym cluster-baseline cache.
 
-After finishing cluster creation, proceed to the next "Update config.yml" step.
+Confirm that all four nodes are `Ready`:
 
----
+```bash
+kubectl get nodes
+```
 
-## **Troubleshooting**
+The cluster is now ready to run SREGym.
 
-- **Docker Issues:**
-  Ensure Docker is running within your WSL2 environment. Verify with `docker ps` to list running containers.
+## Troubleshooting
 
-- **Cluster Creation Failures:**
-  Check that Docker is correctly installed and that your system has enough resources (CPU, memory). Examine the output of `kind export logs <cluster-name>` for details.
+### Docker issues
 
-- **Deployment Problems:**
-  Use `kubectl logs <pod-name>` to view pod logs and diagnose application issues. Make sure that your `kind-config.yaml` file references the correct image.
+Ensure Docker is running and accessible to your user:
 
-- **kube-proxy CrashLoopBackOff / "too many open files":**
-  All kind nodes share the host kernel's `fs.inotify.max_user_instances` limit
-  (default: 128). When this is exhausted, new pods that need inotify instances
-  (like kube-proxy) crash immediately. Fix with:
-  `sudo sysctl -w fs.inotify.max_user_instances=1024`
+```bash
+docker ps
+```
 
-- **Resource Allocation:**
-  WSL2 may require additional resources. Adjust the WSL2 settings in your `.wslconfig` file on Windows if you encounter performance issues.
+### Cluster creation failures
 
-- **Deployment Timeout Issues (Slow Network):**
-  If you have a slow local network connection, first-time deployments may timeout while pulling container images. Increase the timeout in your `.env` file:
+Check that Docker is correctly installed and that your system has enough CPU and memory. Export the KIND logs for diagnostics:
 
-  ```bash
-  WAIT_FOR_POD_READY_TIMEOUT=1800  # 30 minutes (recommended for slow networks)
-  ```
+```bash
+kind export logs ./kind-logs --name kind
+```
 
-  Subsequent deployments are faster since images are cached. Remote clusters typically don't need this adjustment.
+### Deployment problems
 
----
+Inspect the pods and recent Kubernetes events, then use `kubectl logs <pod-name>` to view the logs for a failing pod:
 
-## **Conclusion**
-This guide covers deploying **SREGym** on **both WSL2 and Ubuntu 24.04**, ensuring compatibility across different environments. By following these steps, you can successfully set up **Docker, kind, and Kubernetes** and deploy the SREGym application.
+```bash
+kubectl get pods -A
+kubectl get events -A --sort-by='.lastTimestamp'
+```
 
-For advanced configurations, refer to the [SREGym documentation](https://github.com/SREGym/SREGym). 🚀
+### kube-proxy reports `CrashLoopBackOff` or `too many open files`
+
+All KIND nodes share the host's `fs.inotify.max_user_instances` limit. When this limit is exhausted, new pods that need inotify instances, such as kube-proxy, crash immediately. Apply the Linux or WSL2 inotify settings above.
+
+### Resource allocation
+
+WSL2 may require additional resources. Adjust the WSL2 settings in your `.wslconfig` file on Windows if you encounter performance issues.
+
+### Deployment timeout on a slow network
+
+If you have a slow local network connection, first-time deployments may timeout while pulling container images. Increase the timeout in your `.env` file:
+
+```bash
+WAIT_FOR_POD_READY_TIMEOUT=1800  # 30 minutes (recommended for slow networks)
+```
+
+Subsequent deployments are faster since images are cached. Remote clusters typically don't need this adjustment.
+
+### The cluster already exists
+
+Delete the existing KIND cluster using the command below before recreating it.
+
+## Delete the cluster
+
+```bash
+kind delete cluster --name kind
+```
+
+This removes the KIND node containers. Docker images remain cached.

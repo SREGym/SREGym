@@ -1,5 +1,12 @@
+import contextlib
 import logging
+import shutil
+import tempfile
 import time
+from collections.abc import Iterator
+from pathlib import Path
+
+import yaml
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.paths import FAULT_SCRIPTS, HOTEL_RES_METADATA, TARGET_MICROSERVICES
@@ -11,14 +18,21 @@ logger = logging.getLogger("all.application")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
 
+HOTEL_RESERVATION_APPLICATION_IMAGE = "ghcr.io/sregym/hotel-reservation:latest"
+
 
 class HotelReservation(Application):
-    def __init__(self, mount_failure_scripts: bool = True):
+    def __init__(
+        self,
+        mount_failure_scripts: bool = True,
+        deployment_env_overrides: dict[str, dict[str, dict[str, str]]] | None = None,
+    ):
         super().__init__(HOTEL_RES_METADATA)
         self.kubectl = KubeCtl()
         self.script_dir = FAULT_SCRIPTS
         self.helm_deploy = False
         self.mount_failure_scripts = mount_failure_scripts
+        self.deployment_env_overrides = deployment_env_overrides or {}
 
         self.load_app_json()
 
@@ -120,12 +134,74 @@ class HotelReservation(Application):
             )
             self.kubectl.exec_command(patch_cmd)
 
+    @contextlib.contextmanager
+    def _rendered_deployment_configs(self) -> Iterator[Path]:
+        """Render problem-specific env values before Kubernetes sees a Deployment.
+
+        Most problems use the application manifests unchanged. A problem that
+        needs a different, initially healthy runtime policy can provide exact
+        Deployment/container overrides. Rendering a temporary manifest tree
+        avoids a setup rollout and its misleading ReplicaSet history.
+        """
+        if not self.deployment_env_overrides:
+            yield Path(self.k8s_deploy_path)
+            return
+
+        with tempfile.TemporaryDirectory(prefix="hotel-reservation-config-") as temporary_dir:
+            rendered_path = Path(temporary_dir) / "kubernetes"
+            shutil.copytree(self.k8s_deploy_path, rendered_path)
+            unmatched = {
+                (deployment_name, container_name)
+                for deployment_name, containers in self.deployment_env_overrides.items()
+                for container_name in containers
+            }
+
+            for config_path in [*rendered_path.rglob("*.yaml"), *rendered_path.rglob("*.yml")]:
+                with config_path.open() as config_file:
+                    documents = list(yaml.safe_load_all(config_file))
+
+                changed = False
+                for document in documents:
+                    if not isinstance(document, dict) or document.get("kind") != "Deployment":
+                        continue
+                    deployment_name = document.get("metadata", {}).get("name")
+                    container_overrides = self.deployment_env_overrides.get(deployment_name)
+                    if not container_overrides:
+                        continue
+
+                    containers = document.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
+                    for container in containers:
+                        container_name = container.get("name")
+                        values = container_overrides.get(container_name)
+                        if not values:
+                            continue
+                        existing = [item for item in container.get("env", []) if item.get("name") not in values]
+                        container["env"] = [
+                            *existing,
+                            *({"name": name, "value": str(value)} for name, value in values.items()),
+                        ]
+                        unmatched.discard((deployment_name, container_name))
+                        changed = True
+
+                if changed:
+                    with config_path.open("w") as config_file:
+                        yaml.safe_dump_all(documents, config_file, sort_keys=False)
+
+            if unmatched:
+                targets = ", ".join(
+                    f"deployment/{deployment}:{container}" for deployment, container in sorted(unmatched)
+                )
+                raise RuntimeError(f"deployment environment override targets were not found: {targets}")
+
+            yield rendered_path
+
     def deploy(self):
         """Deploy the Kubernetes configurations."""
         self.logger.info(f"Deploying Kubernetes configurations in namespace: {self.namespace}")
         self.create_namespace()
         self.create_configmaps()
-        self.kubectl.apply_configs(self.namespace, self.k8s_deploy_path)
+        with self._rendered_deployment_configs() as config_path:
+            self.kubectl.apply_configs(self.namespace, config_path)
         if self.mount_failure_scripts:
             self.populate_failure_configmaps()
             self._patch_mongo_failure_script_mounts()

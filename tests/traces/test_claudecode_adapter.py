@@ -6,8 +6,8 @@ Asserts the adapter against a REAL Claude Code run fixture.
 import json
 from pathlib import Path
 
-from sregym.traces.adapters import claudecode
-from sregym.traces.atif import Trajectory
+from atif_converter import Trajectory
+from atif_converter.adapters import claudecode
 
 FIXTURE = Path(__file__).parent / "fixtures" / "claudecode_run"
 
@@ -20,7 +20,8 @@ EXPECTED_TOTAL_COST_USD = 0.2282426
 
 
 def _convert() -> Trajectory:
-    return claudecode.to_atif(FIXTURE, sregym_meta={"problem_id": "p", "run": 1})
+    session_files = list((FIXTURE / "sessions" / "projects" / "-logs").glob("*.jsonl"))
+    return claudecode.convert_files(session_files, total_cost_usd=EXPECTED_TOTAL_COST_USD)
 
 
 def test_to_atif_returns_validated_trajectory():

@@ -72,8 +72,9 @@ Rejected mitigations
 * Deleting the CronJob. Removes the workload, not the bug.
 
 Whichever fix the agent applies, it must also clean up the already-
-accumulated active Jobs -- otherwise the oracle's "active Jobs ≤ N"
-check still fails because the historical Jobs are still active.
+accumulated active Jobs. The oracle rejects any active Job that still uses the
+old regular-sidecar template, while allowing brief schedule-boundary activity
+from the repaired template.
 """
 
 import time
@@ -98,6 +99,7 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
     CRONJOB_NAME = "audit-log-archiver"
     PRIMARY_CONTAINER = "archiver"
     SIDECAR_CONTAINER = "fluent-bit-sidecar"
+    SIDECAR_PORT = 24224
     SCHEDULE = "* * * * *"
 
     # Wait until at least this many Jobs from the CronJob exist before
@@ -278,8 +280,19 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
     def _build_cronjob_body(self) -> dict:
         # Realistic primary container: simulates an audit-log archive step.
         primary_cmd = (
+            "set -eu\n"
             "echo \"[$(date -u '+%FT%TZ')] archiver: starting audit log archive\"\n"
             "echo \"[$(date -u '+%FT%TZ')] archiver: bundling /var/log/audit\"\n"
+            "attempt=0\n"
+            f"until printf 'audit-archive-ready\\n' | nc -w 2 127.0.0.1 {self.SIDECAR_PORT} >/dev/null; do\n"
+            "  attempt=$((attempt + 1))\n"
+            '  if [ "$attempt" -ge 10 ]; then\n'
+            '    echo "archiver: log forwarding unavailable" >&2\n'
+            "    exit 1\n"
+            "  fi\n"
+            "  sleep 1\n"
+            "done\n"
+            "echo \"[$(date -u '+%FT%TZ')] archiver: audit record forwarded\"\n"
             "sleep 1\n"
             "echo \"[$(date -u '+%FT%TZ')] archiver: upload complete (0 bytes archived)\"\n"
         )
@@ -293,9 +306,9 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
         # visible `while`/`sleep` loop; an agent reading the manifest sees a
         # network service, not a shell loop.)
         sidecar_cmd = (
-            "echo \"[$(date -u '+%FT%TZ')] fluent-bit: binding to forward port 24224\"\n"
+            f"echo \"[$(date -u '+%FT%TZ')] fluent-bit: binding to forward port {self.SIDECAR_PORT}\"\n"
             "echo \"[$(date -u '+%FT%TZ')] fluent-bit: ready to receive log streams\"\n"
-            "exec nc -lk -p 24224 -e cat\n"
+            f"exec nc -lk -p {self.SIDECAR_PORT} -e cat\n"
         )
 
         return {
@@ -340,6 +353,18 @@ class CronJobSidecarBlocksCompletionHotelReservation(Problem):
                                         "name": self.SIDECAR_CONTAINER,
                                         "image": "busybox:1.36",
                                         "command": ["sh", "-c", sidecar_cmd],
+                                        "ports": [
+                                            {
+                                                "name": "forward",
+                                                "containerPort": self.SIDECAR_PORT,
+                                                "protocol": "TCP",
+                                            }
+                                        ],
+                                        "startupProbe": {
+                                            "tcpSocket": {"port": self.SIDECAR_PORT},
+                                            "periodSeconds": 1,
+                                            "failureThreshold": 30,
+                                        },
                                         "resources": {
                                             "requests": {"cpu": "10m", "memory": "16Mi"},
                                             "limits": {"cpu": "50m", "memory": "32Mi"},

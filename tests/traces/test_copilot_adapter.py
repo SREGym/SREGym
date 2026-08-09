@@ -15,8 +15,8 @@ Fixtures are synthetic (built from Harbor's documented event shapes) until a rea
 import json
 from pathlib import Path
 
-from sregym.traces.adapters import copilot
-from sregym.traces.atif import Trajectory
+from atif_converter import Trajectory
+from atif_converter.adapters import copilot
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FLAT = FIXTURES / "copilot_run_flat"
@@ -25,7 +25,7 @@ REAL = FIXTURES / "copilot_run_real"
 
 
 def _convert(fixture: Path) -> Trajectory:
-    return copilot.to_atif(fixture, sregym_meta={"problem_id": "p", "run": 1})
+    return copilot.convert_file(fixture / "copilot-cli.jsonl")
 
 
 # --------------------------------------------------------------------------- #
@@ -128,8 +128,7 @@ def test_real_run_roundtrips():
 
 
 # --------------------------------------------------------------------------- #
-# extra.sregym injection
+# Standalone metadata boundary
 # --------------------------------------------------------------------------- #
-def test_sregym_meta_injected():
-    t = _convert(FLAT)
-    assert t.extra["sregym"] == {"problem_id": "p", "run": 1}
+def test_standalone_conversion_has_no_sregym_metadata():
+    assert _convert(FLAT).extra is None

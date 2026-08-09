@@ -41,9 +41,10 @@ class KubeCtl:
         """Return a list of all namespaces in the cluster."""
         return self.core_v1_api.list_namespace()
 
-    def list_pods(self, namespace):
+    def list_pods(self, namespace, timeout: float | None = None):
         """Return a list of all pods within a specified namespace."""
-        return self.core_v1_api.list_namespaced_pod(namespace)
+        kwargs = {"_request_timeout": timeout} if timeout is not None else {}
+        return self.core_v1_api.list_namespaced_pod(namespace, **kwargs)
 
     def list_services(self, namespace):
         """Return a list of all services within a specified namespace."""
@@ -71,9 +72,10 @@ class KubeCtl:
         result = self.exec_command(cmd)
         return result
 
-    def list_deployments(self, namespace):
+    def list_deployments(self, namespace, timeout: float | None = None):
         """Return a list of all deployments within a specified namespace."""
-        return self.apps_v1_api.list_namespaced_deployment(namespace)
+        kwargs = {"_request_timeout": timeout} if timeout is not None else {}
+        return self.apps_v1_api.list_namespaced_deployment(namespace, **kwargs)
 
     def get_cluster_ip(self, service_name, namespace):
         """Retrieve the cluster IP address of a specified service within a namespace."""
@@ -721,10 +723,29 @@ class KubeCtl:
             logger.error("Command failed (exit %d): %s\n  stderr: %s", e.returncode, command, stderr.strip())
             return stderr
 
-        # if out.stderr:
-        #     return out.stderr.decode("utf-8")
-        # else:
-        #     return out.stdout.decode("utf-8")
+    def exec_command_checked(self, command: str, input_data=None, timeout: float | None = None):
+        """Execute kubectl and raise when the command exits unsuccessfully."""
+        if input_data is not None:
+            input_data = input_data.encode("utf-8")
+
+        try:
+            out = subprocess.run(
+                command,
+                shell=True,
+                check=True,
+                capture_output=True,
+                input=input_data,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            logger.error("Command timed out after %ss: %s", timeout, command)
+            raise RuntimeError(f"Command timed out after {timeout}s: {command}") from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.decode("utf-8", errors="replace").strip()
+            logger.error("Command failed (exit %d): %s\n  stderr: %s", exc.returncode, command, stderr)
+            raise RuntimeError(f"Command failed (exit {exc.returncode}): {command}: {stderr}") from exc
+
+        return out.stdout.decode("utf-8")
 
     def get_node_architectures(self):
         """Return a set of CPU architectures from all nodes in the cluster."""

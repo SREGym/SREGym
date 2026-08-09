@@ -45,8 +45,10 @@ from pathlib import Path
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
-from sregym.conductor.oracles.deployment_readiness import DeploymentReadinessOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
+from sregym.conductor.oracles.mutating_webhook_resource_limits_mitigation import (
+    MutatingWebhookResourceLimitsMitigationOracle,
+)
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.social_network import SocialNetwork
 from sregym.service.kubectl import KubeCtl
@@ -191,7 +193,7 @@ class MutatingWebhookResourceLimits(Problem):
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.app.create_workload()
-        self.mitigation_oracle = DeploymentReadinessOracle(problem=self)
+        self.mitigation_oracle = MutatingWebhookResourceLimitsMitigationOracle(problem=self)
 
     def _run(self, args, **kwargs):
         return subprocess.run(args, check=True, text=True, **kwargs)
