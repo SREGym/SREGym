@@ -104,6 +104,38 @@ def submit(solution: str) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# MCP wiring
+# --------------------------------------------------------------------------- #
+def build_mcp_env() -> dict[str, str]:
+    """Point OpenSRE at SREGym's MCP server for this run.
+
+    SREGym exposes its agent tooling over MCP (SSE transport) on a port-forwarded
+    local port — ``/kubectl`` executes kubectl commands through the same filtered
+    Kubernetes proxy other agents use, so it covers investigation (get/describe/
+    logs) and repair (apply/patch/delete) alike.
+
+    OpenSRE has no generic "MCP server" integration, but its OpenClaw integration
+    is a generic MCP client: it lists the connected server's tools and invokes
+    them by name, and those tools are registered on the ``investigation`` surface.
+    Configuring it by environment variable keeps this per-run and leaves the
+    user's persistent OpenSRE configuration untouched.
+
+    Returns an empty dict when disabled via ``OPENSRE_USE_MCP=0``.
+    """
+    if os.getenv("OPENSRE_USE_MCP", "1") != "1":
+        logger.info("MCP wiring disabled (OPENSRE_USE_MCP=0)")
+        return {}
+
+    port = os.getenv("MCP_SERVER_PORT", "9954")
+    url = os.getenv("OPENSRE_MCP_URL", f"http://127.0.0.1:{port}/kubectl/sse")
+    logger.info(f"Wiring OpenSRE to SREGym MCP endpoint: {url}")
+    return {
+        "OPENCLAW_MCP_MODE": "sse",
+        "OPENCLAW_MCP_URL": url,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Prompt / incident construction
 # --------------------------------------------------------------------------- #
 def _namespace_block(app_info: dict) -> str:
@@ -114,14 +146,72 @@ def _namespace_block(app_info: dict) -> str:
 
 
 def build_incident(app_info: dict) -> str:
-    """The alert message handed to OpenSRE for diagnosis."""
+    """The alert message handed to OpenSRE for diagnosis.
+
+    When MCP is wired up the agent has live kubectl tooling available, so the
+    alert tells it to use those tools rather than asking an operator to run
+    commands and report back.
+    """
     app_name = app_info.get("app_name", "unknown")
     descriptions = app_info.get("descriptions", "")
+    primary_namespace = (app_info.get("namespaces") or [app_info.get("namespace", "default")])[0]
+    tools_hint = (
+        "\n\nYou have a live kubectl tool available over your OpenClaw MCP "
+        "integration, named exec_kubectl_cmd_safely (arg: cmd, a full kubectl "
+        "command string). Do NOT just list or discover tools — call "
+        "exec_kubectl_cmd_safely directly, starting with "
+        f"'kubectl get pods -n {primary_namespace}', "
+        "then follow up with 'kubectl describe pod/deploy/svc ...', "
+        "'kubectl get events -n ...', and 'kubectl logs ...' on whatever looks "
+        "unhealthy, until you can name the specific faulty Kubernetes object — "
+        "not just the namespace. Investigate directly; do not ask the operator "
+        "to run commands for you or recommend commands without running them."
+        if os.getenv("OPENSRE_USE_MCP", "1") == "1"
+        else ""
+    )
     return (
         f"A fault has been injected into the Kubernetes application '{app_name}' "
         f"running in {_namespace_block(app_info)}. Investigate the live cluster and "
-        f"its observability data to determine the root cause of the failure.\n\n"
+        f"its observability data to determine the root cause of the failure."
+        f"{tools_hint}\n\n"
         f"{descriptions}"
+    )
+
+
+def build_mitigation_incident(app_info: dict, diagnosis_text: str) -> str:
+    """The alert message handed to OpenSRE for a native (MCP-driven) mitigation pass.
+
+    Reuses OpenSRE's own investigate loop — the same one that successfully calls
+    exec_kubectl_cmd_safely for diagnosis — but hands it the already-known root
+    cause and instructs it to apply the fix itself instead of just reporting on
+    it. Only used when OPENSRE_EXECUTOR=opensre.
+    """
+    app_name = app_info.get("app_name", "unknown")
+    primary_namespace = (app_info.get("namespaces") or [app_info.get("namespace", "default")])[0]
+    return (
+        f"A fault was diagnosed in the Kubernetes application '{app_name}' "
+        f"running in {_namespace_block(app_info)}. The root cause is ALREADY "
+        f"KNOWN — do not re-investigate or re-diagnose it:\n\n{diagnosis_text}\n\n"
+        "YOUR ONLY JOB NOW is to fix this live cluster issue. You have a "
+        "kubectl tool over your OpenClaw MCP integration, named "
+        "exec_kubectl_cmd_safely (arg: cmd, a full kubectl command string). "
+        "Follow these steps in order, in this same turn:\n"
+        "1. If you need the exact port/selector/image for a missing or broken "
+        f"object, call exec_kubectl_cmd_safely once with a read command (e.g. "
+        f"'kubectl get svc,deploy -n {primary_namespace} -o yaml') to look at a "
+        "similar/sibling object as a template. Do this at most once.\n"
+        "2. Immediately call exec_kubectl_cmd_safely again with a MUTATING "
+        "kubectl command that applies the fix (kubectl expose / apply / "
+        "create / patch / rollout restart / scale / delete), "
+        f"scoped to namespace {primary_namespace}. This call is mandatory — "
+        "you must make it before writing any final report.\n"
+        "3. Call exec_kubectl_cmd_safely one more time with a read command "
+        "(kubectl get pods / get svc / get endpoints) to confirm the fix "
+        "worked.\n"
+        "Do NOT conclude with 'unable to determine root cause' or any other "
+        "report that skips step 2 — the root cause is given above, your task "
+        "is to act on it, not diagnose it. Work autonomously; do not ask the "
+        "operator to run anything for you."
     )
 
 
@@ -202,7 +292,7 @@ def main() -> None:
     parser.add_argument(
         "--executor",
         default=os.getenv("OPENSRE_EXECUTOR", "claudecode"),
-        help=f"Mitigation executor: {', '.join(sorted(EXECUTORS))}",
+        help=f"Mitigation executor: opensre (native MCP kubectl), {', '.join(sorted(EXECUTORS))}",
     )
     parser.add_argument(
         "--diagnosis-only",
@@ -230,7 +320,11 @@ def main() -> None:
     incident = build_incident(app_info)
 
     planner = OpenSREAgent(logs_dir=logs_dir / "planner", model_name=args.model)
-    result = planner.investigate(incident, title=f"SREGym incident: {app_info.get('app_name', 'app')}")
+    result = planner.investigate(
+        incident,
+        title=f"SREGym incident: {app_info.get('app_name', 'app')}",
+        extra_env=build_mcp_env(),
+    )
     diagnosis = planner.diagnosis_text(result)
     logger.info(f"OpenSRE diagnosis:\n{diagnosis}")
     submit(diagnosis)
@@ -240,6 +334,17 @@ def main() -> None:
     if args.diagnosis_only:
         logger.info("diagnosis-only mode: submitting empty mitigation (expected to fail the oracle)")
         submit("")
+    elif args.executor == "opensre":
+        logger.info("Using OpenSRE itself (native MCP kubectl) as the mitigation executor...")
+        mitigation_planner = OpenSREAgent(logs_dir=logs_dir / "planner_mitigation", model_name=args.model)
+        mitigation_incident = build_mitigation_incident(app_info, planner.remediation_plan(result))
+        mitigation_result = mitigation_planner.investigate(
+            mitigation_incident,
+            title=f"SREGym mitigation: {app_info.get('app_name', 'app')}",
+            extra_env=build_mcp_env(),
+        )
+        logger.info(f"OpenSRE mitigation report:\n{mitigation_planner.diagnosis_text(mitigation_result)}")
+        submit("")  # driver owns submission; triggers the live-cluster oracle
     else:
         executor = load_executor(args.executor, logs_dir, args.model)
         instruction = build_executor_instruction(app_info, planner.remediation_plan(result))

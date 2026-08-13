@@ -10,8 +10,12 @@ MITIGATION  executor applies OpenSRE's plan via kubectl  ──►  submit ""  (
 
 OpenSRE is **never modified**. It is invoked only as the installed `opensre`
 CLI on `PATH` — this client never imports from or edits the OpenSRE source tree.
-The mitigation executor exists because OpenSRE's own Kubernetes integration is
-read-only; it diagnoses but cannot change the cluster.
+OpenSRE's own Kubernetes integration is read-only, so by default mitigation is
+handed to a separate coding-agent executor. Set `OPENSRE_EXECUTOR=opensre` to
+instead have OpenSRE mitigate itself, over the MCP kubectl tool wired up by
+`build_mcp_env()` (see below) — requires the `openclaw` integration to be
+configured (`opensre integrations list` should show it active) and a recent
+OpenSRE build (older builds shipped without the `openclaw` tool module).
 
 ## Prerequisites
 
@@ -41,13 +45,16 @@ OPENSRE_DIAGNOSIS_ONLY=1 python -m clients.opensre.driver --problem-id <id>
 
 # swap the executor:
 OPENSRE_EXECUTOR=codex python -m clients.opensre.driver --problem-id <id>
+
+# have OpenSRE mitigate itself, over MCP, instead of a coding-agent executor:
+OPENSRE_EXECUTOR=opensre python -m clients.opensre.driver --problem-id <id>
 ```
 
 ## Config (env)
 
 | Var | Default | Meaning |
 | --- | --- | --- |
-| `OPENSRE_EXECUTOR` | `claudecode` | mitigation executor: `claudecode`, `codex`, `opencode`, `geminicli`, `copilot` |
+| `OPENSRE_EXECUTOR` | `claudecode` | mitigation executor: `opensre` (native MCP kubectl), `claudecode`, `codex`, `opencode`, `geminicli`, `copilot` |
 | `OPENSRE_DIAGNOSIS_ONLY` | unset | `1` skips mitigation (submit empty) |
 | `AGENT_MODEL_ID` | `claude-sonnet-4-5` | model for the executor |
 | `AGENT_LOGS_DIR` | `./logs/opensre` | logs directory |

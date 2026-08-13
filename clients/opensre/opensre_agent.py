@@ -13,6 +13,7 @@ out to the ``claude`` binary.
 
 import json
 import logging
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -80,8 +81,17 @@ class OpenSREAgent:
     def output_path(self) -> Path:
         return self.logs_dir / self._OUTPUT_FILENAME
 
-    def investigate(self, incident: str, title: str = "SREGym incident") -> dict[str, Any]:
+    def investigate(
+        self,
+        incident: str,
+        title: str = "SREGym incident",
+        extra_env: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         """Run ``opensre investigate`` against a generic alert built from ``incident``.
+
+        ``extra_env`` is merged into the subprocess environment only — it lets the
+        caller point OpenSRE at SREGym's MCP endpoints for this run without
+        mutating the user's persistent OpenSRE configuration.
 
         Returns the parsed report dict (empty dict on failure).
         """
@@ -102,12 +112,18 @@ class OpenSREAgent:
         ]
         logger.info(f"Running OpenSRE: {' '.join(command)}")
 
+        env = os.environ.copy()
+        if extra_env:
+            env.update(extra_env)
+            logger.info(f"OpenSRE extra env: {sorted(extra_env)}")
+
         try:
             proc = subprocess.run(
                 command,
                 capture_output=True,
                 text=True,
                 timeout=self.timeout,
+                env=env,
             )
         except subprocess.TimeoutExpired:
             logger.error(f"OpenSRE investigation timed out after {self.timeout}s")
