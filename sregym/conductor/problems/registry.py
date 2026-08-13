@@ -83,6 +83,7 @@ from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodC
 from sregym.conductor.problems.postgres_lock_contention_product_catalog import PostgresLockContentionProductCatalog
 from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
 from sregym.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
+from sregym.conductor.problems.product_catalog_missing_index import ProductCatalogMissingIndexAstronomyShop
 from sregym.conductor.problems.psa_restricted_blocks_recreation import PSARestrictedBlocksRecreation
 from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
@@ -97,6 +98,7 @@ from sregym.conductor.problems.secret_rotation_stale_env_credentials import (
 )
 from sregym.conductor.problems.service_dns_resolution_failure import ServiceDNSResolutionFailure
 from sregym.conductor.problems.service_port_conflict import ServicePortConflict
+from sregym.conductor.problems.overlay_mtu_mismatch import OverlayMtuMismatch
 from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation import (
     ServiceWrongPodSelectionHotelReservation,
 )
@@ -142,6 +144,7 @@ class ProblemRegistry:
             "edge_request_filter_cpu_saturation": EdgeRequestFilterCPUSaturation,
             "ephemeral_port_range_hotel_reservation": EphemeralPortRangeHotelReservation,
             "secret_rotation_stale_env_credentials_astronomy_shop": SecretRotationStaleEnvCredentialsAstronomyShop,
+            "product_catalog_missing_index_astronomy_shop": ProductCatalogMissingIndexAstronomyShop,
             # # ==================== VIRTUALIZATION FAULT INJECTOR ====================
             # --- METASTABLE FAILURES ---
             # "cache_flush_capacity_degradation": CacheFlushCapacityDegradation,  # module not yet implemented
@@ -201,6 +204,7 @@ class ProblemRegistry:
             "sidecar_port_conflict_social_network": lambda: SidecarPortConflict(app_name="social_network", faulty_service="user-service"),
             "service_port_conflict_astronomy_shop": lambda: ServicePortConflict(app_name="astronomy_shop", faulty_service="ad"),
             "service_port_conflict_hotel_reservation": lambda: ServicePortConflict(app_name="hotel_reservation", faulty_service="recommendation"),
+            "overlay_mtu_mismatch_astronomy_shop": lambda: OverlayMtuMismatch(faulty_service="frontend-proxy"),
             "service_port_conflict_social_network": lambda: ServicePortConflict(app_name="social_network", faulty_service="media-service"),
             "stale_coredns_config_astronomy_shop": lambda: StaleCoreDNSConfig(app_name="astronomy_shop"),
             "stale_coredns_config_social_network": lambda: StaleCoreDNSConfig(app_name="social_network"),
