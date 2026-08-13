@@ -3,9 +3,9 @@
 import json
 from pathlib import Path
 
+from atif_converter import Trajectory
+from atif_converter.adapters import opencode
 from sregym.traces import convert
-from sregym.traces.adapters import opencode
-from sregym.traces.atif import Trajectory
 
 
 def _canonical_run_dir(tmp_path: Path) -> Path:
@@ -38,6 +38,11 @@ def _write_session(
     path = sessions_dir / f"session-{session_id}.json"
     path.write_text(json.dumps(session))
     return path
+
+
+def _session_file(run_dir: Path) -> Path:
+    candidates = sorted((run_dir / "sessions").rglob("session-*.json"))
+    return candidates[0] if candidates else run_dir / "sessions" / "session-missing.json"
 
 
 def _user_msg(text: str, ts: int = 1700000000000) -> dict:
@@ -76,13 +81,13 @@ def _finish_part(cost: float = 0.01, input_tok: int = 100, output_tok: int = 50)
 def test_no_sessions_dir_returns_none(tmp_path):
     run_dir = _canonical_run_dir(tmp_path)
     run_dir.mkdir(parents=True)
-    assert opencode.to_atif(run_dir) is None
+    assert opencode.convert_file(_session_file(run_dir)) is None
 
 
 def test_empty_sessions_dir_returns_none(tmp_path):
     run_dir = _canonical_run_dir(tmp_path)
     (run_dir / "sessions").mkdir(parents=True)
-    assert opencode.to_atif(run_dir) is None
+    assert opencode.convert_file(_session_file(run_dir)) is None
 
 
 def test_malformed_session_json_returns_none(tmp_path):
@@ -90,13 +95,13 @@ def test_malformed_session_json_returns_none(tmp_path):
     sessions_dir = run_dir / "sessions" / "2026" / "06" / "30"
     sessions_dir.mkdir(parents=True)
     (sessions_dir / "session-bad.json").write_text("not json at all")
-    assert opencode.to_atif(run_dir) is None
+    assert opencode.convert_file(_session_file(run_dir)) is None
 
 
 def test_no_messages_returns_none(tmp_path):
     run_dir = _canonical_run_dir(tmp_path)
     _write_session(run_dir, messages=[])
-    assert opencode.to_atif(run_dir) is None
+    assert opencode.convert_file(_session_file(run_dir)) is None
 
 
 def test_unknown_part_types_skipped(tmp_path):
@@ -113,7 +118,7 @@ def test_unknown_part_types_skipped(tmp_path):
             ),
         ],
     )
-    traj = opencode.to_atif(run_dir)
+    traj = opencode.convert_file(_session_file(run_dir))
     assert isinstance(traj, Trajectory)
     assert len(traj.steps) == 1
     assert traj.steps[0].message == "Hello"
@@ -129,7 +134,7 @@ def test_text_only_turn(tmp_path):
         tokens={"input": 100, "output": 50},
         cost=0.015,
     )
-    traj = opencode.to_atif(run_dir)
+    traj = opencode.convert_file(_session_file(run_dir))
     assert isinstance(traj, Trajectory)
     assert traj.steps[0].message == "Hello."
     assert traj.steps[0].metrics.prompt_tokens == 100
@@ -150,7 +155,7 @@ def test_tool_call_turn(tmp_path):
             ),
         ],
     )
-    traj = opencode.to_atif(run_dir)
+    traj = opencode.convert_file(_session_file(run_dir))
     assert isinstance(traj, Trajectory)
     step = traj.steps[0]
     assert step.tool_calls[0].function_name == "write"
@@ -165,7 +170,7 @@ def test_reasoning_content_captured(tmp_path):
             _assistant_msg([_reasoning_part("Plan first."), _text_part("On it."), _finish_part()]),
         ],
     )
-    traj = opencode.to_atif(run_dir)
+    traj = opencode.convert_file(_session_file(run_dir))
     assert traj.steps[0].reasoning_content == "Plan first."
 
 
@@ -178,7 +183,7 @@ def test_user_step_from_user_message(tmp_path):
             _assistant_msg([_text_part("Done."), _finish_part()]),
         ],
     )
-    traj = opencode.to_atif(run_dir)
+    traj = opencode.convert_file(_session_file(run_dir))
     assert traj.steps[0].source == "user"
     assert traj.steps[0].message == "Fix the bug."
     assert traj.steps[1].source == "agent"
@@ -229,7 +234,7 @@ def test_final_metrics_from_info_tokens(tmp_path):
         tokens={"input": 500, "output": 50, "reasoning": 5, "cache": {"read": 200, "write": 10}},
         cost=0.02,
     )
-    traj = opencode.to_atif(run_dir)
+    traj = opencode.convert_file(_session_file(run_dir))
     fm = traj.final_metrics
     assert fm.total_prompt_tokens == 700  # input + cache_read
     assert fm.total_completion_tokens == 50
@@ -254,6 +259,6 @@ def test_round_trip_through_model_validate(tmp_path):
             ),
         ],
     )
-    traj = opencode.to_atif(run_dir, sregym_meta={"problem_id": "p", "run": 1})
+    traj = opencode.convert_file(_session_file(run_dir))
     assert isinstance(traj, Trajectory)
     Trajectory.model_validate(traj.to_json_dict())

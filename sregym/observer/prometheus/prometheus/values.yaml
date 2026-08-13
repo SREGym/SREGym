@@ -799,27 +799,48 @@ serverFiles:
         - name: app.resources
           rules:
             - alert: ContainerCPUThrottling
-              # Fires when >25% of CPU periods are throttled (container hitting its limit).
+              # Prefer container-level CFS metrics when kubelet exports them,
+              # otherwise fall back to the pod-cgroup series used by cgroup v2.
               expr: |
-                sum by (namespace, pod, container) (
-                  rate(container_cpu_cfs_throttled_periods_total{
-                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
-                    container!=""
-                  }[5m])
-                )
-                /
-                sum by (namespace, pod, container) (
-                  rate(container_cpu_cfs_periods_total{
-                    namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
-                    container!=""
-                  }[5m])
+                (
+                  (
+                    sum by (namespace, pod) (
+                      rate(container_cpu_cfs_throttled_periods_total{
+                        namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
+                        container!=""
+                      }[5m])
+                    )
+                    /
+                    sum by (namespace, pod) (
+                      rate(container_cpu_cfs_periods_total{
+                        namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
+                        container!=""
+                      }[5m])
+                    )
+                  )
+                  or
+                  (
+                    sum by (namespace, pod) (
+                      rate(container_cpu_cfs_throttled_periods_total{
+                        namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
+                        container=""
+                      }[5m])
+                    )
+                    /
+                    sum by (namespace, pod) (
+                      rate(container_cpu_cfs_periods_total{
+                        namespace=~"astronomy-shop|hotel-reservation|social-network|train-ticket",
+                        container=""
+                      }[5m])
+                    )
+                  )
                 ) > 0.25
               for: 2m
               labels:
                 severity: warning
               annotations:
-                summary: "CPU throttling: {{ $labels.pod }}/{{ $labels.container }}"
-                description: "Container {{ $labels.container }} in pod {{ $labels.pod }} ({{ $labels.namespace }}) is being CPU throttled ({{ $value | humanizePercentage }} of periods throttled)."
+                summary: "CPU throttling: {{ $labels.pod }}"
+                description: "Pod {{ $labels.pod }} ({{ $labels.namespace }}) is being CPU throttled ({{ $value | humanizePercentage }} of periods throttled)."
 
         # ---- Golden signal alerts (from OTel spanmetrics) ----
         - name: app.goldensignal
@@ -1167,6 +1188,14 @@ extraScrapeConfigs: |
         target_label: instance
       - target_label: __address__
         replacement: prometheus-prometheus-blackbox-exporter:9115
+
+  - job_name: 'hotel-reservation-application'
+    static_configs:
+      - targets:
+          - search.hotel-reservation:9092
+          - rate.hotel-reservation:9091
+        labels:
+          namespace: hotel-reservation
 
   - job_name: 'blackbox-social-network'
     metrics_path: /probe

@@ -20,7 +20,7 @@ class KafkaPoisonPillHOLBlock(Problem):
         self.kubectl = KubeCtl()
         self.injector = KafkaFaultInjector(namespace=self.namespace)
         self.faulty_service = self.CONSUMER_DEPLOYMENT
-        self.poison_offset = KafkaFaultInjector.SEED_RECORD_COUNT
+        self.poison_offset = KafkaFaultInjector.INITIAL_RECORD_COUNT
 
         self.root_cause = self.build_structured_root_cause(
             component=f"kafka topic/{self.TOPIC}",
@@ -45,8 +45,8 @@ class KafkaPoisonPillHOLBlock(Problem):
             problem=self,
             consumer_group=self.CONSUMER_GROUP,
             topic=self.TOPIC,
+            output_topic=KafkaFaultInjector.OUTPUT_TOPIC,
             consumer_deployment=self.CONSUMER_DEPLOYMENT,
-            archiver_deployment=KafkaFaultInjector.ARCHIVER_DEPLOYMENT,
         )
 
     @mark_fault_injected

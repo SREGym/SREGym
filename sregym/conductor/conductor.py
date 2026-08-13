@@ -220,12 +220,14 @@ class Conductor:
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
 
-        # Snapshot environmental alerts before injecting the fault, so a
-        # mitigation oracle can ignore chronic noise (e.g. ContainerCPUThrottling
-        # from the astronomy-shop Grafana sidecar, SREGym#745) and grade only the
-        # injected fault. Duck-typed so only oracles that support it are affected.
+        # Snapshot the healthy cluster before breaking it. The oracle is built
+        # in Problem.__init__, which runs before deploy_app(), so this is the
+        # first point at which the app actually exists. Also lets a mitigation
+        # oracle ignore chronic pre-existing noise (e.g. ContainerCPUThrottling
+        # from the astronomy-shop Grafana sidecar, SREGym#745) and grade only
+        # the injected fault.
         mitigation_oracle = getattr(problem, "mitigation_oracle", None)
-        if mitigation_oracle is not None and hasattr(mitigation_oracle, "capture_baseline"):
+        if mitigation_oracle is not None:
             try:
                 mitigation_oracle.capture_baseline()
             except Exception:
@@ -767,6 +769,14 @@ class Conductor:
         except Exception as e:
             self.logger.warning(f"Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
 
+        self.logger.info("[FIX] NightlyRebalanceOOM kube-system actor leftover if any")
+        try:
+            from sregym.conductor.problems.nightly_rebalance_oom import NightlyRebalanceOOM
+
+            NightlyRebalanceOOM.cleanup_leftover_actor()
+        except Exception as e:
+            self.logger.warning(f"Could not clean up NightlyRebalanceOOM actor: {e}")
+
         self.logger.info("[FIX] Clock drift leftover if any")
         try:
             injector = RemoteOSFaultInjector()
@@ -864,8 +874,11 @@ class Conductor:
             for ns in app_namespaces:
                 self.jaeger.create_external_name_service(ns)
 
-        problem.app.start_workload()
-        self.logger.info("[ENV] Start workload")
+        if problem.run_default_workload:
+            problem.app.start_workload()
+            self.logger.info("[ENV] Start workload")
+        else:
+            self.logger.info("[ENV] Default application workload disabled for this problem")
 
     def undeploy_app(self):
         """Teardown problem.app and, if no other apps running, OpenEBS/Prometheus."""

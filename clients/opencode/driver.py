@@ -36,15 +36,20 @@ def run_preflight() -> None:
     env = os.environ.copy()
     env["OPENCODE_FAKE_VCS"] = "git"
 
+    command = [
+        "opencode",
+        f"--model={m}",
+        "run",
+        "--format=json",
+        "--thinking",
+    ]
+    reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+    if reasoning_effort:
+        command.extend(["--variant", reasoning_effort])
+    command.append("say ok")
+
     r = subprocess.run(
-        [
-            "opencode",
-            f"--model={m}",
-            "run",
-            "--format=json",
-            "--thinking",
-            "say ok",
-        ],
+        command,
         capture_output=True,
         text=True,
         timeout=60,
