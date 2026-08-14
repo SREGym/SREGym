@@ -40,11 +40,15 @@ class AlertOracle(Oracle):
         self.poll_interval_seconds = poll_interval_seconds
         self.buffer_seconds = buffer_seconds
         self.exclude_alerts = set(exclude_alerts or [])
-        # Alert names already firing before the fault was injected (environmental
-        # noise unrelated to the agent). Populated by ``capture_baseline`` and
-        # ignored during evaluation. ``None`` means no baseline was captured, in
-        # which case no baseline filtering is applied. See SREGym#745.
-        self._baseline_alertnames = None
+        # Alert *instances* (full label sets, not just alertname) already firing
+        # before the fault was injected (environmental noise unrelated to the
+        # agent). Populated by ``capture_baseline`` and ignored during
+        # evaluation. Keying on the full label set (not just alertname) means a
+        # pre-existing alert on one pod/service does not mask a newly firing
+        # alert with the same name on a *different* pod/service. ``None`` means
+        # no baseline was captured, in which case no baseline filtering is
+        # applied. See SREGym#745.
+        self._baseline_instances = None
 
     # ------------------------------------------------------------------
     # Prometheus query helpers
@@ -88,12 +92,27 @@ class AlertOracle(Oracle):
             if alertname in self.exclude_alerts:
                 continue
             # Skip alerts that were already firing before fault injection. They
-            # are environmental noise, not the agent's responsibility. Alerts the
-            # agent newly triggers are absent from the baseline and still caught.
-            if self._baseline_alertnames is not None and alertname in self._baseline_alertnames:
+            # are environmental noise, not the agent's responsibility. Matched by
+            # full label set (not just alertname), so a pre-existing alert on one
+            # pod/service doesn't hide a newly firing alert with the same name on
+            # a different pod/service. Alerts the agent newly triggers are absent
+            # from the baseline and still caught.
+            if self._baseline_instances is not None and self._alert_instance_key(alert) in self._baseline_instances:
                 continue
             firing.append(alert)
         return firing
+
+    @staticmethod
+    def _alert_instance_key(alert: dict) -> tuple:
+        """A hashable key identifying a specific firing alert *instance*.
+
+        Prometheus identifies a firing alert by its full label set, not just
+        ``alertname`` — two alerts with the same name but different ``pod`` or
+        ``service`` labels are different instances. Using the full label set
+        here (rather than just ``alertname``) ensures a pre-existing alert on
+        one pod doesn't mask a newly firing alert with the same name elsewhere.
+        """
+        return tuple(sorted(alert.get("labels", {}).items()))
 
     def capture_baseline(self) -> None:
         """Snapshot alerts already firing in the namespace before fault injection.
@@ -107,16 +126,13 @@ class AlertOracle(Oracle):
         newly triggers are not in this baseline and are still caught.
         """
         namespace = self.problem.namespace
-        # ``_baseline_alertnames`` is still ``None`` here, so this query applies no
+        # ``_baseline_instances`` is still ``None`` here, so this query applies no
         # baseline filtering and returns the true pre-existing firing set.
-        pre_existing = {alert.get("labels", {}).get("alertname") for alert in self._query_firing_alerts(namespace)}
-        pre_existing.discard(None)
-        self._baseline_alertnames = pre_existing
-        if pre_existing:
-            print(
-                f"📋 AlertOracle baseline for {namespace}: ignoring pre-existing alerts "
-                f"[{', '.join(sorted(pre_existing))}]"
-            )
+        pre_existing_alerts = self._query_firing_alerts(namespace)
+        self._baseline_instances = {self._alert_instance_key(alert) for alert in pre_existing_alerts}
+        if pre_existing_alerts:
+            descriptions = ", ".join(self._fmt_alert(alert) for alert in pre_existing_alerts)
+            print(f"📋 AlertOracle baseline for {namespace}: ignoring pre-existing alerts [{descriptions}]")
         else:
             print(f"📋 AlertOracle baseline for {namespace}: no pre-existing alerts")
 
