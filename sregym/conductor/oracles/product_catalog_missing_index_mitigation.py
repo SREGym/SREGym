@@ -1,18 +1,4 @@
 """Mitigation oracle for the product-catalog missing-index fault.
-
-The fault is fixed only when the index behind ``GetProduct`` is restored, which
-flips the query plan from a Sequential Scan back to an Index Scan. Checking the
-plan (rather than latency) makes grading deterministic and machine-independent,
-and it rejects illegitimate "fixes" like scaling replicas, restarting pods, or
-raising memory limits — those all leave the plan a Seq Scan because every
-replica hits the same database.
-
-The deployment check below is an anti-gaming guard (the agent must not "fix" the
-fault by deleting or scaling away the service), *not* the fault signal. It
-deliberately stops at "the deployment exists and is not scaled to zero" rather
-than asserting pod readiness: product-catalog stays healthy both with and without
-the index, so readiness carries no signal, and grading a run on it would just add
-flakiness from unrelated restarts.
 """
 
 import logging
@@ -23,22 +9,24 @@ logger = logging.getLogger(__name__)
 
 
 class ProductCatalogMissingIndexMitigationOracle(Oracle):
-    """Pass only when the GetProduct read uses an Index Scan again."""
+    """Pass only when the index behind GetProduct is back and the plan proves it."""
 
     importance = 1.0
 
     def evaluate(self, *args, **kwargs) -> dict:
-        print("== Mitigation Evaluation ==")
+        print("--- Mitigation Evaluation (product-catalog missing index) ---")
         results = {
             "success": False,
             "deployment_present": False,
+            "index_exists": False,
             "uses_index_scan": False,
+            "row_count": None,
             "plan": None,
             "reason": "",
         }
         problem = self.problem
 
-        # Guard against gaming by deleting/scaling the service away.
+
         try:
             results["deployment_present"] = problem.product_catalog_deployment_present()
         except Exception as exc:  # noqa: BLE001 - report, don't crash the stage
@@ -46,23 +34,34 @@ class ProductCatalogMissingIndexMitigationOracle(Oracle):
             return results
         if not results["deployment_present"]:
             results["reason"] = "product-catalog deployment is missing or scaled to zero"
+            print("Mitigation Result: Fail")
             return results
 
-        # The real check: has the index behind GetProduct been restored?
         try:
+            results["index_exists"] = problem.id_index_exists()
+            results["row_count"] = problem.catalog_row_count()
             plan = problem.explain_getproduct_plan()
         except Exception as exc:  # noqa: BLE001
-            results["reason"] = f"could not EXPLAIN the GetProduct query: {exc}"
+            results["reason"] = f"could not inspect catalog.products: {exc}"
             return results
 
         results["plan"] = plan.strip()
         results["uses_index_scan"] = problem.plan_uses_index_scan(plan)
-        if not results["uses_index_scan"]:
-            results["reason"] = "GetProduct still performs a Seq Scan on catalog.products; index not restored"
+
+        if not results["index_exists"]:
+            results["reason"] = "no index covers catalog.products(id); GetProduct still sequentially scans the table"
+            print("Mitigation Result: Fail")
+            return results
+
+        if results["row_count"] >= problem.PLAN_SIGNIFICANT_ROWS and not results["uses_index_scan"]:
+            results["reason"] = (
+                f"an index on catalog.products(id) exists, but GetProduct still plans a Seq Scan over "
+                f"{results['row_count']} rows"
+            )
             print("Mitigation Result: Fail")
             return results
 
         results["success"] = True
-        results["reason"] = "GetProduct uses an Index Scan on catalog.products; index restored"
+        results["reason"] = "the index on catalog.products(id) is restored and GetProduct no longer sequentially scans"
         print("Mitigation Result: Pass")
         return results
