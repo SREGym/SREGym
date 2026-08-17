@@ -6,6 +6,7 @@ from sregym.conductor.oracles.duplicate_pvc_mounts_mitigation import DuplicatePV
 def _deployment(
     *,
     replicas=1,
+    total=None,
     generation=2,
     observed_generation=2,
     updated=1,
@@ -18,6 +19,7 @@ def _deployment(
         spec=SimpleNamespace(replicas=replicas),
         status=SimpleNamespace(
             observed_generation=observed_generation,
+            replicas=replicas if total is None else total,
             updated_replicas=updated,
             ready_replicas=ready,
             available_replicas=available,
@@ -33,47 +35,46 @@ def _replica_set(name, replicas):
     )
 
 
-def _pod(name, replica_set, *, deleting=False):
+def _pod(
+    name,
+    replica_set,
+    *,
+    deleting=False,
+    phase="Running",
+    ready=True,
+    pod_ip="10.244.0.10",
+):
     return SimpleNamespace(
         metadata=SimpleNamespace(
             name=name,
             deletion_timestamp="now" if deleting else None,
             owner_references=[SimpleNamespace(kind="ReplicaSet", name=replica_set)],
-        )
+        ),
+        status=SimpleNamespace(
+            phase=phase,
+            container_statuses=[SimpleNamespace(ready=ready)],
+            pod_ip=pod_ip,
+        ),
     )
-
-
-def _endpoint(pod_name):
-    return SimpleNamespace(target_ref=SimpleNamespace(kind="Pod", name=pod_name))
 
 
 class _CoreV1:
     def __init__(
         self,
         *,
-        endpoint_pods=None,
-        query_port=True,
         check_phase="Succeeded",
         check_logs="SERVICE_OK\n",
     ):
-        endpoint_pods = ["jaeger-current"] if endpoint_pods is None else endpoint_pods
-        self.endpoints = SimpleNamespace(
-            subsets=[SimpleNamespace(addresses=[_endpoint(name) for name in endpoint_pods])]
-        )
-        self.query_port = query_port
         self.check_phase = check_phase
         self.check_logs = check_logs
         self.created_pods = []
         self.deleted_pods = []
 
     def read_namespaced_endpoints(self, name, namespace):
-        return self.endpoints
+        raise AssertionError("ExternalName services do not provide an Endpoints object")
 
     def read_namespaced_service(self, name, namespace):
-        ports = [SimpleNamespace(port=6831, protocol="UDP")]
-        if self.query_port:
-            ports.append(SimpleNamespace(port=16686, protocol="TCP"))
-        return SimpleNamespace(spec=SimpleNamespace(ports=ports))
+        raise AssertionError("The target pod probe must not depend on the ExternalName service")
 
     def create_namespaced_pod(self, namespace, body):
         self.created_pods.append((namespace, body))
@@ -146,7 +147,7 @@ def test_accepts_healthy_single_replica_and_ignores_obsolete_or_unrelated_pods()
     script = check.spec.containers[0].command[-1]
     assert check.metadata.name.startswith("service-content-check-")
     assert not any(word in check.metadata.name for word in ("sregym", "fault", "oracle", "mitigation"))
-    assert "http://jaeger.social-network.svc.cluster.local:16686/api/services" in script
+    assert "http://10.244.0.10:16686/api/services" in script
     assert len(core_v1.deleted_pods) == 1
 
 
@@ -189,10 +190,43 @@ def test_rejects_stale_generation_with_one_old_ready_replica():
     assert core_v1.created_pods == []
 
 
-def test_rejects_endpoint_owned_only_by_an_obsolete_replicaset():
-    core_v1 = _CoreV1(endpoint_pods=["jaeger-old"])
+def test_rejects_old_ready_pod_masking_unready_current_rollout():
+    core_v1 = _CoreV1()
+    deployment = _deployment(
+        replicas=1,
+        total=2,
+        updated=1,
+        ready=1,
+        available=1,
+        unavailable=0,
+    )
+    replica_sets = [
+        _replica_set("jaeger-current-rs", 1),
+        _replica_set("jaeger-old-rs", 1),
+    ]
     pods = [
-        _pod("jaeger-current", "jaeger-current-rs"),
+        _pod("jaeger-current", "jaeger-current-rs", ready=False),
+        _pod("jaeger-old", "jaeger-old-rs"),
+    ]
+
+    assert (
+        _oracle(
+            _KubeCtl(
+                deployment=deployment,
+                replica_sets=replica_sets,
+                pods=pods,
+                core_v1=core_v1,
+            )
+        ).evaluate()["success"]
+        is False
+    )
+    assert core_v1.created_pods == []
+
+
+def test_rejects_ready_pod_owned_only_by_an_obsolete_replicaset():
+    core_v1 = _CoreV1()
+    pods = [
+        _pod("jaeger-current", "jaeger-current-rs", ready=False),
         _pod("jaeger-old", "jaeger-old-rs"),
     ]
 
@@ -210,10 +244,19 @@ def test_rejects_replacement_without_an_active_target_replicaset():
     assert core_v1.created_pods == []
 
 
-def test_rejects_missing_query_port_without_starting_check():
-    core_v1 = _CoreV1(query_port=False)
+def test_rejects_current_pod_without_an_ip_without_starting_check():
+    core_v1 = _CoreV1()
+    pods = [_pod("jaeger-current", "jaeger-current-rs", pod_ip=None)]
 
-    assert _oracle(_KubeCtl(core_v1=core_v1)).evaluate()["success"] is False
+    assert _oracle(_KubeCtl(pods=pods, core_v1=core_v1)).evaluate()["success"] is False
+    assert core_v1.created_pods == []
+
+
+def test_rejects_current_pod_that_is_not_ready_without_starting_check():
+    core_v1 = _CoreV1()
+    pods = [_pod("jaeger-current", "jaeger-current-rs", ready=False)]
+
+    assert _oracle(_KubeCtl(pods=pods, core_v1=core_v1)).evaluate()["success"] is False
     assert core_v1.created_pods == []
 
 

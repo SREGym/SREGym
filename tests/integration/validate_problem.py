@@ -135,6 +135,7 @@ def validate(problem_id: str, inject_timeout: int, recover_timeout: int, poll_in
         conductor.fix_kubernetes()
         conductor.undeploy_app()  # clear any leftovers from a previous run
         conductor.deploy_app()
+        oracle.capture_baseline()
         stages["deploy"].status = PASS
         stages["deploy"].detail = f"`{problem.app.name}` deployed to namespace `{problem.namespace}`"
 
