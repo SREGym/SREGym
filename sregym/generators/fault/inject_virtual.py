@@ -3055,7 +3055,61 @@ class VirtualizationFaultInjector(FaultInjector):
             self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
             print(f"Recovered FD exhaustion for service: {service}")
 
+    # V.14 - stale_hostaliases: pin a backend hostname to a dead address in the pod's own /etc/hosts
+    def inject_stale_hostaliases(
+        self,
+        microservices: list[str],
+        target_host: str,
+        blackhole_ip: str,
+        rollout_timeout: int = 180,
+    ):
+        """Add a `hostAliases` entry so the pod resolves `target_host` locally.
+
+        The kubelet writes `hostAliases` into the container's /etc/hosts, and
+        the libc resolver reads /etc/hosts before it ever queries CoreDNS, so
+        the entry shadows in-cluster DNS for this pod only.
+        """
+        for service in microservices:
+            patch = [
+                {
+                    "op": "add",
+                    "path": "/spec/template/spec/hostAliases",
+                    "value": [{"ip": blackhole_ip, "hostnames": [target_host]}],
+                }
+            ]
+            self.kubectl.apps_v1_api.patch_namespaced_deployment(
+                name=service,
+                namespace=self.namespace,
+                body=patch,
+            )
+            print(f"Pinned {target_host} to {blackhole_ip} in the hosts file of {service}")
+            self._wait_for_rollout(service, rollout_timeout)
+
+    def recover_stale_hostaliases(self, microservices: list[str], rollout_timeout: int = 180):
+        """Drop the `hostAliases` block so the pod falls back to CoreDNS."""
+        for service in microservices:
+            deployment = self.kubectl.get_deployment(service, self.namespace)
+            if not deployment.spec.template.spec.host_aliases:
+                print(f"No hosts override present on {service}; nothing to recover")
+                continue
+
+            patch = [{"op": "remove", "path": "/spec/template/spec/hostAliases"}]
+            self.kubectl.apps_v1_api.patch_namespaced_deployment(
+                name=service,
+                namespace=self.namespace,
+                body=patch,
+            )
+            print(f"Removed the hosts override from {service}")
+            self._wait_for_rollout(service, rollout_timeout)
+
     ############# HELPER FUNCTIONS ################
+    def _wait_for_rollout(self, service: str, timeout: int = 180):
+        """Block until the Deployment's new ReplicaSet is fully rolled out."""
+        result = self.kubectl.exec_command(
+            f"kubectl rollout status deployment {service} -n {self.namespace} --timeout={timeout}s"
+        )
+        print(f"Rollout status for {service}: {result}")
+        return result
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
             command = (
