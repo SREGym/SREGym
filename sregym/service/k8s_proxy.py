@@ -41,7 +41,100 @@ HIDDEN_LABELS: dict[str, set[str]] = {
     "app": {"load-generator", "locust-fetcher"},
     "job": {"workload"},
     "opentelemetry.io/name": {"load-generator"},
+    # Helm stores the full pre-fault manifest of every release object in its
+    # release Secrets (owner=helm); hiding them stops agents from diffing the
+    # live cluster against Helm's stored copy to recover injected faults (#955).
+    "owner": {"helm"},
 }
+
+
+def has_hidden_label(metadata: dict, hidden_labels: dict[str, set[str]]) -> bool:
+    """Return whether a resource's metadata carries any hidden label."""
+    labels = metadata.get("labels") or {}
+    return any(labels.get(key) in values for key, values in hidden_labels.items())
+
+
+def filter_namespace_list(data: dict, hidden_namespaces: set[str]) -> dict:
+    """Filter hidden namespaces from a namespace list response."""
+    if "items" in data:
+        data["items"] = [
+            item for item in data["items"] if item.get("metadata", {}).get("name") not in hidden_namespaces
+        ]
+    # Handle Table format (kubectl's default)
+    if "rows" in data:
+        data["rows"] = [
+            row
+            for row in data["rows"]
+            if row.get("object", {}).get("metadata", {}).get("name") not in hidden_namespaces
+        ]
+    return data
+
+
+def filter_resource_list(data: dict, hidden_namespaces: set[str], hidden_labels: dict[str, set[str]]) -> dict:
+    """Filter resources in hidden namespaces or with hidden labels from list responses."""
+    if "items" in data:
+        data["items"] = [
+            item
+            for item in data["items"]
+            if item.get("metadata", {}).get("namespace") not in hidden_namespaces
+            and not has_hidden_label(item.get("metadata", {}), hidden_labels)
+        ]
+    # Handle Table format (kubectl's default)
+    if "rows" in data:
+        data["rows"] = [
+            row
+            for row in data["rows"]
+            if row.get("object", {}).get("metadata", {}).get("namespace") not in hidden_namespaces
+            and not has_hidden_label(row.get("object", {}).get("metadata", {}), hidden_labels)
+        ]
+    return data
+
+
+def should_filter_response(path: str) -> str | None:
+    """
+    Determine if a response should be filtered and return the filter type.
+    Returns: 'namespaces', 'resources', or None
+    """
+    clean_path = path.split("?", 1)[0].rstrip("/")
+
+    # Namespace list: /api/v1/namespaces
+    if clean_path == "/api/v1/namespaces":
+        return "namespaces"
+
+    parts = [part for part in clean_path.split("/") if part]
+    if "namespaces" in parts:
+        # Namespaced paths: /api/v1/namespaces/{ns}/{resource}[/{name}[/{sub}]]
+        # or /apis/{group}/{version}/namespaces/{ns}/{resource}[/{name}[/{sub}]]
+        # Exactly [ns, resource] after "namespaces" is a list; anything longer
+        # is a single resource or subresource, handled by the direct-access check.
+        tail = parts[parts.index("namespaces") + 1 :]
+        if len(tail) == 2:
+            return "resources"
+        return None
+
+    # Cluster-wide resource listings (not namespaced)
+    # e.g., /api/v1/pods, /api/v1/events, /apis/apps/v1/deployments
+    resource_patterns = [
+        "/api/v1/pods",
+        "/api/v1/services",
+        "/api/v1/events",
+        "/api/v1/configmaps",
+        "/api/v1/secrets",
+        "/api/v1/endpoints",
+        "/api/v1/persistentvolumeclaims",
+        "/apis/apps/v1/deployments",
+        "/apis/apps/v1/replicasets",
+        "/apis/apps/v1/statefulsets",
+        "/apis/apps/v1/daemonsets",
+        "/apis/batch/v1/jobs",
+        "/apis/batch/v1/cronjobs",
+    ]
+    for pattern in resource_patterns:
+        if clean_path.startswith(pattern):
+            return "resources"
+
+    return None
+
 
 # Disable SSL warnings for self-signed certs
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -223,78 +316,22 @@ class KubernetesAPIProxy:
 
             def _filter_namespace_list(self, data: dict) -> dict:
                 """Filter hidden namespaces from namespace list response."""
-                # Handle standard List format
-                if "items" in data:
-                    data["items"] = [
-                        item for item in data["items"] if item.get("metadata", {}).get("name") not in hidden_namespaces
-                    ]
-                # Handle Table format (kubectl's default)
-                if "rows" in data:
-                    data["rows"] = [
-                        row
-                        for row in data["rows"]
-                        if row.get("object", {}).get("metadata", {}).get("name") not in hidden_namespaces
-                    ]
-                return data
+                return filter_namespace_list(data, hidden_namespaces)
 
             def _has_hidden_label(self, metadata: dict) -> bool:
                 """Check if a resource's metadata contains any hidden labels."""
-                labels = metadata.get("labels") or {}
-                return any(labels.get(key) in values for key, values in hidden_labels.items())
+                return has_hidden_label(metadata, hidden_labels)
 
             def _filter_resource_list(self, data: dict) -> dict:
                 """Filter resources in hidden namespaces or with hidden labels from list responses."""
-                # Handle standard List format
-                if "items" in data:
-                    data["items"] = [
-                        item
-                        for item in data["items"]
-                        if item.get("metadata", {}).get("namespace") not in hidden_namespaces
-                        and not self._has_hidden_label(item.get("metadata", {}))
-                    ]
-                # Handle Table format (kubectl's default)
-                if "rows" in data:
-                    data["rows"] = [
-                        row
-                        for row in data["rows"]
-                        if row.get("object", {}).get("metadata", {}).get("namespace") not in hidden_namespaces
-                        and not self._has_hidden_label(row.get("object", {}).get("metadata", {}))
-                    ]
-                return data
+                return filter_resource_list(data, hidden_namespaces, hidden_labels)
 
             def _should_filter_response(self, path: str) -> str | None:
                 """
                 Determine if response should be filtered and return filter type.
                 Returns: 'namespaces', 'resources', or None
                 """
-                # Namespace list: /api/v1/namespaces
-                if path.rstrip("/") == "/api/v1/namespaces" or path.startswith("/api/v1/namespaces?"):
-                    return "namespaces"
-
-                # Cluster-wide resource listings (not namespaced)
-                # e.g., /api/v1/pods, /api/v1/events, /apis/apps/v1/deployments
-                if "/namespaces/" not in path:
-                    # Check if this is a list of namespaced resources
-                    resource_patterns = [
-                        "/api/v1/pods",
-                        "/api/v1/services",
-                        "/api/v1/events",
-                        "/api/v1/configmaps",
-                        "/api/v1/secrets",
-                        "/api/v1/endpoints",
-                        "/api/v1/persistentvolumeclaims",
-                        "/apis/apps/v1/deployments",
-                        "/apis/apps/v1/replicasets",
-                        "/apis/apps/v1/statefulsets",
-                        "/apis/apps/v1/daemonsets",
-                        "/apis/batch/v1/jobs",
-                        "/apis/batch/v1/cronjobs",
-                    ]
-                    for pattern in resource_patterns:
-                        if path.startswith(pattern):
-                            return "resources"
-
-                return None
+                return should_filter_response(path)
 
             def _proxy_request(self, method: str):
                 """Proxy request to upstream API and filter response."""
