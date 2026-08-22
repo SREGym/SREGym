@@ -287,9 +287,15 @@ spec:
             - |
               TOTAL=$(kubectl get pods -n {self.namespace} -l {_RESERVATION_LABEL} --field-selector=status.phase=Running -o name | wc -l)
               HALF=$(( (TOTAL + 1) / 2 ))
-              kubectl get pods -n {self.namespace} -l {_RESERVATION_LABEL} --field-selector=status.phase=Running -o name \\
-                | head -n "$HALF" \\
+              
+              kubectl get pods -n {self.namespace} -l {_RESERVATION_LABEL} --field-selector=status.phase=Running -o name \
+                | head -n "$HALF" \
                 | xargs -r kubectl delete -n {self.namespace} --wait=false
+
+              echo "Simulating downstream reconnect storm..."
+              kubectl run reconnect-storm-$(date +%s) -n {self.namespace} \
+                --image=williamyeh/wrk --rm -i --restart=Never -- \
+                -t4 -c200 -d15s "http://frontend:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=38.0235&lon=-122.0936"
 """
 
     def _remove_churn(self) -> None:

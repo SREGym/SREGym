@@ -374,7 +374,35 @@ class UngracefulTerminationMitigationOracle(Oracle):
             f"(no HTTP 200 from frontend{self.probe_path})"
         )
         return False
+    def _run_active_session_test(self) -> tuple[dict, threading.Thread]:
+        import re
+        result = {"success": True, "errors": 0}
 
+        def run_wrk():
+            cmd = (
+                f"kubectl run oracle-load-test-{int(time.time())} -n {self.namespace} "
+                f"--image=williamyeh/wrk --rm -i --restart=Never -- "
+                f"-t4 -c100 -d25s http://{self.deployment_name}:5000{self.probe_path}"
+            )
+            out = self.kubectl.exec_command(cmd)
+            
+            errors = 0
+            if "Socket errors" in out:
+                match = re.search(r"read (\d+)", out)
+                if match:
+                    errors += int(match.group(1))
+            if "Non-2xx or 3xx responses" in out:
+                match = re.search(r"responses:\s*(\d+)", out)
+                if match:
+                    errors += int(match.group(1))
+            
+            result["errors"] = errors
+            if errors > 0:
+                result["success"] = False
+
+        t = threading.Thread(target=run_wrk, daemon=True)
+        t.start()
+        return result, t
     # ------------------------------------------------------------------
     # Main evaluation
     # ------------------------------------------------------------------
@@ -444,6 +472,11 @@ class UngracefulTerminationMitigationOracle(Oracle):
             print(f"📌 Tracking pod: {old_pod}")
 
             initial_generation = (deployment.get("metadata") or {}).get("generation", 0)
+            
+            print("🌊 Establishing active sessions (load test) before termination...")
+            session_result, session_thread = self._run_active_session_test()
+            time.sleep(5) 
+            
             print("🔄 Triggering test rollout...")
             self._apply_rollout_annotation()
             annotation_applied = True
@@ -480,6 +513,20 @@ class UngracefulTerminationMitigationOracle(Oracle):
                 f"(threshold: {self.min_drain_seconds}s)"
             )
 
+            session_thread.join(timeout=30)
+            
+            print(
+                f"⏱️  Pod termination duration: {duration:.1f}s "
+                f"(threshold: {self.min_drain_seconds}s)"
+            )
+
+            if not session_result["success"]:
+                print(
+                    f"❌ Impact Validation Failed: Detected {session_result['errors']} "
+                    f"dropped active sessions/errors during the pod handoff."
+                )
+                return {"success": False}
+
             if duration < self.min_drain_seconds:
                 print(
                     f"❌ Pod terminated in {duration:.1f}s — drain did not complete "
@@ -487,6 +534,7 @@ class UngracefulTerminationMitigationOracle(Oracle):
                 )
                 return {"success": False}
 
+            print("✅ Zero active sessions dropped during pod handoff.")
             print(
                 f"✅ Pod lived {duration:.1f}s during termination — "
                 "drain completed before SIGKILL"
@@ -515,3 +563,4 @@ class UngracefulTerminationMitigationOracle(Oracle):
                 except Exception as exc:
                     print(f"⚠️  Could not remove rollout annotation: {exc}")
             self._set_churn_suspended(False)
+    
