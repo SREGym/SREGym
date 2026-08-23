@@ -12,6 +12,7 @@ from langchain_litellm import ChatLiteLLM
 from requests.exceptions import HTTPError
 
 from llm_backend.trim_util import trim_messages_conservative
+from llm_backend.usage_log import record_usage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class LiteLLMBackend:
         messages: str | list[SystemMessage | HumanMessage | AIMessage],
         system_prompt: str | None = None,
         tools: list[any] | None = None,
+        usage_type: str = "trace",
     ):
         if isinstance(messages, str):
             if system_prompt is None:
@@ -118,7 +120,14 @@ class LiteLLMBackend:
                     new_prompt_messages, trim_sum = trim_messages_conservative(prompt_messages)
                     logger.info(f"Trimming the {trim_sum}/{len(prompt_messages)} messages")
                     prompt_messages = new_prompt_messages
+                request_start = time.perf_counter()
                 completion = llm.invoke(input=prompt_messages)
+                record_usage(
+                    completion,
+                    model=self.model_name,
+                    usage_type=usage_type,
+                    duration_seconds=time.perf_counter() - request_start,
+                )
                 return completion
             except openai.BadRequestError as e:
                 logger.error(f"Bad request error - request is malformed: {e}")
