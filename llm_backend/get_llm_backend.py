@@ -30,10 +30,12 @@ class LiteLLMBackend:
         top_p: float = 0.95,
         temperature: float = 0.0,
         max_tokens: int | None = None,
+        provider: str | None = None,
     ):
         self.model_name = model_name
         self.api_key = api_key
         self.api_base = api_base
+        self.provider = provider
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
@@ -93,6 +95,8 @@ class LiteLLMBackend:
             model_config["api_key"] = self.api_key
         if self.api_base is not None:
             model_config["api_base"] = self.api_base
+        if self.provider is not None:
+            model_config["custom_llm_provider"] = self.provider
         if self.max_tokens is not None:
             model_config["max_tokens"] = self.max_tokens
 
