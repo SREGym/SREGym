@@ -117,7 +117,7 @@ If you do not have enough data to determine root cause, state 'Insufficient data
         HumanMessage(content=metrics.content[0].text),
     ]
 
-    metrics_summary = llm.inference(messages=messages)
+    metrics_summary = llm.inference(messages=messages, usage_type="tool")
     # metrics_summary = llm.inference(messages=metrics.content[0].text, system_prompt=system_prompt)
     logger.info(f"Metrics summary: {metrics_summary}")
     return metrics_summary
