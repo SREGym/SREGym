@@ -22,6 +22,7 @@ import requests  # noqa: E402
 import yaml  # noqa: E402
 from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 
+from llm_backend.usage_log import USAGE_LOG_PATH_ENV, summarize_usage  # noqa: E402
 from logger import init_logger  # noqa: E402
 
 init_logger()
@@ -723,6 +724,14 @@ async def main():
     current_problem = resolve_problem_id()
     logger.info(f"Problem ID (harness): {current_problem}")
 
+    agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
+    if agent_logs_dir:
+        problem_dir = Path(agent_logs_dir)
+    else:
+        project_root = Path(__file__).resolve().parents[4]
+        problem_dir = project_root / "results" / timestamp / current_problem
+    os.environ[USAGE_LOG_PATH_ENV] = str(problem_dir / "stratus_usage.jsonl")
+
     # logger.info("*" * 25 + f" Testing {current_problem} ! " + "*" * 25)
     # logger.info("*" * 25 + f" Testing {current_problem} ! " + "*" * 25)
     # logger.info("*" * 25 + f" Testing {current_problem} ! " + "*" * 25)
@@ -856,14 +865,28 @@ async def main():
     agent_output_df["rollback_stack"] = agent_rollback_stack
     agent_output_df["oracle_results"] = agent_oracle_results
 
-    agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
-    if agent_logs_dir:
-        problem_dir = Path(agent_logs_dir)
-    else:
-        project_root = Path(__file__).resolve().parents[4]
-        problem_dir = project_root / "results" / timestamp / current_problem
-
     problem_dir.mkdir(parents=True, exist_ok=True)
+
+    # The callback-backed rows already include trace and nested tool calls. Only
+    # detached summary calls must be added to avoid counting other calls twice.
+    summary_usage = summarize_usage(Path(os.environ[USAGE_LOG_PATH_ENV]), usage_type="summary")
+    if summary_usage["requests"]:
+        summary_row = pd.DataFrame(
+            [
+                {
+                    "agent_name": "run_summary",
+                    "input_tokens": summary_usage["input_tokens"],
+                    "output_tokens": summary_usage["output_tokens"],
+                    "total_tokens": summary_usage["total_tokens"],
+                    "time": str(summary_usage["duration_seconds"]),
+                    "steps": summary_usage["requests"],
+                    "num_retry_attempts": "N/A",
+                    "rollback_stack": "N/A",
+                    "oracle_results": "N/A",
+                }
+            ]
+        )
+        agent_output_df = pd.concat([agent_output_df, summary_row], ignore_index=True)
 
     csv_path = problem_dir / f"{current_problem}_stratus_output.csv"
     agent_output_df.to_csv(csv_path, index=False, header=True)
