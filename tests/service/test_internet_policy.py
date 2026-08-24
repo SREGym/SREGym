@@ -166,6 +166,31 @@ def test_filtered_runner_rewrites_loopback_kubeconfig(tmp_path):
         runner.cleanup_credential_tmps()
 
 
+def test_filtered_runner_does_not_mount_unproxied_kubeconfig(tmp_path, monkeypatch):
+    source = tmp_path / "config"
+    source.write_text("apiVersion: v1\nkind: Config\n")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    runner = ContainerRunner(
+        ContainerConfig(
+            internet_policy=InternetPolicy.from_mode("filtered"),
+            kubeconfig_path=source,
+        )
+    )
+    runner._egress_network_name = "private-network"
+    runner._egress_proxy_ca = tmp_path / "proxy-ca.pem"
+    runner._egress_ca_bundle = tmp_path / "ca-bundle.pem"
+    runner._egress_proxy_ca.touch()
+    runner._egress_ca_bundle.touch()
+
+    try:
+        args = runner._build_base_docker_args()
+        assert "/root/.kube/config:ro" in " ".join(args)
+        assert "/root/.kube/real-config:ro" not in " ".join(args)
+        assert "SREGYM_REAL_KUBECONFIG" not in args
+    finally:
+        runner.cleanup_credential_tmps()
+
+
 def test_filtered_mode_disables_claude_web_search(monkeypatch):
     monkeypatch.setenv("AGENT_INTERNET_ACCESS", "filtered")
     assert "WebFetch" in ClaudeCodeAgent.allowed_tools()
