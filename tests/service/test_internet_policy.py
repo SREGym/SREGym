@@ -21,19 +21,21 @@ from sregym.service.internet_policy import InternetPolicy, blocked_github_owner
 
 
 @pytest.mark.parametrize(
-    ("host", "target", "body"),
+    ("host", "target", "body", "expected"),
     [
-        ("github.com", "/SREGym/SREGym", None),
-        ("github.com", "/orgs/sregym/repositories", None),
-        ("github.com", "/search?q=org%253ASREGym", None),
-        ("api.github.com", "/repos/SREGym/SREGym", None),
-        ("api.github.com", "/graphql", b'{"variables":{"owner":"SREGym"}}'),
-        ("raw.githubusercontent.com", "/SREGym/SREGym/main/README.md", None),
-        ("codeload.github.com", "/SREGym/SREGym/tar.gz/main", None),
+        ("github.com", "/SREGym/SREGym", None, "SREGym"),
+        ("github.com", "/orgs/sregym/repositories", None, "SREGym"),
+        ("github.com", "/search?q=org%253ASREGym", None, "SREGym"),
+        ("api.github.com", "/repos/SREGym/SREGym", None, "SREGym"),
+        ("api.github.com", "/graphql", b'{"variables":{"owner":"SREGym"}}', "SREGym"),
+        ("api.github.com", "/graphql", b'{"variables":{"owner":"S\\u0052EGym"}}', "SREGym"),
+        ("api.github.com", "/repositories/986527564/contents/README.md", None, "repository:986527564"),
+        ("raw.githubusercontent.com", "/SREGym/SREGym/main/README.md", None, "SREGym"),
+        ("codeload.github.com", "/SREGym/SREGym/tar.gz/main", None, "SREGym"),
     ],
 )
-def test_blocks_configured_github_owner(host, target, body):
-    assert blocked_github_owner(host, target, body) == "SREGym"
+def test_blocks_configured_github_owner(host, target, body, expected):
+    assert blocked_github_owner(host, target, body) == expected
 
 
 @pytest.mark.parametrize(
@@ -47,6 +49,21 @@ def test_blocks_configured_github_owner(host, target, body):
 )
 def test_allows_other_github_owners_and_hosts(host, target):
     assert blocked_github_owner(host, target, None) is None
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "/kubernetes/../SREGym/SREGym/blob/main/README.md",
+        "/kubernetes/%2e%2e/SREGym/SREGym/blob/main/README.md",
+    ],
+)
+def test_resolves_dot_segments_before_applying_github_policy(target):
+    assert blocked_github_owner("github.com", target, None) == "SREGym"
+
+
+def test_allows_unconfigured_numeric_github_repository_id():
+    assert blocked_github_owner("api.github.com", "/repositories/12345/contents/README.md", None) is None
 
 
 def test_filtered_runner_uses_private_network_and_proxy(tmp_path):
@@ -167,7 +184,13 @@ def test_filtered_mode_disables_gemini_provider_web_tools(monkeypatch, tmp_path)
 
     command = agent._build_command("inspect the cluster")
 
-    assert "--exclude-tools google_web_search,web_fetch,browser_agent" in command
+    assert "--exclude-tools" not in command
+    settings_file = agent._prepare_filtered_settings()
+    assert settings_file is not None
+    try:
+        assert '"google_web_search"' in settings_file.read_text()
+    finally:
+        settings_file.unlink()
 
 
 def test_filtered_mode_disables_copilot_provider_web_tools(monkeypatch, tmp_path):
@@ -176,7 +199,12 @@ def test_filtered_mode_disables_copilot_provider_web_tools(monkeypatch, tmp_path
 
     command = agent._build_command("inspect the cluster")
 
-    assert command[-2:] == ["--excluded-tools", "web_fetch,web_search"]
+    assert command[-4:] == [
+        "--excluded-tools",
+        "web_fetch,web_search",
+        "--disable-mcp-server",
+        "github-mcp-server",
+    ]
 
 
 def test_open_mode_keeps_gemini_and_copilot_web_tools(monkeypatch, tmp_path):
@@ -186,6 +214,7 @@ def test_open_mode_keeps_gemini_and_copilot_web_tools(monkeypatch, tmp_path):
 
     assert "--exclude-tools" not in gemini._build_command("inspect the cluster")
     assert "--excluded-tools" not in copilot._build_command("inspect the cluster")
+    assert "--disable-mcp-server" not in copilot._build_command("inspect the cluster")
 
 
 def test_filtered_mode_rejects_non_container_agent():

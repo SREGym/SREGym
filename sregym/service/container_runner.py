@@ -22,10 +22,6 @@ DEFAULT_EGRESS_PROXY_IMAGE = "mitmproxy/mitmproxy:12.2.3"
 EGRESS_PROXY_PORT = 8080
 PROXY_CA_CONTAINER_PATH = "/etc/evaluation-egress/mitmproxy-ca-cert.pem"
 PROXY_BUNDLE_CONTAINER_PATH = "/etc/evaluation-egress/ca-certificates.crt"
-GITHUB_TLS_IGNORE_PATTERN = (
-    r"^(?!(?:github\.com|api\.github\.com|raw\.githubusercontent\.com|codeload\.github\.com)"
-    r"(?::443)?$).*"
-)
 
 
 def _docker_uses_separate_host() -> bool:
@@ -254,6 +250,7 @@ class ContainerRunner:
                 "create the filtered egress network",
             )
             owners = ",".join(self.config.internet_policy.blocked_github_owners)
+            repository_ids = ",".join(self.config.internet_policy.blocked_github_repository_ids)
             self._run_docker_checked(
                 [
                     "docker",
@@ -274,6 +271,8 @@ class ContainerRunner:
                     "-e",
                     f"BLOCKED_GITHUB_OWNERS={owners}",
                     "-e",
+                    f"BLOCKED_GITHUB_REPOSITORY_IDS={repository_ids}",
+                    "-e",
                     "BLOCKED_REQUEST_LOG=/state/blocked-requests.jsonl",
                     "-e",
                     "PYTHONPATH=/addons",
@@ -283,8 +282,6 @@ class ContainerRunner:
                     "0.0.0.0",
                     "--listen-port",
                     str(EGRESS_PROXY_PORT),
-                    "--ignore-hosts",
-                    GITHUB_TLS_IGNORE_PATTERN,
                     "--set",
                     "connection_strategy=lazy",
                     "-s",

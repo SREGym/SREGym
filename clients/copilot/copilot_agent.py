@@ -182,8 +182,10 @@ class CopilotCliAgent:
             command.extend(["--reasoning-effort", reasoning_effort])
         if os.environ.get("AGENT_INTERNET_ACCESS") == "filtered":
             # Shell network calls still pass through the egress proxy. Remove
-            # web tools that can perform provider-side requests outside it.
+            # web tools and the built-in GitHub MCP, which can perform
+            # provider-side requests outside the container.
             command.extend(["--excluded-tools", "web_fetch,web_search"])
+            command.extend(["--disable-mcp-server", "github-mcp-server"])
         return command
 
     def run(self, instruction: str) -> int:

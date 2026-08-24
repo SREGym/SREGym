@@ -7,7 +7,11 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from internet_policy import DEFAULT_BLOCKED_GITHUB_OWNERS, blocked_github_owner
+from internet_policy import (
+    DEFAULT_BLOCKED_GITHUB_OWNERS,
+    DEFAULT_BLOCKED_GITHUB_REPOSITORY_IDS,
+    blocked_github_owner,
+)
 from mitmproxy import ctx, http
 
 BLOCKED_OWNERS = tuple(
@@ -15,16 +19,30 @@ BLOCKED_OWNERS = tuple(
     for owner in os.environ.get("BLOCKED_GITHUB_OWNERS", ",".join(DEFAULT_BLOCKED_GITHUB_OWNERS)).split(",")
     if owner.strip()
 )
+BLOCKED_REPOSITORY_IDS = tuple(
+    repository_id.strip()
+    for repository_id in os.environ.get(
+        "BLOCKED_GITHUB_REPOSITORY_IDS", ",".join(DEFAULT_BLOCKED_GITHUB_REPOSITORY_IDS)
+    ).split(",")
+    if repository_id.strip()
+)
 BLOCK_LOG = Path(os.environ.get("BLOCKED_REQUEST_LOG", "/state/blocked-requests.jsonl"))
 
 
 def request(flow: http.HTTPFlow) -> None:
-    owner = blocked_github_owner(
-        flow.request.host,
-        flow.request.path,
-        flow.request.raw_content,
-        BLOCKED_OWNERS,
-    )
+    owner = None
+    # A request can use a GitHub IP in the URL while retaining a GitHub
+    # hostname in its HTTP Host header. Apply the policy to both values.
+    for host in (flow.request.host, flow.request.headers.get("host", "")):
+        owner = blocked_github_owner(
+            host,
+            flow.request.path,
+            flow.request.raw_content,
+            BLOCKED_OWNERS,
+            BLOCKED_REPOSITORY_IDS,
+        )
+        if owner is not None:
+            break
     if owner is None:
         return
 
