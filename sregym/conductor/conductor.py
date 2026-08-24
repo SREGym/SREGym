@@ -41,6 +41,7 @@ class ConductorConfig:
     enable_noise: bool = False
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     k8s_proxy_listen_host: str = "127.0.0.1"
+    block_workload_creation: bool = False
 
 
 class Conductor:
@@ -68,6 +69,7 @@ class Conductor:
             hidden_namespaces={"chaos-mesh", "khaos"},
             listen_port=16443,
             listen_host=self.config.k8s_proxy_listen_host,
+            block_workload_creation=self.config.block_workload_creation,
         )
         self._agent_kubeconfig_path: str | None = None
 

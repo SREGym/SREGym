@@ -9,6 +9,7 @@ from pathlib import Path
 
 from internet_policy import (
     DEFAULT_BLOCKED_GITHUB_OWNERS,
+    DEFAULT_BLOCKED_GITHUB_REPOSITORIES,
     DEFAULT_BLOCKED_GITHUB_REPOSITORY_IDS,
     blocked_github_owner,
 )
@@ -26,6 +27,13 @@ BLOCKED_REPOSITORY_IDS = tuple(
     ).split(",")
     if repository_id.strip()
 )
+BLOCKED_REPOSITORIES = tuple(
+    repository.strip()
+    for repository in os.environ.get(
+        "BLOCKED_GITHUB_REPOSITORIES", ",".join(DEFAULT_BLOCKED_GITHUB_REPOSITORIES)
+    ).split(",")
+    if repository.strip()
+)
 BLOCK_LOG = Path(os.environ.get("BLOCKED_REQUEST_LOG", "/state/blocked-requests.jsonl"))
 
 
@@ -40,6 +48,7 @@ def request(flow: http.HTTPFlow) -> None:
             flow.request.raw_content,
             BLOCKED_OWNERS,
             BLOCKED_REPOSITORY_IDS,
+            BLOCKED_REPOSITORIES,
         )
         if owner is not None:
             break

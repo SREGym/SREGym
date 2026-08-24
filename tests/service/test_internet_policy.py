@@ -16,8 +16,10 @@ from sregym.service.container_runner import (
     PROXY_CA_CONTAINER_PATH,
     ContainerConfig,
     ContainerRunner,
+    _find_host_ca_bundle,
 )
 from sregym.service.internet_policy import InternetPolicy, blocked_github_owner
+from sregym.service.k8s_proxy import KubernetesAPIProxy, _is_workload_create_path, is_valid_bearer_token
 
 
 @pytest.mark.parametrize(
@@ -32,6 +34,8 @@ from sregym.service.internet_policy import InternetPolicy, blocked_github_owner
         ("api.github.com", "/repositories/986527564/contents/README.md", None, "repository:986527564"),
         ("raw.githubusercontent.com", "/SREGym/SREGym/main/README.md", None, "SREGym"),
         ("codeload.github.com", "/SREGym/SREGym/tar.gz/main", None, "SREGym"),
+        ("cdn.jsdelivr.net", "/gh/someone/SREGym@main/README.md", None, "repository:sregym"),
+        ("raw.githack.com", "/someone/SREGym/main/README.md", None, "repository:sregym"),
     ],
 )
 def test_blocks_configured_github_owner(host, target, body, expected):
@@ -64,6 +68,51 @@ def test_resolves_dot_segments_before_applying_github_policy(target):
 
 def test_allows_unconfigured_numeric_github_repository_id():
     assert blocked_github_owner("api.github.com", "/repositories/12345/contents/README.md", None) is None
+
+
+def test_ignores_unrelated_query_and_json_text():
+    assert blocked_github_owner("github.com", "/kubernetes/kubernetes?note=not-sregymnasium", None) is None
+    assert (
+        blocked_github_owner(
+            "api.github.com",
+            "/graphql",
+            b'{"variables":{"note":"SREGym"}}',
+        )
+        is None
+    )
+
+
+def test_filtered_runner_rewrites_all_local_provider_endpoints(tmp_path):
+    runner = ContainerRunner(
+        ContainerConfig(
+            internet_policy=InternetPolicy.from_mode("filtered"),
+            env_vars={
+                "AGENT_API_BASE": "http://127.0.0.1:8001/v1",
+                "OPENAI_BASE_URL": "http://localhost:11434/v1",
+                "ANTHROPIC_API_BASE": "http://[::1]:9000",
+                "UNRELATED_VALUE": "http://127.0.0.1:9999",
+            },
+        )
+    )
+    runner._egress_network_name = "private-network"
+    runner._egress_proxy_name = "filter-proxy"
+    runner._egress_proxy_ca = tmp_path / "proxy-ca.pem"
+    runner._egress_ca_bundle = tmp_path / "ca-bundle.pem"
+    runner._egress_proxy_ca.touch()
+    runner._egress_ca_bundle.touch()
+
+    try:
+        env = dict(item.split("=", 1) for item in runner._build_env_flags()[1::2])
+        assert env["AGENT_API_BASE"] == "http://host.docker.internal:8001/v1"
+        assert env["OPENAI_BASE_URL"] == "http://host.docker.internal:11434/v1"
+        assert env["ANTHROPIC_API_BASE"] == "http://host.docker.internal:9000"
+        assert env["UNRELATED_VALUE"] == "http://127.0.0.1:9999"
+    finally:
+        runner.cleanup_credential_tmps()
+
+
+def test_host_ca_bundle_is_available():
+    assert _find_host_ca_bundle().is_file()
 
 
 def test_filtered_runner_uses_private_network_and_proxy(tmp_path):
@@ -191,6 +240,67 @@ def test_filtered_runner_does_not_mount_unproxied_kubeconfig(tmp_path, monkeypat
         runner.cleanup_credential_tmps()
 
 
+@pytest.mark.parametrize(
+    ("authorization", "expected"),
+    [
+        ("Bearer secret", True),
+        ("bearer secret", True),
+        ("Bearer wrong", False),
+        (None, False),
+        ("Basic secret", False),
+    ],
+)
+def test_kubernetes_proxy_requires_agent_bearer_token(authorization, expected):
+    assert is_valid_bearer_token(authorization, "secret") is expected
+
+
+def test_kubernetes_proxy_kubeconfig_contains_private_token(tmp_path):
+    proxy = KubernetesAPIProxy.__new__(KubernetesAPIProxy)
+    proxy.listen_port = 16443
+    proxy._agent_token = "secret"
+    path = tmp_path / "kubeconfig"
+
+    proxy.generate_agent_kubeconfig(str(path))
+
+    data = yaml.safe_load(path.read_text())
+    assert data["users"][0]["user"]["token"] == "secret"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_kubernetes_proxy_removes_owned_kubeconfig_on_stop(tmp_path):
+    proxy = KubernetesAPIProxy.__new__(KubernetesAPIProxy)
+    proxy.listen_port = 16443
+    proxy._agent_token = "secret"
+    proxy._temp_files = []
+    proxy.server = None
+    proxy.server_thread = None
+    proxy._agent_kubeconfig_path = None
+    path = proxy.generate_agent_kubeconfig()
+
+    try:
+        assert Path(path).is_file()
+        proxy.stop()
+        assert not Path(path).exists()
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/api/v1/namespaces/demo/pods", True),
+        ("/api/v1/namespaces/demo/%70ods", True),
+        ("/api/v1/namespaces/demo/%2570ods", True),
+        ("/apis/batch/v1/namespaces/demo/jobs", True),
+        ("/apis/apps/v1/namespaces/demo/deployments", True),
+        ("/apis/apps/v1/namespaces/demo/deployments/demo", False),
+        ("/api/v1/namespaces/demo/services", False),
+    ],
+)
+def test_filtered_proxy_blocks_workload_creation_paths(path, expected):
+    assert _is_workload_create_path(path) is expected
+
+
 def test_filtered_mode_disables_claude_web_search(monkeypatch):
     monkeypatch.setenv("AGENT_INTERNET_ACCESS", "filtered")
     assert "WebFetch" in ClaudeCodeAgent.allowed_tools()
@@ -252,3 +362,13 @@ def test_filtered_mode_rejects_non_container_agent():
 
 def test_conductor_config_defaults_to_filtered_internet():
     assert ConductorConfig().internet_policy.is_filtered
+
+
+def test_agent_launcher_cleanup_resets_container_runner():
+    launcher = AgentLauncher()
+    runner = ContainerRunner()
+    launcher._container_runner = runner
+
+    launcher.cleanup_all()
+
+    assert launcher._container_runner is None

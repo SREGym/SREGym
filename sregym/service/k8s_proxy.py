@@ -19,11 +19,12 @@ import contextlib
 import json
 import logging
 import os
+import secrets
 import ssl
 import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 import urllib3
 from kubernetes import config
@@ -42,9 +43,25 @@ HIDDEN_LABELS: dict[str, set[str]] = {
     "job": {"workload"},
     "opentelemetry.io/name": {"load-generator"},
 }
+WORKLOAD_CREATE_SUFFIXES = {
+    "/pods",
+    "/jobs",
+    "/cronjobs",
+    "/deployments",
+    "/statefulsets",
+    "/daemonsets",
+    "/replicasets",
+    "/replicationcontrollers",
+}
 
 # Disable SSL warnings for self-signed certs
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def is_valid_bearer_token(authorization: str | None, expected_token: str) -> bool:
+    """Validate the bearer token presented by an agent request."""
+    scheme, separator, token = (authorization or "").partition(" ")
+    return bool(separator and scheme.casefold() == "bearer" and secrets.compare_digest(token, expected_token))
 
 
 class KubernetesAPIProxy:
@@ -60,15 +77,19 @@ class KubernetesAPIProxy:
         hidden_labels: dict[str, set[str]] | None = None,
         listen_port: int = 6443,
         listen_host: str = "127.0.0.1",
+        block_workload_creation: bool = False,
     ):
         self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
         self.hidden_labels: dict[str, set[str]] = hidden_labels if hidden_labels is not None else HIDDEN_LABELS
         self.listen_port = listen_port
         self.listen_host = listen_host
+        self.block_workload_creation = block_workload_creation
         self.server: ThreadingHTTPServer | None = None
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
         self._bearer_token: str | None = None
+        self._agent_token = secrets.token_urlsafe(32)
+        self._agent_kubeconfig_path: str | None = None
 
         if os.path.exists(self._INCLUSTER_TOKEN_PATH):
             # Running inside a Kubernetes pod — use ServiceAccount credentials
@@ -181,12 +202,16 @@ class KubernetesAPIProxy:
 
     def start(self):
         """Start the proxy server in a background thread."""
+        # Rotate the client token for every proxy lifecycle.
+        self._agent_token = secrets.token_urlsafe(32)
         cert_files = self._create_temp_cert_files()
         hidden_namespaces = self.hidden_namespaces
         hidden_labels = self.hidden_labels
         api_host = self.api_host
         api_port = self.api_port
         bearer_token = self._bearer_token
+        agent_token = self._agent_token
+        block_workload_creation = self.block_workload_creation
 
         class FilteringProxyHandler(BaseHTTPRequestHandler):
             """HTTP request handler that proxies and filters Kubernetes API responses."""
@@ -302,6 +327,14 @@ class KubernetesAPIProxy:
                 """Proxy request to upstream API and filter response."""
                 path = self.path
 
+                if not is_valid_bearer_token(self.headers.get("Authorization"), agent_token):
+                    self.send_error(401, "Unauthorized: valid agent token required")
+                    return
+
+                if block_workload_creation and method == "POST" and _is_workload_create_path(path):
+                    self.send_error(403, "Forbidden: workload creation is disabled in filtered mode")
+                    return
+
                 # Block direct access to hidden namespaces
                 if self._is_hidden_namespace_request(path):
                     self.send_error(403, "Forbidden: Access to this namespace is not allowed")
@@ -315,7 +348,11 @@ class KubernetesAPIProxy:
                 try:
                     conn = self._get_upstream_connection()
                     # Forward headers (except Host and Accept-Encoding to avoid gzip)
-                    headers = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "accept-encoding")}
+                    headers = {
+                        k: v
+                        for k, v in self.headers.items()
+                        if k.lower() not in ("host", "accept-encoding", "authorization")
+                    }
                     # In-cluster mode: authenticate to the API server with the ServiceAccount bearer token
                     if bearer_token:
                         headers["Authorization"] = f"Bearer {bearer_token}"
@@ -414,6 +451,11 @@ class KubernetesAPIProxy:
                 os.unlink(temp_file)
         self._temp_files = []
 
+        if self._agent_kubeconfig_path:
+            with contextlib.suppress(OSError):
+                os.unlink(self._agent_kubeconfig_path)
+            self._agent_kubeconfig_path = None
+
     def generate_agent_kubeconfig(self, output_path: str | None = None) -> str:
         """
         Generate a kubeconfig file for agents that points to this proxy.
@@ -453,17 +495,21 @@ class KubernetesAPIProxy:
             "users": [
                 {
                     "name": "sregym-agent",
-                    # No credentials needed - proxy handles auth to real API
-                    "user": {},
+                    "user": {"token": self._agent_token},
                 }
             ],
         }
 
-        if output_path is None:
-            output_path = os.path.join(tempfile.gettempdir(), "sregym-agent-kubeconfig")
+        owns_output = output_path is None
+        if owns_output:
+            fd, output_path = tempfile.mkstemp(prefix="sregym-agent-kubeconfig-", suffix=".yaml")
+            os.close(fd)
 
         with open(output_path, "w") as f:
             yaml.dump(kubeconfig, f)
+        os.chmod(output_path, 0o600)
+        if owns_output:
+            self._agent_kubeconfig_path = output_path
 
         logger.info(f"Generated agent kubeconfig at {output_path}")
         return output_path
@@ -489,13 +535,17 @@ def start_proxy(
     hidden_namespaces: set[str] | None = None,
     hidden_labels: dict[str, set[str]] | None = None,
     port: int = 16443,
+    block_workload_creation: bool = False,
 ) -> KubernetesAPIProxy:
     """Start the Kubernetes API filtering proxy."""
     global _proxy_instance
     if _proxy_instance is not None:
         _proxy_instance.stop()
     _proxy_instance = KubernetesAPIProxy(
-        hidden_namespaces=hidden_namespaces, hidden_labels=hidden_labels, listen_port=port
+        hidden_namespaces=hidden_namespaces,
+        hidden_labels=hidden_labels,
+        listen_port=port,
+        block_workload_creation=block_workload_creation,
     )
     _proxy_instance.start()
     return _proxy_instance
@@ -507,3 +557,14 @@ def stop_proxy():
     if _proxy_instance is not None:
         _proxy_instance.stop()
         _proxy_instance = None
+
+
+def _is_workload_create_path(path: str) -> bool:
+    """Return whether a Kubernetes API path creates a new workload object."""
+    normalized = urlparse(path).path
+    for _ in range(3):
+        decoded = unquote(normalized)
+        if decoded == normalized:
+            break
+        normalized = decoded
+    return normalized.casefold().rstrip("/").endswith(tuple(WORKLOAD_CREATE_SUFFIXES))

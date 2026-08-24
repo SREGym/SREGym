@@ -3,6 +3,7 @@ import logging
 import os
 import platform
 import shutil
+import ssl
 import subprocess
 import tempfile
 import time
@@ -42,9 +43,13 @@ def _replace_loopback_host(url: str) -> str:
 
 
 def get_container_host_bind_address() -> str:
-    """Return a host address reachable from Linux containers but not the public network."""
+    """Return a host bind address reachable from the agent container."""
     if platform.system() != "Linux":
-        return "127.0.0.1"
+        # Docker Desktop exposes the host to containers through
+        # host.docker.internal. The proxy must therefore bind beyond the host
+        # loopback interface; its per-run bearer token prevents unauthenticated
+        # access.
+        return "0.0.0.0"
     result = subprocess.run(
         ["docker", "network", "inspect", "bridge", "-f", "{{(index .IPAM.Config 0).Gateway}}"],
         capture_output=True,
@@ -55,6 +60,36 @@ def get_container_host_bind_address() -> str:
         detail = (result.stderr or result.stdout).strip()
         raise RuntimeError(f"Could not determine the Docker host gateway: {detail}")
     return address
+
+
+def _find_host_ca_bundle() -> Path:
+    """Find a usable host CA bundle on common Linux, macOS, and WSL images."""
+    candidates: list[str] = []
+    configured = os.environ.get("SSL_CERT_FILE")
+    if configured:
+        candidates.append(configured)
+    default_paths = ssl.get_default_verify_paths()
+    if default_paths.cafile:
+        candidates.append(default_paths.cafile)
+    candidates.extend(
+        [
+            "/etc/ssl/certs/ca-certificates.crt",
+            "/etc/pki/tls/certs/ca-bundle.crt",
+            "/etc/ssl/cert.pem",
+        ]
+    )
+    try:
+        import certifi
+
+        candidates.append(certifi.where())
+    except ImportError:
+        pass
+
+    for candidate in dict.fromkeys(candidates):
+        path = Path(candidate)
+        if path.is_file() and path.stat().st_size > 0:
+            return path
+    raise FileNotFoundError("Could not find a readable host CA bundle")
 
 
 @dataclass
@@ -251,6 +286,7 @@ class ContainerRunner:
             )
             owners = ",".join(self.config.internet_policy.blocked_github_owners)
             repository_ids = ",".join(self.config.internet_policy.blocked_github_repository_ids)
+            repositories = ",".join(self.config.internet_policy.blocked_github_repositories)
             self._run_docker_checked(
                 [
                     "docker",
@@ -272,6 +308,8 @@ class ContainerRunner:
                     f"BLOCKED_GITHUB_OWNERS={owners}",
                     "-e",
                     f"BLOCKED_GITHUB_REPOSITORY_IDS={repository_ids}",
+                    "-e",
+                    f"BLOCKED_GITHUB_REPOSITORIES={repositories}",
                     "-e",
                     "BLOCKED_REQUEST_LOG=/state/blocked-requests.jsonl",
                     "-e",
@@ -352,9 +390,7 @@ class ContainerRunner:
         else:
             raise TimeoutError("Timed out while waiting for the filtered egress proxy certificate")
 
-        system_bundle = Path("/etc/ssl/certs/ca-certificates.crt")
-        if not system_bundle.is_file():
-            raise FileNotFoundError(f"System CA bundle not found: {system_bundle}")
+        system_bundle = _find_host_ca_bundle()
         combined_bundle = self._egress_tmp_dir / "ca-certificates.crt"
         combined_bundle.write_bytes(system_bundle.read_bytes() + b"\n" + proxy_ca.read_bytes())
         self._egress_proxy_ca = proxy_ca
@@ -451,11 +487,17 @@ class ContainerRunner:
                 }
             )
 
-        # Docker Desktop and filtered containers cannot reach host loopback directly.
-        if (_docker_uses_separate_host() or self.config.internet_policy.is_filtered) and (
-            api_base := env_vars.get("AGENT_API_BASE")
-        ):
-            env_vars["AGENT_API_BASE"] = _replace_loopback_host(api_base)
+        # Docker Desktop and filtered containers cannot reach host loopback
+        # directly. Rewrite every forwarded provider endpoint that points to a
+        # loopback address, not only the primary agent endpoint.
+        if _docker_uses_separate_host() or self.config.internet_policy.is_filtered:
+            for key, value in list(env_vars.items()):
+                if not isinstance(value, str) or not (
+                    key.endswith(("_API_BASE", "_BASE_URL", "_URL", "_ENDPOINT"))
+                    or key in {"AGENT_API_BASE", "JUDGE_API_BASE"}
+                ):
+                    continue
+                env_vars[key] = _replace_loopback_host(value)
 
         # Agent containers use Docker's host alias to reach SREGym services
         # running on the host, including the MCP port-forward.

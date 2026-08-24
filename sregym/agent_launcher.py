@@ -183,6 +183,8 @@ class AgentLauncher:
             self.cleanup_agent(name, timeout=timeout)
         if self._container_runner:
             self._container_runner.cleanup_egress_proxy()
+            self._container_runner.cleanup_credential_tmps()
+            self._container_runner = None
 
     def internet_policy_result(self, process: AgentProcess | None = None) -> dict[str, str | int]:
         blocked = 0

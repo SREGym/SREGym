@@ -76,13 +76,22 @@ def run_preflight_check(
         check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
 
     logger.info(f"🔍 Running pre-flight check for '{agent_name}'...")
-    result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+    try:
+        result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+    except BaseException:
+        # A failed or interrupted preflight happens before the API shutdown
+        # scope exists, so release the proxy and its Docker resources here.
+        container_runner.cleanup_egress_proxy()
+        container_runner.cleanup_credential_tmps()
+        raise
     if result.returncode != 0:
         if result.stdout:
             print(result.stdout.strip())
         if result.stderr:
             print(result.stderr.strip())
         logger.error(f"❌ Pre-flight check failed for '{agent_name}'")
+        container_runner.cleanup_egress_proxy()
+        container_runner.cleanup_credential_tmps()
         sys.exit(1)
 
     logger.info(f"✅ Pre-flight check passed for '{agent_name}'")
@@ -616,19 +625,24 @@ def main(args):
         enable_noise=args.noise,
         internet_policy=internet_policy,
         k8s_proxy_listen_host=k8s_proxy_listen_host,
+        block_workload_creation=internet_policy.is_filtered,
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
 
-    if not agent_reg or agent_reg.container_isolation:
-        LAUNCHER.enable_container_isolation(force_build=args.force_build)
+    try:
+        if not agent_reg or agent_reg.container_isolation:
+            LAUNCHER.enable_container_isolation(force_build=args.force_build)
 
-    # Pre-flight check — makes a real (minimal) API call inside the agent
-    # container to validate model and credentials in one shot.
-    run_preflight_check(
-        args.agent,
-        container_runner=LAUNCHER._container_runner,
-        install_script=agent_reg.install_script if agent_reg else None,
-    )
+        # Pre-flight check — makes a real (minimal) API call inside the agent
+        # container to validate model and credentials in one shot.
+        run_preflight_check(
+            args.agent,
+            container_runner=LAUNCHER._container_runner,
+            install_script=agent_reg.install_script if agent_reg else None,
+        )
+    except BaseException:
+        LAUNCHER.cleanup_all()
+        raise
 
     conductor = Conductor(config=conductor_config)
 
