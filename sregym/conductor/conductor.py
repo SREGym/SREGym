@@ -5,7 +5,7 @@ import logging
 import shlex
 import shutil
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -24,6 +24,7 @@ from sregym.paths import CLUSTER_BASELINE_STATE_FILE
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
+from sregym.service.internet_policy import InternetPolicy
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
@@ -38,6 +39,8 @@ class ConductorConfig:
 
     deploy_loki: bool = True
     enable_noise: bool = False
+    internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
+    k8s_proxy_listen_host: str = "127.0.0.1"
 
 
 class Conductor:
@@ -64,6 +67,7 @@ class Conductor:
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
             listen_port=16443,
+            listen_host=self.config.k8s_proxy_listen_host,
         )
         self._agent_kubeconfig_path: str | None = None
 

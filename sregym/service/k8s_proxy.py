@@ -59,10 +59,12 @@ class KubernetesAPIProxy:
         hidden_namespaces: set[str] | None = None,
         hidden_labels: dict[str, set[str]] | None = None,
         listen_port: int = 6443,
+        listen_host: str = "127.0.0.1",
     ):
         self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
         self.hidden_labels: dict[str, set[str]] = hidden_labels if hidden_labels is not None else HIDDEN_LABELS
         self.listen_port = listen_port
+        self.listen_host = listen_host
         self.server: ThreadingHTTPServer | None = None
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
@@ -391,10 +393,10 @@ class KubernetesAPIProxy:
                 self._proxy_request("HEAD")
 
         # Create and start server
-        self.server = ThreadingHTTPServer(("127.0.0.1", self.listen_port), FilteringProxyHandler)
+        self.server = ThreadingHTTPServer((self.listen_host, self.listen_port), FilteringProxyHandler)
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.server_thread.start()
-        logger.info(f"Kubernetes API filtering proxy started on port {self.listen_port}")
+        logger.info(f"Kubernetes API filtering proxy started on {self.listen_host}:{self.listen_port}")
         logger.info(f"Hidden namespaces: {self.hidden_namespaces}")
         logger.info(f"Hidden labels: {self.hidden_labels}")
 

@@ -128,6 +128,9 @@ Use `--force-build` to rebuild the container image after updating dependencies o
 uv run main.py --agent codex --model gpt-5 --force-build
 ```
 
+Containerized agents can use the public internet by default, but direct access to the benchmark's GitHub source is
+blocked. Use `--internet-access open` only when you intentionally need the previous unrestricted network behavior.
+
 ### Model Selection
 
 SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings directly (no config file needed). Just pass any supported model string via `--model`:

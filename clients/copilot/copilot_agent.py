@@ -180,6 +180,10 @@ class CopilotCliAgent:
         reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
         if reasoning_effort:
             command.extend(["--reasoning-effort", reasoning_effort])
+        if os.environ.get("AGENT_INTERNET_ACCESS") == "filtered":
+            # Shell network calls still pass through the egress proxy. Remove
+            # web tools that can perform provider-side requests outside it.
+            command.extend(["--excluded-tools", "web_fetch,web_search"])
         return command
 
     def run(self, instruction: str) -> int:

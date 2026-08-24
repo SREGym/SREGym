@@ -200,6 +200,16 @@ class GeminiCliAgent:
         logger.info(f"Extracted usage metrics: {metrics}")
         return metrics
 
+    def _build_command(self, instruction: str) -> str:
+        model = self.model_name.split("/")[-1]
+        escaped_instruction = shlex.quote(instruction)
+        excluded_tools = ""
+        if os.environ.get("AGENT_INTERNET_ACCESS") == "filtered":
+            # These tools can fetch content outside the container, where the
+            # network proxy cannot enforce the source deny list.
+            excluded_tools = " --exclude-tools google_web_search,web_fetch,browser_agent"
+        return f"gemini -p {escaped_instruction} -y -m {model}{excluded_tools}"
+
     def run(self, instruction: str) -> int:
         """
         Run the Gemini CLI agent with the given instruction.
@@ -250,9 +260,7 @@ class GeminiCliAgent:
             logger.error("=" * 80)
             return 1
 
-        # Build command
-        escaped_instruction = shlex.quote(instruction)
-        command = f"gemini -p {escaped_instruction} -y -m {model}"
+        command = self._build_command(instruction)
 
         logger.info(f"Executing command: {command}")
 
