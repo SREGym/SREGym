@@ -126,10 +126,10 @@
         path: /etc/apt/sources.list.d/kubernetes.list
         state: absent
 
-    - name: Refresh and upgrade packages
+    - name: Refresh package metadata
       apt:
-        update_cache: "yes"
-        upgrade: "yes"
+        update_cache: yes
+        cache_valid_time: 3600
 
     # - name: Install python3-apt
     #   apt:
