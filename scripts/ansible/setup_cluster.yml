@@ -7,6 +7,12 @@
     docker_repo: "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
     # kube_version: "1.31.0"  # Adjust Kubernetes version as needed
     cri_dockerd_version: "0.3.12.3-0"  # Example version for cri-dockerd, customize as needed
+    # Ubuntu's generic 6.8 kernel is managed only on architectures known to
+    # support this setup. Override this list when provisioning another
+    # platform whose bootloader supports the generic image.
+    generic_kernel_architectures:
+      - x86_64
+    manage_generic_kernel: "{{ ansible_architecture in generic_kernel_architectures }}"
 
   tasks:
     - name: Kill any stuck apt processes
@@ -44,6 +50,15 @@
         update_cache: yes
       become: yes
       timeout: 900
+      when: manage_generic_kernel
+
+    - name: Explain generic kernel skip on unsupported architecture
+      debug:
+        msg: >-
+          Skipping Ubuntu generic 6.8 installation on {{ ansible_architecture }}.
+          This architecture is not in generic_kernel_architectures; the
+          provider kernel will be retained.
+      when: not manage_generic_kernel
 
     - name: Get current running kernel version
       shell: uname -r
@@ -59,7 +74,7 @@
       set_fact:
         current_kernel_version: "{{ current_kernel_check.stdout }}"
         target_kernel_version: "{{ target_kernel_check.stdout }}"
-        need_kernel_switch: "{{ current_kernel_check.stdout != target_kernel_check.stdout }}"
+        need_kernel_switch: "{{ manage_generic_kernel and current_kernel_check.stdout != target_kernel_check.stdout }}"
 
     - name: Debug kernel versions
       debug:
@@ -352,10 +367,12 @@
           - "'-generic' in kernel_after_fix.stdout"
         fail_msg: "Kernel doesn't match expected Ubuntu generic format. Current: {{ kernel_after_fix.stdout | default('undefined') }}"
         success_msg: "Kernel matches Ubuntu generic 6.8: {{ kernel_after_fix.stdout }}"
+      when: manage_generic_kernel
 
     - name: Confirm kernel and headers match
       debug:
         msg: "Running kernel: {{ kernel_after_fix.stdout }} (should match headers)"
+      when: manage_generic_kernel
 
     - name: Remove broken kernel headers if they cause dependency issues
       shell: |
@@ -410,6 +427,8 @@
         state: present
         update_cache: no
       when: >
+        manage_generic_kernel
+        and
         not dm_flakey_exists
         and not ubuntu_headers.stat.exists
       become: yes
@@ -425,6 +444,8 @@
       fail:
         msg: "Kernel headers not available for {{ kernel_version_full.stdout }}. Cannot build modules."
       when: >
+        manage_generic_kernel
+        and
         not dm_flakey_exists
         and not ubuntu_headers.stat.exists
 
@@ -434,6 +455,8 @@
       register: build_symlink
       changed_when: false
       when: >
+        manage_generic_kernel
+        and
         not dm_flakey_exists
         and ubuntu_headers.stat.exists
 
