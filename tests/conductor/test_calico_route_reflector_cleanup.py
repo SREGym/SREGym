@@ -220,7 +220,7 @@ def test_fix_kubernetes_keeps_kubelet_eviction_global_cleanup(monkeypatch):
         def __init__(self, namespace):
             self.namespace = namespace
 
-        def recover_daemon_set_image_replacement(self, daemon_set_name, original_image):
+        def recover_daemon_set_image_replacement(self, daemon_set_name):
             pass
 
         def recover_all_nxdomain_templates(self):

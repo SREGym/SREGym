@@ -7,6 +7,7 @@ root cause in natural language.
 from __future__ import annotations
 
 import json
+import os
 import re
 from enum import StrEnum
 from pathlib import Path
@@ -57,7 +58,14 @@ class LLMJudge:
         """Lazily initialize the LLM backend only when needed."""
         if self._backend is None:
             try:
-                self._backend = get_llm_backend_for_judge()
+                self._backend = get_llm_backend_for_judge(
+                    provider=self.provider,
+                    model_name=self.model_name,
+                    api_base=self.url,
+                    api_key=self.api_key,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                )
             except (SystemExit, Exception) as e:
                 print(f"Warning: Failed to initialize LLM backend for judge: {e}")
                 print("Returning None - evaluation will be skipped")
@@ -263,7 +271,14 @@ fences, no preamble, no commentary.
         """Lazily initialize the LLM backend only when needed."""
         if self._backend is None:
             try:
-                self._backend = get_llm_backend_for_judge()
+                self._backend = get_llm_backend_for_judge(
+                    provider=self.provider,
+                    model_name=self.model_name or None,
+                    api_base=self.url,
+                    api_key=self.api_key,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                )
             except (SystemExit, Exception) as e:
                 print(f"Warning: Failed to initialize LLM backend for judge: {e}")
                 print("Returning None - evaluation will be skipped")
@@ -314,7 +329,7 @@ fences, no preamble, no commentary.
                 reasoning=error_msg,
                 composite_score=0.0,
                 checklist_version=self._checklist_version,
-                evaluator_model=self.model_name,
+                evaluator_model=self._evaluator_model(),
             )
 
         # Handle empty / "I don't know" answers
@@ -380,7 +395,7 @@ fences, no preamble, no commentary.
             composite_score=composite,
             dimensions=dimensions,
             checklist_version=self._checklist_version,
-            evaluator_model=self.model_name,
+            evaluator_model=self._evaluator_model(),
         )
 
     # ------------------------------------------------------------------
@@ -538,8 +553,13 @@ fences, no preamble, no commentary.
             composite_score=0.0,
             dimensions=dimensions,
             checklist_version=self._checklist_version,
-            evaluator_model=self.model_name,
+            evaluator_model=self._evaluator_model(),
         )
+
+    def _evaluator_model(self) -> str:
+        """Return the model selected by the initialized backend."""
+        backend_model = getattr(self._backend, "model_name", None)
+        return backend_model or self.model_name or os.environ.get("JUDGE_MODEL_ID", "")
 
     @staticmethod
     def _build_reasoning(
