@@ -1,6 +1,8 @@
 import copy
 import http.client
 import json
+import socket
+import ssl
 
 import pytest
 
@@ -83,10 +85,15 @@ def proxy(monkeypatch):
     instance.hidden_namespaces = {"chaos-mesh", "khaos"}
     instance.hidden_labels = {"app": {"load-generator"}}
     instance.listen_port = 0
+    instance.listen_host = "127.0.0.1"
+    instance.block_workload_creation = False
     instance.server = None
     instance.server_thread = None
     instance._temp_files = []
     instance._bearer_token = None
+    instance._agent_token = ""
+    instance._agent_kubeconfig_path = None
+    instance._server_cert_pem = None
     instance.ca_cert = None
     instance.client_cert = None
     instance.client_key = None
@@ -107,11 +114,25 @@ def request(
     body: bytes | None = None,
 ):
     port = proxy.server.server_address[1]
-    connection = http.client.HTTPConnection("127.0.0.1", port)
-    connection.request(method, path, body=body, headers=headers or {})
-    response = connection.getresponse()
-    result = response.status, response.headers, response.read()
-    connection.close()
+    request_headers = dict(headers or {})
+    request_headers.setdefault("Authorization", f"Bearer {proxy._agent_token}")
+    request_headers.setdefault("Host", "127.0.0.1")
+    request_headers.setdefault("Connection", "close")
+    if body is not None:
+        request_headers.setdefault("Content-Length", str(len(body)))
+
+    request_head = f"{method} {path} HTTP/1.1\r\n" + "".join(
+        f"{name}: {value}\r\n" for name, value in request_headers.items()
+    )
+    context = ssl._create_unverified_context()
+    with (
+        socket.create_connection(("127.0.0.1", port)) as raw_socket,
+        context.wrap_socket(raw_socket, server_hostname="localhost") as connection,
+    ):
+        connection.sendall(request_head.encode() + b"\r\n" + (body or b""))
+        response = http.client.HTTPResponse(connection)
+        response.begin()
+        result = response.status, response.headers, response.read()
     return result
 
 
