@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import stat
 from pathlib import Path
 
@@ -137,6 +138,7 @@ def test_filtered_runner_uses_private_network_and_proxy(tmp_path):
         assert "--network=host" not in args
         env = dict(item.split("=", 1) for item in env_flags[1::2])
         assert env["HTTPS_PROXY"] == "http://filter-proxy:8080"
+        assert env["NO_PROXY"] == ""
         assert env["SSL_CERT_FILE"] == PROXY_BUNDLE_CONTAINER_PATH
         assert env["NODE_EXTRA_CA_CERTS"] == PROXY_CA_CONTAINER_PATH
         assert env["AGENT_API_BASE"] == "http://host.docker.internal:8001/v1"
@@ -201,7 +203,7 @@ def test_filtered_runner_rewrites_loopback_kubeconfig(tmp_path):
     source.write_text(
         yaml.safe_dump(
             {
-                "clusters": [{"name": "proxy", "cluster": {"server": "http://127.0.0.1:16443"}}],
+                "clusters": [{"name": "proxy", "cluster": {"server": "https://127.0.0.1:16443"}}],
             }
         )
     )
@@ -210,7 +212,7 @@ def test_filtered_runner_rewrites_loopback_kubeconfig(tmp_path):
     try:
         rewritten = runner._prepare_kubeconfig(source)
         data = yaml.safe_load(Path(rewritten).read_text())
-        assert data["clusters"][0]["cluster"]["server"] == "http://host.docker.internal:16443"
+        assert data["clusters"][0]["cluster"]["server"] == "https://host.docker.internal:16443"
     finally:
         runner.cleanup_credential_tmps()
 
@@ -257,20 +259,30 @@ def test_kubernetes_proxy_requires_agent_bearer_token(authorization, expected):
 def test_kubernetes_proxy_kubeconfig_contains_private_token(tmp_path):
     proxy = KubernetesAPIProxy.__new__(KubernetesAPIProxy)
     proxy.listen_port = 16443
+    proxy.listen_host = "127.0.0.1"
     proxy._agent_token = "secret"
+    proxy._server_cert_pem = "-----BEGIN CERTIFICATE-----\nlocal\n-----END CERTIFICATE-----\n"
     path = tmp_path / "kubeconfig"
 
     proxy.generate_agent_kubeconfig(str(path))
 
     data = yaml.safe_load(path.read_text())
     assert data["users"][0]["user"]["token"] == "secret"
+    assert data["clusters"][0]["cluster"]["server"] == "https://127.0.0.1:16443"
+    assert (
+        base64.b64decode(data["clusters"][0]["cluster"]["certificate-authority-data"]).decode()
+        == proxy._server_cert_pem
+    )
+    assert "insecure-skip-tls-verify" not in data["clusters"][0]["cluster"]
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_kubernetes_proxy_removes_owned_kubeconfig_on_stop(tmp_path):
     proxy = KubernetesAPIProxy.__new__(KubernetesAPIProxy)
     proxy.listen_port = 16443
+    proxy.listen_host = "127.0.0.1"
     proxy._agent_token = "secret"
+    proxy._server_cert_pem = "-----BEGIN CERTIFICATE-----\nlocal\n-----END CERTIFICATE-----\n"
     proxy._temp_files = []
     proxy.server = None
     proxy.server_thread = None

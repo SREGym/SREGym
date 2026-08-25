@@ -23,10 +23,16 @@ import secrets
 import ssl
 import tempfile
 import threading
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from ipaddress import ip_address
 from urllib.parse import unquote, urlparse
 
 import urllib3
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from kubernetes import config
 
 logger = logging.getLogger("all.infra.k8s_proxy")
@@ -90,6 +96,7 @@ class KubernetesAPIProxy:
         self._bearer_token: str | None = None
         self._agent_token = secrets.token_urlsafe(32)
         self._agent_kubeconfig_path: str | None = None
+        self._server_cert_pem: str | None = None
 
         if os.path.exists(self._INCLUSTER_TOKEN_PATH):
             # Running inside a Kubernetes pod — use ServiceAccount credentials
@@ -200,11 +207,57 @@ class KubernetesAPIProxy:
 
         return files
 
+    def _create_server_cert_files(self) -> dict[str, str]:
+        """Create a short-lived certificate for the local agent endpoint."""
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+        dns_names = ["host.docker.internal", "localhost"]
+        ip_names = [ip_address("127.0.0.1")]
+        if self.listen_host not in {"0.0.0.0", "::", ""}:
+            try:
+                ip_names.append(ip_address(self.listen_host))
+            except ValueError:
+                dns_names.append(self.listen_host.rstrip("."))
+
+        san_names: list[x509.GeneralName] = [x509.DNSName(name) for name in dict.fromkeys(dns_names)]
+        san_names.extend(x509.IPAddress(address) for address in dict.fromkeys(ip_names))
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "local Kubernetes proxy")])
+        now = datetime.now(UTC)
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=1))
+            .not_valid_after(now + timedelta(hours=12))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(x509.SubjectAlternativeName(san_names), critical=False)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .sign(private_key, hashes.SHA256())
+        )
+        certificate_pem = certificate.public_bytes(serialization.Encoding.PEM).decode()
+        key_pem = private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False) as cert_file:
+            cert_file.write(certificate_pem)
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".key", delete=False) as key_file:
+            key_file.write(key_pem)
+        os.chmod(key_file.name, 0o600)
+        self._temp_files.extend([cert_file.name, key_file.name])
+        return {"server_cert": cert_file.name, "server_key": key_file.name, "server_cert_pem": certificate_pem}
+
     def start(self):
         """Start the proxy server in a background thread."""
         # Rotate the client token for every proxy lifecycle.
         self._agent_token = secrets.token_urlsafe(32)
         cert_files = self._create_temp_cert_files()
+        cert_files.update(self._create_server_cert_files())
+        self._server_cert_pem = cert_files["server_cert_pem"]
         hidden_namespaces = self.hidden_namespaces
         hidden_labels = self.hidden_labels
         api_host = self.api_host
@@ -431,6 +484,10 @@ class KubernetesAPIProxy:
 
         # Create and start server
         self.server = ThreadingHTTPServer((self.listen_host, self.listen_port), FilteringProxyHandler)
+        tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        tls_context.load_cert_chain(cert_files["server_cert"], cert_files["server_key"])
+        self.server.socket = tls_context.wrap_socket(self.server.socket, server_side=True)
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.server_thread.start()
         logger.info(f"Kubernetes API filtering proxy started on {self.listen_host}:{self.listen_port}")
@@ -450,6 +507,7 @@ class KubernetesAPIProxy:
             with contextlib.suppress(OSError):
                 os.unlink(temp_file)
         self._temp_files = []
+        self._server_cert_pem = None
 
         if self._agent_kubeconfig_path:
             with contextlib.suppress(OSError):
@@ -468,6 +526,16 @@ class KubernetesAPIProxy:
         """
         import yaml
 
+        if not self._server_cert_pem:
+            raise RuntimeError("Kubernetes proxy must be started before generating an agent kubeconfig")
+
+        # A non-loopback bind address is used for Docker agents. Use Docker's
+        # stable host alias in their kubeconfig so the egress proxy can tunnel
+        # this local HTTPS connection without inspecting or rewriting it.
+        server_host = (
+            self.listen_host if self.listen_host in {"127.0.0.1", "::1", "localhost"} else "host.docker.internal"
+        )
+
         kubeconfig = {
             "apiVersion": "v1",
             "kind": "Config",
@@ -476,10 +544,8 @@ class KubernetesAPIProxy:
                 {
                     "name": "sregym-proxy",
                     "cluster": {
-                        # Use HTTP since proxy runs locally without TLS
-                        "server": f"http://127.0.0.1:{self.listen_port}",
-                        # Skip TLS verification for local proxy
-                        "insecure-skip-tls-verify": True,
+                        "server": f"https://{server_host}:{self.listen_port}",
+                        "certificate-authority-data": base64.b64encode(self._server_cert_pem.encode()).decode(),
                     },
                 }
             ],
@@ -516,7 +582,10 @@ class KubernetesAPIProxy:
 
     def get_proxy_url(self) -> str:
         """Get the URL of the proxy server."""
-        return f"http://127.0.0.1:{self.listen_port}"
+        server_host = (
+            self.listen_host if self.listen_host in {"127.0.0.1", "::1", "localhost"} else "host.docker.internal"
+        )
+        return f"https://{server_host}:{self.listen_port}"
 
 
 # Module-level singleton for easy access

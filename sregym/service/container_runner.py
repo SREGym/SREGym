@@ -322,6 +322,12 @@ class ContainerRunner:
                     str(EGRESS_PROXY_PORT),
                     "--set",
                     "connection_strategy=lazy",
+                    # Keep the local Kubernetes TLS connection as an
+                    # end-to-end tunnel. The agent trusts the per-run
+                    # certificate from its kubeconfig; mitmproxy must not
+                    # replace it with an egress certificate.
+                    "--set",
+                    r"ignore_hosts=^host\.docker\.internal:16443$",
                     "-s",
                     "/addons/egress_proxy.py",
                 ],
@@ -477,6 +483,9 @@ class ContainerRunner:
                     "HTTPS_PROXY": proxy_url,
                     "http_proxy": proxy_url,
                     "https_proxy": proxy_url,
+                    # The private agent network cannot route directly to the
+                    # host. Local Kubernetes HTTPS traffic uses the egress
+                    # proxy's CONNECT tunnel instead of being intercepted.
                     "NO_PROXY": "",
                     "no_proxy": "",
                     "SSL_CERT_FILE": PROXY_BUNDLE_CONTAINER_PATH,
