@@ -30,6 +30,7 @@ from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
 from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import CLUSTER_BASELINE_STATE_FILE
+from sregym.profile import is_svelte
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
@@ -1210,19 +1211,28 @@ class Conductor:
             self.khaos.ensure_deployed()
 
         self.logger.info("[DEPLOY] Setting up OpenEBS…")
+        svelte = is_svelte()
         # `openebs` is protected from reconciliation, so it persists across
         # problems and the operator manifest only needs fetching once.
-        if self._openebs_ready():
+        if self._openebs_ready(svelte):
             self.logger.info("[DEPLOY] OpenEBS already deployed; skipping operator re-apply")
         else:
-            self._preflight_openebs_udev_mount()
+            if not svelte:
+                # The udev preflight exists solely for the node-disk-manager,
+                # which svelte does not deploy.
+                self._preflight_openebs_udev_mount()
             self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
             self.kubectl.exec_command(
                 "kubectl patch storageclass openebs-hostpath "
                 '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
             )
+        # Idempotent and cheap; also covers an `openebs` left over from an
+        # earlier full-profile run on the same cluster.
+        if svelte:
+            self._trim_openebs_ndm()
         self.kubectl.wait_for_ready("openebs")
-        self._ensure_openebs_device_storageclass()
+        if not svelte:
+            self._ensure_openebs_device_storageclass()
 
         self.logger.info("[DEPLOY] Deploying Prometheus…")
         self.prometheus.deploy()
@@ -1342,12 +1352,15 @@ class Conductor:
             return False
         return True
 
-    def _openebs_ready(self) -> bool:
-        """True if the OpenEBS tier is already fully deployed.
+    def _openebs_ready(self, svelte: bool) -> bool:
+        """True if the OpenEBS tier already matches what this profile wants.
 
-        Checks the node-disk-manager as well as the LocalPV provisioner so that a
+        Under `full` that includes the node-disk-manager, so that a
         partially-present `openebs` namespace is repaired by re-applying the
-        operator manifest rather than silently accepted.
+        operator manifest rather than silently accepted. Checking it also matters
+        because `openebs` persists between problems: a cluster whose last run was
+        `svelte` has had NDM removed, and accepting the provisioner alone would
+        leave `openebs-device` permanently unbacked after switching back.
         """
         out = self.kubectl.exec_command(
             "kubectl -n openebs get deployment openebs-localpv-provisioner "
@@ -1359,11 +1372,38 @@ class Conductor:
         except (ValueError, AttributeError):
             return False
 
+        if svelte:
+            return True
+
         ndm = self.kubectl.exec_command("kubectl -n openebs get daemonset openebs-ndm -o name --ignore-not-found")
         if not ndm or not ndm.strip():
             self.logger.info("[DEPLOY] OpenEBS node-disk-manager missing; re-applying operator manifest")
             return False
         return True
+
+    # openebs-operator.yaml bundles the node-disk-manager alongside the LocalPV
+    # provisioner. NDM exists to discover block devices and back the
+    # `openebs-device` StorageClass; SREGym only ever provisions through
+    # `openebs-hostpath`, which needs the provisioner alone. Measured on one
+    # problem, these seven pods cost 603m CPU (13% of the cluster) scanning
+    # disks nothing claims.
+    _OPENEBS_NDM_WORKLOADS = (
+        ("daemonset", "openebs-ndm"),
+        ("daemonset", "openebs-ndm-node-exporter"),
+        ("deployment", "openebs-ndm-operator"),
+        ("deployment", "openebs-ndm-cluster-exporter"),
+    )
+
+    def _trim_openebs_ndm(self) -> None:
+        """Remove the node-disk-manager workloads left by openebs-operator.yaml.
+
+        Deleting rather than scaling: the operator manifest is a plain apply with
+        no controller to recreate them, and re-applying it recreates them for this
+        method to remove again.
+        """
+        self.logger.info("[svelte] Removing OpenEBS node-disk-manager (openebs-hostpath does not use it)")
+        for kind, name in self._OPENEBS_NDM_WORKLOADS:
+            self.kubectl.exec_command(f"kubectl delete {kind} {name} -n openebs --ignore-not-found")
 
     def _ensure_openebs_device_storageclass(self) -> None:
         self.logger.info("[DEPLOY] Ensuring OpenEBS LocalPV-Device StorageClass…")
