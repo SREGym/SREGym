@@ -156,6 +156,9 @@ SREGym supports local models through Ollama and OpenAI-compatible servers such a
 
 Set `AGENT_API_KEY` as well if the endpoint requires authentication.
 
+> [!CAUTION]
+> When you use `--internet-access filtered`, the agent runs on an isolated Docker network. It cannot reach a local model server that listens only on `127.0.0.1` or `localhost`. Configure the server to listen on a host-reachable interface, such as `0.0.0.0`, and use `http://host.docker.internal:<port>` as the API base. Protect the exposed port with authentication or a firewall. This requirement is the same for Kind and external Kubernetes clusters because the connection is between the agent container and the machine running SREGym.
+
 **Stratus with Ollama:**
 
 ```bash
