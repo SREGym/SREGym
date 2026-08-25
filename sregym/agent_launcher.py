@@ -11,6 +11,7 @@ from pathlib import Path
 
 from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
+from sregym.service.internet_policy import InternetPolicy
 
 from .agent_registry import AgentRegistration
 
@@ -24,6 +25,7 @@ class AgentProcess:
         self.started_at = datetime.now(UTC)
         self.container_name: str | None = None  # set when running in container mode
         self.pgid = pgid  # process group of shell-launched agents, for tree cleanup
+        self.egress_blocked_start = 0
 
 
 class AgentLauncher:
@@ -32,6 +34,12 @@ class AgentLauncher:
         self._agent_kubeconfig_path: str | None = None
         self._use_containers: bool = True
         self._container_runner: ContainerRunner | None = None
+        self._internet_policy = InternetPolicy()
+
+    def set_internet_policy(self, policy: InternetPolicy) -> None:
+        if self._container_runner is not None:
+            raise RuntimeError("Internet policy cannot change after the container runner is initialized")
+        self._internet_policy = policy
 
     def set_agent_kubeconfig(self, kubeconfig_path: str | None):
         """
@@ -48,6 +56,7 @@ class AgentLauncher:
                 logs_path=Path("./logs"),
                 sregym_apps_path=Path("./SREGym-applications"),
                 sregym_app_subdirs=["socialNetwork/wrk2", "hotelReservation/wrk2"],
+                internet_policy=self._internet_policy,
             )
             self._container_runner = ContainerRunner(config)
             if force_build:
@@ -67,6 +76,12 @@ class AgentLauncher:
 
         if self._use_containers and reg.container_isolation:
             return await self._start_containerized(reg)
+
+        if self._internet_policy.is_filtered:
+            raise RuntimeError(
+                f"Agent '{reg.name}' does not use container isolation. "
+                "Run it with --internet-access open or enable container isolation."
+            )
 
         env = os.environ.copy()
         if reg.kickoff_env:
@@ -152,9 +167,11 @@ class AgentLauncher:
         if harness_artifact_id:
             exec_input.env[HARNESS_ARTIFACT_ID_ENV] = harness_artifact_id
 
+        blocked_start = self._container_runner.blocked_request_count()
         proc = self._container_runner.run_async(exec_input)
         ap = AgentProcess(reg.name, proc)
         ap.container_name = exec_input.container_name  # track for cleanup
+        ap.egress_blocked_start = blocked_start
         self._procs[reg.name] = ap
         t = threading.Thread(target=self._pipe_logs, args=(reg.name, proc), daemon=True)
         t.start()
@@ -164,6 +181,19 @@ class AgentLauncher:
         """Terminate and cleanup all tracked agent processes/containers."""
         for name in list(self._procs):
             self.cleanup_agent(name, timeout=timeout)
+        if self._container_runner:
+            self._container_runner.cleanup_egress_proxy()
+            self._container_runner.cleanup_credential_tmps()
+            self._container_runner = None
+
+    def internet_policy_result(self, process: AgentProcess | None = None) -> dict[str, str | int]:
+        blocked = 0
+        if process is not None and self._container_runner is not None:
+            blocked = max(0, self._container_runner.blocked_request_count() - process.egress_blocked_start)
+        return {
+            "internet_access": self._internet_policy.mode.value,
+            "blocked_requests": blocked,
+        }
 
     def cleanup_agent(self, agent_name: str, timeout: int = 5) -> None:
         """

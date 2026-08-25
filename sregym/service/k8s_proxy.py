@@ -19,13 +19,20 @@ import contextlib
 import json
 import logging
 import os
+import secrets
 import ssl
 import tempfile
 import threading
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from ipaddress import ip_address
+from urllib.parse import unquote, urlparse
 
 import urllib3
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from kubernetes import config
 
 logger = logging.getLogger("all.infra.k8s_proxy")
@@ -42,9 +49,25 @@ HIDDEN_LABELS: dict[str, set[str]] = {
     "job": {"workload"},
     "opentelemetry.io/name": {"load-generator"},
 }
+WORKLOAD_CREATE_SUFFIXES = {
+    "/pods",
+    "/jobs",
+    "/cronjobs",
+    "/deployments",
+    "/statefulsets",
+    "/daemonsets",
+    "/replicasets",
+    "/replicationcontrollers",
+}
 
 # Disable SSL warnings for self-signed certs
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def is_valid_bearer_token(authorization: str | None, expected_token: str) -> bool:
+    """Validate the bearer token presented by an agent request."""
+    scheme, separator, token = (authorization or "").partition(" ")
+    return bool(separator and scheme.casefold() == "bearer" and secrets.compare_digest(token, expected_token))
 
 
 class KubernetesAPIProxy:
@@ -59,14 +82,21 @@ class KubernetesAPIProxy:
         hidden_namespaces: set[str] | None = None,
         hidden_labels: dict[str, set[str]] | None = None,
         listen_port: int = 6443,
+        listen_host: str = "127.0.0.1",
+        block_workload_creation: bool = False,
     ):
         self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
         self.hidden_labels: dict[str, set[str]] = hidden_labels if hidden_labels is not None else HIDDEN_LABELS
         self.listen_port = listen_port
+        self.listen_host = listen_host
+        self.block_workload_creation = block_workload_creation
         self.server: ThreadingHTTPServer | None = None
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
         self._bearer_token: str | None = None
+        self._agent_token = secrets.token_urlsafe(32)
+        self._agent_kubeconfig_path: str | None = None
+        self._server_cert_pem: str | None = None
 
         if os.path.exists(self._INCLUSTER_TOKEN_PATH):
             # Running inside a Kubernetes pod — use ServiceAccount credentials
@@ -177,14 +207,64 @@ class KubernetesAPIProxy:
 
         return files
 
+    def _create_server_cert_files(self) -> dict[str, str]:
+        """Create a short-lived certificate for the local agent endpoint."""
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+        dns_names = ["host.docker.internal", "localhost"]
+        ip_names = [ip_address("127.0.0.1")]
+        if self.listen_host not in {"0.0.0.0", "::", ""}:
+            try:
+                ip_names.append(ip_address(self.listen_host))
+            except ValueError:
+                dns_names.append(self.listen_host.rstrip("."))
+
+        san_names: list[x509.GeneralName] = [x509.DNSName(name) for name in dict.fromkeys(dns_names)]
+        san_names.extend(x509.IPAddress(address) for address in dict.fromkeys(ip_names))
+        subject = issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "local Kubernetes proxy")])
+        now = datetime.now(UTC)
+        certificate = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .public_key(private_key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now - timedelta(minutes=1))
+            .not_valid_after(now + timedelta(hours=12))
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(x509.SubjectAlternativeName(san_names), critical=False)
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .sign(private_key, hashes.SHA256())
+        )
+        certificate_pem = certificate.public_bytes(serialization.Encoding.PEM).decode()
+        key_pem = private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".crt", delete=False) as cert_file:
+            cert_file.write(certificate_pem)
+        with tempfile.NamedTemporaryFile(mode="wb", suffix=".key", delete=False) as key_file:
+            key_file.write(key_pem)
+        os.chmod(key_file.name, 0o600)
+        self._temp_files.extend([cert_file.name, key_file.name])
+        return {"server_cert": cert_file.name, "server_key": key_file.name, "server_cert_pem": certificate_pem}
+
     def start(self):
         """Start the proxy server in a background thread."""
+        # Rotate the client token for every proxy lifecycle.
+        self._agent_token = secrets.token_urlsafe(32)
         cert_files = self._create_temp_cert_files()
+        cert_files.update(self._create_server_cert_files())
+        self._server_cert_pem = cert_files["server_cert_pem"]
         hidden_namespaces = self.hidden_namespaces
         hidden_labels = self.hidden_labels
         api_host = self.api_host
         api_port = self.api_port
         bearer_token = self._bearer_token
+        agent_token = self._agent_token
+        block_workload_creation = self.block_workload_creation
 
         class FilteringProxyHandler(BaseHTTPRequestHandler):
             """HTTP request handler that proxies and filters Kubernetes API responses."""
@@ -300,6 +380,14 @@ class KubernetesAPIProxy:
                 """Proxy request to upstream API and filter response."""
                 path = self.path
 
+                if not is_valid_bearer_token(self.headers.get("Authorization"), agent_token):
+                    self.send_error(401, "Unauthorized: valid agent token required")
+                    return
+
+                if block_workload_creation and method == "POST" and _is_workload_create_path(path):
+                    self.send_error(403, "Forbidden: workload creation is disabled in filtered mode")
+                    return
+
                 # Block direct access to hidden namespaces
                 if self._is_hidden_namespace_request(path):
                     self.send_error(403, "Forbidden: Access to this namespace is not allowed")
@@ -313,7 +401,11 @@ class KubernetesAPIProxy:
                 try:
                     conn = self._get_upstream_connection()
                     # Forward headers (except Host and Accept-Encoding to avoid gzip)
-                    headers = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "accept-encoding")}
+                    headers = {
+                        k: v
+                        for k, v in self.headers.items()
+                        if k.lower() not in ("host", "accept-encoding", "authorization")
+                    }
                     # In-cluster mode: authenticate to the API server with the ServiceAccount bearer token
                     if bearer_token:
                         headers["Authorization"] = f"Bearer {bearer_token}"
@@ -391,10 +483,14 @@ class KubernetesAPIProxy:
                 self._proxy_request("HEAD")
 
         # Create and start server
-        self.server = ThreadingHTTPServer(("127.0.0.1", self.listen_port), FilteringProxyHandler)
+        self.server = ThreadingHTTPServer((self.listen_host, self.listen_port), FilteringProxyHandler)
+        tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
+        tls_context.load_cert_chain(cert_files["server_cert"], cert_files["server_key"])
+        self.server.socket = tls_context.wrap_socket(self.server.socket, server_side=True)
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.server_thread.start()
-        logger.info(f"Kubernetes API filtering proxy started on port {self.listen_port}")
+        logger.info(f"Kubernetes API filtering proxy started on {self.listen_host}:{self.listen_port}")
         logger.info(f"Hidden namespaces: {self.hidden_namespaces}")
         logger.info(f"Hidden labels: {self.hidden_labels}")
 
@@ -411,6 +507,12 @@ class KubernetesAPIProxy:
             with contextlib.suppress(OSError):
                 os.unlink(temp_file)
         self._temp_files = []
+        self._server_cert_pem = None
+
+        if self._agent_kubeconfig_path:
+            with contextlib.suppress(OSError):
+                os.unlink(self._agent_kubeconfig_path)
+            self._agent_kubeconfig_path = None
 
     def generate_agent_kubeconfig(self, output_path: str | None = None) -> str:
         """
@@ -424,6 +526,16 @@ class KubernetesAPIProxy:
         """
         import yaml
 
+        if not self._server_cert_pem:
+            raise RuntimeError("Kubernetes proxy must be started before generating an agent kubeconfig")
+
+        # A non-loopback bind address is used for Docker agents. Use Docker's
+        # stable host alias in their kubeconfig so the egress proxy can tunnel
+        # this local HTTPS connection without inspecting or rewriting it.
+        server_host = (
+            self.listen_host if self.listen_host in {"127.0.0.1", "::1", "localhost"} else "host.docker.internal"
+        )
+
         kubeconfig = {
             "apiVersion": "v1",
             "kind": "Config",
@@ -432,10 +544,8 @@ class KubernetesAPIProxy:
                 {
                     "name": "sregym-proxy",
                     "cluster": {
-                        # Use HTTP since proxy runs locally without TLS
-                        "server": f"http://127.0.0.1:{self.listen_port}",
-                        # Skip TLS verification for local proxy
-                        "insecure-skip-tls-verify": True,
+                        "server": f"https://{server_host}:{self.listen_port}",
+                        "certificate-authority-data": base64.b64encode(self._server_cert_pem.encode()).decode(),
                     },
                 }
             ],
@@ -451,24 +561,31 @@ class KubernetesAPIProxy:
             "users": [
                 {
                     "name": "sregym-agent",
-                    # No credentials needed - proxy handles auth to real API
-                    "user": {},
+                    "user": {"token": self._agent_token},
                 }
             ],
         }
 
-        if output_path is None:
-            output_path = os.path.join(tempfile.gettempdir(), "sregym-agent-kubeconfig")
+        owns_output = output_path is None
+        if owns_output:
+            fd, output_path = tempfile.mkstemp(prefix="sregym-agent-kubeconfig-", suffix=".yaml")
+            os.close(fd)
 
         with open(output_path, "w") as f:
             yaml.dump(kubeconfig, f)
+        os.chmod(output_path, 0o600)
+        if owns_output:
+            self._agent_kubeconfig_path = output_path
 
         logger.info(f"Generated agent kubeconfig at {output_path}")
         return output_path
 
     def get_proxy_url(self) -> str:
         """Get the URL of the proxy server."""
-        return f"http://127.0.0.1:{self.listen_port}"
+        server_host = (
+            self.listen_host if self.listen_host in {"127.0.0.1", "::1", "localhost"} else "host.docker.internal"
+        )
+        return f"https://{server_host}:{self.listen_port}"
 
 
 # Module-level singleton for easy access
@@ -487,13 +604,17 @@ def start_proxy(
     hidden_namespaces: set[str] | None = None,
     hidden_labels: dict[str, set[str]] | None = None,
     port: int = 16443,
+    block_workload_creation: bool = False,
 ) -> KubernetesAPIProxy:
     """Start the Kubernetes API filtering proxy."""
     global _proxy_instance
     if _proxy_instance is not None:
         _proxy_instance.stop()
     _proxy_instance = KubernetesAPIProxy(
-        hidden_namespaces=hidden_namespaces, hidden_labels=hidden_labels, listen_port=port
+        hidden_namespaces=hidden_namespaces,
+        hidden_labels=hidden_labels,
+        listen_port=port,
+        block_workload_creation=block_workload_creation,
     )
     _proxy_instance.start()
     return _proxy_instance
@@ -505,3 +626,14 @@ def stop_proxy():
     if _proxy_instance is not None:
         _proxy_instance.stop()
         _proxy_instance = None
+
+
+def _is_workload_create_path(path: str) -> bool:
+    """Return whether a Kubernetes API path creates a new workload object."""
+    normalized = urlparse(path).path
+    for _ in range(3):
+        decoded = unquote(normalized)
+        if decoded == normalized:
+            break
+        normalized = decoded
+    return normalized.casefold().rstrip("/").endswith(tuple(WORKLOAD_CREATE_SUFFIXES))
