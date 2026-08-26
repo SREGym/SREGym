@@ -128,6 +128,9 @@ Use `--force-build` to rebuild the container image after updating dependencies o
 uv run main.py --agent codex --model gpt-5 --force-build
 ```
 
+Containerized agents can use the public internet by default, but direct access to the benchmark's GitHub source is
+blocked. Use `--internet-access open` only when you intentionally need the previous unrestricted network behavior.
+
 ### Model Selection
 
 SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings directly (no config file needed). Just pass any supported model string via `--model`:
@@ -152,6 +155,9 @@ Set the required environment variable for your provider before running:
 SREGym supports local models through Ollama and OpenAI-compatible servers such as vLLM and LM Studio. The examples below use Ollama.
 
 Set `AGENT_API_KEY` as well if the endpoint requires authentication.
+
+> [!CAUTION]
+> When you use `--internet-access filtered`, the agent runs on an isolated Docker network. It cannot reach a local model server that listens only on `127.0.0.1` or `localhost`. Configure the server to listen on a host-reachable interface, such as `0.0.0.0`, and use `http://host.docker.internal:<port>` as the API base. Protect the exposed port with authentication or a firewall. This requirement is the same for Kind and external Kubernetes clusters because the connection is between the agent container and the machine running SREGym.
 
 **Stratus with Ollama:**
 

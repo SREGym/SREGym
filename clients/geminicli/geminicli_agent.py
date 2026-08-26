@@ -9,6 +9,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -200,6 +201,30 @@ class GeminiCliAgent:
         logger.info(f"Extracted usage metrics: {metrics}")
         return metrics
 
+    def _build_command(self, instruction: str) -> str:
+        model = self.model_name.split("/")[-1]
+        escaped_instruction = shlex.quote(instruction)
+        return f"gemini -p {escaped_instruction} -y -m {model}"
+
+    def _prepare_filtered_settings(self) -> Path | None:
+        """Create a per-run Gemini settings file for provider-side tool blocking."""
+        if os.environ.get("AGENT_INTERNET_ACCESS") != "filtered":
+            return None
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix="gemini-system-settings-",
+            suffix=".json",
+            dir=self.logs_dir,
+            delete=False,
+        ) as settings_file:
+            json.dump(
+                {"tools": {"exclude": ["google_web_search", "web_fetch", "browser_agent"]}},
+                settings_file,
+            )
+            return Path(settings_file.name)
+
     def run(self, instruction: str) -> int:
         """
         Run the Gemini CLI agent with the given instruction.
@@ -250,9 +275,10 @@ class GeminiCliAgent:
             logger.error("=" * 80)
             return 1
 
-        # Build command
-        escaped_instruction = shlex.quote(instruction)
-        command = f"gemini -p {escaped_instruction} -y -m {model}"
+        command = self._build_command(instruction)
+        filtered_settings = self._prepare_filtered_settings()
+        if filtered_settings is not None:
+            env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(filtered_settings)
 
         logger.info(f"Executing command: {command}")
 
@@ -287,3 +313,6 @@ class GeminiCliAgent:
         except Exception as e:
             logger.error(f"Error running Gemini CLI: {e}")
             raise
+        finally:
+            if filtered_settings is not None:
+                filtered_settings.unlink(missing_ok=True)
