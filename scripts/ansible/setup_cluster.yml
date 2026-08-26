@@ -467,6 +467,8 @@
         state: link
       become: yes
       when: >
+        manage_generic_kernel
+        and
         not dm_flakey_exists
         and ubuntu_headers.stat.exists
         and (build_symlink is defined and (not build_symlink.stat.exists or not build_symlink.stat.islnk))
