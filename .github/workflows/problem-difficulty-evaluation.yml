@@ -1,0 +1,245 @@
+name: Problem Difficulty Evaluation
+
+# Opt-in only: a core team member starts this workflow from the Actions UI.
+# Codex requires the Responses API, so a local LiteLLM proxy translates its
+# requests to Z.ai's Anthropic-compatible GLM Coding Plan endpoint.
+
+on:
+  workflow_dispatch:
+    inputs:
+      problem_id:
+        description: "Problem ID (key in problems/registry.py)"
+        required: true
+        type: string
+      attempts:
+        description: "Number of independent evaluations"
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "5"
+          - "3"
+      model:
+        description: "Z.ai Coding Plan model"
+        required: true
+        default: glm-4.7
+        type: choice
+        options:
+          - glm-4.7
+          - glm-5.1
+
+concurrency:
+  group: problem-difficulty-${{ inputs.problem_id }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+    env:
+      PROBLEM_ID: ${{ inputs.problem_id }}
+      ATTEMPTS: ${{ inputs.attempts }}
+      ZAI_MODEL: ${{ inputs.model }}
+      LITELLM_PORT: "4000"
+    steps:
+      - name: Require Z.ai Coding Plan secret
+        env:
+          ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
+        run: |
+          if [ -z "$ZCODE_API_KEY" ]; then
+            echo "::error::Repository secret ZCODE_API_KEY is not configured."
+            exit 1
+          fi
+
+      - name: Preflight Z.ai Coding Plan quota
+        env:
+          ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          response_file="$RUNNER_TEMP/zai-preflight.json"
+          request_body=$(jq -cn --arg model "$ZAI_MODEL" '{
+            model: $model,
+            messages: [{role: "user", content: "Reply with OK."}],
+            thinking: {type: "disabled"},
+            max_tokens: 1,
+            stream: false
+          }')
+          http_status=$(curl --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 60 \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --url https://api.z.ai/api/coding/paas/v4/chat/completions \
+            --header "Authorization: Bearer $ZCODE_API_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$request_body")
+
+          case "$http_status" in
+            2??)
+              echo "Z.ai Coding Plan preflight passed for $ZAI_MODEL."
+              echo "ZAI_PREFLIGHT_PASSED=true" >> "$GITHUB_ENV"
+              ;;
+            *)
+              error_code=$(jq -r '.error.code // .code // "unknown"' "$response_file" 2>/dev/null || true)
+              error_message=$(jq -r '.error.message // .message // "unknown error"' "$response_file" 2>/dev/null || true)
+              printf 'Z.ai Coding Plan preflight failed: HTTP %s, code %s: %s\n' \
+                "$http_status" "${error_code:-unknown}" "${error_message:-unknown error}"
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python dependencies
+        run: uv sync --locked
+
+      - name: Start Codex-to-Z.ai bridge
+        env:
+          ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          proxy_key="sk-local-$(openssl rand -hex 24)"
+          echo "::add-mask::$proxy_key"
+          echo "LITELLM_MASTER_KEY=$proxy_key" >> "$GITHUB_ENV"
+          export LITELLM_MASTER_KEY="$proxy_key"
+
+          cat > "$RUNNER_TEMP/zai-litellm.yaml" <<EOF
+          model_list:
+            - model_name: $ZAI_MODEL
+              litellm_params:
+                model: anthropic/$ZAI_MODEL
+                api_base: https://api.z.ai/api/anthropic
+                api_key: os.environ/ZCODE_API_KEY
+          litellm_settings:
+            drop_params: true
+            modify_params: true
+          general_settings:
+            master_key: os.environ/LITELLM_MASTER_KEY
+          EOF
+
+          # The proxy extra conflicts with SREGym's intentionally pinned web
+          # stack, so run the matching LiteLLM proxy in an isolated uv tool env.
+          nohup uvx --from 'litellm[proxy]==1.91.0' litellm \
+            --config "$RUNNER_TEMP/zai-litellm.yaml" \
+            --host 0.0.0.0 \
+            --port "$LITELLM_PORT" \
+            > "$RUNNER_TEMP/litellm.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/litellm.pid"
+
+          for _ in $(seq 1 90); do
+            if curl --fail --silent --show-error \
+              -H "Authorization: Bearer $proxy_key" \
+              "http://127.0.0.1:$LITELLM_PORT/health/liveliness" > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::error::LiteLLM bridge did not become ready."
+          tail -200 "$RUNNER_TEMP/litellm.log" || true
+          exit 1
+
+      - name: Install Kind
+        run: |
+          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+          kind version
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Pre-pull kind node image
+        run: docker pull jacksonarthurclark/aiopslab-kind-x86:latest
+
+      - name: Prepare /run/udev for OpenEBS NDM
+        run: sudo mkdir -p /run/udev
+
+      - name: Create kind cluster with Calico
+        run: bash kind/setup_kind_cluster.sh x86
+
+      - name: Run repeated Codex evaluation
+        env:
+          AGENT_API_BASE: http://127.0.0.1:4000/v1
+          JUDGE_API_BASE: http://127.0.0.1:4000/v1
+        run: |
+          set -euo pipefail
+          export AGENT_API_KEY="$LITELLM_MASTER_KEY"
+          export JUDGE_API_KEY="$LITELLM_MASTER_KEY"
+          uv run main.py \
+            --problem "$PROBLEM_ID" \
+            --agent codex \
+            --model "$ZAI_MODEL" \
+            --judge-model "openai/$ZAI_MODEL" \
+            --n-attempts "$ATTEMPTS" \
+            --agent-timeout 1800 \
+            --internet-access filtered \
+            2>&1 | tee benchmark.log
+
+      - name: Dump cluster diagnostics
+        if: failure() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        run: |
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by='.lastTimestamp' | tail -100 || true
+          kind export logs /tmp/kind-logs || true
+
+      - name: Build pass-rate report
+        if: always() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        run: |
+          set -euo pipefail
+          result_csv=$(find results -type f -name '*_codex_results.csv' ! -name 'codex_ALL_results.csv' 2>/dev/null \
+            | sort | tail -n1 || true)
+          if [ -z "$result_csv" ]; then
+            result_csv=$(find . -maxdepth 1 -type f -name '_running_*_codex_results.csv' \
+              | sort | tail -n1 || true)
+          fi
+
+          if [ -z "$result_csv" ]; then
+            {
+              echo "# Z.ai Problem Difficulty Evaluation"
+              echo
+              echo "No result CSV was produced. Inspect the benchmark and cluster logs."
+            } | tee evaluation-report.md >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          uv run python -m sregym.problem_evaluation_report \
+            --csv "$result_csv" \
+            --problem "$PROBLEM_ID" \
+            --model "$ZAI_MODEL" \
+            --attempts "$ATTEMPTS" \
+            --output evaluation-report.md \
+            --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload evaluation artifacts
+        if: always() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: problem-difficulty-evaluation-${{ github.run_attempt }}
+          path: |
+            evaluation-report.md
+            benchmark.log
+            results/
+            _running_*_codex_results.csv
+            ${{ runner.temp }}/litellm.log
+            /tmp/kind-logs/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Stop Codex-to-Z.ai bridge
+        if: always() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        run: |
+          if [ -f "$RUNNER_TEMP/litellm.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/litellm.pid")" 2>/dev/null || true
+          fi
