@@ -1,0 +1,465 @@
+name: Problem Difficulty Evaluation
+
+# Opt-in only: a core team member starts this workflow from the Actions UI or
+# comments "/evaluate-problem <id> [3|5] [glm-5.3-flash]" on a pull request.
+# Codex requires the Responses API, so a local LiteLLM proxy translates its
+# requests to Z.ai's Anthropic-compatible GLM Coding Plan endpoint.
+# Secret-bearing comment runs execute the default branch, never PR code.
+
+on:
+  issue_comment:
+    types: [created, edited]
+  workflow_dispatch:
+    inputs:
+      problem_id:
+        description: "Problem ID (key in problems/registry.py)"
+        required: true
+        type: string
+      attempts:
+        description: "Number of independent evaluations"
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "5"
+          - "3"
+      model:
+        description: "Z.ai Coding Plan model"
+        required: true
+        default: glm-5.3-flash
+        type: choice
+        options:
+          - glm-5.3-flash
+
+concurrency:
+  group: problem-difficulty-${{ github.event_name }}-${{ github.event.inputs.problem_id || github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/evaluate-problem'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_run: ${{ steps.parse.outputs.should_run }}
+      problem_id: ${{ steps.parse.outputs.problem_id }}
+      attempts: ${{ steps.parse.outputs.attempts }}
+      model: ${{ steps.parse.outputs.model }}
+      checkout_ref: ${{ steps.parse.outputs.checkout_ref }}
+      pr_number: ${{ steps.parse.outputs.pr_number }}
+      comment_id: ${{ steps.parse.outputs.comment_id }}
+      skip_reason: ${{ steps.parse.outputs.skip_reason }}
+    steps:
+      - name: Resolve evaluation request
+        id: parse
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_ID: ${{ github.event.inputs.problem_id }}
+          DISPATCH_ATTEMPTS: ${{ github.event.inputs.attempts }}
+          DISPATCH_MODEL: ${{ github.event.inputs.model }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_ASSOC: ${{ github.event.comment.author_association }}
+        run: |
+          set -euo pipefail
+          should_run=false
+          problem_id=""
+          attempts=""
+          model=""
+          checkout_ref=""
+          pr_number=""
+          comment_id=""
+          skip_reason=""
+
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              problem_id="$DISPATCH_ID"
+              attempts="$DISPATCH_ATTEMPTS"
+              model="$DISPATCH_MODEL"
+              checkout_ref="$DISPATCH_REF"
+              ;;
+            issue_comment)
+              pr_number="$ISSUE_NUMBER"
+              comment_id="$COMMENT_ID"
+              # This job receives ZCODE_API_KEY later. Never execute code from
+              # the PR head or merge ref in this privileged workflow.
+              checkout_ref="$DEFAULT_BRANCH"
+              case "$COMMENT_ASSOC" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  skip_reason="comment ignored: author association '$COMMENT_ASSOC' lacks write access"
+                  ;;
+              esac
+              if [ -z "$skip_reason" ]; then
+                raw=$(printf '%s\n' "$COMMENT_BODY" \
+                  | grep -iE '^[[:space:]]*/evaluate-problem[[:space:]:]+' \
+                  | head -n1 \
+                  | sed -E 's#^[[:space:]]*/evaluate-problem[[:space:]:]+##I' || true)
+                raw=$(printf '%s' "$raw" | tr -d '\r')
+                problem_id=$(printf '%s' "$raw" | awk '{print $1}')
+                attempts=$(printf '%s' "$raw" | awk '{print $2}')
+                model=$(printf '%s' "$raw" | awk '{print $3}')
+                attempts=${attempts:-5}
+              model=${model:-glm-5.3-flash}
+              fi
+              ;;
+          esac
+
+          problem_id=${problem_id//\`/}
+          problem_id=${problem_id//\"/}
+          problem_id=${problem_id//\'/}
+
+          if [ -z "$skip_reason" ]; then
+            if ! [[ "$problem_id" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+              skip_reason="problem ID must contain only letters, numbers, dots, underscores, or hyphens"
+            elif [ "$attempts" != "3" ] && [ "$attempts" != "5" ]; then
+              skip_reason="attempts must be 3 or 5"
+            elif [ "$model" != "glm-5.3-flash" ]; then
+              skip_reason="model must be glm-5.3-flash"
+            else
+              should_run=true
+            fi
+          fi
+
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "problem_id=$problem_id" >> "$GITHUB_OUTPUT"
+          echo "attempts=$attempts" >> "$GITHUB_OUTPUT"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$checkout_ref" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "comment_id=$comment_id" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
+
+          if [ "$should_run" = "true" ]; then
+            echo "::notice::Difficulty evaluation will run for '$problem_id' ($attempts attempts, $model)"
+          else
+            echo "::notice::Difficulty evaluation skipped: $skip_reason"
+          fi
+
+  evaluate:
+    needs: resolve
+    if: needs.resolve.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
+      ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
+      ZAI_MODEL: ${{ needs.resolve.outputs.model }}
+      LITELLM_PORT: "4000"
+    steps:
+      - name: Require Z.ai Coding Plan secret
+        env:
+          ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
+        run: |
+          if [ -z "$ZCODE_API_KEY" ]; then
+            echo "::error::Repository secret ZCODE_API_KEY is not configured."
+            exit 1
+          fi
+
+      - name: Preflight Z.ai Coding Plan quota
+        env:
+          ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          response_file="$RUNNER_TEMP/zai-preflight.json"
+          request_body=$(jq -cn --arg model "$ZAI_MODEL" '{
+            model: $model,
+            messages: [{role: "user", content: "Reply with OK."}],
+            thinking: {type: "disabled"},
+            max_tokens: 1,
+            stream: false
+          }')
+          http_status=$(curl --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 60 \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --url https://api.z.ai/api/coding/paas/v4/chat/completions \
+            --header "Authorization: Bearer $ZCODE_API_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$request_body")
+
+          case "$http_status" in
+            2??)
+              echo "Z.ai Coding Plan preflight passed for $ZAI_MODEL."
+              echo "ZAI_PREFLIGHT_PASSED=true" >> "$GITHUB_ENV"
+              ;;
+            *)
+              error_code=$(jq -r '.error.code // .code // "unknown"' "$response_file" 2>/dev/null || true)
+              error_message=$(jq -r '.error.message // .message // "unknown error"' "$response_file" 2>/dev/null || true)
+              printf 'Z.ai Coding Plan preflight failed: HTTP %s, code %s: %s\n' \
+                "$http_status" "${error_code:-unknown}" "${error_message:-unknown error}"
+              exit 1
+              ;;
+          esac
+
+      - name: React to triggering comment
+        if: needs.resolve.outputs.comment_id != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          COMMENT_ID: ${{ needs.resolve.outputs.comment_id }}
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: Number(process.env.COMMENT_ID),
+              content: 'eyes',
+            });
+
+      - name: Post running evaluation comment
+        if: needs.resolve.outputs.pr_number != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
+          ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
+          ZAI_MODEL: ${{ needs.resolve.outputs.model }}
+        with:
+          script: |
+            const marker = '<!-- problem-difficulty-evaluation -->';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body =
+              `${marker}\n## Problem Difficulty Evaluation\n\n` +
+              `**Status: Running** for \`${process.env.PROBLEM_ID}\` ` +
+              `(${process.env.ATTEMPTS} attempts, \`${process.env.ZAI_MODEL}\`)\n\n` +
+              `The secret-bearing evaluator runs trusted code from the default branch.\n\n` +
+              `_[Live workflow run](${runUrl})_`;
+
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Require registered problem ID
+        run: |
+          if ! grep -Fq "\"$PROBLEM_ID\":" sregym/conductor/problems/registry.py; then
+            echo "::error::Problem '$PROBLEM_ID' is not registered on the checked-out branch."
+            exit 1
+          fi
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install Python dependencies
+        run: uv sync --locked
+
+      - name: Start Codex-to-Z.ai bridge
+        env:
+          ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
+        run: |
+          set -euo pipefail
+          proxy_key="sk-local-$(openssl rand -hex 24)"
+          echo "::add-mask::$proxy_key"
+          echo "LITELLM_MASTER_KEY=$proxy_key" >> "$GITHUB_ENV"
+          export LITELLM_MASTER_KEY="$proxy_key"
+
+          cat > "$RUNNER_TEMP/zai-litellm.yaml" <<EOF
+          model_list:
+            - model_name: $ZAI_MODEL
+              litellm_params:
+                model: anthropic/$ZAI_MODEL
+                api_base: https://api.z.ai/api/anthropic
+                api_key: os.environ/ZCODE_API_KEY
+          litellm_settings:
+            drop_params: true
+            modify_params: true
+          general_settings:
+            master_key: os.environ/LITELLM_MASTER_KEY
+          EOF
+
+          # The proxy extra conflicts with SREGym's intentionally pinned web
+          # stack, so run the matching LiteLLM proxy in an isolated uv tool env.
+          nohup uvx --from 'litellm[proxy]==1.91.0' litellm \
+            --config "$RUNNER_TEMP/zai-litellm.yaml" \
+            --host 0.0.0.0 \
+            --port "$LITELLM_PORT" \
+            > "$RUNNER_TEMP/litellm.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/litellm.pid"
+
+          for _ in $(seq 1 90); do
+            if curl --fail --silent --show-error \
+              -H "Authorization: Bearer $proxy_key" \
+              "http://127.0.0.1:$LITELLM_PORT/health/liveliness" > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::error::LiteLLM bridge did not become ready."
+          tail -200 "$RUNNER_TEMP/litellm.log" || true
+          exit 1
+
+      - name: Install Kind
+        run: |
+          curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+          kind version
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Pre-pull kind node image
+        run: docker pull jacksonarthurclark/aiopslab-kind-x86:latest
+
+      - name: Prepare /run/udev for OpenEBS NDM
+        run: sudo mkdir -p /run/udev
+
+      - name: Create kind cluster with Calico
+        run: bash kind/setup_kind_cluster.sh x86
+
+      - name: Run repeated Codex evaluation
+        env:
+          AGENT_API_BASE: http://127.0.0.1:4000/v1
+          JUDGE_API_BASE: http://127.0.0.1:4000/v1
+        run: |
+          set -euo pipefail
+          export AGENT_API_KEY="$LITELLM_MASTER_KEY"
+          export JUDGE_API_KEY="$LITELLM_MASTER_KEY"
+          uv run main.py \
+            --problem "$PROBLEM_ID" \
+            --agent codex \
+            --model "$ZAI_MODEL" \
+            --judge-model "openai/$ZAI_MODEL" \
+            --n-attempts "$ATTEMPTS" \
+            --agent-timeout 1800 \
+            --internet-access filtered \
+            2>&1 | tee benchmark.log
+
+      - name: Dump cluster diagnostics
+        if: failure() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        run: |
+          kubectl get nodes -o wide || true
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by='.lastTimestamp' | tail -100 || true
+          kind export logs /tmp/kind-logs || true
+
+      - name: Build pass-rate report
+        if: always() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        run: |
+          set -euo pipefail
+          result_csv=$(find results -type f -name '*_codex_results.csv' ! -name 'codex_ALL_results.csv' 2>/dev/null \
+            | sort | tail -n1 || true)
+          if [ -z "$result_csv" ]; then
+            result_csv=$(find . -maxdepth 1 -type f -name '_running_*_codex_results.csv' \
+              | sort | tail -n1 || true)
+          fi
+
+          if [ -z "$result_csv" ]; then
+            {
+              echo "# Z.ai Problem Difficulty Evaluation"
+              echo
+              echo "No result CSV was produced. Inspect the benchmark and cluster logs."
+            } | tee evaluation-report.md >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+          uv run python -m sregym.problem_evaluation_report \
+            --csv "$result_csv" \
+            --problem "$PROBLEM_ID" \
+            --model "$ZAI_MODEL" \
+            --attempts "$ATTEMPTS" \
+            --output evaluation-report.md \
+            --github-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload evaluation artifacts
+        if: always() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: problem-difficulty-evaluation-${{ github.run_attempt }}
+          path: |
+            evaluation-report.md
+            benchmark.log
+            results/
+            _running_*_codex_results.csv
+            ${{ runner.temp }}/litellm.log
+            /tmp/kind-logs/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Stop Codex-to-Z.ai bridge
+        if: always() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        run: |
+          if [ -f "$RUNNER_TEMP/litellm.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/litellm.pid")" 2>/dev/null || true
+          fi
+
+      - name: Post evaluation result comment
+        if: always() && needs.resolve.outputs.pr_number != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- problem-difficulty-evaluation -->';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let body;
+            try {
+              body = fs.readFileSync(`${process.env.GITHUB_WORKSPACE}/evaluation-report.md`, 'utf8');
+              body = `${marker}\n${body}\n_[Workflow run](${runUrl})_`;
+            } catch (error) {
+              body =
+                `${marker}\n## Problem Difficulty Evaluation\n\n` +
+                `**Status: Failed** before a pass-rate report was produced.\n\n` +
+                `Inspect the [workflow run](${runUrl}) for the preflight or infrastructure error.`;
+            }
+
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: React to triggering comment with final result
+        if: always() && needs.resolve.outputs.comment_id != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          COMMENT_ID: ${{ needs.resolve.outputs.comment_id }}
+          JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: Number(process.env.COMMENT_ID),
+              content: process.env.JOB_STATUS === 'success' ? '+1' : '-1',
+            });
