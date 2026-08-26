@@ -31,7 +31,8 @@ from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
-from sregym.service.container_runner import ContainerRunner, ExecInput
+from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
+from sregym.service.internet_policy import InternetPolicy
 from sregym.traces import postprocess as trace_postprocess
 from sregym.traces import store as trace_store
 
@@ -75,13 +76,22 @@ def run_preflight_check(
         check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
 
     logger.info(f"🔍 Running pre-flight check for '{agent_name}'...")
-    result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+    try:
+        result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+    except BaseException:
+        # A failed or interrupted preflight happens before the API shutdown
+        # scope exists, so release the proxy and its Docker resources here.
+        container_runner.cleanup_egress_proxy()
+        container_runner.cleanup_credential_tmps()
+        raise
     if result.returncode != 0:
         if result.stdout:
             print(result.stdout.strip())
         if result.stderr:
             print(result.stderr.strip())
         logger.error(f"❌ Pre-flight check failed for '{agent_name}'")
+        container_runner.cleanup_egress_proxy()
+        container_runner.cleanup_credential_tmps()
         sys.exit(1)
 
     logger.info(f"✅ Pre-flight check passed for '{agent_name}'")
@@ -453,6 +463,7 @@ def driver_loop(
                     "problem_id": pid,
                     "attempt": attempt,
                 }
+                snapshot.update(LAUNCHER.internet_policy_result(agent_proc))
                 for stage, outcome in conductor.results.items():
                     if isinstance(outcome, dict):
                         for k, v in outcome.items():
@@ -568,6 +579,7 @@ def main(args):
     init_logger()
 
     agent_model, judge_model = _configure_model_environment(args)
+    internet_policy = InternetPolicy.from_mode(args.internet_access)
 
     if args.noise:
         logger.info("Noise injection enabled.")
@@ -579,11 +591,9 @@ def main(args):
     logger.info(
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
         f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
+        f"internet_access: {internet_policy.mode.value}, "
         f"agent_api_base: {_env_status('AGENT_API_BASE')}, judge_api_base: {_env_status('JUDGE_API_BASE')}"
     )
-
-    if not args.use_external_harness:
-        run_judge_preflight_check()
 
     # Only build/check agent container image if the agent requires it
     agent_reg = (
@@ -591,18 +601,49 @@ def main(args):
         if args.agent
         else None
     )
-    if not agent_reg or agent_reg.container_isolation:
-        LAUNCHER.enable_container_isolation(force_build=args.force_build)
+    if (
+        internet_policy.is_filtered
+        and not args.use_external_harness
+        and agent_reg
+        and not agent_reg.container_isolation
+    ):
+        raise RuntimeError(
+            f"Agent '{agent_reg.name}' does not use container isolation. "
+            "Run it with --internet-access open or enable container isolation."
+        )
 
-    # Pre-flight check — makes a real (minimal) API call inside the agent
-    # container to validate model and credentials in one shot.
-    run_preflight_check(
-        args.agent,
-        container_runner=LAUNCHER._container_runner,
-        install_script=agent_reg.install_script if agent_reg else None,
+    if not args.use_external_harness:
+        run_judge_preflight_check()
+
+    k8s_proxy_listen_host = (
+        get_container_host_bind_address()
+        if internet_policy.is_filtered and not args.use_external_harness
+        else "127.0.0.1"
     )
+    conductor_config = ConductorConfig(
+        deploy_loki=not args.use_external_harness,
+        enable_noise=args.noise,
+        internet_policy=internet_policy,
+        k8s_proxy_listen_host=k8s_proxy_listen_host,
+        block_workload_creation=internet_policy.is_filtered,
+    )
+    LAUNCHER.set_internet_policy(conductor_config.internet_policy)
 
-    conductor_config = ConductorConfig(deploy_loki=not args.use_external_harness, enable_noise=args.noise)
+    try:
+        if not agent_reg or agent_reg.container_isolation:
+            LAUNCHER.enable_container_isolation(force_build=args.force_build)
+
+        # Pre-flight check — makes a real (minimal) API call inside the agent
+        # container to validate model and credentials in one shot.
+        run_preflight_check(
+            args.agent,
+            container_runner=LAUNCHER._container_runner,
+            install_script=agent_reg.install_script if agent_reg else None,
+        )
+    except BaseException:
+        LAUNCHER.cleanup_all()
+        raise
+
     conductor = Conductor(config=conductor_config)
 
     suite = getattr(args, "suite", None)
@@ -726,6 +767,12 @@ if __name__ == "__main__":
         "--noise",
         action="store_true",
         help="Enable transient noise injection via Chaos Mesh during problem runs",
+    )
+    parser.add_argument(
+        "--internet-access",
+        choices=("filtered", "open"),
+        default="filtered",
+        help="Agent internet policy. Filtered mode blocks direct access to SREGym GitHub source.",
     )
     parser.add_argument(
         "--n-attempts",
