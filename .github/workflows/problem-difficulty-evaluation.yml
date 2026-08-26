@@ -1,10 +1,14 @@
 name: Problem Difficulty Evaluation
 
-# Opt-in only: a core team member starts this workflow from the Actions UI.
+# Opt-in only: a core team member starts this workflow from the Actions UI or
+# comments "/evaluate-problem <id> [3|5] [glm-5.3-flash]" on a pull request.
 # Codex requires the Responses API, so a local LiteLLM proxy translates its
 # requests to Z.ai's Anthropic-compatible GLM Coding Plan endpoint.
+# Secret-bearing comment runs execute the default branch, never PR code.
 
 on:
+  issue_comment:
+    types: [created, edited]
   workflow_dispatch:
     inputs:
       problem_id:
@@ -22,26 +26,137 @@ on:
       model:
         description: "Z.ai Coding Plan model"
         required: true
-        default: glm-4.7
+        default: glm-5.3-flash
         type: choice
         options:
-          - glm-4.7
-          - glm-5.1
+          - glm-5.3-flash
 
 concurrency:
-  group: problem-difficulty-${{ inputs.problem_id }}
+  group: problem-difficulty-${{ github.event_name }}-${{ github.event.inputs.problem_id || github.event.issue.number || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  resolve:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/evaluate-problem'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_run: ${{ steps.parse.outputs.should_run }}
+      problem_id: ${{ steps.parse.outputs.problem_id }}
+      attempts: ${{ steps.parse.outputs.attempts }}
+      model: ${{ steps.parse.outputs.model }}
+      checkout_ref: ${{ steps.parse.outputs.checkout_ref }}
+      pr_number: ${{ steps.parse.outputs.pr_number }}
+      comment_id: ${{ steps.parse.outputs.comment_id }}
+      skip_reason: ${{ steps.parse.outputs.skip_reason }}
+    steps:
+      - name: Resolve evaluation request
+        id: parse
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DISPATCH_REF: ${{ github.ref }}
+          DISPATCH_ID: ${{ github.event.inputs.problem_id }}
+          DISPATCH_ATTEMPTS: ${{ github.event.inputs.attempts }}
+          DISPATCH_MODEL: ${{ github.event.inputs.model }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_ASSOC: ${{ github.event.comment.author_association }}
+        run: |
+          set -euo pipefail
+          should_run=false
+          problem_id=""
+          attempts=""
+          model=""
+          checkout_ref=""
+          pr_number=""
+          comment_id=""
+          skip_reason=""
+
+          case "$EVENT_NAME" in
+            workflow_dispatch)
+              problem_id="$DISPATCH_ID"
+              attempts="$DISPATCH_ATTEMPTS"
+              model="$DISPATCH_MODEL"
+              checkout_ref="$DISPATCH_REF"
+              ;;
+            issue_comment)
+              pr_number="$ISSUE_NUMBER"
+              comment_id="$COMMENT_ID"
+              # This job receives ZCODE_API_KEY later. Never execute code from
+              # the PR head or merge ref in this privileged workflow.
+              checkout_ref="$DEFAULT_BRANCH"
+              case "$COMMENT_ASSOC" in
+                OWNER|MEMBER|COLLABORATOR) ;;
+                *)
+                  skip_reason="comment ignored: author association '$COMMENT_ASSOC' lacks write access"
+                  ;;
+              esac
+              if [ -z "$skip_reason" ]; then
+                raw=$(printf '%s\n' "$COMMENT_BODY" \
+                  | grep -iE '^[[:space:]]*/evaluate-problem[[:space:]:]+' \
+                  | head -n1 \
+                  | sed -E 's#^[[:space:]]*/evaluate-problem[[:space:]:]+##I' || true)
+                raw=$(printf '%s' "$raw" | tr -d '\r')
+                problem_id=$(printf '%s' "$raw" | awk '{print $1}')
+                attempts=$(printf '%s' "$raw" | awk '{print $2}')
+                model=$(printf '%s' "$raw" | awk '{print $3}')
+                attempts=${attempts:-5}
+              model=${model:-glm-5.3-flash}
+              fi
+              ;;
+          esac
+
+          problem_id=${problem_id//\`/}
+          problem_id=${problem_id//\"/}
+          problem_id=${problem_id//\'/}
+
+          if [ -z "$skip_reason" ]; then
+            if ! [[ "$problem_id" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+              skip_reason="problem ID must contain only letters, numbers, dots, underscores, or hyphens"
+            elif [ "$attempts" != "3" ] && [ "$attempts" != "5" ]; then
+              skip_reason="attempts must be 3 or 5"
+            elif [ "$model" != "glm-5.3-flash" ]; then
+              skip_reason="model must be glm-5.3-flash"
+            else
+              should_run=true
+            fi
+          fi
+
+          echo "should_run=$should_run" >> "$GITHUB_OUTPUT"
+          echo "problem_id=$problem_id" >> "$GITHUB_OUTPUT"
+          echo "attempts=$attempts" >> "$GITHUB_OUTPUT"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=$checkout_ref" >> "$GITHUB_OUTPUT"
+          echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+          echo "comment_id=$comment_id" >> "$GITHUB_OUTPUT"
+          echo "skip_reason=$skip_reason" >> "$GITHUB_OUTPUT"
+
+          if [ "$should_run" = "true" ]; then
+            echo "::notice::Difficulty evaluation will run for '$problem_id' ($attempts attempts, $model)"
+          else
+            echo "::notice::Difficulty evaluation skipped: $skip_reason"
+          fi
+
   evaluate:
+    needs: resolve
+    if: needs.resolve.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 360
     permissions:
       contents: read
+      pull-requests: write
+      issues: write
     env:
-      PROBLEM_ID: ${{ inputs.problem_id }}
-      ATTEMPTS: ${{ inputs.attempts }}
-      ZAI_MODEL: ${{ inputs.model }}
+      PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
+      ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
+      ZAI_MODEL: ${{ needs.resolve.outputs.model }}
       LITELLM_PORT: "4000"
     steps:
       - name: Require Z.ai Coding Plan secret
@@ -91,11 +206,66 @@ jobs:
               ;;
           esac
 
+      - name: React to triggering comment
+        if: needs.resolve.outputs.comment_id != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          COMMENT_ID: ${{ needs.resolve.outputs.comment_id }}
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: Number(process.env.COMMENT_ID),
+              content: 'eyes',
+            });
+
+      - name: Post running evaluation comment
+        if: needs.resolve.outputs.pr_number != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
+          ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
+          ZAI_MODEL: ${{ needs.resolve.outputs.model }}
+        with:
+          script: |
+            const marker = '<!-- problem-difficulty-evaluation -->';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body =
+              `${marker}\n## Problem Difficulty Evaluation\n\n` +
+              `**Status: Running** for \`${process.env.PROBLEM_ID}\` ` +
+              `(${process.env.ATTEMPTS} attempts, \`${process.env.ZAI_MODEL}\`)\n\n` +
+              `The secret-bearing evaluator runs trusted code from the default branch.\n\n` +
+              `_[Live workflow run](${runUrl})_`;
+
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ needs.resolve.outputs.checkout_ref }}
           submodules: recursive
           fetch-depth: 0
+
+      - name: Require registered problem ID
+        run: |
+          if ! grep -Fq "\"$PROBLEM_ID\":" sregym/conductor/problems/registry.py; then
+            echo "::error::Problem '$PROBLEM_ID' is not registered on the checked-out branch."
+            exit 1
+          fi
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -243,3 +413,53 @@ jobs:
           if [ -f "$RUNNER_TEMP/litellm.pid" ]; then
             kill "$(cat "$RUNNER_TEMP/litellm.pid")" 2>/dev/null || true
           fi
+
+      - name: Post evaluation result comment
+        if: always() && needs.resolve.outputs.pr_number != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- problem-difficulty-evaluation -->';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            let body;
+            try {
+              body = fs.readFileSync(`${process.env.GITHUB_WORKSPACE}/evaluation-report.md`, 'utf8');
+              body = `${marker}\n${body}\n_[Workflow run](${runUrl})_`;
+            } catch (error) {
+              body =
+                `${marker}\n## Problem Difficulty Evaluation\n\n` +
+                `**Status: Failed** before a pass-rate report was produced.\n\n` +
+                `Inspect the [workflow run](${runUrl}) for the preflight or infrastructure error.`;
+            }
+
+            const { owner, repo } = context.repo;
+            const issue_number = Number(process.env.PR_NUMBER);
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+      - name: React to triggering comment with final result
+        if: always() && needs.resolve.outputs.comment_id != ''
+        continue-on-error: true
+        uses: actions/github-script@v7
+        env:
+          COMMENT_ID: ${{ needs.resolve.outputs.comment_id }}
+          JOB_STATUS: ${{ job.status }}
+        with:
+          script: |
+            await github.rest.reactions.createForIssueComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: Number(process.env.COMMENT_ID),
+              content: process.env.JOB_STATUS === 'success' ? '+1' : '-1',
+            });
