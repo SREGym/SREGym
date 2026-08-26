@@ -12,6 +12,7 @@ from internet_policy import (
     DEFAULT_BLOCKED_GITHUB_REPOSITORIES,
     DEFAULT_BLOCKED_GITHUB_REPOSITORY_IDS,
     blocked_github_owner,
+    should_stream_response,
 )
 from mitmproxy import ctx, http
 
@@ -35,6 +36,12 @@ BLOCKED_REPOSITORIES = tuple(
     if repository.strip()
 )
 BLOCK_LOG = Path(os.environ.get("BLOCKED_REQUEST_LOG", "/state/blocked-requests.jsonl"))
+
+
+def responseheaders(flow: http.HTTPFlow) -> None:
+    """Forward long-lived SSE responses instead of buffering them forever."""
+    if should_stream_response(flow.response.headers.get("content-type")):
+        flow.response.stream = True
 
 
 def request(flow: http.HTTPFlow) -> None:
