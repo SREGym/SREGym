@@ -19,7 +19,7 @@ from sregym.service.container_runner import (
     ContainerRunner,
     _find_host_ca_bundle,
 )
-from sregym.service.internet_policy import InternetPolicy, blocked_github_owner
+from sregym.service.internet_policy import InternetPolicy, blocked_github_owner, should_stream_response
 from sregym.service.k8s_proxy import KubernetesAPIProxy, _is_workload_create_path, is_valid_bearer_token
 
 
@@ -69,6 +69,19 @@ def test_resolves_dot_segments_before_applying_github_policy(target):
 
 def test_allows_unconfigured_numeric_github_repository_id():
     assert blocked_github_owner("api.github.com", "/repositories/12345/contents/README.md", None) is None
+
+
+@pytest.mark.parametrize(
+    ("content_type", "expected"),
+    [
+        ("text/event-stream", True),
+        ("Text/Event-Stream; charset=utf-8", True),
+        ("application/json", False),
+        (None, False),
+    ],
+)
+def test_only_event_stream_responses_are_streamed(content_type, expected):
+    assert should_stream_response(content_type) is expected
 
 
 def test_ignores_unrelated_query_and_json_text():

@@ -46,6 +46,14 @@ class InternetPolicy:
         return self.mode == InternetAccessMode.FILTERED
 
 
+def should_stream_response(content_type: str | None) -> bool:
+    """Return whether a response must bypass mitmproxy body buffering."""
+    if not content_type:
+        return False
+    media_type = content_type.partition(";")[0].strip().casefold()
+    return media_type == "text/event-stream"
+
+
 def blocked_github_owner(
     host: str,
     request_target: str,
