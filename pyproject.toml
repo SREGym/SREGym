@@ -50,7 +50,6 @@ dependencies = [
     "filelock==3.18.0",
     "flaml==2.3.4",
     "fsspec==2025.5.1",
-    "geni-lib-xlab",
     "gguf==0.10.0",
     "gitpython==3.1.44",
     "google-auth==2.40.2",
@@ -238,6 +237,3 @@ packages = [
 [tool.setuptools.package-data]
 atif_converter = ["README.md"]
 "atif_converter.atif" = ["UPSTREAM.md"]
-
-[tool.uv.sources]
-geni-lib-xlab = { path = "scripts/geni_lib/mod/geni_lib_xlab-1.0.0.tar.gz" }
