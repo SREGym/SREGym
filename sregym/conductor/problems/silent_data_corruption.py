@@ -7,6 +7,7 @@ from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_kernel import KernelInjector
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.dm_flakey_manager import DM_FLAKEY_DEVICE_NAME, DmFlakeyManager
+from sregym.service.khaos_capabilities import KhaosCapability
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
@@ -60,6 +61,9 @@ class SilentDataCorruption(Problem):
     def requires_khaos(self) -> bool:
         """This problem requires Khaos for dm-flakey infrastructure setup."""
         return True
+
+    def khaos_capabilities(self) -> frozenset[KhaosCapability]:
+        return frozenset({KhaosCapability.DM_FLAKEY})
 
     def _discover_node_for_deploy(self) -> str | None:
         """Return the node where the target deployment is running."""

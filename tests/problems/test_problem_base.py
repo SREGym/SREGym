@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 from sregym.conductor.problems.base import Problem
+from sregym.service.khaos_capabilities import KhaosCapability
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -37,3 +38,23 @@ def test_explicit_empty_namespace_is_preserved():
     problem = ExampleProblem(app=app, namespace="")
 
     assert problem.namespace == ""
+
+
+def test_problem_without_khaos_has_no_host_capabilities():
+    app = SimpleNamespace(namespace="application-namespace")
+
+    problem = ExampleProblem(app=app)
+
+    assert problem.khaos_capabilities() == frozenset()
+
+
+def test_legacy_khaos_problem_defaults_to_ebpf_syscall_capability():
+    class LegacyKhaosProblem(ExampleProblem):
+        def requires_khaos(self) -> bool:
+            return True
+
+    app = SimpleNamespace(namespace="application-namespace")
+
+    problem = LegacyKhaosProblem(app=app)
+
+    assert problem.khaos_capabilities() == frozenset({KhaosCapability.EBPF_SYSCALL})

@@ -2,6 +2,8 @@
 
 from abc import ABC, abstractmethod
 
+from sregym.service.khaos_capabilities import KhaosCapability
+
 
 class Problem(ABC):
     run_default_workload = True
@@ -20,6 +22,12 @@ class Problem(ABC):
     def requires_khaos(self) -> bool:
         """Override this method to return True if the problem requires Khaos for fault injection."""
         return False
+
+    def khaos_capabilities(self) -> frozenset[KhaosCapability]:
+        """Return the host features this problem needs from the Khaos node agent."""
+        if self.requires_khaos():
+            return frozenset({KhaosCapability.EBPF_SYSCALL})
+        return frozenset()
 
     @classmethod
     def build_structured_root_cause(

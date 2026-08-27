@@ -37,9 +37,15 @@ spec:
           effect: "NoSchedule"
       containers:
         - name: khaos
-          image: ghcr.io/sregym/khaos:latest
-          imagePullPolicy: IfNotPresent
-          command: ["sleep", "infinity"]
+          image: ghcr.io/xlab-uiuc/khaos:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              if [ "$(stat -f -c %t /sys/fs/bpf)" != "cafe4a11" ]; then
+                mount -t bpf bpf /sys/fs/bpf
+              fi
+              exec sleep infinity
           securityContext:
             privileged: true
           volumeMounts:
@@ -53,7 +59,7 @@ spec:
             - { name: var-run,      mountPath: /var/run, readOnly: true }
             - { name: host-dev,     mountPath: /dev }
       volumes:
-        - { name: sys-bpf,     hostPath: { path: /sys/fs/bpf, type: Directory } }
+        - { name: sys-bpf,     hostPath: { path: /sys/fs/bpf, type: DirectoryOrCreate } }
         - { name: sys-debug,   hostPath: { path: /sys/kernel/debug, type: Directory } }
         - { name: host-proc,   hostPath: { path: /proc, type: Directory } }
         - { name: host-cgroup, hostPath: { path: /sys/fs/cgroup, type: Directory } }
@@ -93,9 +99,15 @@ spec:
         node-role.kubernetes.io/worker: ""   # explicit worker targeting
       containers:
         - name: khaos
-          image: ghcr.io/sregym/khaos:latest
-          imagePullPolicy: IfNotPresent
-          command: ["sleep", "infinity"]
+          image: ghcr.io/xlab-uiuc/khaos:latest
+          imagePullPolicy: Always
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              if [ "$(stat -f -c %t /sys/fs/bpf)" != "cafe4a11" ]; then
+                mount -t bpf bpf /sys/fs/bpf
+              fi
+              exec sleep infinity
           securityContext:
             privileged: true
           volumeMounts:
@@ -110,7 +122,7 @@ spec:
             - { name: openebs,      mountPath: /var/openebs }
             - { name: host-dev,     mountPath: /dev }
       volumes:
-        - { name: sys-bpf,     hostPath: { path: /sys/fs/bpf, type: Directory } }
+        - { name: sys-bpf,     hostPath: { path: /sys/fs/bpf, type: DirectoryOrCreate } }
         - { name: sys-debug,   hostPath: { path: /sys/kernel/debug, type: Directory } }
         - { name: host-proc,   hostPath: { path: /proc, type: Directory } }
         - { name: host-cgroup, hostPath: { path: /sys/fs/cgroup, type: Directory } }

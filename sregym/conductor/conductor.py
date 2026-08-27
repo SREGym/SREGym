@@ -26,7 +26,7 @@ from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.internet_policy import InternetPolicy
 from sregym.service.k8s_proxy import KubernetesAPIProxy
-from sregym.service.khaos import KhaosController
+from sregym.service.khaos import KhaosController, KhaosUnsupportedError
 from sregym.service.kubectl import KubeCtl
 from sregym.service.mcp_server import MCPServer
 from sregym.service.telemetry.loki import Loki
@@ -424,14 +424,6 @@ class Conductor:
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
         self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
 
-        if self.problem.requires_khaos() and self.kubectl.is_emulated_cluster():
-            self.logger.warning(
-                f"Problem '{self.problem_id}' requires Khaos for eBPF-based fault injection, "
-                "but Khaos cannot be deployed on emulated clusters (kind, minikube, k3d, etc.). "
-                "Skipping this problem."
-            )
-            return StartProblemResult.SKIPPED_KHAOS_REQUIRED
-
         self.fix_kubernetes()
 
         self.get_problem_stages()
@@ -441,7 +433,14 @@ class Conductor:
         self.undeploy_app()  # Cleanup any leftovers
         self.logger.info("App leftovers undeployed.")
         self.logger.info("Deploying app...")
-        self.deploy_app()
+        try:
+            self.deploy_app()
+        except KhaosUnsupportedError as exc:
+            self.logger.warning(
+                f"Problem '{self.problem_id}' requires host capabilities that are unavailable: {exc}. "
+                "Skipping this problem."
+            )
+            return StartProblemResult.SKIPPED_KHAOS_REQUIRED
         self.logger.info("App deployed.")
 
         # Update NoiseManager with problem context
@@ -816,7 +815,7 @@ class Conductor:
         # Only deploy Khaos if the problem requires it
         if problem.requires_khaos():
             self.logger.info("[DEPLOY] Deploying Khaos DaemonSet...")
-            self.khaos.ensure_deployed()
+            self.khaos.ensure_deployed(problem.khaos_capabilities())
 
         self.logger.info("[DEPLOY] Setting up OpenEBS…")
         self._preflight_openebs_udev_mount()
