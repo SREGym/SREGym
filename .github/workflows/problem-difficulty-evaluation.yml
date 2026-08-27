@@ -287,7 +287,10 @@ jobs:
           model_list:
             - model_name: $ZAI_MODEL
               litellm_params:
-                model: openai/$ZAI_MODEL
+                # Z.ai implements Chat Completions. This prefix makes LiteLLM
+                # translate Codex Responses requests instead of forwarding
+                # them to Z.ai's nonexistent /responses endpoint.
+                model: openai/chat_completions/$ZAI_MODEL
                 api_base: https://api.z.ai/api/coding/paas/v4
                 api_key: os.environ/ZCODE_API_KEY
           litellm_settings:
@@ -318,6 +321,38 @@ jobs:
           echo "::error::LiteLLM bridge did not become ready."
           tail -200 "$RUNNER_TEMP/litellm.log" || true
           exit 1
+
+      - name: Preflight Codex-to-Z.ai bridge
+        run: |
+          set -euo pipefail
+          response_file="$RUNNER_TEMP/zai-bridge-preflight.json"
+          request_body=$(jq -cn --arg model "$ZAI_MODEL" '{
+            model: $model,
+            input: "Reply with OK.",
+            max_output_tokens: 16,
+            stream: false
+          }')
+          http_status=$(curl --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 60 \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --url "http://127.0.0.1:$LITELLM_PORT/v1/responses" \
+            --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$request_body")
+
+          if [[ "$http_status" != 2* ]]; then
+            error_message=$(jq -r '.error.message // .message // "unknown error"' \
+              "$response_file" 2>/dev/null || true)
+            printf 'Codex-to-Z.ai bridge preflight failed: HTTP %s: %s\n' \
+              "$http_status" "${error_message:-unknown error}"
+            tail -200 "$RUNNER_TEMP/litellm.log" || true
+            exit 1
+          fi
+
+          echo "Codex-to-Z.ai Responses bridge preflight passed for $ZAI_MODEL."
 
       - name: Install Kind
         run: |
