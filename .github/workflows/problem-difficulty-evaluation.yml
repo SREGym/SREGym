@@ -3,7 +3,7 @@ name: Problem Difficulty Evaluation
 # Opt-in only: a core team member starts this workflow from the Actions UI or
 # comments "/evaluate-problem <id> [3|5] [glm-5.3-flash]" on a pull request.
 # Codex requires the Responses API, so a local LiteLLM proxy translates its
-# requests to Z.ai's Anthropic-compatible GLM Coding Plan endpoint.
+# requests to Z.ai's OpenAI-compatible GLM Coding Plan endpoint.
 # Secret-bearing comment runs execute the default branch, never PR code.
 
 on:
@@ -287,8 +287,8 @@ jobs:
           model_list:
             - model_name: $ZAI_MODEL
               litellm_params:
-                model: anthropic/$ZAI_MODEL
-                api_base: https://api.z.ai/api/anthropic
+                model: openai/$ZAI_MODEL
+                api_base: https://api.z.ai/api/coding/paas/v4
                 api_key: os.environ/ZCODE_API_KEY
           litellm_settings:
             drop_params: true
