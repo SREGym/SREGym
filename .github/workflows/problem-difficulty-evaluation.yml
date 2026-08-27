@@ -287,8 +287,8 @@ jobs:
           model_list:
             - model_name: $ZAI_MODEL
               litellm_params:
-                model: anthropic/$ZAI_MODEL
-                api_base: https://api.z.ai/api/anthropic
+                model: openai/$ZAI_MODEL
+                api_base: https://api.z.ai/api/coding/paas/v4
                 api_key: os.environ/ZCODE_API_KEY
           litellm_settings:
             drop_params: true
