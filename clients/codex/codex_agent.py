@@ -43,6 +43,11 @@ def custom_provider_args(env: Mapping[str, str] | None = None) -> list[str]:
         f"model_providers.{_CUSTOM_PROVIDER_ID}.wire_api={json.dumps('responses')}",
         "-c",
         f"model_providers.{_CUSTOM_PROVIDER_ID}.requires_openai_auth=false",
+        # Namespace tools are supported by OpenAI's Responses API but cannot be
+        # represented by the Chat Completions bridge used by Z.ai. Keep Codex's
+        # regular function tools while suppressing its multi-agent namespace.
+        "-c",
+        "features.multi_agent=false",
     ]
 
 

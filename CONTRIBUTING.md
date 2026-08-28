@@ -326,14 +326,6 @@ To add a new problem:
    A problem is marked saturated only when every requested attempt completes
    and passes.
 
-   The workflow requires the repository secret `ZCODE_API_KEY`. Before checking
-   out the repository or creating a cluster, it makes a minimal request to the
-   selected Z.ai model and stops if the key, model access, or Coding Plan quota
-   is unavailable. To keep that secret isolated from untrusted PR code, comment
-   runs always evaluate the default branch, so the problem must already be in
-   the default branch's registry. The workflow is never triggered
-   automatically.
-
 ### Adding New Oracles
 
 Custom oracles allow for specialized evaluation:

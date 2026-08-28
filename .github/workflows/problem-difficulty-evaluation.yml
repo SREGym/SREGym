@@ -3,7 +3,7 @@ name: Problem Difficulty Evaluation
 # Opt-in only: a core team member starts this workflow from the Actions UI or
 # comments "/evaluate-problem <id> [3|5] [glm-5.3-flash]" on a pull request.
 # Codex requires the Responses API, so a local LiteLLM proxy translates its
-# requests to Z.ai's Anthropic-compatible GLM Coding Plan endpoint.
+# requests to Z.ai's OpenAI-compatible GLM Coding Plan endpoint.
 # Secret-bearing comment runs execute the default branch, never PR code.
 
 on:
@@ -287,8 +287,18 @@ jobs:
           model_list:
             - model_name: $ZAI_MODEL
               litellm_params:
-                model: anthropic/$ZAI_MODEL
-                api_base: https://api.z.ai/api/anthropic
+                # Z.ai implements Chat Completions. This prefix makes LiteLLM
+                # translate Codex Responses requests instead of forwarding
+                # them to Z.ai's nonexistent /responses endpoint.
+                model: openai/chat_completions/$ZAI_MODEL
+                api_base: https://api.z.ai/api/coding/paas/v4
+                api_key: os.environ/ZCODE_API_KEY
+            - model_name: $ZAI_MODEL-judge
+              litellm_params:
+                # The judge already speaks Chat Completions, so it must use the
+                # unmodified upstream model ID rather than the Responses bridge.
+                model: openai/$ZAI_MODEL
+                api_base: https://api.z.ai/api/coding/paas/v4
                 api_key: os.environ/ZCODE_API_KEY
           litellm_settings:
             drop_params: true
@@ -318,6 +328,68 @@ jobs:
           echo "::error::LiteLLM bridge did not become ready."
           tail -200 "$RUNNER_TEMP/litellm.log" || true
           exit 1
+
+      - name: Preflight Codex and judge bridges
+        run: |
+          set -euo pipefail
+          codex_response_file="$RUNNER_TEMP/zai-codex-bridge-preflight.json"
+          codex_request_body=$(jq -cn --arg model "$ZAI_MODEL" '{
+            model: $model,
+            input: "Reply with OK.",
+            max_output_tokens: 16,
+            stream: false
+          }')
+          codex_http_status=$(curl --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 60 \
+            --output "$codex_response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --url "http://127.0.0.1:$LITELLM_PORT/v1/responses" \
+            --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$codex_request_body")
+
+          if [[ "$codex_http_status" != 2* ]]; then
+            error_message=$(jq -r '.error.message // .message // "unknown error"' \
+              "$codex_response_file" 2>/dev/null || true)
+            printf 'Codex-to-Z.ai bridge preflight failed: HTTP %s: %s\n' \
+              "$codex_http_status" "${error_message:-unknown error}"
+            tail -200 "$RUNNER_TEMP/litellm.log" || true
+            exit 1
+          fi
+
+          echo "Codex-to-Z.ai Responses bridge preflight passed for $ZAI_MODEL."
+
+          judge_model="$ZAI_MODEL-judge"
+          judge_response_file="$RUNNER_TEMP/zai-judge-bridge-preflight.json"
+          judge_request_body=$(jq -cn --arg model "$judge_model" '{
+            model: $model,
+            messages: [{role: "user", content: "Reply with OK."}],
+            max_tokens: 16,
+            stream: false
+          }')
+          judge_http_status=$(curl --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 60 \
+            --output "$judge_response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --url "http://127.0.0.1:$LITELLM_PORT/v1/chat/completions" \
+            --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$judge_request_body")
+
+          if [[ "$judge_http_status" != 2* ]]; then
+            error_message=$(jq -r '.error.message // .message // "unknown error"' \
+              "$judge_response_file" 2>/dev/null || true)
+            printf 'Judge-to-Z.ai bridge preflight failed: HTTP %s: %s\n' \
+              "$judge_http_status" "${error_message:-unknown error}"
+            tail -200 "$RUNNER_TEMP/litellm.log" || true
+            exit 1
+          fi
+
+          echo "Judge-to-Z.ai Chat Completions bridge preflight passed for $judge_model."
 
       - name: Install Kind
         run: |
@@ -350,7 +422,7 @@ jobs:
             --problem "$PROBLEM_ID" \
             --agent codex \
             --model "$ZAI_MODEL" \
-            --judge-model "openai/$ZAI_MODEL" \
+            --judge-model "openai/${ZAI_MODEL}-judge" \
             --n-attempts "$ATTEMPTS" \
             --agent-timeout 1800 \
             --internet-access filtered \
