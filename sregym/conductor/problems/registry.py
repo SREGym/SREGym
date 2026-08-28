@@ -113,6 +113,9 @@ from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruptio
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
 from sregym.conductor.problems.workload_imbalance import WorkloadImbalance
 from sregym.conductor.problems.wrong_bin_usage import WrongBinUsage
+from sregym.conductor.problems.unit_mismatch_gomemlimit import (
+    UnitMismatchGomemlimitAstronomyShop,
+)
 from sregym.conductor.problems.wrong_dns_policy import WrongDNSPolicy
 from sregym.conductor.problems.wrong_service_selector import WrongServiceSelector
 from sregym.service.kubectl import KubeCtl
@@ -160,6 +163,8 @@ class ProblemRegistry:
             "duplicate_pvc_mounts_hotel_reservation": lambda: DuplicatePVCMounts(app_name="hotel_reservation", faulty_service="frontend"),
             "duplicate_pvc_mounts_social_network": lambda: DuplicatePVCMounts(app_name="social_network", faulty_service="jaeger"),
             "env_variable_shadowing_astronomy_shop": lambda: EnvVariableShadowing(),
+            "unit_mismatch_gomemlimit_astronomy_shop": UnitMismatchGomemlimitAstronomyShop,
+            "unit_mismatch_gomemlimit_product_catalog_astronomy_shop": lambda: UnitMismatchGomemlimitAstronomyShop(faulty_service="product-catalog"),
             "file_descriptor_exhaustion": lambda: FileDescriptorExhaustion(),
             "k8s_target_port-misconfig": lambda: K8STargetPortMisconfig(faulty_service="user-service"),
             "liveness_probe_misconfiguration_astronomy_shop": lambda: LivenessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),
