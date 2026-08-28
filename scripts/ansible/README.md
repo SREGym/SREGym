@@ -23,6 +23,12 @@ After these, you should see every node running inside the cluster:
 kubectl get nodes
 ```
 
+The playbook manages Ubuntu's generic 6.8 kernel only on architectures listed
+in `generic_kernel_architectures` (currently `x86_64`). Other architectures
+retain their provider kernel because kernel images and bootloader limits vary
+by platform. If a different platform has been validated with this kernel, add
+its Ansible architecture to that list in `setup_cluster.yml`.
+
 ### Common Errors
 If you're running into issues from Ansible related to host key authentication, try typing `yes` in your terminal for each node, or proceeding with the following steps:
 

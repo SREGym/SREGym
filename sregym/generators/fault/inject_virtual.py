@@ -11,9 +11,11 @@ import yaml
 from kubernetes.client.rest import ApiException
 
 from sregym.generators.fault.base import FaultInjector
-from sregym.paths import TARGET_MICROSERVICES
+from sregym.paths import CACHE_DIR, TARGET_MICROSERVICES
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
+
+DAEMON_SET_RECOVERY_STATE_DIR = CACHE_DIR / "daemon_set_recovery"
 
 
 class VirtualizationFaultInjector(FaultInjector):
@@ -2354,42 +2356,151 @@ class VirtualizationFaultInjector(FaultInjector):
         self.kubectl.exec_command(deployment_rollout_command)
         self.kubectl.wait_for_ready(self.namespace)
 
+    def _cluster_uid(self) -> str:
+        namespace = self.kubectl.core_v1_api.read_namespace("kube-system")
+        cluster_uid = str(namespace.metadata.uid or "")
+        if not cluster_uid:
+            raise RuntimeError("The kube-system namespace does not have a UID")
+        return cluster_uid
+
+    def _daemon_set_recovery_path(self, daemon_set_name: str, cluster_uid: str) -> Path:
+        filename = f"{cluster_uid}__{self.namespace}__{daemon_set_name}.json"
+        return DAEMON_SET_RECOVERY_STATE_DIR / filename
+
+    @staticmethod
+    def _daemon_set_images(daemon_set) -> dict[str, str]:
+        containers = daemon_set.spec.template.spec.containers or []
+        images = {container.name: container.image for container in containers if container.name and container.image}
+        if not images:
+            raise RuntimeError("The DaemonSet does not contain any named container images")
+        return images
+
+    def _write_daemon_set_recovery_state(self, path: Path, state: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.parent.chmod(0o700)
+        temporary_path = path.with_name(f".{path.name}.tmp")
+        temporary_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+        temporary_path.chmod(0o600)
+        temporary_path.replace(path)
+
+    def _capture_daemon_set_images(self, daemon_set_name: str, daemon_set, cluster_uid: str) -> dict:
+        path = self._daemon_set_recovery_path(daemon_set_name, cluster_uid)
+        daemon_set_uid = str(daemon_set.metadata.uid or "")
+        if not daemon_set_uid:
+            raise RuntimeError(f"DaemonSet '{self.namespace}/{daemon_set_name}' does not have a UID")
+
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"Invalid DaemonSet recovery state: {path}") from exc
+            if existing.get("daemon_set_uid") == daemon_set_uid:
+                expected = {
+                    "version": 1,
+                    "cluster_uid": cluster_uid,
+                    "namespace": self.namespace,
+                    "daemon_set": daemon_set_name,
+                }
+                if any(existing.get(key) != value for key, value in expected.items()):
+                    raise RuntimeError(f"DaemonSet recovery state does not match the current cluster resource: {path}")
+                if not isinstance(existing.get("images"), dict) or not existing["images"]:
+                    raise RuntimeError(f"DaemonSet recovery state does not contain images: {path}")
+                return existing
+
+        state = {
+            "version": 1,
+            "cluster_uid": cluster_uid,
+            "namespace": self.namespace,
+            "daemon_set": daemon_set_name,
+            "daemon_set_uid": daemon_set_uid,
+            "images": self._daemon_set_images(daemon_set),
+        }
+        self._write_daemon_set_recovery_state(path, state)
+        return state
+
+    def _load_daemon_set_recovery_state(self, daemon_set_name: str, cluster_uid: str) -> tuple[Path, dict] | None:
+        path = self._daemon_set_recovery_path(daemon_set_name, cluster_uid)
+        if not path.exists():
+            return None
+
+        try:
+            state = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Invalid DaemonSet recovery state: {path}") from exc
+
+        expected = {
+            "version": 1,
+            "cluster_uid": cluster_uid,
+            "namespace": self.namespace,
+            "daemon_set": daemon_set_name,
+        }
+        if any(state.get(key) != value for key, value in expected.items()):
+            raise RuntimeError(f"DaemonSet recovery state does not match the current cluster resource: {path}")
+        if not isinstance(state.get("images"), dict) or not state["images"]:
+            raise RuntimeError(f"DaemonSet recovery state does not contain images: {path}")
+        return path, state
+
+    def _patch_daemon_set_images(self, daemon_set_name: str, images: dict[str, str]) -> None:
+        body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {"name": container_name, "image": image} for container_name, image in images.items()
+                        ]
+                    }
+                }
+            }
+        }
+        self.kubectl.apps_v1_api.patch_namespaced_daemon_set(
+            name=daemon_set_name,
+            namespace=self.namespace,
+            body=body,
+        )
+
+    def _wait_for_daemon_set_rollout(self, daemon_set_name: str) -> None:
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status ds {daemon_set_name} -n {self.namespace} --timeout=120s",
+            timeout=130,
+        )
+
     def inject_daemon_set_image_replacement(self, daemon_set_name: str, new_image: str):
-        daemon_set_yaml = self._get_daemon_set_yaml(daemon_set_name)
-        if daemon_set_yaml is None:
-            raise RuntimeError(f"Failed to get daemonset '{daemon_set_name}'")
+        cluster_uid = self._cluster_uid()
+        daemon_set = self.kubectl.apps_v1_api.read_namespaced_daemon_set(daemon_set_name, self.namespace)
+        current_images = self._daemon_set_images(daemon_set)
+        self._capture_daemon_set_images(daemon_set_name, daemon_set, cluster_uid)
 
-        # Replace the image in all containers
-        if "spec" in daemon_set_yaml and "template" in daemon_set_yaml["spec"]:
-            template_spec = daemon_set_yaml["spec"]["template"]["spec"]
-            if "containers" in template_spec:
-                for container in template_spec["containers"]:
-                    if "image" in container:
-                        container["image"] = new_image
+        replacement_images = {container_name: new_image for container_name in current_images}
+        if current_images != replacement_images:
+            self._patch_daemon_set_images(daemon_set_name, replacement_images)
+        self._wait_for_daemon_set_rollout(daemon_set_name)
 
-        modified_yaml_path = self._write_yaml_to_file(daemon_set_name, daemon_set_yaml)  # backup the yaml
+    def recover_daemon_set_image_replacement(self, daemon_set_name: str) -> bool:
+        cluster_uid = self._cluster_uid()
+        saved = self._load_daemon_set_recovery_state(daemon_set_name, cluster_uid)
+        if saved is None:
+            return False
 
-        self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path}")
-        self.kubectl.exec_command(f"kubectl rollout restart ds {daemon_set_name} -n {self.namespace}")
-        self.kubectl.exec_command(f"kubectl rollout status ds {daemon_set_name} -n {self.namespace} --timeout=60s")
+        path, state = saved
+        daemon_set = self.kubectl.apps_v1_api.read_namespaced_daemon_set(daemon_set_name, self.namespace)
+        daemon_set_uid = str(daemon_set.metadata.uid or "")
+        if daemon_set_uid != state.get("daemon_set_uid"):
+            raise RuntimeError(
+                f"DaemonSet '{self.namespace}/{daemon_set_name}' was recreated after the recovery state was saved"
+            )
 
-    def recover_daemon_set_image_replacement(self, daemon_set_name: str, original_image: str):
-        daemon_set_yaml = self._get_daemon_set_yaml(daemon_set_name)
-        if daemon_set_yaml is None:
-            return
-        if "spec" in daemon_set_yaml and "template" in daemon_set_yaml["spec"]:
-            template_spec = daemon_set_yaml["spec"]["template"]["spec"]
-            if "containers" in template_spec:
-                for container in template_spec["containers"]:
-                    if "image" in container and container["image"] != original_image:
-                        container["image"] = original_image
-                        modified_yaml_path = self._write_yaml_to_file(daemon_set_name, daemon_set_yaml)
-                        self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path}")
-                        self.kubectl.exec_command(f"kubectl rollout restart ds {daemon_set_name} -n {self.namespace}")
-                        self.kubectl.exec_command(
-                            f"kubectl rollout status ds {daemon_set_name} -n {self.namespace} --timeout=60s"
-                        )
-                        return
+        current_images = self._daemon_set_images(daemon_set)
+        original_images = state["images"]
+        if set(current_images) != set(original_images):
+            raise RuntimeError(
+                f"DaemonSet '{self.namespace}/{daemon_set_name}' containers do not match the recovery state"
+            )
+        if current_images != original_images:
+            self._patch_daemon_set_images(daemon_set_name, original_images)
+        self._wait_for_daemon_set_rollout(daemon_set_name)
+
+        path.unlink()
+        return True
 
     def inject_rbac_misconfiguration(self, microservices: list[str]):
         for service in microservices:
@@ -3106,14 +3217,6 @@ class VirtualizationFaultInjector(FaultInjector):
     def _get_service_yaml(self, service_name: str):
         deployment_yaml = self.kubectl.exec_command(f"kubectl get service {service_name} -n {self.namespace} -o yaml")
         return yaml.safe_load(deployment_yaml)
-
-    def _get_daemon_set_yaml(self, daemon_set_name: str) -> dict | None:
-        daemon_set_yaml = self.kubectl.exec_command(f"kubectl get ds {daemon_set_name} -n {self.namespace} -o yaml")
-        parsed = yaml.safe_load(daemon_set_yaml)
-        if not isinstance(parsed, dict):
-            print(f"[inject_virtual] Failed to get daemonset '{daemon_set_name}': {daemon_set_yaml[:200]}")
-            return None
-        return parsed
 
     def _change_node_selector(self, deployment_yaml: dict, node_name: str):
         if "spec" in deployment_yaml and "template" in deployment_yaml["spec"]:
