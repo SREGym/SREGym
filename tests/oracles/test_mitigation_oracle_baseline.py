@@ -208,6 +208,32 @@ def test_conductor_captures_baseline_before_injecting_the_fault():
     assert conductor.fault_injected is True
 
 
+def test_conductor_aborts_injection_when_baseline_capture_fails():
+    """A fault must not start when its mitigation oracle has no trusted baseline."""
+    calls = []
+
+    def capture_baseline():
+        calls.append("baseline")
+        raise RuntimeError("Prometheus unavailable")
+
+    problem = SimpleNamespace(
+        mitigation_oracle=SimpleNamespace(capture_baseline=capture_baseline),
+        inject_fault=lambda: calls.append("inject"),
+        diagnosis_oracle=None,
+    )
+    conductor = SimpleNamespace(
+        current_problem=problem,
+        logger=SimpleNamespace(info=lambda *a, **k: None),
+        fault_injected=False,
+    )
+
+    with pytest.raises(RuntimeError, match="Prometheus unavailable"):
+        Conductor._inject_fault(conductor)
+
+    assert calls == ["baseline"]
+    assert conductor.fault_injected is False
+
+
 def test_conductor_captures_baseline_through_nested_compounded_oracles(kubectl):
     problem = _Problem(kubectl)
     child_oracles = [MitigationOracle(problem), MitigationOracle(problem)]

@@ -234,10 +234,7 @@ class Conductor:
         # the injected fault.
         mitigation_oracle = getattr(problem, "mitigation_oracle", None)
         if mitigation_oracle is not None:
-            try:
-                mitigation_oracle.capture_baseline()
-            except Exception:
-                self.logger.exception("Failed to capture mitigation alert baseline; continuing without it.")
+            mitigation_oracle.capture_baseline()
 
         problem.inject_fault()
         self.logger.info("[ENV] Injected fault")
