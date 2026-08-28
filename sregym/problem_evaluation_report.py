@@ -52,7 +52,7 @@ def build_report(
     for attempt in range(1, requested_attempts + 1):
         row = attempts.get(attempt)
         if row is None:
-            table_rows.append(f"| {attempt} | — | — | Incomplete | not run |")
+            table_rows.append(f"| {attempt} | — | — | ⚠️ | not run |")
             continue
 
         diagnosis = _as_bool(row.get("Diagnosis.success"))
@@ -77,15 +77,15 @@ def build_report(
                 missing.append("mitigation")
             detail = f"missing {' and '.join(missing)} result"
 
-        diagnosis_text = "Pass" if diagnosis is True else "Fail" if diagnosis is False else "—"
-        mitigation_text = "Pass" if mitigation is True else "Fail" if mitigation is False else "—"
+        diagnosis_text = "✅" if diagnosis is True else "❌" if diagnosis is False else "—"
+        mitigation_text = "✅" if mitigation is True else "❌" if mitigation is False else "—"
         if diagnosis is None or mitigation is None:
-            overall_text = "Incomplete"
+            overall_text = "⚠️"
         else:
             complete_attempts += 1
             overall = diagnosis and mitigation
             overall_passes += int(overall)
-            overall_text = "Pass" if overall else "Fail"
+            overall_text = "✅" if overall else "❌"
         table_rows.append(f"| {attempt} | {diagnosis_text} | {mitigation_text} | {overall_text} | {detail or '—'} |")
 
     if complete_attempts != requested_attempts:
