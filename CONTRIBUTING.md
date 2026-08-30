@@ -312,6 +312,20 @@ To add a new problem:
 
    Automated validation does not replace human review.
 
+6. **Screen validated problems for difficulty (core team).** Run **Problem
+   Difficulty Evaluation** from the Actions tab, or have an owner, member, or
+   collaborator post this PR comment:
+
+   ```text
+   /evaluate-problem <problem_id> [3|5] [glm-5.3-flash]
+   ```
+
+   The optional values default to five attempts and `glm-5.3-flash`. The workflow
+   runs the Codex harness against the Z.ai Coding Plan and publishes diagnosis,
+   mitigation, and overall pass rates in the run summary and PR conversation.
+   A problem is marked saturated only when every requested attempt completes
+   and passes.
+
 ### Adding New Oracles
 
 Custom oracles allow for specialized evaluation:

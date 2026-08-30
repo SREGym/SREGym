@@ -22,7 +22,7 @@ from logger import init_logger  # noqa: E402
 
 init_logger()
 
-from clients.codex.codex_agent import CodexAgent  # noqa: E402
+from clients.codex.codex_agent import CodexAgent, custom_provider_args  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 
 logger = logging.getLogger("all.codex.driver")
@@ -35,12 +35,13 @@ def run_preflight() -> None:
     home = Path(os.environ.get("CODEX_HOME", "/root/.codex"))
     auth = home / "auth.json"
     key = os.environ.get("OPENAI_API_KEY", "")
+    provider_args = custom_provider_args()
 
-    if not auth.exists() and not key:
+    if not provider_args and not auth.exists() and not key:
         print(f"missing {auth} and OPENAI_API_KEY")
         sys.exit(1)
 
-    if not auth.exists():
+    if not provider_args and not auth.exists():
         home.mkdir(parents=True, exist_ok=True)
         auth.write_text(json.dumps({"OPENAI_API_KEY": key}))
 
@@ -56,6 +57,7 @@ def run_preflight() -> None:
         "--dangerously-bypass-approvals-and-sandbox",
         "--skip-git-repo-check",
     ]
+    command.extend(provider_args)
     reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
     if reasoning_effort:
         command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])

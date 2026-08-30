@@ -5,7 +5,7 @@ python-dotenv==1.1.0
 
 # Stratus agent dependencies
 langchain>=0.3.25
-langchain-litellm>=0.2.2
+langchain-litellm==0.6.6
 langchain-google-genai>=2.1.12
 langgraph>=0.4.7
 langsmith>=0.3.43
