@@ -458,7 +458,7 @@ jobs:
             exit 1
           fi
 
-          uv run python -m sregym.problem_evaluation_report \
+          uv run python -m sregym.results.report \
             --csv "$result_csv" \
             --problem "$PROBLEM_ID" \
             --model "$ZAI_MODEL" \

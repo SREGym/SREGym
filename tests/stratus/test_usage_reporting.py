@@ -36,8 +36,8 @@ def test_completed_run_adds_summary_usage_to_csv(monkeypatch, tmp_path):
         }
         return stats, object(), []
 
-    async def fake_stage_switch(**_kwargs):
-        return "done"
+    async def fake_stage_switch(**kwargs):
+        return "diagnosis" if kwargs["current_stage"] == "setup" else "done"
 
     monkeypatch.setattr(driver, "diagnosis_with_localization_task_main", fake_diagnosis_run)
     monkeypatch.setattr(driver, "generate_run_summary", lambda *_args: "summary")

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Build a Markdown difficulty report from one SREGym results CSV."""
 
 import argparse
@@ -57,16 +56,23 @@ def build_report(
 
         diagnosis = _as_bool(row.get("Diagnosis.success"))
         mitigation = _as_bool(row.get("Mitigation.success"))
-        if diagnosis is not None:
+        attempt_incomplete = row.get("run_status") == "incomplete" or diagnosis is None or mitigation is None
+        if not attempt_incomplete and diagnosis is not None:
             diagnosis_evaluated += 1
             diagnosis_passes += int(diagnosis)
-        if mitigation is not None:
+        if not attempt_incomplete and mitigation is not None:
             mitigation_evaluated += 1
             mitigation_passes += int(mitigation)
 
         detail = ""
         if _as_bool(row.get("deploy_failed")):
             detail = "deployment failed"
+        elif row.get("run_status") == "incomplete":
+            reason = row.get("incomplete_reason") or "missing stage results"
+            stage = row.get("incomplete_stage")
+            detail = reason.replace("_", " ")
+            if stage:
+                detail = f"{detail} at {stage}"
         elif _as_bool(row.get("timed_out")):
             detail = "agent timed out"
         elif diagnosis is None or mitigation is None:
@@ -79,7 +85,7 @@ def build_report(
 
         diagnosis_text = "✅" if diagnosis is True else "❌" if diagnosis is False else "—"
         mitigation_text = "✅" if mitigation is True else "❌" if mitigation is False else "—"
-        if diagnosis is None or mitigation is None:
+        if attempt_incomplete:
             overall_text = "⚠️"
         else:
             complete_attempts += 1
