@@ -1,6 +1,7 @@
 """Interface to the OpenTelemetry Astronomy Shop application"""
 
 import json
+from pathlib import Path
 from typing import Any
 
 from sregym.generators.workload.locust import LocustWorkloadManager
@@ -11,6 +12,7 @@ from sregym.service.kubectl import KubeCtl
 
 
 class AstronomyShop(Application):
+    _VALUES_DIR = Path(__file__).resolve().parent / "values"
     _FLAGD_CONFIGMAP = "flagd-config"
     _FLAGD_CONFIG_KEY = "demo.flagd.json"
     _FLAGD_DEPLOYMENT = "flagd"
@@ -48,6 +50,10 @@ class AstronomyShop(Application):
             "components.load-generator.envOverrides[0].name=LOCUST_BROWSER_TRAFFIC_ENABLED",
             "--set-string",
             "components.load-generator.envOverrides[0].value=false",
+            # Keeps the collector's exporters consistent with the components that
+            # are actually deployed; see the file's own comments.
+            "-f",
+            str(self._VALUES_DIR / "astronomy-shop-fixes.yaml"),
         ]
 
         Helm.install(**self.helm_configs)
