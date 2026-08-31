@@ -83,7 +83,7 @@ class BaseAgent:
             plain_response = self.llm.inference(messages=state["messages"] + [prompt, ai_message, plain_prompt])
             ans = plain_response.content if isinstance(plain_response, AIMessage) else ""
 
-        await manual_submit_tool(ans=ans)
+        await manual_submit_tool(ans=ans, stage="diagnosis")
         self.logger.info(f"Force submitted with answer: {ans!r}")
         return {"submitted": True, "messages": [prompt]}
 
