@@ -228,9 +228,13 @@ class Conductor:
 
         # Snapshot the healthy cluster before breaking it. The oracle is built
         # in Problem.__init__, which runs before deploy_app(), so this is the
-        # first point at which the app actually exists.
-        if getattr(problem, "mitigation_oracle", None):
-            problem.mitigation_oracle.capture_baseline()
+        # first point at which the app actually exists. Also lets a mitigation
+        # oracle ignore chronic pre-existing noise (e.g. ContainerCPUThrottling
+        # from the astronomy-shop Grafana sidecar, SREGym#745) and grade only
+        # the injected fault.
+        mitigation_oracle = getattr(problem, "mitigation_oracle", None)
+        if mitigation_oracle is not None:
+            mitigation_oracle.capture_baseline()
 
         problem.inject_fault()
         self.logger.info("[ENV] Injected fault")

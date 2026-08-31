@@ -32,6 +32,7 @@ def test_report_keeps_mixed_result_as_not_saturated():
     )
 
     assert "**Overall pass rate:** 2/3 (67%)" in report
+    assert "| 2 | ✅ | ❌ | ❌ | — |" in report
     assert "🟢 **Not saturated**" in report
 
 
@@ -47,6 +48,6 @@ def test_report_does_not_count_infrastructure_failure_as_model_failure():
 
     assert "**Complete attempts:** 1" in report
     assert "**Overall pass rate:** 1/1 (100%)" in report
-    assert "| 2 | — | — | Incomplete | deployment failed |" in report
-    assert "| 3 | — | — | Incomplete | not run |" in report
+    assert "| 2 | — | — | ⚠️ | deployment failed |" in report
+    assert "| 3 | — | — | ⚠️ | not run |" in report
     assert "⚠️ **Inconclusive**" in report

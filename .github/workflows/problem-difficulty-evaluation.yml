@@ -222,36 +222,38 @@ jobs:
             });
 
       - name: Post running evaluation comment
+        id: report_comment
         if: needs.resolve.outputs.pr_number != ''
         continue-on-error: true
         uses: actions/github-script@v7
         env:
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          COMMENT_ID: ${{ needs.resolve.outputs.comment_id }}
           PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
           ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
           ZAI_MODEL: ${{ needs.resolve.outputs.model }}
         with:
           script: |
-            const marker = '<!-- problem-difficulty-evaluation -->';
+            const marker = `<!-- problem-difficulty-evaluation:${context.runId} -->`;
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const commandUrl =
+              `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/pull/` +
+              `${process.env.PR_NUMBER}#issuecomment-${process.env.COMMENT_ID}`;
             const body =
-              `${marker}\n## Problem Difficulty Evaluation\n\n` +
-              `**Status: Running** for \`${process.env.PROBLEM_ID}\` ` +
+              `${marker}\n> In response to [this command](${commandUrl}).\n\n` +
+              `## ⏳ Problem Difficulty Evaluation\n\n` +
+              `Running for \`${process.env.PROBLEM_ID}\` ` +
               `(${process.env.ATTEMPTS} attempts, \`${process.env.ZAI_MODEL}\`)\n\n` +
               `The secret-bearing evaluator runs trusted code from the default branch.\n\n` +
               `_[Live workflow run](${runUrl})_`;
 
             const { owner, repo } = context.repo;
             const issue_number = Number(process.env.PR_NUMBER);
-            const comments = await github.paginate(github.rest.issues.listComments, {
+            const response = await github.rest.issues.createComment({
               owner, repo, issue_number,
+              body,
             });
-            const existing = comments.find(c => c.body && c.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number, body });
-            }
+            core.setOutput('comment_id', response.data.id);
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -287,6 +289,16 @@ jobs:
           model_list:
             - model_name: $ZAI_MODEL
               litellm_params:
+                # Z.ai implements Chat Completions. This prefix makes LiteLLM
+                # translate Codex Responses requests instead of forwarding
+                # them to Z.ai's nonexistent /responses endpoint.
+                model: openai/chat_completions/$ZAI_MODEL
+                api_base: https://api.z.ai/api/coding/paas/v4
+                api_key: os.environ/ZCODE_API_KEY
+            - model_name: $ZAI_MODEL-judge
+              litellm_params:
+                # The judge already speaks Chat Completions, so it must use the
+                # unmodified upstream model ID rather than the Responses bridge.
                 model: openai/$ZAI_MODEL
                 api_base: https://api.z.ai/api/coding/paas/v4
                 api_key: os.environ/ZCODE_API_KEY
@@ -319,6 +331,68 @@ jobs:
           tail -200 "$RUNNER_TEMP/litellm.log" || true
           exit 1
 
+      - name: Preflight Codex and judge bridges
+        run: |
+          set -euo pipefail
+          codex_response_file="$RUNNER_TEMP/zai-codex-bridge-preflight.json"
+          codex_request_body=$(jq -cn --arg model "$ZAI_MODEL" '{
+            model: $model,
+            input: "Reply with OK.",
+            max_output_tokens: 16,
+            stream: false
+          }')
+          codex_http_status=$(curl --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 60 \
+            --output "$codex_response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --url "http://127.0.0.1:$LITELLM_PORT/v1/responses" \
+            --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$codex_request_body")
+
+          if [[ "$codex_http_status" != 2* ]]; then
+            error_message=$(jq -r '.error.message // .message // "unknown error"' \
+              "$codex_response_file" 2>/dev/null || true)
+            printf 'Codex-to-Z.ai bridge preflight failed: HTTP %s: %s\n' \
+              "$codex_http_status" "${error_message:-unknown error}"
+            tail -200 "$RUNNER_TEMP/litellm.log" || true
+            exit 1
+          fi
+
+          echo "Codex-to-Z.ai Responses bridge preflight passed for $ZAI_MODEL."
+
+          judge_model="$ZAI_MODEL-judge"
+          judge_response_file="$RUNNER_TEMP/zai-judge-bridge-preflight.json"
+          judge_request_body=$(jq -cn --arg model "$judge_model" '{
+            model: $model,
+            messages: [{role: "user", content: "Reply with OK."}],
+            max_tokens: 16,
+            stream: false
+          }')
+          judge_http_status=$(curl --silent --show-error \
+            --connect-timeout 10 \
+            --max-time 60 \
+            --output "$judge_response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --url "http://127.0.0.1:$LITELLM_PORT/v1/chat/completions" \
+            --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
+            --header 'Content-Type: application/json' \
+            --data "$judge_request_body")
+
+          if [[ "$judge_http_status" != 2* ]]; then
+            error_message=$(jq -r '.error.message // .message // "unknown error"' \
+              "$judge_response_file" 2>/dev/null || true)
+            printf 'Judge-to-Z.ai bridge preflight failed: HTTP %s: %s\n' \
+              "$judge_http_status" "${error_message:-unknown error}"
+            tail -200 "$RUNNER_TEMP/litellm.log" || true
+            exit 1
+          fi
+
+          echo "Judge-to-Z.ai Chat Completions bridge preflight passed for $judge_model."
+
       - name: Install Kind
         run: |
           curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
@@ -350,7 +424,7 @@ jobs:
             --problem "$PROBLEM_ID" \
             --agent codex \
             --model "$ZAI_MODEL" \
-            --judge-model "openai/$ZAI_MODEL" \
+            --judge-model "openai/${ZAI_MODEL}-judge" \
             --n-attempts "$ATTEMPTS" \
             --agent-timeout 1800 \
             --internet-access filtered \
@@ -420,33 +494,40 @@ jobs:
         uses: actions/github-script@v7
         env:
           PR_NUMBER: ${{ needs.resolve.outputs.pr_number }}
+          COMMENT_ID: ${{ needs.resolve.outputs.comment_id }}
+          REPORT_COMMENT_ID: ${{ steps.report_comment.outputs.comment_id }}
         with:
           script: |
             const fs = require('fs');
-            const marker = '<!-- problem-difficulty-evaluation -->';
+            const marker = `<!-- problem-difficulty-evaluation:${context.runId} -->`;
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const commandUrl =
+              `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/pull/` +
+              `${process.env.PR_NUMBER}#issuecomment-${process.env.COMMENT_ID}`;
+            const replyHeader = `> In response to [this command](${commandUrl}).`;
             let body;
             try {
-              body = fs.readFileSync(`${process.env.GITHUB_WORKSPACE}/evaluation-report.md`, 'utf8');
-              body = `${marker}\n${body}\n_[Workflow run](${runUrl})_`;
+              const report = fs.readFileSync(`${process.env.GITHUB_WORKSPACE}/evaluation-report.md`, 'utf8');
+              body = `${marker}\n${replyHeader}\n\n${report}\n_[Workflow run](${runUrl})_`;
             } catch (error) {
               body =
-                `${marker}\n## Problem Difficulty Evaluation\n\n` +
-                `**Status: Failed** before a pass-rate report was produced.\n\n` +
+                `${marker}\n${replyHeader}\n\n## Problem Difficulty Evaluation\n\n` +
+                `❌ **Failed** before a pass-rate report was produced.\n\n` +
                 `Inspect the [workflow run](${runUrl}) for the preflight or infrastructure error.`;
             }
 
             const { owner, repo } = context.repo;
             const issue_number = Number(process.env.PR_NUMBER);
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner, repo, issue_number,
-            });
-            const existing = comments.find(c => c.body && c.body.includes(marker));
-            if (existing) {
-              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
-            } else {
-              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            const reportCommentId = Number(process.env.REPORT_COMMENT_ID);
+            if (Number.isInteger(reportCommentId) && reportCommentId > 0) {
+              try {
+                await github.rest.issues.updateComment({ owner, repo, comment_id: reportCommentId, body });
+                return;
+              } catch (error) {
+                core.warning(`Could not update running comment ${reportCommentId}: ${error.message}`);
+              }
             }
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
 
       - name: React to triggering comment with final result
         if: always() && needs.resolve.outputs.comment_id != ''
