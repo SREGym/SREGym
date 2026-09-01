@@ -139,7 +139,8 @@ def _oracle(kubectl=None, *, probe_ok=True, baseline=True):
         oracle.baseline_resources = BASELINE_RESOURCES
     oracle.rollout_timeout_seconds = 0
     oracle.poll_interval_seconds = 0
-    oracle._run_service_probe = lambda deployment: probe_ok
+    oracle._attempt_service_probe = lambda deployment: probe_ok
+    oracle.probe_retry_delay_seconds = 0
     return oracle
 
 
@@ -270,3 +271,35 @@ def test_requires_a_captured_baseline():
 
     assert result["success"] is False
     assert "baseline" in result["reason"]
+
+
+def test_probe_retries_before_declaring_failure():
+    # A real order crosses seven services; one slow call must not fail a
+    # correct repair. Regression test for a live Stratus run where the agent
+    # fixed the value correctly and a single 25s attempt timed out.
+    oracle = _oracle()
+    calls = {"n": 0}
+
+    def flaky(deployment):
+        calls["n"] += 1
+        return calls["n"] >= 3
+
+    oracle._attempt_service_probe = flaky
+
+    assert oracle.evaluate()["success"] is True
+    assert calls["n"] == 3
+
+
+def test_probe_gives_up_after_the_configured_attempts():
+    oracle = _oracle()
+    calls = {"n": 0}
+
+    def always_fail(deployment):
+        calls["n"] += 1
+        return False
+
+    oracle._attempt_service_probe = always_fail
+    result = oracle.evaluate()
+
+    assert result["success"] is False
+    assert calls["n"] == oracle.probe_attempts

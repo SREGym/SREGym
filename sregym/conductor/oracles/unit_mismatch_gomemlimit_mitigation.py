@@ -64,6 +64,13 @@ class UnitMismatchGomemlimitMitigation(Oracle):
     probe_timeout_seconds = 120
     poll_interval_seconds = 2
     probe_image = "fullstorydev/grpcurl:v1.9.3"
+    # A real order traverses cart, currency, payment, shipping, email,
+    # product-catalog and Kafka. A single tight attempt turns any transient
+    # slowness in that chain into a false negative against a correct repair,
+    # so give each call room and retry the whole probe before failing.
+    probe_call_timeout_seconds = 45
+    probe_attempts = 3
+    probe_retry_delay_seconds = 10
     # A syntactically valid limit can still be absurd: the Go runtime accepts
     # "0" and "16B". Anything under this floor would leave the process GC
     # thrashing rather than serving, so it is not a repair.
@@ -198,7 +205,7 @@ class UnitMismatchGomemlimitMitigation(Oracle):
     # ------------------------------------------------------------------
 
     def _grpcurl_args(self, probe_id: str, address: str, rpc: str, payload: dict, with_proto: bool) -> list[str]:
-        args = ["-plaintext", "-max-time", "25"]
+        args = ["-plaintext", "-max-time", str(self.probe_call_timeout_seconds)]
         if with_proto:
             args += ["-import-path", "/proto", "-proto", PROTO_FILE_NAME]
         args += ["-d", json.dumps(payload).replace(PROBE_ID_PLACEHOLDER, probe_id), address, rpc]
@@ -219,7 +226,19 @@ class UnitMismatchGomemlimitMitigation(Oracle):
         )
 
     def _run_service_probe(self, deployment) -> bool:
-        """Exercise the service's real API from a fresh pod.
+        """Exercise the real API, retrying so transient slowness is not a verdict."""
+        for attempt in range(1, self.probe_attempts + 1):
+            if self._attempt_service_probe(deployment):
+                if attempt > 1:
+                    print(f"[probe] succeeded on attempt {attempt}/{self.probe_attempts}")
+                return True
+            if attempt < self.probe_attempts:
+                print(f"[probe] attempt {attempt}/{self.probe_attempts} failed; retrying")
+                time.sleep(self.probe_retry_delay_seconds)
+        return False
+
+    def _attempt_service_probe(self, deployment) -> bool:
+        """One attempt: exercise the service's real API from a fresh pod.
 
         The target defines what a real request means: checkout places an actual
         order (an item is added to a cart first, in an init container), while a
