@@ -20,9 +20,11 @@ import json
 import logging
 import os
 import secrets
+import socket
 import ssl
 import tempfile
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address
@@ -293,6 +295,38 @@ def is_valid_bearer_token(authorization: str | None, expected_token: str) -> boo
     """Validate the bearer token presented by an agent request."""
     scheme, separator, token = (authorization or "").partition(" ")
     return bool(separator and scheme.casefold() == "bearer" and secrets.compare_digest(token, expected_token))
+
+
+def _relay_upgraded_connection(
+    client_socket: socket.socket,
+    upstream_socket: socket.socket,
+    read_from_client: Callable[[int], bytes],
+    read_from_upstream: Callable[[int], bytes],
+) -> None:
+    """Relay an upgraded HTTP connection until either endpoint closes."""
+
+    def relay(read: Callable[[int], bytes], destination: socket.socket) -> None:
+        try:
+            while data := read(64 * 1024):
+                destination.sendall(data)
+        except OSError:
+            pass
+        finally:
+            # An upgraded Kubernetes stream is one logical connection. Once
+            # either endpoint closes, unblock the copy in the other direction.
+            for connection in (client_socket, upstream_socket):
+                with contextlib.suppress(OSError):
+                    connection.shutdown(socket.SHUT_RDWR)
+
+    client_to_upstream = threading.Thread(
+        target=relay,
+        args=(read_from_client, upstream_socket),
+        name="k8s-proxy-client-to-upstream",
+        daemon=True,
+    )
+    client_to_upstream.start()
+    relay(read_from_upstream, client_socket)
+    client_to_upstream.join()
 
 
 class KubernetesAPIProxy:
@@ -575,7 +609,20 @@ class KubernetesAPIProxy:
                     excluded_headers = {"host", "accept-encoding", "authorization"}
                     if requires_json:
                         excluded_headers.add("accept")
-                    headers = {k: v for k, v in self.headers.items() if k.lower() not in excluded_headers}
+                    headers: dict[str, str] = {}
+                    stream_protocol_header = "X-Stream-Protocol-Version"
+                    for header, value in self.headers.items():
+                        header_lower = header.lower()
+                        if header_lower in excluded_headers:
+                            continue
+                        if header_lower == "x-stream-protocol-version":
+                            # Kubernetes accepts this negotiation header as a
+                            # comma-separated preference list. Preserve every
+                            # value instead of letting the dict drop all but one.
+                            previous = headers.get(stream_protocol_header)
+                            headers[stream_protocol_header] = f"{previous}, {value}" if previous else value
+                        else:
+                            headers[header] = value
                     if requires_json:
                         # The proxy cannot safely filter Kubernetes' protobuf form.
                         headers["Accept"] = "application/json"
@@ -584,6 +631,40 @@ class KubernetesAPIProxy:
                         headers["Authorization"] = f"Bearer {bearer_token}"
                     conn.request(method, path, body=body, headers=headers)
                     response = conn.getresponse()
+
+                    if response.status == 101:
+                        if conn.sock is None or response.fp is None:
+                            raise ConnectionError("Kubernetes upgrade did not provide a usable connection")
+
+                        # A 101 ends HTTP response handling and turns both sides
+                        # into one opaque, bidirectional stream. Do not call
+                        # response.read(): it treats 1xx responses as empty and
+                        # closes the buffered reader that may hold the first frame.
+                        self.protocol_version = "HTTP/1.1"
+                        self.close_connection = True
+                        try:
+                            self.send_response(response.status)
+                            for header, value in response.getheaders():
+                                if header.lower() not in ("transfer-encoding", "content-length", "content-encoding"):
+                                    self.send_header(header, value)
+                            self.end_headers()
+                            self.wfile.flush()
+                            _relay_upgraded_connection(
+                                self.connection,
+                                conn.sock,
+                                self.rfile.read1,
+                                response.fp.read1,
+                            )
+                        except OSError as exc:
+                            logger.debug("Upgraded Kubernetes connection closed: %s", exc)
+                        except Exception:
+                            # The HTTP response has already switched protocols,
+                            # so another HTTP error response cannot be sent.
+                            logger.exception("Kubernetes upgraded-connection relay failed")
+                        finally:
+                            response.close()
+                            conn.close()
+                        return
 
                     # Read response
                     response_body = response.read()
