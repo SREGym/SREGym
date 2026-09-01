@@ -3,8 +3,10 @@ import http.client
 import json
 import socket
 import ssl
+from datetime import timedelta
 
 import pytest
+from cryptography import x509
 
 from sregym.service.k8s_proxy import (
     HELM_RELEASE_SECRET_NAME_PREFIX,
@@ -134,6 +136,12 @@ def request(
         response.begin()
         result = response.status, response.headers, response.read()
     return result
+
+
+def test_proxy_certificate_outlives_long_benchmark_campaigns(proxy):
+    certificate = x509.load_pem_x509_certificate(proxy._server_cert_pem.encode())
+
+    assert certificate.not_valid_after_utc - certificate.not_valid_before_utc >= timedelta(days=30)
 
 
 def test_helm_release_detection_does_not_depend_on_labels():

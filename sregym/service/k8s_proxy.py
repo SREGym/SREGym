@@ -453,7 +453,7 @@ class KubernetesAPIProxy:
             .public_key(private_key.public_key())
             .serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(minutes=1))
-            .not_valid_after(now + timedelta(hours=12))
+            .not_valid_after(now + timedelta(days=30))
             .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             .add_extension(x509.SubjectAlternativeName(san_names), critical=False)
             .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
