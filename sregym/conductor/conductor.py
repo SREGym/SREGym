@@ -1182,17 +1182,26 @@ class Conductor:
             self._baseline_captured = True
 
         self.logger.info("[DEPLOY] Setting up metrics-server…")
-        self.kubectl.exec_command(
-            "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
-            "releases/latest/download/components.yaml"
-        )
-        self.kubectl.exec_command(
-            "kubectl -n kube-system patch deployment metrics-server "
-            "--type=json -p='["
-            '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"},'
-            '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
-            "]'"
-        )
+        # metrics-server lives in kube-system, which is protected from
+        # reconciliation, so it survives between problems. Re-applying it fetches
+        # the manifest from GitHub every problem and rolls the deployment for no
+        # gain. The apply and the patch must be skipped together: the patch is an
+        # `add` to the args list, and running it without the apply that resets
+        # those args would append duplicates on every problem.
+        if self._metrics_server_configured():
+            self.logger.info("[DEPLOY] metrics-server already present and patched; skipping re-apply")
+        else:
+            self.kubectl.exec_command(
+                "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
+                "releases/latest/download/components.yaml"
+            )
+            self.kubectl.exec_command(
+                "kubectl -n kube-system patch deployment metrics-server "
+                "--type=json -p='["
+                '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"},'
+                '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
+                "]'"
+            )
         self.kubectl.wait_for_ready("kube-system")
 
         # Only deploy Khaos if the problem requires it
@@ -1201,12 +1210,17 @@ class Conductor:
             self.khaos.ensure_deployed()
 
         self.logger.info("[DEPLOY] Setting up OpenEBS…")
-        self._preflight_openebs_udev_mount()
-        self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
-        self.kubectl.exec_command(
-            "kubectl patch storageclass openebs-hostpath "
-            '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
-        )
+        # `openebs` is protected from reconciliation, so it persists across
+        # problems and the operator manifest only needs fetching once.
+        if self._openebs_ready():
+            self.logger.info("[DEPLOY] OpenEBS already deployed; skipping operator re-apply")
+        else:
+            self._preflight_openebs_udev_mount()
+            self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
+            self.kubectl.exec_command(
+                "kubectl patch storageclass openebs-hostpath "
+                '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
+            )
         self.kubectl.wait_for_ready("openebs")
         self._ensure_openebs_device_storageclass()
 
@@ -1293,6 +1307,63 @@ class Conductor:
                 f"Missing /run/udev on: {missing_list}. Create /run/udev on the host before kind cluster "
                 "creation and mount hostPath /run/udev to containerPath /run/udev in the kind config."
             )
+
+    _METRICS_SERVER_ARGS = ("--kubelet-insecure-tls", "--kubelet-preferred-address-types=InternalIP")
+
+    # components.yaml creates this alongside the Deployment. It grants
+    # metrics-server the ability to create subjectaccessreviews; without it the
+    # aggregated API returns 500 and every `kubectl top` fails.
+    _METRICS_SERVER_BINDING = "metrics-server:system:auth-delegator"
+
+    def _metrics_server_configured(self) -> bool:
+        """True if metrics-server is deployed, patched, *and* still has its RBAC.
+
+        Checking more than existence matters because the Deployment and its
+        cluster-scoped RBAC have different lifetimes: the Deployment sits in the
+        protected kube-system namespace, while the ClusterRoleBinding is
+        cluster-scoped. Accepting a Deployment whose binding has been reconciled
+        away would leave metrics-server permanently broken instead of repairing
+        it, so verify both and re-apply if either is missing.
+        """
+        args = self.kubectl.exec_command(
+            "kubectl -n kube-system get deployment metrics-server "
+            "-o jsonpath='{.spec.template.spec.containers[0].args}' --ignore-not-found"
+        )
+        if not args or not args.strip():
+            return False
+        if not all(arg in args for arg in self._METRICS_SERVER_ARGS):
+            return False
+
+        binding = self.kubectl.exec_command(
+            f"kubectl get clusterrolebinding {self._METRICS_SERVER_BINDING} -o name --ignore-not-found"
+        )
+        if not binding or not binding.strip():
+            self.logger.info("[DEPLOY] metrics-server RBAC missing; re-applying components.yaml")
+            return False
+        return True
+
+    def _openebs_ready(self) -> bool:
+        """True if the OpenEBS tier is already fully deployed.
+
+        Checks the node-disk-manager as well as the LocalPV provisioner so that a
+        partially-present `openebs` namespace is repaired by re-applying the
+        operator manifest rather than silently accepted.
+        """
+        out = self.kubectl.exec_command(
+            "kubectl -n openebs get deployment openebs-localpv-provisioner "
+            "-o jsonpath='{.status.readyReplicas}' --ignore-not-found"
+        )
+        try:
+            if int(out.strip()) < 1:
+                return False
+        except (ValueError, AttributeError):
+            return False
+
+        ndm = self.kubectl.exec_command("kubectl -n openebs get daemonset openebs-ndm -o name --ignore-not-found")
+        if not ndm or not ndm.strip():
+            self.logger.info("[DEPLOY] OpenEBS node-disk-manager missing; re-applying operator manifest")
+            return False
+        return True
 
     def _ensure_openebs_device_storageclass(self) -> None:
         self.logger.info("[DEPLOY] Ensuring OpenEBS LocalPV-Device StorageClass…")
