@@ -23,6 +23,15 @@ class _FakeKubeCtl:
         return self.responses.get(command, "")
 
 
+@pytest.fixture(autouse=True)
+def _capture_sregym_logs(caplog, monkeypatch):
+    all_logger = logging.getLogger("all")
+    monkeypatch.setattr(all_logger, "propagate", False)
+    all_logger.addHandler(caplog.handler)
+    yield
+    all_logger.removeHandler(caplog.handler)
+
+
 def test_application_namespace_lookup_treats_empty_output_as_absent():
     namespace = "example"
     lookup = f"kubectl get namespace {namespace} --ignore-not-found -o name"
