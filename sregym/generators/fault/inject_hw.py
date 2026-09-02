@@ -87,12 +87,10 @@ class HWFaultInjector(FaultInjector):
 
         self.recover(target_pods, fault_type)
 
-        # Sweep any leftover BPF pins for this fault. The reinjection monitor
-        # pins a fresh probe per restarted container, but `khaos --recover` only
-        # detaches one — leaving the rest as stale pins under /sys/fs/bpf that
-        # accumulate across runs and eventually leak kernel resources. We
-        # observed 14 leftover pins on node1 after a single failed
-        # latent_sector_error run.
+        # Sweep any leftover BPF pins for this fault. Current Khaos releases
+        # recover every matching pin; keep this as a compatibility cleanup for
+        # older images and interrupted recoveries. Stale pins accumulate kernel
+        # resources across runs.
         try:
             self._cleanup_pinned_bpf_for_fault(target_node, fault_type)
         except Exception as e:
