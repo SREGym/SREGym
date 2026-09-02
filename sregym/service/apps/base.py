@@ -80,8 +80,8 @@ class Application:
 
     def create_namespace(self):
         """Create the namespace for the application if it doesn't exist."""
-        result = self.kubectl.exec_command(f"kubectl get namespace {self.namespace}")
-        if "notfound" in result.lower():
+        result = self.kubectl.exec_command(f"kubectl get namespace {self.namespace} --ignore-not-found -o name")
+        if not result.strip():
             self.logger.info(f"Namespace {self.namespace} not found. Creating namespace.")
             create_namespace_command = f"kubectl create namespace {self.namespace}"
             create_result = self.kubectl.exec_command(create_namespace_command)
