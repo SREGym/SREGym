@@ -8,12 +8,6 @@ from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 
-# Byte suffixes the Go runtime accepts for GOMEMLIMIT, per
-# runtime/debug.SetMemoryLimit. Verified empirically against
-# ghcr.io/open-telemetry/demo:2.2.0-checkout: SI suffixes ("16MB"),
-# Kubernetes quantity suffixes ("16Mi"), lower-case suffixes ("16mib"),
-# negatives, decimals, surrounding whitespace, and "EiB" are all rejected
-# with "fatal error: malformed GOMEMLIMIT" before main() runs.
 GO_MEMORY_SUFFIXES = {
     "B": 1,
     "KiB": 1024,
@@ -24,15 +18,8 @@ GO_MEMORY_SUFFIXES = {
 
 _GO_MEMORY_LIMIT_PATTERN = re.compile(r"^(\d+)(B|KiB|MiB|GiB|TiB)?$")
 
-# "off" (lower case only) disables the limit and is accepted by the runtime,
-# as is an unset variable. Both mean "no soft limit", which is the pre-fault
-# default and therefore always has at least as much headroom as any explicit
-# value.
 GO_MEMORY_LIMIT_DISABLED = "off"
 
-# Probe plumbing. checkout does not serve gRPC reflection, so grpcurl needs the
-# descriptor supplied as a proto file; the placeholder lets each probe run use a
-# fresh user id so repeated evaluations do not share cart state.
 PROTO_FILE_NAME = "probe.proto"
 PROBE_ID_PLACEHOLDER = "__PROBE_ID__"
 
@@ -40,8 +27,11 @@ PROBE_ID_PLACEHOLDER = "__PROBE_ID__"
 def parse_go_memory_limit(value: str | None) -> int | None:
     """Return the byte value of a GOMEMLIMIT string, or None if Go would reject it.
 
-    An unset variable and the literal "off" both parse to a disabled limit,
-    reported as math.MaxInt64 the way the runtime documents its default.
+    The runtime accepts a non-negative integer with an optional B, KiB, MiB,
+    GiB or TiB suffix, the literal "off", or no value at all. SI suffixes,
+    Kubernetes quantity suffixes, lower-case suffixes, negatives, decimals and
+    surrounding whitespace are rejected with "malformed GOMEMLIMIT" before
+    main() runs. "off" and an unset variable both mean no soft limit.
     """
     if value is None or value == "":
         return 2**63 - 1
@@ -64,16 +54,9 @@ class UnitMismatchGomemlimitMitigation(Oracle):
     probe_timeout_seconds = 120
     poll_interval_seconds = 2
     probe_image = "fullstorydev/grpcurl:v1.9.3"
-    # A real order traverses cart, currency, payment, shipping, email,
-    # product-catalog and Kafka. A single tight attempt turns any transient
-    # slowness in that chain into a false negative against a correct repair,
-    # so give each call room and retry the whole probe before failing.
     probe_call_timeout_seconds = 45
     probe_attempts = 3
     probe_retry_delay_seconds = 10
-    # A syntactically valid limit can still be absurd: the Go runtime accepts
-    # "0" and "16B". Anything under this floor would leave the process GC
-    # thrashing rather than serving, so it is not a repair.
     minimum_reasonable_limit_bytes = 1024**2
 
     def __init__(self, problem):
@@ -193,8 +176,6 @@ class UnitMismatchGomemlimitMitigation(Oracle):
         container = self._target_container(deployment)
         for env in container.env or []:
             if env.name == self.problem.env_var:
-                # A valueFrom reference cannot be resolved to a literal here;
-                # treat it as present with an unknown value so it fails closed.
                 if env.value is None:
                     return None, True
                 return env.value, True
@@ -355,8 +336,6 @@ class UnitMismatchGomemlimitMitigation(Oracle):
             results["reason"] = f"deployment/{self.problem.faulty_service} does not exist: {exc}"
             return results
 
-        # Structure. Catches deletion, scale-to-zero, and quietly shrinking the
-        # deployment so fewer pods can fail.
         replicas = self._desired_replicas(deployment)
         results["replicas"] = replicas
         if replicas < 1:
@@ -366,8 +345,6 @@ class UnitMismatchGomemlimitMitigation(Oracle):
             results["reason"] = f"deployment/{self.problem.faulty_service} is scaled below its pre-fault replica count"
             return results
 
-        # Unrelated configuration must survive the repair: swapping the image or
-        # editing the memory limits is not a fix for a malformed env value.
         container = self._target_container(deployment)
         results["image_preserved"] = container.image == self.baseline_image
         results["resources_preserved"] = self._resources_as_dict(container) == self.baseline_resources
@@ -378,8 +355,6 @@ class UnitMismatchGomemlimitMitigation(Oracle):
             results["reason"] = "the container resource requests or limits were changed from their pre-fault values"
             return results
 
-        # The value itself: semantically valid rather than a match on the
-        # original string, so any correct value the agent chooses is accepted.
         configured, is_set = self._configured_limit(deployment)
         results["configured_limit"] = configured if is_set else "<unset>"
         limit_bytes = parse_go_memory_limit(configured) if (configured is not None or not is_set) else None
@@ -393,7 +368,6 @@ class UnitMismatchGomemlimitMitigation(Oracle):
             )
             return results
 
-        # Runtime state, not just spec.
         deployment = self._wait_for_current_rollout(deployment)
         if deployment is None:
             results["reason"] = f"deployment/{self.problem.faulty_service} did not complete its current rollout"
@@ -407,8 +381,6 @@ class UnitMismatchGomemlimitMitigation(Oracle):
             )
             return results
 
-        # Behaviour. The target defines no readiness probe, so a Running pod
-        # proves nothing on its own; only a real request does.
         results["probe_succeeded"] = self._run_service_probe(deployment)
         if not results["probe_succeeded"]:
             results["reason"] = f"a fresh {self.problem.probe['rpc']} call did not succeed"

@@ -34,8 +34,6 @@ def test_rejects_a_service_with_no_variant():
 
 
 def test_injected_value_is_one_the_go_runtime_actually_rejects():
-    # The whole fault depends on this: if the SI form ever became valid, the
-    # problem would silently stop breaking anything.
     for correct in ("16MiB", "60MiB"):
         wrong = correct.replace("MiB", "MB")
         assert parse_go_memory_limit(correct) is not None
@@ -50,9 +48,6 @@ def test_configured_limit_reads_the_target_container():
 
 
 def test_injection_refuses_when_the_chart_value_has_drifted():
-    # The root-cause text names a specific value; if the chart no longer sets
-    # it, injecting anyway would hand the judge a description that does not
-    # match reality.
     problem = _problem(expected="16MiB", live="32MiB")
     deployment = problem.kubectl.get_deployment("checkout", "astronomy-shop")
 

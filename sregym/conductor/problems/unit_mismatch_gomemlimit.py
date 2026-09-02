@@ -48,17 +48,11 @@ from sregym.utils.decorators import mark_fault_injected
 
 logger = logging.getLogger(__name__)
 
-# The values the chart ships today. Injection asserts the live deployment still
-# matches, so the root-cause text handed to the judge can never drift away from
-# what was actually injected.
 _EXPECTED_CHART_VALUES = {
     "checkout": "16MiB",
     "product-catalog": "16MiB",
 }
 
-# checkout does not serve gRPC reflection, so grpcurl is given just enough of
-# the demo's schema to place a real order. product-catalog does serve
-# reflection and needs none of this.
 _CHECKOUT_PROTO = """syntax = "proto3";
 package oteldemo;
 
@@ -187,13 +181,10 @@ class UnitMismatchGomemlimitAstronomyShop(Problem):
         self.env_var = "GOMEMLIMIT"
         self.service_port = 8080
         self.expected_chart_value = _EXPECTED_CHART_VALUES[faulty_service]
-        # The SI-suffixed form of the shipped value: same number, wrong unit.
         self.wrong_value = self.expected_chart_value.replace("MiB", "MB")
         self._baseline_template = None
         self._baseline_replicas: int | None = None
 
-        # A real request through the service's own API. Neither target defines a
-        # readiness probe, so a Running pod proves nothing without this.
         self.probe = _PROBES[faulty_service]()
 
         self.root_cause = self.build_structured_root_cause(
@@ -362,7 +353,6 @@ class UnitMismatchGomemlimitAstronomyShop(Problem):
         print("== Fault Recovery ==")
 
         if self._baseline_template is None:
-            # A fresh problem instance recovering a cluster it did not inject.
             self._set_limit(self.expected_chart_value)
         else:
             deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)

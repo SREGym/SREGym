@@ -12,9 +12,6 @@ BASELINE_RESOURCES = {"limits": {"memory": "20Mi"}, "requests": {}}
 GOOD = "16MiB"
 BAD = "16MB"
 
-# Every case below was verified against ghcr.io/open-telemetry/demo:2.2.0-checkout
-# by running the real binary with that GOMEMLIMIT and checking whether the Go
-# runtime emitted "fatal error: malformed GOMEMLIMIT" before main().
 ACCEPTED_BY_GO = ["16MiB", "16KiB", "16GiB", "16TiB", "16B", "16", "16777216", "0", "9223372036854775807", "off", ""]
 REJECTED_BY_GO = ["16MB", "16Mi", "16mib", "OFF", "-1", "16.5MiB", " 16MiB", "16MiB ", "16EiB", "MiB", "abc"]
 
@@ -150,7 +147,6 @@ def test_accepts_the_original_value_restored():
 
 @pytest.mark.parametrize("value", ["32MiB", "1GiB", "16777216", "off"])
 def test_accepts_any_valid_value_not_just_the_original(value):
-    # The RFC is explicit that the exact original string must not be required.
     kubectl = _KubeCtl(deployment=_deployment(container=_container(env_value=value)))
 
     assert _oracle(kubectl).evaluate()["success"] is True
@@ -224,8 +220,6 @@ def test_cheat_raise_the_kubernetes_memory_limit():
 
 
 def test_cheat_old_replicaset_pod_still_serving():
-    # The surviving pod belongs to a ReplicaSet that has been scaled to zero,
-    # so it still carries the pre-fault environment and must not count.
     kubectl = _KubeCtl(
         pods=[_pod(name="checkout-old-xyz", rs="checkout-old")],
         replicasets=[
@@ -274,9 +268,6 @@ def test_requires_a_captured_baseline():
 
 
 def test_probe_retries_before_declaring_failure():
-    # A real order crosses seven services; one slow call must not fail a
-    # correct repair. Regression test for a live Stratus run where the agent
-    # fixed the value correctly and a single 25s attempt timed out.
     oracle = _oracle()
     calls = {"n": 0}
 
