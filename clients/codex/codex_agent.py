@@ -9,10 +9,46 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger("all.codex.agent")
+
+_CUSTOM_PROVIDER_ID = "sregym_custom"
+
+
+def custom_provider_args(env: Mapping[str, str] | None = None) -> list[str]:
+    """Build Codex CLI overrides for an OpenAI Responses-compatible endpoint."""
+    source = os.environ if env is None else env
+    api_base = source.get("AGENT_API_BASE", "").strip()
+    if not api_base:
+        return []
+
+    if not source.get("AGENT_API_KEY", "").strip():
+        raise RuntimeError("AGENT_API_KEY is required when AGENT_API_BASE configures Codex")
+
+    # json.dumps emits a quoted string that is valid TOML and safely escapes the
+    # endpoint without placing the credential itself on the command line.
+    return [
+        "-c",
+        f"model_provider={json.dumps(_CUSTOM_PROVIDER_ID)}",
+        "-c",
+        f"model_providers.{_CUSTOM_PROVIDER_ID}.name={json.dumps('SREGym custom endpoint')}",
+        "-c",
+        f"model_providers.{_CUSTOM_PROVIDER_ID}.base_url={json.dumps(api_base)}",
+        "-c",
+        f"model_providers.{_CUSTOM_PROVIDER_ID}.env_key={json.dumps('AGENT_API_KEY')}",
+        "-c",
+        f"model_providers.{_CUSTOM_PROVIDER_ID}.wire_api={json.dumps('responses')}",
+        "-c",
+        f"model_providers.{_CUSTOM_PROVIDER_ID}.requires_openai_auth=false",
+        # Namespace tools are supported by OpenAI's Responses API but cannot be
+        # represented by the Chat Completions bridge used by Z.ai. Keep Codex's
+        # regular function tools while suppressing its multi-agent namespace.
+        "-c",
+        "features.multi_agent=false",
+    ]
 
 
 class CodexAgent:
@@ -195,12 +231,19 @@ class CodexAgent:
     def _setup_auth(self) -> bool:
         """Set up authentication for Codex.
 
-        Checks subscription credentials first (mounted ~/.codex/auth.json),
-        then falls back to OPENAI_API_KEY env var.
+        Uses the custom provider credential when AGENT_API_BASE is set. Otherwise,
+        checks subscription credentials first (mounted ~/.codex/auth.json), then
+        falls back to OPENAI_API_KEY.
 
         Returns:
-            True if API key auth was set up, False if using subscription auth.
+            True if an OpenAI auth file was created; False for subscription or
+            custom-provider auth.
         """
+        if os.environ.get("AGENT_API_BASE", "").strip():
+            custom_provider_args()
+            logger.info("Using AGENT_API_KEY with the configured Codex endpoint")
+            return False
+
         # Prefer subscription auth (OAuth tokens in mounted ~/.codex)
         mounted_auth = Path("/root/.codex/auth.json")
         if mounted_auth.exists():
@@ -292,6 +335,7 @@ class CodexAgent:
             "--enable",
             "unified_exec",
         ]
+        command.extend(custom_provider_args())
         reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
         if reasoning_effort:
             command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
@@ -317,7 +361,9 @@ class CodexAgent:
         logger.info(f"Using reasoning effort: {reasoning_effort or 'Codex default'}")
 
         # Setup authentication
+        using_custom_provider = bool(os.environ.get("AGENT_API_BASE", "").strip())
         using_api_key = self._setup_auth()
+        env = os.environ.copy()
 
         try:
             command = self._build_command(instruction)
@@ -325,9 +371,8 @@ class CodexAgent:
             logger.info(f"Executing command: {' '.join(command)}")
 
             # Set environment variables
-            env = os.environ.copy()
-            if using_api_key:
-                # Use logs_dir as CODEX_HOME for API key auth (auth.json written there).
+            if using_custom_provider or using_api_key:
+                # Keep provider-specific state and API-key auth in the run directory.
                 env["CODEX_HOME"] = str(self.codex_home)
             else:
                 # For subscription auth, use the mounted ~/.codex dir so the CLI finds

@@ -98,10 +98,31 @@ class LLMJudge:
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
         try:
             response = self.backend.inference(messages)
-            return self._parse_judgment(response.content.strip())
+            return self._parse_judgment(self._content_text(response.content))
         except Exception as e:
             print(f"Error during judgment: {e}")
             raise
+
+    @staticmethod
+    def _content_text(content: object) -> str:
+        """Normalize LangChain string or multimodal content blocks to text."""
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for block in content:
+                if isinstance(block, str):
+                    parts.append(block)
+                elif isinstance(block, dict):
+                    value = block.get("text") or block.get("content")
+                    if value is not None:
+                        parts.append(str(value))
+                else:
+                    value = getattr(block, "text", None)
+                    if value is not None:
+                        parts.append(str(value))
+            return "".join(parts).strip()
+        return str(content or "").strip()
 
     def _parse_judgment(self, response_text: str) -> tuple[JudgmentResult, str]:
         reasoning = ""
@@ -457,7 +478,7 @@ fences, no preamble, no commentary.
         for attempt in range(2):
             try:
                 response = self.backend.inference(messages)
-                response_text = response.content.strip()
+                response_text = LLMJudge._content_text(response.content)
                 results = self._parse_response(response_text, self._all_question_ids)
                 return results
             except ChecklistParseError as e:

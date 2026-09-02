@@ -1,0 +1,22 @@
+# Always applied to astronomy-shop, by AstronomyShop.deploy().
+#
+# Corrections to the vendored opentelemetry-demo chart for the way SREGym
+# actually deploys it. Nothing here changes what an agent can observe; each
+# entry removes work the collector was doing that could never succeed.
+
+opentelemetry-collector:
+  config:
+    service:
+      pipelines:
+        # The chart's metrics pipeline pushes to `http://prometheus:9090/api/v1/otlp`,
+        # but AstronomyShop.deploy() sets `prometheus.enabled=false` (the bundled
+        # Prometheus ClusterRole collides with the central one in `observe`), so
+        # that endpoint does not exist. The exporter therefore fails every batch,
+        # grows a retry queue and fills the collector log. SREGym reads metrics
+        # from the central Prometheus, which *scrapes* targets rather than
+        # receiving pushes, so nothing downstream loses data by dropping this.
+        #
+        # `spanmetrics` stays in the receivers list (set by the chart) so span
+        # metrics are still produced for anything that scrapes the collector.
+        metrics:
+          exporters: [debug]

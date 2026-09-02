@@ -32,6 +32,11 @@ logger = logging.getLogger(__name__)
 langgraph_tool_config = LanggraphToolConfig()
 
 
+def _require_accepted_submission(result: dict, stage: str) -> None:
+    if result.get("status") not in {"200", "done"}:
+        raise RuntimeError(f"Benchmark rejected the {stage} submission: {result}")
+
+
 def get_benchmark_status() -> str:
     """
     Check the current status of the benchmark.
@@ -73,6 +78,7 @@ async def submit_tool(
         "submit",
         arguments={
             "ans": ans,
+            "stage": "diagnosis",
         },
     )
     result = result.content[0].text
@@ -152,7 +158,7 @@ async def rollback_submit_tool(tool_call_id: Annotated[str, InjectedToolCallId])
     )
 
 
-async def manual_submit_tool(ans: str) -> str:
+async def manual_submit_tool(ans: str, *, stage: str) -> str:
     # makes http call to benchmark submission server
     logging.info(f"_manually_ submitting to benchmark, answer: {ans}")
 
@@ -164,15 +170,18 @@ async def manual_submit_tool(ans: str) -> str:
 
     await session.initialize()
 
-    await session.call_tool(
+    result = await session.call_tool(
         "submit",
         arguments={
             "ans": ans,
+            "stage": stage,
         },
     )
+    result = ast.literal_eval(result.content[0].text)
     try:
         await exit_stack.aclose()
     except Exception as e:
         logger.debug(f"{type(e).__name__} ignored, as it's expected")
+    _require_accepted_submission(result, stage)
     logger.info("Submission complete. No further action is needed.")
     return "Submitted"

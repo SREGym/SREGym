@@ -30,6 +30,7 @@ from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.results.resume import complete_resume_rows
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
 from sregym.service.internet_policy import InternetPolicy
@@ -40,6 +41,16 @@ LAUNCHER = AgentLauncher()
 logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
+_driver_error: BaseException | None = None
+SUBMISSION_DRAIN_TIMEOUT_SECONDS = float(os.getenv("SUBMISSION_DRAIN_TIMEOUT_SECONDS", "300"))
+
+
+class BenchmarkCampaignAborted(RuntimeError):
+    """The campaign stopped safely after persisting its partial results."""
+
+    def __init__(self, message: str, partial_results: list[dict]):
+        super().__init__(message)
+        self.partial_results = partial_results
 
 
 def run_preflight_check(
@@ -236,6 +247,28 @@ def driver_loop(
 
         all_results_for_agent = []
 
+        async def finish_problem_with_deadline(timeout_reason: str) -> bool:
+            """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
+            try:
+                conductor.finish_problem_in_background()
+                await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+            except TimeoutError:
+                conductor.abandon_submission_work()
+                conductor.results["cleanup_timed_out"] = True
+                conductor.record_incomplete_attempt(timeout_reason)
+                console.log(
+                    "⛔ Conductor cleanup did not finish before the drain deadline; "
+                    "aborting without starting another attempt"
+                )
+                return False
+            except Exception as exc:
+                conductor.results["cleanup_failed"] = True
+                conductor.results["cleanup_error"] = f"{type(exc).__name__}: {exc}"
+                conductor.record_incomplete_attempt("cleanup_failed")
+                console.log(f"⛔ Conductor cleanup raised: {exc}")
+                return False
+            return not conductor.results.get("cleanup_failed", False)
+
         # Get all problem IDs and apply an explicit CLI selection when supplied.
         problem_ids = conductor.problems.get_problem_ids()
         all_problem_ids = conductor.problems.get_problem_ids(all=True)
@@ -266,20 +299,25 @@ def driver_loop(
         from collections import Counter
 
         completed_problems: set[str] = set()
+        completed_attempts: dict[str, set[int]] = {}
         attempt_counts: Counter[str] = Counter()
         if resume_csv:
             try:
                 with open(resume_csv, newline="") as f:
                     reader = csv.DictReader(f)
                     resume_rows = list(reader)
-                # Group by problem_id and count attempts
-                attempt_counts = Counter(r["problem_id"] for r in resume_rows)
-                completed_problems = {pid for pid, count in attempt_counts.items() if count >= n_attempts}
 
-                for row in resume_rows:
+                complete_rows = complete_resume_rows(resume_rows, n_attempts)
+
+                for (pid, attempt_number), row in complete_rows.items():
+                    completed_attempts.setdefault(pid, set()).add(attempt_number)
                     all_results_for_agent.append(row)
+
+                attempt_counts = Counter({pid: len(attempts) for pid, attempts in completed_attempts.items()})
+                completed_problems = {pid for pid, count in attempt_counts.items() if count >= n_attempts}
                 console.log(
-                    f"📋 Resuming from {resume_csv}: {len(completed_problems)} problems already done, skipping them"
+                    f"📋 Resuming from {resume_csv}: {len(completed_problems)} problems already done; "
+                    "incomplete attempts will be rerun"
                 )
             except Exception as e:
                 console.log(f"⚠️  Failed to load resume CSV: {e}")
@@ -306,7 +344,6 @@ def driver_loop(
         for pid in problem_ids:
             if pid in completed_problems:
                 console.log(f"⏭️  Skipping already-completed problem: {pid}")
-                progress.advance(task_id, n_attempts)
                 continue
 
             conductor.problem_id = pid
@@ -314,7 +351,11 @@ def driver_loop(
             # Keep a record of results for this problem in a temp file in case an attempt fails
             tmp_path = f"_running_{pid}_{agent_to_run}_results.csv"
 
-            for attempt in range(1, n_attempts + 1):
+            attempts_to_run = [
+                attempt for attempt in range(1, n_attempts + 1) if attempt not in completed_attempts.get(pid, set())
+            ]
+            for attempt_position, attempt in enumerate(attempts_to_run):
+                abort_campaign_after_attempt = False
                 progress.update(
                     task_id,
                     description=f"[cyan]Benchmarking {agent_to_run or 'agent'} — {pid} (attempt {attempt}/{n_attempts})",
@@ -324,6 +365,7 @@ def driver_loop(
                 # Retry start_problem up to 3 times to handle transient deploy failures
                 max_deploy_retries = 3
                 result = None
+                deploy_cleanup_failed = False
                 for deploy_attempt in range(1, max_deploy_retries + 1):
                     try:
                         result = await conductor.start_problem()
@@ -335,10 +377,13 @@ def driver_loop(
                         )
                         if deploy_attempt < max_deploy_retries:
                             console.log("🧹 Cleaning up before retry...")
-                            try:
-                                conductor._finish_problem()
-                            except Exception as cleanup_err:
-                                console.log(f"⚠️  Cleanup error (non-fatal): {cleanup_err}")
+                            cleanup_succeeded = await finish_problem_with_deadline(
+                                "cleanup_timeout_after_deploy_failure"
+                            )
+                            if not cleanup_succeeded:
+                                deploy_cleanup_failed = True
+                                console.log("⛔ Cleanup failed; refusing to retry deployment against uncertain state")
+                                break
                             console.log(f"🔄 Retrying start_problem for '{pid}'...")
                         else:
                             console.log(
@@ -350,29 +395,59 @@ def driver_loop(
                     # The inner retry loop already logged the failure. Don't crash the
                     # entire driver — record the failure, clean up cluster state, and
                     # move on to the next problem so the benchmark can keep making progress.
-                    try:
-                        conductor._finish_problem()
-                    except Exception as cleanup_err:
-                        console.log(f"⚠️  Cleanup after exhausted deploy retries failed (non-fatal): {cleanup_err}")
+                    if not deploy_cleanup_failed:
+                        deploy_cleanup_failed = not await finish_problem_with_deadline(
+                            "cleanup_timeout_after_deploy_failure"
+                        )
+                    if deploy_cleanup_failed and conductor.results.get("run_status") != "incomplete":
+                        conductor.record_incomplete_attempt("cleanup_failed")
                     snapshot = {
                         "problem_id": pid,
                         "attempt": attempt,
                         "deploy_failed": True,
                     }
+                    for stage, outcome in conductor.results.items():
+                        if isinstance(outcome, dict):
+                            for key, value in outcome.items():
+                                snapshot[f"{stage}.{key}"] = value
+                        else:
+                            snapshot[stage] = outcome
                     all_results_for_agent.append(snapshot)
                     fieldnames = sorted({key for row in all_results_for_agent for key in row})
                     with open(tmp_path, "w", newline="") as csvfile:
                         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                         writer.writeheader()
                         writer.writerows(all_results_for_agent)
+                    if deploy_cleanup_failed:
+                        final_csv_path = base_dir / str(agent_to_run) / pid / f"{pid}_{agent_to_run}_results.csv"
+                        final_csv_path.parent.mkdir(parents=True, exist_ok=True)
+                        os.replace(tmp_path, final_csv_path)
+                        progress.advance(task_id, len(attempts_to_run) - attempt_position)
+                        progress.stop()
+                        if not use_external_harness:
+                            conductor.stop_k8s_proxy()
+                        if conductor.results.get("cleanup_timed_out"):
+                            deploy_abort_reason = (
+                                "Benchmark cleanup did not terminate during deployment; "
+                                "later attempts were not started against uncertain state."
+                            )
+                        else:
+                            deploy_abort_reason = (
+                                "Benchmark cleanup failed during deployment; "
+                                "later attempts were not started against uncertain state."
+                            )
+                        raise BenchmarkCampaignAborted(
+                            deploy_abort_reason,
+                            [{agent_to_run: all_results_for_agent}],
+                        )
                     console.log(f"⏭️  Skipping remaining attempts for '{pid}' and moving to next problem")
                     # Account for this attempt + remaining skipped attempts on the bar.
-                    progress.advance(task_id, n_attempts - attempt + 1)
+                    progress.advance(task_id, len(attempts_to_run) - attempt_position)
                     break
 
                 if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
                     console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
-                    progress.advance(task_id, n_attempts - attempt + 1)
+                    progress.advance(task_id, len(attempts_to_run) - attempt_position)
                     break  # Skip to next problem
 
                 # If using external harness, fault is injected - exit now
@@ -392,25 +467,68 @@ def driver_loop(
                 )
                 agent_proc = None
 
-                with _artifact_environment(run):
-                    reg = get_agent(
-                        agent_to_run,
-                        path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml",
-                    )
-                    if reg:
-                        agent_proc = await LAUNCHER.ensure_started(reg)
+                if conductor.stage_sequence:
+                    with _artifact_environment(run):
+                        reg = get_agent(
+                            agent_to_run,
+                            path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml",
+                        )
+                        if reg:
+                            agent_proc = await LAUNCHER.ensure_started(reg)
+                else:
+                    console.log("⏩ No agent stages are configured; waiting only for bounded cleanup")
+                    if conductor.close_submissions():
+                        try:
+                            await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                        except TimeoutError:
+                            abort_campaign_after_attempt = True
+                            conductor.abandon_submission_work()
+                            conductor.results["cleanup_timed_out"] = True
+                            conductor.record_incomplete_attempt("cleanup_timeout_without_agent_stages")
+                        except Exception as exc:
+                            abort_campaign_after_attempt = True
+                            conductor.results["cleanup_failed"] = True
+                            conductor.results["cleanup_error"] = f"{type(exc).__name__}: {exc}"
+                            conductor.record_incomplete_attempt("cleanup_failed")
 
                 timed_out = False
                 agent_start_time = time.time()
-                while conductor.submission_stage != "done":
+                while not abort_campaign_after_attempt and conductor.submission_stage != "done":
                     if time.time() - agent_start_time > agent_timeout:
                         timed_out = True
                         console.log(f"⏰ Agent timeout ({agent_timeout}s) exceeded, killing agent")
+                        submission_work = conductor.close_submissions()
                         LAUNCHER.cleanup_agent(agent_to_run)
                         conductor.results["timed_out"] = True
                         conductor.results["agent_timeout_seconds"] = agent_timeout
-                        console.log("🧹 Running conductor cleanup after agent timeout...")
-                        conductor._finish_problem()
+                        evaluation_failed = False
+                        if submission_work:
+                            console.log("⏳ Waiting for the accepted submission evaluation to complete...")
+                            try:
+                                await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                            except TimeoutError:
+                                evaluation_failed = True
+                                abort_campaign_after_attempt = True
+                                conductor.abandon_submission_work()
+                                console.log(
+                                    "⛔ Submission evaluation did not finish before the drain deadline; "
+                                    "aborting the campaign without concurrent cluster cleanup"
+                                )
+                            except Exception as e:
+                                evaluation_failed = True
+                                console.log(f"⚠️  Conductor evaluation raised: {e}")
+                        if abort_campaign_after_attempt:
+                            reason = "evaluation_timeout_after_agent_timeout"
+                        else:
+                            reason = "evaluation_failed_after_agent_timeout" if evaluation_failed else "agent_timeout"
+                        if evaluation_failed or conductor.missing_submission_stages():
+                            conductor.record_incomplete_attempt(reason)
+                        if not abort_campaign_after_attempt:
+                            console.log("🧹 Running conductor cleanup after agent timeout...")
+                            cleanup_succeeded = await finish_problem_with_deadline(
+                                "cleanup_timeout_after_agent_timeout"
+                            )
+                            abort_campaign_after_attempt = not cleanup_succeeded
                         break
 
                     tracked_proc = LAUNCHER._procs.get(agent_to_run) or agent_proc
@@ -419,28 +537,71 @@ def driver_loop(
                         if tracked_proc.proc.returncode is not None:
                             agent_proc = tracked_proc
                             console.log(f"⚠️  Agent process exited with return code {tracked_proc.proc.returncode}")
-                            if conductor._submit_future is not None and not conductor._submit_future.done():
+                            submission_work = conductor.close_submissions()
+                            evaluation_failed = False
+                            if submission_work:
                                 console.log("⏳ Waiting for conductor evaluation to complete...")
                                 try:
-                                    await asyncio.wait_for(
-                                        asyncio.wrap_future(conductor._submit_future),
-                                        timeout=300,
-                                    )
+                                    await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
                                 except TimeoutError:
-                                    console.log("⚠️  Conductor evaluation did not finish within 300s")
+                                    evaluation_failed = True
+                                    abort_campaign_after_attempt = True
+                                    conductor.abandon_submission_work()
+                                    console.log(
+                                        "⛔ Submission evaluation did not finish before the drain deadline; "
+                                        "aborting the campaign without concurrent cluster cleanup"
+                                    )
                                 except Exception as e:
+                                    evaluation_failed = True
                                     console.log(f"⚠️  Conductor evaluation raised: {e}")
-                            console.log("🧹 Running conductor cleanup after agent exit...")
-                            conductor._finish_problem()
+                            if conductor.submission_stage != "done":
+                                if abort_campaign_after_attempt:
+                                    reason = "evaluation_timeout_after_agent_exit"
+                                elif evaluation_failed:
+                                    reason = "evaluation_failed_after_agent_exit"
+                                else:
+                                    reason = "agent_exited_before_all_stages_completed"
+                                conductor.record_incomplete_attempt(
+                                    reason,
+                                    agent_return_code=tracked_proc.proc.returncode,
+                                )
+                            if not abort_campaign_after_attempt:
+                                console.log("🧹 Running conductor cleanup after agent exit...")
+                                cleanup_succeeded = await finish_problem_with_deadline(
+                                    "cleanup_timeout_after_agent_exit"
+                                )
+                                abort_campaign_after_attempt = not cleanup_succeeded
                             break
                     await asyncio.sleep(1)
 
-                console.log(f"✅ Completed {pid}: results={conductor.results}", markup=False)
+                # The final evaluator sets stage=done during cleanup just
+                # before its worker future returns. Consume that future before
+                # freezing the attempt snapshot or starting another attempt.
+                if not abort_campaign_after_attempt and conductor.close_submissions():
+                    try:
+                        await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                    except TimeoutError:
+                        abort_campaign_after_attempt = True
+                        conductor.abandon_submission_work()
+                        conductor.record_incomplete_attempt("evaluation_timeout_after_stage_completion")
+                        console.log(
+                            "⛔ Submission evaluation did not finish before the drain deadline; "
+                            "aborting the campaign without concurrent cluster cleanup"
+                        )
+                    except Exception as e:
+                        console.log(f"⚠️  Conductor evaluation raised after stage completion: {e}")
+                        conductor.record_incomplete_attempt("evaluation_failed_after_stage_completion")
+
+                run_status = conductor.finalize_attempt_status()
+                if conductor.results.get("cleanup_failed"):
+                    abort_campaign_after_attempt = True
+                status_icon = "✅" if run_status == "complete" else "⚠️"
+                console.log(f"{status_icon} {run_status.capitalize()} {pid}: results={conductor.results}", markup=False)
                 # Wait for agent process to complete naturally before cleanup
                 # This allows the agent to finish saving trajectories and other cleanup tasks
                 if not use_external_harness:
                     agent_proc = LAUNCHER._procs.get(agent_to_run) or agent_proc
-                    if agent_proc and not timed_out:
+                    if agent_proc and not timed_out and not abort_campaign_after_attempt:
                         console.log("⏳ Waiting for agent process to complete...")
                         timeout = 60  # seconds
                         elapsed = 0
@@ -523,15 +684,41 @@ def driver_loop(
                     else:
                         logger.warning(f"⚠️ ATIF trajectory conversion skipped for {published_run_dir}")
 
-                if attempt == n_attempts:
+                if attempt == attempts_to_run[-1] or abort_campaign_after_attempt:
                     final_csv_path = base_dir / agent_to_run / pid / f"{pid}_{agent_to_run}_results.csv"
                     final_csv_path.parent.mkdir(parents=True, exist_ok=True)
                     os.replace(tmp_path, final_csv_path)
-                    logger.info(
-                        f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {final_csv_path}"
-                    )
+                    if abort_campaign_after_attempt:
+                        logger.error(
+                            f"⛔ Problem {pid} for agent {agent_to_run} stopped incomplete. "
+                            f"Partial results written to {final_csv_path}"
+                        )
+                    else:
+                        logger.info(
+                            f"✅ Problem {pid} for agent {agent_to_run} complete! Results written to {final_csv_path}"
+                        )
 
                 progress.advance(task_id)
+
+                if abort_campaign_after_attempt:
+                    if conductor.results.get("cleanup_failed"):
+                        abort_reason = (
+                            "Benchmark cleanup failed; later attempts were not started against uncertain state."
+                        )
+                    elif conductor.results.get("cleanup_timed_out"):
+                        abort_reason = "Benchmark cleanup did not terminate; later attempts were not started against uncertain state."
+                    else:
+                        abort_reason = (
+                            "A submission evaluator did not terminate safely. "
+                            "The next benchmark startup will clean the remaining fault state."
+                        )
+                    console.log(f"⛔ Benchmark stopped: {abort_reason}")
+                    progress.stop()
+                    conductor.stop_k8s_proxy()
+                    raise BenchmarkCampaignAborted(
+                        abort_reason,
+                        [{agent_to_run: all_results_for_agent}],
+                    )
 
         progress.stop()
 
@@ -555,6 +742,7 @@ def _run_driver_and_shutdown(
     resume_csv: str | None = None,
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
+    global _driver_error, _driver_results
     try:
         results = driver_loop(
             conductor,
@@ -565,9 +753,13 @@ def _run_driver_and_shutdown(
             agent_timeout=agent_timeout,
             resume_csv=resume_csv,
         )
-        global _driver_results
         _driver_results = results
-    except Exception:
+    except BenchmarkCampaignAborted as exc:
+        _driver_results = exc.partial_results
+        _driver_error = exc
+        logger.error("Benchmark campaign aborted: %s", exc)
+    except BaseException as exc:
+        _driver_error = exc
         logger.exception("Driver thread crashed")
     finally:
         LAUNCHER.cleanup_all()
@@ -575,6 +767,10 @@ def _run_driver_and_shutdown(
 
 
 def main(args):
+    global _driver_error, _driver_results
+    _driver_error = None
+    _driver_results = []
+
     # set up the logger
     init_logger()
 
@@ -709,9 +905,17 @@ def main(args):
                 writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(agent_results)
-            logger.info(f"✅ Benchmark complete! Results for {agent_name} written to {csv_path}")
+            if _driver_error is None:
+                logger.info(f"✅ Benchmark complete! Results for {agent_name} written to {csv_path}")
+            else:
+                logger.error(f"⛔ Partial benchmark results for {agent_name} written to {csv_path}")
     else:
         logger.warning("⚠️ No results to write.")
+
+    if _driver_error is not None:
+        if __name__ == "__main__":
+            raise SystemExit(1) from _driver_error
+        raise RuntimeError("Benchmark campaign did not complete") from _driver_error
 
     if __name__ == "__main__":
         # separate run, use exit
