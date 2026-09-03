@@ -445,7 +445,7 @@ def test_abandoned_evaluator_cannot_publish_or_advance_late_result():
         old_future = conductor._submit_future
         assert old_future is not None
         with pytest.raises(TimeoutError):
-            await conductor.wait_for_submission_work(timeout=0.01)
+            await conductor.wait_for_submission_evaluations(timeout=0.01)
         conductor.abandon_submission_work()
         gate.set()
         old_future.result(timeout=2)
@@ -453,6 +453,62 @@ def test_abandoned_evaluator_cannot_publish_or_advance_late_result():
     asyncio.run(run())
     assert conductor.submission_stage == "aborted"
     assert "Diagnosis" not in conductor.results
+    assert conductor._submit_future is None
+
+
+def test_evaluation_and_cleanup_have_separate_deadlines():
+    evaluation_started = threading.Event()
+    release_evaluation = threading.Event()
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+
+    def evaluate_mitigation(_solution):
+        evaluation_started.set()
+        release_evaluation.wait(2)
+        return {"success": True}
+
+    def recover_fault():
+        cleanup_started.set()
+        release_cleanup.wait(2)
+
+    conductor = _conductor()
+    conductor.stage_sequence = [{"name": "mitigation", "evaluation": evaluate_mitigation}]
+    conductor.current_stage_index = 0
+    conductor.submission_stage = "mitigation"
+    conductor.problem = SimpleNamespace(
+        recover_fault=recover_fault,
+        app=SimpleNamespace(cleanup=lambda: None),
+    )
+
+    async def release_after(delay, event):
+        await asyncio.sleep(delay)
+        event.set()
+
+    async def run():
+        started_at = time.monotonic()
+        await conductor.submit("", expected_stage="mitigation")
+        assert evaluation_started.wait(1)
+
+        evaluation_release = asyncio.create_task(release_after(0.12, release_evaluation))
+        await conductor.wait_for_submission_evaluations(timeout=0.2)
+        await evaluation_release
+
+        assert conductor.submission_stage == "tearing_down"
+        assert cleanup_started.wait(1)
+        cleanup_future = conductor.finish_problem_in_background()
+        assert cleanup_future is conductor._submit_future
+
+        cleanup_release = asyncio.create_task(release_after(0.12, release_cleanup))
+        await conductor.wait_for_submission_work(timeout=0.2)
+        await cleanup_release
+        return time.monotonic() - started_at
+
+    elapsed = asyncio.run(run())
+
+    assert elapsed > 0.2
+    assert conductor.results["Mitigation"]["success"] is True
+    assert conductor.missing_submission_stages() == []
+    assert conductor.submission_stage == "done"
     assert conductor._submit_future is None
 
 
