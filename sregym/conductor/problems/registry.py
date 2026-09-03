@@ -83,6 +83,7 @@ from sregym.conductor.problems.pod_cidr_exhaustion_hotel_reservation import PodC
 from sregym.conductor.problems.postgres_lock_contention_product_catalog import PostgresLockContentionProductCatalog
 from sregym.conductor.problems.priority_preemption_cascade import PriorityPreemptionCascadeHotelReservation
 from sregym.conductor.problems.product_catalog_failure import ProductCatalogServiceFailure
+from sregym.conductor.problems.product_catalog_missing_index import ProductCatalogMissingIndexAstronomyShop
 from sregym.conductor.problems.psa_restricted_blocks_recreation import PSARestrictedBlocksRecreation
 from sregym.conductor.problems.pvc_claim_mismatch import PVCClaimMismatch
 from sregym.conductor.problems.rbac_misconfiguration import RBACMisconfiguration
@@ -142,6 +143,7 @@ class ProblemRegistry:
             "edge_request_filter_cpu_saturation": EdgeRequestFilterCPUSaturation,
             "ephemeral_port_range_hotel_reservation": EphemeralPortRangeHotelReservation,
             "secret_rotation_stale_env_credentials_astronomy_shop": SecretRotationStaleEnvCredentialsAstronomyShop,
+            "product_catalog_missing_index_astronomy_shop": ProductCatalogMissingIndexAstronomyShop,
             # # ==================== VIRTUALIZATION FAULT INJECTOR ====================
             # --- METASTABLE FAILURES ---
             # "cache_flush_capacity_degradation": CacheFlushCapacityDegradation,  # module not yet implemented
