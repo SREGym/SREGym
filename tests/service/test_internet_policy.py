@@ -343,14 +343,20 @@ def test_filtered_mode_disables_codex_web_search(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_INTERNET_ACCESS", "filtered")
     agent = CodexAgent(logs_dir=tmp_path, model_name="gpt-5.6-sol")
 
-    assert 'web_search="disabled"' in agent._build_command("inspect the cluster")
+    command = agent._build_command("inspect the cluster")
+
+    assert 'web_search="disabled"' in command
+    assert "mcp_servers.codex_apps.enabled=false" in command
 
 
 def test_open_mode_keeps_codex_web_search(monkeypatch, tmp_path):
     monkeypatch.setenv("AGENT_INTERNET_ACCESS", "open")
     agent = CodexAgent(logs_dir=tmp_path, model_name="gpt-5.6-sol")
 
-    assert 'web_search="disabled"' not in agent._build_command("inspect the cluster")
+    command = agent._build_command("inspect the cluster")
+
+    assert 'web_search="disabled"' not in command
+    assert "mcp_servers.codex_apps.enabled=false" not in command
 
 
 def test_filtered_mode_disables_gemini_provider_web_tools(monkeypatch, tmp_path):
