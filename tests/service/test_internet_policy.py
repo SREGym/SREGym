@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import stat
 from pathlib import Path
 
@@ -20,56 +21,16 @@ from sregym.service.container_runner import (
     ContainerRunner,
     _find_host_ca_bundle,
 )
-from sregym.service.internet_policy import InternetPolicy, blocked_github_owner, should_stream_response
+from sregym.service.internet_policy import (
+    EndpointRule,
+    InternetPolicy,
+    endpoint_host_is_allowed,
+    endpoint_is_allowed,
+    provider_endpoint_rules,
+    provider_tool_uses_internet,
+    should_stream_response,
+)
 from sregym.service.k8s_proxy import KubernetesAPIProxy, _is_workload_create_path, is_valid_bearer_token
-
-
-@pytest.mark.parametrize(
-    ("host", "target", "body", "expected"),
-    [
-        ("github.com", "/SREGym/SREGym", None, "SREGym"),
-        ("github.com", "/orgs/sregym/repositories", None, "SREGym"),
-        ("github.com", "/search?q=org%253ASREGym", None, "SREGym"),
-        ("api.github.com", "/repos/SREGym/SREGym", None, "SREGym"),
-        ("api.github.com", "/graphql", b'{"variables":{"owner":"SREGym"}}', "SREGym"),
-        ("api.github.com", "/graphql", b'{"variables":{"owner":"S\\u0052EGym"}}', "SREGym"),
-        ("api.github.com", "/repositories/986527564/contents/README.md", None, "repository:986527564"),
-        ("raw.githubusercontent.com", "/SREGym/SREGym/main/README.md", None, "SREGym"),
-        ("codeload.github.com", "/SREGym/SREGym/tar.gz/main", None, "SREGym"),
-        ("cdn.jsdelivr.net", "/gh/someone/SREGym@main/README.md", None, "repository:sregym"),
-        ("raw.githack.com", "/someone/SREGym/main/README.md", None, "repository:sregym"),
-    ],
-)
-def test_blocks_configured_github_owner(host, target, body, expected):
-    assert blocked_github_owner(host, target, body) == expected
-
-
-@pytest.mark.parametrize(
-    ("host", "target"),
-    [
-        ("github.com", "/kubernetes/kubernetes"),
-        ("api.github.com", "/repos/kubernetes/kubernetes"),
-        ("raw.githubusercontent.com", "/kubernetes/kubernetes/master/README.md"),
-        ("example.com", "/SREGym/SREGym"),
-    ],
-)
-def test_allows_other_github_owners_and_hosts(host, target):
-    assert blocked_github_owner(host, target, None) is None
-
-
-@pytest.mark.parametrize(
-    "target",
-    [
-        "/kubernetes/../SREGym/SREGym/blob/main/README.md",
-        "/kubernetes/%2e%2e/SREGym/SREGym/blob/main/README.md",
-    ],
-)
-def test_resolves_dot_segments_before_applying_github_policy(target):
-    assert blocked_github_owner("github.com", target, None) == "SREGym"
-
-
-def test_allows_unconfigured_numeric_github_repository_id():
-    assert blocked_github_owner("api.github.com", "/repositories/12345/contents/README.md", None) is None
 
 
 @pytest.mark.parametrize(
@@ -85,16 +46,63 @@ def test_only_event_stream_responses_are_streamed(content_type, expected):
     assert should_stream_response(content_type) is expected
 
 
-def test_ignores_unrelated_query_and_json_text():
-    assert blocked_github_owner("github.com", "/kubernetes/kubernetes?note=not-sregymnasium", None) is None
-    assert (
-        blocked_github_owner(
-            "api.github.com",
-            "/graphql",
-            b'{"variables":{"note":"SREGym"}}',
+def test_endpoint_rules_require_matching_host_port_and_path():
+    rules = (EndpointRule.from_url("https://api.example.test/v1"),)
+
+    assert endpoint_host_is_allowed("API.EXAMPLE.TEST.", 443, rules)
+    assert endpoint_is_allowed("api.example.test", 443, "/v1/messages", rules)
+    assert not endpoint_is_allowed("api.example.test", 443, "/v10/messages", rules)
+    assert not endpoint_is_allowed("api.example.test", 443, "/v1/%252e%252e/private", rules)
+    assert not endpoint_is_allowed("api.example.test", 80, "/v1/messages", rules)
+    assert not endpoint_is_allowed("other.example.test", 443, "/v1/messages", rules)
+
+
+def test_exact_endpoint_rule_does_not_allow_other_paths():
+    rules = (EndpointRule("api.example.test", 443, "/", include_subpaths=False),)
+
+    assert endpoint_is_allowed("api.example.test", 443, "/", rules)
+    assert not endpoint_is_allowed("api.example.test", 443, "/models", rules)
+
+
+def test_provider_host_rule_ignores_configured_base_path():
+    rule = EndpointRule.host_from_url("https://provider.example.test/v1")
+
+    assert rule == EndpointRule("provider.example.test", 443)
+    assert rule.allows("provider.example.test", 443, "/oauth/token")
+
+
+def test_internet_policy_rejects_invalid_additional_endpoint():
+    with pytest.raises(ValueError, match=r"HTTP\(S\) URL"):
+        InternetPolicy.from_mode(
+            "filtered",
+            additional_allowed_endpoints=["ssh://example.test"],
         )
-        is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"tools":[{"type":"web_search_preview"}]}',
+        b'{"tools":[{"type":"web_search_20250305"}]}',
+        b'{"tools":[{"type":"web_fetch_20250910"}]}',
+        b'{"tools":[{"googleSearch":{}}]}',
+        b'{"tools":[{"type":"mcp","server_url":"https://example.com/mcp"}]}',
+        b'{"tools":[{"type":"computer_use_preview"}]}',
+        b'{"plugins":[{"id":"github"}]}',
+        b'{"apps":[{"id":"github"}]}',
+        b'{"mcp_servers":[{"url":"https://example.com/mcp"}]}',
+    ],
+)
+def test_detects_provider_hosted_web_tools(body):
+    assert provider_tool_uses_internet(body)
+
+
+def test_provider_tool_filter_does_not_scan_prompt_text_or_regular_tools():
+    body = (
+        b'{"messages":[{"content":"use web_search"}],"tools":[{"type":"function","name":"kubectl",'
+        b'"parameters":{"properties":{"browser":{"type":"string"}}}}]}'
     )
+    assert not provider_tool_uses_internet(body)
 
 
 def test_filtered_runner_rewrites_all_local_provider_endpoints(tmp_path):
@@ -167,11 +175,179 @@ def test_filtered_runner_prepares_proxy_audit_log():
         runner._prepare_egress_state()
         assert runner._egress_tmp_dir is not None
         blocked_log = runner._egress_tmp_dir / "blocked-requests.jsonl"
+        policy_file = runner._egress_tmp_dir / "policy.json"
 
         assert stat.S_IMODE(runner._egress_tmp_dir.stat().st_mode) == 0o711
         assert stat.S_IMODE(blocked_log.stat().st_mode) == 0o622
+        assert not (runner._egress_tmp_dir / "observed-requests.jsonl").exists()
+        assert json.loads(policy_file.read_text()) == {"allowed_endpoints": []}
     finally:
         runner.cleanup_egress_proxy()
+
+
+def test_filtered_runner_builds_rules_from_explicit_provider_endpoints():
+    runner = ContainerRunner(
+        ContainerConfig(
+            internet_policy=InternetPolicy.from_mode(
+                "filtered",
+                agent_name="stratus",
+                model_id="openai/local-model",
+            )
+        )
+    )
+    rules = runner._configured_egress_rules(
+        {"AGENT_API_BASE": "https://custom.example.test/v1", "API_PORT": "8000", "MCP_SERVER_PORT": "9954"}
+    )
+
+    assert EndpointRule("custom.example.test", 443) in rules
+    assert EndpointRule("host.docker.internal", 8000) in rules
+    assert EndpointRule("host.docker.internal", 9954) in rules
+    assert EndpointRule("host.docker.internal", 16443) in rules
+
+
+def test_filtered_runner_adds_user_endpoints_without_replacing_required_rules():
+    runner = ContainerRunner(
+        ContainerConfig(
+            internet_policy=InternetPolicy.from_mode(
+                "filtered",
+                agent_name="stratus",
+                model_id="openai/gpt-5",
+                additional_allowed_endpoints=[
+                    "https://telemetry.example.test/v1",
+                    "http://localhost:18081/health",
+                ],
+            )
+        )
+    )
+
+    rules = runner._configured_egress_rules({"API_PORT": "8000", "MCP_SERVER_PORT": "9954"})
+
+    assert EndpointRule("api.openai.com", 443) in rules
+    assert EndpointRule("telemetry.example.test", 443, "/v1") in rules
+    assert EndpointRule("host.docker.internal", 18081, "/health") in rules
+    assert EndpointRule("host.docker.internal", 8000) in rules
+
+
+def test_additional_endpoint_path_does_not_allow_sibling_paths():
+    policy = InternetPolicy.from_mode(
+        "filtered",
+        additional_allowed_endpoints=["https://telemetry.example.test/v1"],
+    )
+    rule = EndpointRule.from_url(policy.additional_allowed_endpoints[0])
+
+    assert rule.allows("telemetry.example.test", 443, "/v1/events")
+    assert not rule.allows("telemetry.example.test", 443, "/admin")
+
+
+def test_codex_subscription_allows_only_runtime_and_refresh_hosts():
+    policy = InternetPolicy.from_mode("filtered", agent_name="codex", model_id="gpt-5.6-sol")
+
+    rules = provider_endpoint_rules(
+        policy,
+        {"OPENAI_API_KEY": "unused-when-subscription-auth-exists"},
+        codex_auth_available=True,
+    )
+
+    assert rules == (
+        EndpointRule("auth.openai.com", 443),
+        EndpointRule("chatgpt.com", 443),
+    )
+
+
+def test_codex_api_key_allows_openai_api_only():
+    policy = InternetPolicy.from_mode("filtered", agent_name="codex", model_id="gpt-5.6-sol")
+
+    assert provider_endpoint_rules(policy, {"OPENAI_API_KEY": "secret"}) == (EndpointRule("api.openai.com", 443),)
+
+
+def test_codex_custom_endpoint_replaces_openai_hosts():
+    policy = InternetPolicy.from_mode("filtered", agent_name="codex", model_id="custom-model")
+
+    assert provider_endpoint_rules(
+        policy,
+        {"AGENT_API_BASE": "https://models.example.test/v1", "OPENAI_API_KEY": "unused"},
+        codex_auth_available=True,
+    ) == (EndpointRule("models.example.test", 443),)
+
+
+def test_claude_oauth_includes_provider_refresh_host():
+    policy = InternetPolicy.from_mode("filtered", agent_name="claudecode", model_id="claude-opus-4-8")
+
+    assert provider_endpoint_rules(policy, {"CLAUDE_CODE_OAUTH_TOKEN": "oauth"}) == (
+        EndpointRule("api.anthropic.com", 443),
+        EndpointRule("platform.claude.com", 443),
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "environment", "expected_hosts"),
+    [
+        ("gpt-5", {}, {"api.openai.com"}),
+        ("anthropic/claude-sonnet-4-6", {}, {"api.anthropic.com"}),
+        ("gemini/gemini-2.5-pro", {}, {"generativelanguage.googleapis.com"}),
+        ("deepseek/deepseek-reasoner", {}, {"api.deepseek.com"}),
+        (
+            "bedrock/us.anthropic.claude-sonnet-4-5-v1:0",
+            {"AWS_DEFAULT_REGION": "us-east-2"},
+            {"bedrock-runtime.us-east-2.amazonaws.com", "sts.us-east-2.amazonaws.com"},
+        ),
+        (
+            "vertex_ai/gemini-2.5-pro",
+            {"VERTEXAI_LOCATION": "us-west1"},
+            {"us-west1-aiplatform.googleapis.com", "oauth2.googleapis.com"},
+        ),
+    ],
+)
+def test_stratus_provider_allowlist_is_derived_from_selected_model(model, environment, expected_hosts):
+    policy = InternetPolicy.from_mode("filtered", agent_name="stratus", model_id=model)
+
+    rules = provider_endpoint_rules(policy, environment)
+
+    assert {rule.host for rule in rules} == expected_hosts
+
+
+def test_unrelated_provider_endpoint_does_not_enter_allowlist():
+    policy = InternetPolicy.from_mode("filtered", agent_name="stratus", model_id="anthropic/claude-sonnet-4-6")
+
+    rules = provider_endpoint_rules(
+        policy,
+        {
+            "ANTHROPIC_API_KEY": "secret",
+            "OPENAI_API_BASE": "https://unrelated.example.test/v1",
+        },
+    )
+
+    assert rules == (EndpointRule("api.anthropic.com", 443),)
+
+
+def test_unknown_provider_fails_closed_with_configuration_help():
+    policy = InternetPolicy.from_mode("filtered", agent_name="stratus", model_id="unknown/model")
+
+    with pytest.raises(ValueError, match="AGENT_API_BASE"):
+        provider_endpoint_rules(policy, {})
+
+
+@pytest.mark.parametrize(
+    ("model", "environment", "expected_hosts"),
+    [
+        ("google/gemini-2.5-pro", {}, {"generativelanguage.googleapis.com"}),
+        ("llama/Llama-4-Maverick", {}, {"api.llama.com"}),
+        ("opencode/gpt-5", {}, {"opencode.ai"}),
+        ("local/qwen3-coder", {"AGENT_API_BASE": "http://127.0.0.1:11434/v1"}, {"127.0.0.1"}),
+    ],
+)
+def test_opencode_provider_allowlist_is_derived_from_selected_model(model, environment, expected_hosts):
+    policy = InternetPolicy.from_mode("filtered", agent_name="opencode", model_id=model)
+
+    rules = provider_endpoint_rules(policy, environment)
+
+    assert {rule.host for rule in rules} == expected_hosts
+
+
+def test_open_mode_does_not_build_provider_allowlist():
+    policy = InternetPolicy.from_mode("open", agent_name="stratus", model_id="unknown/model")
+
+    assert provider_endpoint_rules(policy, {}) == ()
 
 
 def test_open_runner_keeps_existing_host_network():
@@ -187,6 +363,19 @@ def test_open_runner_keeps_existing_host_network():
         assert "HTTPS_PROXY" not in env
     finally:
         runner.cleanup_credential_tmps()
+
+
+def test_agent_container_does_not_receive_judge_credentials(monkeypatch):
+    monkeypatch.setenv("JUDGE_API_BASE", "https://judge.example.test/v1")
+    monkeypatch.setenv("JUDGE_API_KEY", "judge-secret")
+    monkeypatch.setenv("JUDGE_MODEL_ID", "judge-model")
+    runner = ContainerRunner(ContainerConfig(internet_policy=InternetPolicy.from_mode("open")))
+
+    env = dict(item.split("=", 1) for item in runner._build_env_flags()[1::2])
+
+    assert "JUDGE_API_BASE" not in env
+    assert "JUDGE_API_KEY" not in env
+    assert "JUDGE_MODEL_ID" not in env
 
 
 def test_codex_auth_mount_does_not_expose_writable_host_directory(monkeypatch, tmp_path):
@@ -329,7 +518,7 @@ def test_filtered_proxy_blocks_workload_creation_paths(path, expected):
 
 def test_filtered_mode_disables_claude_web_search(monkeypatch):
     monkeypatch.setenv("AGENT_INTERNET_ACCESS", "filtered")
-    assert "WebFetch" in ClaudeCodeAgent.allowed_tools()
+    assert "WebFetch" not in ClaudeCodeAgent.allowed_tools()
     assert "WebSearch" not in ClaudeCodeAgent.allowed_tools()
 
 

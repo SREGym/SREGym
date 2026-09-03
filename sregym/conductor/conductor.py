@@ -32,6 +32,7 @@ from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import CLUSTER_BASELINE_STATE_FILE
 from sregym.profile import is_svelte
 from sregym.service.apps.app_registry import AppRegistry
+from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.internet_policy import InternetPolicy
@@ -72,6 +73,7 @@ class Conductor:
         self.khaos = KhaosController(self.kubectl)
         self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
         self.cluster_state = ClusterStateManager(self.kubectl)
+        self.cluster_egress = ClusterEgressBoundary(self.kubectl)
         self._baseline_captured = False
 
         # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
@@ -126,15 +128,32 @@ class Conductor:
         Should be called before launching agents.
         """
         self.logger.info("Starting Kubernetes API filtering proxy...")
-        self.k8s_proxy.start()
-        self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig()
+        if self.config.internet_policy.is_filtered:
+            self.cluster_egress.start()
+        else:
+            self.cluster_egress.stop()
+        try:
+            self.k8s_proxy.start()
+            self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig()
+        except BaseException:
+            self.cluster_egress.stop()
+            raise
         self.logger.info(f"Agent kubeconfig generated at: {self._agent_kubeconfig_path}")
 
     def stop_k8s_proxy(self):
         """Stop the Kubernetes API proxy."""
         self.logger.info("Stopping Kubernetes API filtering proxy...")
-        self.k8s_proxy.stop()
-        self._agent_kubeconfig_path = None
+        try:
+            self.k8s_proxy.stop()
+        finally:
+            try:
+                self.cluster_egress.stop()
+            finally:
+                self._agent_kubeconfig_path = None
+
+    def clear_cluster_egress_boundary(self):
+        """Remove a policy left by a previously interrupted filtered run."""
+        self.cluster_egress.stop()
 
     def get_agent_kubeconfig_path(self) -> str | None:
         """

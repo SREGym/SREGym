@@ -14,6 +14,7 @@ from sregym.service.k8s_proxy import (
     KubernetesAPIProxy,
     _filter_resource_list,
     _inspect_workload_request,
+    _is_cluster_egress_control_mutation,
     _is_helm_release_secret,
     _is_helm_release_secret_request,
     _is_hidden_namespace_request,
@@ -271,6 +272,29 @@ def test_secret_gets_require_json_but_other_methods_do_not():
 
 
 @pytest.mark.parametrize(
+    "path",
+    [
+        "/apis/crd.projectcalico.org/v1/globalnetworkpolicies",
+        "/apis/crd.projectcalico.org/v1/globalnetworkpolicies/adminnetworkpolicy.external-egress-boundary",
+        "/apis/crd.projectcalico.org/v1/namespaces/astronomy-shop/networkpolicies/early-allow",
+        "/apis/crd.projectcalico.org/v1/tiers/adminnetworkpolicy",
+        "/apis/crd.projectcalico.org/v1/felixconfigurations/default",
+        "/apis/policy.networking.k8s.io/v1alpha1/adminnetworkpolicies/early-allow",
+        "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/globalnetworkpolicies.crd.projectcalico.org",
+    ],
+)
+def test_cluster_egress_controls_are_protected_from_mutation(path):
+    assert _is_cluster_egress_control_mutation(path, "PATCH")
+    assert not _is_cluster_egress_control_mutation(path, "GET")
+
+
+def test_standard_kubernetes_network_policies_remain_mutable():
+    path = "/apis/networking.k8s.io/v1/namespaces/hotel-reservation/networkpolicies/deny-all"
+
+    assert not _is_cluster_egress_control_mutation(path, "PATCH")
+
+
+@pytest.mark.parametrize(
     ("content_type", "body"),
     [
         (
@@ -295,6 +319,40 @@ def test_workload_secret_references_are_rejected(content_type, body):
 def test_ordinary_workload_secret_reference_is_allowed():
     path = "/apis/apps/v1/namespaces/astronomy-shop/deployments/frontend"
     body = json.dumps({"spec": {"volumes": [{"secret": {"secretName": "checkout-credentials"}}]}}).encode()
+
+    assert _inspect_workload_request(path, "PATCH", body, "application/strategic-merge-patch+json") is None
+
+
+@pytest.mark.parametrize(
+    ("content_type", "body"),
+    [
+        (
+            "application/strategic-merge-patch+json",
+            json.dumps({"spec": {"template": {"spec": {"hostNetwork": True}}}}).encode(),
+        ),
+        (
+            "application/json-patch+json",
+            json.dumps([{"op": "add", "path": "/spec/template/spec/hostPID", "value": True}]).encode(),
+        ),
+        (
+            "application/apply-patch+yaml",
+            b"spec:\n  template:\n    spec:\n      containers:\n        - securityContext:\n            privileged: true\n",
+        ),
+        (
+            "application/json",
+            json.dumps({"spec": {"template": {"spec": {"volumes": [{"hostPath": {"path": "/"}}]}}}}).encode(),
+        ),
+    ],
+)
+def test_workload_network_escapes_are_rejected(content_type, body):
+    path = "/apis/apps/v1/namespaces/astronomy-shop/deployments/frontend"
+
+    assert _inspect_workload_request(path, "PATCH", body, content_type) == "network_escape"
+
+
+def test_safe_workload_patch_is_allowed():
+    path = "/apis/apps/v1/namespaces/astronomy-shop/deployments/frontend"
+    body = json.dumps({"spec": {"template": {"spec": {"containers": [{"name": "frontend", "image": "v2"}]}}}}).encode()
 
     assert _inspect_workload_request(path, "PATCH", body, "application/strategic-merge-patch+json") is None
 
@@ -367,6 +425,20 @@ def test_pod_cannot_mount_a_helm_release_secret(proxy):
         method="POST",
         headers={"Content-Type": "application/json"},
         body=json.dumps(pod).encode(),
+    )
+
+    assert status == 403
+    assert FakeHTTPSConnection.requests == []
+
+
+def test_deployment_cannot_enable_host_network(proxy):
+    patch = {"spec": {"template": {"spec": {"hostNetwork": True}}}}
+    status, _, _ = request(
+        proxy,
+        "/apis/apps/v1/namespaces/astronomy-shop/deployments/frontend",
+        method="PATCH",
+        headers={"Content-Type": "application/strategic-merge-patch+json"},
+        body=json.dumps(patch).encode(),
     )
 
     assert status == 403

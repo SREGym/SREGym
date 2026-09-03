@@ -1,7 +1,9 @@
 import contextlib
+import json
 import logging
 import os
 import platform
+import shlex
 import shutil
 import ssl
 import subprocess
@@ -14,7 +16,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import yaml
 
-from sregym.service.internet_policy import InternetPolicy
+from sregym.service.internet_policy import EndpointRule, InternetPolicy, provider_endpoint_rules
 
 logger = logging.getLogger("all.sregym.container_runner")
 
@@ -23,6 +25,8 @@ DEFAULT_EGRESS_PROXY_IMAGE = "mitmproxy/mitmproxy:12.2.3"
 EGRESS_PROXY_PORT = 8080
 PROXY_CA_CONTAINER_PATH = "/etc/evaluation-egress/mitmproxy-ca-cert.pem"
 PROXY_BUNDLE_CONTAINER_PATH = "/etc/evaluation-egress/ca-certificates.crt"
+AGENT_TOOLS_CONTAINER_PATH = "/opt/agent-tools"
+CONTAINER_PATH = f"{AGENT_TOOLS_CONTAINER_PATH}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 
 def _docker_uses_separate_host() -> bool:
@@ -120,7 +124,7 @@ class ContainerConfig:
 
 class ContainerRunner:
     # Env vars forwarded from host to agent containers.
-    # Sourced from litellm provider source code (llms/<provider>/).
+    # These cover LiteLLM and the provider integrations used by agent CLIs.
     API_KEY_VARS = [
         # OpenAI
         "OPENAI_API_KEY",
@@ -132,14 +136,21 @@ class ContainerRunner:
         # Anthropic
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_API_BASE",
+        "ANTHROPIC_BASE_URL",
         # Gemini / Google
         "GOOGLE_API_KEY",
         "GEMINI_API_KEY",
         "GEMINI_API_BASE",
+        "GOOGLE_GENERATIVE_AI_API_KEY",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_GENAI_USE_VERTEXAI",
         # Azure OpenAI
         "AZURE_API_KEY",
         "AZURE_OPENAI_API_KEY",
         "AZURE_API_BASE",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_RESOURCE_NAME",
         "AZURE_API_VERSION",
         "AZURE_AD_TOKEN",
         "AZURE_CLIENT_ID",
@@ -198,14 +209,28 @@ class ContainerRunner:
         # Moonshot
         "MOONSHOT_API_KEY",
         "MOONSHOT_API_BASE",
+        # OpenRouter / Groq / Mistral / xAI / Hugging Face
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_API_BASE",
+        "GROQ_API_KEY",
+        "GROQ_API_BASE",
+        "MISTRAL_API_KEY",
+        "MISTRAL_API_BASE",
+        "XAI_API_KEY",
+        "XAI_API_BASE",
+        "HF_TOKEN",
+        "HF_ENDPOINT",
+        "LLAMA_API_KEY",
         # GLM
         "GLM_API_KEY",
         "ZAI_API_KEY",
+        "ZAI_API_BASE",
         "ZHIPU_API_KEY",
         # Claude Code
         "CLAUDE_CODE_OAUTH_TOKEN",
         # GitHub Copilot CLI
         "COPILOT_GITHUB_TOKEN",
+        "GITHUB_TOKEN",
         "COPILOT_PROVIDER_BASE_URL",
         "COPILOT_PROVIDER_API_KEY",
         "COPILOT_PROVIDER_TYPE",
@@ -214,9 +239,6 @@ class ContainerRunner:
         "AGENT_REASONING_EFFORT",
         "AGENT_API_BASE",
         "AGENT_API_KEY",
-        "JUDGE_MODEL_ID",
-        "JUDGE_API_BASE",
-        "JUDGE_API_KEY",
         # Config vars
         "API_HOSTNAME",
         "API_PORT",
@@ -238,6 +260,8 @@ class ContainerRunner:
         self._egress_tmp_dir: Path | None = None
         self._egress_proxy_ca: Path | None = None
         self._egress_ca_bundle: Path | None = None
+        self._egress_rules: tuple[EndpointRule, ...] = ()
+        self._agent_tools_volume: str | None = None
 
     @property
     def internet_access_mode(self) -> str:
@@ -253,7 +277,7 @@ class ContainerRunner:
         except FileNotFoundError:
             return 0
 
-    def _ensure_filtered_egress(self) -> None:
+    def _ensure_filtered_egress(self, env_vars: dict[str, str]) -> None:
         if not self.config.internet_policy.is_filtered:
             return
         if self._egress_proxy_name is not None:
@@ -270,6 +294,7 @@ class ContainerRunner:
         suffix = uuid.uuid4().hex[:8]
         self._egress_network_name = f"evaluation-egress-{suffix}"
         self._egress_proxy_name = f"evaluation-egress-proxy-{suffix}"
+        self._egress_rules = self._configured_egress_rules(env_vars)
         self._prepare_egress_state()
 
         repo_root = Path(__file__).resolve().parents[2]
@@ -284,9 +309,6 @@ class ContainerRunner:
                 ["docker", "network", "create", "--internal", self._egress_network_name],
                 "create the filtered egress network",
             )
-            owners = ",".join(self.config.internet_policy.blocked_github_owners)
-            repository_ids = ",".join(self.config.internet_policy.blocked_github_repository_ids)
-            repositories = ",".join(self.config.internet_policy.blocked_github_repositories)
             self._run_docker_checked(
                 [
                     "docker",
@@ -305,13 +327,9 @@ class ContainerRunner:
                     "-v",
                     f"{self._egress_tmp_dir}:/state",
                     "-e",
-                    f"BLOCKED_GITHUB_OWNERS={owners}",
-                    "-e",
-                    f"BLOCKED_GITHUB_REPOSITORY_IDS={repository_ids}",
-                    "-e",
-                    f"BLOCKED_GITHUB_REPOSITORIES={repositories}",
-                    "-e",
                     "BLOCKED_REQUEST_LOG=/state/blocked-requests.jsonl",
+                    "-e",
+                    "EGRESS_POLICY_STATE=/state/policy.json",
                     "-e",
                     "PYTHONPATH=/addons",
                     self.config.egress_proxy_image,
@@ -338,21 +356,65 @@ class ContainerRunner:
                 "connect the egress proxy to the internet",
             )
             self._copy_proxy_certificate()
+            logger.info(
+                "Agent egress permits only: %s",
+                ", ".join(f"{rule.host}:{rule.port}" for rule in self._egress_rules),
+            )
         except Exception:
             self.cleanup_egress_proxy()
             raise
 
     def _prepare_egress_state(self) -> None:
-        """Create an audit log that the unprivileged proxy process can append to."""
+        """Create the fixed allowlist and blocked-request audit log."""
         self._egress_tmp_dir = Path(tempfile.mkdtemp(prefix="evaluation-egress-"))
         blocked_log = self._egress_tmp_dir / "blocked-requests.jsonl"
         blocked_log.touch()
+        self._write_egress_policy(self._egress_rules)
 
         # The mitmproxy image drops privileges before loading the addon. Allow
-        # it to traverse the private temp directory and append to this one file
+        # it to traverse the private temp directory and append to the audit log
         # without making the audit log readable by other host users.
         self._egress_tmp_dir.chmod(0o711)
         blocked_log.chmod(0o622)
+
+    def _write_egress_policy(self, rules: tuple[EndpointRule, ...]) -> None:
+        if self._egress_tmp_dir is None:
+            raise RuntimeError("Filtered egress state is not initialized")
+        policy_path = self._egress_tmp_dir / "policy.json"
+        temp_path = self._egress_tmp_dir / "policy.json.tmp"
+        temp_path.write_text(
+            json.dumps(
+                {
+                    "allowed_endpoints": [rule.to_dict() for rule in sorted(set(rules))],
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        temp_path.chmod(0o644)
+        temp_path.replace(policy_path)
+
+    def _configured_egress_rules(self, env_vars: dict[str, str]) -> tuple[EndpointRule, ...]:
+        rules = {
+            EndpointRule("host.docker.internal", int(env_vars.get("API_PORT", "8000"))),
+            EndpointRule("host.docker.internal", 16443),
+            EndpointRule("host.docker.internal", int(env_vars.get("MCP_SERVER_PORT", "9954"))),
+        }
+        codex_auth = Path.home() / ".codex" / "auth.json"
+        rules.update(
+            provider_endpoint_rules(
+                self.config.internet_policy,
+                env_vars,
+                codex_auth_available=(
+                    codex_auth.is_file() and not codex_auth.is_symlink() and os.access(codex_auth, os.R_OK)
+                ),
+            )
+        )
+        rules.update(
+            EndpointRule.from_url(_replace_loopback_host(endpoint))
+            for endpoint in self.config.internet_policy.additional_allowed_endpoints
+        )
+        return tuple(sorted(rules))
 
     def _ensure_proxy_image_exists(self) -> None:
         image = self.config.egress_proxy_image
@@ -361,6 +423,60 @@ class ContainerRunner:
             return
         logger.info("Pulling filtered egress proxy image '%s'...", image)
         self._run_docker_checked(["docker", "pull", image], "pull the filtered egress proxy image")
+
+    @property
+    def has_prepared_agent_tools(self) -> bool:
+        return self._agent_tools_volume is not None
+
+    def prepare_agent_tools(self, install_script: str | None, agent_version: str | None) -> None:
+        """Install an agent CLI before the evaluation network is available."""
+        if not self.config.internet_policy.is_filtered or not install_script:
+            return
+        if self._agent_tools_volume is not None:
+            return
+        if Path(install_script).name != install_script:
+            raise ValueError(f"Invalid agent install script: {install_script}")
+
+        suffix = uuid.uuid4().hex[:8]
+        volume = f"evaluation-agent-tools-{suffix}"
+        self._run_docker_checked(["docker", "volume", "create", volume], "create the agent tools volume")
+        self._agent_tools_volume = volume
+        version = agent_version or "latest"
+        command = f"AGENT_VERSION={shlex.quote(version)} /opt/sregym/install-scripts/{shlex.quote(install_script)}"
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network=bridge",
+                    "-v",
+                    f"{volume}:{AGENT_TOOLS_CONTAINER_PATH}",
+                    "-e",
+                    f"NPM_CONFIG_PREFIX={AGENT_TOOLS_CONTAINER_PATH}",
+                    "-e",
+                    f"PATH={CONTAINER_PATH}",
+                    self.config.image,
+                    command,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                detail = (result.stderr or result.stdout).strip()
+                raise RuntimeError(f"Could not install the agent CLI: {detail}")
+            logger.info("Prepared agent CLI before enabling evaluation network restrictions")
+        except BaseException:
+            self.cleanup_agent_tools()
+            raise
+
+    def cleanup_agent_tools(self) -> None:
+        if self._agent_tools_volume:
+            subprocess.run(
+                ["docker", "volume", "rm", "-f", self._agent_tools_volume],
+                capture_output=True,
+            )
+        self._agent_tools_volume = None
 
     def _copy_proxy_certificate(self) -> None:
         if self._egress_proxy_name is None or self._egress_tmp_dir is None:
@@ -428,6 +544,7 @@ class ContainerRunner:
         self._egress_tmp_dir = None
         self._egress_proxy_ca = None
         self._egress_ca_bundle = None
+        self._egress_rules = ()
 
     def _mount_codex_credentials(self, args: list[str]) -> None:
         """Mount Codex auth into a throwaway tempdir.
@@ -459,8 +576,7 @@ class ContainerRunner:
             shutil.rmtree(tmp, ignore_errors=True)
         self._credential_tmps = []
 
-    def _build_env_flags(self, extra_env: dict[str, str] | None = None) -> list[str]:
-        flags = []
+    def _build_env_vars(self, extra_env: dict[str, str] | None = None) -> dict[str, str]:
         env_vars = dict(self.config.env_vars)
 
         # Forward API keys from host (skip empty values to avoid overriding
@@ -472,7 +588,40 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
+        # The judge runs on the host. Its model and credentials are not inputs
+        # to the evaluated agent and must not enter the agent container.
+        for name in ("JUDGE_MODEL_ID", "JUDGE_API_BASE", "JUDGE_API_KEY"):
+            env_vars.pop(name, None)
+
         env_vars["AGENT_INTERNET_ACCESS"] = self.internet_access_mode
+
+        # Docker Desktop and filtered containers cannot reach host loopback
+        # directly. Rewrite every forwarded provider endpoint that points to a
+        # loopback address, not only the primary agent endpoint.
+        if _docker_uses_separate_host() or self.config.internet_policy.is_filtered:
+            for key, value in list(env_vars.items()):
+                if not isinstance(value, str) or not (
+                    key.endswith(("_API_BASE", "_BASE_URL", "_URL", "_ENDPOINT"))
+                    or key in {"AGENT_API_BASE", "JUDGE_API_BASE"}
+                ):
+                    continue
+                env_vars[key] = _replace_loopback_host(value)
+
+        # Agent containers use Docker's host alias to reach SREGym services
+        # running on the host, including the MCP port-forward.
+        if self.config.network_mode == "host" or self.config.internet_policy.is_filtered:
+            env_vars["API_HOSTNAME"] = "host.docker.internal"
+            mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
+            env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
+
+        if self._agent_tools_volume is not None:
+            env_vars["PATH"] = CONTAINER_PATH
+            env_vars["NODE_PATH"] = f"{AGENT_TOOLS_CONTAINER_PATH}/lib/node_modules"
+
+        return env_vars
+
+    def _build_env_flags(self, extra_env: dict[str, str] | None = None) -> list[str]:
+        env_vars = self._build_env_vars(extra_env)
         if self.config.internet_policy.is_filtered:
             if self._egress_proxy_name is None or self._egress_proxy_ca is None or self._egress_ca_bundle is None:
                 raise RuntimeError("Filtered egress proxy is not ready")
@@ -496,25 +645,7 @@ class ContainerRunner:
                 }
             )
 
-        # Docker Desktop and filtered containers cannot reach host loopback
-        # directly. Rewrite every forwarded provider endpoint that points to a
-        # loopback address, not only the primary agent endpoint.
-        if _docker_uses_separate_host() or self.config.internet_policy.is_filtered:
-            for key, value in list(env_vars.items()):
-                if not isinstance(value, str) or not (
-                    key.endswith(("_API_BASE", "_BASE_URL", "_URL", "_ENDPOINT"))
-                    or key in {"AGENT_API_BASE", "JUDGE_API_BASE"}
-                ):
-                    continue
-                env_vars[key] = _replace_loopback_host(value)
-
-        # Agent containers use Docker's host alias to reach SREGym services
-        # running on the host, including the MCP port-forward.
-        if self.config.network_mode == "host" or self.config.internet_policy.is_filtered:
-            env_vars["API_HOSTNAME"] = "host.docker.internal"
-            mcp_port = env_vars.get("MCP_SERVER_PORT", os.environ.get("MCP_SERVER_PORT", "9954"))
-            env_vars["MCP_SERVER_URL"] = f"http://host.docker.internal:{mcp_port}"
-
+        flags = []
         for key, value in env_vars.items():
             flags.extend(["-e", f"{key}={value}"])
         return flags
@@ -548,6 +679,9 @@ class ContainerRunner:
                 args.append("--add-host=host.docker.internal:host-gateway")
         else:
             args.append(f"--network={self.config.network_mode}")
+
+        if self._agent_tools_volume:
+            args.extend(["-v", f"{self._agent_tools_volume}:{AGENT_TOOLS_CONTAINER_PATH}:ro"])
 
         # Mount kubeconfig (read-only)
         if self.config.kubeconfig_path and self.config.kubeconfig_path.exists():
@@ -608,7 +742,8 @@ class ContainerRunner:
         return output
 
     def build_docker_command(self, exec_input: ExecInput) -> list[str]:
-        self._ensure_filtered_egress()
+        env_vars = self._build_env_vars(exec_input.env)
+        self._ensure_filtered_egress(env_vars)
         cmd = self._build_base_docker_args()
         suffix = uuid.uuid4().hex[:8]
         if exec_input.label:

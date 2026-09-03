@@ -50,6 +50,7 @@ HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
 HIDDEN_LABELS: dict[str, set[str]] = {
     "app": {"load-generator", "locust-fetcher"},
     "job": {"workload"},
+    "network-access": {"restricted"},
     "opentelemetry.io/name": {"load-generator"},
 }
 WORKLOAD_CREATE_SUFFIXES = {
@@ -84,6 +85,20 @@ STRUCTURED_KUBERNETES_CONTENT_TYPES = {
     "application/merge-patch+json",
     "application/strategic-merge-patch+json",
     "application/yaml",
+}
+PROTECTED_EGRESS_RESOURCES = {
+    "felixconfigurations",
+    "globalnetworkpolicies",
+    "networkpolicies",
+    "tiers",
+}
+PROTECTED_EGRESS_CRDS = {
+    "adminnetworkpolicies.policy.networking.k8s.io",
+    "baselineadminnetworkpolicies.policy.networking.k8s.io",
+    "felixconfigurations.crd.projectcalico.org",
+    "globalnetworkpolicies.crd.projectcalico.org",
+    "networkpolicies.crd.projectcalico.org",
+    "tiers.crd.projectcalico.org",
 }
 
 
@@ -129,6 +144,16 @@ def _resource_request(path: str) -> tuple[str | None, str | None]:
     resource = parts[resource_index]
     name = parts[resource_index + 1] if len(parts) > resource_index + 1 else None
     return resource, name
+
+
+def _request_api_group(path: str) -> str | None:
+    """Return the API group from a normalized Kubernetes request path."""
+    parts = _decode_path_parts(path)
+    if len(parts) >= 3 and parts[0] == "apis":
+        return parts[1]
+    if len(parts) >= 2 and parts[0] == "api":
+        return ""
+    return None
 
 
 def _is_watch_request(path: str) -> bool:
@@ -243,6 +268,22 @@ def _is_secret_watch_request(path: str) -> bool:
     return resource == "secrets" and _is_watch_request(path)
 
 
+def _is_cluster_egress_control_mutation(path: str, method: str) -> bool:
+    """Protect the cluster policy that prevents workload internet relays."""
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    resource, name = _resource_request(path)
+    api_group = _request_api_group(path)
+    if api_group == "crd.projectcalico.org" and resource in PROTECTED_EGRESS_RESOURCES:
+        return True
+    if api_group == "policy.networking.k8s.io" and resource in {
+        "adminnetworkpolicies",
+        "baselineadminnetworkpolicies",
+    }:
+        return True
+    return resource == "customresourcedefinitions" and name in PROTECTED_EGRESS_CRDS
+
+
 def _requires_json_secret_response(path: str, method: str) -> bool:
     """Return whether the proxy must inspect a Secret response as JSON."""
     resource, _ = _resource_request(path)
@@ -260,11 +301,39 @@ def _contains_helm_release_secret_name(value) -> bool:
     return False
 
 
+def _contains_network_escape(value) -> bool:
+    """Return whether a workload mutation can escape pod network isolation."""
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, dict):
+                path = str(item.get("path", "")).rstrip("/").casefold()
+                if path.endswith(("/hostnetwork", "/hostpid", "/hostipc", "/privileged")) and item.get("value") is True:
+                    return True
+                if path.endswith("/hostpath") and item.get("op", "").casefold() != "remove":
+                    return True
+            if _contains_network_escape(item):
+                return True
+        return False
+    if not isinstance(value, dict):
+        return False
+
+    for key, item in value.items():
+        normalized_key = str(key).casefold()
+        if normalized_key in {"hostnetwork", "hostpid", "hostipc", "privileged"} and item is True:
+            return True
+        if normalized_key == "hostpath" and item is not None:
+            return True
+        if _contains_network_escape(item):
+            return True
+    return False
+
+
 def _inspect_workload_request(path: str, method: str, body: bytes | None, content_type: str) -> str | None:
-    """Inspect workload mutations for references to a protected Helm Secret.
+    """Inspect workload mutations for protected data and network escapes.
 
     Returns ``forbidden`` for a Helm Secret reference, ``unsupported`` when a
-    workload body cannot be inspected safely, and ``None`` when it is safe.
+    workload body cannot be inspected safely, ``network_escape`` for a pod
+    isolation escape, and ``None`` when it is safe.
     """
     resource, _ = _resource_request(path)
     if method not in {"POST", "PUT", "PATCH"} or resource not in WORKLOAD_RESOURCES or not body:
@@ -284,6 +353,8 @@ def _inspect_workload_request(path: str, method: str, body: bytes | None, conten
 
     if _contains_helm_release_secret_name(data):
         return "forbidden"
+    if _contains_network_escape(data):
+        return "network_escape"
     return None
 
 
@@ -557,6 +628,10 @@ class KubernetesAPIProxy:
                     self.send_error(403, "Forbidden: workload creation is disabled in filtered mode")
                     return
 
+                if block_workload_creation and _is_cluster_egress_control_mutation(path, method):
+                    self.send_error(403, "Forbidden: cluster outbound policy changes are disabled in filtered mode")
+                    return
+
                 # Block direct access to hidden namespaces
                 if _is_hidden_namespace_request(path, hidden_namespaces):
                     self.send_error(403, "Forbidden: Access to this namespace is not allowed")
@@ -592,6 +667,9 @@ class KubernetesAPIProxy:
                 )
                 if workload_inspection == "forbidden":
                     self.send_error(403, "Forbidden: Workloads cannot reference this Secret")
+                    return
+                if workload_inspection == "network_escape":
+                    self.send_error(403, "Forbidden: Workloads cannot escape pod network isolation")
                     return
                 if workload_inspection == "unsupported":
                     self.send_error(415, "Unsupported Media Type: Workload request body cannot be inspected")

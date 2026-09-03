@@ -64,6 +64,10 @@ class AgentLauncher:
             else:
                 self._container_runner.ensure_image_exists()
 
+    def prepare_agent_tools(self, install_script: str | None, agent_version: str | None) -> None:
+        if self._container_runner:
+            self._container_runner.prepare_agent_tools(install_script, agent_version)
+
     async def ensure_started(self, reg: AgentRegistration) -> AgentProcess | None:
         if not reg or not reg.kickoff_command:
             return None
@@ -150,7 +154,7 @@ class AgentLauncher:
         self._container_runner.config.workspace_path = None
 
         composite_cmd = self._container_runner.build_composite_command(
-            install_script=reg.install_script,
+            install_script=None if self._container_runner.has_prepared_agent_tools else reg.install_script,
             agent_version=reg.agent_version,
             driver_command=reg.kickoff_command,
         )
@@ -184,6 +188,7 @@ class AgentLauncher:
         if self._container_runner:
             self._container_runner.cleanup_egress_proxy()
             self._container_runner.cleanup_credential_tmps()
+            self._container_runner.cleanup_agent_tools()
             self._container_runner = None
 
     def internet_policy_result(self, process: AgentProcess | None = None) -> dict[str, str | int]:
