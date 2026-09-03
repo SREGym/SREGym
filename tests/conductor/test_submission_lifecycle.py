@@ -456,6 +456,86 @@ def test_abandoned_evaluator_cannot_publish_or_advance_late_result():
     assert conductor._submit_future is None
 
 
+def test_evaluation_wait_times_out_while_a_request_remains_pending():
+    conductor = _conductor()
+    generation = conductor.register_pending_submission("mitigation")
+
+    try:
+        with pytest.raises(TimeoutError):
+            asyncio.run(conductor.wait_for_submission_evaluations(timeout=0.01))
+    finally:
+        conductor.unregister_pending_submission("mitigation", generation)
+
+
+def test_each_queued_stage_evaluation_gets_its_own_deadline(monkeypatch):
+    diagnosis_started = threading.Event()
+    release_diagnosis = threading.Event()
+    mitigation_started = threading.Event()
+    release_mitigation = threading.Event()
+
+    def evaluate_diagnosis(_solution):
+        diagnosis_started.set()
+        release_diagnosis.wait(2)
+        return {"success": True}
+
+    def evaluate_mitigation(_solution):
+        mitigation_started.set()
+        release_mitigation.wait(2)
+        return {"success": True}
+
+    conductor = _conductor(evaluate_diagnosis, evaluate_mitigation)
+    monkeypatch.setattr(conductor_api, "_conductor", conductor)
+
+    async def release_after_start(started, release):
+        while not started.is_set():
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.12)
+        release.set()
+
+    async def wait_for_pending_request():
+        while not conductor._pending_submission_stages:
+            await asyncio.sleep(0.005)
+
+    async def run():
+        transport = httpx.ASGITransport(app=conductor_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            diagnosis_response = await client.post(
+                "/submit",
+                json={"stage": "diagnosis", "solution": "diagnosis"},
+            )
+            assert diagnosis_response.status_code == 200
+
+            mitigation_request = asyncio.create_task(
+                client.post(
+                    "/submit",
+                    json={"stage": "mitigation", "solution": ""},
+                )
+            )
+            await asyncio.wait_for(wait_for_pending_request(), timeout=1)
+            conductor.close_submissions()
+
+            diagnosis_release = asyncio.create_task(release_after_start(diagnosis_started, release_diagnosis))
+            mitigation_release = asyncio.create_task(release_after_start(mitigation_started, release_mitigation))
+            started_at = time.monotonic()
+            await conductor.wait_for_submission_evaluations(timeout=0.2)
+            elapsed = time.monotonic() - started_at
+
+            mitigation_response = await mitigation_request
+            await diagnosis_release
+            await mitigation_release
+            await conductor.wait_for_submission_work(timeout=1)
+            return elapsed, mitigation_response
+
+    elapsed, mitigation_response = asyncio.run(run())
+
+    assert elapsed > 0.2
+    assert mitigation_response.status_code == 200
+    assert mitigation_response.json()["stage"] == "mitigation"
+    assert conductor.results["Diagnosis"]["success"] is True
+    assert conductor.results["Mitigation"]["success"] is True
+    assert conductor.submission_stage == "done"
+
+
 def test_evaluation_and_cleanup_have_separate_deadlines():
     evaluation_started = threading.Event()
     release_evaluation = threading.Event()

@@ -879,18 +879,27 @@ class Conductor:
     async def wait_for_submission_evaluations(self, timeout: float | None) -> None:
         """Wait for accepted stage requests and grading, but not teardown.
 
+        Give each accepted stage evaluation a fresh deadline. An early
+        mitigation request can wait behind diagnosis grading. Each will get
+        their own deadlines.
+
         The final stage worker performs teardown in the same future. Return as
         soon as that worker enters ``tearing_down`` so the driver can apply a
         separate cleanup deadline without allowing attempts to overlap.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout if timeout is not None else None
+        observed_future: concurrent.futures.Future | None = None
 
         while True:
             with self._submission_lock:
                 stage = self.submission_stage
                 future = self._submit_future
                 pending = bool(self._pending_submission_stages)
+
+            if future is not None and future is not observed_future:
+                observed_future = future
+                deadline = loop.time() + timeout if timeout is not None else None
 
             if future is not None and future.done():
                 try:
