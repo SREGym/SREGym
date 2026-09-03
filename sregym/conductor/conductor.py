@@ -472,9 +472,11 @@ class Conductor:
         self.logger.info("[STAGE] Teardown complete")
 
     def finish_problem_in_background(self) -> concurrent.futures.Future:
-        """Start safety cleanup on a daemon thread so the driver can enforce a deadline."""
+        """Return running teardown or start it so the driver can enforce a deadline."""
         with self._submission_lock:
             if self._submit_future is not None:
+                if self.submission_stage in ("tearing_down", "done"):
+                    return self._submit_future
                 raise RuntimeError("Cannot start cleanup while submission work is still active.")
             if self.submission_stage == "tearing_down":
                 raise RuntimeError(
@@ -874,6 +876,54 @@ class Conductor:
             self._evaluating = False
             self.submission_stage = "aborted"
             self._submit_future = None
+
+    async def wait_for_submission_evaluations(self, timeout: float | None) -> None:
+        """Wait for accepted stage requests and grading, but not teardown.
+
+        Give each accepted stage evaluation a fresh deadline. An early
+        mitigation request can wait behind diagnosis grading. Each will get
+        their own deadlines.
+
+        The final stage worker performs teardown in the same future. Return as
+        soon as that worker enters ``tearing_down`` so the driver can apply a
+        separate cleanup deadline without allowing attempts to overlap.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout if timeout is not None else None
+        observed_future: concurrent.futures.Future | None = None
+
+        while True:
+            with self._submission_lock:
+                stage = self.submission_stage
+                future = self._submit_future
+                pending = bool(self._pending_submission_stages)
+
+            if future is not None and future is not observed_future:
+                observed_future = future
+                deadline = loop.time() + timeout if timeout is not None else None
+
+            if future is not None and future.done():
+                try:
+                    future.result()
+                finally:
+                    with self._submission_lock:
+                        if self._submit_future is future:
+                            self._submit_future = None
+                continue
+
+            if stage in {"tearing_down", "done"}:
+                return
+
+            if future is None and not pending:
+                return
+
+            if deadline is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError
+                await asyncio.sleep(min(0.05, remaining))
+            else:
+                await asyncio.sleep(0.05)
 
     async def wait_for_submission_work(self, timeout: float | None) -> None:
         """Wait for all accepted evaluations and registered stage requests.
