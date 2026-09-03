@@ -30,6 +30,7 @@ from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.profile import PROFILES, set_profile
 from sregym.results.resume import complete_resume_rows
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
@@ -786,6 +787,8 @@ def main(args):
     agent_model, judge_model = _configure_model_environment(args)
     internet_policy = InternetPolicy.from_mode(args.internet_access)
 
+    set_profile(args.profile)
+
     if args.noise:
         logger.info("Noise injection enabled.")
     os.environ["API_HOSTNAME"] = "0.0.0.0"
@@ -975,6 +978,18 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
+    )
+    parser.add_argument(
+        "--profile",
+        choices=PROFILES,
+        default=os.environ.get("SREGYM_PROFILE", "full"),
+        help=(
+            "Deployment profile (independent of --suite). 'full' (default) deploys the standard "
+            "stack. 'svelte' additionally drops components no part of SREGym reads — astronomy-shop's "
+            "bundled OpenSearch/Grafana/Jaeger, Prometheus Alertmanager/Pushgateway, the OpenEBS NDM "
+            "stack — and shortens metric retention. 'svelte' changes what an agent can observe, so "
+            "its results are not comparable with 'full'."
+        ),
     )
     parser.add_argument(
         "--noise",
