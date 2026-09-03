@@ -9,6 +9,12 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class MissingConfigMap(Problem):
+    """Model missing ConfigMaps across applications.
+
+    The ``missing_configmap_social_network`` configuration is deprecated in
+    SREGym 1.1 after reaching 100% overall pass@3.
+    """
+
     def __init__(self, app_name: str = "social_network", faulty_service: str = "media-mongodb"):
         self.faulty_service = faulty_service
         self.app_name = app_name
