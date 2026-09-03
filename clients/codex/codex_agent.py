@@ -336,6 +336,8 @@ class CodexAgent:
             "unified_exec",
         ]
         command.extend(custom_provider_args())
+        if os.environ.get("AGENT_INTERNET_ACCESS") == "filtered":
+            command.extend(["-c", 'web_search="disabled"'])
         reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
         if reasoning_effort:
             command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])

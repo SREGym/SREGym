@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
+from clients.codex.codex_agent import CodexAgent
 from clients.copilot.copilot_agent import CopilotCliAgent
 from clients.geminicli.geminicli_agent import GeminiCliAgent
 from sregym.agent_launcher import AgentLauncher
@@ -336,6 +337,20 @@ def test_open_mode_keeps_claude_web_search(monkeypatch):
     monkeypatch.setenv("AGENT_INTERNET_ACCESS", "open")
     assert "WebFetch" in ClaudeCodeAgent.allowed_tools()
     assert "WebSearch" in ClaudeCodeAgent.allowed_tools()
+
+
+def test_filtered_mode_disables_codex_web_search(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_INTERNET_ACCESS", "filtered")
+    agent = CodexAgent(logs_dir=tmp_path, model_name="gpt-5.6-sol")
+
+    assert 'web_search="disabled"' in agent._build_command("inspect the cluster")
+
+
+def test_open_mode_keeps_codex_web_search(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_INTERNET_ACCESS", "open")
+    agent = CodexAgent(logs_dir=tmp_path, model_name="gpt-5.6-sol")
+
+    assert 'web_search="disabled"' not in agent._build_command("inspect the cluster")
 
 
 def test_filtered_mode_disables_gemini_provider_web_tools(monkeypatch, tmp_path):
