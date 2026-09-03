@@ -445,7 +445,7 @@ def test_abandoned_evaluator_cannot_publish_or_advance_late_result():
         old_future = conductor._submit_future
         assert old_future is not None
         with pytest.raises(TimeoutError):
-            await conductor.wait_for_submission_work(timeout=0.01)
+            await conductor.wait_for_submission_evaluations(timeout=0.01)
         conductor.abandon_submission_work()
         gate.set()
         old_future.result(timeout=2)
@@ -453,6 +453,142 @@ def test_abandoned_evaluator_cannot_publish_or_advance_late_result():
     asyncio.run(run())
     assert conductor.submission_stage == "aborted"
     assert "Diagnosis" not in conductor.results
+    assert conductor._submit_future is None
+
+
+def test_evaluation_wait_times_out_while_a_request_remains_pending():
+    conductor = _conductor()
+    generation = conductor.register_pending_submission("mitigation")
+
+    try:
+        with pytest.raises(TimeoutError):
+            asyncio.run(conductor.wait_for_submission_evaluations(timeout=0.01))
+    finally:
+        conductor.unregister_pending_submission("mitigation", generation)
+
+
+def test_each_queued_stage_evaluation_gets_its_own_deadline(monkeypatch):
+    diagnosis_started = threading.Event()
+    release_diagnosis = threading.Event()
+    mitigation_started = threading.Event()
+    release_mitigation = threading.Event()
+
+    def evaluate_diagnosis(_solution):
+        diagnosis_started.set()
+        release_diagnosis.wait(2)
+        return {"success": True}
+
+    def evaluate_mitigation(_solution):
+        mitigation_started.set()
+        release_mitigation.wait(2)
+        return {"success": True}
+
+    conductor = _conductor(evaluate_diagnosis, evaluate_mitigation)
+    monkeypatch.setattr(conductor_api, "_conductor", conductor)
+
+    async def release_after_start(started, release):
+        while not started.is_set():
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.12)
+        release.set()
+
+    async def wait_for_pending_request():
+        while not conductor._pending_submission_stages:
+            await asyncio.sleep(0.005)
+
+    async def run():
+        transport = httpx.ASGITransport(app=conductor_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            diagnosis_response = await client.post(
+                "/submit",
+                json={"stage": "diagnosis", "solution": "diagnosis"},
+            )
+            assert diagnosis_response.status_code == 200
+
+            mitigation_request = asyncio.create_task(
+                client.post(
+                    "/submit",
+                    json={"stage": "mitigation", "solution": ""},
+                )
+            )
+            await asyncio.wait_for(wait_for_pending_request(), timeout=1)
+            conductor.close_submissions()
+
+            diagnosis_release = asyncio.create_task(release_after_start(diagnosis_started, release_diagnosis))
+            mitigation_release = asyncio.create_task(release_after_start(mitigation_started, release_mitigation))
+            started_at = time.monotonic()
+            await conductor.wait_for_submission_evaluations(timeout=0.2)
+            elapsed = time.monotonic() - started_at
+
+            mitigation_response = await mitigation_request
+            await diagnosis_release
+            await mitigation_release
+            await conductor.wait_for_submission_work(timeout=1)
+            return elapsed, mitigation_response
+
+    elapsed, mitigation_response = asyncio.run(run())
+
+    assert elapsed > 0.2
+    assert mitigation_response.status_code == 200
+    assert mitigation_response.json()["stage"] == "mitigation"
+    assert conductor.results["Diagnosis"]["success"] is True
+    assert conductor.results["Mitigation"]["success"] is True
+    assert conductor.submission_stage == "done"
+
+
+def test_evaluation_and_cleanup_have_separate_deadlines():
+    evaluation_started = threading.Event()
+    release_evaluation = threading.Event()
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+
+    def evaluate_mitigation(_solution):
+        evaluation_started.set()
+        release_evaluation.wait(2)
+        return {"success": True}
+
+    def recover_fault():
+        cleanup_started.set()
+        release_cleanup.wait(2)
+
+    conductor = _conductor()
+    conductor.stage_sequence = [{"name": "mitigation", "evaluation": evaluate_mitigation}]
+    conductor.current_stage_index = 0
+    conductor.submission_stage = "mitigation"
+    conductor.problem = SimpleNamespace(
+        recover_fault=recover_fault,
+        app=SimpleNamespace(cleanup=lambda: None),
+    )
+
+    async def release_after(delay, event):
+        await asyncio.sleep(delay)
+        event.set()
+
+    async def run():
+        started_at = time.monotonic()
+        await conductor.submit("", expected_stage="mitigation")
+        assert evaluation_started.wait(1)
+
+        evaluation_release = asyncio.create_task(release_after(0.12, release_evaluation))
+        await conductor.wait_for_submission_evaluations(timeout=0.2)
+        await evaluation_release
+
+        assert conductor.submission_stage == "tearing_down"
+        assert cleanup_started.wait(1)
+        cleanup_future = conductor.finish_problem_in_background()
+        assert cleanup_future is conductor._submit_future
+
+        cleanup_release = asyncio.create_task(release_after(0.12, release_cleanup))
+        await conductor.wait_for_submission_work(timeout=0.2)
+        await cleanup_release
+        return time.monotonic() - started_at
+
+    elapsed = asyncio.run(run())
+
+    assert elapsed > 0.2
+    assert conductor.results["Mitigation"]["success"] is True
+    assert conductor.missing_submission_stages() == []
+    assert conductor.submission_stage == "done"
     assert conductor._submit_future is None
 
 
