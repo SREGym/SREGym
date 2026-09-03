@@ -10,6 +10,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class K8STargetPortMisconfig(Problem):
+    """Deprecated in SREGym 1.1 after reaching 100% overall pass@3."""
+
     def __init__(self, faulty_service="user-service"):
         super().__init__(app=SocialNetwork())
         self.faulty_service = faulty_service

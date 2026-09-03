@@ -11,6 +11,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class PVCClaimMismatch(Problem):
+    """Deprecated in SREGym 1.1 after reaching 100% overall pass@3."""
+
     def __init__(self):
         super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
