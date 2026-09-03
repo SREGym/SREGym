@@ -33,12 +33,10 @@ class SocialNetwork(Application):
 
     def create_tls_secret(self):
         """Create TLS secret for MongoDB if it doesn't exist."""
-        check_sec = f"kubectl get secret mongodb-tls -n {self.namespace}"
+        check_sec = f"kubectl get secret mongodb-tls -n {self.namespace} --ignore-not-found -o name"
         result = self.kubectl.exec_command(check_sec)
-        result_lower = result.lower()
 
-        # Secret exists if we got a successful response (contains secret name without error)
-        if "mongodb-tls" in result and "error" not in result_lower:
+        if result.strip() == "secret/mongodb-tls":
             logger.debug("TLS secret already exists. Skipping creation.")
             return
 
