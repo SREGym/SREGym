@@ -131,6 +131,44 @@ uv run main.py --agent codex --model gpt-5 --force-build
 Containerized agents can use the public internet by default, but direct access to the benchmark's GitHub source is
 blocked. Use `--internet-access open` only when you intentionally need the previous unrestricted network behavior.
 
+### Deployment Profiles
+
+`--profile` controls how much infrastructure SREGym stands up. It is independent of
+`--suite` — the profile selects *what gets deployed*, the suite selects *which problems run*.
+
+| Profile | Behaviour |
+|---------|-----------|
+| `full` (default) | The standard stack. Use this for results you intend to compare against the leaderboard. |
+| `svelte` | Additionally drops components that nothing in SREGym reads, and shortens metric retention. |
+
+```bash
+uv run main.py --suite sregym-lite --agent stratus --model gpt-5 --profile svelte
+```
+
+`svelte` removes:
+
+- astronomy-shop's bundled **OpenSearch**, **Grafana** and **Jaeger**. Nothing in `sregym/`,
+  `mcp_server/` or `clients/` queries OpenSearch or Grafana; the bundled Jaeger is deleted
+  moments after deployment anyway, by `Jaeger.create_external_name_service()`.
+- Prometheus **Alertmanager** and **Pushgateway** (no alert rules are configured and nothing
+  pushes), and TSDB retention cut from 15d to 2h.
+- The OpenEBS **node-disk-manager** stack, which backs the `openebs-device` StorageClass.
+  SREGym only provisions through `openebs-hostpath`.
+
+Measured on one astronomy-shop problem (peak RSS / peak CPU, sampled over the run):
+
+| | `full` | `svelte` |
+|---|---|---|
+| OpenSearch | 1096 MiB / 1709m | — |
+| Grafana | 475 MiB / 303m | — |
+| OpenEBS NDM (7 pods) | ~190 MiB / 582m | — |
+
+> [!WARNING]
+> `svelte` changes what an agent can observe in the cluster, so its scores are **not**
+> comparable with `full`. It is intended for local iteration on memory-constrained hosts,
+> not for leaderboard submissions. Note that `--profile svelte` and `--suite sregym-lite`
+> are unrelated: you can run either without the other.
+
 ### Model Selection
 
 SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings directly (no config file needed). Just pass any supported model string via `--model`:

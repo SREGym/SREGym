@@ -3,6 +3,7 @@ import logging
 import subprocess
 
 from sregym.paths import BASE_DIR, PROMETHEUS_METADATA
+from sregym.profile import is_svelte
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
@@ -70,7 +71,13 @@ class Prometheus:
 
         Helm.uninstall(**self.helm_configs)
 
-        Helm.install(**self.helm_configs)
+        helm_configs = dict(self.helm_configs)
+        if is_svelte():
+            svelte_values = BASE_DIR / "observer" / "prometheus" / "values-svelte.yaml"
+            helm_configs["extra_args"] = [*helm_configs.get("extra_args", []), "-f", str(svelte_values)]
+            self.logger.info("[svelte] Dropping Alertmanager and Pushgateway; retention 15d -> 2h")
+
+        Helm.install(**helm_configs)
         Helm.assert_if_deployed(self.namespace)
 
     def teardown(self):
