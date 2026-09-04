@@ -51,6 +51,7 @@ class ConductorConfig:
     enable_noise: bool = False
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     k8s_proxy_listen_host: str = "127.0.0.1"
+    k8s_proxy_listen_port: int = 16443
     block_workload_creation: bool = False
 
 
@@ -77,7 +78,7 @@ class Conductor:
         # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
-            listen_port=16443,
+            listen_port=self.config.k8s_proxy_listen_port,
             listen_host=self.config.k8s_proxy_listen_host,
             block_workload_creation=self.config.block_workload_creation,
         )
