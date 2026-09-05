@@ -147,6 +147,10 @@ The URL permits its host, port, path, and child paths. A URL without a path perm
 This option has no effect with `--internet-access open`.
 
 Filtered mode also blocks public internet access from application pods. It requires Calico 3.29 or later with policy tiers.
+Cluster DNS pods in `kube-system` retain TCP/UDP port 53 access for upstream DNS queries.
+They can also reach Docker's local DNS resolver, which kind uses after address and port translation.
+These exceptions do not open other external ports or direct external DNS access for application pods.
+Fault-specific Kubernetes NetworkPolicies still apply to DNS traffic.
 The kind setup script installs Calico 3.29.3. Older kind clusters need a Calico upgrade before filtered runs can start.
 For an existing kind cluster, run:
 

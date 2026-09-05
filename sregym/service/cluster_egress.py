@@ -23,6 +23,8 @@ POLICY_TIER = "adminnetworkpolicy"
 POLICY_NAME = f"{POLICY_TIER}.external-egress-boundary"
 POLICY_LABEL_KEY = "network-access"
 POLICY_LABEL_VALUE = "restricted"
+CLUSTER_DNS_SELECTOR = "projectcalico.org/namespace == 'kube-system' && k8s-app == 'kube-dns'"
+DOCKER_DNS_LOOPBACK = "127.0.0.11/32"
 
 
 class ClusterEgressBoundary:
@@ -198,7 +200,29 @@ class ClusterEgressBoundary:
     def _policy_body(self, internal_networks: list[str]) -> dict:
         ipv4 = [network for network in internal_networks if ipaddress.ip_network(network).version == 4]
         ipv6 = [network for network in internal_networks if ipaddress.ip_network(network).version == 6]
-        rules: list[dict] = []
+        # CoreDNS must finish upstream lookups, including search-domain misses
+        # before a resolver tries the absolute cluster Service name. Dropping
+        # these queries can make an internal lookup fail with SERVFAIL instead
+        # of continuing after NXDOMAIN. Do not allow general internet access
+        # from CoreDNS or direct external DNS from application pods.
+        # Pass preserves any DNS restrictions in subsequent policy tiers.
+        dns_destinations = [
+            {"ports": [53]},
+            # Kind DNATs its upstream DNS address to Docker's loopback resolver
+            # on dynamically assigned ports before Calico evaluates egress.
+            # Permit only this address, not arbitrary node or loopback traffic.
+            {"nets": [DOCKER_DNS_LOOPBACK]},
+        ]
+        rules: list[dict] = [
+            {
+                "action": "Pass",
+                "protocol": protocol,
+                "source": {"selector": CLUSTER_DNS_SELECTOR},
+                "destination": destination,
+            }
+            for protocol in ("UDP", "TCP")
+            for destination in dns_destinations
+        ]
         if ipv4:
             rules.append(
                 {

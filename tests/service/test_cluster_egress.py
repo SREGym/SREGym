@@ -4,6 +4,8 @@ import pytest
 from kubernetes.client.rest import ApiException
 
 from sregym.service.cluster_egress import (
+    CLUSTER_DNS_SELECTOR,
+    DOCKER_DNS_LOOPBACK,
     POLICY_NAME,
     POLICY_PLURAL,
     POLICY_TIER,
@@ -91,7 +93,7 @@ def test_boundary_creates_cluster_wide_deny_then_pass_policy():
     assert body["spec"]["tier"] == POLICY_TIER
     assert body["spec"]["selector"] == "all()"
     assert body["spec"]["egress"][-1] == {"action": "Pass"}
-    ipv4_rule = body["spec"]["egress"][0]
+    ipv4_rule = next(rule for rule in body["spec"]["egress"] if rule.get("ipVersion") == 4)
     assert ipv4_rule["action"] == "Deny"
     assert ipv4_rule["destination"]["nets"] == ["0.0.0.0/0"]
     assert ipv4_rule["destination"]["notNets"] == [
@@ -102,6 +104,32 @@ def test_boundary_creates_cluster_wide_deny_then_pass_policy():
 
     boundary.stop()
     assert custom_api.deleted == [(POLICY_PLURAL, POLICY_NAME)]
+
+
+def test_dns_exception_precedes_external_deny_and_preserves_lower_tier_policies():
+    boundary = ClusterEgressBoundary(SimpleNamespace(), custom_api=FakeCustomObjectsAPI(), core_api=FakeCoreAPI())
+    rules = boundary._policy_body(["10.244.0.0/16", "fd00:10:244::/56"])["spec"]["egress"]
+
+    assert rules[:4] == [
+        {
+            "action": "Pass",
+            "protocol": protocol,
+            "source": {"selector": CLUSTER_DNS_SELECTOR},
+            "destination": destination,
+        }
+        for protocol in ("UDP", "TCP")
+        for destination in ({"ports": [53]}, {"nets": [DOCKER_DNS_LOOPBACK]})
+    ]
+    assert CLUSTER_DNS_SELECTOR == "projectcalico.org/namespace == 'kube-system' && k8s-app == 'kube-dns'"
+    assert DOCKER_DNS_LOOPBACK == "127.0.0.11/32"
+    # Public DNS stays restricted to port 53. Dynamic ports apply only to the
+    # exact Docker resolver address, not other loopback or node addresses.
+    assert all("ipVersion" not in rule for rule in rules[:4])
+    assert [(rule["action"], rule.get("ipVersion")) for rule in rules[4:]] == [
+        ("Deny", 4),
+        ("Deny", 6),
+        ("Pass", None),
+    ]
 
 
 def test_boundary_replaces_a_stale_policy():
