@@ -60,6 +60,7 @@ def test_aws_dir_mounted_when_credentials_selected(fake_home, monkeypatch, var, 
         "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "bedrock-claude-sonnet-4.5",
+        "amazon-bedrock/anthropic.claude-v2",
         "sagemaker/jumpstart-model",
     ],
 )
@@ -71,20 +72,46 @@ def test_aws_model_id_mounts_aws_dir_without_any_aws_var(fake_home, model_id):
     assert aws_mounts(runner._build_base_docker_args()) == [f"{fake_home / '.aws'}:/root/.aws:ro"]
 
 
-@pytest.mark.parametrize("model_id", ["gpt-5", "anthropic/claude-sonnet-4-6-20250627", "local/qwen3"])
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "gpt-5",
+        "anthropic/claude-sonnet-4-6-20250627",
+        "local/qwen3",
+        # Provider names that merely start with an AWS one.
+        "bedrockery/local-model",
+        "sagemakerless/mock",
+    ],
+)
 def test_non_aws_model_id_does_not_mount_aws_dir(fake_home, model_id):
     runner = make_runner(AGENT_MODEL_ID=model_id)
 
     assert aws_mounts(runner._build_base_docker_args()) == []
 
 
-def test_judge_model_id_mounts_aws_dir(fake_home):
+def test_empty_kickoff_value_masks_the_host_var(fake_home, monkeypatch):
+    # _build_env_flags lets ExecInput.env overwrite with "", so the container
+    # never sees the host value; the gate must not mount on it either.
+    monkeypatch.setenv("AWS_PROFILE", "production")
+    runner = make_runner()
+    exec_input = ExecInput(command="true", env={"AWS_PROFILE": ""})
+
+    try:
+        cmd = runner.build_docker_command(exec_input)
+    finally:
+        runner.cleanup_credential_tmps()
+
+    assert aws_mounts(cmd) == []
+
+
+def test_bedrock_judge_does_not_mount_into_agent_container(fake_home):
+    # The judge runs host-side in the conductor, not in the agent container.
     runner = make_runner(
         AGENT_MODEL_ID="gpt-5",
         JUDGE_MODEL_ID="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
     )
 
-    assert aws_mounts(runner._build_base_docker_args()) == [f"{fake_home / '.aws'}:/root/.aws:ro"]
+    assert aws_mounts(runner._build_base_docker_args()) == []
 
 
 def test_kickoff_env_reaches_the_gate(fake_home):

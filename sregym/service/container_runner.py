@@ -243,11 +243,14 @@ class ContainerRunner:
         "AWS_BEARER_TOKEN_BEDROCK",
     )
 
-    MODEL_ID_VARS = ("AGENT_MODEL_ID", "JUDGE_MODEL_ID")
+    # Only the agent model. The judge runs host-side in the conductor, where it
+    # reads ~/.aws directly, so a Bedrock judge is no reason to mount anything
+    # into an agent container that may only speak to OpenAI.
+    MODEL_ID_VARS = ("AGENT_MODEL_ID",)
 
-    # LiteLLM provider prefixes that resolve AWS credentials. Matched without a
-    # separator so "bedrock/x" and "bedrock-x" both count.
-    AWS_MODEL_PREFIXES = ("bedrock", "sagemaker")
+    # Model-id providers that resolve AWS credentials. "amazon-bedrock" is the
+    # spelling OpenCode uses; see PROVIDER_ENV_VARS in clients/opencode.
+    AWS_MODEL_PROVIDERS = ("bedrock", "amazon-bedrock", "sagemaker")
 
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
@@ -476,17 +479,23 @@ class ContainerRunner:
         """Whether this run resolves AWS credentials, and so needs ~/.aws."""
 
         def lookup(name: str) -> str:
+            # First source that *defines* the var wins, matching how
+            # _build_env_flags layers them. A caller setting it empty is
+            # masking it, not deferring to the host.
             for source in (extra_env or {}, self.config.env_vars, os.environ):
-                value = source.get(name)
-                if value:
-                    return str(value)
+                if name in source:
+                    return str(source[name] or "")
             return ""
+
+        def is_aws_model(model: str) -> bool:
+            provider = model.split("/", 1)[0].casefold()
+            return any(provider == p or provider.startswith(f"{p}-") for p in self.AWS_MODEL_PROVIDERS)
 
         if any(lookup(var) for var in self.AWS_CREDENTIAL_VARS):
             return True
         # A default profile in ~/.aws/config needs no AWS_* var set, so the
         # model id is the only signal left that an AWS run needs the mount.
-        return any(lookup(var).startswith(self.AWS_MODEL_PREFIXES) for var in self.MODEL_ID_VARS)
+        return any(is_aws_model(lookup(var)) for var in self.MODEL_ID_VARS)
 
     def cleanup_credential_tmps(self) -> None:
         """Remove throwaway credential directories."""
@@ -590,10 +599,9 @@ class ContainerRunner:
             args.extend(["-v", f"{kubeconfig_path.resolve()}:/root/.kube/config:ro"])
             args.extend(["-e", "KUBECONFIG=/root/.kube/config"])
 
-        # Mount AWS credentials (read-only) for Bedrock and other AWS services.
-        # Gated on the run actually resolving AWS credentials: the directory
-        # holds live SSO and CLI cache tokens, which a run against another
-        # provider has no use for.
+        # Gated on the run resolving AWS credentials: the directory holds live
+        # SSO and CLI cache tokens, which a run against another provider has no
+        # use for.
         aws_dir = Path.home() / ".aws"
         if aws_dir.is_dir():
             if self._run_uses_aws(extra_env):
