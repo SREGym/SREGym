@@ -6,7 +6,7 @@ import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from urllib.parse import parse_qsl, unquote, urlsplit
+from urllib.parse import unquote, urlsplit
 
 
 class InternetAccessMode(StrEnum):
@@ -14,137 +14,188 @@ class InternetAccessMode(StrEnum):
     FILTERED = "filtered"
 
 
-DEFAULT_BLOCKED_GITHUB_OWNERS = ("SREGym",)
-DEFAULT_BLOCKED_GITHUB_REPOSITORIES = ("SREGym",)
-# The repository API accepts numeric IDs instead of an owner/repository path.
-# Keep the benchmark repository protected when an agent uses that form.
-DEFAULT_BLOCKED_GITHUB_REPOSITORY_IDS = ("986527564",)
-GITHUB_CONTENT_HOSTS = {
-    "api.github.com",
-    "codeload.github.com",
-    "cdn.jsdelivr.net",
-    "github.com",
-    "raw.githubusercontent.com",
-    "raw.githack.com",
-}
-GITHUB_MIRROR_HOSTS = {"cdn.jsdelivr.net", "raw.githack.com"}
-
-
 @dataclass(frozen=True)
 class InternetPolicy:
     mode: InternetAccessMode = InternetAccessMode.FILTERED
-    blocked_github_owners: tuple[str, ...] = DEFAULT_BLOCKED_GITHUB_OWNERS
-    blocked_github_repository_ids: tuple[str, ...] = DEFAULT_BLOCKED_GITHUB_REPOSITORY_IDS
-    blocked_github_repositories: tuple[str, ...] = DEFAULT_BLOCKED_GITHUB_REPOSITORIES
+    agent_name: str | None = None
+    model_id: str | None = None
+    additional_allowed_endpoints: tuple[str, ...] = ()
 
     @classmethod
-    def from_mode(cls, mode: str | InternetAccessMode) -> InternetPolicy:
-        return cls(mode=InternetAccessMode(mode))
+    def from_mode(
+        cls,
+        mode: str | InternetAccessMode,
+        *,
+        agent_name: str | None = None,
+        model_id: str | None = None,
+        additional_allowed_endpoints: tuple[str, ...] | list[str] = (),
+    ) -> InternetPolicy:
+        endpoints = tuple(additional_allowed_endpoints)
+        for endpoint in endpoints:
+            EndpointRule.from_url(endpoint)
+        return cls(
+            mode=InternetAccessMode(mode),
+            agent_name=agent_name,
+            model_id=model_id,
+            additional_allowed_endpoints=endpoints,
+        )
 
     @property
     def is_filtered(self) -> bool:
         return self.mode == InternetAccessMode.FILTERED
 
 
-def should_stream_response(content_type: str | None) -> bool:
-    """Return whether a response must bypass mitmproxy body buffering."""
-    if not content_type:
-        return False
-    media_type = content_type.partition(";")[0].strip().casefold()
-    return media_type == "text/event-stream"
+@dataclass(frozen=True, order=True)
+class EndpointRule:
+    """One network destination that an evaluated agent can use."""
+
+    host: str
+    port: int
+    path_prefix: str = "/"
+    include_subpaths: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "host", _normalize_host(self.host))
+        object.__setattr__(self, "path_prefix", _normalize_path(self.path_prefix))
+        if not 1 <= self.port <= 65535:
+            raise ValueError(f"Invalid endpoint port: {self.port}")
+
+    @classmethod
+    def from_url(cls, url: str) -> EndpointRule:
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError(f"Endpoint must be an HTTP(S) URL: {url}")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        return cls(
+            host=_normalize_host(parsed.hostname),
+            port=port,
+            path_prefix=_normalize_path(parsed.path or "/"),
+        )
+
+    @classmethod
+    def host_from_url(cls, url: str) -> EndpointRule:
+        """Allow one HTTP(S) host and port, independent of its API path."""
+        parsed = urlsplit(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError(f"Endpoint must be an HTTP(S) URL: {url}")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        return cls(host=parsed.hostname, port=port)
+
+    @classmethod
+    def from_dict(cls, value: dict) -> EndpointRule:
+        include_subpaths = value.get("include_subpaths", True)
+        if not isinstance(include_subpaths, bool):
+            raise ValueError("include_subpaths must be a boolean")
+        return cls(
+            host=_normalize_host(str(value["host"])),
+            port=int(value["port"]),
+            path_prefix=_normalize_path(str(value.get("path_prefix", "/"))),
+            include_subpaths=include_subpaths,
+        )
+
+    def to_dict(self) -> dict[str, str | int]:
+        return {
+            "host": self.host,
+            "port": self.port,
+            "path_prefix": self.path_prefix,
+            "include_subpaths": self.include_subpaths,
+        }
+
+    def allows(self, host: str, port: int, request_target: str) -> bool:
+        if _normalize_host(host) != self.host or port != self.port:
+            return False
+        path = _normalize_path(urlsplit(request_target).path or "/")
+        if path == self.path_prefix:
+            return True
+        if not self.include_subpaths:
+            return False
+        if self.path_prefix == "/":
+            return True
+        return path.startswith(f"{self.path_prefix.rstrip('/')}/")
 
 
-def blocked_github_owner(
+def endpoint_is_allowed(
     host: str,
+    port: int,
     request_target: str,
-    request_body: bytes | str | None,
-    blocked_owners: tuple[str, ...] = DEFAULT_BLOCKED_GITHUB_OWNERS,
-    blocked_repository_ids: tuple[str, ...] = DEFAULT_BLOCKED_GITHUB_REPOSITORY_IDS,
-    blocked_repositories: tuple[str, ...] = DEFAULT_BLOCKED_GITHUB_REPOSITORIES,
-) -> str | None:
-    """Return the blocked GitHub owner or repository route, if any."""
-    normalized_host = host.partition(":")[0].rstrip(".").casefold()
-    if normalized_host not in GITHUB_CONTENT_HOSTS:
-        return None
-
-    parsed = urlsplit(_decode_repeatedly(request_target))
-    segments = _normalise_path_segments(parsed.path)
-    query = _decode_repeatedly(parsed.query).casefold()
-
-    if (
-        normalized_host == "api.github.com"
-        and len(segments) > 1
-        and segments[0] == "repositories"
-        and segments[1] in {repository_id.casefold() for repository_id in blocked_repository_ids}
-    ):
-        return f"repository:{segments[1]}"
-
-    for owner in blocked_owners:
-        normalized_owner = owner.strip().casefold()
-        if not normalized_owner:
-            continue
-        if _owner_is_in_path(normalized_host, segments, normalized_owner):
-            return owner
-        if _query_references_owner(query, normalized_owner):
-            return owner
-        if normalized_host == "api.github.com" and segments and segments[0] == "graphql":
-            if _decoded_json_references_owner(request_body, normalized_owner):
-                return owner
-
-    repository = _repository_in_path(normalized_host, segments, blocked_repositories)
-    if repository is not None:
-        return f"repository:{repository}"
-    return None
+    rules: tuple[EndpointRule, ...] | list[EndpointRule],
+) -> bool:
+    """Return whether a request matches one of the endpoint rules."""
+    return any(rule.allows(host, port, request_target) for rule in rules)
 
 
-def _owner_is_in_path(host: str, segments: tuple[str, ...], owner: str) -> bool:
-    if not segments:
+def endpoint_host_is_allowed(
+    host: str,
+    port: int,
+    rules: tuple[EndpointRule, ...] | list[EndpointRule],
+) -> bool:
+    """Return whether a CONNECT tunnel can lead to an allowed endpoint."""
+    normalized_host = _normalize_host(host)
+    return any(rule.host == normalized_host and rule.port == port for rule in rules)
+
+
+def provider_tool_uses_internet(request_body: bytes | str | None) -> bool:
+    """Reject common provider-hosted web tools without scanning prompt text."""
+    try:
+        # json.loads accepts UTF-8/16/32 bytes, just as JSON API servers can.
+        payload = json.loads(request_body)
+    except RecursionError:
+        return True
+    except (TypeError, ValueError):
         return False
-    if host in {"raw.githubusercontent.com", "codeload.github.com"}:
-        return segments[0] == owner
-    if host == "github.com":
-        return segments[0] == owner or (len(segments) > 1 and segments[0] in {"orgs", "users"} and segments[1] == owner)
-    if host == "api.github.com":
-        return len(segments) > 1 and segments[0] in {"orgs", "repos", "users"} and segments[1] == owner
-    if host == "cdn.jsdelivr.net":
-        return len(segments) > 2 and segments[0] == "gh" and segments[1] == owner
-    if host == "raw.githack.com":
-        return len(segments) > 1 and segments[0] == owner
-    return False
+    if not isinstance(payload, dict):
+        return False
 
+    blocked_names = {
+        "browser",
+        "browser_agent",
+        "code_interpreter",
+        "computer",
+        "computer_use",
+        "computer_use_preview",
+        "connector",
+        "google_search",
+        "google_search_retrieval",
+        "mcp",
+        "remote_mcp",
+        "url_context",
+        "web",
+        "web_fetch",
+        "web_search",
+        "web_search_preview",
+    }
 
-def _repository_in_path(host: str, segments: tuple[str, ...], repositories: tuple[str, ...]) -> str | None:
-    blocked = {repository.strip().casefold() for repository in repositories if repository.strip()}
-    if not blocked:
-        return None
+    def is_blocked_tool(value: object) -> bool:
+        if not isinstance(value, dict):
+            return False
+        for key, child in value.items():
+            normalized_key = _normalize_tool_name(str(key))
+            if normalized_key in blocked_names:
+                return True
+            if normalized_key in {"id", "name", "type"} and isinstance(child, str):
+                normalized_value = _normalize_tool_name(child)
+                if normalized_value in blocked_names or normalized_value.startswith(("web_fetch_", "web_search_")):
+                    return True
+        return False
 
-    repository_segment: str | None = None
-    if host in {"github.com", "raw.githubusercontent.com", "codeload.github.com"} and len(segments) > 1:
-        repository_segment = segments[1]
-    elif host == "api.github.com" and len(segments) > 2 and segments[0] in {"orgs", "repos"}:
-        repository_segment = segments[2]
-    elif host in GITHUB_MIRROR_HOSTS:
-        # jsDelivr uses /gh/{owner}/{repo}@{ref}/..., while raw.githack uses
-        # /{owner}/{repo}/{ref}/....
-        if host == "cdn.jsdelivr.net" and len(segments) > 2 and segments[0] == "gh":
-            repository_segment = segments[2].split("@", 1)[0]
-        elif len(segments) > 1:
-            repository_segment = segments[1]
-
-    if repository_segment in blocked:
-        return repository_segment
-    return None
-
-
-def _query_references_owner(query: str, owner: str) -> bool:
-    for key, value in parse_qsl(_decode_repeatedly(query), keep_blank_values=True):
-        key = key.casefold()
-        value = _decode_repeatedly(value).casefold()
-        if key in {"owner", "organization", "org"} and value == owner:
+    def uses_internet(request: dict) -> bool:
+        tools = request.get("tools")
+        if isinstance(tools, list) and any(is_blocked_tool(tool) for tool in tools):
             return True
-        if key in {"q", "query"} and re.search(rf"(?:^|\s)(?:org|user|repo):{re.escape(owner)}(?:\b|/)", value):
+        if any(request.get(key) for key in ("plugins", "apps", "mcp_servers")):
             return True
-    return False
+        # WebSocket APIs can wrap a request in a response/session event.
+        # Do not traverse messages, prompts, or function argument schemas.
+        return any(
+            uses_internet(value)
+            for key in ("response", "session", "request")
+            if isinstance(value := request.get(key), dict)
+        )
+
+    try:
+        return uses_internet(payload)
+    except RecursionError:
+        return True
 
 
 def _decode_repeatedly(value: str, limit: int = 3) -> str:
@@ -157,50 +208,23 @@ def _decode_repeatedly(value: str, limit: int = 3) -> str:
     return decoded
 
 
-def _normalise_path_segments(path: str) -> tuple[str, ...]:
-    """Decode and resolve dot segments before applying path-based rules."""
-    normalised: list[str] = []
-    for raw_segment in path.split("/"):
-        segment = _decode_repeatedly(raw_segment).casefold()
+def _normalize_host(host: str) -> str:
+    return host.strip().strip("[]").rstrip(".").casefold()
+
+
+def _normalize_path(path: str) -> str:
+    normalized: list[str] = []
+    for segment in _decode_repeatedly(path).split("/"):
         if segment in {"", "."}:
             continue
         if segment == "..":
-            if normalised:
-                normalised.pop()
+            if normalized:
+                normalized.pop()
             continue
-        normalised.append(segment)
-    return tuple(normalised)
+        normalized.append(segment)
+    return f"/{'/'.join(normalized)}" if normalized else "/"
 
 
-def _decoded_json_references_owner(body: bytes | str | None, needle: str) -> bool:
-    """Match GraphQL owner/repository fields after JSON escape processing."""
-    try:
-        decoded = json.loads(_body_text(body))
-    except (TypeError, ValueError):
-        return False
-
-    def references(value: object, key: str = "") -> bool:
-        if isinstance(value, dict):
-            return any(references(child_value, str(child_key).casefold()) for child_key, child_value in value.items())
-        if isinstance(value, list):
-            return any(references(item, key) for item in value)
-        if not isinstance(value, str):
-            return False
-        normalized = value.casefold()
-        if key in {"owner", "repositoryowner", "repository_owner", "organization", "org"}:
-            return normalized == needle
-        if key in {"repo", "repository"}:
-            return normalized == needle or normalized.startswith(f"{needle}/")
-        if key in {"q", "query"}:
-            return bool(re.search(rf"(?:^|\s)(?:org|user|repo):{re.escape(needle)}(?:\b|/)", normalized))
-        return False
-
-    return references(decoded)
-
-
-def _body_text(body: bytes | str | None, limit: int = 1_000_000) -> str:
-    if body is None:
-        return ""
-    if isinstance(body, bytes):
-        return body[:limit].decode("utf-8", errors="ignore")
-    return body[:limit]
+def _normalize_tool_name(value: str) -> str:
+    snake_case = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value)
+    return re.sub(r"[^a-z0-9]+", "_", snake_case.casefold()).strip("_")

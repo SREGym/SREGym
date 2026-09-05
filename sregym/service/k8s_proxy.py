@@ -38,6 +38,12 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from kubernetes import config
 
+from sregym.service.kubernetes_access_policy import (
+    PROTECTED_EGRESS_CRDS,
+    PROTECTED_EGRESS_RESOURCES,
+    contains_network_escape,
+)
+
 logger = logging.getLogger("all.infra.k8s_proxy")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
@@ -50,6 +56,7 @@ HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
 HIDDEN_LABELS: dict[str, set[str]] = {
     "app": {"load-generator", "locust-fetcher"},
     "job": {"workload"},
+    "network-access": {"restricted"},
     "opentelemetry.io/name": {"load-generator"},
 }
 WORKLOAD_CREATE_SUFFIXES = {
@@ -129,6 +136,16 @@ def _resource_request(path: str) -> tuple[str | None, str | None]:
     resource = parts[resource_index]
     name = parts[resource_index + 1] if len(parts) > resource_index + 1 else None
     return resource, name
+
+
+def _request_api_group(path: str) -> str | None:
+    """Return the API group from a normalized Kubernetes request path."""
+    parts = _decode_path_parts(path)
+    if len(parts) >= 3 and parts[0] == "apis":
+        return parts[1]
+    if len(parts) >= 2 and parts[0] == "api":
+        return ""
+    return None
 
 
 def _is_watch_request(path: str) -> bool:
@@ -243,6 +260,22 @@ def _is_secret_watch_request(path: str) -> bool:
     return resource == "secrets" and _is_watch_request(path)
 
 
+def _is_cluster_egress_control_mutation(path: str, method: str) -> bool:
+    """Protect the cluster policy that prevents workload internet relays."""
+    if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+    resource, name = _resource_request(path)
+    api_group = _request_api_group(path)
+    if api_group == "crd.projectcalico.org" and resource in PROTECTED_EGRESS_RESOURCES:
+        return True
+    if api_group == "policy.networking.k8s.io" and resource in {
+        "adminnetworkpolicies",
+        "baselineadminnetworkpolicies",
+    }:
+        return True
+    return resource == "customresourcedefinitions" and name in PROTECTED_EGRESS_CRDS
+
+
 def _requires_json_secret_response(path: str, method: str) -> bool:
     """Return whether the proxy must inspect a Secret response as JSON."""
     resource, _ = _resource_request(path)
@@ -261,10 +294,11 @@ def _contains_helm_release_secret_name(value) -> bool:
 
 
 def _inspect_workload_request(path: str, method: str, body: bytes | None, content_type: str) -> str | None:
-    """Inspect workload mutations for references to a protected Helm Secret.
+    """Inspect workload mutations for protected data and network escapes.
 
     Returns ``forbidden`` for a Helm Secret reference, ``unsupported`` when a
-    workload body cannot be inspected safely, and ``None`` when it is safe.
+    workload body cannot be inspected safely, ``network_escape`` for a pod
+    isolation escape, and ``None`` when it is safe.
     """
     resource, _ = _resource_request(path)
     if method not in {"POST", "PUT", "PATCH"} or resource not in WORKLOAD_RESOURCES or not body:
@@ -284,6 +318,8 @@ def _inspect_workload_request(path: str, method: str, body: bytes | None, conten
 
     if _contains_helm_release_secret_name(data):
         return "forbidden"
+    if contains_network_escape(data):
+        return "network_escape"
     return None
 
 
@@ -343,12 +379,15 @@ class KubernetesAPIProxy:
         listen_port: int = 6443,
         listen_host: str = "127.0.0.1",
         block_workload_creation: bool = False,
+        *,
+        restrict_network_access: bool = False,
     ):
         self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
         self.hidden_labels: dict[str, set[str]] = hidden_labels if hidden_labels is not None else HIDDEN_LABELS
         self.listen_port = listen_port
         self.listen_host = listen_host
-        self.block_workload_creation = block_workload_creation
+        # Preserve the old keyword for callers outside the Conductor.
+        self.restrict_network_access = restrict_network_access or block_workload_creation
         self.server: ThreadingHTTPServer | None = None
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
@@ -521,7 +560,7 @@ class KubernetesAPIProxy:
         api_port = self.api_port
         bearer_token = self._bearer_token
         agent_token = self._agent_token
-        block_workload_creation = self.block_workload_creation
+        restrict_network_access = self.restrict_network_access
 
         class FilteringProxyHandler(BaseHTTPRequestHandler):
             """HTTP request handler that proxies and filters Kubernetes API responses."""
@@ -553,8 +592,12 @@ class KubernetesAPIProxy:
                     self.send_error(401, "Unauthorized: valid agent token required")
                     return
 
-                if block_workload_creation and method == "POST" and _is_workload_create_path(path):
+                if restrict_network_access and method == "POST" and _is_workload_create_path(path):
                     self.send_error(403, "Forbidden: workload creation is disabled in filtered mode")
+                    return
+
+                if restrict_network_access and _is_cluster_egress_control_mutation(path, method):
+                    self.send_error(403, "Forbidden: cluster outbound policy changes are disabled in filtered mode")
                     return
 
                 # Block direct access to hidden namespaces
@@ -592,6 +635,9 @@ class KubernetesAPIProxy:
                 )
                 if workload_inspection == "forbidden":
                     self.send_error(403, "Forbidden: Workloads cannot reference this Secret")
+                    return
+                if workload_inspection == "network_escape":
+                    self.send_error(403, "Forbidden: Workloads cannot escape pod network isolation")
                     return
                 if workload_inspection == "unsupported":
                     self.send_error(415, "Unsupported Media Type: Workload request body cannot be inspected")
@@ -867,6 +913,8 @@ def start_proxy(
     hidden_labels: dict[str, set[str]] | None = None,
     port: int = 16443,
     block_workload_creation: bool = False,
+    *,
+    restrict_network_access: bool = False,
 ) -> KubernetesAPIProxy:
     """Start the Kubernetes API filtering proxy."""
     global _proxy_instance
@@ -876,7 +924,7 @@ def start_proxy(
         hidden_namespaces=hidden_namespaces,
         hidden_labels=hidden_labels,
         listen_port=port,
-        block_workload_creation=block_workload_creation,
+        restrict_network_access=restrict_network_access or block_workload_creation,
     )
     _proxy_instance.start()
     return _proxy_instance

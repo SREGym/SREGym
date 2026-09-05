@@ -128,8 +128,40 @@ Use `--force-build` to rebuild the container image after updating dependencies o
 uv run main.py --agent codex --model gpt-5 --force-build
 ```
 
-Containerized agents can use the public internet by default, but direct access to the benchmark's GitHub source is
-blocked. Use `--internet-access open` only when you intentionally need the previous unrestricted network behavior.
+Containerized agents use filtered network access by default. SREGym allows the selected model provider and local SREGym
+services. It blocks all other internet destinations. The allowlist is fixed before the provider preflight, so the agent
+cannot add a new destination during the run. SREGym includes the authentication endpoint needed by supported subscription
+clients, such as Codex. Set `AGENT_API_BASE` when Stratus, Codex, or a local OpenCode model uses a custom endpoint. An
+unknown provider fails before the benchmark starts. Use `--internet-access open` only when the agent must have
+unrestricted network access.
+
+Use `--allow-agent-endpoint` to add a required destination without enabling all internet access. Repeat the option to
+add more destinations:
+
+```bash
+uv run main.py --agent codex --model gpt-5.6-sol \
+  --allow-agent-endpoint https://telemetry.example.com/v1
+```
+
+The URL permits its host, port, path, and child paths. A URL without a path permits all paths on that host and port.
+This option has no effect with `--internet-access open`.
+
+Filtered mode also blocks public internet access from application pods. It requires Calico 3.29 or later with policy tiers.
+Cluster DNS pods in `kube-system` retain TCP/UDP port 53 access for upstream DNS queries.
+They can also reach Docker's local DNS resolver, which kind uses after address and port translation.
+These exceptions do not open other external ports or direct external DNS access for application pods.
+Fault-specific Kubernetes NetworkPolicies still apply to DNS traffic.
+The kind setup script installs Calico 3.29.3. Older kind clusters need a Calico upgrade before filtered runs can start.
+For an existing kind cluster, run:
+
+```bash
+kubectl apply --server-side --force-conflicts -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.3/manifests/calico.yaml
+kubectl rollout status daemonset/calico-node -n kube-system --timeout=240s
+kubectl rollout status deployment/calico-kube-controllers -n kube-system --timeout=240s
+kubectl get tiers.crd.projectcalico.org
+```
+
+The output must include the `adminnetworkpolicy` tier. These upgrade commands apply to the repository's kind setup, not custom Calico installations.
 
 ### Deployment Profiles
 

@@ -1,4 +1,5 @@
 import contextlib
+import importlib
 import logging
 import os
 import signal
@@ -63,6 +64,61 @@ class AgentLauncher:
                 self._container_runner.build_image()
             else:
                 self._container_runner.ensure_image_exists()
+
+    @property
+    def container_image(self) -> str:
+        return self._container_runner.config.image if self._container_runner else ContainerConfig().image
+
+    def prepare_agent(self, reg: AgentRegistration | None, *, force_build: bool = False) -> None:
+        """Prepare isolated tools and validate credentials before a run."""
+        try:
+            if reg is None or reg.container_isolation:
+                self.enable_container_isolation(force_build=force_build)
+            if reg is not None and self._container_runner is not None:
+                self._container_runner.prepare_agent_tools(reg.install_script, reg.agent_version)
+                self._run_preflight(reg)
+        except BaseException:
+            self.cleanup_all()
+            raise
+
+    def _run_preflight(self, reg: AgentRegistration) -> None:
+        # Agents that need pre-flight check
+        agent_driver_modules: dict[str, str] = {
+            "stratus": "clients.stratus.stratus_agent.driver.driver",
+            "claudecode": "clients.claudecode.driver",
+            "codex": "clients.codex.driver",
+            "copilot": "clients.copilot.driver",
+            "opencode": "clients.opencode.driver",
+            "gemini": "clients.geminicli.driver",
+        }
+
+        module_path = agent_driver_modules.get(reg.name)
+        if not module_path:
+            return
+
+        driver_mod = importlib.import_module(module_path)
+        if not hasattr(driver_mod, "run_preflight"):
+            return
+
+        check_cmd = f"python3 -c 'from {module_path} import run_preflight; run_preflight()'"
+        check_cmd = self._container_runner.build_composite_command(
+            install_script=reg.install_script,
+            agent_version=reg.agent_version,
+            driver_command=check_cmd,
+            capture_logs=False,
+        )
+
+        logger.info(f"🔍 Running pre-flight check for '{reg.name}'...")
+        result = self._container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+        if result.returncode != 0:
+            if result.stdout:
+                print(result.stdout.strip())
+            if result.stderr:
+                print(result.stderr.strip())
+            logger.error(f"❌ Pre-flight check failed for '{reg.name}'")
+            sys.exit(1)
+
+        logger.info(f"✅ Pre-flight check passed for '{reg.name}'")
 
     async def ensure_started(self, reg: AgentRegistration) -> AgentProcess | None:
         if not reg or not reg.kickoff_command:
@@ -182,9 +238,10 @@ class AgentLauncher:
         for name in list(self._procs):
             self.cleanup_agent(name, timeout=timeout)
         if self._container_runner:
-            self._container_runner.cleanup_egress_proxy()
-            self._container_runner.cleanup_credential_tmps()
-            self._container_runner = None
+            try:
+                self._container_runner.close()
+            finally:
+                self._container_runner = None
 
     def internet_policy_result(self, process: AgentProcess | None = None) -> dict[str, str | int]:
         blocked = 0
