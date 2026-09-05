@@ -245,6 +245,10 @@ class ContainerRunner:
 
     MODEL_ID_VARS = ("AGENT_MODEL_ID", "JUDGE_MODEL_ID")
 
+    # LiteLLM provider prefixes that resolve AWS credentials. Matched without a
+    # separator so "bedrock/x" and "bedrock-x" both count.
+    AWS_MODEL_PREFIXES = ("bedrock", "sagemaker")
+
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
         self._credential_tmps: list[str] = []
@@ -481,8 +485,8 @@ class ContainerRunner:
         if any(lookup(var) for var in self.AWS_CREDENTIAL_VARS):
             return True
         # A default profile in ~/.aws/config needs no AWS_* var set, so the
-        # model id is the only signal left that a Bedrock run needs the mount.
-        return any(lookup(var).startswith("bedrock/") for var in self.MODEL_ID_VARS)
+        # model id is the only signal left that an AWS run needs the mount.
+        return any(lookup(var).startswith(self.AWS_MODEL_PREFIXES) for var in self.MODEL_ID_VARS)
 
     def cleanup_credential_tmps(self) -> None:
         """Remove throwaway credential directories."""

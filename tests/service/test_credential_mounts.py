@@ -54,12 +54,28 @@ def test_aws_dir_mounted_when_credentials_selected(fake_home, monkeypatch, var, 
     assert aws_mounts(runner._build_base_docker_args()) == [f"{fake_home / '.aws'}:/root/.aws:ro"]
 
 
-def test_bedrock_model_id_mounts_aws_dir_without_any_aws_var(fake_home):
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "bedrock-claude-sonnet-4.5",
+        "sagemaker/jumpstart-model",
+    ],
+)
+def test_aws_model_id_mounts_aws_dir_without_any_aws_var(fake_home, model_id):
     # A default profile in ~/.aws/config sets no AWS_* var, so the model id has
     # to keep the mount alive on its own.
-    runner = make_runner(AGENT_MODEL_ID="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+    runner = make_runner(AGENT_MODEL_ID=model_id)
 
     assert aws_mounts(runner._build_base_docker_args()) == [f"{fake_home / '.aws'}:/root/.aws:ro"]
+
+
+@pytest.mark.parametrize("model_id", ["gpt-5", "anthropic/claude-sonnet-4-6-20250627", "local/qwen3"])
+def test_non_aws_model_id_does_not_mount_aws_dir(fake_home, model_id):
+    runner = make_runner(AGENT_MODEL_ID=model_id)
+
+    assert aws_mounts(runner._build_base_docker_args()) == []
 
 
 def test_judge_model_id_mounts_aws_dir(fake_home):
