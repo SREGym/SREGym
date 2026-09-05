@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import unquote, urlsplit
@@ -135,229 +134,13 @@ def endpoint_host_is_allowed(
     return any(rule.host == normalized_host and rule.port == port for rule in rules)
 
 
-def provider_endpoint_rules(
-    policy: InternetPolicy,
-    environment: Mapping[str, str],
-    *,
-    codex_auth_available: bool = False,
-) -> tuple[EndpointRule, ...]:
-    """Return the fixed provider destinations for one evaluated agent."""
-    if not policy.is_filtered or not policy.agent_name:
-        return ()
-
-    agent = policy.agent_name.casefold()
-    model = (policy.model_id or "").strip()
-
-    if agent in {"autosubmit", "debug"}:
-        return ()
-    if agent == "codex":
-        custom_base = _configured_url(environment, "AGENT_API_BASE")
-        if custom_base:
-            return (EndpointRule.host_from_url(custom_base),)
-        if codex_auth_available:
-            return _rules_from_urls(("https://chatgpt.com", "https://auth.openai.com"))
-        return _rules_from_urls((_provider_url("openai", environment),))
-    if agent == "claudecode":
-        urls = [_provider_url("anthropic", environment)]
-        if environment.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
-            urls.append("https://platform.claude.com")
-        return _rules_from_urls(urls)
-    if agent == "gemini":
-        provider = "vertex" if _uses_vertex_ai(environment) else "gemini"
-        return _provider_rules(provider, environment)
-    if agent == "copilot":
-        custom_base = _configured_url(environment, "COPILOT_PROVIDER_BASE_URL")
-        if custom_base:
-            return (EndpointRule.host_from_url(custom_base),)
-        return _provider_rules("github-copilot", environment)
-    if agent == "opencode":
-        provider = model.partition("/")[0].casefold()
-        if not provider or "/" not in model:
-            raise ValueError("Filtered internet access requires an OpenCode model in provider/model format")
-        if provider == "local":
-            return _required_custom_base(environment, agent, model)
-        return _provider_rules(provider, environment)
-    if agent == "stratus":
-        if _configured_url(environment, "AGENT_API_BASE"):
-            return _required_custom_base(environment, agent, model)
-        return _provider_rules(_provider_from_model(model), environment)
-
-    raise ValueError(
-        f"Filtered internet access does not know the model provider for agent '{policy.agent_name}'. "
-        "Use a supported agent or run with --internet-access open."
-    )
-
-
-def _provider_from_model(model: str) -> str:
-    normalized = model.strip().casefold()
-    prefix = normalized.partition("/")[0]
-    aliases = {
-        "amazon-bedrock": "bedrock",
-        "anthropic": "anthropic",
-        "azure": "azure",
-        "bedrock": "bedrock",
-        "custom_openai": "custom",
-        "deepseek": "deepseek",
-        "gemini": "gemini",
-        "google": "gemini",
-        "google_ai_studio": "gemini",
-        "groq": "groq",
-        "huggingface": "huggingface",
-        "mistral": "mistral",
-        "moonshot": "moonshot",
-        "ollama": "custom",
-        "ollama_chat": "custom",
-        "openai": "openai",
-        "openrouter": "openrouter",
-        "vertex_ai": "vertex",
-        "watsonx": "watsonx",
-        "xai": "xai",
-        "zai": "zai-coding-plan",
-        "zhipu": "zai-coding-plan",
-    }
-    if prefix in aliases and "/" in normalized:
-        return aliases[prefix]
-    if normalized.startswith("claude"):
-        return "anthropic"
-    if normalized.startswith("gemini"):
-        return "gemini"
-    if normalized.startswith("deepseek"):
-        return "deepseek"
-    if normalized.startswith(("gpt-", "o1", "o3", "o4", "ft:")):
-        return "openai"
-    raise ValueError(
-        f"Filtered internet access cannot determine the provider for model '{model}'. "
-        "Set AGENT_API_BASE to the model API endpoint or use --internet-access open."
-    )
-
-
-def _provider_rules(provider: str, environment: Mapping[str, str]) -> tuple[EndpointRule, ...]:
-    provider = provider.casefold()
-    if provider == "google":
-        provider = "vertex" if _uses_vertex_ai(environment) else "gemini"
-    if provider == "custom":
-        return _required_custom_base(environment, "stratus", environment.get("AGENT_MODEL_ID", ""))
-    if provider in {"amazon-bedrock", "bedrock"}:
-        region = _first_value(environment, "AWS_REGION_NAME", "AWS_REGION", "AWS_DEFAULT_REGION")
-        if not region:
-            raise ValueError("Filtered Bedrock access requires AWS_REGION_NAME, AWS_REGION, or AWS_DEFAULT_REGION")
-        runtime = _configured_url(environment, "AWS_BEDROCK_RUNTIME_ENDPOINT")
-        sts = _configured_url(environment, "AWS_STS_ENDPOINT")
-        return _rules_from_urls(
-            (
-                runtime or f"https://bedrock-runtime.{region}.amazonaws.com",
-                sts or f"https://sts.{region}.amazonaws.com",
-            )
-        )
-    if provider == "vertex":
-        location = _first_value(environment, "VERTEXAI_LOCATION", "VERTEX_LOCATION", "GOOGLE_CLOUD_LOCATION")
-        if not location:
-            location = "us-central1"
-        return _rules_from_urls(
-            (
-                f"https://{location}-aiplatform.googleapis.com",
-                "https://oauth2.googleapis.com",
-            )
-        )
-    if provider == "azure":
-        endpoint = _configured_url(environment, "AZURE_API_BASE", "AZURE_OPENAI_ENDPOINT")
-        if endpoint:
-            return (EndpointRule.host_from_url(endpoint),)
-        resource = environment.get("AZURE_RESOURCE_NAME", "").strip()
-        if resource:
-            return _rules_from_urls((f"https://{resource}.openai.azure.com",))
-        raise ValueError("Filtered Azure access requires AZURE_API_BASE, AZURE_OPENAI_ENDPOINT, or AZURE_RESOURCE_NAME")
-    if provider == "watsonx":
-        endpoint = _configured_url(environment, "WATSONX_API_BASE", "WATSONX_URL", "WX_URL", "WML_URL")
-        if not endpoint:
-            raise ValueError("Filtered WatsonX access requires WATSONX_API_BASE, WATSONX_URL, WX_URL, or WML_URL")
-        iam = _configured_url(environment, "WATSONX_IAM_URL") or "https://iam.cloud.ibm.com"
-        return _rules_from_urls((endpoint, iam))
-    if provider == "github-copilot":
-        return _rules_from_urls(("https://api.githubcopilot.com",))
-    if provider == "llama":
-        return _rules_from_urls(("https://api.llama.com",))
-    if provider == "opencode":
-        return _rules_from_urls(("https://opencode.ai",))
-
-    return _rules_from_urls((_provider_url(provider, environment),))
-
-
-def _provider_url(provider: str, environment: Mapping[str, str]) -> str:
-    configured_names = {
-        "anthropic": ("ANTHROPIC_BASE_URL", "ANTHROPIC_API_BASE"),
-        "deepseek": ("DEEPSEEK_API_BASE",),
-        "gemini": ("GEMINI_API_BASE",),
-        "groq": ("GROQ_API_BASE",),
-        "huggingface": ("HF_ENDPOINT",),
-        "mistral": ("MISTRAL_API_BASE",),
-        "moonshot": ("MOONSHOT_API_BASE",),
-        "openai": ("OPENAI_API_BASE", "OPENAI_BASE_URL"),
-        "openrouter": ("OPENROUTER_API_BASE",),
-        "xai": ("XAI_API_BASE",),
-        "zai-coding-plan": ("ZAI_API_BASE",),
-    }
-    defaults = {
-        "anthropic": "https://api.anthropic.com",
-        "deepseek": "https://api.deepseek.com",
-        "gemini": "https://generativelanguage.googleapis.com",
-        "groq": "https://api.groq.com",
-        "huggingface": "https://router.huggingface.co",
-        "mistral": "https://api.mistral.ai",
-        "moonshot": "https://api.moonshot.ai",
-        "openai": "https://api.openai.com",
-        "openrouter": "https://openrouter.ai",
-        "xai": "https://api.x.ai",
-        "zai-coding-plan": "https://api.z.ai",
-    }
-    if provider not in defaults:
-        raise ValueError(
-            f"Filtered internet access does not know the endpoint for provider '{provider}'. "
-            "Set AGENT_API_BASE with a supported custom model or use --internet-access open."
-        )
-    return _configured_url(environment, *configured_names[provider]) or defaults[provider]
-
-
-def _required_custom_base(
-    environment: Mapping[str, str],
-    agent: str,
-    model: str,
-) -> tuple[EndpointRule, ...]:
-    endpoint = _configured_url(environment, "AGENT_API_BASE")
-    if not endpoint:
-        raise ValueError(f"Filtered internet access requires AGENT_API_BASE for agent '{agent}' and model '{model}'")
-    return (EndpointRule.host_from_url(endpoint),)
-
-
-def _configured_url(environment: Mapping[str, str], *names: str) -> str | None:
-    for name in names:
-        value = environment.get(name, "").strip()
-        if not value:
-            continue
-        try:
-            EndpointRule.host_from_url(value)
-        except ValueError as exc:
-            raise ValueError(f"{name} must be an HTTP(S) URL") from exc
-        return value
-    return None
-
-
-def _first_value(environment: Mapping[str, str], *names: str) -> str | None:
-    return next((environment[name].strip() for name in names if environment.get(name, "").strip()), None)
-
-
-def _rules_from_urls(urls: tuple[str, ...] | list[str]) -> tuple[EndpointRule, ...]:
-    return tuple(sorted({EndpointRule.host_from_url(url) for url in urls}))
-
-
-def _uses_vertex_ai(environment: Mapping[str, str]) -> bool:
-    return environment.get("GOOGLE_GENAI_USE_VERTEXAI", "").strip().casefold() in {"1", "true", "yes"}
-
-
 def provider_tool_uses_internet(request_body: bytes | str | None) -> bool:
     """Reject common provider-hosted web tools without scanning prompt text."""
     try:
-        payload = json.loads(_body_text(request_body))
+        # json.loads accepts UTF-8/16/32 bytes, just as JSON API servers can.
+        payload = json.loads(request_body)
+    except RecursionError:
+        return True
     except (TypeError, ValueError):
         return False
     if not isinstance(payload, dict):
@@ -395,24 +178,24 @@ def provider_tool_uses_internet(request_body: bytes | str | None) -> bool:
                     return True
         return False
 
-    tools = payload.get("tools")
-    plugins = payload.get("plugins")
-    apps = payload.get("apps")
-    mcp_servers = payload.get("mcp_servers")
-    return (
-        (isinstance(tools, list) and any(is_blocked_tool(tool) for tool in tools))
-        or (isinstance(plugins, list) and bool(plugins))
-        or (isinstance(apps, list) and bool(apps))
-        or (isinstance(mcp_servers, list) and bool(mcp_servers))
-    )
+    def uses_internet(request: dict) -> bool:
+        tools = request.get("tools")
+        if isinstance(tools, list) and any(is_blocked_tool(tool) for tool in tools):
+            return True
+        if any(request.get(key) for key in ("plugins", "apps", "mcp_servers")):
+            return True
+        # WebSocket APIs can wrap a request in a response/session event.
+        # Do not traverse messages, prompts, or function argument schemas.
+        return any(
+            uses_internet(value)
+            for key in ("response", "session", "request")
+            if isinstance(value := request.get(key), dict)
+        )
 
-
-def should_stream_response(content_type: str | None) -> bool:
-    """Return whether a response must bypass mitmproxy body buffering."""
-    if not content_type:
-        return False
-    media_type = content_type.partition(";")[0].strip().casefold()
-    return media_type == "text/event-stream"
+    try:
+        return uses_internet(payload)
+    except RecursionError:
+        return True
 
 
 def _decode_repeatedly(value: str, limit: int = 3) -> str:
@@ -445,11 +228,3 @@ def _normalize_path(path: str) -> str:
 def _normalize_tool_name(value: str) -> str:
     snake_case = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", value)
     return re.sub(r"[^a-z0-9]+", "_", snake_case.casefold()).strip("_")
-
-
-def _body_text(body: bytes | str | None, limit: int = 1_000_000) -> str:
-    if body is None:
-        return ""
-    if isinstance(body, bytes):
-        return body[:limit].decode("utf-8", errors="ignore")
-    return body[:limit]

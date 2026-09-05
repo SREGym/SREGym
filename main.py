@@ -2,7 +2,6 @@ import argparse
 import asyncio
 import contextlib
 import csv
-import importlib
 import logging
 import os
 import sys
@@ -33,7 +32,7 @@ from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.profile import PROFILES, set_profile
 from sregym.results.resume import complete_resume_rows
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
-from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
+from sregym.service.container_runner import get_container_host_bind_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.traces import postprocess as trace_postprocess
 from sregym.traces import store as trace_store
@@ -62,61 +61,6 @@ class BenchmarkCampaignAborted(RuntimeError):
     def __init__(self, message: str, partial_results: list[dict]):
         super().__init__(message)
         self.partial_results = partial_results
-
-
-def run_preflight_check(
-    agent_name: str,
-    container_runner: ContainerRunner | None = None,
-    install_script: str | None = None,
-) -> None:
-    """Run the agent's pre-flight check inside the container."""
-
-    # Agents that need pre-flight check
-    agent_driver_modules: dict[str, str] = {
-        "stratus": "clients.stratus.stratus_agent.driver.driver",
-        "claudecode": "clients.claudecode.driver",
-        "codex": "clients.codex.driver",
-        "copilot": "clients.copilot.driver",
-        "opencode": "clients.opencode.driver",
-        "gemini": "clients.geminicli.driver",
-    }
-
-    module_path = agent_driver_modules.get(agent_name)
-    if not module_path:
-        return
-
-    driver_mod = importlib.import_module(module_path)
-    if not hasattr(driver_mod, "run_preflight"):
-        return
-
-    if container_runner is None:
-        logger.warning(f"⚠️  No container runner — skipping pre-flight check for '{agent_name}'")
-        return
-
-    check_cmd = f"python3 -c 'from {module_path} import run_preflight; run_preflight()'"
-    if install_script:
-        check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
-
-    logger.info(f"🔍 Running pre-flight check for '{agent_name}'...")
-    try:
-        result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
-    except BaseException:
-        # A failed or interrupted preflight happens before the API shutdown
-        # scope exists, so release the proxy and its Docker resources here.
-        container_runner.cleanup_egress_proxy()
-        container_runner.cleanup_credential_tmps()
-        raise
-    if result.returncode != 0:
-        if result.stdout:
-            print(result.stdout.strip())
-        if result.stderr:
-            print(result.stderr.strip())
-        logger.error(f"❌ Pre-flight check failed for '{agent_name}'")
-        container_runner.cleanup_egress_proxy()
-        container_runner.cleanup_credential_tmps()
-        sys.exit(1)
-
-    logger.info(f"✅ Pre-flight check passed for '{agent_name}'")
 
 
 def run_judge_preflight_check() -> None:
@@ -657,11 +601,7 @@ def driver_loop(
                         snapshot[stage] = outcome
 
                 fieldnames = sorted({key for row in [*all_results_for_agent, snapshot] for key in row})
-                ownership_image = (
-                    LAUNCHER._container_runner.config.image
-                    if LAUNCHER._container_runner is not None
-                    else "sregym-agent-base:latest"
-                )
+                ownership_image = LAUNCHER.container_image
                 try:
                     published_run_dir = run.finalize_and_publish(
                         snapshot=snapshot,
@@ -852,35 +792,10 @@ def main(args):
         enable_noise=args.noise,
         internet_policy=internet_policy,
         k8s_proxy_listen_host=k8s_proxy_listen_host,
-        block_workload_creation=internet_policy.is_filtered,
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
 
-    try:
-        if not agent_reg or agent_reg.container_isolation:
-            LAUNCHER.enable_container_isolation(force_build=args.force_build)
-
-        if internet_policy.is_filtered and agent_reg:
-            # Install the CLI before starting the fixed runtime network.
-            # Package registries are not permitted during evaluation.
-            LAUNCHER.prepare_agent_tools(agent_reg.install_script, agent_reg.agent_version)
-
-        # Pre-flight check — makes a real (minimal) API call inside the agent
-        # container to validate model and credentials in one shot.
-        run_preflight_check(
-            args.agent,
-            container_runner=LAUNCHER._container_runner,
-            install_script=(
-                None
-                if LAUNCHER._container_runner and LAUNCHER._container_runner.has_prepared_agent_tools
-                else agent_reg.install_script
-                if agent_reg
-                else None
-            ),
-        )
-    except BaseException:
-        LAUNCHER.cleanup_all()
-        raise
+    LAUNCHER.prepare_agent(agent_reg, force_build=args.force_build)
 
     conductor = Conductor(config=conductor_config)
 

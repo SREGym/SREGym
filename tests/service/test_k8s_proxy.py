@@ -105,7 +105,7 @@ def proxy(monkeypatch):
     instance.hidden_labels = {"app": {"load-generator"}}
     instance.listen_port = 0
     instance.listen_host = "127.0.0.1"
-    instance.block_workload_creation = False
+    instance.restrict_network_access = False
     instance.server = None
     instance.server_thread = None
     instance._temp_files = []
@@ -355,6 +355,22 @@ def test_safe_workload_patch_is_allowed():
     body = json.dumps({"spec": {"template": {"spec": {"containers": [{"name": "frontend", "image": "v2"}]}}}}).encode()
 
     assert _inspect_workload_request(path, "PATCH", body, "application/strategic-merge-patch+json") is None
+
+
+@pytest.mark.parametrize("operation", ["copy", "move"])
+@pytest.mark.parametrize("target", ["/spec/template/spec/hostNetwork", "/spec/template/spec", "/spec", ""])
+def test_workload_patch_cannot_copy_uninspected_values(operation, target):
+    path = "/apis/apps/v1/namespaces/demo/deployments/frontend"
+    body = json.dumps(
+        [{"op": operation, "from": "/spec/template/spec/automountServiceAccountToken", "path": target}]
+    ).encode()
+    assert _inspect_workload_request(path, "PATCH", body, "application/json-patch+json") == "network_escape"
+
+
+def test_workload_patch_can_copy_metadata():
+    path = "/apis/apps/v1/namespaces/demo/deployments/frontend"
+    body = b'[{"op":"copy","from":"/metadata/labels/app","path":"/metadata/labels/component"}]'
+    assert _inspect_workload_request(path, "PATCH", body, "application/json-patch+json") is None
 
 
 def test_uninspectable_workload_body_is_rejected():

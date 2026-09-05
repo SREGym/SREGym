@@ -15,35 +15,26 @@ from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import AgentRegistration
 from sregym.conductor.conductor import ConductorConfig
 from sregym.service.container_runner import (
-    PROXY_BUNDLE_CONTAINER_PATH,
-    PROXY_CA_CONTAINER_PATH,
     ContainerConfig,
     ContainerRunner,
-    _find_host_ca_bundle,
 )
+from sregym.service.docker_egress import PROXY_BUNDLE_CONTAINER_PATH, PROXY_CA_CONTAINER_PATH, _find_host_ca_bundle
 from sregym.service.internet_policy import (
     EndpointRule,
     InternetPolicy,
     endpoint_host_is_allowed,
     endpoint_is_allowed,
-    provider_endpoint_rules,
     provider_tool_uses_internet,
-    should_stream_response,
 )
 from sregym.service.k8s_proxy import KubernetesAPIProxy, _is_workload_create_path, is_valid_bearer_token
 
 
-@pytest.mark.parametrize(
-    ("content_type", "expected"),
-    [
-        ("text/event-stream", True),
-        ("Text/Event-Stream; charset=utf-8", True),
-        ("application/json", False),
-        (None, False),
-    ],
-)
-def test_only_event_stream_responses_are_streamed(content_type, expected):
-    assert should_stream_response(content_type) is expected
+def test_programmatic_filtered_conductor_enables_kubernetes_restrictions():
+    assert ConductorConfig().restrict_network_access
+    assert not ConductorConfig(internet_policy=InternetPolicy.from_mode("open")).restrict_network_access
+    assert ConductorConfig(
+        internet_policy=InternetPolicy.from_mode("open"), block_workload_creation=True
+    ).restrict_network_access
 
 
 def test_endpoint_rules_require_matching_host_port_and_path():
@@ -97,12 +88,33 @@ def test_detects_provider_hosted_web_tools(body):
     assert provider_tool_uses_internet(body)
 
 
+@pytest.mark.parametrize("encoding", ["utf-8-sig", "utf-16", "utf-32"])
+def test_detects_web_tools_in_json_encodings(encoding):
+    assert provider_tool_uses_internet('{"tools":[{"type":"web_search"}]}'.encode(encoding))
+
+
+def test_overly_nested_requests_fail_closed():
+    assert provider_tool_uses_internet('{"response":' * 2000 + "{}" + "}" * 2000)
+
+
 def test_provider_tool_filter_does_not_scan_prompt_text_or_regular_tools():
     body = (
         b'{"messages":[{"content":"use web_search"}],"tools":[{"type":"function","name":"kubectl",'
         b'"parameters":{"properties":{"browser":{"type":"string"}}}}]}'
     )
     assert not provider_tool_uses_internet(body)
+
+
+def test_large_provider_requests_do_not_skip_tool_inspection():
+    body = b" " * 1_000_001 + b'{"tools":[{"type":"web_search"}]}'
+    assert provider_tool_uses_internet(body)
+    assert not provider_tool_uses_internet(b" " * 1_000_001 + b'{"tools":[{"type":"function","name":"kubectl"}]}')
+
+
+@pytest.mark.parametrize("wrapper", ["response", "session", "request"])
+def test_provider_event_wrappers_are_inspected(wrapper):
+    assert provider_tool_uses_internet(json.dumps({wrapper: {"tools": [{"type": "web_search"}]}}))
+    assert not provider_tool_uses_internet(json.dumps({"messages": [{wrapper: {"tools": [{"type": "web_search"}]}}]}))
 
 
 def test_filtered_runner_rewrites_all_local_provider_endpoints(tmp_path):
@@ -117,12 +129,12 @@ def test_filtered_runner_rewrites_all_local_provider_endpoints(tmp_path):
             },
         )
     )
-    runner._egress_network_name = "private-network"
-    runner._egress_proxy_name = "filter-proxy"
-    runner._egress_proxy_ca = tmp_path / "proxy-ca.pem"
-    runner._egress_ca_bundle = tmp_path / "ca-bundle.pem"
-    runner._egress_proxy_ca.touch()
-    runner._egress_ca_bundle.touch()
+    runner._egress._network_name = "private-network"
+    runner._egress._proxy_name = "filter-proxy"
+    runner._egress._proxy_ca = tmp_path / "proxy-ca.pem"
+    runner._egress._ca_bundle = tmp_path / "ca-bundle.pem"
+    runner._egress._proxy_ca.touch()
+    runner._egress._ca_bundle.touch()
 
     try:
         env = dict(item.split("=", 1) for item in runner._build_env_flags()[1::2])
@@ -145,12 +157,12 @@ def test_filtered_runner_uses_private_network_and_proxy(tmp_path):
             env_vars={"AGENT_API_BASE": "http://127.0.0.1:8001/v1"},
         )
     )
-    runner._egress_network_name = "private-network"
-    runner._egress_proxy_name = "filter-proxy"
-    runner._egress_proxy_ca = tmp_path / "proxy-ca.pem"
-    runner._egress_ca_bundle = tmp_path / "ca-bundle.pem"
-    runner._egress_proxy_ca.touch()
-    runner._egress_ca_bundle.touch()
+    runner._egress._network_name = "private-network"
+    runner._egress._proxy_name = "filter-proxy"
+    runner._egress._proxy_ca = tmp_path / "proxy-ca.pem"
+    runner._egress._ca_bundle = tmp_path / "ca-bundle.pem"
+    runner._egress._proxy_ca.touch()
+    runner._egress._ca_bundle.touch()
 
     try:
         args = runner._build_base_docker_args()
@@ -172,14 +184,14 @@ def test_filtered_runner_prepares_proxy_audit_log():
     runner = ContainerRunner(ContainerConfig(internet_policy=InternetPolicy.from_mode("filtered")))
 
     try:
-        runner._prepare_egress_state()
-        assert runner._egress_tmp_dir is not None
-        blocked_log = runner._egress_tmp_dir / "blocked-requests.jsonl"
-        policy_file = runner._egress_tmp_dir / "policy.json"
+        runner._egress._prepare_state()
+        assert runner._egress._tmp_dir is not None
+        blocked_log = runner._egress._tmp_dir / "blocked-requests.jsonl"
+        policy_file = runner._egress._tmp_dir / "policy.json"
 
-        assert stat.S_IMODE(runner._egress_tmp_dir.stat().st_mode) == 0o711
+        assert stat.S_IMODE(runner._egress._tmp_dir.stat().st_mode) == 0o711
         assert stat.S_IMODE(blocked_log.stat().st_mode) == 0o622
-        assert not (runner._egress_tmp_dir / "observed-requests.jsonl").exists()
+        assert not (runner._egress._tmp_dir / "observed-requests.jsonl").exists()
         assert json.loads(policy_file.read_text()) == {"allowed_endpoints": []}
     finally:
         runner.cleanup_egress_proxy()
@@ -237,117 +249,6 @@ def test_additional_endpoint_path_does_not_allow_sibling_paths():
 
     assert rule.allows("telemetry.example.test", 443, "/v1/events")
     assert not rule.allows("telemetry.example.test", 443, "/admin")
-
-
-def test_codex_subscription_allows_only_runtime_and_refresh_hosts():
-    policy = InternetPolicy.from_mode("filtered", agent_name="codex", model_id="gpt-5.6-sol")
-
-    rules = provider_endpoint_rules(
-        policy,
-        {"OPENAI_API_KEY": "unused-when-subscription-auth-exists"},
-        codex_auth_available=True,
-    )
-
-    assert rules == (
-        EndpointRule("auth.openai.com", 443),
-        EndpointRule("chatgpt.com", 443),
-    )
-
-
-def test_codex_api_key_allows_openai_api_only():
-    policy = InternetPolicy.from_mode("filtered", agent_name="codex", model_id="gpt-5.6-sol")
-
-    assert provider_endpoint_rules(policy, {"OPENAI_API_KEY": "secret"}) == (EndpointRule("api.openai.com", 443),)
-
-
-def test_codex_custom_endpoint_replaces_openai_hosts():
-    policy = InternetPolicy.from_mode("filtered", agent_name="codex", model_id="custom-model")
-
-    assert provider_endpoint_rules(
-        policy,
-        {"AGENT_API_BASE": "https://models.example.test/v1", "OPENAI_API_KEY": "unused"},
-        codex_auth_available=True,
-    ) == (EndpointRule("models.example.test", 443),)
-
-
-def test_claude_oauth_includes_provider_refresh_host():
-    policy = InternetPolicy.from_mode("filtered", agent_name="claudecode", model_id="claude-opus-4-8")
-
-    assert provider_endpoint_rules(policy, {"CLAUDE_CODE_OAUTH_TOKEN": "oauth"}) == (
-        EndpointRule("api.anthropic.com", 443),
-        EndpointRule("platform.claude.com", 443),
-    )
-
-
-@pytest.mark.parametrize(
-    ("model", "environment", "expected_hosts"),
-    [
-        ("gpt-5", {}, {"api.openai.com"}),
-        ("anthropic/claude-sonnet-4-6", {}, {"api.anthropic.com"}),
-        ("gemini/gemini-2.5-pro", {}, {"generativelanguage.googleapis.com"}),
-        ("deepseek/deepseek-reasoner", {}, {"api.deepseek.com"}),
-        (
-            "bedrock/us.anthropic.claude-sonnet-4-5-v1:0",
-            {"AWS_DEFAULT_REGION": "us-east-2"},
-            {"bedrock-runtime.us-east-2.amazonaws.com", "sts.us-east-2.amazonaws.com"},
-        ),
-        (
-            "vertex_ai/gemini-2.5-pro",
-            {"VERTEXAI_LOCATION": "us-west1"},
-            {"us-west1-aiplatform.googleapis.com", "oauth2.googleapis.com"},
-        ),
-    ],
-)
-def test_stratus_provider_allowlist_is_derived_from_selected_model(model, environment, expected_hosts):
-    policy = InternetPolicy.from_mode("filtered", agent_name="stratus", model_id=model)
-
-    rules = provider_endpoint_rules(policy, environment)
-
-    assert {rule.host for rule in rules} == expected_hosts
-
-
-def test_unrelated_provider_endpoint_does_not_enter_allowlist():
-    policy = InternetPolicy.from_mode("filtered", agent_name="stratus", model_id="anthropic/claude-sonnet-4-6")
-
-    rules = provider_endpoint_rules(
-        policy,
-        {
-            "ANTHROPIC_API_KEY": "secret",
-            "OPENAI_API_BASE": "https://unrelated.example.test/v1",
-        },
-    )
-
-    assert rules == (EndpointRule("api.anthropic.com", 443),)
-
-
-def test_unknown_provider_fails_closed_with_configuration_help():
-    policy = InternetPolicy.from_mode("filtered", agent_name="stratus", model_id="unknown/model")
-
-    with pytest.raises(ValueError, match="AGENT_API_BASE"):
-        provider_endpoint_rules(policy, {})
-
-
-@pytest.mark.parametrize(
-    ("model", "environment", "expected_hosts"),
-    [
-        ("google/gemini-2.5-pro", {}, {"generativelanguage.googleapis.com"}),
-        ("llama/Llama-4-Maverick", {}, {"api.llama.com"}),
-        ("opencode/gpt-5", {}, {"opencode.ai"}),
-        ("local/qwen3-coder", {"AGENT_API_BASE": "http://127.0.0.1:11434/v1"}, {"127.0.0.1"}),
-    ],
-)
-def test_opencode_provider_allowlist_is_derived_from_selected_model(model, environment, expected_hosts):
-    policy = InternetPolicy.from_mode("filtered", agent_name="opencode", model_id=model)
-
-    rules = provider_endpoint_rules(policy, environment)
-
-    assert {rule.host for rule in rules} == expected_hosts
-
-
-def test_open_mode_does_not_build_provider_allowlist():
-    policy = InternetPolicy.from_mode("open", agent_name="stratus", model_id="unknown/model")
-
-    assert provider_endpoint_rules(policy, {}) == ()
 
 
 def test_open_runner_keeps_existing_host_network():
@@ -430,11 +331,12 @@ def test_filtered_runner_does_not_mount_unproxied_kubeconfig(tmp_path, monkeypat
             kubeconfig_path=source,
         )
     )
-    runner._egress_network_name = "private-network"
-    runner._egress_proxy_ca = tmp_path / "proxy-ca.pem"
-    runner._egress_ca_bundle = tmp_path / "ca-bundle.pem"
-    runner._egress_proxy_ca.touch()
-    runner._egress_ca_bundle.touch()
+    runner._egress._network_name = "private-network"
+    runner._egress._proxy_name = "filter-proxy"
+    runner._egress._proxy_ca = tmp_path / "proxy-ca.pem"
+    runner._egress._ca_bundle = tmp_path / "ca-bundle.pem"
+    runner._egress._proxy_ca.touch()
+    runner._egress._ca_bundle.touch()
 
     try:
         args = runner._build_base_docker_args()

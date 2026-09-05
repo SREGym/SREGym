@@ -107,7 +107,10 @@ class ClusterEgressBoundary:
                 POLICY_TIER,
             )
         except ApiException as exc:
-            raise RuntimeError("Filtered internet access requires Calico with the adminnetworkpolicy tier") from exc
+            raise RuntimeError(
+                "Filtered internet access requires Calico 3.29 or later with the adminnetworkpolicy tier. "
+                "Upgrade older kind clusters using the Calico version in kind/setup_kind_cluster.sh."
+            ) from exc
 
     def _internal_networks(self) -> list[str]:
         networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []

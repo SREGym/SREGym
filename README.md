@@ -146,6 +146,19 @@ uv run main.py --agent codex --model gpt-5.6-sol \
 The URL permits its host, port, path, and child paths. A URL without a path permits all paths on that host and port.
 This option has no effect with `--internet-access open`.
 
+Filtered mode also blocks public internet access from application pods. It requires Calico 3.29 or later with policy tiers.
+The kind setup script installs Calico 3.29.3. Older kind clusters need a Calico upgrade before filtered runs can start.
+For an existing kind cluster, run:
+
+```bash
+kubectl apply --server-side --force-conflicts -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.3/manifests/calico.yaml
+kubectl rollout status daemonset/calico-node -n kube-system --timeout=240s
+kubectl rollout status deployment/calico-kube-controllers -n kube-system --timeout=240s
+kubectl get tiers.crd.projectcalico.org
+```
+
+The output must include the `adminnetworkpolicy` tier. These upgrade commands apply to the repository's kind setup, not custom Calico installations.
+
 ### Deployment Profiles
 
 `--profile` controls how much infrastructure SREGym stands up. It is independent of

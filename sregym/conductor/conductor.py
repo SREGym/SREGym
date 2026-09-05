@@ -54,6 +54,12 @@ class ConductorConfig:
     k8s_proxy_listen_host: str = "127.0.0.1"
     block_workload_creation: bool = False
 
+    @property
+    def restrict_network_access(self) -> bool:
+        # The old workload flag remains an input for programmatic callers.
+        # Derive the effective policy here, for both CLI and direct use.
+        return self.internet_policy.is_filtered or self.block_workload_creation
+
 
 class Conductor:
     def __init__(self, config: ConductorConfig | None = None):
@@ -66,7 +72,7 @@ class Conductor:
         self.jaeger = Jaeger()
         self.otel_collector = OtelCollector()
         self.loki = Loki()
-        self.mcp_server = MCPServer()
+        self.mcp_server = MCPServer(restrict_network_access=self.config.restrict_network_access)
         self.apps = AppRegistry()
         self.agent_name = None
 
@@ -81,7 +87,7 @@ class Conductor:
             hidden_namespaces={"chaos-mesh", "khaos"},
             listen_port=16443,
             listen_host=self.config.k8s_proxy_listen_host,
-            block_workload_creation=self.config.block_workload_creation,
+            restrict_network_access=self.config.restrict_network_access,
         )
         self._agent_kubeconfig_path: str | None = None
 

@@ -38,6 +38,12 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from kubernetes import config
 
+from sregym.service.kubernetes_access_policy import (
+    PROTECTED_EGRESS_CRDS,
+    PROTECTED_EGRESS_RESOURCES,
+    contains_network_escape,
+)
+
 logger = logging.getLogger("all.infra.k8s_proxy")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
@@ -85,20 +91,6 @@ STRUCTURED_KUBERNETES_CONTENT_TYPES = {
     "application/merge-patch+json",
     "application/strategic-merge-patch+json",
     "application/yaml",
-}
-PROTECTED_EGRESS_RESOURCES = {
-    "felixconfigurations",
-    "globalnetworkpolicies",
-    "networkpolicies",
-    "tiers",
-}
-PROTECTED_EGRESS_CRDS = {
-    "adminnetworkpolicies.policy.networking.k8s.io",
-    "baselineadminnetworkpolicies.policy.networking.k8s.io",
-    "felixconfigurations.crd.projectcalico.org",
-    "globalnetworkpolicies.crd.projectcalico.org",
-    "networkpolicies.crd.projectcalico.org",
-    "tiers.crd.projectcalico.org",
 }
 
 
@@ -301,33 +293,6 @@ def _contains_helm_release_secret_name(value) -> bool:
     return False
 
 
-def _contains_network_escape(value) -> bool:
-    """Return whether a workload mutation can escape pod network isolation."""
-    if isinstance(value, list):
-        for item in value:
-            if isinstance(item, dict):
-                path = str(item.get("path", "")).rstrip("/").casefold()
-                if path.endswith(("/hostnetwork", "/hostpid", "/hostipc", "/privileged")) and item.get("value") is True:
-                    return True
-                if path.endswith("/hostpath") and item.get("op", "").casefold() != "remove":
-                    return True
-            if _contains_network_escape(item):
-                return True
-        return False
-    if not isinstance(value, dict):
-        return False
-
-    for key, item in value.items():
-        normalized_key = str(key).casefold()
-        if normalized_key in {"hostnetwork", "hostpid", "hostipc", "privileged"} and item is True:
-            return True
-        if normalized_key == "hostpath" and item is not None:
-            return True
-        if _contains_network_escape(item):
-            return True
-    return False
-
-
 def _inspect_workload_request(path: str, method: str, body: bytes | None, content_type: str) -> str | None:
     """Inspect workload mutations for protected data and network escapes.
 
@@ -353,7 +318,7 @@ def _inspect_workload_request(path: str, method: str, body: bytes | None, conten
 
     if _contains_helm_release_secret_name(data):
         return "forbidden"
-    if _contains_network_escape(data):
+    if contains_network_escape(data):
         return "network_escape"
     return None
 
@@ -414,12 +379,15 @@ class KubernetesAPIProxy:
         listen_port: int = 6443,
         listen_host: str = "127.0.0.1",
         block_workload_creation: bool = False,
+        *,
+        restrict_network_access: bool = False,
     ):
         self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
         self.hidden_labels: dict[str, set[str]] = hidden_labels if hidden_labels is not None else HIDDEN_LABELS
         self.listen_port = listen_port
         self.listen_host = listen_host
-        self.block_workload_creation = block_workload_creation
+        # Preserve the old keyword for callers outside the Conductor.
+        self.restrict_network_access = restrict_network_access or block_workload_creation
         self.server: ThreadingHTTPServer | None = None
         self.server_thread: threading.Thread | None = None
         self._temp_files: list = []
@@ -592,7 +560,7 @@ class KubernetesAPIProxy:
         api_port = self.api_port
         bearer_token = self._bearer_token
         agent_token = self._agent_token
-        block_workload_creation = self.block_workload_creation
+        restrict_network_access = self.restrict_network_access
 
         class FilteringProxyHandler(BaseHTTPRequestHandler):
             """HTTP request handler that proxies and filters Kubernetes API responses."""
@@ -624,11 +592,11 @@ class KubernetesAPIProxy:
                     self.send_error(401, "Unauthorized: valid agent token required")
                     return
 
-                if block_workload_creation and method == "POST" and _is_workload_create_path(path):
+                if restrict_network_access and method == "POST" and _is_workload_create_path(path):
                     self.send_error(403, "Forbidden: workload creation is disabled in filtered mode")
                     return
 
-                if block_workload_creation and _is_cluster_egress_control_mutation(path, method):
+                if restrict_network_access and _is_cluster_egress_control_mutation(path, method):
                     self.send_error(403, "Forbidden: cluster outbound policy changes are disabled in filtered mode")
                     return
 
@@ -945,6 +913,8 @@ def start_proxy(
     hidden_labels: dict[str, set[str]] | None = None,
     port: int = 16443,
     block_workload_creation: bool = False,
+    *,
+    restrict_network_access: bool = False,
 ) -> KubernetesAPIProxy:
     """Start the Kubernetes API filtering proxy."""
     global _proxy_instance
@@ -954,7 +924,7 @@ def start_proxy(
         hidden_namespaces=hidden_namespaces,
         hidden_labels=hidden_labels,
         listen_port=port,
-        block_workload_creation=block_workload_creation,
+        restrict_network_access=restrict_network_access or block_workload_creation,
     )
     _proxy_instance.start()
     return _proxy_instance

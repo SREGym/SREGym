@@ -12,7 +12,6 @@ from internet_policy import (
     endpoint_host_is_allowed,
     endpoint_is_allowed,
     provider_tool_uses_internet,
-    should_stream_response,
 )
 from mitmproxy import ctx, http
 
@@ -22,7 +21,8 @@ POLICY_STATE = Path(os.environ.get("EGRESS_POLICY_STATE", "/state/policy.json"))
 
 def responseheaders(flow: http.HTTPFlow) -> None:
     """Forward long-lived SSE responses instead of buffering them forever."""
-    if should_stream_response(flow.response.headers.get("content-type")):
+    content_type = flow.response.headers.get("content-type", "")
+    if content_type.partition(";")[0].strip().casefold() == "text/event-stream":
         flow.response.stream = True
 
 
@@ -39,7 +39,14 @@ def request(flow: http.HTTPFlow) -> None:
     if flow.request.method.upper() == "CONNECT":
         return
 
-    if provider_tool_uses_internet(flow.request.raw_content):
+    try:
+        # content decodes Content-Encoding (gzip, brotli, etc.). Inspecting
+        # raw_content would let compressed requests skip the tool check.
+        body = flow.request.content
+    except ValueError:
+        _block(flow, "invalid-request-encoding")
+        return
+    if provider_tool_uses_internet(body):
         _block(flow, "provider-web-tool")
         return
 
@@ -48,6 +55,28 @@ def request(flow: http.HTTPFlow) -> None:
     port = flow.request.port or (443 if flow.request.scheme == "https" else 80)
     if not endpoint_is_allowed(host, port, flow.request.path, rules):
         _block(flow, "endpoint-not-allowed")
+
+
+def websocket_message(flow: http.HTTPFlow) -> None:
+    """Apply the same tool policy to requests sent after a WebSocket upgrade."""
+    message = flow.websocket.messages[-1]
+    if message.from_client and provider_tool_uses_internet(message.content):
+        message.drop()
+        try:
+            _record_block(flow, "provider-web-tool")
+        except OSError as exc:
+            ctx.log.error(f"Could not record blocked request: {exc}")
+        # flow.kill() cannot reliably close an upgraded WebSocket. Return an
+        # error event so the client does not wait for a discarded request.
+        error = {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": "network_policy_violation",
+                "message": "Request blocked by the evaluation network policy.",
+            },
+        }
+        ctx.master.commands.call("inject.websocket", flow, True, json.dumps(error).encode())
 
 
 def _load_policy() -> tuple[EndpointRule, ...]:
