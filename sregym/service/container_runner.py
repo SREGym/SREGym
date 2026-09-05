@@ -230,6 +230,21 @@ class ContainerRunner:
         "WAIT_FOR_POD_READY_TIMEOUT",
     ]
 
+    # Vars that select AWS credentials. Region vars are excluded on purpose:
+    # they say where to call, not which identity to call with.
+    AWS_CREDENTIAL_VARS = (
+        "AWS_PROFILE",
+        "AWS_PROFILE_NAME",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_ROLE_ARN",
+        "AWS_ROLE_NAME",
+        "AWS_WEB_IDENTITY_TOKEN",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_BEARER_TOKEN_BEDROCK",
+    )
+
+    MODEL_ID_VARS = ("AGENT_MODEL_ID", "JUDGE_MODEL_ID")
+
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
         self._credential_tmps: list[str] = []
@@ -453,6 +468,22 @@ class ContainerRunner:
         args.extend(["-v", f"{auth_dst}:/root/.codex/auth.json:ro"])
         self._credential_tmps.append(tmp)
 
+    def _run_uses_aws(self, extra_env: dict[str, str] | None = None) -> bool:
+        """Whether this run resolves AWS credentials, and so needs ~/.aws."""
+
+        def lookup(name: str) -> str:
+            for source in (extra_env or {}, self.config.env_vars, os.environ):
+                value = source.get(name)
+                if value:
+                    return str(value)
+            return ""
+
+        if any(lookup(var) for var in self.AWS_CREDENTIAL_VARS):
+            return True
+        # A default profile in ~/.aws/config needs no AWS_* var set, so the
+        # model id is the only signal left that a Bedrock run needs the mount.
+        return any(lookup(var).startswith("bedrock/") for var in self.MODEL_ID_VARS)
+
     def cleanup_credential_tmps(self) -> None:
         """Remove throwaway credential directories."""
         for tmp in self._credential_tmps:
@@ -519,7 +550,7 @@ class ContainerRunner:
             flags.extend(["-e", f"{key}={value}"])
         return flags
 
-    def _build_base_docker_args(self) -> list[str]:
+    def _build_base_docker_args(self, extra_env: dict[str, str] | None = None) -> list[str]:
         args = [
             "docker",
             "run",
@@ -555,10 +586,16 @@ class ContainerRunner:
             args.extend(["-v", f"{kubeconfig_path.resolve()}:/root/.kube/config:ro"])
             args.extend(["-e", "KUBECONFIG=/root/.kube/config"])
 
-        # Mount AWS credentials directory (read-only) for Bedrock and other AWS services
+        # Mount AWS credentials (read-only) for Bedrock and other AWS services.
+        # Gated on the run actually resolving AWS credentials: the directory
+        # holds live SSO and CLI cache tokens, which a run against another
+        # provider has no use for.
         aws_dir = Path.home() / ".aws"
         if aws_dir.is_dir():
-            args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
+            if self._run_uses_aws(extra_env):
+                args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
+            else:
+                logger.debug("Skipping ~/.aws mount: no AWS credentials selected for this run")
 
         self._mount_codex_credentials(args)
 
@@ -609,7 +646,7 @@ class ContainerRunner:
 
     def build_docker_command(self, exec_input: ExecInput) -> list[str]:
         self._ensure_filtered_egress()
-        cmd = self._build_base_docker_args()
+        cmd = self._build_base_docker_args(exec_input.env)
         suffix = uuid.uuid4().hex[:8]
         if exec_input.label:
             container_name = f"sregym-{exec_input.label}-{suffix}"
