@@ -79,6 +79,39 @@ bash kind/setup_kind_cluster.sh x86
 bash kind/setup_kind_cluster.sh arm
 ```
 
+### Runtime images
+
+Some helpers now use prebuilt packages and application files instead of public downloads during pod startup.
+The images belong to the SREGym organization on GitHub Packages.
+Follow the [runtime image instructions](./docker/runtime/README.md).
+
+### After a cluster upgrade
+
+SREGym saves a cluster baseline for cleanup between attempts.
+An old baseline does not include infrastructure added by a later upgrade.
+Cleanup can remove those new resources, including Calico CRDs.
+
+After an intentional infrastructure upgrade, refresh the baseline before the next run:
+
+1. Stop all benchmark runs and remove their application namespaces.
+2. Verify that the upgraded cluster and infrastructure pods are healthy.
+3. Verify that `kubectl config current-context` selects the correct cluster.
+4. Capture the new baseline with the command below.
+
+Do not capture a baseline while a fault is active. Cleanup would preserve that faulty state.
+
+```bash
+uv run python - <<'PY'
+from sregym.paths import CLUSTER_BASELINE_STATE_FILE
+from sregym.service.cluster_state import ClusterStateManager
+from sregym.service.kubectl import KubeCtl
+
+manager = ClusterStateManager(KubeCtl())
+manager.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
+print(f"Saved cluster baseline to {CLUSTER_BASELINE_STATE_FILE}")
+PY
+```
+
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
 ### Running an Agent

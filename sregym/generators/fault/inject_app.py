@@ -9,6 +9,7 @@ from kubernetes import client
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE
 from sregym.service.kubectl import KubeCtl
+from sregym.service.runtime_images import KAFKA_CLIENT_IMAGE, REDIS_CLIENT_IMAGE
 
 FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE = HOTEL_RESERVATION_APPLICATION_IMAGE
 
@@ -253,11 +254,11 @@ class ApplicationFaultInjector(FaultInjector):
                         "containers": [
                             {
                                 "name": "flooder",
-                                "image": "python:3.10-slim",
+                                "image": REDIS_CLIENT_IMAGE,
                                 "command": [
-                                    "sh",
+                                    "python3",
                                     "-c",
-                                    f"pip install redis && python3 -c \"import base64; exec(base64.b64decode('{encoded_script}'))\"",
+                                    f"import base64; exec(base64.b64decode('{encoded_script}'))",
                                 ],
                             }
                         ],
@@ -538,11 +539,12 @@ class ApplicationFaultInjector(FaultInjector):
 
         producer = client.V1Container(
             name="order-creator",
-            image="python:3.12-slim",
+            image=KAFKA_CLIENT_IMAGE,
             command=[
-                "sh",
+                "python3",
+                "-u",
                 "-c",
-                f"pip install confluent-kafka && python3 -u -c \"import base64; exec(base64.b64decode('{encoded}'))\"",
+                f"import base64; exec(base64.b64decode('{encoded}'))",
             ],
         )
 
