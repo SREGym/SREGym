@@ -151,6 +151,9 @@ Cluster DNS pods in `kube-system` retain TCP/UDP port 53 access for upstream DNS
 They can also reach Docker's local DNS resolver, which kind uses after address and port translation.
 These exceptions do not open other external ports or direct external DNS access for application pods.
 Fault-specific Kubernetes NetworkPolicies still apply to DNS traffic.
+Filtered mode does not guarantee isolation from an agent with node-administrator access.
+An agent can change node-local restrictions or use privileged host-network paths.
+Protection against this case is outside the current scope. No additional VM or host-firewall backend is required.
 The kind setup script installs Calico 3.29.3. Older kind clusters need a Calico upgrade before filtered runs can start.
 For an existing kind cluster, run:
 

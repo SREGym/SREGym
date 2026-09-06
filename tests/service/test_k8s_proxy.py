@@ -447,7 +447,12 @@ def test_pod_cannot_mount_a_helm_release_secret(proxy):
     assert FakeHTTPSConnection.requests == []
 
 
-def test_deployment_cannot_enable_host_network(proxy):
+@pytest.mark.parametrize("restricted", [False, True])
+def test_host_network_restriction_does_not_change_open_mode(proxy, restricted):
+    # The handler captures this flag when the server starts.
+    proxy.stop()
+    proxy.restrict_network_access = restricted
+    proxy.start()
     patch = {"spec": {"template": {"spec": {"hostNetwork": True}}}}
     status, _, _ = request(
         proxy,
@@ -457,8 +462,8 @@ def test_deployment_cannot_enable_host_network(proxy):
         body=json.dumps(patch).encode(),
     )
 
-    assert status == 403
-    assert FakeHTTPSConnection.requests == []
+    assert status == (403 if restricted else 200)
+    assert bool(FakeHTTPSConnection.requests) is not restricted
 
 
 def test_ordinary_secret_remains_accessible(proxy):

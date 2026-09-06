@@ -636,7 +636,7 @@ class KubernetesAPIProxy:
                 if workload_inspection == "forbidden":
                     self.send_error(403, "Forbidden: Workloads cannot reference this Secret")
                     return
-                if workload_inspection == "network_escape":
+                if restrict_network_access and workload_inspection == "network_escape":
                     self.send_error(403, "Forbidden: Workloads cannot escape pod network isolation")
                     return
                 if workload_inspection == "unsupported":
