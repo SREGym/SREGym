@@ -47,10 +47,26 @@ def test_request_inspects_decoded_content(addon):
 
 def test_invalid_content_encoding_fails_closed(addon):
     request_flow = flow(None)
-    request_flow.request = Mock(method="POST")
+    request_flow.request = Mock(method="POST", host="provider.test", port=443, path="/v1/messages")
     type(request_flow.request).content = PropertyMock(side_effect=ValueError("invalid gzip"))
     addon.request(request_flow)
     addon._block.assert_called_once_with(request_flow, "invalid-request-encoding")
+
+
+def test_internal_application_data_is_not_a_provider_tool_declaration(addon, monkeypatch):
+    monkeypatch.setattr(
+        addon,
+        "_load_policy",
+        lambda: (internet_policy.EndpointRule("host.docker.internal", 8000, inspect_tools=False),),
+    )
+    request_flow = flow(b'{"tools":[{"type":"web_search"}],"apps":["catalog"]}')
+    request_flow.request.host = "host.docker.internal"
+    request_flow.request.port = 8000
+    addon.request(request_flow)
+    addon._block.assert_not_called()
+    request_flow.request.port = 8001
+    addon.request(request_flow)
+    addon._block.assert_called_once_with(request_flow, "endpoint-not-allowed")
 
 
 @pytest.mark.parametrize(

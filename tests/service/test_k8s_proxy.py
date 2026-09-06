@@ -3,6 +3,7 @@ import http.client
 import json
 import socket
 import ssl
+import threading
 from datetime import timedelta
 
 import pytest
@@ -274,9 +275,7 @@ def test_secret_gets_require_json_but_other_methods_do_not():
 @pytest.mark.parametrize(
     "path",
     [
-        "/apis/crd.projectcalico.org/v1/globalnetworkpolicies",
         "/apis/crd.projectcalico.org/v1/globalnetworkpolicies/adminnetworkpolicy.external-egress-boundary",
-        "/apis/crd.projectcalico.org/v1/namespaces/astronomy-shop/networkpolicies/early-allow",
         "/apis/crd.projectcalico.org/v1/tiers/adminnetworkpolicy",
         "/apis/crd.projectcalico.org/v1/felixconfigurations/default",
         "/apis/policy.networking.k8s.io/v1alpha1/adminnetworkpolicies/early-allow",
@@ -347,7 +346,8 @@ def test_ordinary_workload_secret_reference_is_allowed():
 def test_workload_network_escapes_are_rejected(content_type, body):
     path = "/apis/apps/v1/namespaces/astronomy-shop/deployments/frontend"
 
-    assert _inspect_workload_request(path, "PATCH", body, content_type) == "network_escape"
+    current = {"spec": {"template": {"spec": {}}}}
+    assert _inspect_workload_request(path, "PATCH", body, content_type, current=current) == "network_escape"
 
 
 def test_safe_workload_patch_is_allowed():
@@ -358,24 +358,195 @@ def test_safe_workload_patch_is_allowed():
 
 
 @pytest.mark.parametrize("operation", ["copy", "move"])
-@pytest.mark.parametrize("target", ["/spec/template/spec/hostNetwork", "/spec/template/spec", "/spec", ""])
-def test_workload_patch_cannot_copy_uninspected_values(operation, target):
+def test_workload_patch_cannot_copy_a_new_host_network_permission(operation):
     path = "/apis/apps/v1/namespaces/demo/deployments/frontend"
     body = json.dumps(
-        [{"op": operation, "from": "/spec/template/spec/automountServiceAccountToken", "path": target}]
+        [
+            {
+                "op": operation,
+                "from": "/spec/template/spec/automountServiceAccountToken",
+                "path": "/spec/template/spec/hostNetwork",
+            }
+        ]
     ).encode()
-    assert _inspect_workload_request(path, "PATCH", body, "application/json-patch+json") == "network_escape"
+    current = {"spec": {"template": {"spec": {"automountServiceAccountToken": True}}}}
+    assert (
+        _inspect_workload_request(path, "PATCH", body, "application/json-patch+json", current=current)
+        == "network_escape"
+    )
 
 
 def test_workload_patch_can_copy_metadata():
     path = "/apis/apps/v1/namespaces/demo/deployments/frontend"
     body = b'[{"op":"copy","from":"/metadata/labels/app","path":"/metadata/labels/component"}]'
-    assert _inspect_workload_request(path, "PATCH", body, "application/json-patch+json") is None
+    assert (
+        _inspect_workload_request(
+            path, "PATCH", body, "application/json-patch+json", current={"metadata": {"labels": {"app": "frontend"}}}
+        )
+        is None
+    )
 
 
 def test_uninspectable_workload_body_is_rejected():
     path = "/api/v1/namespaces/astronomy-shop/pods"
     assert _inspect_workload_request(path, "POST", b"protobuf", "application/vnd.kubernetes.protobuf") == "unsupported"
+
+
+@pytest.mark.parametrize(
+    "resource,path",
+    [
+        ("Pod", "/api/v1/namespaces/default/pods"),
+        ("Job", "/apis/batch/v1/namespaces/default/jobs"),
+        ("Deployment", "/apis/apps/v1/namespaces/default/deployments"),
+    ],
+)
+def test_filtered_proxy_allows_ordinary_workload_creation(proxy, resource, path):
+    proxy.stop()
+    proxy.restrict_network_access = True
+    proxy.start()
+    pod_spec = {"containers": [{"name": "probe", "image": "busybox"}]}
+    spec = pod_spec if resource == "Pod" else {"template": {"spec": pod_spec}}
+    status, _, _ = request(
+        proxy,
+        path,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        body=json.dumps({"kind": resource, "metadata": {"name": "probe"}, "spec": spec}).encode(),
+    )
+    assert status == 200
+    assert FakeHTTPSConnection.requests[-1][0] == "POST"
+
+
+def test_filtered_proxy_accepts_unchanged_system_workload(proxy):
+    proxy.stop()
+    proxy.restrict_network_access = True
+    proxy.start()
+    current = {"kind": "DaemonSet", "spec": {"template": {"spec": {"hostNetwork": True}}}}
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(current).encode())
+    status, _, _ = request(
+        proxy,
+        "/apis/apps/v1/namespaces/kube-system/daemonsets/calico-node",
+        method="PUT",
+        headers={"Content-Type": "application/json"},
+        body=json.dumps(current).encode(),
+    )
+    assert status == 200
+    assert [method for method, _, _ in FakeHTTPSConnection.requests] == ["GET", "PUT"]
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE"])
+@pytest.mark.parametrize(
+    "old_tier,new_tier,expected",
+    [
+        ("default", "default", 200),
+        ("default", "adminnetworkpolicy", 403),
+        ("adminnetworkpolicy", "default", 403),
+        ("default", "unknown", 403),
+    ],
+)
+def test_filtered_calico_policy_writes_respect_tier_order(proxy, monkeypatch, method, old_tier, new_tier, expected):
+    proxy.stop()
+    proxy.restrict_network_access = True
+    proxy.start()
+    current = {"metadata": {"name": "default.internal"}, "spec": {"tier": old_tier}}
+    proposed = {"metadata": {"name": "default.internal"}, "spec": {"tier": new_tier}}
+
+    def getresponse(self):
+        request_method, path, _ = self.requests[-1]
+        if request_method == "GET" and "/tiers/" in path:
+            order = {"default": 1_000_000, "adminnetworkpolicy": 1000}.get(path.rsplit("/", 1)[-1])
+            return FakeResponse(json.dumps({"spec": {"order": order}}).encode())
+        return FakeResponse(json.dumps(current if request_method == "GET" else proposed).encode())
+
+    monkeypatch.setattr(FakeHTTPSConnection, "getresponse", getresponse)
+    path = "/apis/crd.projectcalico.org/v1/namespaces/default/networkpolicies"
+    if method != "POST":
+        path += "/default.internal"
+    if method == "POST":
+        expected = 200 if new_tier == "default" else 403
+    if method == "DELETE":
+        expected = 200 if old_tier == "default" else 403
+    status, _, _ = request(
+        proxy,
+        path,
+        method=method,
+        headers={"Content-Type": "application/merge-patch+json"},
+        body=json.dumps(proposed).encode() if method != "DELETE" else None,
+    )
+    assert status == expected
+    assert any(m == method for m, _, _ in FakeHTTPSConnection.requests) is (expected == 200)
+
+
+def test_table_columns_are_preserved_and_hidden_rows_removed(proxy):
+    table = {
+        "kind": "Table",
+        "columnDefinitions": [{"name": "Ready"}, {"name": "Restarts"}],
+        "rows": [
+            {"cells": ["1/1", 0], "object": {"metadata": {"name": "api"}}},
+            {"cells": ["1/1", 2], "object": {"metadata": {"name": "load", "labels": {"app": "load-generator"}}}},
+        ],
+    }
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(table).encode())
+    status, _, body = request(
+        proxy,
+        "/api/v1/pods?includeObject=None",
+        headers={"Accept": "application/json;as=Table;v=v1;g=meta.k8s.io,application/json"},
+    )
+    result = json.loads(body)
+    assert status == 200 and result["columnDefinitions"] == table["columnDefinitions"]
+    assert len(result["rows"]) == 1 and result["rows"][0]["cells"] == ["1/1", 0]
+    _, path, headers = FakeHTTPSConnection.requests[-1]
+    assert "includeObject=Object" in path and "includeObject=None" not in path
+    assert "as=Table" in headers["Accept"]
+
+
+@pytest.mark.parametrize("watch", [False, True])
+@pytest.mark.parametrize("filtered", [False, True])
+def test_streams_arrive_before_upstream_closes_and_watch_hides_resources(proxy, watch, filtered):
+    proxy.stop()
+    proxy.restrict_network_access = filtered
+    proxy.start()
+    upstream_reader, upstream_writer = socket.socketpair()
+    finish = threading.Event()
+    visible = {"type": "ADDED", "object": {"metadata": {"name": "api"}}}
+    hidden = {"type": "ADDED", "object": {"metadata": {"name": "load", "labels": {"app": "load-generator"}}}}
+    first = (json.dumps(hidden) + "\n" + json.dumps(visible) + "\n").encode() if watch else b"first log line\n"
+    content_type = "application/json" if watch else "text/plain"
+
+    def produce():
+        upstream_writer.sendall(
+            f"HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nTransfer-Encoding: chunked\r\n\r\n".encode()
+        )
+        upstream_writer.sendall(f"{len(first):x}\r\n".encode() + first + b"\r\n")
+        finish.wait(3)
+        upstream_writer.sendall(b"0\r\n\r\n")
+
+    producer = threading.Thread(target=produce, daemon=True)
+    producer.start()
+    upstream_response = http.client.HTTPResponse(upstream_reader)
+    upstream_response.begin()
+    FakeHTTPSConnection.response = upstream_response
+    path = "/api/v1/pods?watch=true" if watch else "/api/v1/namespaces/default/pods/api/log?follow=true"
+    try:
+        with (
+            socket.create_connection(("127.0.0.1", proxy.server.server_address[1]), timeout=1) as raw,
+            ssl._create_unverified_context().wrap_socket(raw, server_hostname="localhost") as connection,
+        ):
+            connection.sendall(
+                f"GET {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {proxy._agent_token}\r\nConnection: close\r\n\r\n".encode()
+            )
+            response = http.client.HTTPResponse(connection)
+            response.begin()
+            line = response.readline()
+            assert response.status == 200 and not finish.is_set()
+            assert (json.loads(line) == visible) if watch else (line == first)
+            finish.set()
+            assert response.read() == b""
+    finally:
+        finish.set()
+        producer.join(3)
+        upstream_reader.close()
+        upstream_writer.close()
 
 
 @pytest.mark.parametrize("method", ["GET", "PATCH", "PUT", "DELETE"])
@@ -463,7 +634,7 @@ def test_host_network_restriction_does_not_change_open_mode(proxy, restricted):
     )
 
     assert status == (403 if restricted else 200)
-    assert bool(FakeHTTPSConnection.requests) is not restricted
+    assert any(method == "PATCH" for method, _, _ in FakeHTTPSConnection.requests) is not restricted
 
 
 def test_ordinary_secret_remains_accessible(proxy):

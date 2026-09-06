@@ -2,7 +2,7 @@
 # Run on native AMD64 or ARM64 Linux, including Docker Desktop on macOS.
 set -euo pipefail
 
-kind=${1:?Usage: smoke-test.sh redis|kafka|tls IMAGE amd64|arm64}
+kind=${1:?Usage: smoke-test.sh redis|kafka|tls|grafana IMAGE amd64|arm64}
 image=${2:?An image reference is required}
 arch=${3:?An architecture is required}
 
@@ -13,7 +13,7 @@ case "$arch" in
 esac
 
 test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$image")" = "linux/$arch"
-test "$(docker run --rm --network none "$image" uname -m)" = "$machine"
+test "$(docker run --rm --network none --entrypoint uname "$image" -m)" = "$machine"
 
 case "$kind" in
   redis)
@@ -36,6 +36,29 @@ case "$kind" in
       fi
       grep -q "certificate has expired" /tmp/expired.log
       openssl version
+    '
+    ;;
+  grafana)
+    docker run --rm --network none --entrypoint sh "$image" -ec '
+      test "$GF_PATHS_PLUGINS" = /opt/grafana/plugins
+      test "$GF_PLUGINS_PREINSTALL_DISABLED" = true
+      test "$GF_PLUGINS_PUBLIC_KEY_RETRIEVAL_DISABLED" = true
+      test -s "$GF_PATHS_PLUGINS/grafana-opensearch-datasource/MANIFEST.txt"
+      grafana cli --pluginsDir "$GF_PATHS_PLUGINS" plugins ls | grep "grafana-opensearch-datasource @ 2.34.3"
+      /run.sh >/tmp/grafana.log 2>&1 &
+      pid=$!
+      trap "kill $pid 2>/dev/null || true" EXIT
+      for attempt in $(seq 1 60); do
+        if wget -qO /tmp/health.json http://127.0.0.1:3000/api/health; then
+          grep -q "ok" /tmp/health.json
+          cat /tmp/health.json
+          exit 0
+        fi
+        kill -0 "$pid" || { cat /tmp/grafana.log; exit 1; }
+        sleep 1
+      done
+      cat /tmp/grafana.log
+      exit 1
     '
     ;;
   *) echo "Unknown runtime image: $kind" >&2; exit 2 ;;

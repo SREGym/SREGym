@@ -180,6 +180,9 @@ The URL permits its host, port, path, and child paths. A URL without a path perm
 This option has no effect with `--internet-access open`.
 
 Filtered mode also blocks public internet access from application pods. It requires Calico 3.29 or later with policy tiers.
+Agents can create ordinary diagnostic pods, Jobs, and replacement workloads. These workloads remain subject to the same outbound policy.
+Normal internal traffic and lower-tier Calico policy edits remain available. The proxy protects the outbound boundary and rejects newly added host-network privileges.
+Existing privileged system workloads can keep their current settings during repairs.
 Cluster DNS pods in `kube-system` retain TCP/UDP port 53 access for upstream DNS queries.
 They can also reach Docker's local DNS resolver, which kind uses after address and port translation.
 These exceptions do not open other external ports or direct external DNS access for application pods.

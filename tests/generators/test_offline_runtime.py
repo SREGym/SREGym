@@ -2,9 +2,11 @@
 
 import base64
 import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import yaml
 from kubernetes import client
 
 from sregym.conductor.problems.node_clock_drift import NodeClockDriftHotelReservation
@@ -12,6 +14,16 @@ from sregym.generators.fault import inject_app
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.generators.fault.inject_kafka import KafkaFaultInjector
 from sregym.service.runtime_images import KAFKA_CLIENT_IMAGE, REDIS_CLIENT_IMAGE, TLS_CLIENT_IMAGE
+
+
+def test_grafana_uses_baked_plugins_outside_its_data_volume():
+    root = Path(__file__).resolve().parents[2]
+    values = yaml.safe_load((root / "sregym/service/apps/values/astronomy-shop-fixes.yaml").read_text())
+    grafana = values["grafana"]
+    assert grafana["image"] == {"registry": "ghcr.io", "repository": "sregym/grafana", "tag": "12.3.1-opensearch2.34.3"}
+    assert grafana["plugins"] == []
+    assert grafana["grafana.ini"]["paths"]["plugins"] == "/opt/grafana/plugins"
+    assert grafana["env"]["GF_PLUGINS_PREINSTALL_DISABLED"] == "true"
 
 
 def _application_injector():

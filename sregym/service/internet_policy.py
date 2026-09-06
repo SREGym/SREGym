@@ -53,6 +53,7 @@ class EndpointRule:
     port: int
     path_prefix: str = "/"
     include_subpaths: bool = True
+    inspect_tools: bool = True
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "host", _normalize_host(self.host))
@@ -84,13 +85,15 @@ class EndpointRule:
     @classmethod
     def from_dict(cls, value: dict) -> EndpointRule:
         include_subpaths = value.get("include_subpaths", True)
-        if not isinstance(include_subpaths, bool):
-            raise ValueError("include_subpaths must be a boolean")
+        inspect_tools = value.get("inspect_tools", True)
+        if not isinstance(include_subpaths, bool) or not isinstance(inspect_tools, bool):
+            raise ValueError("include_subpaths and inspect_tools must be booleans")
         return cls(
             host=_normalize_host(str(value["host"])),
             port=int(value["port"]),
             path_prefix=_normalize_path(str(value.get("path_prefix", "/"))),
             include_subpaths=include_subpaths,
+            inspect_tools=inspect_tools,
         )
 
     def to_dict(self) -> dict[str, str | int]:
@@ -99,6 +102,7 @@ class EndpointRule:
             "port": self.port,
             "path_prefix": self.path_prefix,
             "include_subpaths": self.include_subpaths,
+            "inspect_tools": self.inspect_tools,
         }
 
     def allows(self, host: str, port: int, request_target: str) -> bool:
@@ -168,11 +172,13 @@ def provider_tool_uses_internet(request_body: bytes | str | None) -> bool:
     def is_blocked_tool(value: object) -> bool:
         if not isinstance(value, dict):
             return False
+        # Local function names are user-defined. Only a provider's tool type
+        # (or its named capability field, as in Gemini) selects hosted work.
         for key, child in value.items():
             normalized_key = _normalize_tool_name(str(key))
             if normalized_key in blocked_names:
                 return True
-            if normalized_key in {"id", "name", "type"} and isinstance(child, str):
+            if normalized_key == "type" and isinstance(child, str):
                 normalized_value = _normalize_tool_name(child)
                 if normalized_value in blocked_names or normalized_value.startswith(("web_fetch_", "web_search_")):
                     return True

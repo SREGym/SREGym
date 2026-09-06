@@ -49,7 +49,7 @@ def test_deploy_applies_final_permissions_before_exposing_mcp(rendered_manifests
     resources = list(yaml.safe_load_all(applies[0].kwargs["input_data"]))
     role = next(body for body in resources if body["kind"] == "ClusterRole")
     for resource in ("felixconfigurations", "networkpolicies", "globalnetworkpolicies"):
-        assert ("create" in verbs(role, resource)) is not filtered
+        assert ("create" in verbs(role, resource)) is (not filtered or resource != "felixconfigurations")
         assert {"get", "list", "watch"} <= verbs(role, resource)
     assert "patch" in verbs(role, "bgppeers")
     assert "patch" in verbs(role, "networkpolicies", "networking.k8s.io")
@@ -77,7 +77,8 @@ def test_restricted_role_does_not_change_the_open_manifest(rendered_manifests):
     original = next(body for body in yaml.safe_load_all(rendered_manifests) if body["kind"] == "ClusterRole")
     restricted = restricted_cluster_role(original)
     assert "create" in verbs(original, "globalnetworkpolicies")
-    assert "create" not in verbs(restricted, "globalnetworkpolicies")
+    assert "create" in verbs(restricted, "globalnetworkpolicies")
+    assert "create" not in verbs(restricted, "felixconfigurations")
     assert restricted_cluster_role(restricted) == restricted
 
 

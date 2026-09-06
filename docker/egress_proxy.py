@@ -10,7 +10,6 @@ from pathlib import Path
 from internet_policy import (
     EndpointRule,
     endpoint_host_is_allowed,
-    endpoint_is_allowed,
     provider_tool_uses_internet,
 )
 from mitmproxy import ctx, http
@@ -39,6 +38,16 @@ def request(flow: http.HTTPFlow) -> None:
     if flow.request.method.upper() == "CONNECT":
         return
 
+    rules = _load_policy()
+    matching_rules = tuple(
+        rule for rule in rules if rule.allows(flow.request.host, flow.request.port, flow.request.path)
+    )
+    if not matching_rules:
+        _block(flow, "endpoint-not-allowed")
+        return
+    if not any(rule.inspect_tools for rule in matching_rules):
+        return
+
     try:
         # content decodes Content-Encoding (gzip, brotli, etc.). Inspecting
         # raw_content would let compressed requests skip the tool check.
@@ -50,17 +59,15 @@ def request(flow: http.HTTPFlow) -> None:
         _block(flow, "provider-web-tool")
         return
 
-    rules = _load_policy()
-    host = flow.request.host
-    port = flow.request.port or (443 if flow.request.scheme == "https" else 80)
-    if not endpoint_is_allowed(host, port, flow.request.path, rules):
-        _block(flow, "endpoint-not-allowed")
-
 
 def websocket_message(flow: http.HTTPFlow) -> None:
     """Apply the same tool policy to requests sent after a WebSocket upgrade."""
     message = flow.websocket.messages[-1]
-    if message.from_client and provider_tool_uses_internet(message.content):
+    inspect_tools = any(
+        rule.inspect_tools and rule.allows(flow.request.host, flow.request.port, flow.request.path)
+        for rule in _load_policy()
+    )
+    if message.from_client and inspect_tools and provider_tool_uses_internet(message.content):
         message.drop()
         try:
             _record_block(flow, "provider-web-tool")

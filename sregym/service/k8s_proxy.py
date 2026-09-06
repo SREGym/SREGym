@@ -36,13 +36,22 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+from jsonpatch import JsonPatchException
+from jsonpointer import JsonPointerException
 from kubernetes import config
 
 from sregym.service.kubernetes_access_policy import (
+    CALICO_POLICY_RESOURCES,
+    EGRESS_POLICY_NAME,
+    EGRESS_POLICY_TIER,
     PROTECTED_EGRESS_CRDS,
     PROTECTED_EGRESS_RESOURCES,
-    contains_network_escape,
+    apply_json_patch,
+    merge_object,
+    policy_tier,
+    workload_adds_network_access,
 )
+from sregym.service.kubernetes_response import include_table_objects, json_accept_header, stream_response
 
 logger = logging.getLogger("all.infra.k8s_proxy")
 logger.propagate = True
@@ -59,17 +68,6 @@ HIDDEN_LABELS: dict[str, set[str]] = {
     "network-access": {"restricted"},
     "opentelemetry.io/name": {"load-generator"},
 }
-WORKLOAD_CREATE_SUFFIXES = {
-    "/pods",
-    "/jobs",
-    "/cronjobs",
-    "/deployments",
-    "/statefulsets",
-    "/daemonsets",
-    "/replicasets",
-    "/replicationcontrollers",
-}
-
 # Helm stores each release revision in a Secret by default. These Secrets contain
 # the complete rendered chart, including the application's pre-fault manifests.
 HELM_RELEASE_SECRET_TYPE = "helm.sh/release.v1"
@@ -158,6 +156,16 @@ def _is_watch_request(path: str) -> bool:
         query = next_query
     values = parse_qs(query, keep_blank_values=True).get("watch", [])
     return any(value.lower() in {"1", "true"} for value in values)
+
+
+def _is_log_follow_request(path: str) -> bool:
+    resource, _ = _resource_request(path)
+    values = parse_qs(urlsplit(path).query).get("follow", [])
+    return (
+        resource == "pods"
+        and _decode_path_parts(path)[-1] == "log"
+        and any(value.lower() in {"1", "true"} for value in values)
+    )
 
 
 def _is_helm_release_secret(resource: dict) -> bool:
@@ -267,6 +275,8 @@ def _is_cluster_egress_control_mutation(path: str, method: str) -> bool:
     resource, name = _resource_request(path)
     api_group = _request_api_group(path)
     if api_group == "crd.projectcalico.org" and resource in PROTECTED_EGRESS_RESOURCES:
+        if resource in CALICO_POLICY_RESOURCES:
+            return name == EGRESS_POLICY_NAME or (method == "DELETE" and name is None)
         return True
     if api_group == "policy.networking.k8s.io" and resource in {
         "adminnetworkpolicies",
@@ -293,7 +303,27 @@ def _contains_helm_release_secret_name(value) -> bool:
     return False
 
 
-def _inspect_workload_request(path: str, method: str, body: bytes | None, content_type: str) -> str | None:
+def _decode_mutation(body: bytes, content_type: str) -> dict | list:
+    media_type = content_type.partition(";")[0].strip().lower()
+    if media_type not in STRUCTURED_KUBERNETES_CONTENT_TYPES:
+        raise ValueError("Unsupported Kubernetes request format")
+    data = (
+        yaml.safe_load(body) if media_type.endswith("+yaml") or media_type == "application/yaml" else json.loads(body)
+    )
+    if not isinstance(data, (dict, list)):
+        raise ValueError("A Kubernetes mutation must contain an object or JSON Patch")
+    return data
+
+
+def _inspect_workload_request(
+    path: str,
+    method: str,
+    body: bytes | None,
+    content_type: str,
+    *,
+    current: dict | None = None,
+    restrict_network_access: bool = True,
+) -> str | None:
     """Inspect workload mutations for protected data and network escapes.
 
     Returns ``forbidden`` for a Helm Secret reference, ``unsupported`` when a
@@ -304,23 +334,30 @@ def _inspect_workload_request(path: str, method: str, body: bytes | None, conten
     if method not in {"POST", "PUT", "PATCH"} or resource not in WORKLOAD_RESOURCES or not body:
         return None
 
-    media_type = content_type.partition(";")[0].strip().lower()
-    if media_type not in STRUCTURED_KUBERNETES_CONTENT_TYPES:
-        return "unsupported"
-
     try:
-        if media_type.endswith("+yaml") or media_type == "application/yaml":
-            data = yaml.safe_load(body)
-        else:
-            data = json.loads(body)
+        data = _decode_mutation(body, content_type)
     except (UnicodeDecodeError, ValueError, yaml.YAMLError):
         return "unsupported"
 
     if _contains_helm_release_secret_name(data):
         return "forbidden"
-    if contains_network_escape(data):
-        return "network_escape"
+    if restrict_network_access:
+        try:
+            proposed = apply_json_patch(current or {}, data) if isinstance(data, list) else data
+        except (JsonPatchException, JsonPointerException, TypeError, KeyError):
+            return "invalid"
+        if workload_adds_network_access(resource, proposed, current):
+            return "network_escape"
     return None
+
+
+def _object_path(path: str) -> str:
+    """Remove query and subresource parts from a Kubernetes object URL."""
+    parts = _decode_path_parts(path)
+    index = 2 if parts[0] == "api" else 3
+    if parts[index] == "namespaces" and len(parts) >= index + 3:
+        index += 2
+    return "/" + "/".join(parts[: index + 2])
 
 
 # Disable SSL warnings for self-signed certs
@@ -584,16 +621,86 @@ class KubernetesAPIProxy:
 
                 return http.client.HTTPSConnection(api_host, api_port, context=context)
 
+            def _read_object(self, object_path: str) -> dict | None:
+                """Read policy input with upstream credentials, never the agent token."""
+                conn = self._get_upstream_connection()
+                try:
+                    headers = {"Accept": "application/json"}
+                    if bearer_token:
+                        headers["Authorization"] = f"Bearer {bearer_token}"
+                    conn.request("GET", object_path, headers=headers)
+                    response = conn.getresponse()
+                    body = response.read()
+                    if response.status == 404:
+                        return None
+                    if response.status != 200:
+                        raise RuntimeError(f"Could not read policy input: Kubernetes HTTP {response.status}")
+                    result = json.loads(body)
+                    if not isinstance(result, dict):
+                        raise ValueError("Kubernetes returned an invalid object")
+                    return result
+                finally:
+                    conn.close()
+
+            def _validate_mutation(self, path, method, body, content_type):
+                resource, name = _resource_request(path)
+                if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+                    return None
+                if resource in WORKLOAD_RESOURCES and method != "DELETE" and body:
+                    current = None
+                    if restrict_network_access and name and method in {"PUT", "PATCH"}:
+                        current = self._read_object(_object_path(path))
+                    return _inspect_workload_request(
+                        path,
+                        method,
+                        body,
+                        content_type,
+                        current=current,
+                        restrict_network_access=restrict_network_access,
+                    )
+                if not (
+                    restrict_network_access
+                    and _request_api_group(path) == "crd.projectcalico.org"
+                    and resource in CALICO_POLICY_RESOURCES
+                ):
+                    return None
+                current = self._read_object(_object_path(path)) if name else None
+                candidates = [current] if current else []
+                if method != "DELETE":
+                    data = _decode_mutation(body or b"{}", content_type)
+                    if isinstance(data, list):
+                        proposed = apply_json_patch(current or {}, data)
+                    elif method == "PATCH":
+                        proposed = merge_object(current or {}, data)
+                    else:
+                        proposed = data
+                    candidates.append(proposed)
+                # Calico evaluates these policies after the outbound boundary.
+                # Never allow a change to move an existing policy before it.
+                tiers = {policy_tier(candidate) for candidate in candidates} | {EGRESS_POLICY_TIER}
+                orders = {}
+                for tier in tiers:
+                    value = self._read_object(f"/apis/crd.projectcalico.org/v1/tiers/{tier}")
+                    orders[tier] = (value or {}).get("spec", {}).get("order")
+                boundary_order = orders[EGRESS_POLICY_TIER]
+                if not isinstance(boundary_order, (int, float)):
+                    return "network_policy"
+                for candidate in candidates:
+                    order = orders[policy_tier(candidate)]
+                    if (
+                        (candidate.get("metadata") or {}).get("name") == EGRESS_POLICY_NAME
+                        or not isinstance(order, (int, float))
+                        or not order > boundary_order
+                    ):
+                        return "network_policy"
+                return None
+
             def _proxy_request(self, method: str):
                 """Proxy request to upstream API and filter response."""
                 path = self.path
 
                 if not is_valid_bearer_token(self.headers.get("Authorization"), agent_token):
                     self.send_error(401, "Unauthorized: valid agent token required")
-                    return
-
-                if restrict_network_access and method == "POST" and _is_workload_create_path(path):
-                    self.send_error(403, "Forbidden: workload creation is disabled in filtered mode")
                     return
 
                 if restrict_network_access and _is_cluster_egress_control_mutation(path, method):
@@ -627,17 +734,31 @@ class KubernetesAPIProxy:
                 content_length = int(self.headers.get("Content-Length", 0))
                 body = self.rfile.read(content_length) if content_length > 0 else None
 
-                workload_inspection = _inspect_workload_request(
-                    path,
-                    method,
-                    body,
-                    self.headers.get("Content-Type", ""),
-                )
+                try:
+                    workload_inspection = self._validate_mutation(
+                        path,
+                        method,
+                        body,
+                        self.headers.get("Content-Type", ""),
+                    )
+                except (ValueError, yaml.YAMLError, JsonPatchException, JsonPointerException, TypeError, KeyError):
+                    self.send_error(422, "Invalid Kubernetes mutation")
+                    return
+                except Exception:
+                    logger.exception("Could not validate Kubernetes mutation")
+                    self.send_error(502, "Bad Gateway: Could not read resource state")
+                    return
                 if workload_inspection == "forbidden":
                     self.send_error(403, "Forbidden: Workloads cannot reference this Secret")
                     return
                 if restrict_network_access and workload_inspection == "network_escape":
                     self.send_error(403, "Forbidden: Workloads cannot escape pod network isolation")
+                    return
+                if workload_inspection == "network_policy":
+                    self.send_error(403, "Forbidden: Policy must remain after the cluster outbound boundary")
+                    return
+                if workload_inspection == "invalid":
+                    self.send_error(422, "Invalid Kubernetes JSON Patch")
                     return
                 if workload_inspection == "unsupported":
                     self.send_error(415, "Unsupported Media Type: Workload request body cannot be inspected")
@@ -647,8 +768,9 @@ class KubernetesAPIProxy:
                 try:
                     conn = self._get_upstream_connection()
                     filter_type = _response_filter_type(path)
+                    watch = method == "GET" and _is_watch_request(path)
                     requires_json = _requires_json_secret_response(path, method) or (
-                        method == "GET" and filter_type is not None and not _is_watch_request(path)
+                        method == "GET" and (filter_type is not None or watch)
                     )
                     # Forward headers (except Host and Accept-Encoding to avoid gzip).
                     # The per-run proxy credential must not be forwarded upstream.
@@ -670,8 +792,11 @@ class KubernetesAPIProxy:
                         else:
                             headers[header] = value
                     if requires_json:
-                        # The proxy cannot safely filter Kubernetes' protobuf form.
-                        headers["Accept"] = "application/json"
+                        headers["Accept"] = (
+                            "application/json" if watch else json_accept_header(self.headers.get("Accept", ""))
+                        )
+                        if "as=Table" in headers["Accept"]:
+                            path = include_table_objects(path)
                     # In-cluster mode: authenticate to the API server with the ServiceAccount bearer token
                     if bearer_token:
                         headers["Authorization"] = f"Bearer {bearer_token}"
@@ -712,7 +837,35 @@ class KubernetesAPIProxy:
                             conn.close()
                         return
 
-                    # Read response
+                    if response.status == 200 and (watch or (method == "GET" and _is_log_follow_request(path))):
+                        if response.getheader("Content-Encoding", "") or (
+                            watch and "application/json" not in response.getheader("Content-Type", "")
+                        ):
+                            self.send_error(502, "Bad Gateway: Unsupported Kubernetes stream format")
+                            conn.close()
+                            return
+
+                        def event_visible(event):
+                            obj = event["object"]
+                            if (
+                                _resource_request(path)[0] == "namespaces"
+                                and (obj.get("metadata") or {}).get("name") in hidden_namespaces
+                            ):
+                                return False
+                            return not _is_hidden_resource(obj, hidden_namespaces, hidden_labels)
+
+                        try:
+                            stream_response(self, response, event_visible=event_visible if watch else None)
+                        except OSError as exc:
+                            logger.debug("Kubernetes stream closed: %s", exc)
+                        except ValueError:
+                            logger.exception("Kubernetes returned an invalid watch stream")
+                        finally:
+                            response.close()
+                            conn.close()
+                        return
+
+                    # Finite JSON responses must be filtered before forwarding.
                     response_body = response.read()
                     content_type = response.getheader("Content-Type", "")
                     content_encoding = response.getheader("Content-Encoding", "")
@@ -936,14 +1089,3 @@ def stop_proxy():
     if _proxy_instance is not None:
         _proxy_instance.stop()
         _proxy_instance = None
-
-
-def _is_workload_create_path(path: str) -> bool:
-    """Return whether a Kubernetes API path creates a new workload object."""
-    normalized = urlparse(path).path
-    for _ in range(3):
-        decoded = unquote(normalized)
-        if decoded == normalized:
-            break
-        normalized = decoded
-    return normalized.casefold().rstrip("/").endswith(tuple(WORKLOAD_CREATE_SUFFIXES))

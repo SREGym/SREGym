@@ -86,9 +86,10 @@ class DockerEgress:
             "HTTPS_PROXY": proxy_url,
             "http_proxy": proxy_url,
             "https_proxy": proxy_url,
-            # Internal Kubernetes HTTPS uses the proxy's CONNECT tunnel.
-            "NO_PROXY": "",
-            "no_proxy": "",
+            # A forwarded port or local tool lives in the agent container, not
+            # in the separate proxy container. Host services still use CONNECT.
+            "NO_PROXY": "localhost,127.0.0.1,::1",
+            "no_proxy": "localhost,127.0.0.1,::1",
             "SSL_CERT_FILE": PROXY_BUNDLE_CONTAINER_PATH,
             "REQUESTS_CA_BUNDLE": PROXY_BUNDLE_CONTAINER_PATH,
             "CURL_CA_BUNDLE": PROXY_BUNDLE_CONTAINER_PATH,

@@ -140,7 +140,7 @@ def _provider_rules(provider: str, environment: Mapping[str, str]) -> tuple[Endp
             location = "us-central1"
         return _rules_from_urls(
             (
-                f"https://{location}-aiplatform.googleapis.com",
+                _vertex_url(location),
                 "https://oauth2.googleapis.com",
             )
         )
@@ -169,6 +169,15 @@ def _provider_url(provider: str, environment: Mapping[str, str]) -> str:
             "Set AGENT_API_BASE with a supported custom model or use --internet-access open."
         )
     return _configured_url(environment, *endpoint.environment_variables) or endpoint.default_url
+
+
+def _vertex_url(location: str) -> str:
+    """Match Vertex's global, multi-region, and regional API routing."""
+    if location == "global":
+        return "https://aiplatform.googleapis.com"
+    if "-" not in location:
+        return f"https://aiplatform.{location}.rep.googleapis.com"
+    return f"https://{location}-aiplatform.googleapis.com"
 
 
 def _required_custom_base(

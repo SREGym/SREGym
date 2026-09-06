@@ -26,7 +26,7 @@ from sregym.service.internet_policy import (
     endpoint_is_allowed,
     provider_tool_uses_internet,
 )
-from sregym.service.k8s_proxy import KubernetesAPIProxy, _is_workload_create_path, is_valid_bearer_token
+from sregym.service.k8s_proxy import KubernetesAPIProxy, is_valid_bearer_token
 
 
 def test_programmatic_filtered_conductor_enables_kubernetes_restrictions():
@@ -105,6 +105,18 @@ def test_provider_tool_filter_does_not_scan_prompt_text_or_regular_tools():
     assert not provider_tool_uses_internet(body)
 
 
+@pytest.mark.parametrize("name", ["browser", "web_fetch", "web_search", "computer", "mcp"])
+@pytest.mark.parametrize("tool_format", ["responses", "anthropic", "chat_completions"])
+def test_local_function_names_do_not_select_provider_hosted_tools(name, tool_format):
+    if tool_format == "anthropic":
+        tool = {"name": name, "input_schema": {"type": "object"}}
+    elif tool_format == "responses":
+        tool = {"type": "function", "name": name, "parameters": {"type": "object"}}
+    else:
+        tool = {"type": "function", "function": {"name": name, "parameters": {"type": "object"}}}
+    assert not provider_tool_uses_internet(json.dumps({"tools": [tool]}))
+
+
 def test_large_provider_requests_do_not_skip_tool_inspection():
     body = b" " * 1_000_001 + b'{"tools":[{"type":"web_search"}]}'
     assert provider_tool_uses_internet(body)
@@ -172,7 +184,8 @@ def test_filtered_runner_uses_private_network_and_proxy(tmp_path):
         assert "--network=host" not in args
         env = dict(item.split("=", 1) for item in env_flags[1::2])
         assert env["HTTPS_PROXY"] == "http://filter-proxy:8080"
-        assert env["NO_PROXY"] == ""
+        assert env["NO_PROXY"] == "localhost,127.0.0.1,::1"
+        assert env["no_proxy"] == env["NO_PROXY"]
         assert env["SSL_CERT_FILE"] == PROXY_BUNDLE_CONTAINER_PATH
         assert env["NODE_EXTRA_CA_CERTS"] == PROXY_CA_CONTAINER_PATH
         assert env["AGENT_API_BASE"] == "http://host.docker.internal:8001/v1"
@@ -212,9 +225,9 @@ def test_filtered_runner_builds_rules_from_explicit_provider_endpoints():
     )
 
     assert EndpointRule("custom.example.test", 443) in rules
-    assert EndpointRule("host.docker.internal", 8000) in rules
-    assert EndpointRule("host.docker.internal", 9954) in rules
-    assert EndpointRule("host.docker.internal", 16443) in rules
+    assert EndpointRule("host.docker.internal", 8000, inspect_tools=False) in rules
+    assert EndpointRule("host.docker.internal", 9954, inspect_tools=False) in rules
+    assert EndpointRule("host.docker.internal", 16443, inspect_tools=False) in rules
 
 
 def test_filtered_runner_adds_user_endpoints_without_replacing_required_rules():
@@ -237,7 +250,7 @@ def test_filtered_runner_adds_user_endpoints_without_replacing_required_rules():
     assert EndpointRule("api.openai.com", 443) in rules
     assert EndpointRule("telemetry.example.test", 443, "/v1") in rules
     assert EndpointRule("host.docker.internal", 18081, "/health") in rules
-    assert EndpointRule("host.docker.internal", 8000) in rules
+    assert EndpointRule("host.docker.internal", 8000, inspect_tools=False) in rules
 
 
 def test_additional_endpoint_path_does_not_allow_sibling_paths():
@@ -400,22 +413,6 @@ def test_kubernetes_proxy_removes_owned_kubeconfig_on_stop(tmp_path):
         assert not Path(path).exists()
     finally:
         Path(path).unlink(missing_ok=True)
-
-
-@pytest.mark.parametrize(
-    ("path", "expected"),
-    [
-        ("/api/v1/namespaces/demo/pods", True),
-        ("/api/v1/namespaces/demo/%70ods", True),
-        ("/api/v1/namespaces/demo/%2570ods", True),
-        ("/apis/batch/v1/namespaces/demo/jobs", True),
-        ("/apis/apps/v1/namespaces/demo/deployments", True),
-        ("/apis/apps/v1/namespaces/demo/deployments/demo", False),
-        ("/api/v1/namespaces/demo/services", False),
-    ],
-)
-def test_filtered_proxy_blocks_workload_creation_paths(path, expected):
-    assert _is_workload_create_path(path) is expected
 
 
 def test_filtered_mode_disables_claude_web_search(monkeypatch):

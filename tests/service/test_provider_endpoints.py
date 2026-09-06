@@ -115,6 +115,15 @@ def test_open_mode_does_not_build_provider_allowlist():
     assert provider_endpoint_rules(policy, {}) == ()
 
 
+@pytest.mark.parametrize("location", ["global", "us", "eu", "us-central1", "europe-west4"])
+def test_vertex_allowlist_matches_the_client_destination(location):
+    from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+
+    policy = InternetPolicy.from_mode("filtered", agent_name="stratus", model_id="vertex_ai/gemini-2.5-pro")
+    rules = provider_endpoint_rules(policy, {"VERTEXAI_LOCATION": location})
+    assert EndpointRule.host_from_url(get_vertex_base_url(location)) in rules
+
+
 @pytest.mark.parametrize("provider,definition", [(name, item) for name, item in PROVIDERS.items() if item.default_url])
 def test_provider_definition_keeps_default_and_overrides_together(provider, definition):
     policy = InternetPolicy.from_mode("filtered", agent_name="stratus", model_id=f"{provider}/model")

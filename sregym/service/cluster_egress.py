@@ -11,6 +11,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.service.kubectl import KubeCtl
+from sregym.service.kubernetes_access_policy import EGRESS_POLICY_NAME, EGRESS_POLICY_TIER
 
 logger = logging.getLogger("all.infra.cluster_egress")
 
@@ -19,8 +20,8 @@ CALICO_API_VERSION = "v1"
 POLICY_PLURAL = "globalnetworkpolicies"
 TIER_PLURAL = "tiers"
 IP_POOL_PLURAL = "ippools"
-POLICY_TIER = "adminnetworkpolicy"
-POLICY_NAME = f"{POLICY_TIER}.external-egress-boundary"
+POLICY_TIER = EGRESS_POLICY_TIER
+POLICY_NAME = EGRESS_POLICY_NAME
 POLICY_LABEL_KEY = "network-access"
 POLICY_LABEL_VALUE = "restricted"
 CLUSTER_DNS_SELECTOR = "projectcalico.org/namespace == 'kube-system' && k8s-app == 'kube-dns'"

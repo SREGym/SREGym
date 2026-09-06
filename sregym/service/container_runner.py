@@ -249,9 +249,9 @@ class ContainerRunner:
 
     def _configured_egress_rules(self, env_vars: dict[str, str]) -> tuple[EndpointRule, ...]:
         rules = {
-            EndpointRule("host.docker.internal", int(env_vars.get("API_PORT", "8000"))),
-            EndpointRule("host.docker.internal", 16443),
-            EndpointRule("host.docker.internal", int(env_vars.get("MCP_SERVER_PORT", "9954"))),
+            EndpointRule("host.docker.internal", int(env_vars.get("API_PORT", "8000")), inspect_tools=False),
+            EndpointRule("host.docker.internal", 16443, inspect_tools=False),
+            EndpointRule("host.docker.internal", int(env_vars.get("MCP_SERVER_PORT", "9954")), inspect_tools=False),
         }
         codex_auth = Path.home() / ".codex" / "auth.json"
         rules.update(

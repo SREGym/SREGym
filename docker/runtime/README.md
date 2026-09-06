@@ -10,11 +10,14 @@ Pod startup and replacement do not need PyPI, package mirrors, or GitHub source 
 | `ghcr.io/sregym/kafka-client:2.5.3-py3.12` | Python 3.12 and confluent-kafka 2.5.3 | Kafka producer and validator helpers |
 | `ghcr.io/sregym/tls-client:ubuntu22.04` | Ubuntu 22.04, OpenSSL, and CA certificates | TLS verification sidecar |
 | `ghcr.io/sregym/social-network-assets:v1` | Lua files, generated Thrift files, pages, and existing test certificates | Social Network init containers |
+| `ghcr.io/sregym/grafana:12.3.1-opensearch2.34.3` | Grafana 12.3.1 and the signed OpenSearch plugin 2.34.3 | Astronomy Shop Grafana |
 
 ## Current publication status
 
-All four packages are public. Each tag in the table contains `linux/amd64` and `linux/arm64` images.
-Offline checks passed on native AMD64 and on ARM64 through Docker BuildKit's existing emulator.
+All five packages are public. Each tag in the table contains `linux/amd64` and `linux/arm64` images.
+Offline checks passed on native AMD64. The Redis, Kafka, TLS, and Social Network
+images also passed ARM64 checks through Docker BuildKit's existing emulator.
+The Grafana ARM64 image builds successfully; its runtime check remains deferred.
 Native ARM64 and full macOS benchmark testing remain separate checks.
 
 ## Architecture support
@@ -37,6 +40,7 @@ Run these commands from the repository root:
 docker build -t ghcr.io/sregym/redis-client:8.1.0-py3.10 docker/runtime/redis
 docker build -t ghcr.io/sregym/kafka-client:2.5.3-py3.12 docker/runtime/kafka
 docker build -t ghcr.io/sregym/tls-client:ubuntu22.04 docker/runtime/tls
+docker build -t ghcr.io/sregym/grafana:12.3.1-opensearch2.34.3 docker/runtime/grafana
 docker build -t ghcr.io/sregym/social-network-assets:v1 \
   -f SREGym-applications/socialNetwork/Dockerfile-assets \
   SREGym-applications/socialNetwork
@@ -51,6 +55,7 @@ For AMD64 images, run the offline startup checks:
 bash docker/runtime/smoke-test.sh redis ghcr.io/sregym/redis-client:8.1.0-py3.10 amd64
 bash docker/runtime/smoke-test.sh kafka ghcr.io/sregym/kafka-client:2.5.3-py3.12 amd64
 bash docker/runtime/smoke-test.sh tls ghcr.io/sregym/tls-client:ubuntu22.04 amd64
+bash docker/runtime/smoke-test.sh grafana ghcr.io/sregym/grafana:12.3.1-opensearch2.34.3 amd64
 bash SREGym-applications/socialNetwork/test-assets-image.sh ghcr.io/sregym/social-network-assets:v1 amd64
 ```
 
@@ -69,7 +74,7 @@ If the builder cannot execute ARM64 commands, use an ARM64 machine for the build
 
 ## Load into a test cluster
 
-For tests without registry access, load all four images into **every node** before a run.
+For tests without registry access, load all five images into **every node** before a run.
 A replacement pod can use a different node.
 
 For kind, run this command on the host of the kind cluster:
@@ -79,7 +84,8 @@ kind load docker-image --name kind \
   ghcr.io/sregym/redis-client:8.1.0-py3.10 \
   ghcr.io/sregym/kafka-client:2.5.3-py3.12 \
   ghcr.io/sregym/tls-client:ubuntu22.04 \
-  ghcr.io/sregym/social-network-assets:v1
+  ghcr.io/sregym/social-network-assets:v1 \
+  ghcr.io/sregym/grafana:12.3.1-opensearch2.34.3
 ```
 
 For a remote cluster, export the images:
@@ -89,7 +95,8 @@ docker save -o runtime-images.tar \
   ghcr.io/sregym/redis-client:8.1.0-py3.10 \
   ghcr.io/sregym/kafka-client:2.5.3-py3.12 \
   ghcr.io/sregym/tls-client:ubuntu22.04 \
-  ghcr.io/sregym/social-network-assets:v1
+  ghcr.io/sregym/social-network-assets:v1 \
+  ghcr.io/sregym/grafana:12.3.1-opensearch2.34.3
 ```
 
 Copy the archive to every node. Import it with the existing container runtime.
@@ -115,6 +122,7 @@ docker buildx imagetools inspect 'ghcr.io/sregym/<image>:<version>'
 ```
 
 Verify that the release tag contains both `linux/amd64` and `linux/arm64`.
+New GitHub packages can default to internal visibility. Make each package public and verify an anonymous pull before use.
 
 Use a new tag for changed content.
 Update `sregym/service/runtime_images.py` and the affected Helm values to match.
