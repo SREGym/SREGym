@@ -42,6 +42,7 @@ from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.init_container_dependency_hang import InitContainerDependencyHang
+from sregym.conductor.problems.integer_overflow_primary_key_astronomy_shop import IntegerOverflowPrimaryKeyAstronomyShop
 from sregym.conductor.problems.internal_traffic_policy_local import InternalTrafficPolicyLocalAstronomyShop
 from sregym.conductor.problems.kafka_poison_pill_hol_block import KafkaPoisonPillHOLBlock
 from sregym.conductor.problems.kafka_producer_leak import KafkaProducerLeak
@@ -171,6 +172,7 @@ class ProblemRegistry:
             "init_container_dependency_hang_hotel_reservation": lambda: InitContainerDependencyHang(app_name="hotel_reservation", faulty_service="frontend"),
             "init_container_dependency_hang_social_network": lambda: InitContainerDependencyHang(app_name="social_network", faulty_service="user-service"),
             "init_container_dependency_hang_astronomy_shop": lambda: InitContainerDependencyHang(app_name="astronomy_shop", faulty_service="frontend"),
+            "integer_overflow_primary_key_astronomy_shop": IntegerOverflowPrimaryKeyAstronomyShop,
             "missing_configmap_hotel_reservation": lambda: MissingConfigMap(app_name="hotel_reservation", faulty_service="mongodb-geo"),
             "missing_configmap_social_network": lambda: MissingConfigMap(app_name="social_network", faulty_service="media-mongodb"),
             "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),
