@@ -1,5 +1,6 @@
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
 import shlex
@@ -30,6 +31,7 @@ from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
 from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import CLUSTER_BASELINE_STATE_FILE
+from sregym.phases import PhaseLedger
 from sregym.profile import is_svelte
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
@@ -103,6 +105,11 @@ class Conductor:
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
+
+        # Phase-boundary ledger, bound per attempt by whoever owns the run
+        # directory (main.py). Left unset by cli.py, the external harness and
+        # the tests, where `_phase` degrades to a no-op.
+        self.phases: PhaseLedger | None = None
 
         self.stage_sequence: list[dict] = []
         self.current_stage_index: int = 0
@@ -299,6 +306,45 @@ class Conductor:
         )
         return r
 
+    def bind_phase_ledger(self, path, **context) -> None:
+        """Point the phase ledger at this attempt's run directory.
+
+        Called per attempt by the caller that owns the directory, so each
+        attempt gets its own `phases.jsonl` rather than appending to a shared
+        one.
+        """
+        self.phases = PhaseLedger(path, context={"problem_id": self.problem_id, **context})
+
+    def _phase(self, name: str, **fields):
+        """Time a block as a phase, or do nothing if no ledger is bound.
+
+        A missing ledger must never change control flow, so the fallback is a
+        real no-op context manager rather than a branch at every call site.
+        `getattr` rather than attribute access: instrumentation must also
+        survive a Conductor built without __init__, which several tests and
+        external callers do.
+        """
+        ledger = getattr(self, "phases", None)
+        if ledger is None:
+            return contextlib.nullcontext()
+        return ledger.phase(name, **fields)
+
+    def _mark(self, name: str, event: str, **fields) -> None:
+        """Record one boundary for a phase that is not a block.
+
+        The agent stages start when the conductor opens them for submission and
+        end when their evaluation returns -- two different call sites, so they
+        cannot use the context manager.
+        """
+        ledger = getattr(self, "phases", None)
+        if ledger is not None:
+            ledger.record(name, event, **fields)
+
+    def _phase_is_open(self, name: str) -> bool:
+        """True if `name` was started and not yet ended. False with no ledger."""
+        ledger = getattr(self, "phases", None)
+        return ledger is not None and ledger.is_open(name)
+
     def _advance_to_next_stage(self, start_index: int = 0):
         """
         Advance to the next stage starting from start_index.
@@ -315,7 +361,8 @@ class Conductor:
 
         # Inject fault before the first stage if not already done
         if start_index == 0 and not self.fault_injected:
-            self._inject_fault()
+            with self._phase("inject_fault"):
+                self._inject_fault()
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
@@ -326,6 +373,9 @@ class Conductor:
             self.submission_stage = stage_name
             self._accepting_submissions = not self._attempt_closed
             self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+            # The agent's clock for this stage starts here: submissions are now
+            # accepted. Ends where its evaluation returns.
+            self._mark(f"stage:{stage_name}", "start")
 
             # Update NoiseManager stage
             if self.config.enable_noise:
@@ -465,10 +515,23 @@ class Conductor:
                 )
                 return
             self.logger.info("[STAGE] Done, starting teardown")
+            # A stage still open at teardown never received a submission -- the
+            # agent exited, timed out, or was killed. Close it here with a
+            # written-down end rather than leaving the reader to infer one from
+            # the next phase's start.
+            open_stage = self.submission_stage
             self._accepting_submissions = False
             self._attempt_closed = True
             self.submission_stage = "tearing_down"
-        self._cleanup_sync(cleanup_generation)
+        # Only close a stage that is genuinely still open. `submission_stage`
+        # still names the last stage after it has been evaluated, so closing on
+        # that alone writes a second end for a stage that finished cleanly.
+        if open_stage in {stage["name"] for stage in self.stage_sequence} and self._phase_is_open(
+            f"stage:{open_stage}"
+        ):
+            self._mark(f"stage:{open_stage}", "end", outcome="no_submission")
+        with self._phase("cleanup"):
+            self._cleanup_sync(cleanup_generation)
         self.logger.info("[STAGE] Teardown complete")
 
     def finish_problem_in_background(self) -> concurrent.futures.Future:
@@ -566,16 +629,19 @@ class Conductor:
             )
             return StartProblemResult.SKIPPED_KHAOS_REQUIRED
 
-        self.fix_kubernetes()
+        with self._phase("fix_kubernetes"):
+            self.fix_kubernetes()
 
         self.get_problem_stages()
         self._build_stage_sequence()
 
         self.logger.info("Undeploying app leftovers...")
-        self.undeploy_app()  # Cleanup any leftovers
+        with self._phase("undeploy_leftovers"):
+            self.undeploy_app()  # Cleanup any leftovers
         self.logger.info("App leftovers undeployed.")
         self.logger.info("Deploying app...")
-        self.deploy_app()
+        with self._phase("deploy"):
+            self.deploy_app()
         self.logger.info("App deployed.")
 
         # Update NoiseManager with problem context
@@ -622,13 +688,18 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to stop noise manager: {e}")
 
+        # The agent's time on this stage ends when a submission arrives to be
+        # evaluated; grading time is its own phase, not the agent's.
+        self._mark(f"stage:{stage_name}", "end", outcome="submitted")
+
         outcome = None
         # Run the evaluation function for the current stage. The per-stage
         # _evaluate_* methods catch their own oracle exceptions; this outer
         # guard is defense in depth so an ordinary evaluation error still
         # produces a failed stage result.
         try:
-            outcome = current_stage["evaluation"](sol)
+            with self._phase(f"evaluate:{stage_name}"):
+                outcome = current_stage["evaluation"](sol)
         except Exception:
             self.logger.exception(
                 f"Stage '{stage_name}' evaluation raised unexpectedly; advancing anyway "
@@ -705,6 +776,10 @@ class Conductor:
                 self._evaluating = False
                 self._accepting_submissions = not self._attempt_closed
                 self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+            # Second of the two places a stage opens -- _advance_to_next_stage
+            # is the other. Marked outside the lock: the ledger fsyncs, and a
+            # stuck disk must not hold the submission lock.
+            self._mark(f"stage:{next_stage_name}", "start")
             return
 
         if next_index >= len(self.stage_sequence):
