@@ -73,6 +73,17 @@ spec:
         image: jaegertracing/all-in-one:1.57
         args:
         - "--collector.otlp.enabled=true"
+        # all-in-one defaults to in-memory storage with no cap, so the span
+        # store grows for as long as the process lives. This is the central
+        # Jaeger for every app namespace; 25000 matches the bound the
+        # astronomy-shop chart already applies to its own Jaeger.
+        - "--memory.max-traces=25000"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            memory: 1Gi
         ports:
         - containerPort: 5775
           protocol: UDP

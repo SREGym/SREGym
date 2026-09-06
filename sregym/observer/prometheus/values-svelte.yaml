@@ -1,0 +1,30 @@
+# Applied to the central Prometheus only under `--profile svelte`.
+#
+# The vendored chart (prometheus-25.6.0) runs at stock defaults, which are sized
+# for a long-lived production install rather than a benchmark problem measured in
+# minutes.
+
+# Neither component is referenced anywhere in sregym/, mcp_server/ or clients/.
+# Nothing configures alert rules and nothing pushes to a gateway.
+alertmanager:
+  enabled: false
+prometheus-pushgateway:
+  enabled: false
+
+# Kept deliberately:
+#   kube-state-metrics        — cluster object metrics the oracles rely on
+#   prometheus-node-exporter  — node metrics
+#   blackbox-exporter         — target of the extraScrapeConfigs TCP probes
+#                               declared in values.yaml
+
+server:
+  # 15d of TSDB for a run that lasts minutes. Each problem tears the namespace
+  # down anyway, so retention beyond the problem's own duration is never read;
+  # 2h leaves plenty of headroom for the longest agent timeout (1800s default).
+  retention: 2h
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
