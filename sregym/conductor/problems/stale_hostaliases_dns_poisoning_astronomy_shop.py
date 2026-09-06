@@ -1,14 +1,15 @@
 """Pod-local hosts override shadowing in-cluster DNS on Astronomy Shop.
 
 A leftover `hostAliases` entry — the kind teams add during a migration to pin a
-hostname at a fixed address and then forget to remove — makes the frontend
-resolve its product-catalog backend to a dead address. Because the libc
-resolver reads /etc/hosts before it queries CoreDNS, the entry wins forever and
-the failure is confined to one Deployment's pods.
+hostname at a fixed address and then forget to remove — makes the frontend-proxy
+resolve the frontend service to a loopback address. Because the libc resolver
+reads /etc/hosts before it queries CoreDNS, the entry wins forever and the
+failure is confined to the frontend-proxy Deployment's pods.
 
-Every control-plane signal stays green: pods are Running and Ready, CoreDNS is
-healthy, the backend Service has live Endpoints, and `nslookup` from any other
-pod resolves correctly. Only the frontend's own requests fail.
+Every control-plane signal stays green: frontend and backend pods are Running
+and Ready, CoreDNS is healthy, all backend Services have live Endpoints, and
+`nslookup` from any other pod resolves correctly. Only external/edge traffic
+entering through frontend-proxy fails.
 """
 
 import logging
@@ -27,16 +28,14 @@ logger = logging.getLogger(__name__)
 
 
 class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
-    """Poison one Deployment's /etc/hosts so it cannot reach its backend."""
+    """Poison frontend-proxy's /etc/hosts so it cannot reach the frontend service."""
 
-    FAULTY_SERVICE = "frontend"
-    # The frontend reaches the catalog through PRODUCT_CATALOG_ADDR, which the
-    # chart sets to `product-catalog:8080`. The alias must use exactly that
-    # hostname — any other spelling resolves normally and the fault is a no-op.
-    TARGET_BACKEND = "product-catalog"
-    # Loopback gives an immediate connection error rather than a long TCP
-    # timeout: the frontend's own server binds the pod IP (Next.js standalone
-    # binds $HOSTNAME), so nothing is listening on 127.0.0.1:8080.
+    FAULTY_SERVICE = "frontend-proxy"
+    # The frontend-proxy routes edge requests to the frontend service using
+    # the FRONTEND_HOST environment variable, which defaults to `frontend`.
+    TARGET_BACKEND = "frontend"
+    # Loopback ensures that attempts by Envoy to route to frontend:8080 target
+    # 127.0.0.1:8080 inside the proxy pod instead of the actual frontend Service.
     BLACKHOLE_IP = "127.0.0.1"
 
     def __init__(self):
@@ -56,8 +55,8 @@ class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
                 f"The {self.faulty_service} deployment carries a stale hostAliases entry that maps "
                 f"{self.target_backend} to {self.blackhole_ip}, so the kubelet writes that mapping into the pod's "
                 "/etc/hosts. The libc resolver consults /etc/hosts before CoreDNS, so the pod-local override "
-                "silently shadows in-cluster DNS and every call to the backend fails with a connection error, "
-                "even though CoreDNS, the backend Service, and its Endpoints are all healthy."
+                "silently shadows in-cluster DNS and every request routed to frontend fails, "
+                "even though CoreDNS, the frontend Service, its Endpoints, and downstream services are all healthy."
             ),
         )
 

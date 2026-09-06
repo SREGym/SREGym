@@ -1,7 +1,7 @@
 """Tests for the pod-local hosts-override problem on Astronomy Shop.
 
 The unit tests pin down the injection contract without a cluster: the patch has
-to name `product-catalog` (the hostname the frontend actually dials), and
+to name `frontend` (the hostname the frontend-proxy actually dials), and
 recovery has to remove it. The integration test runs the real
 inject -> oracle fails -> recover -> oracle passes lifecycle and is skipped
 unless `-m integration` is selected against a live cluster.
@@ -20,7 +20,8 @@ from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.paths import TARGET_MICROSERVICES
 
 NAMESPACE = "astronomy-shop"
-DEPLOYMENT = "frontend"
+DEPLOYMENT = "frontend-proxy"
+TARGET_BACKEND = "frontend"
 
 _CHART = TARGET_MICROSERVICES / "astronomy-shop" / "charts" / "opentelemetry-demo"
 _KUBECONFIG = Path(os.environ.get("KUBECONFIG") or Path.home() / ".kube" / "config")
@@ -58,11 +59,11 @@ def _injector(kubectl):
     return injector
 
 
-def test_injection_patches_the_hostname_the_frontend_actually_dials():
+def test_injection_patches_the_hostname_the_proxy_actually_dials():
     kubectl = _KubeCtl()
     _injector(kubectl).inject_stale_hostaliases(
         microservices=[DEPLOYMENT],
-        target_host="product-catalog",
+        target_host=TARGET_BACKEND,
         blackhole_ip="127.0.0.1",
     )
 
@@ -72,7 +73,7 @@ def test_injection_patches_the_hostname_the_frontend_actually_dials():
         {
             "op": "add",
             "path": "/spec/template/spec/hostAliases",
-            "value": [{"ip": "127.0.0.1", "hostnames": ["product-catalog"]}],
+            "value": [{"ip": "127.0.0.1", "hostnames": [TARGET_BACKEND]}],
         }
     ]
 
@@ -81,7 +82,7 @@ def test_injection_waits_for_the_rollout_instead_of_sleeping():
     kubectl = _KubeCtl()
     _injector(kubectl).inject_stale_hostaliases(
         microservices=[DEPLOYMENT],
-        target_host="product-catalog",
+        target_host=TARGET_BACKEND,
         blackhole_ip="127.0.0.1",
     )
 
@@ -89,7 +90,7 @@ def test_injection_waits_for_the_rollout_instead_of_sleeping():
 
 
 def test_recovery_removes_the_override_and_waits():
-    kubectl = _KubeCtl(host_aliases=[SimpleNamespace(ip="127.0.0.1", hostnames=["product-catalog"])])
+    kubectl = _KubeCtl(host_aliases=[SimpleNamespace(ip="127.0.0.1", hostnames=[TARGET_BACKEND])])
     _injector(kubectl).recover_stale_hostaliases(microservices=[DEPLOYMENT])
 
     _, _, patch = kubectl.apps_v1_api.patches[0]
@@ -106,17 +107,16 @@ def test_recovery_is_a_noop_when_the_agent_already_removed_the_override():
 
 
 def test_problem_targets_the_charts_backend_hostname():
-    """`productcatalogservice` is the OTel demo 1.x name; this chart uses `product-catalog`."""
+    """`frontend-proxy` targets the `frontend` service as configured in values.yaml."""
     assert StaleHostAliasesDNSPoisoningAstronomyShop.FAULTY_SERVICE == DEPLOYMENT
-    assert StaleHostAliasesDNSPoisoningAstronomyShop.TARGET_BACKEND == "product-catalog"
+    assert StaleHostAliasesDNSPoisoningAstronomyShop.TARGET_BACKEND == TARGET_BACKEND
     assert StaleHostAliasesDNSPoisoningAstronomyShop.BLACKHOLE_IP == "127.0.0.1"
 
 
-def test_backend_hostname_matches_the_frontend_env_in_the_chart():
-    """The alias only bites if it spells the host in PRODUCT_CATALOG_ADDR exactly."""
-    product_catalog_addr = "product-catalog:8080"  # values.yaml -> components.frontend.env
-    host = product_catalog_addr.split(":", 1)[0]
-    assert host == StaleHostAliasesDNSPoisoningAstronomyShop.TARGET_BACKEND
+def test_backend_hostname_matches_the_proxy_env_in_the_chart():
+    """The alias only bites if it spells the host in FRONTEND_HOST exactly."""
+    frontend_host = "frontend"  # values.yaml -> components.frontend-proxy.env
+    assert frontend_host == StaleHostAliasesDNSPoisoningAstronomyShop.TARGET_BACKEND
 
 
 @pytest.mark.integration

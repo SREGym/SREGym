@@ -3,8 +3,8 @@
 The generic :class:`~sregym.conductor.oracles.mitigation.MitigationOracle` only
 looks at Deployment and pod health. That is not enough here: a pod-local
 ``/etc/hosts`` override keeps every control-plane signal green while the
-frontend cannot reach its backend at all, so a health-only oracle reports
-success on an unmitigated cluster.
+frontend-proxy cannot reach the frontend service at all, so a health-only
+oracle reports success on an unmitigated cluster.
 
 This oracle therefore checks three independent things:
 
@@ -16,7 +16,8 @@ This oracle therefore checks three independent things:
    rejects the "fix" of hand-editing ``/etc/hosts`` inside a running container
    (which leaves the template, and therefore the next pod, still poisoned).
 3. **Function** - a fresh request through the edge proxy actually returns
-   catalog data, i.e. the frontend really can reach the backend again.
+   catalog data, i.e. the frontend-proxy really can reach frontend and
+   downstream services again.
 """
 
 import contextlib
@@ -129,9 +130,10 @@ class StaleHostAliasesMitigationOracle(Oracle):
                 offending.append(pod.metadata.name)
         return offending
 
-    def _has_ready_endpoint(self) -> bool:
+    def _has_ready_endpoint(self, service_name: str | None = None) -> bool:
+        name = service_name or self.deployment_name
         endpoints = self.problem.kubectl.core_v1_api.read_namespaced_endpoints(
-            name=self.deployment_name,
+            name=name,
             namespace=self.problem.namespace,
         )
         return any(subset.addresses for subset in endpoints.subsets or [])
@@ -152,10 +154,13 @@ class StaleHostAliasesMitigationOracle(Oracle):
         url = f"http://{self.edge_service}.{namespace}.svc.cluster.local:{port}{self.product_path}"
         pod_name = f"catalog-availability-check-{time.time_ns()}"[:63]
         script = (
-            "set -eu; "
-            f"wget -q -T {self.request_timeout_seconds} -t 1 -O /tmp/products '{url}'; "
-            f"grep -q '{self.expected_product_id}' /tmp/products; "
-            "echo PRODUCTS_OK"
+            f"for i in $(seq 1 10); do "
+            f"if wget -q -T {self.request_timeout_seconds} -t 1 -O /tmp/products '{url}' 2>/dev/null && "
+            f"grep -q '{self.expected_product_id}' /tmp/products; then "
+            f"echo PRODUCTS_OK; exit 0; fi; "
+            f"sleep 2; done; "
+            f"wget -T {self.request_timeout_seconds} -t 1 -O /tmp/products '{url}' || true; "
+            f"exit 1"
         )
         pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
@@ -258,12 +263,16 @@ class StaleHostAliasesMitigationOracle(Oracle):
         results["no_pod_carries_override"] = True
 
         try:
-            if not self._has_ready_endpoint():
+            if not self._has_ready_endpoint(self.deployment_name):
                 results["reason"] = f"service '{self.deployment_name}' has no ready endpoint"
                 print(f"[FAIL] {results['reason']}")
                 return results
+            if not self._has_ready_endpoint(self.backend_hostname):
+                results["reason"] = f"service '{self.backend_hostname}' has no ready endpoint"
+                print(f"[FAIL] {results['reason']}")
+                return results
         except ApiException as exc:
-            results["reason"] = f"could not read endpoints for '{self.deployment_name}': {exc}"
+            results["reason"] = f"could not read endpoints: {exc}"
             print(f"[FAIL] {results['reason']}")
             return results
         results["ready_endpoint"] = True

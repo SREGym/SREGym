@@ -3,7 +3,7 @@
 These run without a cluster: the oracle is driven against fake kubectl objects
 so every rejection path is exercised, including the two failures that a
 health-only oracle misses (a live pod still carrying the override, and a
-frontend that is Ready but cannot fetch the catalog).
+frontend-proxy that is Ready but cannot fetch the catalog).
 """
 
 from types import SimpleNamespace
@@ -13,8 +13,8 @@ import pytest
 from sregym.conductor.oracles.stale_hostaliases_mitigation import StaleHostAliasesMitigationOracle
 
 NAMESPACE = "astronomy-shop"
-DEPLOYMENT = "frontend"
-BACKEND = "product-catalog"
+DEPLOYMENT = "frontend-proxy"
+BACKEND = "frontend"
 
 
 def _deployment(host_aliases=None, replicas=1, ready=1):
@@ -69,7 +69,7 @@ class _KubeCtl:
 
     def get_deployment(self, name, namespace):
         if self.missing:
-            raise RuntimeError("deployments.apps 'frontend' not found")
+            raise RuntimeError(f"deployments.apps '{DEPLOYMENT}' not found")
         return self.deployment
 
     def list_pods(self, namespace):
@@ -90,7 +90,7 @@ def _oracle(kubectl, probe_ok=True):
 
 
 def test_passes_when_override_gone_and_catalog_serves():
-    kubectl = _KubeCtl(_deployment(), pods=[_pod("frontend-new")])
+    kubectl = _KubeCtl(_deployment(), pods=[_pod("frontend-proxy-new")])
     result = _oracle(kubectl).evaluate()
 
     assert result["success"] is True
@@ -102,7 +102,7 @@ def test_passes_when_override_gone_and_catalog_serves():
 def test_fails_while_fault_is_live():
     """The unmitigated cluster must not pass — this is what PR #944 got wrong."""
     aliases = [_alias("127.0.0.1", [BACKEND])]
-    kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-old", aliases)])
+    kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-proxy-old", aliases)])
     result = _oracle(kubectl).evaluate()
 
     assert result["success"] is False
@@ -114,20 +114,20 @@ def test_fails_when_a_stale_pod_still_carries_the_override():
     """Template clean but an old pod survived: /etc/hosts is still poisoned there."""
     kubectl = _KubeCtl(
         _deployment(),
-        pods=[_pod("frontend-new"), _pod("frontend-old", [_alias("127.0.0.1", [BACKEND])])],
+        pods=[_pod("frontend-proxy-new"), _pod("frontend-proxy-old", [_alias("127.0.0.1", [BACKEND])])],
     )
     result = _oracle(kubectl).evaluate()
 
     assert result["success"] is False
     assert result["template_override_removed"] is True
     assert result["no_pod_carries_override"] is False
-    assert "frontend-old" in result["reason"]
+    assert "frontend-proxy-old" in result["reason"]
 
 
 def test_ignores_terminating_pods():
     kubectl = _KubeCtl(
         _deployment(),
-        pods=[_pod("frontend-new"), _pod("frontend-old", [_alias("127.0.0.1", [BACKEND])], deleting=True)],
+        pods=[_pod("frontend-proxy-new"), _pod("frontend-proxy-old", [_alias("127.0.0.1", [BACKEND])], deleting=True)],
     )
     assert _oracle(kubectl).evaluate()["success"] is True
 
@@ -136,7 +136,7 @@ def test_ignores_pods_outside_the_deployment():
     kubectl = _KubeCtl(
         _deployment(),
         pods=[
-            _pod("frontend-new"),
+            _pod("frontend-proxy-new"),
             _pod("checkout-1", [_alias("127.0.0.1", [BACKEND])], labels={"app": "checkout"}),
         ],
     )
@@ -146,7 +146,7 @@ def test_ignores_pods_outside_the_deployment():
 def test_fails_when_alias_is_merely_repointed():
     """Hardcoding the current ClusterIP is still an override, not a fix."""
     aliases = [_alias("10.96.4.7", [BACKEND])]
-    kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-new", aliases)])
+    kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-proxy-new", aliases)])
     assert _oracle(kubectl).evaluate()["success"] is False
 
 
@@ -161,19 +161,19 @@ def test_fails_when_alias_is_merely_repointed():
 )
 def test_detects_every_qualified_form_of_the_backend_name(hostname):
     aliases = [_alias("127.0.0.1", [hostname])]
-    kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-new", aliases)])
+    kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-proxy-new", aliases)])
     assert _oracle(kubectl).evaluate()["success"] is False
 
 
 def test_allows_unrelated_host_aliases():
     aliases = [_alias("10.0.0.9", ["legacy-billing.internal"])]
-    kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-new", aliases)])
+    kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-proxy-new", aliases)])
     assert _oracle(kubectl).evaluate()["success"] is True
 
 
 def test_fails_when_catalog_requests_still_error():
     """Config is clean and the pod is Ready, but /api/products does not serve."""
-    kubectl = _KubeCtl(_deployment(), pods=[_pod("frontend-new")])
+    kubectl = _KubeCtl(_deployment(), pods=[_pod("frontend-proxy-new")])
     result = _oracle(kubectl, probe_ok=False).evaluate()
 
     assert result["success"] is False
@@ -198,7 +198,7 @@ def test_fails_when_deployment_is_deleted():
 
 
 def test_fails_when_rollout_never_completes():
-    kubectl = _KubeCtl(_deployment(replicas=2, ready=1), pods=[_pod("frontend-new")])
+    kubectl = _KubeCtl(_deployment(replicas=2, ready=1), pods=[_pod("frontend-proxy-new")])
     result = _oracle(kubectl).evaluate()
 
     assert result["success"] is False
@@ -206,7 +206,7 @@ def test_fails_when_rollout_never_completes():
 
 
 def test_fails_when_service_has_no_ready_endpoint():
-    kubectl = _KubeCtl(_deployment(), pods=[_pod("frontend-new")], endpoints_ready=False)
+    kubectl = _KubeCtl(_deployment(), pods=[_pod("frontend-proxy-new")], endpoints_ready=False)
     result = _oracle(kubectl).evaluate()
 
     assert result["success"] is False
