@@ -30,6 +30,7 @@ from sregym.conductor.conductor import Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.profile import PROFILES, set_profile
 from sregym.results.resume import complete_resume_rows
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
@@ -42,7 +43,8 @@ logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
 _driver_error: BaseException | None = None
-SUBMISSION_DRAIN_TIMEOUT_SECONDS = float(os.getenv("SUBMISSION_DRAIN_TIMEOUT_SECONDS", "300"))
+EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
+CLEANUP_DRAIN_TIMEOUT_SECONDS = 300
 
 
 class BenchmarkCampaignAborted(RuntimeError):
@@ -251,13 +253,13 @@ def driver_loop(
             """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
             try:
                 conductor.finish_problem_in_background()
-                await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
             except TimeoutError:
                 conductor.abandon_submission_work()
                 conductor.results["cleanup_timed_out"] = True
                 conductor.record_incomplete_attempt(timeout_reason)
                 console.log(
-                    "⛔ Conductor cleanup did not finish before the drain deadline; "
+                    "⛔ Conductor cleanup did not finish before the cleanup deadline; "
                     "aborting without starting another attempt"
                 )
                 return False
@@ -479,7 +481,7 @@ def driver_loop(
                     console.log("⏩ No agent stages are configured; waiting only for bounded cleanup")
                     if conductor.close_submissions():
                         try:
-                            await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                            await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
                         except TimeoutError:
                             abort_campaign_after_attempt = True
                             conductor.abandon_submission_work()
@@ -505,13 +507,15 @@ def driver_loop(
                         if submission_work:
                             console.log("⏳ Waiting for the accepted submission evaluation to complete...")
                             try:
-                                await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                                await conductor.wait_for_submission_evaluations(
+                                    timeout=EVALUATION_DRAIN_TIMEOUT_SECONDS
+                                )
                             except TimeoutError:
                                 evaluation_failed = True
                                 abort_campaign_after_attempt = True
                                 conductor.abandon_submission_work()
                                 console.log(
-                                    "⛔ Submission evaluation did not finish before the drain deadline; "
+                                    "⛔ Submission evaluation did not finish before the evaluation deadline; "
                                     "aborting the campaign without concurrent cluster cleanup"
                                 )
                             except Exception as e:
@@ -542,19 +546,22 @@ def driver_loop(
                             if submission_work:
                                 console.log("⏳ Waiting for conductor evaluation to complete...")
                                 try:
-                                    await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                                    await conductor.wait_for_submission_evaluations(
+                                        timeout=EVALUATION_DRAIN_TIMEOUT_SECONDS
+                                    )
                                 except TimeoutError:
                                     evaluation_failed = True
                                     abort_campaign_after_attempt = True
                                     conductor.abandon_submission_work()
                                     console.log(
-                                        "⛔ Submission evaluation did not finish before the drain deadline; "
+                                        "⛔ Submission evaluation did not finish before the evaluation deadline; "
                                         "aborting the campaign without concurrent cluster cleanup"
                                     )
                                 except Exception as e:
                                     evaluation_failed = True
                                     console.log(f"⚠️  Conductor evaluation raised: {e}")
-                            if conductor.submission_stage != "done":
+                            missing_stages = conductor.missing_submission_stages()
+                            if abort_campaign_after_attempt or evaluation_failed or missing_stages:
                                 if abort_campaign_after_attempt:
                                     reason = "evaluation_timeout_after_agent_exit"
                                 elif evaluation_failed:
@@ -579,18 +586,21 @@ def driver_loop(
                 # freezing the attempt snapshot or starting another attempt.
                 if not abort_campaign_after_attempt and conductor.close_submissions():
                     try:
-                        await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                        await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
                     except TimeoutError:
                         abort_campaign_after_attempt = True
                         conductor.abandon_submission_work()
-                        conductor.record_incomplete_attempt("evaluation_timeout_after_stage_completion")
+                        conductor.results["cleanup_timed_out"] = True
+                        conductor.record_incomplete_attempt("cleanup_timeout_after_stage_completion")
                         console.log(
-                            "⛔ Submission evaluation did not finish before the drain deadline; "
-                            "aborting the campaign without concurrent cluster cleanup"
+                            "⛔ Conductor cleanup did not finish before the cleanup deadline; "
+                            "aborting without starting another attempt"
                         )
                     except Exception as e:
-                        console.log(f"⚠️  Conductor evaluation raised after stage completion: {e}")
-                        conductor.record_incomplete_attempt("evaluation_failed_after_stage_completion")
+                        console.log(f"⚠️  Conductor cleanup raised after stage completion: {e}")
+                        conductor.results["cleanup_failed"] = True
+                        conductor.results["cleanup_error"] = f"{type(e).__name__}: {e}"
+                        conductor.record_incomplete_attempt("cleanup_failed")
 
                 run_status = conductor.finalize_attempt_status()
                 if conductor.results.get("cleanup_failed"):
@@ -776,6 +786,8 @@ def main(args):
 
     agent_model, judge_model = _configure_model_environment(args)
     internet_policy = InternetPolicy.from_mode(args.internet_access)
+
+    set_profile(args.profile)
 
     if args.noise:
         logger.info("Noise injection enabled.")
@@ -966,6 +978,18 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
+    )
+    parser.add_argument(
+        "--profile",
+        choices=PROFILES,
+        default=os.environ.get("SREGYM_PROFILE", "full"),
+        help=(
+            "Deployment profile (independent of --suite). 'full' (default) deploys the standard "
+            "stack. 'svelte' additionally drops components no part of SREGym reads — astronomy-shop's "
+            "bundled OpenSearch/Grafana/Jaeger, Prometheus Alertmanager/Pushgateway, the OpenEBS NDM "
+            "stack — and shortens metric retention. 'svelte' changes what an agent can observe, so "
+            "its results are not comparable with 'full'."
+        ),
     )
     parser.add_argument(
         "--noise",

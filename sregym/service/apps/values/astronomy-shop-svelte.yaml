@@ -1,0 +1,47 @@
+# Applied to astronomy-shop only under `--profile svelte`.
+#
+# Removes the demo's bundled observability stack. SREGym deploys its own
+# Prometheus, Jaeger, OTel collector and Loki into `observe`, and no oracle,
+# MCP tool or agent tool in this repo reads OpenSearch or Grafana.
+#
+# Measured on one astronomy-shop problem (peak RSS / peak CPU over the run):
+#   opensearch  1096 MiB / 1709m   <- 14% of cluster memory, 39% of cluster CPU
+#   grafana      475 MiB /  303m
+#   jaeger         (never observed; see below)
+
+# Jaeger: the chart deploys it, Helm.assert_if_deployed() waits for it to become
+# Ready, and then Jaeger.create_external_name_service() (observer/jaeger/jaeger.py:64)
+# deletes the Deployment and replaces the Service with an ExternalName pointing at
+# the central collector. Disabling it reaches the identical end state without the
+# image pull, the scheduling, or the readiness wait.
+jaeger:
+  enabled: false
+
+# OpenSearch: the only writer is the collector's logs pipeline (rerouted below).
+# Container logs still reach Loki via the promtail DaemonSet in `observe`, which
+# is what SREGym's log tooling queries, so log observability is unaffected.
+opensearch:
+  enabled: false
+
+# Grafana: a UI with no headless consumer. frontend-proxy's envoy config keeps a
+# GRAFANA_HOST cluster; envoy's DNS clusters tolerate an unresolvable name (the
+# cluster is marked unhealthy, the listener still serves), so the shop's own
+# routes are unaffected.
+grafana:
+  enabled: false
+
+opentelemetry-collector:
+  config:
+    service:
+      pipelines:
+        # Drop the now-absent OpenSearch exporter. The exporter stays *declared*
+        # in the chart's `exporters:` map — the collector only instantiates
+        # components a pipeline references, so an unreferenced one is inert.
+        logs:
+          exporters: [debug]
+      telemetry:
+        metrics:
+          # The chart asks the collector to emit its own telemetry at `detailed`,
+          # which is high-cardinality and, on this deployment, loops back into the
+          # same collector. `basic` keeps the health signals without the volume.
+          level: basic
