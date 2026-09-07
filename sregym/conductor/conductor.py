@@ -1051,13 +1051,15 @@ class Conductor:
             ]
             marked_nodes = [node for node in marked_nodes if node]
 
-            bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} -o json")
+            bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} --ignore-not-found -o json")
             bgppeers = (kubectl_json("kubectl get bgppeers -o json") or {}).get("items", [])
-            bgp_config = kubectl_json("kubectl get bgpconfiguration default -o json")
-            support_namespace = kubectl_json(f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} -o json")
+            bgp_config = kubectl_json("kubectl get bgpconfiguration default --ignore-not-found -o json")
+            support_namespace = kubectl_json(
+                f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} --ignore-not-found -o json"
+            )
             state_configmap = kubectl_json(
                 f"kubectl -n {self._q(problem.STATE_NAMESPACE)} get configmap "
-                f"{self._q(problem.STATE_CONFIGMAP_NAME)} -o json"
+                f"{self._q(problem.STATE_CONFIGMAP_NAME)} --ignore-not-found -o json"
             )
             state_data = (state_configmap or {}).get("data", {}) or {}
 

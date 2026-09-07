@@ -23,7 +23,8 @@ class MCPServer:
     def _is_running(self) -> bool:
         """Check if the MCP server deployment already exists and is ready."""
         result = self.kubectl.exec_command(
-            f"kubectl get deployment {self.service_name} -n {self.namespace} -o jsonpath='{{.status.readyReplicas}}'"
+            f"kubectl get deployment {self.service_name} -n {self.namespace} "
+            f"--ignore-not-found -o jsonpath='{{.status.readyReplicas}}'"
         )
         value = result.strip().strip("'")
         # exec_command returns stderr on failure (e.g. "Error from server (NotFound)"),
