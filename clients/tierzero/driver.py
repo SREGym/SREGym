@@ -184,12 +184,12 @@ def wait_for_stage(target_stages: set[str], timeout: int = 300) -> str:
     raise TimeoutError(f"Conductor did not reach {target_stages} within {timeout}s")
 
 
-def submit_to_conductor(solution: str) -> None:
+def submit_to_conductor(solution: str, stage: str) -> None:
     """POST /submit to conductor."""
     logger.info(f"Submitting to conductor ({len(solution)} chars)")
     resp = requests.post(
         f"{CONDUCTOR_URL}/submit",
-        json={"solution": solution},
+        json={"stage": stage, "solution": solution},
         timeout=30,
     )
     if not resp.ok:
@@ -263,11 +263,11 @@ def main():
         logger.error("TIERZERO_ORG_API_KEY is not set")
         sys.exit(1)
 
-    # ---- Wait for conductor to be ready for diagnosis ----
+    # ---- Wait for conductor to be ready for an agent stage ----
     try:
-        stage = wait_for_stage({"diagnosis"}, timeout=300)
+        stage = wait_for_stage({"diagnosis", "mitigation"}, timeout=300)
     except TimeoutError:
-        logger.error("Timed out waiting for conductor to reach diagnosis stage")
+        logger.error("Timed out waiting for conductor to reach an agent stage")
         sys.exit(1)
 
     # ---- Get problem info ----
@@ -284,43 +284,41 @@ def main():
     # ================================================================
     # PHASE 1: DIAGNOSIS
     # ================================================================
-    logger.info("=" * 40 + " DIAGNOSIS " + "=" * 40)
-
-    diagnosis_prompt = DIAGNOSIS_PROMPT.format(**params)
     diagnosis_interaction_id = None
     diagnosis_text = ""
+    if stage == "diagnosis":
+        logger.info("=" * 40 + " DIAGNOSIS " + "=" * 40)
+        diagnosis_prompt = DIAGNOSIS_PROMPT.format(**params)
 
-    try:
-        diagnosis_interaction_id = create_interaction(diagnosis_prompt)
-        result = poll_interaction(diagnosis_interaction_id)
+        try:
+            diagnosis_interaction_id = create_interaction(diagnosis_prompt)
+            result = poll_interaction(diagnosis_interaction_id)
 
-        if result.get("status") == "COMPLETED":
-            diagnosis_text = extract_content(result)
-            logger.info(f"Diagnosis result ({len(diagnosis_text)} chars): {diagnosis_text[:300]}...")
-        else:
-            logger.error(f"Diagnosis interaction status: {result.get('status')}")
+            if result.get("status") == "COMPLETED":
+                diagnosis_text = extract_content(result)
+                logger.info(f"Diagnosis result ({len(diagnosis_text)} chars): {diagnosis_text[:300]}...")
+            else:
+                logger.error(f"Diagnosis interaction status: {result.get('status')}")
+                diagnosis_text = "Unable to complete diagnosis"
+        except Exception as e:
+            logger.error(f"Diagnosis phase failed: {e}")
             diagnosis_text = "Unable to complete diagnosis"
-    except Exception as e:
-        logger.error(f"Diagnosis phase failed: {e}")
-        diagnosis_text = "Unable to complete diagnosis"
 
-    # Submit diagnosis to conductor
-    submit_to_conductor(diagnosis_text)
+        submit_to_conductor(diagnosis_text, "diagnosis")
+        _save_stage_result(logs_dir, "diagnosis", diagnosis_interaction_id, diagnosis_text)
 
-    # Save diagnosis result
-    _save_stage_result(logs_dir, "diagnosis", diagnosis_interaction_id, diagnosis_text)
+        try:
+            stage = wait_for_stage({"mitigation", "done"}, timeout=300)
+        except TimeoutError:
+            logger.error("Timed out waiting for mitigation stage")
+            sys.exit(1)
 
-    # ---- Wait for conductor to transition to mitigation ----
-    try:
-        stage = wait_for_stage({"mitigation", "done"}, timeout=300)
-    except TimeoutError:
-        logger.error("Timed out waiting for mitigation stage")
-        sys.exit(1)
-
-    if stage == "done":
-        logger.info("Conductor went straight to done after diagnosis")
-        _finish(logs_dir, problem_id)
-        return
+        if stage == "done":
+            logger.info("Conductor went straight to done after diagnosis")
+            _finish(logs_dir, problem_id)
+            return
+    else:
+        logger.info("Benchmark starts at mitigation; skipping diagnosis")
 
     # ================================================================
     # PHASE 2: MITIGATION
@@ -348,7 +346,7 @@ def main():
         logger.error(f"Mitigation phase failed: {e}")
 
     # Submit empty string for mitigation (fix has been applied via kubectl)
-    submit_to_conductor("")
+    submit_to_conductor("", "mitigation")
 
     # Save mitigation result
     _save_stage_result(logs_dir, "mitigation", mitigation_interaction_id, mitigation_text)
@@ -358,7 +356,7 @@ def main():
         stage = wait_for_stage({"resolution", "done", "tearing_down"}, timeout=300)
         if stage == "resolution":
             logger.info("Resolution stage reached, submitting empty string")
-            submit_to_conductor("")
+            submit_to_conductor("", "mitigation")
             wait_for_stage({"done", "tearing_down"}, timeout=300)
     except TimeoutError:
         logger.warning("Timed out waiting for done stage")

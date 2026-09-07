@@ -4,7 +4,11 @@ name: Problem Difficulty Evaluation
 # comments "/evaluate-problem <id> [3|5] [glm-5.3-flash]" on a pull request.
 # Codex requires the Responses API, so a local LiteLLM proxy translates its
 # requests to Z.ai's OpenAI-compatible GLM Coding Plan endpoint.
-# Secret-bearing comment runs execute the default branch, never PR code.
+#
+# Comment runs evaluate the PR merged into the default branch so that problems
+# introduced by the PR itself can be scored before merge. Because this job
+# holds ZCODE_API_KEY, only OWNER/MEMBER/COLLABORATOR comments are honoured;
+# review the PR diff before issuing the command, as it executes PR code.
 
 on:
   issue_comment:
@@ -59,7 +63,6 @@ jobs:
         id: parse
         env:
           EVENT_NAME: ${{ github.event_name }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           DISPATCH_REF: ${{ github.ref }}
           DISPATCH_ID: ${{ github.event.inputs.problem_id }}
           DISPATCH_ATTEMPTS: ${{ github.event.inputs.attempts }}
@@ -89,9 +92,13 @@ jobs:
             issue_comment)
               pr_number="$ISSUE_NUMBER"
               comment_id="$COMMENT_ID"
-              # This job receives ZCODE_API_KEY later. Never execute code from
-              # the PR head or merge ref in this privileged workflow.
-              checkout_ref="$DEFAULT_BRANCH"
+              # Use the /merge ref (PR merged into current main), not /head,
+              # so main-only harness files are present even when the PR branch
+              # predates them. A PR with merge conflicts has no /merge ref and
+              # checkout fails with a clear error. This runs PR code next to
+              # ZCODE_API_KEY, which is why the trigger is limited to
+              # write-access commenters below.
+              checkout_ref="refs/pull/${pr_number}/merge"
               case "$COMMENT_ASSOC" in
                 OWNER|MEMBER|COLLABORATOR) ;;
                 *)
@@ -232,6 +239,7 @@ jobs:
           PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
           ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
           ZAI_MODEL: ${{ needs.resolve.outputs.model }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         with:
           script: |
             const marker = `<!-- problem-difficulty-evaluation:${context.runId} -->`;
@@ -244,7 +252,7 @@ jobs:
               `## ⏳ Problem Difficulty Evaluation\n\n` +
               `Running for \`${process.env.PROBLEM_ID}\` ` +
               `(${process.env.ATTEMPTS} attempts, \`${process.env.ZAI_MODEL}\`)\n\n` +
-              `The secret-bearing evaluator runs trusted code from the default branch.\n\n` +
+              `Evaluating this PR merged into \`${process.env.DEFAULT_BRANCH}\`.\n\n` +
               `_[Live workflow run](${runUrl})_`;
 
             const { owner, repo } = context.repo;
@@ -261,11 +269,23 @@ jobs:
           ref: ${{ needs.resolve.outputs.checkout_ref }}
           submodules: recursive
           fetch-depth: 0
+          # PR code runs later in this job; keep GITHUB_TOKEN out of .git/config.
+          persist-credentials: false
 
       - name: Require registered problem ID
+        env:
+          CHECKOUT_REF: ${{ needs.resolve.outputs.checkout_ref }}
         run: |
           if ! grep -Fq "\"$PROBLEM_ID\":" sregym/conductor/problems/registry.py; then
-            echo "::error::Problem '$PROBLEM_ID' is not registered on the checked-out branch."
+            echo "::error::Problem '$PROBLEM_ID' is not registered at $CHECKOUT_REF."
+            {
+              echo "# Z.ai Problem Difficulty Evaluation"
+              echo
+              echo "❌ Problem \`$PROBLEM_ID\` is not registered in" \
+                "\`sregym/conductor/problems/registry.py\` at \`$CHECKOUT_REF\`."
+              echo
+              echo "Check the ID against the registry key, or push the registration to this PR."
+            } | tee evaluation-report.md >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
 
@@ -418,6 +438,7 @@ jobs:
           JUDGE_API_BASE: http://127.0.0.1:4000/v1
         run: |
           set -euo pipefail
+          echo "EVALUATION_STARTED=true" >> "$GITHUB_ENV"
           export AGENT_API_KEY="$LITELLM_MASTER_KEY"
           export JUDGE_API_KEY="$LITELLM_MASTER_KEY"
           uv run main.py \
@@ -439,7 +460,7 @@ jobs:
           kind export logs /tmp/kind-logs || true
 
       - name: Build pass-rate report
-        if: always() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        if: always() && env.EVALUATION_STARTED == 'true'
         run: |
           set -euo pipefail
           result_csv=$(find results -type f -name '*_codex_results.csv' ! -name 'codex_ALL_results.csv' 2>/dev/null \
@@ -458,7 +479,7 @@ jobs:
             exit 1
           fi
 
-          uv run python -m sregym.problem_evaluation_report \
+          uv run python -m sregym.results.report \
             --csv "$result_csv" \
             --problem "$PROBLEM_ID" \
             --model "$ZAI_MODEL" \

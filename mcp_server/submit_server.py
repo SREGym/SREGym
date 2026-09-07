@@ -13,7 +13,7 @@ mcp = FastMCP("Submission MCP Server")
 
 
 @mcp.tool(name="submit")
-def submit(ans: str) -> dict[str, str]:
+def submit(ans: str, stage: str | None = None) -> dict[str, str]:
     """Submit task result to benchmark
 
     Args:
@@ -29,9 +29,11 @@ def submit(ans: str) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
     # Match curl behavior: send "\"yes\"" when ans is "yes"
     payload = {"solution": f"{ans}"}
+    if stage is not None:
+        payload["stage"] = stage
 
     try:
-        response = requests.post(url, json=payload, headers=headers)
+        response = requests.post(url, json=payload, headers=headers, timeout=310)
         logger.info(f"[submit_mcp] Response status: {response.status_code}, text: {response.text}")
         return {"status": str(response.status_code), "text": str(response.text)}
 

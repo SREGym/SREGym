@@ -3,8 +3,10 @@ import http.client
 import json
 import socket
 import ssl
+from datetime import timedelta
 
 import pytest
+from cryptography import x509
 
 from sregym.service.k8s_proxy import (
     HELM_RELEASE_SECRET_NAME_PREFIX,
@@ -43,10 +45,18 @@ ORDINARY_SECRET = {
 
 
 class FakeResponse:
-    def __init__(self, body: bytes, content_type: str = "application/json", status: int = 200):
+    def __init__(
+        self,
+        body: bytes,
+        content_type: str = "application/json",
+        status: int = 200,
+        headers: list[tuple[str, str]] | None = None,
+        fp=None,
+    ):
         self.status = status
         self._body = body
-        self._headers = [("Content-Type", content_type), ("Content-Length", str(len(body)))]
+        self._headers = headers or [("Content-Type", content_type), ("Content-Length", str(len(body)))]
+        self.fp = fp
 
     def read(self) -> bytes:
         return self._body
@@ -57,13 +67,18 @@ class FakeResponse:
     def getheaders(self) -> list[tuple[str, str]]:
         return self._headers
 
+    def close(self):
+        if self.fp is not None:
+            self.fp.close()
+
 
 class FakeHTTPSConnection:
     requests: list[tuple[str, str, dict[str, str]]] = []
     response = FakeResponse(b"{}")
+    sock: socket.socket | None = None
 
     def __init__(self, *args, **kwargs):
-        pass
+        self.sock = type(self).sock
 
     def request(self, method: str, path: str, body=None, headers=None):
         self.requests.append((method, path, headers or {}))
@@ -72,13 +87,16 @@ class FakeHTTPSConnection:
         return self.response
 
     def close(self):
-        pass
+        if self.sock is not None:
+            self.sock.close()
+            self.sock = None
 
 
 @pytest.fixture
 def proxy(monkeypatch):
     FakeHTTPSConnection.requests = []
     FakeHTTPSConnection.response = FakeResponse(b"{}")
+    FakeHTTPSConnection.sock = None
     monkeypatch.setattr(http.client, "HTTPSConnection", FakeHTTPSConnection)
 
     instance = object.__new__(KubernetesAPIProxy)
@@ -134,6 +152,12 @@ def request(
         response.begin()
         result = response.status, response.headers, response.read()
     return result
+
+
+def test_proxy_certificate_outlives_long_benchmark_campaigns(proxy):
+    certificate = x509.load_pem_x509_certificate(proxy._server_cert_pem.encode())
+
+    assert certificate.not_valid_after_utc - certificate.not_valid_before_utc >= timedelta(days=30)
 
 
 def test_helm_release_detection_does_not_depend_on_labels():
@@ -356,3 +380,91 @@ def test_ordinary_secret_remains_accessible(proxy):
 
     assert status == 200
     assert json.loads(body) == ORDINARY_SECRET
+
+
+@pytest.mark.parametrize("upgrade_protocol", ["websocket", "SPDY/3.1"])
+def test_protocol_upgrade_relays_buffered_and_subsequent_bytes_in_both_directions(proxy, upgrade_protocol):
+    proxy_side, upstream_side = socket.socketpair()
+    proxy_side.settimeout(2)
+    upstream_side.settimeout(2)
+    upstream_reader = proxy_side.makefile("rb")
+    FakeHTTPSConnection.sock = proxy_side
+    FakeHTTPSConnection.response = FakeResponse(
+        b"",
+        status=101,
+        headers=[
+            ("Connection", "Upgrade"),
+            ("Upgrade", upgrade_protocol),
+            ("Sec-WebSocket-Accept", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="),
+            ("Sec-WebSocket-Protocol", "v5.channel.k8s.io"),
+        ],
+        fp=upstream_reader,
+    )
+    upstream_side.sendall(b"early server frame")
+    assert upstream_reader.peek(18) == b"early server frame"
+
+    port = proxy.server.server_address[1]
+    context = ssl._create_unverified_context()
+    try:
+        with (
+            socket.create_connection(("127.0.0.1", port), timeout=2) as raw_socket,
+            context.wrap_socket(raw_socket, server_hostname="localhost") as connection,
+        ):
+            connection.settimeout(2)
+            connection.sendall(
+                b"GET /api/v1/namespaces/default/pods/example/exec?command=true&stdout=true HTTP/1.1\r\n"
+                + f"Authorization: Bearer {proxy._agent_token}\r\n".encode()
+                + b"Connection: Upgrade\r\n"
+                + f"Upgrade: {upgrade_protocol}\r\n".encode()
+                + b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                + b"Sec-WebSocket-Version: 13\r\n"
+                + b"Sec-WebSocket-Protocol: v5.channel.k8s.io\r\n"
+                + b"X-Stream-Protocol-Version: v5.channel.k8s.io\r\n"
+                + b"X-Stream-Protocol-Version: v4.channel.k8s.io\r\n"
+                + b"\r\n"
+                + b"early client frame"
+            )
+            response = http.client.HTTPResponse(connection)
+            response.begin()
+
+            assert response.status == 101
+            assert response.version == 11
+            assert response.getheader("Upgrade") == upgrade_protocol
+            assert response.getheader("Sec-WebSocket-Accept") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+            assert response.getheader("Sec-WebSocket-Protocol") == "v5.channel.k8s.io"
+            assert response.getheader("Content-Length") is None
+            assert upstream_side.recv(18) == b"early client frame"
+            assert response.fp.read1(18) == b"early server frame"
+
+            connection.sendall(b"client frame")
+            assert upstream_side.recv(12) == b"client frame"
+
+            upstream_side.sendall(b"server frame")
+            assert response.fp.read1(12) == b"server frame"
+
+            _, _, forwarded_headers = FakeHTTPSConnection.requests[0]
+            assert forwarded_headers["Connection"] == "Upgrade"
+            assert forwarded_headers["Upgrade"] == upgrade_protocol
+            assert forwarded_headers["Sec-WebSocket-Key"] == "dGhlIHNhbXBsZSBub25jZQ=="
+            assert forwarded_headers["Sec-WebSocket-Version"] == "13"
+            assert forwarded_headers["Sec-WebSocket-Protocol"] == "v5.channel.k8s.io"
+            assert forwarded_headers["X-Stream-Protocol-Version"] == "v5.channel.k8s.io, v4.channel.k8s.io"
+    finally:
+        upstream_side.close()
+        upstream_reader.close()
+
+
+def test_rejected_protocol_upgrade_uses_the_normal_response_path(proxy):
+    response_body = b'{"kind":"Status","message":"pod not found"}'
+    FakeHTTPSConnection.response = FakeResponse(response_body, status=404)
+
+    status, headers, body = request(
+        proxy,
+        "/api/v1/namespaces/default/pods/missing/exec?command=true&stdout=true",
+        method="POST",
+        headers={"Connection": "Upgrade", "Upgrade": "websocket"},
+    )
+
+    assert status == 404
+    assert headers["Content-Length"] == str(len(response_body))
+    assert body == response_body

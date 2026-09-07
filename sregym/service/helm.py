@@ -35,15 +35,7 @@ class Helm:
         logger.info(f"Helm Install: {release_name} in namespace {namespace}")
 
         if not remote_chart:
-            # Install dependencies for chart before installation
-            dependency_command = f"helm dependency update {chart_path}"
-            dependency_process = subprocess.Popen(
-                dependency_command,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            dependency_output, dependency_error = dependency_process.communicate()
+            Helm.ensure_dependencies(chart_path)
 
         command = f"helm install {release_name} {chart_path} -n {namespace} --create-namespace"
 
@@ -70,6 +62,36 @@ class Helm:
             )
         else:
             logger.debug(stdout)
+
+    @staticmethod
+    def ensure_dependencies(chart_path: str):
+        """Vendor a local chart's subcharts, skipping the update when already satisfied.
+
+        `helm dependency update` re-fetches every repository index over the network
+        on each call. It runs once per problem per local chart, so across a suite it
+        is a meaningful share of wall clock (and the only reason a run needs network
+        access once images are cached).
+
+        `helm dependency list` answers the same question locally in ~0.1s: it reports
+        "ok" per dependency when the pinned version is present in charts/. Only fall
+        through to the update when something is missing or the wrong version.
+        """
+        listing = subprocess.run(f"helm dependency list {chart_path}", shell=True, capture_output=True, text=True)
+        if listing.returncode == 0:
+            # Header row plus one row per dependency; trailing text (e.g. WARNING
+            # lines) has fewer than 4 columns and is ignored.
+            rows = [ln.split() for ln in listing.stdout.splitlines()[1:]]
+            statuses = [r[-1] for r in rows if len(r) >= 4]
+            if statuses and all(s == "ok" for s in statuses):
+                logger.debug(f"Chart dependencies already satisfied for {chart_path}; skipping update")
+                return
+            logger.info(f"Chart dependencies not satisfied for {chart_path} ({statuses or 'none listed'}); updating")
+
+        result = subprocess.run(f"helm dependency update {chart_path}", shell=True, capture_output=True, text=True)
+        if result.returncode != 0:
+            # Previously swallowed. A failure here surfaces later as a confusing
+            # "chart not found" from helm install, so say so now.
+            logger.error(f"helm dependency update failed for {chart_path}:\n{result.stderr.strip()}")
 
     @staticmethod
     def uninstall(**args):

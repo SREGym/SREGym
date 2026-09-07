@@ -50,6 +50,26 @@ singleBinary:
     enabled: true
     storageClass: openebs-hostpath
     size: 10Gi
+  # The chart has no top-level `resources` key, so a resources block outside a
+  # component is silently dropped. This is the path that actually applies.
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+# Chunk/results caches are memcached sidecars whose chart defaults are sized for
+# a production Loki: allocatedMemory 8192 and 1024 respectively, which the chart
+# turns into 9830Mi and 1229Mi of *both* requests and limits. Those are hard
+# scheduler reservations — ~11GiB of a workstation cluster committed to caches
+# that a benchmark run (minutes of logs, few repeated queries) never fills.
+# Right-size rather than remove: query results are unchanged either way.
+chunksCache:
+  allocatedMemory: 256
+resultsCache:
+  allocatedMemory: 128
 
 # Disable components not needed in SingleBinary mode
 backend:
@@ -77,26 +97,13 @@ promtail:
     clients:
       - url: http://loki-gateway/loki/api/v1/push
 
-# Disable monitoring components for simplicity
-monitoring:
-  selfMonitoring:
-    enabled: false
-    grafanaAgent:
-      installOperator: false
-  lokiCanary:
-    enabled: false
+# Disable monitoring components for simplicity.
+# `monitoring.selfMonitoring` and `monitoring.lokiCanary` were removed from the
+# chart in 6.x; under 7.3.0 they are inert, which is why the canary DaemonSet
+# ran on every node regardless. lokiCanary is top-level now.
+lokiCanary:
+  enabled: false
 
 # Disable test pod
 test:
   enabled: false
-
-# Resource limits
-resources:
-  limits:
-    cpu: 500m
-    memory: 512Mi
-    ephemeral-storage: 10Gi
-  requests:
-    cpu: 100m
-    memory: 256Mi
-    ephemeral-storage: 1Gi

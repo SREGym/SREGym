@@ -20,7 +20,21 @@ logger.setLevel(logging.DEBUG)
 # is included so that noise injection survives the per-problem cleanup —
 # without it the conductor wipes the chaos-mesh helm release and CRDs after
 # every problem and the next noise injection silently fails.
-PROTECTED_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease", "default", "sregym", "chaos-mesh"})
+#
+# `openebs` is included for the same reason plus one more. It is pure
+# infrastructure: it holds no problem state, so rebuilding it between problems
+# buys no trial independence, and it costs ~24s of redeploy each time. More
+# importantly, deleting the namespace kills openebs-localpv-provisioner before
+# it can run its cleanup helper pods, which is the leak that
+# `gc_orphan_localpv_dirs` exists to mop up (see step 4b below). Keeping the
+# provisioner alive lets it clean up properly.
+#
+# The `observe` namespace is deliberately NOT protected: Prometheus, Loki and
+# Jaeger accumulate telemetry, and carrying that from one problem into the next
+# would make results order-dependent.
+PROTECTED_NAMESPACES = frozenset(
+    {"kube-system", "kube-public", "kube-node-lease", "default", "sregym", "chaos-mesh", "openebs"}
+)
 
 
 def _is_chaos_mesh_resource(name: str) -> bool:
@@ -43,6 +57,36 @@ def _is_chaos_mesh_resource(name: str) -> bool:
     return (
         ("chaos-mesh" in name) or ("chaos-controller" in name) or ("chaos-daemon" in name) or name in {"validate-auth"}
     )
+
+
+def _is_openebs_resource(name: str) -> bool:
+    """True if a cluster-scoped resource belongs to OpenEBS and must be preserved.
+
+    Protecting the `openebs` namespace alone is not enough: openebs-operator.yaml
+    also creates cluster-scoped RBAC, CRDs (`*.openebs.io`) and StorageClasses.
+    Deleting those while keeping the namespace leaves the provisioner running but
+    unable to act — a broken half-state that is harder to diagnose than a clean
+    rebuild. Preserve the whole tier together.
+    """
+    if not name:
+        return False
+    return name.endswith(".openebs.io") or "openebs" in name
+
+
+def _is_metrics_server_resource(name: str) -> bool:
+    """True if a cluster-scoped resource belongs to metrics-server.
+
+    The Deployment lives in kube-system and is protected, but its cluster-scoped
+    RBAC is not in the baseline and was being deleted here every problem. That
+    went unnoticed only because the conductor re-applied components.yaml on each
+    problem and silently recreated it. The binding that matters is
+    `metrics-server:system:auth-delegator`, which does not start with "system:"
+    and so escapes the generic guard below; without it metrics-server cannot
+    create subjectaccessreviews and every `kubectl top` fails with a 500.
+    """
+    if not name:
+        return False
+    return "metrics-server" in name
 
 
 @dataclass
@@ -223,7 +267,7 @@ class ClusterStateManager:
             # Skip system roles that may have been auto-created
             if role.startswith("system:") or role.startswith("kubeadm:"):
                 continue
-            if _is_chaos_mesh_resource(role):
+            if _is_chaos_mesh_resource(role) or _is_openebs_resource(role) or _is_metrics_server_resource(role):
                 continue
             logger.info(f"Deleting unexpected ClusterRole: {role}")
             try:
@@ -239,7 +283,11 @@ class ClusterStateManager:
         for binding in unexpected_bindings:
             if binding.startswith("system:") or binding.startswith("kubeadm:"):
                 continue
-            if _is_chaos_mesh_resource(binding):
+            if (
+                _is_chaos_mesh_resource(binding)
+                or _is_openebs_resource(binding)
+                or _is_metrics_server_resource(binding)
+            ):
                 continue
             logger.info(f"Deleting unexpected ClusterRoleBinding: {binding}")
             try:
@@ -262,14 +310,14 @@ class ClusterStateManager:
                     logger.warning(f"Failed to delete PersistentVolume {pv}: {e}")
 
         # 4b. Garbage-collect orphaned OpenEBS LocalPV hostpath dirs.
-        # The openebs namespace is itself "unexpected" and gets deleted in step 1
-        # above, which kills the openebs-localpv-provisioner before it can run
-        # cleanup helper pods for any PVs it provisioned. Additionally, on
-        # control-plane nodes the dm-flakey path is intentionally skipped, so
-        # those nodes never get the rm -rf wipe that workers do at dm-flakey
-        # setup. Either path leaks /var/openebs/local/pvc-* dirs, eventually
-        # filling the disk and breaking subsequent deploys. Sweep them now that
-        # all unexpected PVs are gone from the API. Best-effort.
+        # `openebs` is now protected (see PROTECTED_NAMESPACES), so the
+        # provisioner survives step 1 and can run its own cleanup helper pods for
+        # PVs deleted in step 4 — the main source of leaks is gone. This sweep
+        # remains as a backstop: on control-plane nodes the dm-flakey path is
+        # intentionally skipped, so those nodes never get the rm -rf wipe that
+        # workers do at dm-flakey setup, and any /var/openebs/local/pvc-* dirs
+        # left behind eventually fill the disk and break subsequent deploys.
+        # Best-effort.
         try:
             gc_results = self.kubectl.gc_orphan_localpv_dirs()
             total = sum(c for c in gc_results.values() if c > 0)
@@ -283,6 +331,8 @@ class ClusterStateManager:
         current_scs = self._get_storage_classes()
         unexpected_scs = current_scs - self.baseline.storage_classes
         for sc in unexpected_scs:
+            if _is_openebs_resource(sc):
+                continue
             logger.info(f"Deleting unexpected StorageClass: {sc}")
             try:
                 self.storage_v1.delete_storage_class(name=sc)
@@ -295,7 +345,7 @@ class ClusterStateManager:
         current_crds = self._get_crds()
         unexpected_crds = current_crds - self.baseline.crds
         for crd in unexpected_crds:
-            if _is_chaos_mesh_resource(crd):
+            if _is_chaos_mesh_resource(crd) or _is_openebs_resource(crd):
                 continue
             logger.info(f"Deleting unexpected CRD: {crd}")
             self._strip_cr_finalizers(crd)
@@ -310,7 +360,7 @@ class ClusterStateManager:
         current_vwc = self._get_validating_webhook_configs()
         unexpected_vwc = current_vwc - self.baseline.validating_webhook_configs
         for vwc in unexpected_vwc:
-            if _is_chaos_mesh_resource(vwc):
+            if _is_chaos_mesh_resource(vwc) or _is_openebs_resource(vwc):
                 continue
             logger.info(f"Deleting unexpected ValidatingWebhookConfiguration: {vwc}")
             try:
@@ -324,7 +374,7 @@ class ClusterStateManager:
         current_mwc = self._get_mutating_webhook_configs()
         unexpected_mwc = current_mwc - self.baseline.mutating_webhook_configs
         for mwc in unexpected_mwc:
-            if _is_chaos_mesh_resource(mwc):
+            if _is_chaos_mesh_resource(mwc) or _is_openebs_resource(mwc):
                 continue
             logger.info(f"Deleting unexpected MutatingWebhookConfiguration: {mwc}")
             try:
