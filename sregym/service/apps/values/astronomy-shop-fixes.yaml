@@ -1,8 +1,22 @@
 # Always applied to astronomy-shop, by AstronomyShop.deploy().
 #
 # Corrections to the vendored opentelemetry-demo chart for the way SREGym
-# actually deploys it. Nothing here changes what an agent can observe; each
-# entry removes work the collector was doing that could never succeed.
+# actually deploys it. Keep telemetry and plugins available without runtime
+# public downloads or exports to services that are not deployed.
+
+grafana:
+  image:
+    registry: ghcr.io
+    repository: sregym/grafana
+    tag: 12.3.1-opensearch2.34.3
+  # The custom image includes this plugin. The chart's plugins list otherwise
+  # starts a network download every time a Grafana pod starts.
+  plugins: []
+  grafana.ini:
+    paths:
+      plugins: /opt/grafana/plugins
+  env:
+    GF_PLUGINS_PREINSTALL_DISABLED: "true"
 
 opentelemetry-collector:
   config:

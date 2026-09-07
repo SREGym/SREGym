@@ -592,6 +592,74 @@ def test_evaluation_and_cleanup_have_separate_deadlines():
     assert conductor._submit_future is None
 
 
+def test_oracle_budget_is_bound_to_accepted_stage():
+    gate = threading.Event()
+    conductor = _conductor(mitigation_evaluation=lambda _: gate.wait(2))
+    conductor.current_stage_index = 1
+    conductor.submission_stage = "mitigation"
+    conductor.problem = SimpleNamespace(
+        mitigation_oracle=SimpleNamespace(evaluation_timeout_seconds=0.3),
+        recover_fault=lambda: None,
+        app=SimpleNamespace(cleanup=lambda: None),
+    )
+
+    async def run():
+        await conductor.submit("", expected_stage="mitigation")
+        # A later stage/configuration change must not rewrite the accepted budget.
+        conductor.problem.mitigation_oracle.evaluation_timeout_seconds = 0.01
+
+        async def release():
+            await asyncio.sleep(0.1)
+            gate.set()
+
+        task = asyncio.create_task(release())
+        await conductor.wait_for_submission_evaluations(timeout=0.02)
+        await task
+        await conductor.wait_for_submission_work(timeout=1)
+
+    try:
+        asyncio.run(run())
+    finally:
+        gate.set()
+        _wait_for_current_evaluation(conductor)
+    assert conductor.submission_stage == "done"
+
+
+@pytest.mark.parametrize("budget", [None, -1, 0, float("inf"), float("nan"), "300", True])
+def test_unspecified_or_invalid_oracle_budget_preserves_default_deadline(budget):
+    gate = threading.Event()
+    conductor = _conductor(diagnosis_evaluation=lambda _: gate.wait(2))
+    conductor.problem = SimpleNamespace(diagnosis_oracle=SimpleNamespace(evaluation_timeout_seconds=budget))
+
+    async def run():
+        await conductor.submit("diagnosis", expected_stage="diagnosis")
+        with pytest.raises(TimeoutError):
+            await conductor.wait_for_submission_evaluations(timeout=0.01)
+
+    try:
+        asyncio.run(run())
+    finally:
+        gate.set()
+        _wait_for_current_evaluation(conductor)
+
+
+def test_mitigation_budget_does_not_extend_diagnosis():
+    gate = threading.Event()
+    conductor = _conductor(diagnosis_evaluation=lambda _: gate.wait(2))
+    conductor.problem = SimpleNamespace(mitigation_oracle=SimpleNamespace(evaluation_timeout_seconds=10))
+
+    async def run():
+        await conductor.submit("diagnosis", expected_stage="diagnosis")
+        with pytest.raises(TimeoutError):
+            await conductor.wait_for_submission_evaluations(timeout=0.01)
+
+    try:
+        asyncio.run(run())
+    finally:
+        gate.set()
+        _wait_for_current_evaluation(conductor)
+
+
 def test_abandoned_conductor_cannot_start_an_overlapping_attempt():
     conductor = _conductor()
     conductor.problem_id = "next-problem"

@@ -107,6 +107,7 @@ class ClaudeCodeAgent:
     def allowed_tools(cls) -> list[str]:
         tools = list(cls.ALLOWED_TOOLS)
         if os.environ.get("AGENT_INTERNET_ACCESS") == "filtered":
+            tools.remove("WebFetch")
             tools.remove("WebSearch")
         return tools
 

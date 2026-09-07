@@ -1,5 +1,6 @@
 """Opaque runtime artifacts and host-side semantic publication."""
 
+import contextlib
 import csv
 import json
 import os
@@ -23,6 +24,15 @@ class RunArtifacts:
     staging_root: Path
     active_dir: Path
     final_dir: Path
+
+    @property
+    def network_audit_path(self) -> Path:
+        # A sibling of the agent mount: the agent cannot edit this host record.
+        return self.active_dir.with_name(f"{self.artifact_id}.internet-audit.json")
+
+    def save_network_audit(self, audit: dict[str, Any]) -> None:
+        """Retain the audit even if agent artifact validation later fails."""
+        _write_json(self.network_audit_path, audit)
 
     @classmethod
     def create(
@@ -81,9 +91,16 @@ class RunArtifacts:
                 raise ArtifactFinalizationError(f"invalid per-attempt CSV: {attempt_csv}")
             if any(self.artifact_id in path.name for path in _walk(self.active_dir)):
                 raise ArtifactFinalizationError("opaque artifact name remains after canonicalization")
+            if self.network_audit_path.exists():
+                # Add trusted metadata only after validating agent artifacts.
+                # Atomic replacement does not follow an agent-created symlink.
+                _write_json(
+                    self.active_dir / "internet_audit.json",
+                    json.loads(self.network_audit_path.read_text(encoding="utf-8")),
+                )
         except ArtifactFinalizationError:
             raise
-        except (OSError, csv.Error) as exc:
+        except (OSError, csv.Error, ValueError) as exc:
             raise ArtifactFinalizationError(f"could not finalize opaque artifacts: {exc}") from exc
 
         self._assert_target_available()
@@ -92,6 +109,9 @@ class RunArtifacts:
             self.active_dir.rename(self.final_dir)
         except OSError as exc:
             raise ArtifactFinalizationError(f"could not publish artifact directory: {exc}") from exc
+        # A leftover host copy must not turn successful publication into failure.
+        with contextlib.suppress(OSError):
+            self.network_audit_path.unlink(missing_ok=True)
         _remove_empty_parents(self.active_dir.parent, self.staging_root.parent)
         return self.final_dir
 

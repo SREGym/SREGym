@@ -22,7 +22,7 @@ from logger import init_logger  # noqa: E402
 
 init_logger()
 
-from clients.codex.codex_agent import CodexAgent, custom_provider_args  # noqa: E402
+from clients.codex.codex_agent import CodexAgent, custom_provider_args, filtered_runtime_args  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 
 logger = logging.getLogger("all.codex.driver")
@@ -58,6 +58,7 @@ def run_preflight() -> None:
         "--skip-git-repo-check",
     ]
     command.extend(provider_args)
+    command.extend(filtered_runtime_args(env))
     reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
     if reasoning_effort:
         command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])

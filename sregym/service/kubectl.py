@@ -847,6 +847,26 @@ class KubeCtl:
 
         return matching_rs
 
+    def get_deployment_pods(self, deployment: client.V1Deployment, namespace: str) -> list[client.V1Pod]:
+        """Return pods controlled by this Deployment, including rolling replacements."""
+        replica_sets = self.get_matching_replicasets(namespace, deployment.metadata.name)
+        owned_uids = {
+            rs.metadata.uid
+            for rs in replica_sets
+            if any(
+                owner.kind == "Deployment" and owner.uid == deployment.metadata.uid and owner.controller
+                for owner in (rs.metadata.owner_references or [])
+            )
+        }
+        return [
+            pod
+            for pod in self.list_pods(namespace).items
+            if any(
+                owner.kind == "ReplicaSet" and owner.uid in owned_uids and owner.controller
+                for owner in (pod.metadata.owner_references or [])
+            )
+        ]
+
     def delete_replicaset(self, name: str, namespace: str):
         body = client.V1DeleteOptions(propagation_policy="Foreground")
         try:

@@ -5,20 +5,23 @@ import subprocess
 import time
 
 import requests
+import yaml
 
 from sregym.paths import MCP_SERVER_K8S
 from sregym.service.kubectl import KubeCtl
+from sregym.service.kubernetes_access_policy import restricted_cluster_role
 
 logger = logging.getLogger("all.sregym.mcp_server")
 
 
 class MCPServer:
-    def __init__(self):
+    def __init__(self, *, restrict_network_access: bool = False):
         self.namespace = "sregym"
         self.service_name = "mcp-server"
         self.port = 9954
         self.port_forward_process = None
         self.kubectl = KubeCtl()
+        self.restrict_network_access = restrict_network_access
 
     def _is_running(self) -> bool:
         """Check if the MCP server deployment already exists and is ready."""
@@ -30,32 +33,54 @@ class MCPServer:
         # so only treat a purely numeric positive value as "running".
         return value.isdigit() and int(value) > 0
 
-    def _ensure_rbac(self):
-        """Ensure RBAC resources exist even if the MCP server pod is already running."""
-        rbac_dir = MCP_SERVER_K8S
-        for resource in ["clusterrole.yaml", "clusterrolebinding.yaml"]:
-            self.kubectl.exec_command(f"kubectl apply -f {rbac_dir / resource}")
-        logger.info("MCP server RBAC resources ensured.")
+    def _network_environment(self) -> dict[str, str]:
+        value = str(self.restrict_network_access).lower()
+        return {
+            "RESTRICT_NETWORK_ACCESS": value,
+            # Older MCP images read this name. Keep it synchronized during upgrades.
+            "BLOCK_WORKLOAD_CREATION": value,
+        }
+
+    def _deployment_resources(self) -> list[dict]:
+        """Configure the rendered manifests before any resource is applied."""
+        rendered = self.kubectl.exec_command_checked(f"kubectl kustomize {MCP_SERVER_K8S}", timeout=30)
+        resources = [body for body in yaml.safe_load_all(rendered) if body]
+        for index, body in enumerate(resources):
+            if body["kind"] == "ClusterRole" and self.restrict_network_access:
+                resources[index] = restricted_cluster_role(body)
+            elif body["kind"] == "Deployment" and body["metadata"]["name"] == self.service_name:
+                for container in body["spec"]["template"]["spec"]["containers"]:
+                    if container["name"] == self.service_name:
+                        network_env = self._network_environment()
+                        container["env"] = [
+                            entry for entry in container.get("env", []) if entry["name"] not in network_env
+                        ] + [{"name": name, "value": value} for name, value in network_env.items()]
+        return resources
 
     def deploy(self):
-        """Deploy the MCP server into the cluster via kustomize.
+        """Apply the selected mode and wait for readiness before exposing MCP."""
+        resources = self._deployment_resources()
+        already_running = self._is_running()
+        if already_running:
+            # Keep the existing image and other Deployment customizations.
+            resources = [body for body in resources if body["kind"] in {"ClusterRole", "ClusterRoleBinding"}]
 
-        Skips redeployment if the MCP server is already running to avoid disrupting existing connections.
-        Always ensures RBAC resources exist regardless of pod state.
-        """
-        self._ensure_rbac()
+        self.kubectl.exec_command_checked("kubectl apply -f -", input_data=yaml.safe_dump_all(resources), timeout=60)
+        if already_running:
+            env_args = " ".join(f"{name}={value}" for name, value in self._network_environment().items())
+            self.kubectl.exec_command_checked(
+                f"kubectl set env deployment/{self.service_name} -n {self.namespace} {env_args}", timeout=30
+            )
 
-        if self._is_running():
-            logger.info("MCP server already running, skipping redeploy.")
-            if not self._is_port_forward_healthy():
-                logger.info("Port-forward is absent or stale, restarting.")
-                self.start_port_forward()
-            return
-
-        self.kubectl.exec_command(f"kubectl apply -k {MCP_SERVER_K8S}")
-        self.kubectl.wait_for_ready(self.namespace)
-        self.start_port_forward()
-        logger.info("MCP server deployed successfully.")
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{self.service_name} -n {self.namespace} --timeout=180s",
+            timeout=190,
+        )
+        if not already_running:
+            self.kubectl.wait_for_ready(self.namespace)
+        if not self._is_port_forward_healthy():
+            self.start_port_forward()
+        logger.info("MCP server deployment and access policy are ready.")
 
     def is_port_in_use(self, port: int) -> bool:
         """Check if a local TCP port is already bound."""

@@ -79,6 +79,8 @@ bash kind/setup_kind_cluster.sh x86
 bash kind/setup_kind_cluster.sh arm
 ```
 
+For existing clusters, see the [upgrade and baseline instructions](./docs/network-access.md#cluster-maintenance).
+
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
 ### Running an Agent
@@ -128,8 +130,20 @@ Use `--force-build` to rebuild the container image after updating dependencies o
 uv run main.py --agent codex --model gpt-5 --force-build
 ```
 
-Containerized agents can use the public internet by default, but direct access to the benchmark's GitHub source is
-blocked. Use `--internet-access open` only when you intentionally need the previous unrestricted network behavior.
+#### Network access
+
+Filtered access is the default. Agents can reach the selected model provider and internal services, but not other internet destinations.
+Application pods also have outbound restrictions.
+
+Use `--internet-access open` for unrestricted internet access.
+To allow an extra destination in filtered mode, add `--allow-agent-endpoint`:
+
+```bash
+uv run main.py --agent codex --model gpt-5.6-sol \
+  --allow-agent-endpoint https://telemetry.example.com/v1
+```
+
+Repeat the option for more destinations.
 
 ### Deployment Profiles
 

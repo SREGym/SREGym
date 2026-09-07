@@ -10,6 +10,7 @@ from kubernetes import client
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.kubectl import KubeCtl
+from sregym.service.runtime_images import KAFKA_CLIENT_IMAGE
 
 logger = logging.getLogger("all.sregym.inject_kafka")
 logger.propagate = True
@@ -396,8 +397,7 @@ class KafkaFaultInjector(FaultInjector):
     INITIAL_RECORD_COUNT = 20
     INVALID_RECORD = '{"order_id":"ORD-100020","amount":'
 
-    PIPELINE_IMAGE = "python:3.12-slim"
-    CONFLUENT_KAFKA_VERSION = "2.5.3"
+    PIPELINE_IMAGE = KAFKA_CLIENT_IMAGE
 
     def __init__(self, namespace: str):
         self.namespace = namespace
@@ -498,10 +498,6 @@ class KafkaFaultInjector(FaultInjector):
             api.replace_namespaced_config_map(self.SCRIPTS_CONFIGMAP, self.namespace, body)
 
     def _apply_pipeline_deployment(self, name: str, script: str) -> None:
-        install_cmd = (
-            f"pip install --no-cache-dir --quiet --retries 5 "
-            f"confluent-kafka=={self.CONFLUENT_KAFKA_VERSION} && exec python /scripts/{script}"
-        )
         env = [
             {"name": "KAFKA_BOOTSTRAP", "value": "kafka:9092"},
             {"name": "ORDERS_TOPIC", "value": self.TOPIC},
@@ -528,7 +524,7 @@ class KafkaFaultInjector(FaultInjector):
                             {
                                 "name": name,
                                 "image": self.PIPELINE_IMAGE,
-                                "command": ["sh", "-lc", install_cmd],
+                                "command": ["python", f"/scripts/{script}"],
                                 "env": env,
                                 "volumeMounts": [{"name": "scripts", "mountPath": "/scripts"}],
                             }
@@ -575,7 +571,7 @@ class KafkaFaultInjector(FaultInjector):
             time.sleep(5)
         raise TimeoutError(
             f"Deployment '{name}' not ready within {timeout}s "
-            f"(check cluster egress to PyPI for the confluent-kafka install)"
+            "(check pod events, image availability, and container logs)"
         )
 
     def _wait_for_log(self, deployment: str, substring: str, timeout: int) -> None:

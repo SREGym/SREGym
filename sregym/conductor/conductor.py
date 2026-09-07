@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import math
 import shlex
 import shutil
 import threading
@@ -32,6 +33,7 @@ from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import CLUSTER_BASELINE_STATE_FILE
 from sregym.profile import is_svelte
 from sregym.service.apps.app_registry import AppRegistry
+from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.internet_policy import InternetPolicy
@@ -53,6 +55,12 @@ class ConductorConfig:
     k8s_proxy_listen_host: str = "127.0.0.1"
     block_workload_creation: bool = False
 
+    @property
+    def restrict_network_access(self) -> bool:
+        # The old workload flag remains an input for programmatic callers.
+        # Derive the effective policy here, for both CLI and direct use.
+        return self.internet_policy.is_filtered or self.block_workload_creation
+
 
 class Conductor:
     def __init__(self, config: ConductorConfig | None = None):
@@ -65,13 +73,14 @@ class Conductor:
         self.jaeger = Jaeger()
         self.otel_collector = OtelCollector()
         self.loki = Loki()
-        self.mcp_server = MCPServer()
+        self.mcp_server = MCPServer(restrict_network_access=self.config.restrict_network_access)
         self.apps = AppRegistry()
         self.agent_name = None
 
         self.khaos = KhaosController(self.kubectl)
         self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
         self.cluster_state = ClusterStateManager(self.kubectl)
+        self.cluster_egress = ClusterEgressBoundary(self.kubectl)
         self._baseline_captured = False
 
         # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
@@ -79,7 +88,7 @@ class Conductor:
             hidden_namespaces={"chaos-mesh", "khaos"},
             listen_port=16443,
             listen_host=self.config.k8s_proxy_listen_host,
-            block_workload_creation=self.config.block_workload_creation,
+            restrict_network_access=self.config.restrict_network_access,
         )
         self._agent_kubeconfig_path: str | None = None
 
@@ -94,6 +103,7 @@ class Conductor:
         self.submission_stage = None
         self.results = {}
         self._submit_future = None  # Future for the executor running _submit_evaluate_and_advance
+        self._submit_evaluation_timeout: float | None = None
         self._submission_lock = threading.RLock()
         self._pending_submission_stages: dict[tuple[int, str], int] = {}
         self._submission_generation = 0
@@ -126,15 +136,32 @@ class Conductor:
         Should be called before launching agents.
         """
         self.logger.info("Starting Kubernetes API filtering proxy...")
-        self.k8s_proxy.start()
-        self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig()
+        if self.config.internet_policy.is_filtered:
+            self.cluster_egress.start()
+        else:
+            self.cluster_egress.stop()
+        try:
+            self.k8s_proxy.start()
+            self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig()
+        except BaseException:
+            self.cluster_egress.stop()
+            raise
         self.logger.info(f"Agent kubeconfig generated at: {self._agent_kubeconfig_path}")
 
     def stop_k8s_proxy(self):
         """Stop the Kubernetes API proxy."""
         self.logger.info("Stopping Kubernetes API filtering proxy...")
-        self.k8s_proxy.stop()
-        self._agent_kubeconfig_path = None
+        try:
+            self.k8s_proxy.stop()
+        finally:
+            try:
+                self.cluster_egress.stop()
+            finally:
+                self._agent_kubeconfig_path = None
+
+    def clear_cluster_egress_boundary(self):
+        """Remove a policy left by a previously interrupted filtered run."""
+        self.cluster_egress.stop()
 
     def get_agent_kubeconfig_path(self) -> str | None:
         """
@@ -797,6 +824,8 @@ class Conductor:
                 else:
                     future.set_result(result)
 
+            oracle = getattr(self.problem, f"{accepted_stage}_oracle", None)
+            self._submit_evaluation_timeout = getattr(oracle, "evaluation_timeout_seconds", None)
             self._submit_future = future
             threading.Thread(
                 target=run_evaluation,
@@ -897,10 +926,14 @@ class Conductor:
                 stage = self.submission_stage
                 future = self._submit_future
                 pending = bool(self._pending_submission_stages)
+                oracle_timeout = getattr(self, "_submit_evaluation_timeout", None)
 
             if future is not None and future is not observed_future:
                 observed_future = future
-                deadline = loop.time() + timeout if timeout is not None else None
+                stage_timeout = timeout
+                if timeout is not None and type(oracle_timeout) in (int, float) and math.isfinite(oracle_timeout):
+                    stage_timeout = max(timeout, oracle_timeout)
+                deadline = loop.time() + stage_timeout if stage_timeout is not None else None
 
             if future is not None and future.done():
                 try:
