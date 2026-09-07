@@ -243,14 +243,19 @@ class AgentLauncher:
             finally:
                 self._container_runner = None
 
-    def internet_policy_result(self, process: AgentProcess | None = None) -> dict[str, str | int]:
-        blocked = 0
-        if process is not None and self._container_runner is not None:
-            blocked = max(0, self._container_runner.blocked_request_count() - process.egress_blocked_start)
-        return {
-            "internet_access": self._internet_policy.mode.value,
-            "blocked_requests": blocked,
-        }
+    def internet_policy_result(self, process: AgentProcess | None = None) -> dict[str, object]:
+        """Snapshot the audit after stopping the agent, before proxy cleanup."""
+        result: dict[str, object] = {"internet_access": self._internet_policy.mode.value}
+        try:
+            records = []
+            if process is not None and self._container_runner is not None:
+                records = self._container_runner.blocked_request_records(process.egress_blocked_start)
+            result.update(blocked_requests=len(records), blocked_request_details=records)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            # Do not report zero denials when the audit could not be read.
+            logger.exception("Could not read the agent's network audit")
+            result["internet_audit_error"] = f"{type(exc).__name__}: could not read blocked-request records"
+        return result
 
     def cleanup_agent(self, agent_name: str, timeout: int = 5) -> None:
         """

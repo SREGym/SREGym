@@ -179,6 +179,11 @@ uv run main.py --agent codex --model gpt-5.6-sol \
 The URL permits its host, port, path, and child paths. A URL without a path permits all paths on that host and port.
 This option has no effect with `--internet-access open`.
 
+Each attempt saves `internet_audit.json` with its results. This file records blocked destinations, timestamps, methods,
+and policy reasons from the agent's outbound HTTP(S) proxy. It does not record packets dropped by the cluster firewall.
+It excludes preflight requests, request paths, query strings, headers, and bodies. The results CSV keeps the blocked-request
+count. Audit read or write failures appear as `internet_audit_error`, not a false zero count.
+
 Filtered mode also blocks public internet access from application pods. It requires Calico 3.29 or later with policy tiers.
 Agents can create ordinary diagnostic pods, Jobs, and replacement workloads. These workloads remain subject to the same outbound policy.
 Normal internal traffic and lower-tier Calico policy edits remain available. The proxy protects the outbound boundary and rejects newly added host-network privileges.

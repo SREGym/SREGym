@@ -45,6 +45,15 @@ def test_request_inspects_decoded_content(addon):
     addon._block.assert_called_once_with(request_flow, "provider-web-tool")
 
 
+def test_audit_does_not_record_paths_queries_headers_or_bodies(addon):
+    request_flow = flow(b"private body")
+    request_flow.request.path = "/secret-in-path?token=secret-in-query#secret-fragment"
+    request_flow.request.headers = {"Authorization": "Bearer secret-header"}
+    record = addon._request_record(request_flow)
+    assert set(record) == {"timestamp", "method", "scheme", "host", "port"}
+    assert not any("secret" in str(value) or "private" in str(value) for value in record.values())
+
+
 def test_invalid_content_encoding_fails_closed(addon):
     request_flow = flow(None)
     request_flow.request = Mock(method="POST", host="provider.test", port=443, path="/v1/messages")

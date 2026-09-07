@@ -107,6 +107,28 @@ class DockerEgress:
         except FileNotFoundError:
             return 0
 
+    def blocked_request_records(self, start: int = 0) -> list[dict[str, str | int]]:
+        """Read this attempt's records before the proxy state is removed."""
+        if self._tmp_dir is None:
+            return []
+        records = []
+        count = 0
+        with (self._tmp_dir / "blocked-requests.jsonl").open(encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                count += 1
+                if count <= start:
+                    continue
+                record = json.loads(line)
+                # Whitelist exported fields, including when reading an older log.
+                records.append(
+                    {key: record[key] for key in ("timestamp", "method", "scheme", "host", "port", "reason")}
+                )
+        if count < start:
+            raise ValueError("blocked-request log was truncated during the attempt")
+        return records
+
     def ensure_started(self, rules: tuple[EndpointRule, ...]) -> None:
         if self._proxy_name is not None:
             running = subprocess.run(

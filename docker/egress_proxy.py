@@ -127,5 +127,6 @@ def _request_record(flow: http.HTTPFlow) -> dict[str, str | int]:
         "scheme": flow.request.scheme,
         "host": flow.request.host,
         "port": flow.request.port or (443 if flow.request.scheme == "https" else 80),
-        "path": flow.request.path.split("?", 1)[0],
+        # Paths, queries and fragments can contain credentials. Destinations
+        # and policy reasons are enough to diagnose blocked traffic.
     }

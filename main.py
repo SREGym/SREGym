@@ -592,7 +592,15 @@ def driver_loop(
                     "problem_id": pid,
                     "attempt": attempt,
                 }
-                snapshot.update(LAUNCHER.internet_policy_result(agent_proc))
+                internet_audit = LAUNCHER.internet_policy_result(agent_proc)
+                snapshot.update(
+                    {key: value for key, value in internet_audit.items() if key != "blocked_request_details"}
+                )
+                try:
+                    run.save_network_audit(internet_audit)
+                except OSError:
+                    logger.exception("Could not save the network audit for %s attempt %s", pid, attempt)
+                    snapshot["internet_audit_error"] = "could not save blocked-request records"
                 for stage, outcome in conductor.results.items():
                     if isinstance(outcome, dict):
                         for k, v in outcome.items():
@@ -611,6 +619,8 @@ def driver_loop(
                 except ArtifactFinalizationError as exc:
                     snapshot["artifact_finalization_failed"] = True
                     snapshot["artifact_staging_path"] = str(run.active_dir)
+                    if run.network_audit_path.exists():
+                        snapshot["internet_audit_staging_path"] = str(run.network_audit_path)
                     logger.error(
                         "Artifact finalization failed for %s attempt %s; staging retained at %s: %s",
                         pid,

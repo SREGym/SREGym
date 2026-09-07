@@ -230,6 +230,9 @@ class ContainerRunner:
     def blocked_request_count(self) -> int:
         return self._egress.blocked_request_count()
 
+    def blocked_request_records(self, start: int = 0) -> list[dict[str, str | int]]:
+        return self._egress.blocked_request_records(start)
+
     def _ensure_filtered_egress(self, env_vars: dict[str, str]) -> None:
         if self.config.internet_policy.is_filtered:
             self._egress.ensure_started(self._configured_egress_rules(env_vars))
