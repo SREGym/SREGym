@@ -79,38 +79,7 @@ bash kind/setup_kind_cluster.sh x86
 bash kind/setup_kind_cluster.sh arm
 ```
 
-### Runtime images
-
-Some helpers now use prebuilt packages and application files instead of public downloads during pod startup.
-The images belong to the SREGym organization on GitHub Packages.
-Follow the [runtime image instructions](./docker/runtime/README.md).
-
-### After a cluster upgrade
-
-SREGym saves a cluster baseline for cleanup between attempts.
-An old baseline does not include infrastructure added by a later upgrade.
-Cleanup can remove those new resources, including Calico CRDs.
-
-After an intentional infrastructure upgrade, refresh the baseline before the next run:
-
-1. Stop all benchmark runs and remove their application namespaces.
-2. Verify that the upgraded cluster and infrastructure pods are healthy.
-3. Verify that `kubectl config current-context` selects the correct cluster.
-4. Capture the new baseline with the command below.
-
-Do not capture a baseline while a fault is active. Cleanup would preserve that faulty state.
-
-```bash
-uv run python - <<'PY'
-from sregym.paths import CLUSTER_BASELINE_STATE_FILE
-from sregym.service.cluster_state import ClusterStateManager
-from sregym.service.kubectl import KubeCtl
-
-manager = ClusterStateManager(KubeCtl())
-manager.save_baseline_state(CLUSTER_BASELINE_STATE_FILE)
-print(f"Saved cluster baseline to {CLUSTER_BASELINE_STATE_FILE}")
-PY
-```
+For existing clusters, see the [upgrade and baseline instructions](./docs/network-access.md#cluster-maintenance).
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
@@ -161,51 +130,20 @@ Use `--force-build` to rebuild the container image after updating dependencies o
 uv run main.py --agent codex --model gpt-5 --force-build
 ```
 
-Containerized agents use filtered network access by default. SREGym allows the selected model provider and local SREGym
-services. It blocks all other internet destinations. The allowlist is fixed before the provider preflight, so the agent
-cannot add a new destination during the run. SREGym includes the authentication endpoint needed by supported subscription
-clients, such as Codex. Set `AGENT_API_BASE` when Stratus, Codex, or a local OpenCode model uses a custom endpoint. An
-unknown provider fails before the benchmark starts. Use `--internet-access open` only when the agent must have
-unrestricted network access.
+#### Network access
 
-Use `--allow-agent-endpoint` to add a required destination without enabling all internet access. Repeat the option to
-add more destinations:
+Filtered access is the default. Agents can reach the selected model provider and internal services, but not other internet destinations.
+Application pods also have outbound restrictions.
+
+Use `--internet-access open` for unrestricted internet access.
+To allow an extra destination in filtered mode, add `--allow-agent-endpoint`:
 
 ```bash
 uv run main.py --agent codex --model gpt-5.6-sol \
   --allow-agent-endpoint https://telemetry.example.com/v1
 ```
 
-The URL permits its host, port, path, and child paths. A URL without a path permits all paths on that host and port.
-This option has no effect with `--internet-access open`.
-
-Each attempt saves `internet_audit.json` with its results. This file records blocked destinations, timestamps, methods,
-and policy reasons from the agent's outbound HTTP(S) proxy. It does not record packets dropped by the cluster firewall.
-It excludes preflight requests, request paths, query strings, headers, and bodies. The results CSV keeps the blocked-request
-count. Audit read or write failures appear as `internet_audit_error`, not a false zero count.
-
-Filtered mode also blocks public internet access from application pods. It requires Calico 3.29 or later with policy tiers.
-Agents can create ordinary diagnostic pods, Jobs, and replacement workloads. These workloads remain subject to the same outbound policy.
-Normal internal traffic and lower-tier Calico policy edits remain available. The proxy protects the outbound boundary and rejects newly added host-network privileges.
-Existing privileged system workloads can keep their current settings during repairs.
-Cluster DNS pods in `kube-system` retain TCP/UDP port 53 access for upstream DNS queries.
-They can also reach Docker's local DNS resolver, which kind uses after address and port translation.
-These exceptions do not open other external ports or direct external DNS access for application pods.
-Fault-specific Kubernetes NetworkPolicies still apply to DNS traffic.
-Filtered mode does not guarantee isolation from an agent with node-administrator access.
-An agent can change node-local restrictions or use privileged host-network paths.
-Protection against this case is outside the current scope. No additional VM or host-firewall backend is required.
-The kind setup script installs Calico 3.29.3. Older kind clusters need a Calico upgrade before filtered runs can start.
-For an existing kind cluster, run:
-
-```bash
-kubectl apply --server-side --force-conflicts -f https://raw.githubusercontent.com/projectcalico/calico/v3.29.3/manifests/calico.yaml
-kubectl rollout status daemonset/calico-node -n kube-system --timeout=240s
-kubectl rollout status deployment/calico-kube-controllers -n kube-system --timeout=240s
-kubectl get tiers.crd.projectcalico.org
-```
-
-The output must include the `adminnetworkpolicy` tier. These upgrade commands apply to the repository's kind setup, not custom Calico installations.
+Repeat the option for more destinations.
 
 ### Deployment Profiles
 
