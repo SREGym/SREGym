@@ -75,14 +75,14 @@ def test_kafka_sidecar_starts_the_producer_without_pip():
     )
     checkout = SimpleNamespace(spec=SimpleNamespace(template=SimpleNamespace(spec=SimpleNamespace(containers=[]))))
     injector.kubectl.get_deployment.side_effect = [kafka, checkout]
-    injector.kubectl.list_pods.return_value = SimpleNamespace(
-        items=[
-            SimpleNamespace(
-                metadata=SimpleNamespace(name="kafka-123"),
-                status=SimpleNamespace(container_statuses=[SimpleNamespace(name="kafka", restart_count=1)]),
-            )
-        ]
+    oom = client.V1ContainerState(
+        terminated=client.V1ContainerStateTerminated(exit_code=137, reason="OOMKilled", container_id="new-process")
     )
+    pod = SimpleNamespace(
+        metadata=SimpleNamespace(uid="kafka-pod"),
+        status=SimpleNamespace(container_statuses=[SimpleNamespace(name="kafka", state=oom, last_state=None)]),
+    )
+    injector.kubectl.get_deployment_pods.side_effect = [[], [pod]]
 
     assert injector.inject_kafka_producer_leak() == ["-Xmx400m", "600Mi"]
 

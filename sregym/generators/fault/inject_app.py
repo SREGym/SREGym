@@ -12,6 +12,8 @@ from sregym.service.kubectl import KubeCtl
 from sregym.service.runtime_images import KAFKA_CLIENT_IMAGE, REDIS_CLIENT_IMAGE
 
 FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE = HOTEL_RESERVATION_APPLICATION_IMAGE
+KAFKA_OOM_TIMEOUT_SECONDS = 600
+KAFKA_OOM_POLL_SECONDS = 5
 
 
 class ApplicationFaultInjector(FaultInjector):
@@ -479,10 +481,24 @@ class ApplicationFaultInjector(FaultInjector):
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
 
+    @staticmethod
+    def _kafka_oom_events(pods) -> set[tuple]:
+        events = set()
+        for pod in pods:
+            for container in pod.status.container_statuses or []:
+                if container.name != "kafka":
+                    continue
+                for state in (container.state, container.last_state):
+                    terminated = state.terminated if state else None
+                    if terminated and terminated.reason == "OOMKilled":
+                        events.add((pod.metadata.uid, terminated.container_id, terminated.finished_at))
+        return events
+
     def inject_kafka_producer_leak(self, deployment_name: str = "checkout") -> list:
         limits = [None, None]
 
         kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
+        previous_ooms = self._kafka_oom_events(self.kubectl.get_deployment_pods(kafka_dep, self.namespace))
         for c in kafka_dep.spec.template.spec.containers:
             if "kafka" in c.name:
                 c.env.append(client.V1EnvVar(name="KAFKA_MESSAGE_MAX_BYTES", value="20971520"))
@@ -552,24 +568,17 @@ class ApplicationFaultInjector(FaultInjector):
 
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
 
-        deadline = time.monotonic() + 120
-        while time.monotonic() < deadline:
-            pods = self.kubectl.list_pods(self.namespace)
-            rcnt = None
-            for p in pods.items:
-                if "kafka" in p.metadata.name:
-                    for c in p.status.container_statuses or []:
-                        if "kafka" in c.name:
-                            rcnt = c.restart_count
-                            break
-                    break
-
-            if rcnt:
+        # Measured OOM delays vary even on the same host. Wait for a new OOM,
+        # not an old restart count or merely a running producer container.
+        deadline = time.monotonic() + KAFKA_OOM_TIMEOUT_SECONDS
+        while True:
+            pods = self.kubectl.get_deployment_pods(kafka_dep, self.namespace)
+            if self._kafka_oom_events(pods) - previous_ooms:
                 break
-
-            time.sleep(5)
-        else:
-            raise TimeoutError("Kafka did not restart within 120 seconds after producer injection")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"Kafka did not report a new OOM within {KAFKA_OOM_TIMEOUT_SECONDS} seconds")
+            time.sleep(min(KAFKA_OOM_POLL_SECONDS, remaining))
 
         print(f"Injected sidecar container 'order-creator' in '{deployment_name}'")
 

@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import math
 import shlex
 import shutil
 import threading
@@ -102,6 +103,7 @@ class Conductor:
         self.submission_stage = None
         self.results = {}
         self._submit_future = None  # Future for the executor running _submit_evaluate_and_advance
+        self._submit_evaluation_timeout: float | None = None
         self._submission_lock = threading.RLock()
         self._pending_submission_stages: dict[tuple[int, str], int] = {}
         self._submission_generation = 0
@@ -822,6 +824,8 @@ class Conductor:
                 else:
                     future.set_result(result)
 
+            oracle = getattr(self.problem, f"{accepted_stage}_oracle", None)
+            self._submit_evaluation_timeout = getattr(oracle, "evaluation_timeout_seconds", None)
             self._submit_future = future
             threading.Thread(
                 target=run_evaluation,
@@ -922,10 +926,14 @@ class Conductor:
                 stage = self.submission_stage
                 future = self._submit_future
                 pending = bool(self._pending_submission_stages)
+                oracle_timeout = getattr(self, "_submit_evaluation_timeout", None)
 
             if future is not None and future is not observed_future:
                 observed_future = future
-                deadline = loop.time() + timeout if timeout is not None else None
+                stage_timeout = timeout
+                if timeout is not None and type(oracle_timeout) in (int, float) and math.isfinite(oracle_timeout):
+                    stage_timeout = max(timeout, oracle_timeout)
+                deadline = loop.time() + stage_timeout if stage_timeout is not None else None
 
             if future is not None and future.done():
                 try:

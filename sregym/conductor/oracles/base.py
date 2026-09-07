@@ -4,6 +4,10 @@ from abc import ABC, abstractmethod
 
 
 class Oracle(ABC):
+    # Long-running oracles can request a larger grading budget. None preserves
+    # the runner's default; this does not extend agent or cleanup deadlines.
+    evaluation_timeout_seconds: float | None = None
+
     def __init__(self, problem):
         self.problem = problem
 

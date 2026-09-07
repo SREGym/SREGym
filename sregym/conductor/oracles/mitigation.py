@@ -57,11 +57,17 @@ class MitigationOracle(Oracle):
 
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
-        results = {}
 
         # Wait for any in-progress rollouts to finish so we don't evaluate
         # a transient state where old pods are gone and new ones haven't crashed yet.
         self._wait_for_rollouts(kubectl, namespace)
+        return self._evaluate_current_state()
+
+    def _evaluate_current_state(self) -> dict:
+        """Check current application health without another rollout grace period."""
+        kubectl = self.problem.kubectl
+        namespace = self.problem.namespace
+        results = {}
 
         deployments = kubectl.list_deployments(namespace)
         current_deps = {dep.metadata.name: dep for dep in deployments.items}
