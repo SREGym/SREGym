@@ -536,6 +536,7 @@ jobs:
             zai)
               agent_name="codex"
               judge_model="openai/${ZAI_MODEL}-judge"
+              internet_access="filtered"
               export AGENT_API_BASE="http://127.0.0.1:$LITELLM_PORT/v1"
               export AGENT_API_KEY="$LITELLM_MASTER_KEY"
               export JUDGE_API_BASE="http://127.0.0.1:$LITELLM_PORT/v1"
@@ -544,6 +545,14 @@ jobs:
             cursor)
               agent_name="cursor"
               judge_model="openai/$CURSOR_MODEL"
+              # The Cursor CLI does not go through the filtered egress proxy's
+              # TLS interception (it hangs until agent-side timeouts instead
+              # of erroring), so this fallback runs with open internet access.
+              # It's already restricted to write-access commenters; this
+              # trades away the filtered mode's GitHub-owner blocklist (which
+              # stops an agent from just reading this repo's answer key) only
+              # for the fallback path.
+              internet_access="open"
               export JUDGE_API_BASE="http://127.0.0.1:$CURSOR_JUDGE_BRIDGE_PORT/v1"
               export JUDGE_API_KEY="dummy"
               ;;
@@ -557,7 +566,7 @@ jobs:
             --judge-model "$judge_model" \
             --n-attempts "$ATTEMPTS" \
             --agent-timeout 1800 \
-            --internet-access filtered \
+            --internet-access "$internet_access" \
             2>&1 | tee benchmark.log
 
       - name: Dump cluster diagnostics
