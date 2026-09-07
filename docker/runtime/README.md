@@ -56,7 +56,6 @@ bash docker/runtime/smoke-test.sh redis ghcr.io/sregym/redis-client:8.1.0-py3.10
 bash docker/runtime/smoke-test.sh kafka ghcr.io/sregym/kafka-client:2.5.3-py3.12 amd64
 bash docker/runtime/smoke-test.sh tls ghcr.io/sregym/tls-client:ubuntu22.04 amd64
 bash docker/runtime/smoke-test.sh grafana ghcr.io/sregym/grafana:12.3.1-opensearch2.34.3 amd64
-bash SREGym-applications/socialNetwork/test-assets-image.sh ghcr.io/sregym/social-network-assets:v1 amd64
 ```
 
 For ARM64 images, replace `amd64` with `arm64`.

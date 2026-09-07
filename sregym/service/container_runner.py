@@ -1,4 +1,5 @@
 import contextlib
+import json
 import logging
 import os
 import platform
@@ -39,6 +40,25 @@ def _replace_loopback_host(url: str) -> str:
     if parsed.port is not None:
         netloc += f":{parsed.port}"
     return urlunsplit(parsed._replace(netloc=netloc))
+
+
+def _codex_subscription_auth_available(auth_path: Path) -> bool:
+    """Inspect the mounted credential format without exposing its contents."""
+    if auth_path.is_symlink() or not auth_path.is_file() or not os.access(auth_path, os.R_OK):
+        return False
+    try:
+        auth = json.loads(auth_path.read_text())
+    except (OSError, ValueError):
+        return False
+    if not isinstance(auth, dict):
+        return False
+
+    # Codex honors an explicit mode first. Legacy files infer API-key auth
+    # from OPENAI_API_KEY, even when tokens are also present.
+    mode = auth.get("auth_mode")
+    if mode is not None:
+        return mode in ("chatgpt", "chatgptAuthTokens")
+    return auth.get("OPENAI_API_KEY") is None and isinstance(auth.get("tokens"), dict)
 
 
 def get_container_host_bind_address() -> str:
@@ -256,13 +276,14 @@ class ContainerRunner:
             EndpointRule("host.docker.internal", 16443, inspect_tools=False),
             EndpointRule("host.docker.internal", int(env_vars.get("MCP_SERVER_PORT", "9954")), inspect_tools=False),
         }
-        codex_auth = Path.home() / ".codex" / "auth.json"
         rules.update(
             provider_endpoint_rules(
                 self.config.internet_policy,
                 env_vars,
-                codex_auth_available=(
-                    codex_auth.is_file() and not codex_auth.is_symlink() and os.access(codex_auth, os.R_OK)
+                codex_subscription_auth=(
+                    self.config.internet_policy.is_filtered
+                    and (self.config.internet_policy.agent_name or "").casefold() == "codex"
+                    and _codex_subscription_auth_available(Path.home() / ".codex" / "auth.json")
                 ),
             )
         )

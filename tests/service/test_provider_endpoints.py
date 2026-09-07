@@ -1,5 +1,9 @@
+import json
+from pathlib import Path
+
 import pytest
 
+from sregym.service.container_runner import ContainerConfig, ContainerRunner
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
 from sregym.service.provider_endpoints import PROVIDERS, provider_endpoint_rules
 
@@ -10,7 +14,7 @@ def test_codex_subscription_allows_only_runtime_and_refresh_hosts():
     rules = provider_endpoint_rules(
         policy,
         {"OPENAI_API_KEY": "unused-when-subscription-auth-exists"},
-        codex_auth_available=True,
+        codex_subscription_auth=True,
     )
 
     assert rules == (
@@ -25,13 +29,67 @@ def test_codex_api_key_allows_openai_api_only():
     assert provider_endpoint_rules(policy, {"OPENAI_API_KEY": "secret"}) == (EndpointRule("api.openai.com", 443),)
 
 
+@pytest.mark.parametrize(
+    "auth,subscription",
+    [
+        ({"OPENAI_API_KEY": "test-key"}, False),
+        ({"auth_mode": "apikey", "OPENAI_API_KEY": "test-key"}, False),
+        ({"OPENAI_API_KEY": "test-key", "tokens": {"access_token": "test-token"}}, False),
+        ({"OPENAI_API_KEY": None, "tokens": {"access_token": "test-token"}}, True),
+        ({"auth_mode": "chatgpt", "tokens": {"access_token": "test-token"}}, True),
+        ({"auth_mode": "chatgptAuthTokens", "tokens": {"access_token": "test-token"}}, True),
+        ({"auth_mode": "chatgpt", "OPENAI_API_KEY": "unused", "tokens": {}}, True),
+        ({}, False),
+        (None, False),
+        ([], False),
+    ],
+)
+def test_codex_runner_uses_stored_auth_type(monkeypatch, tmp_path, auth, subscription):
+    auth_file = tmp_path / ".codex" / "auth.json"
+    auth_file.parent.mkdir()
+    original = json.dumps(auth)
+    auth_file.write_text(original)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    runner = ContainerRunner(ContainerConfig(internet_policy=InternetPolicy.from_mode("filtered", agent_name="codex")))
+
+    # A stored login takes precedence over the API key in the environment.
+    rules = runner._configured_egress_rules({"OPENAI_API_KEY": "environment-test-key"})
+
+    assert (EndpointRule("api.openai.com", 443) in rules) is not subscription
+    assert (EndpointRule("chatgpt.com", 443) in rules) is subscription
+    assert (EndpointRule("auth.openai.com", 443) in rules) is subscription
+    assert auth_file.read_text() == original
+
+
+@pytest.mark.parametrize("state", ["missing", "invalid-json", "symlink", "unreadable"])
+def test_codex_runner_does_not_infer_subscription_from_unusable_file(monkeypatch, tmp_path, state):
+    auth_file = tmp_path / ".codex" / "auth.json"
+    auth_file.parent.mkdir()
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    if state == "invalid-json":
+        auth_file.write_text("not json")
+    elif state == "symlink":
+        target = tmp_path / "other-auth.json"
+        target.write_text('{"tokens": {}}')
+        auth_file.symlink_to(target)
+    elif state == "unreadable":
+        auth_file.write_text('{"tokens": {}}')
+        monkeypatch.setattr("sregym.service.container_runner.os.access", lambda *_: False)
+    runner = ContainerRunner(ContainerConfig(internet_policy=InternetPolicy.from_mode("filtered", agent_name="codex")))
+
+    rules = runner._configured_egress_rules({"OPENAI_API_KEY": "test-key"})
+
+    assert EndpointRule("api.openai.com", 443) in rules
+    assert EndpointRule("chatgpt.com", 443) not in rules
+
+
 def test_codex_custom_endpoint_replaces_openai_hosts():
     policy = InternetPolicy.from_mode("filtered", agent_name="codex", model_id="custom-model")
 
     assert provider_endpoint_rules(
         policy,
         {"AGENT_API_BASE": "https://models.example.test/v1", "OPENAI_API_KEY": "unused"},
-        codex_auth_available=True,
+        codex_subscription_auth=True,
     ) == (EndpointRule("models.example.test", 443),)
 
 

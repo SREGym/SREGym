@@ -46,7 +46,7 @@ def provider_endpoint_rules(
     policy: InternetPolicy,
     environment: Mapping[str, str],
     *,
-    codex_auth_available: bool = False,
+    codex_subscription_auth: bool = False,
 ) -> tuple[EndpointRule, ...]:
     """Return the fixed provider destinations for one evaluated agent."""
     if not policy.is_filtered or not policy.agent_name:
@@ -61,7 +61,7 @@ def provider_endpoint_rules(
         custom_base = _configured_url(environment, "AGENT_API_BASE")
         if custom_base:
             return (EndpointRule.host_from_url(custom_base),)
-        if codex_auth_available:
+        if codex_subscription_auth:
             return _rules_from_urls(("https://chatgpt.com", "https://auth.openai.com"))
         return _rules_from_urls((_provider_url("openai", environment),))
     if agent == "claudecode":

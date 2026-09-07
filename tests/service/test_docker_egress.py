@@ -1,3 +1,4 @@
+import asyncio
 import subprocess
 from unittest.mock import Mock
 
@@ -5,9 +6,9 @@ import pytest
 
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import AgentRegistration
-from sregym.service.container_runner import ContainerRunner
+from sregym.service.container_runner import ContainerConfig, ContainerRunner
 from sregym.service.docker_egress import DockerEgress
-from sregym.service.internet_policy import EndpointRule
+from sregym.service.internet_policy import EndpointRule, InternetPolicy
 
 
 @pytest.mark.parametrize("failed_step", ["state", "network", "proxy", "connect", "certificate"])
@@ -84,6 +85,40 @@ def test_preflight_and_run_share_the_install_decision(prepared, capture_logs):
     assert ("install-codex.sh" in command) is not prepared
     assert ("/logs/driver.log" in command) is capture_logs
     assert "run-agent" in command
+
+
+@pytest.mark.parametrize(
+    "kickoff_env", [None, {"AGENT_API_BASE": "https://custom.test/v1", "AGENT_API_KEY": "test-key"}]
+)
+def test_preflight_and_run_share_registered_provider_environment(monkeypatch, kickoff_env):
+    launcher = AgentLauncher()
+    runner = ContainerRunner(
+        ContainerConfig(
+            internet_policy=InternetPolicy.from_mode("filtered", agent_name="stratus", model_id="anthropic/model")
+        )
+    )
+    launcher._container_runner = runner
+    reg = AgentRegistration(name="stratus", kickoff_command="run-agent", kickoff_env=kickoff_env)
+    monkeypatch.setattr(runner, "run_sync", Mock(return_value=subprocess.CompletedProcess([], 0)))
+    monkeypatch.setattr(runner, "run_async", Mock(return_value=Mock()))
+    monkeypatch.setattr(launcher, "_pipe_logs", Mock())
+    with monkeypatch.context() as imports:
+        imports.setattr("sregym.agent_launcher.importlib.import_module", Mock(return_value=Mock()))
+        launcher._run_preflight(reg)
+    asyncio.run(launcher._start_containerized(reg))
+
+    preflight = runner.run_sync.call_args.args[0]
+    runtime = runner.run_async.call_args.args[0]
+    assert preflight.env == (kickoff_env or {})
+    assert preflight.env is not kickoff_env
+    for name, value in (kickoff_env or {}).items():
+        assert runtime.env[name] == value
+    preflight_rules = runner._configured_egress_rules(runner._build_env_vars(preflight.env))
+    runtime_rules = runner._configured_egress_rules(runner._build_env_vars(runtime.env))
+    assert preflight_rules == runtime_rules
+    if kickoff_env:
+        assert EndpointRule("custom.test", 443) in preflight_rules
+        assert "AGENT_LOGS_DIR" not in kickoff_env
 
 
 @pytest.mark.parametrize("failure", ["installation", "preflight", "interrupt"])
