@@ -70,6 +70,7 @@ def run_preflight_check(
         "copilot": "clients.copilot.driver",
         "opencode": "clients.opencode.driver",
         "gemini": "clients.geminicli.driver",
+        "cursor": "clients.cursor.driver",
     }
 
     module_path = agent_driver_modules.get(agent_name)

@@ -3,12 +3,18 @@ name: Problem Difficulty Evaluation
 # Opt-in only: a core team member starts this workflow from the Actions UI or
 # comments "/evaluate-problem <id> [3|5] [glm-5.3-flash]" on a pull request.
 # Codex requires the Responses API, so a local LiteLLM proxy translates its
-# requests to Z.ai's OpenAI-compatible GLM Coding Plan endpoint.
+# requests to Z.ai's OpenAI-compatible GLM Coding Plan endpoint. Z.ai is a
+# low-volume annual plan, so when its preflight fails (quota, outage, or the
+# secret simply isn't set) this workflow falls back to a personal Cursor CLI
+# subscription instead of failing outright. The fallback doesn't try to match
+# models between runs -- it exists purely to flag whether a problem still
+# gets solved by *some* capable agent, not to compare agents.
 #
 # Comment runs evaluate the PR merged into the default branch so that problems
 # introduced by the PR itself can be scored before merge. Because this job
-# holds ZCODE_API_KEY, only OWNER/MEMBER/COLLABORATOR comments are honoured;
-# review the PR diff before issuing the command, as it executes PR code.
+# holds ZCODE_API_KEY/CURSOR_API_KEY, only OWNER/MEMBER/COLLABORATOR comments
+# are honoured; review the PR diff before issuing the command, as it executes
+# PR code.
 
 on:
   issue_comment:
@@ -165,53 +171,88 @@ jobs:
       ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
       ZAI_MODEL: ${{ needs.resolve.outputs.model }}
       LITELLM_PORT: "4000"
+      CURSOR_JUDGE_BRIDGE_PORT: "4100"
+      CURSOR_MODEL: "auto"
     steps:
-      - name: Require Z.ai Coding Plan secret
+      - name: Choose evaluation provider
+        id: provider
         env:
           ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
-        run: |
-          if [ -z "$ZCODE_API_KEY" ]; then
-            echo "::error::Repository secret ZCODE_API_KEY is not configured."
-            exit 1
-          fi
-
-      - name: Preflight Z.ai Coding Plan quota
-        env:
-          ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -euo pipefail
-          response_file="$RUNNER_TEMP/zai-preflight.json"
-          request_body=$(jq -cn --arg model "$ZAI_MODEL" '{
-            model: $model,
-            messages: [{role: "user", content: "Reply with OK."}],
-            thinking: {type: "disabled"},
-            max_tokens: 1,
-            stream: false
-          }')
-          http_status=$(curl --silent --show-error \
-            --connect-timeout 10 \
-            --max-time 60 \
-            --output "$response_file" \
-            --write-out '%{http_code}' \
-            --request POST \
-            --url https://api.z.ai/api/coding/paas/v4/chat/completions \
-            --header "Authorization: Bearer $ZCODE_API_KEY" \
-            --header 'Content-Type: application/json' \
-            --data "$request_body")
+          provider=""
+          zai_reason=""
 
-          case "$http_status" in
-            2??)
-              echo "Z.ai Coding Plan preflight passed for $ZAI_MODEL."
-              echo "ZAI_PREFLIGHT_PASSED=true" >> "$GITHUB_ENV"
-              ;;
-            *)
-              error_code=$(jq -r '.error.code // .code // "unknown"' "$response_file" 2>/dev/null || true)
-              error_message=$(jq -r '.error.message // .message // "unknown error"' "$response_file" 2>/dev/null || true)
-              printf 'Z.ai Coding Plan preflight failed: HTTP %s, code %s: %s\n' \
-                "$http_status" "${error_code:-unknown}" "${error_message:-unknown error}"
+          if [ -n "$ZCODE_API_KEY" ]; then
+            response_file="$RUNNER_TEMP/zai-preflight.json"
+            request_body=$(jq -cn --arg model "$ZAI_MODEL" '{
+              model: $model,
+              messages: [{role: "user", content: "Reply with OK."}],
+              thinking: {type: "disabled"},
+              max_tokens: 1,
+              stream: false
+            }')
+            http_status=$(curl --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 60 \
+              --output "$response_file" \
+              --write-out '%{http_code}' \
+              --request POST \
+              --url https://api.z.ai/api/coding/paas/v4/chat/completions \
+              --header "Authorization: Bearer $ZCODE_API_KEY" \
+              --header 'Content-Type: application/json' \
+              --data "$request_body")
+
+            case "$http_status" in
+              2??)
+                provider="zai"
+                echo "Z.ai Coding Plan preflight passed for $ZAI_MODEL."
+                ;;
+              *)
+                error_code=$(jq -r '.error.code // .code // "unknown"' "$response_file" 2>/dev/null || true)
+                error_message=$(jq -r '.error.message // .message // "unknown error"' "$response_file" 2>/dev/null || true)
+                zai_reason="HTTP $http_status, code ${error_code:-unknown}: ${error_message:-unknown error}"
+                echo "Z.ai Coding Plan preflight failed: $zai_reason"
+                ;;
+            esac
+          else
+            zai_reason="repository secret ZCODE_API_KEY is not configured"
+            echo "$zai_reason"
+          fi
+
+          # Z.ai is a low-volume annual plan; when it's out of quota (or
+          # simply not configured), fall back to a personal Cursor CLI
+          # subscription instead of failing the whole run. This fallback
+          # doesn't try to hold the model constant across runs -- it exists
+          # to flag whether a problem is still solvable at all, not to
+          # compare agents/models.
+          if [ -z "$provider" ]; then
+            if [ -n "$CURSOR_API_KEY" ]; then
+              provider="cursor"
+              echo "Falling back to the Cursor CLI ($zai_reason)."
+            else
+              echo "::error::Neither Z.ai nor Cursor is usable for this run."
+              {
+                echo "# Problem Difficulty Evaluation"
+                echo
+                echo "❌ No usable evaluation backend."
+                echo
+                echo "- **Z.ai**: $zai_reason"
+                echo "- **Cursor**: repository secret \`CURSOR_API_KEY\` is not configured."
+              } | tee evaluation-report.md >> "$GITHUB_STEP_SUMMARY"
               exit 1
-              ;;
-          esac
+            fi
+          fi
+
+          run_model="$ZAI_MODEL"
+          [ "$provider" = "cursor" ] && run_model="$CURSOR_MODEL"
+
+          echo "provider=$provider" >> "$GITHUB_OUTPUT"
+          echo "PROVIDER=$provider" >> "$GITHUB_ENV"
+          echo "PROVIDER_READY=true" >> "$GITHUB_ENV"
+          echo "RUN_MODEL=$run_model" >> "$GITHUB_ENV"
+          echo "::notice::Using provider '$provider' (model '$run_model') for this evaluation."
 
       - name: React to triggering comment
         if: needs.resolve.outputs.comment_id != ''
@@ -238,7 +279,8 @@ jobs:
           COMMENT_ID: ${{ needs.resolve.outputs.comment_id }}
           PROBLEM_ID: ${{ needs.resolve.outputs.problem_id }}
           ATTEMPTS: ${{ needs.resolve.outputs.attempts }}
-          ZAI_MODEL: ${{ needs.resolve.outputs.model }}
+          PROVIDER: ${{ env.PROVIDER }}
+          RUN_MODEL: ${{ env.RUN_MODEL }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         with:
           script: |
@@ -247,11 +289,14 @@ jobs:
             const commandUrl =
               `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/pull/` +
               `${process.env.PR_NUMBER}#issuecomment-${process.env.COMMENT_ID}`;
+            const providerLabel = process.env.PROVIDER === 'cursor'
+              ? 'Cursor CLI fallback'
+              : 'Z.ai Coding Plan';
             const body =
               `${marker}\n> In response to [this command](${commandUrl}).\n\n` +
               `## ⏳ Problem Difficulty Evaluation\n\n` +
               `Running for \`${process.env.PROBLEM_ID}\` ` +
-              `(${process.env.ATTEMPTS} attempts, \`${process.env.ZAI_MODEL}\`)\n\n` +
+              `(${process.env.ATTEMPTS} attempts, \`${process.env.RUN_MODEL}\` via ${providerLabel})\n\n` +
               `Evaluating this PR merged into \`${process.env.DEFAULT_BRANCH}\`.\n\n` +
               `_[Live workflow run](${runUrl})_`;
 
@@ -279,7 +324,7 @@ jobs:
           if ! grep -Fq "\"$PROBLEM_ID\":" sregym/conductor/problems/registry.py; then
             echo "::error::Problem '$PROBLEM_ID' is not registered at $CHECKOUT_REF."
             {
-              echo "# Z.ai Problem Difficulty Evaluation"
+              echo "# Problem Difficulty Evaluation"
               echo
               echo "❌ Problem \`$PROBLEM_ID\` is not registered in" \
                 "\`sregym/conductor/problems/registry.py\` at \`$CHECKOUT_REF\`."
@@ -296,6 +341,7 @@ jobs:
         run: uv sync --locked
 
       - name: Start Codex-to-Z.ai bridge
+        if: env.PROVIDER == 'zai'
         env:
           ZCODE_API_KEY: ${{ secrets.ZCODE_API_KEY }}
         run: |
@@ -352,6 +398,7 @@ jobs:
           exit 1
 
       - name: Preflight Codex and judge bridges
+        if: env.PROVIDER == 'zai'
         run: |
           set -euo pipefail
           codex_response_file="$RUNNER_TEMP/zai-codex-bridge-preflight.json"
@@ -413,6 +460,52 @@ jobs:
 
           echo "Judge-to-Z.ai Chat Completions bridge preflight passed for $judge_model."
 
+      - name: Install Cursor CLI
+        if: env.PROVIDER == 'cursor'
+        run: |
+          set -euo pipefail
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/agent" --version
+
+      - name: Preflight Cursor CLI
+        if: env.PROVIDER == 'cursor'
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          response_file="$RUNNER_TEMP/cursor-preflight.json"
+          if ! agent --print "Reply with OK." --model "$CURSOR_MODEL" --output-format json --trust \
+              > "$response_file" 2> "$RUNNER_TEMP/cursor-preflight.err"; then
+            echo "Cursor CLI preflight failed:"
+            cat "$RUNNER_TEMP/cursor-preflight.err" "$response_file" 2>/dev/null || true
+            exit 1
+          fi
+          echo "Cursor CLI preflight passed for $CURSOR_MODEL."
+
+      - name: Start Cursor judge bridge
+        if: env.PROVIDER == 'cursor'
+        env:
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          set -euo pipefail
+          nohup uv run python -m clients.cursor.judge_bridge \
+            --port "$CURSOR_JUDGE_BRIDGE_PORT" \
+            --model "$CURSOR_MODEL" \
+            > "$RUNNER_TEMP/cursor-judge-bridge.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/cursor-judge-bridge.pid"
+
+          for _ in $(seq 1 30); do
+            if curl --fail --silent "http://127.0.0.1:$CURSOR_JUDGE_BRIDGE_PORT/health" > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "::error::Cursor judge bridge did not become ready."
+          tail -200 "$RUNNER_TEMP/cursor-judge-bridge.log" || true
+          exit 1
+
       - name: Install Kind
         run: |
           curl -Lo /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
@@ -432,27 +525,43 @@ jobs:
       - name: Create kind cluster with Calico
         run: bash kind/setup_kind_cluster.sh x86
 
-      - name: Run repeated Codex evaluation
+      - name: Run repeated agent evaluation
         env:
-          AGENT_API_BASE: http://127.0.0.1:4000/v1
-          JUDGE_API_BASE: http://127.0.0.1:4000/v1
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
         run: |
           set -euo pipefail
           echo "EVALUATION_STARTED=true" >> "$GITHUB_ENV"
-          export AGENT_API_KEY="$LITELLM_MASTER_KEY"
-          export JUDGE_API_KEY="$LITELLM_MASTER_KEY"
+
+          case "$PROVIDER" in
+            zai)
+              agent_name="codex"
+              judge_model="openai/${ZAI_MODEL}-judge"
+              export AGENT_API_BASE="http://127.0.0.1:$LITELLM_PORT/v1"
+              export AGENT_API_KEY="$LITELLM_MASTER_KEY"
+              export JUDGE_API_BASE="http://127.0.0.1:$LITELLM_PORT/v1"
+              export JUDGE_API_KEY="$LITELLM_MASTER_KEY"
+              ;;
+            cursor)
+              agent_name="cursor"
+              judge_model="openai/$CURSOR_MODEL"
+              export JUDGE_API_BASE="http://127.0.0.1:$CURSOR_JUDGE_BRIDGE_PORT/v1"
+              export JUDGE_API_KEY="dummy"
+              ;;
+          esac
+          echo "AGENT_NAME=$agent_name" >> "$GITHUB_ENV"
+
           uv run main.py \
             --problem "$PROBLEM_ID" \
-            --agent codex \
-            --model "$ZAI_MODEL" \
-            --judge-model "openai/${ZAI_MODEL}-judge" \
+            --agent "$agent_name" \
+            --model "$RUN_MODEL" \
+            --judge-model "$judge_model" \
             --n-attempts "$ATTEMPTS" \
             --agent-timeout 1800 \
             --internet-access filtered \
             2>&1 | tee benchmark.log
 
       - name: Dump cluster diagnostics
-        if: failure() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        if: failure() && env.PROVIDER_READY == 'true'
         run: |
           kubectl get nodes -o wide || true
           kubectl get pods -A -o wide || true
@@ -463,16 +572,16 @@ jobs:
         if: always() && env.EVALUATION_STARTED == 'true'
         run: |
           set -euo pipefail
-          result_csv=$(find results -type f -name '*_codex_results.csv' ! -name 'codex_ALL_results.csv' 2>/dev/null \
+          result_csv=$(find results -type f -name "*_${AGENT_NAME}_results.csv" ! -name "${AGENT_NAME}_ALL_results.csv" 2>/dev/null \
             | sort | tail -n1 || true)
           if [ -z "$result_csv" ]; then
-            result_csv=$(find . -maxdepth 1 -type f -name '_running_*_codex_results.csv' \
+            result_csv=$(find . -maxdepth 1 -type f -name "_running_*_${AGENT_NAME}_results.csv" \
               | sort | tail -n1 || true)
           fi
 
           if [ -z "$result_csv" ]; then
             {
-              echo "# Z.ai Problem Difficulty Evaluation"
+              echo "# Problem Difficulty Evaluation"
               echo
               echo "No result CSV was produced. Inspect the benchmark and cluster logs."
             } | tee evaluation-report.md >> "$GITHUB_STEP_SUMMARY"
@@ -482,13 +591,13 @@ jobs:
           uv run python -m sregym.results.report \
             --csv "$result_csv" \
             --problem "$PROBLEM_ID" \
-            --model "$ZAI_MODEL" \
+            --model "$RUN_MODEL" \
             --attempts "$ATTEMPTS" \
             --output evaluation-report.md \
             --github-summary "$GITHUB_STEP_SUMMARY"
 
       - name: Upload evaluation artifacts
-        if: always() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        if: always() && env.PROVIDER_READY == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: problem-difficulty-evaluation-${{ github.run_attempt }}
@@ -496,17 +605,25 @@ jobs:
             evaluation-report.md
             benchmark.log
             results/
-            _running_*_codex_results.csv
+            _running_*_${{ env.AGENT_NAME }}_results.csv
             ${{ runner.temp }}/litellm.log
+            ${{ runner.temp }}/cursor-judge-bridge.log
             /tmp/kind-logs/
           if-no-files-found: ignore
           retention-days: 30
 
       - name: Stop Codex-to-Z.ai bridge
-        if: always() && env.ZAI_PREFLIGHT_PASSED == 'true'
+        if: always() && env.PROVIDER == 'zai'
         run: |
           if [ -f "$RUNNER_TEMP/litellm.pid" ]; then
             kill "$(cat "$RUNNER_TEMP/litellm.pid")" 2>/dev/null || true
+          fi
+
+      - name: Stop Cursor judge bridge
+        if: always() && env.PROVIDER == 'cursor'
+        run: |
+          if [ -f "$RUNNER_TEMP/cursor-judge-bridge.pid" ]; then
+            kill "$(cat "$RUNNER_TEMP/cursor-judge-bridge.pid")" 2>/dev/null || true
           fi
 
       - name: Post evaluation result comment
