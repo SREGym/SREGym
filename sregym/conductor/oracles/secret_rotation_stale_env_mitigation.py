@@ -8,6 +8,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 logger = logging.getLogger(__name__)
 
@@ -236,11 +237,27 @@ class SecretRotationStaleEnvMitigation(Oracle):
                     grace_period_seconds=0,
                 )
 
+    FAILURE_CLASSES = {
+        # Every one of these compares against a value the injector wrote or a
+        # rotation it performed, so they attribute confidently: the credential
+        # was rotated, and the agent's job was to make the app follow.
+        "stale_pod_still_serving": FailureClass.AGENT_ERROR,
+        "secret_not_rotated": FailureClass.AGENT_ERROR,
+        "deployment_not_using_rotated_secret": FailureClass.AGENT_ERROR,
+        "postgres_rejects_new_password": FailureClass.AGENT_ERROR,
+        "postgres_still_accepts_old_password": FailureClass.AGENT_ERROR,
+        "init_missing_rotated_password": FailureClass.AGENT_ERROR,
+        # One HTTP request against a real app.
+        "product_probe_failed": FailureClass.AMBIGUOUS,
+    }
+
     def evaluate(self, *args, **kwargs) -> dict:
         """Evaluate whether the required rotation reached a fresh, functional pod."""
         print("== Secret Rotation Mitigation Evaluation ==")
+        # ``success`` and ``reason`` are no longer pre-seeded: every exit path
+        # goes through ``_reject`` or sets success explicitly, so a new early
+        # return cannot silently inherit a stale failure verdict.
         results = {
-            "success": False,
             "deployment_exists": False,
             "rollout_complete": False,
             "pods_ready": False,
@@ -254,34 +271,37 @@ class SecretRotationStaleEnvMitigation(Oracle):
             "postgres_accepts_new_password": False,
             "postgresql_init_uses_new_password": False,
             "product_probe_succeeded": False,
-            "reason": "",
         }
 
         output = self._run(f"kubectl get deployment {self.problem.faulty_service} -n {self.problem.namespace} -o json")
         try:
             deployment_json = json.loads(output)
         except json.JSONDecodeError as exc:
-            results["reason"] = f"product-catalog deployment does not exist: {exc}"
-            return results
+            return self._reject(
+                results, "required_deployment_missing", f"product-catalog deployment does not exist: {exc}"
+            )
         try:
             deployment = self.problem.kubectl.get_deployment(
                 self.problem.faulty_service,
                 self.problem.namespace,
             )
         except Exception as exc:
-            results["reason"] = f"product-catalog deployment does not exist: {exc}"
-            return results
+            return self._reject(
+                results, "required_deployment_missing", f"product-catalog deployment does not exist: {exc}"
+            )
         results["deployment_exists"] = True
 
         desired = self._desired_replicas(deployment)
         if desired < 1:
-            results["reason"] = f"product-catalog is scaled to {desired}"
-            return results
+            return self._reject(
+                results, "required_deployment_scaled_to_zero", f"product-catalog is scaled to {desired}"
+            )
 
         deployment = self._wait_for_current_rollout(deployment)
         if deployment is None:
-            results["reason"] = "product-catalog did not complete its current rollout"
-            return results
+            return self._reject(
+                results, "required_deployment_not_rolled_out", "product-catalog did not complete its current rollout"
+            )
         results["rollout_complete"] = True
         results["pods_ready"] = True
 
@@ -289,14 +309,19 @@ class SecretRotationStaleEnvMitigation(Oracle):
         results["ready_target_endpoint"] = endpoint_ready
         results["current_pod_uids"] = sorted(current_pod_uids)
         if not endpoint_ready:
-            results["reason"] = "product-catalog has no ready endpoint from its Deployment"
-            return results
+            return self._reject(
+                results, "no_ready_endpoints", "product-catalog has no ready endpoint from its Deployment"
+            )
 
         stale_pod_uid = self._stale_pod_uid(deployment_json)
         results["stale_pod_uid"] = stale_pod_uid
         if stale_pod_uid and stale_pod_uid in current_pod_uids:
-            results["reason"] = "the product-catalog pod from before credential rotation is still serving"
-            return results
+            return self._reject(
+                results,
+                "stale_pod_still_serving",
+                "the product-catalog pod from before credential rotation is still serving",
+                pod_uid=stale_pod_uid,
+            )
 
         secret_conn = self.problem._get_secret_conn_string()
         configured_conn = self._configured_connection_string(deployment_json, secret_conn)
@@ -304,32 +329,55 @@ class SecretRotationStaleEnvMitigation(Oracle):
         results["configured_conn"] = configured_conn
         results["deployment_references_secret"] = self._deployment_references_secret(deployment_json)
         if secret_conn != self.new_conn:
-            results["reason"] = "the Secret does not contain the required rotated connection string"
-            return results
+            return self._reject(
+                results, "secret_not_rotated", "the Secret does not contain the required rotated connection string"
+            )
         if configured_conn != self.new_conn:
-            results["reason"] = "product-catalog is not configured with the required rotated connection string"
-            return results
+            return self._reject(
+                results,
+                "deployment_not_using_rotated_secret",
+                "product-catalog is not configured with the required rotated connection string",
+            )
 
         results["postgres_accepts_old_password"] = self._postgres_accepts_password(self.old_password)
         results["postgres_accepts_new_password"] = self._postgres_accepts_password(self.new_password)
         results["postgresql_init_uses_new_password"] = self.problem._postgresql_init_uses_password(self.new_password)
 
         if not results["postgres_accepts_new_password"]:
-            results["reason"] = "PostgreSQL does not accept the required rotated password"
-            return results
+            return self._reject(
+                results, "postgres_rejects_new_password", "PostgreSQL does not accept the required rotated password"
+            )
         if results["postgres_accepts_old_password"]:
-            results["reason"] = "PostgreSQL still accepts the pre-rotation password"
-            return results
+            return self._reject(
+                results, "postgres_still_accepts_old_password", "PostgreSQL still accepts the pre-rotation password"
+            )
         if not results["postgresql_init_uses_new_password"]:
-            results["reason"] = "postgresql-init does not declare the required rotated password"
-            return results
+            return self._reject(
+                results,
+                "init_missing_rotated_password",
+                "postgresql-init does not declare the required rotated password",
+            )
 
         results["product_probe_succeeded"] = self._run_product_probe()
         if not results["product_probe_succeeded"]:
-            results["reason"] = "a fresh /api/products request did not return catalog data"
-            return results
+            return self._reject(
+                results, "product_probe_failed", "a fresh /api/products request did not return catalog data"
+            )
 
         results["success"] = True
-        results["reason"] = "required credential rotation is consistent and product queries succeed"
+        results["message"] = "required credential rotation is consistent and product queries succeed"
         print("Mitigation Result: Pass")
+        return results
+
+    def _reject(self, results: dict, reason: str, message: str, **detail) -> dict:
+        """Merge a coded verdict into the diagnostics dict and keep the prose.
+
+        Every branch here used to set a free-text ``results["reason"]`` -- some
+        of them interpolating an exception string, so no two runs shared a
+        value. The sentence stays, as ``message``; ``reason`` becomes a code.
+        The rest of the diagnostics dict is untouched, since it is what makes
+        this oracle's output worth reading.
+        """
+        print(f"❌ {message}")
+        results.update(self.fail(reason, message=message, **detail))
         return results

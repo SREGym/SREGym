@@ -175,7 +175,9 @@ def test_fresh_oracle_rejects_current_pod_matching_cluster_stale_uid():
     result = _oracle(kubectl).evaluate()
 
     assert result["success"] is False
-    assert "before credential rotation" in result["reason"]
+    assert result["reason"] == "stale_pod_still_serving"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "before credential rotation" in result["detail"]["message"]
     assert core_v1.created_pods == []
 
 
@@ -208,7 +210,9 @@ def test_deleting_only_stale_marker_still_fails_functional_probe():
     result = _oracle(kubectl).evaluate()
 
     assert result["success"] is False
-    assert "/api/products" in result["reason"]
+    assert result["reason"] == "product_probe_failed"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "/api/products" in result["detail"]["message"]
     assert len(core_v1.deleted_pods) == 1
 
 
@@ -218,7 +222,9 @@ def test_rejects_rollback_or_novel_secret_password(conn):
     result = _oracle(_KubeCtl(core_v1=core_v1), secret_conn=conn).evaluate()
 
     assert result["success"] is False
-    assert "Secret does not contain" in result["reason"]
+    assert result["reason"] == "secret_not_rotated"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "Secret does not contain" in result["detail"]["message"]
     assert core_v1.created_pods == []
 
 
@@ -229,7 +235,9 @@ def test_rejects_backend_that_still_accepts_old_password():
     ).evaluate()
 
     assert result["success"] is False
-    assert "pre-rotation password" in result["reason"]
+    assert result["reason"] == "postgres_still_accepts_old_password"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "pre-rotation password" in result["detail"]["message"]
 
 
 def test_rejects_scaled_to_zero_without_starting_probe():
@@ -245,7 +253,9 @@ def test_rejects_scaled_to_zero_without_starting_probe():
     result = _oracle(_KubeCtl(deployment=deployment, pods=[], core_v1=core_v1)).evaluate()
 
     assert result["success"] is False
-    assert "scaled to 0" in result["reason"]
+    assert result["reason"] == "required_deployment_scaled_to_zero"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "scaled to 0" in result["detail"]["message"]
     assert core_v1.created_pods == []
 
 
@@ -263,7 +273,9 @@ def test_rejects_stale_rollout_even_when_old_pod_is_ready():
     result = _oracle(_KubeCtl(deployment=deployment, core_v1=core_v1)).evaluate()
 
     assert result["success"] is False
-    assert "current rollout" in result["reason"]
+    assert result["reason"] == "required_deployment_not_rolled_out"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "current rollout" in result["detail"]["message"]
     assert core_v1.created_pods == []
 
 
@@ -274,5 +286,7 @@ def test_rejects_endpoint_from_another_workload():
     result = _oracle(_KubeCtl(pods=pods, core_v1=core_v1)).evaluate()
 
     assert result["success"] is False
-    assert "no ready endpoint" in result["reason"]
+    assert result["reason"] == "no_ready_endpoints"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "no ready endpoint" in result["detail"]["message"]
     assert core_v1.created_pods == []

@@ -37,11 +37,13 @@ class MissingCmKeyMitigationOracle(Oracle):
 
             if missing_keys:
                 print(f"❌ Missing ConfigMap keys: {missing_keys}")
-                return {"success": False}
+                # The removed keys are the injected fault; still absent means
+                # still unfixed.
+                return self.fail("fault_still_present", missing_keys=missing_keys)
             else:
                 print("✅ All expected ConfigMap keys present.")
                 return {"success": True}
 
         except Exception as e:
             print(f"❌ Failed to check ConfigMap: {str(e)}")
-            return {"success": False}
+            return self.fail_from_exception(e)

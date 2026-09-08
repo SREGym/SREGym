@@ -5,6 +5,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class NamespaceMemoryLimitMitigationOracle(Oracle):
@@ -160,6 +161,13 @@ class NamespaceMemoryLimitMitigationOracle(Oracle):
                     grace_period_seconds=0,
                 )
 
+    FAILURE_CLASSES = {
+        # This probe creates a pod with no memory resources -- precisely what
+        # the injected namespace quota refuses to admit -- so failing it is the
+        # fault's own signature rather than a generic connectivity result.
+        "fresh_pod_admission_failed": FailureClass.AGENT_ERROR,
+    }
+
     def evaluate(self) -> dict:
         print("== Namespace Memory Limit Mitigation Evaluation ==")
 
@@ -170,28 +178,32 @@ class NamespaceMemoryLimitMitigationOracle(Oracle):
             if active_memory_quotas:
                 names = ", ".join(sorted(active_memory_quotas))
                 print(f"[FAIL] Namespace-wide memory admission requirements remain: {names}")
-                return {"success": False}
+                # The namespace-wide memory quota is the injected fault; still
+                # present means still unfixed.
+                return self.fail("fault_still_present", quotas=sorted(active_memory_quotas))
 
             deployment = self.problem.kubectl.get_deployment(deployment_name, namespace)
             desired = self._desired_replicas(deployment)
             if desired < 1:
                 print(f"[FAIL] Deployment '{deployment_name}' is scaled to {desired}")
-                return {"success": False}
+                return self.fail("required_deployment_scaled_to_zero", deployment=deployment_name, desired=desired)
 
             deployment = self._wait_for_current_rollout(deployment)
             if deployment is None:
                 print(f"[FAIL] Deployment '{deployment_name}' did not complete its current rollout")
-                return {"success": False}
+                return self.fail("required_deployment_not_rolled_out", deployment=deployment_name)
 
             if not self._service_has_ready_target_endpoint(deployment):
-                return {"success": False}
+                return self.fail("no_ready_endpoints", service=deployment_name)
 
             if not self._run_fresh_admission_and_connection_probe():
                 print("[FAIL] A fresh no-memory-resource pod could not connect to search")
-                return {"success": False}
+                # A pod with no memory resources is exactly what the injected
+                # quota rejects, so admitting one is the direct test of the fix.
+                return self.fail("fresh_pod_admission_failed", namespace=namespace)
         except Exception as exc:
             print(f"[FAIL] Error checking namespace memory mitigation: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
 
         print("[PASS] Namespace memory admission is safe and search is reachable")
         return {"success": True}

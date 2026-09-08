@@ -180,22 +180,24 @@ class NetworkPolicyMitigationOracle(Oracle):
             desired = self._desired_replicas(deployment)
             if desired < 1:
                 print(f"[FAIL] Deployment '{service_name}' is scaled to {desired}")
-                return {"success": False}
+                return self.fail("required_deployment_scaled_to_zero", deployment=service_name, desired=desired)
 
             deployment = self._wait_for_current_rollout(deployment)
             if deployment is None:
                 print(f"[FAIL] Deployment '{service_name}' did not complete its current rollout")
-                return {"success": False}
+                return self.fail("required_deployment_not_rolled_out", deployment=service_name)
 
             if not self._service_has_ready_target_endpoint(deployment):
-                return {"success": False}
+                return self.fail("no_ready_endpoints", service=service_name)
 
             if not self._run_recommendation_probe():
                 print("[FAIL] Hotel Reservation recommendation request did not recover")
-                return {"success": False}
+                # The NetworkPolicy blocks exactly this request path, so a
+                # probe that still cannot reach recommendation is the fault.
+                return self.fail("fault_still_present", service=service_name)
         except Exception as exc:
             print(f"[FAIL] Error checking NetworkPolicy mitigation: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
 
         print("[PASS] Recommendation is healthy, discoverable, and reachable through the frontend")
         return {"success": True}

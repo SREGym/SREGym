@@ -4,6 +4,7 @@ import re
 import time
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class FeatureFlagHttpProbeMitigationOracle(Oracle):
@@ -37,6 +38,15 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
                 return pod.metadata.name
         return None
 
+    FAILURE_CLASSES = {
+        # Measured over several attempts against the endpoint the feature flag
+        # breaks, so a sustained error rate is the fault's symptom rather than
+        # one unlucky request.
+        "endpoint_error_rate_high": FailureClass.AGENT_ERROR,
+        # No probe pod means no measurement, which is our problem.
+        "no_probe_pod_available": FailureClass.HARNESS_ERROR,
+    }
+
     def evaluate(self) -> dict:
         print("== HTTP Probe Evaluation ==")
 
@@ -47,8 +57,8 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
         probe_pod = self._get_probe_pod()
         if not probe_pod:
             print("❌ No suitable probe pod found")
-            results["success"] = False
-            return results
+            # We had nowhere to run the probe from, so nothing was measured.
+            return self.fail("no_probe_pod_available", namespace=namespace)
 
         print(f"Probing frontend via pod {probe_pod}...")
 
@@ -75,6 +85,13 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
             print(
                 f"❌ Frontend /hotels endpoint returning errors ({self.probe_attempts - success_count}/{self.probe_attempts} failed)"
             )
-            results["success"] = False
+            results.update(
+                self.fail(
+                    "endpoint_error_rate_high",
+                    endpoint="/hotels",
+                    succeeded=success_count,
+                    attempts=self.probe_attempts,
+                )
+            )
 
         return results

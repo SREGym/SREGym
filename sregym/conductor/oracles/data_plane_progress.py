@@ -6,6 +6,7 @@ import time
 from kubernetes import client
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 from sregym.generators.fault.inject_kafka import KafkaBrokerClient
 
 
@@ -126,11 +127,29 @@ class DataPlaneProgressOracle(Oracle):
             time.sleep(10)
         return None, last_error
 
+    FAILURE_CLASSES = {
+        # This oracle already returned a ``reason``, but as free text -- often
+        # an exception string, so no two runs shared a value. Codes now, with
+        # the text kept in ``detail`` or printed.
+        #
+        # Progress that stalls after clearing the poison record, or that does
+        # not survive a consumer restart, are both about the durability of the
+        # agent's fix rather than about the cluster.
+        "no_forward_progress": FailureClass.AGENT_ERROR,
+        "not_restart_resistant": FailureClass.AGENT_ERROR,
+        # We could not read the pipeline, or never knew what to measure.
+        "pipeline_snapshot_failed": FailureClass.ENVIRONMENT_ERROR,
+        "blocked_offset_unknown": FailureClass.HARNESS_ERROR,
+    }
+
     def evaluate(self) -> dict:
         print("== Data-Plane Progress Oracle ==")
         blocked_offset = getattr(self.problem, "poison_offset", None)
         if blocked_offset is None:
-            return {"success": False, "reason": "blocked source offset is unknown"}
+            print("❌ Blocked source offset is unknown")
+            # The problem never recorded which offset was poisoned, so there is
+            # nothing to measure progress against. Our bookkeeping, not theirs.
+            return self.fail("blocked_offset_unknown")
 
         print(f"⏳ Settling {self.settle_seconds}s before evaluation...")
         time.sleep(self.settle_seconds)
@@ -138,7 +157,9 @@ class DataPlaneProgressOracle(Oracle):
         progress, detail = self._await_progress_past(blocked_offset, self.progress_timeout)
         if progress is None:
             print("❌ The Kafka data plane did not make valid progress beyond the blocked record")
-            return {"success": False, "reason": detail or "consumer group did not advance"}
+            # The consumer group is still stuck on the poisoned record: the
+            # injected fault, measured directly against its offset.
+            return self.fail("fault_still_present", blocked_offset=blocked_offset, detail=detail)
         high = max(progress)
         print(f"   valid source results are complete through offset {high}; group offset={detail}")
 
@@ -146,16 +167,20 @@ class DataPlaneProgressOracle(Oracle):
         try:
             progress_after, _ = self._pipeline_snapshot()
         except (RuntimeError, ValueError) as exc:
-            return {"success": False, "reason": str(exc)}
+            print(f"❌ Could not snapshot the pipeline: {exc}")
+            return self.fail("pipeline_snapshot_failed", error=f"{type(exc).__name__}: {exc}")
         high_after = max(progress_after, default=high)
         print(f"   forward progress: {high} -> {high_after}")
         if high_after <= high:
             print("❌ No new valid records were processed")
-            return {"success": False, "reason": "no forward progress"}
+            # Progress got past the poison record but then stopped, which is a
+            # different finding from never getting past it.
+            return self.fail("no_forward_progress", offset=high, window_seconds=self.progress_window_seconds)
 
         running = self._ready_consumer_pods()
         if not running:
-            return {"success": False, "reason": "consumer Deployment has no Ready pod before restart probe"}
+            print("❌ Consumer Deployment has no Ready pod before the restart probe")
+            return self.fail("no_ready_endpoints", stage="before_restart_probe")
         victim = running[0]
         victim_name = victim.metadata.name
         victim_uid = victim.metadata.uid
@@ -183,4 +208,6 @@ class DataPlaneProgressOracle(Oracle):
                     last_error = str(exc)
             time.sleep(10)
         print("❌ Pipeline did not resume valid processing after consumer replacement")
-        return {"success": False, "reason": last_error or "not restart-resistant"}
+        # Progress was real but did not survive replacing the consumer, so the
+        # fix was not durable. Distinct from never progressing at all.
+        return self.fail("not_restart_resistant", last_error=last_error)

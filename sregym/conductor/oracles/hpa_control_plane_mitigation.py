@@ -16,6 +16,7 @@ import time
 from json import JSONDecodeError
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 _DEFAULT_TIMEOUT_SECONDS = 60
 _DEFAULT_POLL_INTERVAL_SECONDS = 5
@@ -44,6 +45,12 @@ class HPAControlPlaneMitigationOracle(Oracle):
         self.poll_interval_seconds = poll_interval_seconds
         self.consecutive_successes = consecutive_successes
 
+    FAILURE_CLASSES = {
+        # The HPA never reached the required run of healthy polls. That is what
+        # this problem breaks, measured over a window rather than once.
+        "hpa_never_became_healthy": FailureClass.AGENT_ERROR,
+    }
+
     def evaluate(self) -> dict:
         print("== HPA Control Plane Mitigation Evaluation ==")
 
@@ -68,12 +75,19 @@ class HPAControlPlaneMitigationOracle(Oracle):
                 print(f"❌ HPA not healthy: {detail}")
 
             if time.monotonic() >= deadline:
+                details = (
+                    f"Timed out after {self.timeout_seconds}s waiting for "
+                    f"{self.consecutive_successes} consecutive healthy HPA polls. "
+                    f"Last check: {last_detail}"
+                )
+                # ``details`` stays at the top level for anything already
+                # reading it; ``reason`` is the new filterable part.
                 return {
-                    "success": False,
-                    "details": (
-                        f"Timed out after {self.timeout_seconds}s waiting for "
-                        f"{self.consecutive_successes} consecutive healthy HPA polls. "
-                        f"Last check: {last_detail}"
+                    "details": details,
+                    **self.fail(
+                        "hpa_never_became_healthy",
+                        timeout_seconds=self.timeout_seconds,
+                        last_check=last_detail,
                     ),
                 }
 
