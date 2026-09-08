@@ -31,7 +31,8 @@ RUN python3 -m ensurepip --upgrade \
 # ───────────────────────────────────────────────
 # 3. kubectl
 # ───────────────────────────────────────────────
-RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+RUN ARCH="$(dpkg --print-architecture)" \
+    && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${ARCH}/kubectl" \
     && chmod +x kubectl && mv kubectl /usr/local/bin/
 
 # ───────────────────────────────────────────────
