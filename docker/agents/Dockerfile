@@ -31,7 +31,12 @@ RUN python3 -m ensurepip --upgrade \
 # ───────────────────────────────────────────────
 # 3. kubectl
 # ───────────────────────────────────────────────
-RUN curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" \
+ARG TARGETARCH
+ARG KUBECTL_VERSION=stable
+RUN KUBECTL_ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" \
+    && case "${KUBECTL_ARCH}" in amd64|arm64) ;; *) echo "Unsupported kubectl architecture: ${KUBECTL_ARCH}" >&2; exit 1 ;; esac \
+    && if [ "${KUBECTL_VERSION}" = stable ]; then KUBECTL_VERSION="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"; fi \
+    && curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" \
     && chmod +x kubectl && mv kubectl /usr/local/bin/
 
 # ───────────────────────────────────────────────

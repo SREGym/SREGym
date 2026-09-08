@@ -5,6 +5,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BUILD_CTX="$SCRIPT_DIR/build-context"
 
+# Keep the container client aligned with the host's chosen Kubernetes version.
+# Downloading the newest release can be far outside the cluster's supported
+# version skew. An explicit KUBECTL_VERSION takes precedence; standalone builds
+# without kubectl retain the Dockerfile's stable-release fallback.
+if [ -z "${KUBECTL_VERSION:-}" ] && command -v kubectl >/dev/null 2>&1; then
+    KUBECTL_VERSION="$(kubectl version --client --output=yaml | awk '$1 == "gitVersion:" { print $2; exit }')"
+fi
+KUBECTL_VERSION="${KUBECTL_VERSION:-stable}"
+
 echo "==> Assembling build context..."
 rm -rf "$BUILD_CTX"
 
@@ -55,7 +64,8 @@ cp "$SCRIPT_DIR/Dockerfile"                  "$BUILD_CTX/Dockerfile"
 OLD_IMAGE_ID="$(docker images -q sregym-agent-base:latest 2>/dev/null || true)"
 
 echo "==> Building Docker image..."
-docker build --build-arg CACHE_BUST="$(date +%s)" -t sregym-agent-base:latest -f "$BUILD_CTX/Dockerfile" "$BUILD_CTX"
+docker build --build-arg CACHE_BUST="$(date +%s)" --build-arg KUBECTL_VERSION="$KUBECTL_VERSION" \
+    -t sregym-agent-base:latest -f "$BUILD_CTX/Dockerfile" "$BUILD_CTX"
 
 # Remove the previous image (now untagged) to avoid dangling buildup
 if [ -n "$OLD_IMAGE_ID" ]; then

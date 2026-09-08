@@ -35,6 +35,7 @@ from sregym.results.resume import complete_resume_rows
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
 from sregym.service.internet_policy import InternetPolicy
+from sregym.service.kubectl import ContainerPlatformError
 from sregym.traces import postprocess as trace_postprocess
 from sregym.traces import store as trace_store
 
@@ -377,6 +378,11 @@ def driver_loop(
                             f"❌ start_problem failed for '{pid}' "
                             f"(deploy attempt {deploy_attempt}/{max_deploy_retries}): {e}"
                         )
+                        if isinstance(e, ContainerPlatformError):
+                            console.log(
+                                "⛔ Image platform failures require a compatible image; skipping deploy retries"
+                            )
+                            break
                         if deploy_attempt < max_deploy_retries:
                             console.log("🧹 Cleaning up before retry...")
                             cleanup_succeeded = await finish_problem_with_deadline(

@@ -1,0 +1,22 @@
+# Applied automatically on ARM64 clusters.
+#
+# The upstream demo's Go service limits are tight enough to OOMKill their ARM64
+# builds during startup or normal traffic. Keep the application behavior the
+# same while allowing the native binaries enough headroom.
+
+components:
+  product-catalog:
+    envOverrides:
+      - name: GOMEMLIMIT
+        value: 48MiB
+    resources:
+      limits:
+        memory: 64Mi
+
+  checkout:
+    envOverrides:
+      - name: GOMEMLIMIT
+        value: 48MiB
+    resources:
+      limits:
+        memory: 64Mi

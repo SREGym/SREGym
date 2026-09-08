@@ -3,7 +3,7 @@
 # Creates a Kind cluster with Calico CNI for SREGym.
 #
 # Usage (from repo root):
-#   bash kind/setup_kind_cluster.sh [arm|x86]
+#   bash kind/setup_kind_cluster.sh [auto|arm|x86]
 #
 # Requirements:
 #   - kind
@@ -12,13 +12,32 @@
 set -euo pipefail
 
 CALICO_VERSION="v3.27.0"
-ARCH="${1:-x86}"
+REQUESTED_ARCH="${1:-auto}"
+
+case "${REQUESTED_ARCH}" in
+    auto)
+        case "$(uname -m)" in
+            arm64|aarch64) ARCH="arm" ;;
+            x86_64|amd64) ARCH="x86" ;;
+            *)
+                echo "❌ Unsupported host architecture: $(uname -m)"
+                exit 1
+                ;;
+        esac
+        ;;
+    arm|x86) ARCH="${REQUESTED_ARCH}" ;;
+    *)
+        echo "Usage: bash kind/setup_kind_cluster.sh [auto|arm|x86]"
+        exit 1
+        ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIND_CONFIG="${SCRIPT_DIR}/kind-config-${ARCH}.yaml"
 
 if [[ ! -f "${KIND_CONFIG}" ]]; then
     echo "❌ Config file not found: ${KIND_CONFIG}"
-    echo "Usage: bash kind/setup_kind_cluster.sh [arm|x86]"
+    echo "Usage: bash kind/setup_kind_cluster.sh [auto|arm|x86]"
     exit 1
 fi
 
@@ -41,9 +60,12 @@ dump_calico_diagnostics() {
     echo "--- calico pods ---"
     kubectl -n kube-system get pods -l k8s-app=calico-node -o wide || true
     echo "--- describe unready calico pods ---"
-    kubectl -n kube-system get pods -l k8s-app=calico-node \
-        --field-selector=status.phase!=Running -o name 2>/dev/null \
-        | xargs -r -I{} kubectl -n kube-system describe {} || true
+    while IFS= read -r pod; do
+        [[ -n "${pod}" ]] && kubectl -n kube-system describe "${pod}" || true
+    done < <(
+        kubectl -n kube-system get pods -l k8s-app=calico-node \
+            --field-selector=status.phase!=Running -o name 2>/dev/null || true
+    )
     echo "--- recent kube-system events ---"
     kubectl -n kube-system get events --sort-by='.lastTimestamp' | tail -40 || true
 }

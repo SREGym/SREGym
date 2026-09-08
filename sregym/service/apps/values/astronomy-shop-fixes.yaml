@@ -1,8 +1,48 @@
 # Always applied to astronomy-shop, by AstronomyShop.deploy().
 #
 # Corrections to the vendored opentelemetry-demo chart for the way SREGym
-# actually deploys it. Nothing here changes what an agent can observe; each
-# entry removes work the collector was doing that could never succeed.
+# actually deploys it: keep the flag UI within its memory budget and remove
+# collector work that could never succeed. Application features are unchanged.
+
+components:
+  flagd:
+    # KIND/containerd can give pods a NOFILE limit of 1,073,741,816. Erlang
+    # allocates memory against that limit at startup and is OOMKilled even
+    # with 2 GiB. Cap only this UI process, retaining its upstream 250 MiB
+    # memory budget. Do not raise a lower existing descriptor limit.
+    # Helm replaces lists, so retain the complete upstream sidecar definition.
+    sidecarContainers:
+      - name: flagd-ui
+        command:
+          - /bin/sh
+          - -ec
+          - |
+            current=$(ulimit -n)
+            if [ "$current" = unlimited ] || [ "$current" -gt 65536 ]; then
+              ulimit -n 65536
+            fi
+            exec /app/bin/server
+        useDefault:
+          env: true
+        service:
+          port: 4000
+        env:
+          - name: FLAGD_METRICS_EXPORTER
+            value: otel
+          - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            value: http://$(OTEL_COLLECTOR_NAME):4318
+          - name: FLAGD_UI_PORT
+            value: "4000"
+          - name: SECRET_KEY_BASE
+            value: yYrECL4qbNwleYInGJYvVnSkwJuSQJ4ijPTx5tirGUXrbznFIBFVJdPl5t6O9ASw
+          - name: PHX_HOST
+            value: localhost
+        resources:
+          limits:
+            memory: 250Mi
+        volumeMounts:
+          - name: config-rw
+            mountPath: /app/data
 
 opentelemetry-collector:
   config:

@@ -30,6 +30,13 @@ opensearch:
 grafana:
   enabled: false
 
+# The feature-flag UI is not consumed by the harness, oracles, MCP tools, or
+# agent tools. The flagd service itself remains enabled; only its UI sidecar is
+# omitted on the memory-constrained profile.
+components:
+  flagd:
+    sidecarContainers: []
+
 opentelemetry-collector:
   config:
     service:

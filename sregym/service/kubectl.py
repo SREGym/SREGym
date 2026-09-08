@@ -24,6 +24,16 @@ from kubernetes.client.rest import ApiException  # noqa: E402
 from logger import console  # noqa: E402
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
+PLATFORM_ERROR_MARKERS = (
+    "exec format error",
+    "no matching manifest for",
+    "no match for platform in manifest",
+    "running an x86 program on an arm64 os",
+)
+
+
+class ContainerPlatformError(RuntimeError):
+    """A container image or executable cannot run on the selected node."""
 
 
 class KubeCtl:
@@ -194,6 +204,7 @@ class KubeCtl:
         console.log(f"[bold yellow]Waiting for all pods in {display_name} to be ready...")
 
         wait = 0
+        checked_platform_logs = set()
 
         while wait < max_wait:
             try:
@@ -207,6 +218,9 @@ class KubeCtl:
                     all_pods = self.list_pods(namespace).items or []
 
                 if all_pods:
+                    for pod in all_pods:
+                        self._check_container_platform(pod, namespace)
+                        self._check_container_platform_logs(pod, namespace, checked_platform_logs)
                     ready_pods = [
                         pod
                         for pod in all_pods
@@ -223,6 +237,8 @@ class KubeCtl:
                         console.log(f"[bold green]All pods in {display_name} are ready.")
                         return
 
+            except ContainerPlatformError:
+                raise
             except Exception as e:
                 console.log(f"[red]Error checking pod statuses: {e}")
 
@@ -232,6 +248,80 @@ class KubeCtl:
         raise Exception(
             f"[red]Timeout: Not all pods in {display_name} reached the Ready state within {max_wait} seconds."
         )
+
+    @staticmethod
+    def _check_container_platform(pod, namespace: str):
+        """Surface explicit runtime platform failures before the readiness timeout.
+
+        Inspect init containers too; an incompatible init image prevents the main
+        containers from ever starting. Ordinary pull failures and application
+        crashes remain eligible for the normal readiness retry.
+        """
+        statuses = [
+            *(pod.status.init_container_statuses or []),
+            *(pod.status.container_statuses or []),
+        ]
+        for status in statuses:
+            if status.ready:
+                continue
+            for state in (status.state, status.last_state):
+                if state is None:
+                    continue
+                for detail in (state.waiting, state.terminated):
+                    message = getattr(detail, "message", None) or ""
+                    if any(marker in message.lower() for marker in PLATFORM_ERROR_MARKERS):
+                        raise KubeCtl._container_platform_error(pod, namespace, status, message)
+
+    @staticmethod
+    def _container_platform_error(pod, namespace, status, message):
+        return ContainerPlatformError(
+            f"Container platform failure in {namespace}/{pod.metadata.name}, "
+            f"container '{status.name}', image '{status.image}', "
+            f"node '{pod.spec.node_name}': {message.rstrip('.')}. "
+            "Verify that the image and its executables support the node architecture. "
+            "For ARM64 KIND and SREGym-Lite, run: bash kind/build_lite_images.sh"
+        )
+
+    def _check_container_platform_logs(self, pod, namespace: str, checked: set):
+        """Some runtimes report exec/loader failures only in container stderr.
+
+        Inspect a small tail once per failed container instance, never healthy
+        containers. Do not turn a log-fetch error or an ordinary crash into a
+        platform error. Only include the matching error line in diagnostics.
+        """
+        statuses = [*(pod.status.init_container_statuses or []), *(pod.status.container_statuses or [])]
+        for status in statuses:
+            if status.ready:
+                continue
+            terminated = status.state.terminated if status.state else None
+            previous = False
+            if terminated is None and status.last_state is not None:
+                terminated = status.last_state.terminated
+                previous = bool(status.state and status.state.running)
+            if terminated is None or terminated.exit_code == 0:
+                continue
+            key = (pod.metadata.uid or pod.metadata.name, status.name, status.restart_count, status.container_id)
+            if key in checked:
+                continue
+            try:
+                logs = self.core_v1_api.read_namespaced_pod_log(
+                    name=pod.metadata.name,
+                    namespace=namespace,
+                    container=status.name,
+                    previous=previous,
+                    tail_lines=20,
+                    limit_bytes=4096,
+                    _request_timeout=3,
+                )
+            except Exception:
+                # Log files may not yet be available immediately after exit.
+                continue
+            if not isinstance(logs, str) or not logs:
+                continue
+            checked.add(key)
+            for line in logs.splitlines():
+                if any(marker in line.lower() for marker in PLATFORM_ERROR_MARKERS):
+                    raise self._container_platform_error(pod, namespace, status, line[:512])
 
     def wait_for_namespace_deletion(self, namespace, sleep=2, max_wait=300):
         """Wait for a namespace to be fully deleted before proceeding."""

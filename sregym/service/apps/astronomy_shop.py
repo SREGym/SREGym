@@ -13,6 +13,13 @@ from sregym.service.kubectl import KubeCtl
 
 
 class AstronomyShop(Application):
+    _HELM_REPOSITORIES = {
+        "open-telemetry": "https://open-telemetry.github.io/opentelemetry-helm-charts",
+        "jaegertracing": "https://jaegertracing.github.io/helm-charts",
+        "prometheus-community": "https://prometheus-community.github.io/helm-charts",
+        "grafana": "https://grafana.github.io/helm-charts",
+        "opensearch": "https://opensearch-project.github.io/helm-charts/",
+    }
     _VALUES_DIR = Path(__file__).resolve().parent / "values"
     _FLAGD_CONFIGMAP = "flagd-config"
     _FLAGD_CONFIG_KEY = "demo.flagd.json"
@@ -42,6 +49,12 @@ class AstronomyShop(Application):
         """Deploy the Helm configurations."""
         self.kubectl.create_namespace_if_not_exist(self.namespace)
 
+        # A fresh Helm installation has no repository aliases configured. The
+        # local chart pins dependencies from these repositories, so register
+        # them before Helm attempts to vendor missing subcharts.
+        for name, url in self._HELM_REPOSITORIES.items():
+            Helm.add_repo(name, url)
+
         extra_args = [
             # Disable bundled Prometheus to avoid ClusterRole conflict with central
             # Prometheus in the observe namespace (ClusterRoles are cluster-wide)
@@ -56,6 +69,11 @@ class AstronomyShop(Application):
             "-f",
             str(self._VALUES_DIR / "astronomy-shop-fixes.yaml"),
         ]
+        node_architectures = self.kubectl.get_node_architectures()
+        if any(arch in {"arm64", "aarch64"} for arch in node_architectures):
+            # The upstream limits are below the observed steady-state memory
+            # usage of two ARM64 containers and cause deterministic OOM kills.
+            extra_args += ["-f", str(self._VALUES_DIR / "astronomy-shop-arm64.yaml")]
         if is_svelte():
             extra_args += ["-f", str(self._VALUES_DIR / "astronomy-shop-svelte.yaml")]
             self.logger.info("[svelte] Dropping bundled OpenSearch, Grafana and Jaeger from astronomy-shop")
