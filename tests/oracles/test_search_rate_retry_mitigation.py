@@ -82,7 +82,7 @@ def test_a_backlogged_retry_loop_is_behavioural_not_environmental(monkeypatch):
     assert verdict["detail"]["attempts_per_request"] == 3.0
 
 
-def test_a_broken_cluster_keeps_its_own_reason(monkeypatch):
+def test_an_unsettled_rollout_keeps_its_own_reason(monkeypatch):
     """The regression the verdict-returning sample exists to prevent."""
     oracle = _oracle([{}], WorkloadSnapshot(0, 0, 0, 0.0, 0.0, None))
     oracle._cluster_shape_unhealthy = Mock(
@@ -92,7 +92,7 @@ def test_a_broken_cluster_keeps_its_own_reason(monkeypatch):
     verdict = oracle._unhealthy_sample()
 
     assert verdict["reason"] == "required_deployment_not_rolled_out"
-    assert verdict["failure_class"] == FailureClass.ENVIRONMENT_ERROR
+    assert verdict["failure_class"] == FailureClass.AMBIGUOUS
 
 
 def test_runtime_policy_accepts_the_standard_operating_envelope():

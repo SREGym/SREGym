@@ -10,6 +10,10 @@ from sregym.conductor.oracles.failure import FailureClass
 from sregym.generators.fault.inject_kafka import KafkaBrokerClient
 
 
+class PipelineValidationError(ValueError):
+    """A readable snapshot violates the source/output integrity checks."""
+
+
 class DataPlaneProgressOracle(Oracle):
     importance = 1.0
 
@@ -82,7 +86,7 @@ class DataPlaneProgressOracle(Oracle):
 
         blocked_offset = self.problem.poison_offset
         if blocked_offset not in invalid_source:
-            raise ValueError("the original invalid source record is no longer present")
+            raise PipelineValidationError("the original invalid source record is no longer present")
 
         processed: dict[int, str] = {}
         for record in output_records:
@@ -92,25 +96,25 @@ class DataPlaneProgressOracle(Oracle):
                 source_offset = int(result["source_offset"])
                 order_id = result["order_id"]
             except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
-                raise ValueError("processed topic contains an invalid result") from exc
+                raise PipelineValidationError("processed topic contains an invalid result") from exc
             if source_offset in invalid_source:
-                raise ValueError(f"invalid source offset {source_offset} was treated as a valid order")
+                raise PipelineValidationError(f"invalid source offset {source_offset} was treated as a valid order")
             expected = valid_source.get(source_offset)
             if expected is None or expected != order_id:
-                raise ValueError(f"processed result does not match source offset {source_offset}")
+                raise PipelineValidationError(f"processed result does not match source offset {source_offset}")
             previous = processed.setdefault(source_offset, order_id)
             if previous != order_id:
-                raise ValueError(f"conflicting processed results for source offset {source_offset}")
+                raise PipelineValidationError(f"conflicting processed results for source offset {source_offset}")
 
         high = max(processed, default=-1)
         missing = sorted(offset for offset in valid_source if offset <= high and offset not in processed)
         if missing:
-            raise ValueError(f"valid source records were skipped, including offsets {missing[:10]}")
+            raise PipelineValidationError(f"valid source records were skipped, including offsets {missing[:10]}")
 
         expected_initial_ids = {f"ORD-{100000 + index}" for index in range(self.problem.poison_offset)}
         processed_ids = set(processed.values())
         if not expected_initial_ids.issubset(processed_ids):
-            raise ValueError("original valid order history was not fully processed")
+            raise PipelineValidationError("original valid order history was not fully processed")
 
         return processed, state["group_offset"]
 
@@ -120,10 +124,11 @@ class DataPlaneProgressOracle(Oracle):
         while time.time() < deadline:
             try:
                 processed, group_offset = self._pipeline_snapshot()
+                last_error = None
                 if processed and max(processed) > offset and group_offset is not None and group_offset > offset:
                     return processed, group_offset
             except (RuntimeError, ValueError) as exc:
-                last_error = str(exc)
+                last_error = exc
             time.sleep(10)
         return None, last_error
 
@@ -137,10 +142,15 @@ class DataPlaneProgressOracle(Oracle):
         # agent's fix rather than about the cluster.
         "no_forward_progress": FailureClass.AGENT_ERROR,
         "not_restart_resistant": FailureClass.AGENT_ERROR,
-        # We could not read the pipeline, or never knew what to measure.
-        "pipeline_snapshot_failed": FailureClass.ENVIRONMENT_ERROR,
+        "pipeline_data_invalid": FailureClass.AGENT_ERROR,
+        # A failed inspection can result from a broken workload or transport.
+        "pipeline_snapshot_failed": FailureClass.AMBIGUOUS,
         "blocked_offset_unknown": FailureClass.HARNESS_ERROR,
     }
+
+    def _snapshot_failure(self, exc: Exception) -> dict:
+        reason = "pipeline_data_invalid" if isinstance(exc, PipelineValidationError) else "pipeline_snapshot_failed"
+        return self.fail(reason, error=f"{type(exc).__name__}: {exc}")
 
     def evaluate(self) -> dict:
         print("== Data-Plane Progress Oracle ==")
@@ -157,6 +167,8 @@ class DataPlaneProgressOracle(Oracle):
         progress, detail = self._await_progress_past(blocked_offset, self.progress_timeout)
         if progress is None:
             print("❌ The Kafka data plane did not make valid progress beyond the blocked record")
+            if detail is not None:
+                return self._snapshot_failure(detail)
             # The consumer group is still stuck on the poisoned record: the
             # injected fault, measured directly against its offset.
             return self.fail("fault_still_present", blocked_offset=blocked_offset, detail=detail)
@@ -168,7 +180,7 @@ class DataPlaneProgressOracle(Oracle):
             progress_after, _ = self._pipeline_snapshot()
         except (RuntimeError, ValueError) as exc:
             print(f"❌ Could not snapshot the pipeline: {exc}")
-            return self.fail("pipeline_snapshot_failed", error=f"{type(exc).__name__}: {exc}")
+            return self._snapshot_failure(exc)
         high_after = max(progress_after, default=high)
         print(f"   forward progress: {high} -> {high_after}")
         if high_after <= high:
@@ -199,15 +211,18 @@ class DataPlaneProgressOracle(Oracle):
             if replacement:
                 try:
                     now, _ = self._pipeline_snapshot()
+                    last_error = None
                     now_high = max(now, default=baseline)
                     if now_high > baseline:
                         print(f"   post-restart progress: {baseline} -> {now_high}")
                         print("✅ Kafka source/output integrity and durable consumer progress verified")
                         return {"success": True}
                 except (RuntimeError, ValueError) as exc:
-                    last_error = str(exc)
+                    last_error = exc
             time.sleep(10)
         print("❌ Pipeline did not resume valid processing after consumer replacement")
+        if last_error is not None:
+            return self._snapshot_failure(last_error)
         # Progress was real but did not survive replacing the consumer, so the
         # fix was not durable. Distinct from never progressing at all.
         return self.fail("not_restart_resistant", last_error=last_error)

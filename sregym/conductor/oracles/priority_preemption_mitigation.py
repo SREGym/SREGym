@@ -237,13 +237,13 @@ class PriorityPreemptionMitigationOracle(Oracle):
         if target_unready is not None:
             return target_unready
 
-        for check in (
-            self._service_endpoint_unready(target, namespace),
-            self._any_deployment_unready(namespace),
-            self._any_app_pod_unready(namespace),
-        ):
-            if check is not None:
-                return check
+        endpoint_failure = self._service_endpoint_unready(target, namespace)
+        if endpoint_failure is not None:
+            return endpoint_failure
+        for check in (self._any_deployment_unready, self._any_app_pod_unready):
+            failure = check(namespace)
+            if failure is not None:
+                return failure
 
         platform_pc = self._read_priority_class(platform_priority)
         if platform_pc is None:

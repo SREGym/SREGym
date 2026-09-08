@@ -46,8 +46,8 @@ def test_an_unmapped_reason_is_ambiguous_not_an_error(oracle):
         ("wrong_pods_selected", "agent_error"),
         # An action, not a symptom: nothing environmental scales to zero.
         ("required_deployment_scaled_to_zero", "agent_error"),
-        # The cluster could not host the mitigation -- the Calico shape.
-        ("required_deployment_not_rolled_out", "environment_error"),
+        # A stalled rollout can result from infrastructure or the agent's edits.
+        ("required_deployment_not_rolled_out", "ambiguous"),
         # Honestly undecidable from the oracle's vantage point.
         #
         # A *missing* Deployment sits here rather than with the environmental
@@ -150,7 +150,7 @@ def test_a_scaled_to_zero_deployment_is_the_agents_doing(oracle, capsys):
 
 
 def test_a_non_404_api_error_still_propagates(oracle):
-    """A 500 is not a verdict; it belongs to the harness_error path."""
+    """An escaping 500 receives its classification at the evaluation boundary."""
 
     def server_error(_name):
         raise ApiException(status=500, reason="Internal Server Error")
@@ -166,13 +166,13 @@ def test_healthy_deployments_return_none(oracle, monkeypatch):
     assert oracle._required_deployments_unhealthy() is None
 
 
-def test_a_stalled_rollout_is_environmental(oracle, monkeypatch, capsys):
+def test_a_stalled_rollout_has_no_proven_cause(oracle, monkeypatch, capsys):
     oracle.problem = _Problem(_Kubectl(lambda _n: _deployment(1)))
     monkeypatch.setattr(Oracle, "_wait_for_current_rollout", lambda self, dep: None)
 
     verdict = oracle._required_deployments_unhealthy()
     assert verdict["reason"] == "required_deployment_not_rolled_out"
-    assert verdict["failure_class"] == "environment_error"
+    assert verdict["failure_class"] == "ambiguous"
     assert "not fully rolled out" in capsys.readouterr().out
 
 

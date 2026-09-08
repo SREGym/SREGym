@@ -219,12 +219,12 @@ class EnvVariableShadowingMitigationOracle(Oracle):
                 print(f"[FAIL] Container '{deployment_name}' was not found")
                 return self.fail("target_container_missing", container=deployment_name)
 
-            for check in (
-                self._host_configuration_unsafe(container),
-                self._service_target_endpoint_unready(deployment),
-            ):
-                if check is not None:
-                    return check
+            configuration_failure = self._host_configuration_unsafe(container)
+            if configuration_failure is not None:
+                return configuration_failure
+            endpoint_failure = self._service_target_endpoint_unready(deployment)
+            if endpoint_failure is not None:
+                return endpoint_failure
 
             probe_failed = self._frontend_probe_failed()
             if probe_failed is not None:

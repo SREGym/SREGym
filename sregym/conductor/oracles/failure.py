@@ -82,9 +82,8 @@ _PRECEDENCE = (
 #: - Only an *actor* can delete an object, set replicas to zero, or edit a spec.
 #:   Kubernetes does not do these things spontaneously. If the problem's own
 #:   fault injection did not do it, the agent did -- so these are AGENT_ERROR.
-#: - Infrastructure produces "did not become ready", "rollout never completed",
-#:   "endpoint never appeared" on its own, all the time. For a component the
-#:   problem did not deliberately break, these are ENVIRONMENT_ERROR.
+#: - A stalled rollout or absent endpoint can also result from an agent's edits.
+#:   These symptoms alone do not establish an environmental cause.
 #: - Where both are plausible, AMBIGUOUS. Separating agent destruction from an
 #:   incomplete deploy needs a *before* observation, which is what the
 #:   environment-health precondition would add and which no oracle has today.
@@ -101,10 +100,6 @@ SHARED_FAILURE_CLASSES = {
     # Likewise: a replica count below one is a spec edit, not a symptom.
     "invalid_replica_count": FailureClass.AGENT_ERROR,
     # -- The environment could not host the work ---------------------------
-    # A Deployment that exists but never converged. This is the shape the
-    # Calico incident took -- pods could not get a network sandbox on one node,
-    # so rollouts stalled indefinitely with nothing the agent could have done.
-    "required_deployment_not_rolled_out": FailureClass.ENVIRONMENT_ERROR,
     # Observability we grade *with* rather than grade. If Prometheus is
     # unreachable the oracle has no evidence, and that is the cluster's problem,
     # not the model's. This is the single most common cause of a spurious
@@ -124,6 +119,10 @@ SHARED_FAILURE_CLASSES = {
     # deleted its way to a passing health check; calling them agent errors would
     # blame the model for a broken deploy. Neither is honest yet.
     "required_deployment_missing": FailureClass.AMBIGUOUS,
+    "required_deployment_not_rolled_out": FailureClass.AMBIGUOUS,
+    "kubernetes_resource_missing": FailureClass.AMBIGUOUS,
+    "kubernetes_request_failed": FailureClass.AMBIGUOUS,
+    "oracle_command_failed": FailureClass.AMBIGUOUS,
     "namespace_missing": FailureClass.AMBIGUOUS,
     "no_deployments_found": FailureClass.AMBIGUOUS,
     "no_pods_found": FailureClass.AMBIGUOUS,

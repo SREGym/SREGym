@@ -76,30 +76,47 @@ class Oracle(ABC):
 
     @classmethod
     def fail_from_exception(cls, exc: BaseException, **detail) -> dict:
-        """Build a failure verdict from an exception an oracle caught itself.
+        """Classify caught and escaping exceptions with the same evidence.
 
-        Several oracles wrap their whole evaluation in ``except Exception`` and
-        return a bare failure. That collapses two different things: the API
-        server being unreachable or refusing us (the cluster's problem, and
-        common) and a genuine bug in the oracle (ours, and rare). The exception
-        type separates them for free, so there is no reason to keep guessing.
-
-        Note this is *not* the same path as the conductor's handler, which sees
-        exceptions that escaped an oracle entirely. Here the oracle chose to
-        catch, so it still owes a verdict.
+        A missing resource or rejected request does not establish who caused
+        it. Command failures also stay ambiguous: a nonzero exit status alone
+        cannot distinguish an application error from an unavailable API.
         """
-        # Imported lazily: ``base`` is imported by every oracle, and the
-        # kubernetes client is slow to import and not needed to classify.
-        from kubernetes.client.rest import ApiException
+        import subprocess
 
-        if isinstance(exc, ApiException):
-            return cls.fail(
-                "kubernetes_api_error",
-                status=getattr(exc, "status", None),
-                error=f"{type(exc).__name__}: {exc}",
-                **detail,
-            )
-        return cls.fail("oracle_raised", error=f"{type(exc).__name__}: {exc}", **detail)
+        from kubernetes.client.rest import ApiException
+        from urllib3.exceptions import HTTPError, MaxRetryError, NewConnectionError, ProtocolError
+        from urllib3.exceptions import TimeoutError as HTTPTimeoutError
+
+        detail = {**detail, "error": f"{type(exc).__name__}: {exc}"}
+        cause = exc
+        seen = set()
+        while cause is not None and id(cause) not in seen:
+            seen.add(id(cause))
+            if isinstance(cause, ApiException):
+                status = cause.status or 0
+                if status == 404:
+                    reason = "kubernetes_resource_missing"
+                elif status in (408, 429) or 500 <= status < 600:
+                    reason = "kubernetes_api_error"
+                else:
+                    reason = "kubernetes_request_failed"
+                return cls.fail(reason, **{**detail, "status": status})
+            if isinstance(cause, (NewConnectionError, HTTPTimeoutError, ProtocolError)):
+                return cls.fail("kubernetes_api_error", **detail)
+            if isinstance(cause, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
+                return cls.fail("oracle_command_failed", **detail)
+            # The checked kubectl helper wraps subprocess errors in RuntimeError.
+            # urllib3 stores its transport cause in ``reason`` instead.
+            if isinstance(cause, MaxRetryError) and isinstance(cause.reason, BaseException):
+                cause = cause.reason
+                continue
+            if isinstance(cause, HTTPError):
+                return cls.fail("kubernetes_request_failed", **detail)
+            cause = cause.__cause__
+            if not isinstance(cause, BaseException):
+                break
+        return cls.fail("oracle_raised", **detail)
 
     def pods_unready(self, pods, **detail) -> dict | None:
         """Return a verdict for the first unhealthy pod or container, else None.

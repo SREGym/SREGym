@@ -347,10 +347,13 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
         return True
 
     def _bgp_configuration_not_route_reflector_mode(self):
-        result = self._run("kubectl get bgpconfiguration default -o json")
+        result = self._run("kubectl get bgpconfiguration default -o json --ignore-not-found")
         if result.returncode != 0:
+            print("FAIL: Could not read Calico BGPConfiguration/default")
+            return self.fail("oracle_command_failed", resource="bgpconfiguration/default", stderr=result.stderr.strip())
+        if not result.stdout.strip():
             print("FAIL: Calico BGPConfiguration/default is missing")
-            return self.fail("bgp_configuration_missing", stderr=result.stderr.strip())
+            return self.fail("bgp_configuration_missing")
         config = json.loads(result.stdout)
         if config.get("spec", {}).get("nodeToNodeMeshEnabled") is not False:
             print("FAIL: Calico node-to-node mesh is enabled; route-reflector topology was bypassed")
@@ -363,7 +366,7 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
         result = self._run("kubectl get bgppeers -o json")
         if result.returncode != 0:
             print("FAIL: Could not read Calico BGPPeer resources")
-            return self.fail("kubernetes_api_error", resource="bgppeers", stderr=result.stderr.strip())
+            return self.fail("oracle_command_failed", resource="bgppeers", stderr=result.stderr.strip())
 
         peers = json.loads(result.stdout).get("items", [])
         if not peers:
@@ -402,24 +405,26 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
         self._wait_for_rollouts(self.problem.namespace)
         self._wait_for_rollouts(self.problem.PROBE_NAMESPACE)
 
-        for check in (
-            self._app_replicas_were_reduced(self.problem.namespace),
-            self._deployments_unready(self.problem.namespace),
-            self._deployments_unready(self.problem.PROBE_NAMESPACE),
-            self._application_not_spanning_nodes(self.problem.namespace),
+        for check, namespace in (
+            (self._app_replicas_were_reduced, self.problem.namespace),
+            (self._deployments_unready, self.problem.namespace),
+            (self._deployments_unready, self.problem.PROBE_NAMESPACE),
+            (self._application_not_spanning_nodes, self.problem.namespace),
         ):
-            if check is not None:
-                return check
+            failure = check(namespace)
+            if failure is not None:
+                return failure
 
         if not self._calico_ready():
             return self.fail("calico_not_ready")
 
         for check in (
-            self._bgp_configuration_not_route_reflector_mode(),
-            self._route_reflector_peer_selects_no_nodes(),
+            self._bgp_configuration_not_route_reflector_mode,
+            self._route_reflector_peer_selects_no_nodes,
         ):
-            if check is not None:
-                return check
+            failure = check()
+            if failure is not None:
+                return failure
 
         if not self._cross_node_probe_ok():
             return self.fail("cross_node_connectivity_failed")

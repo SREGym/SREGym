@@ -115,6 +115,7 @@ class PostgresLockMitigationOracle(Oracle):
         # The table reads fine but the catalog does not surface through the
         # frontend, which has other possible causes.
         "catalog_not_reachable": FailureClass.AMBIGUOUS,
+        "catalog_read_failed": FailureClass.AMBIGUOUS,
     }
 
     def evaluate(self) -> dict:
@@ -125,9 +126,8 @@ class PostgresLockMitigationOracle(Oracle):
             status = self.problem._catalog_read_status()
             if status != "ok":
                 logger.info("catalog.products read status is '%s'; not mitigated.", status)
-                # Was free text; the sentence moves to the log line above and
-                # `reason` becomes a code.
-                return self.fail("fault_still_present", read_status=status)
+                reason = "fault_still_present" if status == "locked" else "catalog_read_failed"
+                return self.fail(reason, read_status=status)
             if time.monotonic() >= deadline:
                 break
             time.sleep(self.SAMPLE_INTERVAL)
