@@ -106,8 +106,11 @@ class Helm:
 
         logger.info(f"Helm Uninstall: {release_name} in namespace {namespace}")
 
-        if not Helm.exists_release(release_name, namespace):
-            logger.warning(f"Release {release_name} does not exist. Skipping uninstall.")
+        release_exists = Helm._release_status(release_name, namespace)
+        if release_exists is None:
+            return
+        if not release_exists:
+            logger.debug(f"Release {release_name} does not exist. Skipping uninstall.")
             return
 
         command = f"helm uninstall {release_name} -n {namespace}"
@@ -140,15 +143,21 @@ class Helm:
         Returns:
             bool: True if release exists
         """
+        return Helm._release_status(release_name, namespace) is True
+
+    @staticmethod
+    def _release_status(release_name: str, namespace: str) -> bool | None:
+        """Return whether a release exists, or None when Helm cannot check."""
         command = f"helm list -n {namespace}"
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, error = process.communicate()
 
-        if error:
-            logger.error(error.decode("utf-8"))
-            return False
-        else:
-            return release_name in output.decode("utf-8")
+        if process.returncode != 0:
+            stderr = error.decode("utf-8").strip() if error else "unknown error"
+            logger.error(f"Failed to list Helm releases in namespace '{namespace}': {stderr}")
+            return None
+
+        return release_name in output.decode("utf-8")
 
     @staticmethod
     def assert_if_deployed(namespace: str):
