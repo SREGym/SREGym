@@ -26,7 +26,7 @@ from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
-from sregym.conductor.conductor import Conductor, ConductorConfig
+from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
@@ -72,6 +72,7 @@ def run_preflight_check(
         "copilot": "clients.copilot.driver",
         "opencode": "clients.opencode.driver",
         "gemini": "clients.geminicli.driver",
+        "cursor": "clients.cursor.driver",
     }
 
     module_path = agent_driver_modules.get(agent_name)
@@ -820,9 +821,15 @@ def main(args):
     if args.noise:
         logger.info("Noise injection enabled.")
     os.environ["API_HOSTNAME"] = "0.0.0.0"
-    os.environ["API_PORT"] = "8000"
-    os.environ["MCP_SERVER_PORT"] = "9954"
-    os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
+    # Host-facing ports are defaults, not constants: a run has to be able to
+    # step around whatever else is already listening on the workstation.
+    # Assigning unconditionally here would clobber the caller's value, which
+    # then surfaces far away as a connection to the wrong service.
+    os.environ.setdefault("API_PORT", "8000")
+    os.environ.setdefault("MCP_SERVER_PORT", "9954")
+    # Derived, never duplicated: a literal here silently disagrees with
+    # MCP_SERVER_PORT, and consumers prefer the URL over the parts.
+    os.environ["MCP_SERVER_URL"] = f"http://127.0.0.1:{os.environ['MCP_SERVER_PORT']}"
 
     logger.info(
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
@@ -861,13 +868,18 @@ def main(args):
         enable_noise=args.noise,
         internet_policy=internet_policy,
         k8s_proxy_listen_host=k8s_proxy_listen_host,
+        k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
         block_workload_creation=internet_policy.is_filtered,
+        stages=tuple(args.stages) if args.stages else None,
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
 
     try:
         if not agent_reg or agent_reg.container_isolation:
-            LAUNCHER.enable_container_isolation(force_build=args.force_build)
+            LAUNCHER.enable_container_isolation(
+                force_build=args.force_build,
+                k8s_proxy_port=conductor_config.k8s_proxy_listen_port,
+            )
 
         # Pre-flight check — makes a real (minimal) API call inside the agent
         # container to validate model and credentials in one shot.
@@ -979,6 +991,20 @@ if __name__ == "__main__":
         choices=tuple(PROBLEM_SETS),
         default=None,
         help="Run a named problem set (e.g., 'sregym-lite')",
+    )
+    # Deliberately outside the selection group: which stages run is independent
+    # of which problems run, so --stages composes with both --problem and
+    # --suite.
+    parser.add_argument(
+        "--stages",
+        nargs="+",
+        choices=ALL_STAGES,
+        default=None,
+        help=(
+            "Stages to attempt, in order (default: every stage the problem supports). "
+            "Use '--stages diagnosis' to skip mitigation entirely. Naming a stage the "
+            "problem has no oracle for is an error rather than a silent skip."
+        ),
     )
     parser.add_argument(
         "--agent",

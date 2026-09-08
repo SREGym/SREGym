@@ -319,11 +319,11 @@ class KubeCtl:
                         )
                         console.log(f"[bold green]Job with label '{label}' deleted successfully.")
                 else:
-                    console.log(f"[yellow]No jobs found with label '{label}' in namespace '{namespace}'.")
+                    logger.debug(f"No jobs found with label '{label}' in namespace '{namespace}'.")
             return True
         except client.exceptions.ApiException as e:
             if e.status == 404:
-                console.log(f"[yellow]Job '{job_name}' not found in namespace '{namespace}' (already deleted)")
+                logger.debug(f"Job '{job_name}' not found in namespace '{namespace}' (already deleted)")
                 return True
             else:
                 console.log(f"[red]Error deleting job '{job_name}': {e}")
@@ -503,7 +503,7 @@ class KubeCtl:
             logger.info(f"Namespace '{namespace}' deleted successfully.")
         except ApiException as e:
             if e.status == 404:
-                logger.warning(f"Namespace '{namespace}' not found.")
+                logger.debug(f"Namespace '{namespace}' not found.")
             else:
                 logger.error(f"Error deleting namespace '{namespace}': {e}")
 
