@@ -847,7 +847,10 @@ def main(args):
 
     try:
         if not agent_reg or agent_reg.container_isolation:
-            LAUNCHER.enable_container_isolation(force_build=args.force_build)
+            LAUNCHER.enable_container_isolation(
+                force_build=args.force_build,
+                k8s_proxy_port=conductor_config.k8s_proxy_listen_port,
+            )
 
         # Pre-flight check — makes a real (minimal) API call inside the agent
         # container to validate model and credentials in one shot.

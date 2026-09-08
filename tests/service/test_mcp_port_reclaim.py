@@ -7,11 +7,16 @@ takes out unrelated processes on a developer's machine, so ownership is decided
 by the command line rather than by port occupancy.
 """
 
+import re
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
+from sregym.agent_launcher import AgentLauncher
 from sregym.conductor.conductor import ConductorConfig
+from sregym.service.container_runner import ContainerRunner
+from sregym.service.internet_policy import InternetPolicy
 from sregym.service.mcp_server import MCPServer
 
 OWN_CMDLINE = "kubectl port-forward svc/mcp-server 9954:9954 -n sregym --address 0.0.0.0"
@@ -125,3 +130,63 @@ def test_mcp_port_is_overridable(monkeypatch):
 def test_k8s_proxy_port_is_overridable():
     assert ConductorConfig().k8s_proxy_listen_port == 16443
     assert ConductorConfig(k8s_proxy_listen_port=16500).k8s_proxy_listen_port == 16500
+
+
+@pytest.mark.parametrize("port", [16443, 17443])
+def test_launcher_passes_k8s_port_to_egress_proxy(monkeypatch, tmp_path, port):
+    monkeypatch.setattr(ContainerRunner, "ensure_image_exists", lambda self: None)
+    launcher = AgentLauncher()
+    launcher.set_internet_policy(InternetPolicy.from_mode("filtered"))
+    launcher.enable_container_isolation(k8s_proxy_port=port)
+    runner = launcher._container_runner
+    assert runner is not None
+    assert runner.config.k8s_proxy_port == port
+
+    commands = []
+    monkeypatch.setattr(runner, "_ensure_proxy_image_exists", lambda: None)
+    monkeypatch.setattr(runner, "_prepare_egress_state", lambda: None)
+    monkeypatch.setattr(runner, "_copy_proxy_certificate", lambda: None)
+    monkeypatch.setattr(runner, "_run_docker_checked", lambda command, action: commands.append(command))
+    runner._egress_tmp_dir = tmp_path
+    runner._ensure_filtered_egress()
+
+    proxy_command = next(command for command in commands if "mitmdump" in command)
+    rule = next(arg.removeprefix("ignore_hosts=") for arg in proxy_command if arg.startswith("ignore_hosts="))
+    assert re.search(rule, f"host.docker.internal:{port}")
+    assert not re.search(rule, f"host.docker.internal:{port + 1}")
+    assert not re.search(rule, f"host.docker.internal:{port}0")
+    assert not re.search(rule, f"other.example:{port}")
+    assert not re.search(rule, f"hostXdockerXinternal:{port}")
+
+
+def test_main_sets_custom_k8s_port_before_agent_preflight(monkeypatch):
+    import main as benchmark
+
+    class StopBeforeDeployment(Exception):
+        pass
+
+    monkeypatch.setattr(benchmark.os, "environ", benchmark.os.environ.copy())
+    monkeypatch.setenv("K8S_PROXY_PORT", "17443")
+    monkeypatch.setattr(benchmark, "LAUNCHER", AgentLauncher())
+    monkeypatch.setattr(benchmark, "init_logger", lambda: None)
+    monkeypatch.setattr(benchmark, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark, "_configure_model_environment", lambda args: ("unused", "unused"))
+    monkeypatch.setattr(benchmark, "run_judge_preflight_check", lambda: None)
+    monkeypatch.setattr(benchmark, "get_container_host_bind_address", lambda: "172.17.0.1")
+    monkeypatch.setattr(ContainerRunner, "ensure_image_exists", lambda self: None)
+
+    def preflight(agent, *, container_runner, install_script):
+        assert container_runner.config.k8s_proxy_port == 17443
+        raise StopBeforeDeployment
+
+    monkeypatch.setattr(benchmark, "run_preflight_check", preflight)
+    args = SimpleNamespace(
+        agent="debug",
+        internet_access="filtered",
+        use_external_harness=False,
+        profile="full",
+        noise=False,
+        force_build=False,
+    )
+    with pytest.raises(StopBeforeDeployment):
+        benchmark.main(args)

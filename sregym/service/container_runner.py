@@ -116,6 +116,7 @@ class ContainerConfig:
     memory: str = "8g"
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     egress_proxy_image: str = DEFAULT_EGRESS_PROXY_IMAGE
+    k8s_proxy_port: int = 16443
 
 
 class ContainerRunner:
@@ -329,7 +330,7 @@ class ContainerRunner:
                     # certificate from its kubeconfig; mitmproxy must not
                     # replace it with an egress certificate.
                     "--set",
-                    r"ignore_hosts=^host\.docker\.internal:16443$",
+                    rf"ignore_hosts=^host\.docker\.internal:{self.config.k8s_proxy_port}$",
                     "-s",
                     "/addons/egress_proxy.py",
                 ],
