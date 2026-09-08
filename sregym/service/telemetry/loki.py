@@ -125,6 +125,7 @@ class Loki:
         Helm.install(
             release_name=self.promtail_release_name,
             chart_path="grafana/promtail",
+            version="6.17.1",
             namespace=self.namespace,
             remote_chart=True,
             extra_args=["-f", self.promtail_values_file],

@@ -1,8 +1,8 @@
 # Always applied to astronomy-shop, by AstronomyShop.deploy().
 #
 # Corrections to the vendored opentelemetry-demo chart for the way SREGym
-# actually deploys it. Nothing here changes what an agent can observe; each
-# entry removes work the collector was doing that could never succeed.
+# actually deploys it: correct telemetry routing and backport upstream runtime
+# settings without changing the application image or disabling instrumentation.
 
 opentelemetry-collector:
   config:
@@ -20,3 +20,24 @@ opentelemetry-collector:
         # metrics are still produced for anything that scrapes the collector.
         metrics:
           exporters: [debug]
+
+# Backport opentelemetry-demo#3105 to the pinned 2.2.0 images. An explicit
+# maximum leaves room within the existing 300Mi limits for native memory and
+# instrumentation. Preserve the image's javaagent when overriding this variable.
+components:
+  accounting:
+    # The first successful upstream nightly after opentelemetry-demo#2876.
+    # Source ebb18186819c510b39d64184d774a527a79e1525 changes only Consumer.cs
+    # under src/accounting versus 2.2.0: dispose the DB context per message.
+    # Pin the multi-platform index, retaining both ARM64 and AMD64 support.
+    imageOverride:
+      repository: ghcr.io/open-telemetry/demo
+      tag: nightly-20939609681-accounting@sha256:51e6720438c13d0a4fefd129b01e2422b176fdb18a9ea71ef08fd84e717e82f4
+  ad:
+    envOverrides:
+      - name: JAVA_TOOL_OPTIONS
+        value: "-javaagent:/usr/src/app/opentelemetry-javaagent.jar -Xmx200m"
+  fraud-detection:
+    envOverrides:
+      - name: JAVA_TOOL_OPTIONS
+        value: "-javaagent:/usr/src/app/opentelemetry-javaagent.jar -Xmx180m"

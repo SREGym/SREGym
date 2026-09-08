@@ -2,10 +2,12 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import os
 import shlex
 import shutil
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,6 +30,7 @@ from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
 from sregym.generators.noise.manager import get_noise_manager
+from sregym.observer.baseline import capture_attempt
 from sregym.observer.jaeger import Jaeger
 from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import CLUSTER_BASELINE_STATE_FILE
@@ -272,6 +275,20 @@ class Conductor:
         """Inject fault and prepare diagnosis checkpoint if available."""
         problem = self.current_problem
 
+        # Opt-in evaluation guard: an already unhealthy baseline is an incomplete
+        # attempt. Never apply this rule after injection, where OOM can be intended.
+        if os.environ.get("SREGYM_BASELINE_CHECK") == "1":
+            self._baseline_diagnostics_dir = Path("results/baseline") / uuid.uuid4().hex
+            self.results["baseline_diagnostics"] = str(self._baseline_diagnostics_dir)
+            try:
+                findings = capture_attempt(self._baseline_diagnostics_dir, "pre-injection")
+            except Exception:
+                self.record_incomplete_attempt("baseline_diagnostics_failed")
+                raise
+            if findings:
+                self.record_incomplete_attempt("baseline_unhealthy")
+                raise RuntimeError(f"Unhealthy pre-injection baseline: {findings}")
+
         # Snapshot the healthy cluster before breaking it. The oracle is built
         # in Problem.__init__, which runs before deploy_app(), so this is the
         # first point at which the app actually exists. Also lets a mitigation
@@ -285,6 +302,12 @@ class Conductor:
         problem.inject_fault()
         self.logger.info("[ENV] Injected fault")
         self.fault_injected = True
+        diagnostics_dir = getattr(self, "_baseline_diagnostics_dir", None)
+        if diagnostics_dir is not None:
+            try:
+                capture_attempt(diagnostics_dir, "post-injection")
+            except Exception as exc:
+                self.logger.warning("Could not capture post-injection diagnostics: %s", exc)
 
         # Prepare diagnosis checkpoint if available, after fault injection but before agent stages
         if (
@@ -386,6 +409,13 @@ class Conductor:
         problem = self.problem
         cleanup_generation = self._submission_generation if generation is None else generation
         cleanup_errors: list[str] = []
+
+        diagnostics_dir = getattr(self, "_baseline_diagnostics_dir", None)
+        if diagnostics_dir is not None and cleanup_generation == self._submission_generation:
+            try:
+                capture_attempt(diagnostics_dir, "pre-cleanup")
+            except Exception as exc:
+                self.logger.warning("Could not capture pre-cleanup diagnostics: %s", exc)
 
         def cleanup_was_abandoned() -> bool:
             with self._submission_lock:
@@ -583,6 +613,7 @@ class Conductor:
             self.problem = None
             self.app = None
             self.results = {}
+            self._baseline_diagnostics_dir = None
 
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
@@ -1283,7 +1314,7 @@ class Conductor:
         else:
             self.kubectl.exec_command(
                 "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
-                "releases/latest/download/components.yaml"
+                "releases/download/v0.9.0/components.yaml"
             )
             self.kubectl.exec_command(
                 "kubectl -n kube-system patch deployment metrics-server "

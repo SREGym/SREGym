@@ -9,22 +9,22 @@ networking:
 #      endpoint = ["http://128.105.144.30:5000"]
 nodes:
   - role: control-plane
-    image: jacksonarthurclark/aiopslab-kind-arm:latest
+    image: jacksonarthurclark/aiopslab-kind-arm@sha256:9723c6d45f5e1b9af0975987801543f36f529e6caff2575d9ba55d048f38977c
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev
   - role: worker
-    image: jacksonarthurclark/aiopslab-kind-arm:latest
+    image: jacksonarthurclark/aiopslab-kind-arm@sha256:9723c6d45f5e1b9af0975987801543f36f529e6caff2575d9ba55d048f38977c
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev
   - role: worker
-    image: jacksonarthurclark/aiopslab-kind-arm:latest
+    image: jacksonarthurclark/aiopslab-kind-arm@sha256:9723c6d45f5e1b9af0975987801543f36f529e6caff2575d9ba55d048f38977c
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev
   - role: worker
-    image: jacksonarthurclark/aiopslab-kind-arm:latest
+    image: jacksonarthurclark/aiopslab-kind-arm@sha256:9723c6d45f5e1b9af0975987801543f36f529e6caff2575d9ba55d048f38977c
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev

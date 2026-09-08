@@ -13,6 +13,7 @@
         "chart_path": "grafana/loki",
         "namespace": "observe",
         "remote_chart": true,
+        "version": "7.3.0",
         "extra_args": ["-f", "observer/loki/loki-values.yaml"]
     }
 }

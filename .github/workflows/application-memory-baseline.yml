@@ -1,0 +1,81 @@
+name: Application Memory Baseline
+
+# A sustained, credential-free regression run for deployment changes.
+# Health success still needs curve review before claiming qualification.
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/application-memory-baseline.yml'
+      - 'SREGym-applications'
+      - 'kind/**'
+      - 'scripts/baseline/**'
+      - 'sregym/observer/baseline.py'
+      - 'sregym/observer/loki/**'
+      - 'sregym/service/apps/astronomy_shop.py'
+      - 'sregym/service/apps/values/astronomy-shop*.yaml'
+      - 'sregym/service/metadata/loki.json'
+      - 'sregym/service/telemetry/loki.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  astronomy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        repetition: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v4
+      - name: Install Python dependencies
+        run: uv sync --locked --python 3.12
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Install kind and prepare host
+        run: |
+          curl --fail --location --output /tmp/kind https://kind.sigs.k8s.io/dl/v0.27.0/kind-linux-amd64
+          chmod +x /tmp/kind
+          sudo mv /tmp/kind /usr/local/bin/kind
+          sudo mkdir -p /run/udev
+          # The four nodes share the host's per-user inotify instance budget.
+          sudo sysctl -w fs.inotify.max_user_instances=1024
+      - name: Create dedicated cluster
+        run: bash kind/setup_kind_cluster.sh x86
+      - name: Fresh full-profile baseline (45 minutes)
+        run: |
+          uv run --no-sync python -m scripts.baseline.run \
+            --context kind-kind --seconds 2700 --output baseline-evidence/fresh
+      - name: Exercise application cleanup and redeployment
+        if: matrix.repetition == 1
+        run: |
+          uv run --no-sync python -c 'from sregym.service.apps.astronomy_shop import AstronomyShop; AstronomyShop().delete()'
+          uv run --no-sync python -m scripts.baseline.run \
+            --context kind-kind --seconds 2700 --output baseline-evidence/redeployed
+      - name: Summarize memory curves
+        if: always()
+        run: |
+          for run_dir in baseline-evidence/*; do
+            [ -d "$run_dir" ] || continue
+            uv run --no-sync python -m scripts.baseline.summarize "$run_dir" > "$run_dir/memory-summary.json"
+          done
+      - name: Preserve cluster diagnostics
+        if: always()
+        run: kind export logs baseline-evidence/final-kind-logs || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: astronomy-memory-${{ matrix.repetition }}
+          path: baseline-evidence/
+          retention-days: 30
+          if-no-files-found: error
+      - name: Remove test cluster
+        if: always()
+        run: kind delete cluster
