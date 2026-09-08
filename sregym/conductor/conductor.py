@@ -43,6 +43,11 @@ from sregym.service.mcp_server import MCPServer
 from sregym.service.telemetry.loki import Loki
 from sregym.service.telemetry.prometheus import Prometheus
 
+# The agent-facing stages, in the only order they can run. Shared with
+# `--stages`' choices so the CLI and the conductor cannot disagree about what
+# exists.
+ALL_STAGES = ("diagnosis", "mitigation")
+
 
 @dataclass
 class ConductorConfig:
@@ -54,6 +59,9 @@ class ConductorConfig:
     k8s_proxy_listen_host: str = "127.0.0.1"
     k8s_proxy_listen_port: int = 16443
     block_workload_creation: bool = False
+    # Which stages this run should attempt. None means every stage the problem
+    # supports, which is what an unset --stages leaves in place.
+    stages: tuple[str, ...] | None = None
 
 
 class Conductor:
@@ -152,13 +160,30 @@ class Conductor:
                 raise RuntimeError(f"[❌] Required dependency '{b}' not found.")
 
     def get_problem_stages(self):
+        """Record which stages this run intends to attempt.
+
+        Precedence: the run's own configuration (`--stages`), then the legacy
+        per-problem `tasklist.yml`, then every stage. Whether a stage *can* run
+        is a separate question, answered in `_build_stage_sequence` from the
+        oracles the problem actually attaches; this method only records intent.
+        """
+        if self.config.stages is not None:
+            requested = list(self.config.stages)
+            if not is_ordered_subset(requested, list(ALL_STAGES)):
+                msg = f"Requested stages {requested} must be a subset of {list(ALL_STAGES)}, in that order"
+                self.logger.error(msg)
+                raise ValueError(msg)
+            self.logger.info(f"Stages requested for this run: {requested}")
+            self.tasklist = requested
+            return
+
         file_dir = Path(__file__).resolve().parent
         tasklist_path = file_dir / "tasklist.yml"
 
         # If tasklist file doesn't exist, default to running diagnosis + mitigation
         if not tasklist_path.exists():
             self.logger.info("No tasklist.yml found. Defaulting to running diagnosis and mitigation for this problem.")
-            self.tasklist = ["diagnosis", "mitigation"]
+            self.tasklist = list(ALL_STAGES)
             return
 
         with open(tasklist_path) as f:
@@ -171,7 +196,7 @@ class Conductor:
 
         if self.problem_id not in (problems if problems else []):
             self.logger.warning("problem_id not found in tasklist. Defaulting to running diagnosis and mitigation.")
-            self.tasklist = ["diagnosis", "mitigation"]
+            self.tasklist = list(ALL_STAGES)
         else:
             problem_tasklist = problems[self.problem_id]
             if not problem_tasklist:
@@ -179,7 +204,7 @@ class Conductor:
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
-            if not is_ordered_subset(problem_tasklist, ["diagnosis", "mitigation"]):
+            if not is_ordered_subset(problem_tasklist, list(ALL_STAGES)):
                 msg = f"Task list for {self.problem_id} is either out of order or has an unknown step (allowed: diagnosis, mitigation)"
                 self.logger.error(msg)
                 raise RuntimeError(msg)
@@ -208,33 +233,35 @@ class Conductor:
             "mitigation": self._evaluate_mitigation,
         }
 
+        # A stage the caller named explicitly is a different thing from one that
+        # came from the default or tasklist.yml: an absent oracle is a conflict
+        # in the first case and merely a fact in the second.
+        explicitly_requested = self.config.stages is not None
+
         # Determine which stages are actually available (oracle attached)
         for name in self.tasklist:
-            if name not in stage_definitions:
+            evaluation = stage_definitions.get(name)
+            if evaluation is None:
                 self.logger.warning(f"Unknown stage '{name}' in tasklist; skipping.")
                 continue
 
-            if name == "diagnosis":
-                if getattr(self.problem, "diagnosis_oracle", None):
-                    self.stage_sequence.append(
-                        {
-                            "name": name,
-                            "evaluation": stage_definitions[name],
-                        }
-                    )
-                else:
-                    self.logger.info("⏩ Diagnosis oracle is not attached. Skipping diagnosis.")
+            if getattr(self.problem, f"{name}_oracle", None):
+                self.stage_sequence.append(
+                    {
+                        "name": name,
+                        "evaluation": evaluation,
+                    }
+                )
+                continue
 
-            elif name == "mitigation":
-                if getattr(self.problem, "mitigation_oracle", None):
-                    self.stage_sequence.append(
-                        {
-                            "name": name,
-                            "evaluation": stage_definitions[name],
-                        }
-                    )
-                else:
-                    self.logger.info("⏩ Mitigation oracle is not attached. Skipping mitigation.")
+            if explicitly_requested:
+                # Skipping quietly here would report a successful run that
+                # measured nothing at all.
+                msg = f"Stage {name!r} was requested for {self.problem_id!r}, but it has no {name}_oracle"
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            self.logger.info(f"⏩ {name.capitalize()} oracle is not attached. Skipping {name}.")
 
         if not self.stage_sequence:
             self.logger.warning(
