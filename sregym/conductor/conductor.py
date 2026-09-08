@@ -52,6 +52,7 @@ class ConductorConfig:
     enable_noise: bool = False
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     k8s_proxy_listen_host: str = "127.0.0.1"
+    k8s_proxy_listen_port: int = 16443
     block_workload_creation: bool = False
 
 
@@ -78,7 +79,7 @@ class Conductor:
         # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
-            listen_port=16443,
+            listen_port=self.config.k8s_proxy_listen_port,
             listen_host=self.config.k8s_proxy_listen_host,
             block_workload_creation=self.config.block_workload_creation,
         )
@@ -1060,13 +1061,15 @@ class Conductor:
             ]
             marked_nodes = [node for node in marked_nodes if node]
 
-            bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} -o json")
+            bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} --ignore-not-found -o json")
             bgppeers = (kubectl_json("kubectl get bgppeers -o json") or {}).get("items", [])
-            bgp_config = kubectl_json("kubectl get bgpconfiguration default -o json")
-            support_namespace = kubectl_json(f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} -o json")
+            bgp_config = kubectl_json("kubectl get bgpconfiguration default --ignore-not-found -o json")
+            support_namespace = kubectl_json(
+                f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} --ignore-not-found -o json"
+            )
             state_configmap = kubectl_json(
                 f"kubectl -n {self._q(problem.STATE_NAMESPACE)} get configmap "
-                f"{self._q(problem.STATE_CONFIGMAP_NAME)} -o json"
+                f"{self._q(problem.STATE_CONFIGMAP_NAME)} --ignore-not-found -o json"
             )
             state_data = (state_configmap or {}).get("data", {}) or {}
 
