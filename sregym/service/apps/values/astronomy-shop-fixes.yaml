@@ -1,8 +1,8 @@
 # Always applied to astronomy-shop, by AstronomyShop.deploy().
 #
 # Corrections to the vendored opentelemetry-demo chart for the way SREGym
-# actually deploys it: correct telemetry routing and backport upstream runtime
-# settings without changing the application image or disabling instrumentation.
+# actually deploys it: correct telemetry routing and apply upstream memory
+# fixes while preserving instrumentation.
 
 opentelemetry-collector:
   config:
