@@ -550,7 +550,7 @@ class ApplicationFaultInjector(FaultInjector):
 
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
 
-        deadline = time.monotonic() + 120
+        deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
             pods = self.kubectl.list_pods(self.namespace)
             rcnt = None
@@ -567,7 +567,7 @@ class ApplicationFaultInjector(FaultInjector):
 
             time.sleep(5)
         else:
-            raise TimeoutError("Kafka did not restart within 120 seconds after producer injection")
+            raise TimeoutError("Kafka did not restart within 300 seconds after producer injection")
 
         print(f"Injected sidecar container 'order-creator' in '{deployment_name}'")
 
