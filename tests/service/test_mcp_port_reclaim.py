@@ -187,6 +187,7 @@ def test_main_sets_custom_k8s_port_before_agent_preflight(monkeypatch):
         profile="full",
         noise=False,
         force_build=False,
+        stages=None,
     )
     with pytest.raises(StopBeforeDeployment):
         benchmark.main(args)

@@ -26,7 +26,7 @@ from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
-from sregym.conductor.conductor import Conductor, ConductorConfig
+from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
@@ -842,6 +842,7 @@ def main(args):
         k8s_proxy_listen_host=k8s_proxy_listen_host,
         k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
         block_workload_creation=internet_policy.is_filtered,
+        stages=tuple(args.stages) if args.stages else None,
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
 
@@ -962,6 +963,20 @@ if __name__ == "__main__":
         choices=tuple(PROBLEM_SETS),
         default=None,
         help="Run a named problem set (e.g., 'sregym-lite')",
+    )
+    # Deliberately outside the selection group: which stages run is independent
+    # of which problems run, so --stages composes with both --problem and
+    # --suite.
+    parser.add_argument(
+        "--stages",
+        nargs="+",
+        choices=ALL_STAGES,
+        default=None,
+        help=(
+            "Stages to attempt, in order (default: every stage the problem supports). "
+            "Use '--stages diagnosis' to skip mitigation entirely. Naming a stage the "
+            "problem has no oracle for is an error rather than a silent skip."
+        ),
     )
     parser.add_argument(
         "--agent",
