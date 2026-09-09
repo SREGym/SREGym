@@ -8,11 +8,29 @@ import time
 import yaml
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class RollingUpdateMitigationOracle(Oracle):
     rollout_timeout_seconds = 120
     poll_interval_seconds = 2
+
+    FAILURE_CLASSES = {
+        # The agent edits this very Deployment as its mitigation, so it sits
+        # inside the problem's blast radius. A stalled rollout of a Deployment
+        # the agent just rewrote is not attributable to infrastructure the way
+        # it is elsewhere -- hence the override of the shared
+        # ENVIRONMENT_ERROR.
+        "required_deployment_not_rolled_out": FailureClass.AMBIGUOUS,
+        # Losing every replica mid-rollout is the injected fault's whole
+        # symptom, observed under a rollout this oracle triggers itself. It is
+        # the decisive check.
+        "lost_all_available_replicas": FailureClass.AGENT_ERROR,
+        # We could not read or drive the Deployment: our probe, our problem.
+        "deployment_yaml_unreadable": FailureClass.ENVIRONMENT_ERROR,
+        "deployment_has_no_pod_template": FailureClass.AMBIGUOUS,
+        "rollout_probe_ineffective": FailureClass.HARNESS_ERROR,
+    }
 
     def __init__(self, problem, deployment_name: str):
         super().__init__(problem)
@@ -81,7 +99,14 @@ class RollingUpdateMitigationOracle(Oracle):
             and status.get("unavailableReplicas", 0) == 0
         )
 
-    def _wait_for_rollout(self, minimum_generation: int, *, require_continuous_availability: bool) -> bool:
+    def _rollout_failed(self, minimum_generation: int, *, require_continuous_availability: bool) -> dict | None:
+        """Return a verdict if the rollout did not complete cleanly, else None.
+
+        The two failures here were previously one bare ``False``, which is the
+        worst possible conflation for this problem: dropping to zero available
+        replicas *is* the fault under test, while a timeout is a much weaker
+        signal. They now report separately.
+        """
         deadline = time.monotonic() + self.rollout_timeout_seconds
         while time.monotonic() < deadline:
             deployment = self._get_deployment_json()
@@ -90,15 +115,19 @@ class RollingUpdateMitigationOracle(Oracle):
 
             if require_continuous_availability and available < 1:
                 print("❌ Mitigation failed: deployment reached zero available replicas")
-                return False
+                return self.fail("lost_all_available_replicas", deployment=self.deployment_name)
 
             if generation >= minimum_generation and self._rollout_complete(deployment):
-                return True
+                return None
 
             time.sleep(self.poll_interval_seconds)
 
         print(f"❌ Timed out waiting for deployment/{self.deployment_name} rollout")
-        return False
+        return self.fail(
+            "required_deployment_not_rolled_out",
+            deployment=self.deployment_name,
+            waited_seconds=self.rollout_timeout_seconds,
+        )
 
     def _patch_deployment(self, patch: dict) -> str:
         tmp_path = None
@@ -166,21 +195,24 @@ class RollingUpdateMitigationOracle(Oracle):
             deployment = yaml.safe_load(output)
             if not isinstance(deployment, dict):
                 print("❌ Mitigation failed: deployment output was not valid YAML")
-                return {"success": False}
+                return self.fail("deployment_yaml_unreadable", deployment=self.deployment_name)
 
             original_template = copy.deepcopy((deployment.get("spec") or {}).get("template"))
             if not isinstance(original_template, dict):
                 print("❌ Mitigation failed: deployment has no pod template")
-                return {"success": False}
+                return self.fail("deployment_has_no_pod_template", deployment=self.deployment_name)
 
             if not self._strategy_preserves_availability(deployment):
                 print("❌ Mitigation failed: rolling update strategy permits total unavailability")
-                return {"success": False}
+                # The injected fault restated: the strategy still allows every
+                # replica to go away at once.
+                return self.fail("fault_still_present", deployment=self.deployment_name)
 
             initial_generation = (deployment.get("metadata") or {}).get("generation", 0)
-            if not self._wait_for_rollout(initial_generation, require_continuous_availability=False):
+            not_ready = self._rollout_failed(initial_generation, require_continuous_availability=False)
+            if not_ready is not None:
                 print("❌ Mitigation failed: repaired deployment did not become ready")
-                return {"success": False}
+                return not_ready
 
             print("🔄 Triggering controlled slow rollout")
             self._apply_rollout_probe()
@@ -189,16 +221,19 @@ class RollingUpdateMitigationOracle(Oracle):
             probe_generation = (probe_deployment.get("metadata") or {}).get("generation", 0)
             if probe_generation <= initial_generation:
                 print("❌ Mitigation failed: rollout probe did not update the deployment generation")
-                return {"success": False}
+                # Our probe patch did not take effect, so we never ran the test
+                # this oracle exists to run.
+                return self.fail("rollout_probe_ineffective", deployment=self.deployment_name)
 
-            if not self._wait_for_rollout(probe_generation, require_continuous_availability=True):
-                return {"success": False}
+            failed = self._rollout_failed(probe_generation, require_continuous_availability=True)
+            if failed is not None:
+                return failed
 
             print("✅ Mitigation successful: rollout completed without losing all replicas")
             return {"success": True}
         except Exception as e:
             print(f"❌ Error during evaluation: {e}")
-            return {"success": False}
+            return self.fail_from_exception(e, deployment=self.deployment_name)
         finally:
             if probe_applied and original_template is not None:
                 try:

@@ -1,11 +1,15 @@
 import json
-from types import SimpleNamespace
+import shlex
+import subprocess
+from types import MethodType, SimpleNamespace
 
 import pytest
+from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.secret_rotation_stale_env_mitigation import (
     SecretRotationStaleEnvMitigation,
 )
+from sregym.service.kubectl import KubeCtl
 
 OLD_CONN = "postgres://otelu:otelp@postgresql/otel?sslmode=disable"
 NEW_CONN = "postgres://otelu:otelp_7k9m2q4x@postgresql/otel?sslmode=disable"
@@ -127,6 +131,9 @@ class _KubeCtl:
             return json.dumps(self.deployment_json)
         raise AssertionError(f"Unexpected command: {command}")
 
+    def exec_command_checked(self, command, timeout=None):
+        return self.exec_command(command)
+
     def get_deployment(self, name, namespace):
         return self.deployment
 
@@ -175,7 +182,9 @@ def test_fresh_oracle_rejects_current_pod_matching_cluster_stale_uid():
     result = _oracle(kubectl).evaluate()
 
     assert result["success"] is False
-    assert "before credential rotation" in result["reason"]
+    assert result["reason"] == "stale_pod_still_serving"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "before credential rotation" in result["detail"]["message"]
     assert core_v1.created_pods == []
 
 
@@ -208,7 +217,9 @@ def test_deleting_only_stale_marker_still_fails_functional_probe():
     result = _oracle(kubectl).evaluate()
 
     assert result["success"] is False
-    assert "/api/products" in result["reason"]
+    assert result["reason"] == "product_probe_failed"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "/api/products" in result["detail"]["message"]
     assert len(core_v1.deleted_pods) == 1
 
 
@@ -218,7 +229,9 @@ def test_rejects_rollback_or_novel_secret_password(conn):
     result = _oracle(_KubeCtl(core_v1=core_v1), secret_conn=conn).evaluate()
 
     assert result["success"] is False
-    assert "Secret does not contain" in result["reason"]
+    assert result["reason"] == "secret_not_rotated"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "Secret does not contain" in result["detail"]["message"]
     assert core_v1.created_pods == []
 
 
@@ -229,7 +242,9 @@ def test_rejects_backend_that_still_accepts_old_password():
     ).evaluate()
 
     assert result["success"] is False
-    assert "pre-rotation password" in result["reason"]
+    assert result["reason"] == "postgres_still_accepts_old_password"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "pre-rotation password" in result["detail"]["message"]
 
 
 def test_rejects_scaled_to_zero_without_starting_probe():
@@ -245,7 +260,9 @@ def test_rejects_scaled_to_zero_without_starting_probe():
     result = _oracle(_KubeCtl(deployment=deployment, pods=[], core_v1=core_v1)).evaluate()
 
     assert result["success"] is False
-    assert "scaled to 0" in result["reason"]
+    assert result["reason"] == "required_deployment_scaled_to_zero"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "scaled to 0" in result["detail"]["message"]
     assert core_v1.created_pods == []
 
 
@@ -263,7 +280,9 @@ def test_rejects_stale_rollout_even_when_old_pod_is_ready():
     result = _oracle(_KubeCtl(deployment=deployment, core_v1=core_v1)).evaluate()
 
     assert result["success"] is False
-    assert "current rollout" in result["reason"]
+    assert result["reason"] == "required_deployment_not_rolled_out"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "current rollout" in result["detail"]["message"]
     assert core_v1.created_pods == []
 
 
@@ -274,5 +293,107 @@ def test_rejects_endpoint_from_another_workload():
     result = _oracle(_KubeCtl(pods=pods, core_v1=core_v1)).evaluate()
 
     assert result["success"] is False
-    assert "no ready endpoint" in result["reason"]
+    assert result["reason"] == "no_ready_endpoints"
+    # The prose that used to *be* the reason is preserved verbatim.
+    assert "no ready endpoint" in result["detail"]["message"]
     assert core_v1.created_pods == []
+
+
+def _real_password_oracle():
+    oracle = _oracle(_KubeCtl())
+    del oracle.__dict__["_postgres_accepts_password"]
+    return oracle
+
+
+@pytest.mark.parametrize("stage", ["deployment", "old_password", "new_password"])
+@pytest.mark.parametrize("timeout", [False, True])
+def test_checked_command_errors_do_not_claim_password_rejection(monkeypatch, stage, timeout):
+    oracle = _real_password_oracle()
+    kube = oracle.problem.kubectl
+    kube.exec_command_checked = MethodType(KubeCtl.exec_command_checked, kube)
+
+    def run(command, **kwargs):
+        current = (
+            "deployment"
+            if "get deployment" in command
+            else ("new_password" if oracle.new_password in command else "old_password")
+        )
+        if current == stage:
+            if timeout:
+                raise subprocess.TimeoutExpired(command, 30)
+            raise subprocess.CalledProcessError(1, command, stderr=b"connection refused")
+        output = json.dumps(kube.deployment_json) if current == "deployment" else "PASSWORD_REJECTED\n"
+        return subprocess.CompletedProcess(command, 0, stdout=output.encode())
+
+    monkeypatch.setattr(subprocess, "run", run)
+    result = oracle.evaluate()
+    assert result["success"] is False
+    assert result["reason"] == "oracle_command_failed"
+    assert result["failure_class"] == "ambiguous"
+
+
+@pytest.mark.parametrize(
+    ("output", "exit_code", "expected"),
+    [
+        ("1", 0, True),
+        ('psql: FATAL:  password authentication failed for user "otelu"', 2, False),
+        ("connection refused", 2, "command_error"),
+        ('FATAL: database "otel" does not exist', 2, "command_error"),
+        ("psql: not found", 127, "command_error"),
+        ("unexpected response", 0, None),
+        ("0", 0, None),
+    ],
+)
+def test_password_probe_shell_preserves_non_authentication_errors(monkeypatch, output, exit_code, expected):
+    oracle = _real_password_oracle()
+
+    def run_probe(command):
+        script = shlex.split(command)[-1]
+        stub = f"psql() {{ printf '%s\\n' {shlex.quote(output)}; return {exit_code}; }}; "
+        return subprocess.run(["sh", "-c", stub + script], check=True, capture_output=True, text=True).stdout
+
+    monkeypatch.setattr(oracle, "_run", run_probe)
+    if expected == "command_error":
+        with pytest.raises(subprocess.CalledProcessError) as error:
+            oracle._postgres_accepts_password(oracle.new_password)
+        assert output in error.value.stderr
+    else:
+        assert oracle._postgres_accepts_password(oracle.new_password) is expected
+
+
+@pytest.mark.parametrize("response", ["", "0", "unexpected response"])
+def test_unreadable_password_response_is_ambiguous(monkeypatch, response):
+    oracle = _real_password_oracle()
+    original = oracle._run
+    monkeypatch.setattr(oracle, "_run", lambda command: response if "kubectl exec" in command else original(command))
+    result = oracle.evaluate()
+    assert result["reason"] == "postgres_password_probe_unreadable"
+    assert result["failure_class"] == "ambiguous"
+
+
+def test_confirmed_password_rejection_can_recover_on_retry(monkeypatch):
+    oracle = _real_password_oracle()
+    oracle.problem._POSTGRES_PASSWORD_CHECK_ATTEMPTS = 3
+    responses = iter(["PASSWORD_REJECTED", "1"])
+    monkeypatch.setattr(oracle, "_run", lambda command: next(responses))
+    assert oracle._postgres_accepts_password(oracle.new_password) is True
+
+
+@pytest.mark.parametrize("status", [403, 404, 503])
+@pytest.mark.parametrize("stage", ["deployment", "password", "product"])
+def test_api_errors_preserve_their_classification(monkeypatch, status, stage):
+    oracle = _oracle(_KubeCtl())
+
+    def fail(*args, **kwargs):
+        raise ApiException(status=status)
+
+    if stage == "deployment":
+        monkeypatch.setattr(oracle.problem.kubectl, "get_deployment", fail)
+    elif stage == "password":
+        monkeypatch.setattr(oracle, "_postgres_accepts_password", fail)
+    else:
+        monkeypatch.setattr(oracle.problem.kubectl.core_v1_api, "create_namespaced_pod", fail)
+    result = oracle.evaluate()
+    assert result["success"] is False
+    assert result["failure_class"] == ("environment_error" if status == 503 else "ambiguous")
+    assert result["detail"]["status"] == status

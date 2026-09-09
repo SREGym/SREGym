@@ -54,7 +54,7 @@ class AgentLauncher:
         """
         self._agent_kubeconfig_path = kubeconfig_path
 
-    def enable_container_isolation(self, force_build: bool = False):
+    def enable_container_isolation(self, force_build: bool = False, *, k8s_proxy_port: int = 16443):
         """Initialize the container runner and build/check the image."""
         if not self._container_runner:
             config = ContainerConfig(
@@ -64,6 +64,7 @@ class AgentLauncher:
                 sregym_app_subdirs=["socialNetwork/wrk2", "hotelReservation/wrk2"],
                 internet_policy=self._internet_policy,
                 harden_container=self._harden_container,
+                k8s_proxy_port=k8s_proxy_port,
             )
             self._container_runner = ContainerRunner(config)
             if force_build:
