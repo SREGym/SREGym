@@ -173,7 +173,6 @@ jobs:
       LITELLM_PORT: "4000"
       CURSOR_JUDGE_BRIDGE_PORT: "4100"
       CURSOR_MODEL: "auto"
-      SREGYM_BASELINE_CHECK: "1"
     steps:
       - name: Choose evaluation provider
         id: provider
@@ -518,7 +517,7 @@ jobs:
         uses: azure/setup-helm@v4
 
       - name: Pre-pull kind node image
-        run: docker pull jacksonarthurclark/aiopslab-kind-x86@sha256:d631857278d3f8ce5c36364c75ec25695ceb22e311ec6621a4ebf5506b86774d
+        run: docker pull jacksonarthurclark/aiopslab-kind-x86:latest
 
       - name: Prepare /run/udev for OpenEBS NDM
         run: sudo mkdir -p /run/udev
@@ -562,7 +561,7 @@ jobs:
             2>&1 | tee benchmark.log
 
       - name: Dump cluster diagnostics
-        if: always() && env.EVALUATION_STARTED == 'true'
+        if: failure() && env.PROVIDER_READY == 'true'
         run: |
           kubectl get nodes -o wide || true
           kubectl get pods -A -o wide || true

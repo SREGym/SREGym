@@ -65,9 +65,7 @@ def build_report(
             mitigation_passes += int(mitigation)
 
         detail = ""
-        if row.get("incomplete_reason") in {"baseline_unhealthy", "baseline_diagnostics_failed"}:
-            detail = row["incomplete_reason"].replace("_", " ")
-        elif _as_bool(row.get("deploy_failed")):
+        if _as_bool(row.get("deploy_failed")):
             detail = "deployment failed"
         elif row.get("run_status") == "incomplete":
             reason = row.get("incomplete_reason") or "missing stage results"

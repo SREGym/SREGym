@@ -120,25 +120,3 @@ def test_report_does_not_count_explicitly_incomplete_run_with_stage_results():
     assert "**Mitigation pass rate:** n/a" in report
     assert "| 1 | ✅ | ✅ | ⚠️ | agent timeout at run |" in report
     assert "⚠️ **Inconclusive**" in report
-
-
-def test_baseline_failure_is_not_reported_as_an_agent_miss():
-    from sregym.results.report import build_report
-
-    report = build_report(
-        [
-            {
-                "problem_id": "demo",
-                "attempt": "1",
-                "deploy_failed": "True",
-                "run_status": "incomplete",
-                "incomplete_reason": "baseline_unhealthy",
-            }
-        ],
-        problem_id="demo",
-        model="test",
-        requested_attempts=1,
-    )
-    assert "baseline unhealthy" in report
-    assert "deployment failed" not in report
-    assert "n/a" in report
