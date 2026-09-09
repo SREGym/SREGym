@@ -5,6 +5,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class IncorrectPortAssignmentMitigationOracle(Oracle):
@@ -137,7 +138,7 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
             return True
         except ApiException as exc:
             print(f"[FAIL] Dependency connectivity check could not run: {exc}")
-            return False
+            raise
         finally:
             with contextlib.suppress(ApiException):
                 core_v1.delete_namespaced_pod(
@@ -145,6 +146,11 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
                     namespace=namespace,
                     grace_period_seconds=0,
                 )
+
+    FAILURE_CLASSES = {
+        # An env var left without any literal address is an edit, not a symptom.
+        "dependency_address_missing": FailureClass.AGENT_ERROR,
+    }
 
     def evaluate(self, *args, **kwargs) -> dict:
         print("== Dependency Connectivity Evaluation ==")
@@ -157,28 +163,32 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
             if self.require_source_ready:
                 if self._desired_replicas(deployment) < 1:
                     print(f"[FAIL] Deployment '{self.problem.faulty_service}' is scaled to zero")
-                    return {"success": False}
+                    return self.fail("required_deployment_scaled_to_zero", deployment=self.problem.faulty_service)
 
                 deployment = self._wait_for_current_rollout(deployment)
                 if deployment is None:
                     print(f"[FAIL] Deployment '{self.problem.faulty_service}' did not complete its current rollout")
-                    return {"success": False}
+                    return self.fail("required_deployment_not_rolled_out", deployment=self.problem.faulty_service)
 
                 if not self._has_ready_service_endpoint():
                     print(f"[FAIL] Service '{self.problem.faulty_service}' has no Ready endpoint")
-                    return {"success": False}
+                    return self.fail("no_ready_endpoints", service=self.problem.faulty_service)
 
             address = self._configured_address(deployment)
             if address is None:
                 print(f"[FAIL] Environment variable '{self.problem.env_var}' has no literal address")
-                return {"success": False}
+                # The env var the agent was meant to correct no longer holds an
+                # address at all, so it did not converge on a working value.
+                return self.fail("dependency_address_missing", env=self.problem.env_var)
 
             print(f"Checking configured dependency address '{address}'")
             if not self._run_dependency_probe(deployment, address):
-                return {"success": False}
+                # The configured port is what this problem breaks, and the probe
+                # dials exactly the address the Deployment is configured with.
+                return self.fail("fault_still_present", address=address, env=self.problem.env_var)
         except Exception as exc:
             print(f"[FAIL] Error checking dependency connectivity: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
 
         print("[PASS] The configured dependency returned a valid product-catalog response")
         return {"success": True}
