@@ -5,6 +5,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class DuplicatePVCMountsMitigationOracle(Oracle):
@@ -149,6 +150,10 @@ class DuplicatePVCMountsMitigationOracle(Oracle):
                     grace_period_seconds=0,
                 )
 
+    FAILURE_CLASSES = {
+        "query_check_failed": FailureClass.AMBIGUOUS,
+    }
+
     def evaluate(self, *args, **kwargs) -> dict:
         print("== Storage Recovery Evaluation ==")
 
@@ -159,23 +164,26 @@ class DuplicatePVCMountsMitigationOracle(Oracle):
             desired = self._desired_replicas(deployment)
             if desired < 1:
                 print(f"[FAIL] Deployment '{service_name}' is scaled to {desired}")
-                return {"success": False}
+                return self.fail("required_deployment_scaled_to_zero", deployment=service_name, desired=desired)
 
             deployment = self._wait_for_current_rollout(deployment)
             if deployment is None:
                 print(f"[FAIL] Deployment '{service_name}' did not complete its current rollout")
-                return {"success": False}
+                # Duplicate PVC mounts are exactly what stops this Deployment
+                # rolling out, so here a stalled rollout is the fault, not the
+                # cluster.
+                return self.fail("fault_still_present", deployment=service_name)
 
             target_ip = self._current_ready_pod_ip()
             if target_ip is None:
-                return {"success": False}
+                return self.fail("no_ready_endpoints", deployment=service_name)
 
             if not self._run_query_check(target_ip):
                 print(f"[FAIL] Current Jaeger pod for Deployment '{service_name}' did not respond correctly")
-                return {"success": False}
+                return self.fail("query_check_failed", deployment=service_name, pod_ip=target_ip)
         except Exception as exc:
             print(f"[FAIL] Error checking storage recovery: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
 
         print(f"[PASS] Deployment '{service_name}' is fully ready and its current pod is serving Jaeger queries")
         return {"success": True}
