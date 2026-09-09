@@ -1,6 +1,8 @@
 """Inject faults at the application layer: Code, MongoDB, Redis, etc."""
 
 import base64
+import datetime
+import shlex
 import textwrap
 import time
 
@@ -8,6 +10,7 @@ from kubernetes import client
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE
+from sregym.service.kafka_health import KafkaHealthCheck, broker_memory_failure
 from sregym.service.kubectl import KubeCtl
 
 FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE = HOTEL_RESERVATION_APPLICATION_IMAGE
@@ -479,7 +482,14 @@ class ApplicationFaultInjector(FaultInjector):
         print(f"Restored environment variable '{env_var}' with value '{env_value}' to deployment '{deployment_name}'.")
 
     def inject_kafka_producer_leak(self, deployment_name: str = "checkout") -> list:
+        with KafkaHealthCheck(self.kubectl, self.namespace) as probe:
+            if not probe.wait_until_available():
+                raise RuntimeError("Kafka cannot publish and read a record before injection")
+            return self._inject_kafka_producers(deployment_name, probe)
+
+    def _inject_kafka_producers(self, deployment_name: str, probe: KafkaHealthCheck) -> list:
         limits = [None, None]
+        started = datetime.datetime.now(datetime.UTC)
 
         kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
         for c in kafka_dep.spec.template.spec.containers:
@@ -505,7 +515,7 @@ class ApplicationFaultInjector(FaultInjector):
             import os
 
             def task(thread_id: int):
-                payload_size = int(os.environ.get('PAYLOAD_SIZE_BYTES', '10000000'))
+                payload_size = int(os.environ.get('PAYLOAD_SIZE_BYTES', '15728640'))
                 payload = os.urandom(payload_size)
 
                 conf = {
@@ -518,8 +528,12 @@ class ApplicationFaultInjector(FaultInjector):
                 while True:
                     try:
                         producer = Producer(conf)
-                        producer.produce('orders', payload)
-                        producer.poll(0)
+                        # This binary stream must not reach the application's
+                        # protobuf consumers on the real orders topic.
+                        producer.produce('order-events', payload)
+                        # Keep the producer alive until delivery finishes. poll(0)
+                        # destroys it with most messages still queued locally.
+                        producer.flush(10)
                     except BufferError:
                         producer.poll(0.1)
 
@@ -552,51 +566,62 @@ class ApplicationFaultInjector(FaultInjector):
 
         deadline = time.monotonic() + 300
         while time.monotonic() < deadline:
-            pods = self.kubectl.list_pods(self.namespace)
-            rcnt = None
-            for p in pods.items:
-                if "kafka" in p.metadata.name:
-                    for c in p.status.container_statuses or []:
-                        if "kafka" in c.name:
-                            rcnt = c.restart_count
-                            break
-                    break
-
-            if rcnt:
+            # A Java heap failure can leave the container Running/Ready. Require
+            # fresh memory-failure evidence AND a failed Kafka round trip.
+            if broker_memory_failure(self.kubectl, self.namespace, started) and not probe.check():
                 break
 
             time.sleep(5)
         else:
-            raise TimeoutError("Kafka did not restart within 300 seconds after producer injection")
+            raise TimeoutError("Kafka did not develop a memory-related serving failure within 300 seconds")
 
         print(f"Injected sidecar container 'order-creator' in '{deployment_name}'")
 
         return limits
 
     def recover_kafka_producer_leak(self, deployment_name: str = "checkout"):
-        kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
-        for c in kafka_dep.spec.template.spec.containers:
-            if "kafka" in c.name:
-                temp = None
-                for i, e in enumerate(c.env):
-                    if e.name == "KAFKA_MESSAGE_MAX_BYTES":
-                        temp = i
-                        break
-
-                if temp is not None:
-                    c.env.pop(temp)
-
-        self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
-
         deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
-
+        replicas = deployment.spec.replicas
+        deployment.spec.replicas = 0
         deployment.spec.template.spec.containers = [
-            x for x in deployment.spec.template.spec.containers if x.name != "order-creator"
+            c for c in deployment.spec.template.spec.containers if c.name != "order-creator"
         ]
-
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        try:
+            # Scaling down prevents the old ReplicaSet from replacing producers
+            # while checkout's replacement is waiting for the broken broker.
+            selector = deployment.spec.selector.match_labels
+            deadline = time.monotonic() + 120
+            while any(
+                all((pod.metadata.labels or {}).get(key) == value for key, value in selector.items())
+                and any(c.name == "order-creator" for c in pod.spec.containers)
+                for pod in self.kubectl.list_pods(self.namespace).items
+            ):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Producer containers did not terminate within 120 seconds")
+                time.sleep(2)
 
-        self.kubectl.exec_command(f"kubectl delete pod -l app.kubernetes.io/name={deployment_name} -n {self.namespace}")
+            kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
+            for container in kafka_dep.spec.template.spec.containers:
+                if container.name == "kafka":
+                    container.env = [e for e in container.env or [] if e.name != "KAFKA_MESSAGE_MAX_BYTES"]
+            # Combine config restoration and restart into one rollout. A second
+            # rollout can replace a broker that just became Ready again.
+            metadata = kafka_dep.spec.template.metadata
+            metadata.annotations = dict(metadata.annotations or {})
+            metadata.annotations["kubectl.kubernetes.io/restartedAt"] = datetime.datetime.now(datetime.UTC).isoformat()
+            self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
+            self.kubectl.exec_command_checked(
+                shlex.join(
+                    ["kubectl", "rollout", "status", "deployment/kafka", "-n", self.namespace, "--timeout=120s"]
+                ),
+                timeout=125,
+            )
+        finally:
+            # Also restore the requested count after an API or startup error.
+            deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+            deployment.spec.replicas = replicas
+            self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
 
         print(f"Removed sidecar container 'order-creator' from '{deployment_name}'")
 
