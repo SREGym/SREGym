@@ -67,6 +67,7 @@ class ConductorConfig:
     # Which stages this run should attempt. None means every stage the problem
     # supports, which is what an unset --stages leaves in place.
     stages: tuple[str, ...] | None = None
+    baseline_override_s: int | None = None  # overrides per-problem baseline_duration_s when set
 
 
 class Conductor:
@@ -676,6 +677,17 @@ class Conductor:
         with self._phase("deploy"):
             self.deploy_app()
         self.logger.info("App deployed.")
+
+        baseline = (
+            self.config.baseline_override_s
+            if self.config.baseline_override_s is not None
+            else self.problem.baseline_duration_s
+        )
+        if baseline > 0:
+            self.logger.info(f"[BASELINE] Running steady-state for {baseline}s before fault injection...")
+            with self._phase("baseline", seconds=baseline):
+                await asyncio.sleep(baseline)
+            self.logger.info("[BASELINE] Baseline period complete.")
 
         # Update NoiseManager with problem context
         if self.config.enable_noise:
