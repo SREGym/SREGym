@@ -1,6 +1,7 @@
 """HTTP probe mitigation oracle for feature flag latent bug problem."""
 
 import re
+import shlex
 import time
 
 from sregym.conductor.oracles.base import Oracle
@@ -43,11 +44,19 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
         # breaks, so a sustained error rate is the fault's symptom rather than
         # one unlucky request.
         "endpoint_error_rate_high": FailureClass.AGENT_ERROR,
+        "http_probe_response_missing": FailureClass.AMBIGUOUS,
         # No probe pod means no measurement, which is our problem.
         "no_probe_pod_available": FailureClass.HARNESS_ERROR,
     }
 
     def evaluate(self) -> dict:
+        try:
+            return self._evaluate()
+        except Exception as exc:
+            print(f"[FAIL] Error running frontend HTTP probe: {exc}")
+            return self.fail_from_exception(exc)
+
+    def _evaluate(self) -> dict:
         print("== HTTP Probe Evaluation ==")
 
         kubectl = self.problem.kubectl
@@ -64,14 +73,19 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
 
         success_count = 0
         for _i in range(self.probe_attempts):
-            cmd = (
-                f"kubectl exec {probe_pod} -n {namespace} -- "
-                f"wget -S -q -O /dev/null "
-                f"'http://frontend:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'"
-                f" 2>&1 || true"
+            # wget exits nonzero for HTTP errors. Preserve its response inside the
+            # pod, without masking a failure to execute the command through Kubernetes.
+            script = (
+                "wget -T 10 -S -q -O /dev/null "
+                "'http://frontend:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'"
+                " 2>&1 || true"
             )
-            result = kubectl.exec_command(cmd)
-            if re.search(r"HTTP/\S+ 200", str(result)):
+            cmd = f"kubectl exec {shlex.quote(probe_pod)} -n {shlex.quote(namespace)} -- sh -c {shlex.quote(script)}"
+            result = kubectl.exec_command_checked(cmd, timeout=30)
+            statuses = re.findall(r"^\s*HTTP/\S+\s+(\d{3})\b", result, re.MULTILINE)
+            if not statuses:
+                return self.fail("http_probe_response_missing", pod=probe_pod, output=result.strip()[:500])
+            if statuses[-1] == "200":
                 success_count += 1
             time.sleep(0.5)
 

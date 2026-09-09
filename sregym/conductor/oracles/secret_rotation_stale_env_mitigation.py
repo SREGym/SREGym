@@ -36,7 +36,7 @@ class SecretRotationStaleEnvMitigation(Oracle):
     def _run(self, command: str) -> str:
         """Helper to run a kubectl command for the mitigation oracle."""
         logger.debug("[secret-rotation-oracle] %s", command)
-        return self.problem.kubectl.exec_command(command)
+        return self.problem.kubectl.exec_command_checked(command, timeout=30)
 
     @staticmethod
     def _desired_replicas(deployment) -> int:
@@ -153,14 +153,20 @@ class SecretRotationStaleEnvMitigation(Oracle):
             return False, set()
         return True, {target_pods[name] for name in ready_target_names}
 
-    def _postgres_accepts_password(self, password: str | None) -> bool:
-        """Return whether PostgreSQL accepts the supplied application password."""
+    def _postgres_accepts_password(self, password: str | None) -> bool | None:
+        """Return acceptance, confirmed rejection, or None for an unreadable response."""
         if not password:
             return False
+        rejection = shlex.quote(f'password authentication failed for user "{self.problem.db_user}"')
         script = (
-            f"if PGPASSWORD={shlex.quote(password)} psql -h {shlex.quote(self.problem.backend_service)} "
-            f"-U {shlex.quote(self.problem.db_user)} -d {shlex.quote(self.problem.db_name)} -tAc 'select 1' "
-            ">/dev/null 2>&1; then echo 1; else echo 0; fi"
+            f"if output=$(LC_ALL=C PGCONNECT_TIMEOUT=5 PGPASSWORD={shlex.quote(password)} "
+            f"psql -X -w -h {shlex.quote(self.problem.backend_service)} "
+            f"-U {shlex.quote(self.problem.db_user)} -d {shlex.quote(self.problem.db_name)} -tAc 'select 1' 2>&1); "
+            'then printf "%s\\n" "$output"; else status=$?; '
+            # Only a PostgreSQL authentication rejection is a negative password result.
+            # Other psql errors keep their exit status through kubectl exec.
+            f'case "$output" in *FATAL:*{rejection}*) echo PASSWORD_REJECTED;; '
+            '*) printf "%s\\n" "$output" >&2; exit "$status";; esac; fi'
         )
         command = (
             f"kubectl exec -n {self.problem.namespace} deploy/{self.problem.backend_service} -- "
@@ -170,6 +176,8 @@ class SecretRotationStaleEnvMitigation(Oracle):
             output = self._run(command)
             if output.strip() == "1":
                 return True
+            if output.strip() != "PASSWORD_REJECTED":
+                return None
             if attempt < self.problem._POSTGRES_PASSWORD_CHECK_ATTEMPTS - 1:
                 time.sleep(self.problem._POSTGRES_PASSWORD_CHECK_INTERVAL_SECONDS)
         return False
@@ -228,7 +236,7 @@ class SecretRotationStaleEnvMitigation(Oracle):
             return phase == "Succeeded" and "PRODUCTS_OK" in logs
         except ApiException as exc:
             print(f"[FAIL] Product catalog probe failed: {exc}")
-            return False
+            raise
         finally:
             with contextlib.suppress(ApiException):
                 core_v1.delete_namespaced_pod(
@@ -249,10 +257,18 @@ class SecretRotationStaleEnvMitigation(Oracle):
         "init_missing_rotated_password": FailureClass.AGENT_ERROR,
         # One HTTP request against a real app.
         "product_probe_failed": FailureClass.AMBIGUOUS,
+        "postgres_password_probe_unreadable": FailureClass.AMBIGUOUS,
     }
 
     def evaluate(self, *args, **kwargs) -> dict:
         """Evaluate whether the required rotation reached a fresh, functional pod."""
+        try:
+            return self._evaluate()
+        except Exception as exc:
+            print(f"[FAIL] Error checking credential rotation: {exc}")
+            return self.fail_from_exception(exc)
+
+    def _evaluate(self) -> dict:
         print("== Secret Rotation Mitigation Evaluation ==")
         # ``success`` and ``reason`` are no longer pre-seeded: every exit path
         # goes through ``_reject`` or sets success explicitly, so a new early
@@ -274,21 +290,11 @@ class SecretRotationStaleEnvMitigation(Oracle):
         }
 
         output = self._run(f"kubectl get deployment {self.problem.faulty_service} -n {self.problem.namespace} -o json")
-        try:
-            deployment_json = json.loads(output)
-        except json.JSONDecodeError as exc:
-            return self._reject(
-                results, "required_deployment_missing", f"product-catalog deployment does not exist: {exc}"
-            )
-        try:
-            deployment = self.problem.kubectl.get_deployment(
-                self.problem.faulty_service,
-                self.problem.namespace,
-            )
-        except Exception as exc:
-            return self._reject(
-                results, "required_deployment_missing", f"product-catalog deployment does not exist: {exc}"
-            )
+        deployment_json = json.loads(output)
+        deployment = self.problem.kubectl.get_deployment(
+            self.problem.faulty_service,
+            self.problem.namespace,
+        )
         results["deployment_exists"] = True
 
         desired = self._desired_replicas(deployment)
@@ -341,6 +347,12 @@ class SecretRotationStaleEnvMitigation(Oracle):
 
         results["postgres_accepts_old_password"] = self._postgres_accepts_password(self.old_password)
         results["postgres_accepts_new_password"] = self._postgres_accepts_password(self.new_password)
+        if results["postgres_accepts_old_password"] is None or results["postgres_accepts_new_password"] is None:
+            return self._reject(
+                results,
+                "postgres_password_probe_unreadable",
+                "PostgreSQL returned an unexpected password probe response",
+            )
         results["postgresql_init_uses_new_password"] = self.problem._postgresql_init_uses_password(self.new_password)
 
         if not results["postgres_accepts_new_password"]:
