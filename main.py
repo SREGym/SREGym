@@ -30,6 +30,8 @@ from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.phases import read_ledger as read_phase_ledger
+from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, set_profile
 from sregym.results.resume import complete_resume_rows
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
@@ -365,6 +367,25 @@ def driver_loop(
                 )
                 console.log(f"\n🔍 Starting problem: {pid} (Attempt {attempt} of {n_attempts})")
 
+                # Bind the phase ledger before the first phase runs. It cannot
+                # live inside the run directory: RunArtifacts.create() happens
+                # after deploy, and deploy is a phase we want recorded. Sitting
+                # beside the run directories keeps it per-attempt and out of the
+                # way of artifact publication.
+                #
+                # The models are recorded too: without them a ledger is only
+                # interpretable next to the log that produced it. Read from the
+                # environment, where _configure_model_environment already put
+                # them, so agent and judge cannot drift apart.
+                phases_path = Path(base_dir) / (agent_to_run or "agent") / pid / f"phases_attempt{attempt}.jsonl"
+                conductor.bind_phase_ledger(
+                    phases_path,
+                    attempt=attempt,
+                    agent=agent_to_run,
+                    model=os.environ.get("AGENT_MODEL_ID"),
+                    judge_model=os.environ.get("JUDGE_MODEL_ID"),
+                )
+
                 # Retry start_problem up to 3 times to handle transient deploy failures
                 max_deploy_retries = 3
                 result = None
@@ -602,6 +623,13 @@ def driver_loop(
                         conductor.results["cleanup_failed"] = True
                         conductor.results["cleanup_error"] = f"{type(e).__name__}: {e}"
                         conductor.record_incomplete_attempt("cleanup_failed")
+
+                # Fold the phase ledger into the results so infra-vs-agent time
+                # is a column rather than something to reconstruct from logs.
+                # Read from the file, not from memory, so a phase that ended in
+                # a process that later died is still counted.
+                if conductor.phases is not None:
+                    conductor.results.update(phase_results_columns(read_phase_ledger(conductor.phases.path)))
 
                 run_status = conductor.finalize_attempt_status()
                 if conductor.results.get("cleanup_failed"):
