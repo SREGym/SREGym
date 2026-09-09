@@ -35,11 +35,17 @@ class AgentLauncher:
         self._use_containers: bool = True
         self._container_runner: ContainerRunner | None = None
         self._internet_policy = InternetPolicy()
+        self._harden_container = True
 
     def set_internet_policy(self, policy: InternetPolicy) -> None:
         if self._container_runner is not None:
             raise RuntimeError("Internet policy cannot change after the container runner is initialized")
         self._internet_policy = policy
+
+    def set_container_hardening(self, enabled: bool) -> None:
+        if self._container_runner is not None:
+            raise RuntimeError("Container hardening cannot change after the container runner is initialized")
+        self._harden_container = enabled
 
     def set_agent_kubeconfig(self, kubeconfig_path: str | None):
         """
@@ -57,6 +63,7 @@ class AgentLauncher:
                 sregym_apps_path=Path("./SREGym-applications"),
                 sregym_app_subdirs=["socialNetwork/wrk2", "hotelReservation/wrk2"],
                 internet_policy=self._internet_policy,
+                harden_container=self._harden_container,
                 k8s_proxy_port=k8s_proxy_port,
             )
             self._container_runner = ContainerRunner(config)
