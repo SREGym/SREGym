@@ -16,6 +16,7 @@ downstream breakage the agent may have introduced.
 import time
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 5
@@ -23,6 +24,22 @@ _ROLLOUT_POLL_INTERVAL = 5
 
 class DeploymentReadinessOracle(Oracle):
     importance = 1.0
+
+    # This oracle deliberately separates a primary from a secondary check, and
+    # the classification follows that split rather than flattening it.
+    #
+    # The primary check is the fault signature: this oracle exists for faults
+    # that stop the affected Deployment's pods being created at all (admission
+    # webhooks, scheduling deadlocks, PDB-blocked drains). If that Deployment
+    # is still short of ready replicas after the settle window, the fault it
+    # was asked to clear is still in effect.
+    #
+    # The secondary walk over the rest of the namespace is looking for
+    # collateral damage, and stays ambiguous: an unrelated pod that will not
+    # run may be the agent's doing or the cluster's.
+    FAILURE_CLASSES = {
+        "faulty_deployment_not_ready": FailureClass.AGENT_ERROR,
+    }
 
     def _wait_for_rollouts(self, kubectl, namespace):
         """Wait for all deployments in the namespace to finish rolling out so we
@@ -52,7 +69,6 @@ class DeploymentReadinessOracle(Oracle):
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
         deployment_name = self.problem.faulty_service
-        results = {}
 
         self._wait_for_rollouts(kubectl, namespace)
 
@@ -62,40 +78,25 @@ class DeploymentReadinessOracle(Oracle):
         deployment = kubectl.get_deployment(deployment_name, namespace)
         if deployment is None:
             print(f"❌ Deployment '{deployment_name}' not found in namespace '{namespace}'")
-            results["success"] = False
-            return results
+            return self.fail("required_deployment_missing", deployment=deployment_name, namespace=namespace)
 
         desired = deployment.spec.replicas or 0
         ready = deployment.status.ready_replicas or 0
         if ready != desired:
             print(f"❌ Deployment '{deployment_name}' has {ready}/{desired} replicas ready")
-            results["success"] = False
-            return results
+            return self.fail(
+                "faulty_deployment_not_ready",
+                deployment=deployment_name,
+                namespace=namespace,
+                ready=ready,
+                desired=desired,
+            )
 
         # Secondary check: the rest of the namespace is healthy (no agent-induced
         # collateral damage to other services).
-        pod_list = kubectl.list_pods(namespace)
-        for pod in pod_list.items:
-            if pod.status.phase != "Running":
-                print(f"❌ Pod {pod.metadata.name} is in phase: {pod.status.phase}")
-                results["success"] = False
-                return results
-            for container_status in pod.status.container_statuses or []:
-                if container_status.state.waiting and container_status.state.waiting.reason:
-                    print(f"❌ Container {container_status.name} is waiting: {container_status.state.waiting.reason}")
-                    results["success"] = False
-                    return results
-                if container_status.state.terminated and container_status.state.terminated.reason != "Completed":
-                    print(
-                        f"❌ Container {container_status.name} terminated: {container_status.state.terminated.reason}"
-                    )
-                    results["success"] = False
-                    return results
-                if not container_status.ready:
-                    print(f"❌ Container {container_status.name} is not ready")
-                    results["success"] = False
-                    return results
+        unready = self.pods_unready(kubectl.list_pods(namespace).items, namespace=namespace)
+        if unready is not None:
+            return unready
 
         print(f"✅ Deployment '{deployment_name}' has {ready}/{desired} replicas ready; all pods healthy")
-        results["success"] = True
-        return results
+        return {"success": True}

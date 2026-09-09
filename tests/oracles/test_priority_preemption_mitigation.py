@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+import pytest
+
+from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.priority_preemption_mitigation import PriorityPreemptionMitigationOracle
 
 
@@ -48,7 +51,14 @@ def _priority_class(name, value, global_default=False):
     )
 
 
-def test_all_deployments_ready_rejects_scaled_down_shortcut():
+# These helpers used to return bare booleans, printing the reason and throwing
+# it away. They now return a failure verdict or ``None``, so the assertions
+# below check the reason as well as the outcome -- the reason is the part that
+# reaches the results CSV, and an unasserted reason is an unpinned contract.
+
+
+def test_a_scaled_down_shortcut_is_the_agents_doing():
+    """Nothing environmental scales a Deployment to zero."""
     oracle = _oracle()
     oracle.apps_v1 = SimpleNamespace(
         list_namespaced_deployment=lambda namespace: SimpleNamespace(
@@ -59,10 +69,19 @@ def test_all_deployments_ready_rejects_scaled_down_shortcut():
         )
     )
 
-    assert oracle._all_deployments_ready("hotel-reservation") is False
+    verdict = oracle._any_deployment_unready("hotel-reservation")
+
+    assert verdict["reason"] == "required_deployment_scaled_to_zero"
+    assert verdict["failure_class"] == FailureClass.AGENT_ERROR
+    assert verdict["detail"]["deployment"] == "frontend"
 
 
-def test_all_deployments_ready_requires_ready_replicas():
+def test_unready_replicas_are_ambiguous_rather_than_the_agents_fault():
+    """A Deployment that exists but has not converged is the Calico shape.
+
+    Distinct from the scaled-to-zero case above: replicas are still requested,
+    they just are not ready, which infrastructure produces on its own.
+    """
     oracle = _oracle()
     oracle.apps_v1 = SimpleNamespace(
         list_namespaced_deployment=lambda namespace: SimpleNamespace(
@@ -73,28 +92,35 @@ def test_all_deployments_ready_requires_ready_replicas():
         )
     )
 
-    assert oracle._all_deployments_ready("hotel-reservation") is False
+    verdict = oracle._any_deployment_unready("hotel-reservation")
+
+    assert verdict["reason"] == "deployment_replicas_unready"
+    assert verdict["failure_class"] == FailureClass.AMBIGUOUS
+    assert verdict["detail"] == {"deployment": "frontend", "ready": 0, "desired": 1}
 
 
-def test_request_not_reduced_rejects_target_memory_cut():
+def test_a_memory_request_cut_is_the_agents_doing():
     oracle = _oracle()
     deployment = _deployment("reservation", memory="128Mi")
 
-    assert oracle._request_not_reduced(deployment, "512Mi") is False
+    verdict = oracle._request_was_reduced(deployment, "512Mi")
+
+    assert verdict["reason"] == "memory_request_reduced"
+    assert verdict["failure_class"] == FailureClass.AGENT_ERROR
 
 
-def test_request_not_reduced_accepts_equal_or_larger_request():
+def test_an_equal_or_larger_request_is_not_a_failure():
     oracle = _oracle()
     deployment = _deployment("tenant-ingester", memory="2Gi")
 
-    assert oracle._request_not_reduced(deployment, "2Gi") is True
+    assert oracle._request_was_reduced(deployment, "2Gi") is None
 
 
 def test_request_check_is_disabled_when_injection_did_not_record_expected_memory():
     oracle = _oracle()
     deployment = _deployment("reservation", memory="128Mi")
 
-    assert oracle._request_not_reduced(deployment, None) is True
+    assert oracle._request_was_reduced(deployment, None) is None
 
 
 def test_target_priority_accepts_custom_class_above_platform():
@@ -106,10 +132,20 @@ def test_target_priority_accepts_custom_class_above_platform():
     }
     oracle._read_priority_class = classes.get
 
-    assert oracle._target_priority_is_safe(deployment, platform) is True
+    assert oracle._target_priority_unsafe(deployment, platform) is None
 
 
-def test_target_priority_rejects_missing_or_low_priority_class():
+@pytest.mark.parametrize(
+    ("priority_class", "expected_reason"),
+    [
+        # Each is a distinct way to leave the priority relationship wrong, and
+        # they used to be indistinguishable in the results.
+        (None, "target_has_no_priority_class"),
+        ("missing-priority", "target_priority_class_missing"),
+        ("reservation-low", "target_priority_not_above_platform"),
+    ],
+)
+def test_each_unsafe_priority_reports_its_own_reason(priority_class, expected_reason):
     oracle = _oracle()
     platform = _priority_class("platform-medium", 100000)
     classes = {
@@ -118,11 +154,7 @@ def test_target_priority_rejects_missing_or_low_priority_class():
     }
     oracle._read_priority_class = classes.get
 
-    assert oracle._target_priority_is_safe(_deployment("reservation"), platform) is False
-    assert (
-        oracle._target_priority_is_safe(_deployment("reservation", priority_class="missing-priority"), platform)
-        is False
-    )
-    assert (
-        oracle._target_priority_is_safe(_deployment("reservation", priority_class="reservation-low"), platform) is False
-    )
+    verdict = oracle._target_priority_unsafe(_deployment("reservation", priority_class=priority_class), platform)
+
+    assert verdict["reason"] == expected_reason
+    assert verdict["failure_class"] == FailureClass.AGENT_ERROR

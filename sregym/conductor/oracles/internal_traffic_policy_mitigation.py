@@ -19,6 +19,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class InternalTrafficPolicyMitigationOracle(Oracle):
@@ -29,6 +30,10 @@ class InternalTrafficPolicyMitigationOracle(Oracle):
         self.core_v1 = client.CoreV1Api()
         self.discovery_v1 = client.DiscoveryV1Api()
 
+    FAILURE_CLASSES = {
+        "internal_traffic_probe_failed": FailureClass.AMBIGUOUS,
+    }
+
     def evaluate(self) -> dict:
         print("== InternalTrafficPolicy Mitigation Evaluation ==")
 
@@ -36,7 +41,7 @@ class InternalTrafficPolicyMitigationOracle(Oracle):
             svc = self.core_v1.read_namespaced_service(self.problem.FAULTY_SERVICE, self.problem.namespace)
         except ApiException as exc:
             print(f"Could not read service: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc, service=self.problem.FAULTY_SERVICE)
 
         policy = (svc.spec.internal_traffic_policy or "Cluster").strip()
         print(f"service/{self.problem.FAULTY_SERVICE} internalTrafficPolicy={policy}")
@@ -54,10 +59,14 @@ class InternalTrafficPolicyMitigationOracle(Oracle):
                 f"Fault still active: internalTrafficPolicy=Local and "
                 f"{len(uncovered_nodes)} worker node(s) have no Ready local endpoint."
             )
+            # The injected fault restated: the policy is still Local while
+            # some worker nodes have no local endpoint to route to. The two
+            # existing keys stay at the top level so nothing downstream that
+            # reads them breaks.
             return {
-                "success": False,
                 "internalTrafficPolicy": policy,
                 "uncovered_nodes": uncovered_nodes,
+                **self.fail("fault_still_present", policy=policy, uncovered_nodes=uncovered_nodes),
             }
 
         probe_node = self._pick_probe_node(worker_nodes, nodes_with_endpoint)
@@ -65,12 +74,17 @@ class InternalTrafficPolicyMitigationOracle(Oracle):
         probe_ok = self._connectivity_probe(probe_node)
 
         print(f"Probe result: {'PASS' if probe_ok else 'FAIL'}")
-        return {
-            "success": probe_ok,
+        extra = {
             "internalTrafficPolicy": policy,
             "probe_node": probe_node,
             "probe_ok": probe_ok,
         }
+        if probe_ok:
+            return {"success": True, **extra}
+        # The policy is correct but traffic still does not flow. Unlike the
+        # branch above, that is not the fault restated -- it is a probe result
+        # with more than one explanation.
+        return {**extra, **self.fail("internal_traffic_probe_failed", probe_node=probe_node)}
 
     def _nodes_with_ready_endpoint(self) -> set[str]:
         """Return nodes containing an endpoint the Service can actually use."""
