@@ -9,6 +9,7 @@ import yaml
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class RollingUpdateMitigationOracle(Oracle):
@@ -85,19 +86,7 @@ class RollingUpdateMitigationOracle(Oracle):
 
     @staticmethod
     def _rollout_complete(deployment: dict) -> bool:
-        metadata = deployment.get("metadata") or {}
-        spec = deployment.get("spec") or {}
-        status = deployment.get("status") or {}
-        generation = metadata.get("generation", 0)
-        replicas = spec.get("replicas", 1)
-
-        return (
-            status.get("observedGeneration", 0) >= generation
-            and status.get("updatedReplicas", 0) == replicas
-            and status.get("readyReplicas", 0) == replicas
-            and status.get("availableReplicas", 0) == replicas
-            and status.get("unavailableReplicas", 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _rollout_failed(self, minimum_generation: int, *, require_continuous_availability: bool) -> dict | None:
         """Return a verdict if the rollout did not complete cleanly, else None.

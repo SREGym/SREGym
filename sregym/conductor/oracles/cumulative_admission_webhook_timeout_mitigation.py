@@ -30,8 +30,8 @@ The oracle checks four properties in order:
    the fix must add the allow, not tear down the isolation. (Deleting
    only the baseline default-deny does not even work, because the other
    targeted allow policies still select and isolate the backends.)
-3. **Pod healthy.** The target deployment reports
-   ``ready_replicas == spec.replicas``; the Service has at least one
+3. **Pod healthy.** The target deployment has completed its current
+   rollout; the Service has at least one
    endpoint.
 4. **Fix verified at runtime.** A fresh probe pod is created in the
    application namespace and observed transitioning to Running within
@@ -50,6 +50,7 @@ from kubernetes.client.exceptions import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 logger = logging.getLogger(__name__)
 
@@ -287,11 +288,11 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
         d = self.apps_v1.read_namespaced_deployment(name=target_deployment, namespace=app_namespace)
         desired = d.spec.replicas or 1
         ready = d.status.ready_replicas or 0
-        if ready < desired:
+        if not deployment_rollout_complete(d):
             return False, (
                 f"Deployment '{target_deployment}' in '{app_namespace}' shows "
                 f"ready_replicas={ready} (expected {desired}). The application is "
-                "still missing a replica; admission is likely still failing."
+                "rollout is incomplete."
             )
 
         # Service endpoints
@@ -369,11 +370,7 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
             deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
             settled = True
             for dep in deployments.items:
-                desired = dep.spec.replicas or 1
-                ready = dep.status.ready_replicas or 0
-                updated = dep.status.updated_replicas or 0
-                unavailable = dep.status.unavailable_replicas or 0
-                if ready < desired or updated < desired or unavailable > 0:
+                if not deployment_rollout_complete(dep):
                     # only block on the target; let the others settle in background
                     if dep.metadata.name == self.problem.TARGET_DEPLOYMENT:
                         settled = False

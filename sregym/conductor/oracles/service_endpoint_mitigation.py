@@ -6,6 +6,7 @@ from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class ServiceEndpointMitigationOracle(Oracle):
@@ -37,17 +38,7 @@ class ServiceEndpointMitigationOracle(Oracle):
 
     @classmethod
     def _rollout_complete(cls, deployment) -> bool:
-        desired = cls._desired_replicas(deployment)
-        if desired < 1:
-            return False
-        status = deployment.status
-        return (
-            (status.observed_generation or 0) >= (deployment.metadata.generation or 0)
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _wait_for_current_rollout(self, deployment):
         deadline = time.monotonic() + self.rollout_timeout_seconds

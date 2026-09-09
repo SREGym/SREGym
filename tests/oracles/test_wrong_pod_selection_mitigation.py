@@ -10,6 +10,7 @@ def _deployment(name, replicas=1, ready=1, generation=1, observed_generation=1):
         metadata=SimpleNamespace(name=name, generation=generation),
         spec=SimpleNamespace(replicas=replicas),
         status=SimpleNamespace(
+            replicas=1 if replicas is None else replicas,
             observed_generation=observed_generation,
             updated_replicas=ready,
             ready_replicas=ready,
