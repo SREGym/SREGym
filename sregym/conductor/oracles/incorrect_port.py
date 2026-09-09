@@ -138,7 +138,7 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
             return True
         except ApiException as exc:
             print(f"[FAIL] Dependency connectivity check could not run: {exc}")
-            return False
+            raise
         finally:
             with contextlib.suppress(ApiException):
                 core_v1.delete_namespaced_pod(

@@ -106,7 +106,7 @@ class DNSResolutionMitigationOracle(Oracle):
             return phase == "Succeeded" and "DNS_OK" in logs
         except ApiException as exc:
             print(f"❌ DNS probe pod failed: {exc}")
-            return False
+            raise
         finally:
             with contextlib.suppress(ApiException):
                 core_v1.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=0)

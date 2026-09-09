@@ -152,7 +152,7 @@ class NamespaceMemoryLimitMitigationOracle(Oracle):
             return phase == "Succeeded" and "SEARCH_OK" in logs
         except ApiException as exc:
             print(f"[FAIL] Fresh pod admission or search connection failed: {exc}")
-            return False
+            raise
         finally:
             with contextlib.suppress(ApiException):
                 core_v1.delete_namespaced_pod(

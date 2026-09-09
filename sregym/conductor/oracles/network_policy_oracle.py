@@ -161,7 +161,7 @@ class NetworkPolicyMitigationOracle(Oracle):
             return phase == "Succeeded" and "RECOMMENDATION_OK" in logs
         except ApiException as exc:
             print(f"[FAIL] Recommendation probe failed: {exc}")
-            return False
+            raise
         finally:
             with contextlib.suppress(ApiException):
                 core_v1.delete_namespaced_pod(
