@@ -13,9 +13,9 @@ from pathlib import Path
 import yaml
 
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
-from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.problems.registry import ProblemRegistry
 from sregym.conductor.submission import (
     SUBMISSION_STAGES,
@@ -311,7 +311,7 @@ class Conductor:
             r = problem.diagnosis_oracle.evaluate(solution)
         except Exception as e:
             self.logger.exception("Diagnosis oracle raised; recording as failure to avoid a stuck stage.")
-            r = {"success": False, "error": f"{type(e).__name__}: {e}"}
+            r = {**Oracle.fail_from_exception(e), "error": f"{type(e).__name__}: {e}"}
         r["submission"] = solution
         self.logger.info(
             f"[EVAL] Diagnosis {'Succeed' if r.get('success') else 'Failed'}\n "
@@ -328,15 +328,8 @@ class Conductor:
             r = problem.mitigation_oracle.evaluate()
         except Exception as e:
             self.logger.exception("Mitigation oracle raised; recording as failure to avoid a stuck stage.")
-            # The oracle never reached a verdict, so this is neither the agent's
-            # error nor the environment's -- it is ours, and must not be counted
-            # against the model.
-            r = {
-                "success": False,
-                "error": f"{type(e).__name__}: {e}",
-                "reason": "oracle_raised",
-                "failure_class": FailureClass.HARNESS_ERROR,
-            }
+            # Keep the existing top-level error field for result consumers.
+            r = {**Oracle.fail_from_exception(e), "error": f"{type(e).__name__}: {e}"}
         self.logger.info(
             f"[EVAL] Mitigation {'Succeed' if r.get('success') else 'Failed'}\n "
             f"TTM: {time.time() - self.execution_start_time}"

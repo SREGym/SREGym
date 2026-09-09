@@ -1,5 +1,5 @@
 from sregym.conductor.oracles.base import Oracle
-from sregym.conductor.oracles.failure import FailureClass, worst
+from sregym.conductor.oracles.failure import worst
 
 
 class CompoundedOracle(Oracle):
@@ -51,16 +51,12 @@ class CompoundedOracle(Oracle):
             except Exception as e:
                 print(f"[❌] Error during evaluation of oracle '{key}': {e}")
                 result["success"] = False
-                # A child that raised produced no verdict, so this is our fault
-                # rather than the agent's or the cluster's. Recording the
-                # exception text as well: the child never got to print anything
-                # useful, so this is the only trace of what went wrong.
+                # Use the same classification as an oracle that catches the
+                # exception itself. Preserve the existing error field.
                 result["oracles"].append(
                     {
                         "name": key,
-                        "success": False,
-                        "reason": "oracle_raised",
-                        "failure_class": FailureClass.HARNESS_ERROR,
+                        **oracle.fail_from_exception(e),
                         "error": f"{type(e).__name__}: {e}",
                     }
                 )

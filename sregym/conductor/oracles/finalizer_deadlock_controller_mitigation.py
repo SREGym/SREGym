@@ -7,6 +7,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class FinalizerDeadlockControllerMitigationOracle(Oracle):
@@ -28,6 +29,16 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
         self.configmap_name = configmap_name
         self.finalizer = finalizer
         self.controller_deployment_name = controller_deployment_name
+
+    FAILURE_CLASSES = {
+        # A ConfigMap still held by its finalizer is the injected deadlock,
+        # observed directly, so ``fault_still_present`` covers it.
+        #
+        # The controller being unhealthy or a fresh cleanup request not
+        # reconciling are both downstream of a real controller doing real work.
+        "controller_not_healthy": FailureClass.AMBIGUOUS,
+        "cleanup_request_not_reconciled": FailureClass.AMBIGUOUS,
+    }
 
     def evaluate(self, *args, **kwargs) -> dict:
         print("== Cleanup Controller Recovery Evaluation ==")
@@ -58,16 +69,31 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
             if configmap_deleted and controller_ok and app_ok:
                 durability_ok = self._run_cleanup_request(kubectl, namespace)
 
-            success = configmap_deleted and controller_ok and app_ok and durability_ok
+            # Report the first failed property rather than a conjunction: all
+            # four used to collapse into one bare failure, so a stuck finalizer
+            # and a broken app were indistinguishable.
+            first_failure = next(
+                (
+                    reason
+                    for ok, reason in (
+                        (configmap_deleted, "fault_still_present"),
+                        (controller_ok, "controller_not_healthy"),
+                        (app_ok, "pods_not_ready"),
+                        (durability_ok, "cleanup_request_not_reconciled"),
+                    )
+                    if not ok
+                ),
+                None,
+            )
         except Exception as exc:
             print(f"[FAIL] Error checking cleanup-controller recovery: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
 
-        if success:
+        if first_failure is None:
             print("[PASS] The controller successfully reconciled a new cleanup request.")
-        else:
-            print("[FAIL] Cleanup-controller recovery is incomplete.")
-        return {"success": success}
+            return {"success": True}
+        print("[FAIL] Cleanup-controller recovery is incomplete.")
+        return self.fail(first_failure)
 
     @staticmethod
     def _desired_replicas(deployment) -> int:
