@@ -7,6 +7,7 @@ import time
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class SearchRateRetryMitigationOracle(Oracle):
@@ -18,6 +19,32 @@ class SearchRateRetryMitigationOracle(Oracle):
     initial_recovery_timeout_seconds = 150
     replay_recovery_timeout_seconds = 120
     required_services = ("frontend", "search", "rate")
+
+    FAILURE_CLASSES = {
+        # This oracle is one of the few that records a *before*: capture_baseline
+        # snapshots the Deployment names while the app is healthy. So unlike
+        # everywhere else, a missing Deployment here is not ambiguous -- it was
+        # present, and now it is not, and the fault injection does not delete
+        # Deployments. Overriding the shared AMBIGUOUS is exactly what the
+        # per-oracle table is for.
+        "required_deployment_missing": FailureClass.AGENT_ERROR,
+        # Recovery obtained by disabling backpressure rather than fixing the
+        # retry amplification: the documented way to game this problem.
+        "qps_limit_outside_safe_envelope": FailureClass.AGENT_ERROR,
+        "queue_capacity_outside_safe_envelope": FailureClass.AGENT_ERROR,
+        # Behavioural failures measured after cluster shape was verified
+        # healthy, so they are about the mitigation rather than the cluster.
+        "traffic_did_not_recover": FailureClass.AGENT_ERROR,
+        "did_not_recover_after_trigger": FailureClass.AGENT_ERROR,
+        # We could not read what we needed to judge.
+        "metrics_unreadable": FailureClass.ENVIRONMENT_ERROR,
+        "policy_not_exposed": FailureClass.ENVIRONMENT_ERROR,
+        # capture_baseline never ran or found nothing -- our sequencing problem.
+        "baseline_not_captured": FailureClass.HARNESS_ERROR,
+        # The load generator did not deliver the replay. Could be the generator
+        # or an agent that rate-limited ingress; not separable from here.
+        "trigger_load_not_delivered": FailureClass.AMBIGUOUS,
+    }
 
     def __init__(self, problem):
         super().__init__(problem)
@@ -40,17 +67,18 @@ class SearchRateRetryMitigationOracle(Oracle):
             and (status.unavailable_replicas or 0) == 0
         )
 
-    def _cluster_shape_healthy(self) -> bool:
+    def _cluster_shape_unhealthy(self) -> dict | None:
         try:
             deployments = self.problem.kubectl.apps_v1_api.list_namespaced_deployment(namespace=self.problem.namespace)
             current = {deployment.metadata.name: deployment for deployment in deployments.items}
             missing = sorted(self._baseline_deployments - current.keys())
             if missing:
                 print(f"[FAIL] Required Deployments are missing: {', '.join(missing)}")
-                return False
-            if any(not self._rollout_complete(current[name]) for name in self._baseline_deployments):
+                return self.fail("required_deployment_missing", deployments=missing)
+            unrolled = sorted(name for name in self._baseline_deployments if not self._rollout_complete(current[name]))
+            if unrolled:
                 print("[FAIL] One or more application Deployments are not fully rolled out and Ready")
-                return False
+                return self.fail("required_deployment_not_rolled_out", deployments=unrolled)
 
             for service_name in self.required_services:
                 endpoints = self.problem.kubectl.core_v1_api.read_namespaced_endpoints(
@@ -59,19 +87,28 @@ class SearchRateRetryMitigationOracle(Oracle):
                 )
                 if not any(subset.addresses for subset in endpoints.subsets or []):
                     print(f"[FAIL] Service {service_name!r} has no Ready endpoints")
-                    return False
+                    return self.fail("no_ready_endpoints", service=service_name)
         except ApiException as exc:
             print(f"[FAIL] Could not verify the application topology: {exc}")
-            return False
-        return True
+            return self.fail_from_exception(exc)
+        return None
 
     @staticmethod
     def _delta(before: dict[str, float], after: dict[str, float], name: str) -> float:
         return after.get(name, 0.0) - before.get(name, 0.0)
 
-    def _healthy_sample(self) -> bool:
-        if not self._cluster_shape_healthy():
-            return False
+    def _unhealthy_sample(self) -> dict | None:
+        """Return a verdict describing why the sample was unhealthy, else None.
+
+        Returning the verdict rather than a bool matters more here than
+        elsewhere: a broken cluster and an unrecovered application both used to
+        surface as "traffic did not recover", so an environmental failure was
+        reported as a behavioural one. The caller now propagates whichever
+        verdict the last sample produced.
+        """
+        unhealthy = self._cluster_shape_unhealthy()
+        if unhealthy is not None:
+            return unhealthy
 
         try:
             before = self.problem.workload.metrics.snapshot()
@@ -79,7 +116,7 @@ class SearchRateRetryMitigationOracle(Oracle):
             after = self.problem.workload.metrics.snapshot()
         except Exception as exc:
             print(f"[FAIL] Application metrics could not be read: {exc}")
-            return False
+            return self.fail("metrics_unreadable", error=f"{type(exc).__name__}: {exc}")
 
         observed = self.problem.workload.snapshot(self.sample_seconds)
         search_requests = self._delta(before, after, "search_requests_total")
@@ -101,31 +138,44 @@ class SearchRateRetryMitigationOracle(Oracle):
             f"success={observed.success_rate:.1%} attempts/request={amplification:.2f} "
             f"queue={queue_depth:.0f}"
         )
-        return healthy
+        if healthy:
+            return None
+        # Behavioural, and measured only after cluster shape checked out above.
+        # The caller relabels this for the post-replay window.
+        return self.fail(
+            "traffic_did_not_recover",
+            rate=round(observed.actual_rate, 2),
+            success_rate=round(observed.success_rate, 3),
+            attempts_per_request=None if amplification == float("inf") else round(amplification, 2),
+            queue_depth=queue_depth,
+        )
 
-    def _wait_for_healthy_state(self, timeout_seconds: float) -> bool:
+    def _wait_for_healthy_state(self, timeout_seconds: float) -> dict | None:
+        """Return None once a sample is healthy, else the last sample's verdict."""
         deadline = time.monotonic() + timeout_seconds
+        last = None
         while time.monotonic() < deadline:
-            if self._healthy_sample():
-                return True
+            last = self._unhealthy_sample()
+            if last is None:
+                return None
             remaining = deadline - time.monotonic()
             if remaining > 0:
                 time.sleep(min(self.poll_interval_seconds, remaining))
-        return False
+        return last if last is not None else self.fail("traffic_did_not_recover")
 
-    def _runtime_policy_within_safe_bounds(self) -> bool:
+    def _runtime_policy_outside_safe_bounds(self) -> dict | None:
         """Reject recovery obtained by effectively disabling backpressure."""
         try:
             metrics = self.problem.workload.metrics.snapshot()
         except Exception as exc:
             print(f"[FAIL] The effective rate policy could not be read: {exc}")
-            return False
+            return self.fail("metrics_unreadable", error=f"{type(exc).__name__}: {exc}")
 
         qps_limit = metrics.get("rate_backend_qps_limit")
         queue_capacity = metrics.get("rate_queue_capacity")
         if qps_limit is None or queue_capacity is None:
             print("[FAIL] The rate service did not expose its effective admission-control policy")
-            return False
+            return self.fail("policy_not_exposed")
 
         maximum_qps = self.problem.maximum_safe_backend_qps_limit
         maximum_queue = self.problem.maximum_safe_queue_capacity
@@ -134,16 +184,20 @@ class SearchRateRetryMitigationOracle(Oracle):
                 "[FAIL] The effective backend QPS limit is outside the safe operating envelope: "
                 f"{qps_limit:g} (maximum {maximum_qps:g})"
             )
-            return False
+            return self.fail("qps_limit_outside_safe_envelope", qps_limit=qps_limit, maximum=maximum_qps)
         if not 0 < queue_capacity <= maximum_queue:
             print(
                 "[FAIL] The effective queue capacity is outside the safe operating envelope: "
                 f"{queue_capacity:g} (maximum {maximum_queue:g})"
             )
-            return False
+            return self.fail(
+                "queue_capacity_outside_safe_envelope",
+                queue_capacity=queue_capacity,
+                maximum=maximum_queue,
+            )
 
         print(f"[Policy] backend_qps_limit={qps_limit:g} queue_capacity={queue_capacity:g}")
-        return True
+        return None
 
     def _replay_trigger(self) -> bool:
         self.problem.workload.set_rate(self.problem.trigger_rate)
@@ -162,36 +216,50 @@ class SearchRateRetryMitigationOracle(Oracle):
         print("== Search Retry Mitigation Evaluation ==")
         if not self._baseline_deployments:
             print("[FAIL] No healthy baseline was captured")
-            return {"success": False}
+            # capture_baseline is the conductor's to call, so an empty baseline
+            # is our sequencing failure and says nothing about the agent.
+            return self.fail("baseline_not_captured")
 
         try:
             self.problem.workload.start()
             self.problem.workload.set_rate(self.problem.base_rate)
 
-            if not self._runtime_policy_within_safe_bounds():
-                return {"success": False}
+            outside_bounds = self._runtime_policy_outside_safe_bounds()
+            if outside_bounds is not None:
+                return outside_bounds
 
-            if not self._wait_for_healthy_state(self.initial_recovery_timeout_seconds):
+            unhealthy = self._wait_for_healthy_state(self.initial_recovery_timeout_seconds)
+            if unhealthy is not None:
                 print("[FAIL] Normal search traffic did not recover")
-                return {"success": False}
+                return unhealthy
 
             if not self._replay_trigger():
                 print("[FAIL] The protected trigger workload was not delivered at the required rate")
-                return {"success": False}
+                return self.fail("trigger_load_not_delivered", trigger_rate=self.problem.trigger_rate)
 
-            if not self._wait_for_healthy_state(self.replay_recovery_timeout_seconds):
+            unhealthy = self._wait_for_healthy_state(self.replay_recovery_timeout_seconds)
+            if unhealthy is not None:
                 print("[FAIL] The application did not recover after the temporary trigger ended")
-                return {"success": False}
+                # Relabel only a behavioural verdict: recovering before the
+                # replay and not after is a different finding from never
+                # recovering. An environmental verdict keeps its own reason,
+                # since the window it happened in does not change whose fault
+                # it was.
+                if unhealthy.get("reason") == "traffic_did_not_recover":
+                    return self.fail("did_not_recover_after_trigger", **unhealthy.get("detail", {}))
+                return unhealthy
 
-            if not self._runtime_policy_within_safe_bounds():
-                return {"success": False}
+            outside_bounds = self._runtime_policy_outside_safe_bounds()
+            if outside_bounds is not None:
+                return outside_bounds
 
-            if not self._cluster_shape_healthy():
-                return {"success": False}
+            unhealthy = self._cluster_shape_unhealthy()
+            if unhealthy is not None:
+                return unhealthy
             self.problem.workload.stop()
         except Exception as exc:
             print(f"[FAIL] Error while verifying mitigation: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
 
         print("[PASS] Normal traffic is healthy and recovers after replaying the temporary trigger")
         return {"success": True}

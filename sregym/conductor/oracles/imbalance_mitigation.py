@@ -16,9 +16,6 @@ class ImbalanceMitigationOracle(Oracle):
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
         deployment_names = self.problem.faulty_service
-        results = {}
-
-        results["success"] = True
 
         for deployment_name in deployment_names:
             for _ in range(self.RETRIES):
@@ -39,11 +36,16 @@ class ImbalanceMitigationOracle(Oracle):
                     print(
                         f"❌ Deployment {deployment_name} still not balanced (max usage: {max_usage}, average others: {average_others})"
                     )
-                    results["success"] = False
-                    return results
+                    # One pod taking more than 3x the others is the imbalance
+                    # this problem injects, measured over several retries.
+                    return self.fail(
+                        "fault_still_present",
+                        deployment=deployment_name,
+                        max_usage=max_usage,
+                        average_others=round(average_others, 2),
+                    )
 
                 time.sleep(10)  # wait for variation
 
         print(f"✅ Deployment {deployment_name} balanced")
-        results["success"] = True
-        return results
+        return {"success": True}

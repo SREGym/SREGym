@@ -1,6 +1,7 @@
 import time
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 # Time to wait for deployments to settle after agent submission, so we
 # evaluate a stable state rather than a transient rolling-update window.
@@ -10,6 +11,21 @@ _ROLLOUT_POLL_INTERVAL = 5
 
 class MitigationOracle(Oracle):
     importance = 1.0
+
+    # The default mitigation oracle, referenced by 68 problem files -- the
+    # widest-reaching classification in the codebase.
+    #
+    # It is also one of the few oracles that can attribute a deletion, because
+    # ``capture_baseline`` records the Deployment names and replica counts while
+    # the app is healthy and *before* the fault is injected. A Deployment that
+    # was in that snapshot and is now gone did not vanish on its own, and the
+    # fault injection does not delete Deployments -- so unlike the shared
+    # AMBIGUOUS default, here it is the agent's doing. The class docstring on
+    # ``capture_baseline`` already notes this is exactly what stops "scale to 0"
+    # and "delete the deployment" passing.
+    FAILURE_CLASSES = {
+        "required_deployment_missing": FailureClass.AGENT_ERROR,
+    }
 
     def __init__(self, problem):
         super().__init__(problem)
@@ -57,7 +73,6 @@ class MitigationOracle(Oracle):
 
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
-        results = {}
 
         # Wait for any in-progress rollouts to finish so we don't evaluate
         # a transient state where old pods are gone and new ones haven't crashed yet.
@@ -69,50 +84,33 @@ class MitigationOracle(Oracle):
         for name in self.replica_count:
             if name not in current_deps:
                 print(f"❌ Deployment '{name}' was deleted")
-                results["success"] = False
-                return results
+                return self.fail("required_deployment_missing", deployment=name, namespace=namespace)
             dep = current_deps[name]
             desired = dep.spec.replicas if dep.spec.replicas is not None else 1
             if desired == 0:
                 print(f"❌ Deployment '{name}' was scaled to 0")
-                results["success"] = False
-                return results
+                return self.fail("required_deployment_scaled_to_zero", deployment=name, namespace=namespace)
             ready = dep.status.ready_replicas or 0
             if ready < desired:
                 print(f"❌ Deployment '{name}' has {ready}/{desired} replicas ready")
-                results["success"] = False
-                return results
+                return self.fail(
+                    "deployment_replicas_unready",
+                    deployment=name,
+                    namespace=namespace,
+                    ready=ready,
+                    desired=desired,
+                )
 
         pod_list = kubectl.list_pods(namespace)
 
         if not pod_list.items:
             print("❌ No pods found in namespace")
-            results["success"] = False
-            return results
+            return self.fail("no_pods_found", namespace=namespace)
 
-        all_normal = True
+        # The original loop tracked an ``all_normal`` flag and broke out of two
+        # levels, which left nowhere to record *which* pod was at fault.
+        unready = self.pods_unready(pod_list.items, namespace=namespace)
+        if unready is not None:
+            return unready
 
-        for pod in pod_list.items:
-            if pod.status.phase != "Running":
-                print(f"❌ Pod {pod.metadata.name} is in phase: {pod.status.phase}")
-                all_normal = False
-                break
-
-            for container_status in pod.status.container_statuses:
-                if container_status.state.waiting and container_status.state.waiting.reason:
-                    print(f"❌ Container {container_status.name} is waiting: {container_status.state.waiting.reason}")
-                    all_normal = False
-                elif container_status.state.terminated and container_status.state.terminated.reason != "Completed":
-                    print(
-                        f"❌ Container {container_status.name} terminated: {container_status.state.terminated.reason}"
-                    )
-                    all_normal = False
-                elif not container_status.ready:
-                    print(f"⚠️ Container {container_status.name} is not ready")
-                    all_normal = False
-
-            if not all_normal:
-                break
-
-        results["success"] = all_normal
-        return results
+        return {"success": True}

@@ -115,4 +115,9 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
         if self._app_recovered(kubectl, namespace, self.problem.faulty_service):
             return {"success": True}
 
-        return {"success": False}
+        # Two independent acceptance paths both failed: the kubelet threshold is
+        # still misconfigured with DiskPressure active, *and* the app did not
+        # recover by rescheduling away from the node. Either alone could fail
+        # environmentally; both failing together is the fault still in place.
+        print("❌ Neither the node-level fix nor an app-level recovery was achieved")
+        return self.fail("fault_still_present", node=target_node, namespace=namespace)
