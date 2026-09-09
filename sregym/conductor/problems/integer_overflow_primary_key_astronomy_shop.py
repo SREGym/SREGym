@@ -145,6 +145,46 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
 
         return "other"
 
+    def _review_row_count(self) -> int:
+        """Number of rows currently in reviews.productreviews (-1 if unreadable)."""
+        cmd = (
+            f"kubectl exec -n {self.namespace} deploy/{self.POSTGRES_DEPLOY} -- "
+            f"env PGPASSWORD=otel psql -U {self.PG_SUPERUSER} -d {self.PG_DB} "
+            f'-tA -c "SELECT count(*) FROM reviews.productreviews;"'
+        )
+        out = self.kubectl.exec_command(cmd).strip()
+        try:
+            return int(out.splitlines()[-1].strip())
+        except (ValueError, IndexError):
+            return -1
+
+    def _review_id_headroom(self) -> int:
+        """
+        Number of IDs remaining before the identity sequence hits its limit (seqmax - last_value).
+
+        This should be a very large number after a BIGINT migration. If it's still tiny,
+        the sequence was probably just reset instead of being fixed correctly.
+
+        This helps the check make sure that the sequence was fixed properly, instead of
+        only verifying that one insert happened to work.
+
+        Returns -1 if the value can't be read.
+        """
+        sql = (
+            f"SELECT (SELECT seqmax FROM pg_sequence WHERE seqrelid = '{self.SEQUENCE}'::regclass) "
+            f"- (SELECT last_value FROM {self.SEQUENCE});"
+        )
+        cmd = (
+            f"kubectl exec -n {self.namespace} deploy/{self.POSTGRES_DEPLOY} -- "
+            f"env PGPASSWORD=otel psql -U {self.PG_SUPERUSER} -d {self.PG_DB} "
+            f'-tA -c "{sql}"'
+        )
+        out = self.kubectl.exec_command(cmd).strip()
+        try:
+            return int(out.splitlines()[-1].strip())
+        except (ValueError, IndexError):
+            return -1
+
     def _namespace_exists(self) -> bool:
         """True if the problem's app namespace currently exists"""
 
