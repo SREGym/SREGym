@@ -137,6 +137,27 @@ def test_backend_hostname_matches_the_proxy_env_in_the_chart():
     assert frontend_host == StaleHostAliasesDNSPoisoningAstronomyShop.TARGET_BACKEND
 
 
+def test_problem_wires_hosts_mitigation_oracle_and_probe_method(monkeypatch):
+    """Verify hosts_mitigation_oracle is exposed and _run_product_probe is callable on oracles."""
+    monkeypatch.setattr(
+        "sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop.AstronomyShop",
+        lambda: SimpleNamespace(namespace="astronomy-shop", create_workload=lambda: None),
+    )
+    monkeypatch.setattr(
+        "sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop.KubeCtl",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop.VirtualizationFaultInjector",
+        lambda namespace: SimpleNamespace(),
+    )
+    problem = StaleHostAliasesDNSPoisoningAstronomyShop()
+    assert hasattr(problem, "hosts_mitigation_oracle")
+    assert hasattr(problem.mitigation_oracle, "_run_product_probe")
+    assert hasattr(problem, "_run_product_probe")
+    assert problem.hosts_mitigation_oracle._run_product_probe == problem.mitigation_oracle._run_product_probe
+
+
 @pytest.mark.integration
 @pytest.mark.skipif(not _HAS_CLUSTER, reason="no kubeconfig or astronomy-shop chart submodule on disk")
 def test_lifecycle_against_a_live_cluster():
@@ -146,9 +167,11 @@ def test_lifecycle_against_a_live_cluster():
     problem.kubectl.wait_for_ready(problem.namespace)
     problem.mitigation_oracle.capture_baseline()
 
+    hosts_oracle = problem.hosts_mitigation_oracle
+
     try:
         # Pre-injection: traffic must work and oracle must pass.
-        assert problem.mitigation_oracle._run_product_probe(), "pre-injection probe must succeed"
+        assert hosts_oracle._run_product_probe(), "pre-injection probe must succeed"
         assert problem.mitigation_oracle.evaluate()["success"] is True, "healthy cluster should pass"
 
         # Inject the fault.
@@ -159,7 +182,7 @@ def test_lifecycle_against_a_live_cluster():
         assert problem.target_backend in aliases[0].hostnames
 
         # Post-injection: traffic must fail and oracle must fail.
-        assert not problem.mitigation_oracle._run_product_probe(), "post-injection probe must fail"
+        assert not hosts_oracle._run_product_probe(), "post-injection probe must fail"
         assert problem.mitigation_oracle.evaluate()["success"] is False, "the oracle must fail while the fault is live"
 
         # Recover.
@@ -168,9 +191,10 @@ def test_lifecycle_against_a_live_cluster():
         assert not deployment.spec.template.spec.host_aliases
 
         # Post-recovery: traffic must work and oracle must pass.
-        assert problem.mitigation_oracle._run_product_probe(), "post-recovery probe must succeed"
+        assert hosts_oracle._run_product_probe(), "post-recovery probe must succeed"
         assert problem.mitigation_oracle.evaluate()["success"] is True, (
             "the oracle must pass once the override is removed"
         )
     finally:
         problem.app.cleanup()
+

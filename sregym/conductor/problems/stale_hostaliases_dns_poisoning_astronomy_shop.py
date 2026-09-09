@@ -61,14 +61,18 @@ class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
         )
 
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
+        self.hosts_mitigation_oracle = StaleHostAliasesMitigationOracle(problem=self)
         # The generic oracle keeps namespace-wide health honest (nothing deleted
         # or scaled to zero); the dedicated oracle proves the override is gone
         # and that catalog traffic actually flows again.
         self.mitigation_oracle = CompoundedOracle(
             self,
             MitigationOracle(problem=self),
-            StaleHostAliasesMitigationOracle(problem=self),
+            self.hosts_mitigation_oracle,
         )
+        # Delegate probe to the hosts mitigation oracle so callers on CompoundedOracle
+        # or the problem instance don't raise AttributeError.
+        self.mitigation_oracle._run_product_probe = self.hosts_mitigation_oracle._run_product_probe
 
         self.app.create_workload()
 
@@ -94,3 +98,8 @@ class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
         logger.info("Removing the hosts override from the %s deployment", self.faulty_service)
         self.injector.recover_stale_hostaliases(microservices=[self.faulty_service])
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}\n")
+
+    def _run_product_probe(self) -> bool:
+        """Fetch the catalog through the edge proxy to verify end-to-end traffic."""
+        return self.hosts_mitigation_oracle._run_product_probe()
+
