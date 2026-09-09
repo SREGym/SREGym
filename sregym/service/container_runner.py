@@ -20,6 +20,16 @@ logger = logging.getLogger("all.sregym.container_runner")
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 DEFAULT_EGRESS_PROXY_IMAGE = "mitmproxy/mitmproxy:12.2.3"
+
+# DAC_OVERRIDE survives the drop because /logs and /workspace are bind mounts
+# owned by the host user: container root needs it to write through their mode
+# bits. Removing it means running non-root.
+HARDENING_FLAGS = (
+    "--cap-drop=ALL",
+    "--cap-add=DAC_OVERRIDE",
+    "--security-opt=no-new-privileges",
+)
+
 EGRESS_PROXY_PORT = 8080
 PROXY_CA_CONTAINER_PATH = "/etc/evaluation-egress/mitmproxy-ca-cert.pem"
 PROXY_BUNDLE_CONTAINER_PATH = "/etc/evaluation-egress/ca-certificates.crt"
@@ -116,6 +126,7 @@ class ContainerConfig:
     memory: str = "8g"
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     egress_proxy_image: str = DEFAULT_EGRESS_PROXY_IMAGE
+    harden_container: bool = True
     k8s_proxy_port: int = 16443
 
 
@@ -574,6 +585,9 @@ class ContainerRunner:
             f"--cpus={self.config.cpus}",
             f"--memory={self.config.memory}",
         ]
+
+        if self.config.harden_container:
+            args.extend(HARDENING_FLAGS)
 
         # Filtered agents have no direct external route. The proxy container is
         # the only member of their private network that also joins a public one.
