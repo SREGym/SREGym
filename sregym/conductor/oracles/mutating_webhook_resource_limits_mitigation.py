@@ -4,6 +4,7 @@ from kubernetes import client
 from kubernetes.utils.quantity import parse_quantity
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class MutatingWebhookResourceLimitsMitigationOracle(Oracle):
@@ -199,6 +200,10 @@ class MutatingWebhookResourceLimitsMitigationOracle(Oracle):
                 return True
             time.sleep(self.poll_interval_seconds)
 
+    FAILURE_CLASSES = {
+        "replacement_pod_unstable": FailureClass.AMBIGUOUS,
+    }
+
     def evaluate(self, *args, **kwargs) -> dict:
         print("== Pod Resource Durability Evaluation ==")
 
@@ -209,17 +214,17 @@ class MutatingWebhookResourceLimitsMitigationOracle(Oracle):
             desired = self._desired_replicas(deployment)
             if desired < 1:
                 print(f"[FAIL] Deployment '{deployment_name}' is scaled to {desired}")
-                return {"success": False}
+                return self.fail("required_deployment_scaled_to_zero", deployment=deployment_name, desired=desired)
 
             deployment = self._wait_for_current_rollout(deployment)
             if deployment is None:
                 print(f"[FAIL] Deployment '{deployment_name}' is not currently fully Ready")
-                return {"success": False}
+                return self.fail("required_deployment_not_rolled_out", deployment=deployment_name)
 
             current_pods = self._current_ready_endpoint_pods()
             if not current_pods:
                 print(f"[FAIL] Deployment '{deployment_name}' has no current Ready Service endpoint")
-                return {"success": False}
+                return self.fail("no_ready_endpoints", deployment=deployment_name)
 
             container_name, intended_memory = self._intended_memory(deployment)
             previous_uids = {str(pod.metadata.uid) for pod in self._current_target_pods()}
@@ -238,14 +243,24 @@ class MutatingWebhookResourceLimitsMitigationOracle(Oracle):
             )
             if replacement is None:
                 print(f"[FAIL] Deployment '{deployment_name}' did not create a correct serving replacement")
-                return {"success": False}
+                # The webhook rewrites resource limits on pod creation, so a
+                # replacement pod that never comes up correct means the webhook
+                # is still mutating: the injected fault, restated.
+                return self.fail(
+                    "fault_still_present",
+                    deployment=deployment_name,
+                    container=container_name,
+                    intended_memory=str(intended_memory),
+                )
 
             if not self._replacement_stable(replacement, container_name):
                 print(f"[FAIL] Replacement pod '{replacement.metadata.name}' did not remain stable")
-                return {"success": False}
+                # A correct pod was created and then did not stay up, which is
+                # a different finding from never getting a correct one.
+                return self.fail("replacement_pod_unstable", pod=replacement.metadata.name)
         except Exception as exc:
             print(f"[FAIL] Error checking pod resource recovery: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
 
         print(f"[PASS] Deployment '{deployment_name}' recreated a stable pod with intended resources")
         return {"success": True}

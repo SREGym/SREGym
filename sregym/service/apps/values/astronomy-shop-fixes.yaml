@@ -41,3 +41,20 @@ components:
     envOverrides:
       - name: JAVA_TOOL_OPTIONS
         value: "-javaagent:/usr/src/app/opentelemetry-javaagent.jar -Xmx180m"
+  kafka:
+    resources:
+      # KafkaFaultInjector._run (inject_kafka.py) execs the Kafka admin CLI
+      # inside this container, and kubectl exec runs it in the container's own
+      # cgroup. The chart declares limits only, so Kubernetes copies the limit
+      # into the request: the broker is capped at 600Mi while -Xms400M commits
+      # a 400M heap up front. A second JVM needs ~100-150Mi RSS even at
+      # -Xmx64m -- which bounds the heap, not metaspace or thread stacks -- so
+      # without this override the kernel OOM-kills it and takes the broker
+      # down, and kafka_poison_pill_hol_block cannot inject its fault.
+      #
+      # Pinning the request where it already effectively sits leaves scheduling
+      # unchanged; only the burst ceiling moves.
+      requests:
+        memory: 600Mi
+      limits:
+        memory: 1Gi

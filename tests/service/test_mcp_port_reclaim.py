@@ -183,10 +183,12 @@ def test_main_sets_custom_k8s_port_before_agent_preflight(monkeypatch):
     args = SimpleNamespace(
         agent="debug",
         internet_access="filtered",
+        container_hardening="on",
         use_external_harness=False,
         profile="full",
         noise=False,
         force_build=False,
+        stages=None,
     )
     with pytest.raises(StopBeforeDeployment):
         benchmark.main(args)

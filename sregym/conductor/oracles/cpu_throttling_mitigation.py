@@ -83,13 +83,13 @@ class CpuThrottlingMitigationOracle(MitigationOracle):
 
         deployments = self._wait_for_required_deployments()
         if deployments is None:
-            return {"success": False}
+            return self.fail("required_deployment_not_rolled_out", namespace=self.problem.namespace)
 
         try:
             deployment = deployments[self.faulty_service]
         except KeyError:
             print(f"Deployment '{self.faulty_service}' not found")
-            return {"success": False}
+            return self.fail("required_deployment_missing", deployment=self.faulty_service)
 
         injected_mc = _parse_cpu_millicores(self.injected_cpu_limit) if self.injected_cpu_limit else None
         for container in deployment.spec.template.spec.containers:
@@ -104,7 +104,14 @@ class CpuThrottlingMitigationOracle(MitigationOracle):
                         f"Container '{container.name}' still has a throttling CPU limit: {cpu_limit_str} "
                         f"(<= {injected_mc * 2}m)"
                     )
-                    return {"success": False}
+                    # Compared against the limit the injector wrote, so this is
+                    # the injected fault observed directly.
+                    return self.fail(
+                        "fault_still_present",
+                        container=container.name,
+                        cpu_limit=str(cpu_limit_str),
+                        injected_limit=self.injected_cpu_limit,
+                    )
 
         print(
             f"Deployment '{self.faulty_service}' CPU limit is fixed; "

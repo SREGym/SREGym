@@ -5,7 +5,8 @@ if [ "$VERSION" != "latest" ]; then
     echo "[$(date -Iseconds)] Cursor CLI installer does not support pinning a version; ignoring AGENT_VERSION=$VERSION" >&2
 fi
 echo "[$(date -Iseconds)] Installing Cursor CLI..."
-curl https://cursor.com/install -fsS | bash
+# Ignore build-machine ownership so extraction works without CAP_CHOWN.
+curl https://cursor.com/install -fsS | TAR_OPTIONS=--no-same-owner bash
 
 # The installer places the binary under ~/.local/bin, which is only added to
 # PATH by shell rc files. Later steps run as separate, non-login processes
