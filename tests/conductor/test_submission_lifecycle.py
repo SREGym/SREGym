@@ -18,6 +18,7 @@ from sregym.conductor.conductor import (
     SubmissionAttemptClosed,
     SubmissionAttemptMismatch,
 )
+from sregym.phases import read_ledger, summarize
 
 
 def _conductor(diagnosis_evaluation=None, mitigation_evaluation=None) -> Conductor:
@@ -135,6 +136,82 @@ def test_legacy_early_mitigation_waits_and_is_accepted_for_mitigation(monkeypatc
     assert mitigation_evaluated.is_set()
     assert conductor.results["Diagnosis"]["submission"] == "diagnosis"
     assert conductor.results["Mitigation"]["success"] is True
+
+
+@pytest.mark.parametrize("interrupt", [None, "close", "abort", "replace"])
+def test_stage_start_is_recorded_before_mitigation_accepts_submissions(monkeypatch, tmp_path, interrupt):
+    conductor = _conductor(lambda _: {"success": True}, lambda _: {"success": True})
+    conductor.problem_id = "demo"
+    path = tmp_path / "phases.jsonl"
+    conductor.bind_phase_ledger(path)
+    ledger = conductor.phases
+    assert ledger is not None
+    conductor._mark("stage:diagnosis", "start")
+    monkeypatch.setattr(conductor_api, "_conductor", conductor)
+    write_started = threading.Event()
+    release_write = threading.Event()
+    record = ledger.record
+
+    def slow_record(phase, event, **fields):
+        if (phase, event) == ("stage:mitigation", "start"):
+            write_started.set()
+            assert release_write.wait(5)
+        record(phase, event, **fields)
+
+    monkeypatch.setattr(ledger, "record", slow_record)
+
+    async def run():
+        await conductor.submit("diagnosis", expected_stage="diagnosis")
+        diagnosis_future = conductor._submit_future
+        assert diagnosis_future is not None
+        mitigation_request = None
+        try:
+            assert await asyncio.to_thread(write_started.wait, 2)
+            # A slow ledger write must not hold the submission lock or expose
+            # mitigation before its start record is complete.
+            assert conductor._submission_lock.acquire(timeout=1)
+            try:
+                assert conductor.submission_state() == ("diagnosis", True, 1)
+            finally:
+                conductor._submission_lock.release()
+            if interrupt in {"abort", "replace"}:
+                conductor.abandon_submission_work()
+                if interrupt == "replace":
+                    conductor._submission_generation += 1
+                    conductor.submission_stage = "setup"
+                    conductor.bind_phase_ledger(tmp_path / "next-attempt.jsonl")
+            else:
+                mitigation_request = asyncio.create_task(
+                    conductor_api.submit_solution(conductor_api.SubmitRequest(stage="mitigation", solution=""))
+                )
+                await asyncio.sleep(0)
+                assert not mitigation_request.done()
+                assert conductor._pending_submission_stages == {(1, "mitigation"): 1}
+                if interrupt == "close":
+                    assert conductor.close_submissions() is True
+        finally:
+            release_write.set()
+            await asyncio.to_thread(diagnosis_future.result, 2)
+        if mitigation_request is not None:
+            response = await asyncio.wait_for(mitigation_request, timeout=2)
+            assert response["stage"] == "mitigation"
+            await conductor.wait_for_submission_work(timeout=2)
+
+    asyncio.run(run())
+    records = read_ledger(path)
+    assert [r["event"] for r in records if r["phase"] == "stage:mitigation"] == ["start", "end"]
+    summary = summarize(records)
+    assert "stage:mitigation#2" not in summary
+    assert summary["stage:mitigation"]["duration_s"] is not None
+    if interrupt in {"abort", "replace"}:
+        assert summary["stage:mitigation"]["outcome"] == "aborted"
+        assert conductor.submission_stage == ("setup" if interrupt == "replace" else "aborted")
+        assert "Mitigation" not in conductor.results
+        assert not (tmp_path / "next-attempt.jsonl").exists()
+    else:
+        assert summary["stage:mitigation"]["outcome"] == "submitted"
+        assert conductor.results["Mitigation"]["success"] is True
+        assert conductor.submission_stage == "done"
 
 
 def test_registered_early_mitigation_survives_atomic_agent_exit_close(monkeypatch):

@@ -54,6 +54,12 @@ agents:
     kickoff_env: null
     install_script: install-copilot.sh
     agent_version: null
+  - name: cursor
+    kickoff_command: python -m clients.cursor.driver
+    kickoff_workdir: .
+    kickoff_env: null
+    install_script: install-cursor.sh
+    agent_version: null
   - name: demo
     kickoff_command: python -m clients.demo.driver
     kickoff_workdir: .
