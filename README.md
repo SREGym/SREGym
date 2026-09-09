@@ -131,6 +131,15 @@ uv run main.py --agent codex --model gpt-5 --force-build
 Containerized agents can use the public internet by default, but direct access to the benchmark's GitHub source is
 blocked. Use `--internet-access open` only when you intentionally need the previous unrestricted network behavior.
 
+Agent containers are hardened by default: every Linux capability is dropped except `DAC_OVERRIDE`, which container
+root needs to write to the host-owned `/logs` and `/workspace` bind mounts, and `no-new-privileges` is set. This
+blocks `apt-get`, which cannot drop to the `_apt` user without `setuid`/`setgid`. If your agent installs tooling
+during a run, turn it off:
+
+```bash
+uv run main.py --agent codex --model gpt-5 --container-hardening off
+```
+
 ### Deployment Profiles
 
 `--profile` controls how much infrastructure SREGym stands up. It is independent of

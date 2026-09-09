@@ -1,5 +1,6 @@
 import pytest
 
+from sregym import agent_launcher
 from sregym.service.container_runner import HARDENING_FLAGS, ContainerConfig, ContainerRunner, ExecInput
 from sregym.service.internet_policy import InternetPolicy
 
@@ -62,3 +63,54 @@ def test_flags_precede_the_image_in_the_full_command():
     for flag in HARDENING_FLAGS:
         assert cmd.index(flag) < image_index
     assert cmd[-1] == "echo hi"
+
+
+@pytest.mark.parametrize(("enabled", "expected"), [(True, True), (False, False)])
+def test_launcher_passes_hardening_choice_to_the_container_config(monkeypatch, enabled, expected):
+    captured = {}
+
+    class StubRunner:
+        def __init__(self, config):
+            captured["config"] = config
+
+        def ensure_image_exists(self):
+            pass
+
+    monkeypatch.setattr(agent_launcher, "ContainerRunner", StubRunner)
+    launcher = agent_launcher.AgentLauncher()
+    launcher.set_container_hardening(enabled)
+    launcher.enable_container_isolation()
+
+    assert captured["config"].harden_container is expected
+
+
+def test_launcher_hardens_by_default(monkeypatch):
+    captured = {}
+
+    class StubRunner:
+        def __init__(self, config):
+            captured["config"] = config
+
+        def ensure_image_exists(self):
+            pass
+
+    monkeypatch.setattr(agent_launcher, "ContainerRunner", StubRunner)
+    agent_launcher.AgentLauncher().enable_container_isolation()
+
+    assert captured["config"].harden_container is True
+
+
+def test_hardening_cannot_change_after_the_runner_exists(monkeypatch):
+    class StubRunner:
+        def __init__(self, config):
+            pass
+
+        def ensure_image_exists(self):
+            pass
+
+    monkeypatch.setattr(agent_launcher, "ContainerRunner", StubRunner)
+    launcher = agent_launcher.AgentLauncher()
+    launcher.enable_container_isolation()
+
+    with pytest.raises(RuntimeError):
+        launcher.set_container_hardening(False)

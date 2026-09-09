@@ -786,6 +786,7 @@ def main(args):
 
     agent_model, judge_model = _configure_model_environment(args)
     internet_policy = InternetPolicy.from_mode(args.internet_access)
+    harden_container = args.container_hardening == "on"
 
     set_profile(args.profile)
 
@@ -800,6 +801,7 @@ def main(args):
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
         f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
         f"internet_access: {internet_policy.mode.value}, "
+        f"container_hardening: {args.container_hardening}, "
         f"agent_api_base: {_env_status('AGENT_API_BASE')}, judge_api_base: {_env_status('JUDGE_API_BASE')}"
     )
 
@@ -836,6 +838,7 @@ def main(args):
         block_workload_creation=internet_policy.is_filtered,
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
+    LAUNCHER.set_container_hardening(harden_container)
 
     try:
         if not agent_reg or agent_reg.container_isolation:
@@ -1001,6 +1004,16 @@ if __name__ == "__main__":
         choices=("filtered", "open"),
         default="filtered",
         help="Agent internet policy. Filtered mode blocks direct access to SREGym GitHub source.",
+    )
+    parser.add_argument(
+        "--container-hardening",
+        choices=("on", "off"),
+        default="on",
+        help=(
+            "Agent container hardening. 'on' (default) drops every Linux capability except "
+            "DAC_OVERRIDE and sets no-new-privileges. Use 'off' for agents that need to install "
+            "tooling mid-run: apt-get cannot drop to the _apt user without setuid/setgid."
+        ),
     )
     parser.add_argument(
         "--n-attempts",
