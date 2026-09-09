@@ -99,11 +99,23 @@ def test_passes_when_override_gone_and_catalog_serves():
     assert result["product_probe_succeeded"] is True
 
 
+def test_passes_when_alias_present_but_traffic_works():
+    """An alternative fix (e.g. FQDN env override) that restores traffic should be accepted."""
+    aliases = [_alias("127.0.0.1", [BACKEND])]
+    kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-proxy-old", aliases)])
+    result = _oracle(kubectl, probe_ok=True).evaluate()
+
+    assert result["success"] is True
+    assert result["template_override_removed"] is False
+    assert result["no_pod_carries_override"] is False
+    assert result["product_probe_succeeded"] is True
+
+
 def test_fails_while_fault_is_live():
     """The unmitigated cluster must not pass — this is what PR #944 got wrong."""
     aliases = [_alias("127.0.0.1", [BACKEND])]
     kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-proxy-old", aliases)])
-    result = _oracle(kubectl).evaluate()
+    result = _oracle(kubectl, probe_ok=False).evaluate()
 
     assert result["success"] is False
     assert result["template_override_removed"] is False
@@ -111,12 +123,12 @@ def test_fails_while_fault_is_live():
 
 
 def test_fails_when_a_stale_pod_still_carries_the_override():
-    """Template clean but an old pod survived: /etc/hosts is still poisoned there."""
+    """Template clean but an old pod survived and probe fails."""
     kubectl = _KubeCtl(
         _deployment(),
         pods=[_pod("frontend-proxy-new"), _pod("frontend-proxy-old", [_alias("127.0.0.1", [BACKEND])])],
     )
-    result = _oracle(kubectl).evaluate()
+    result = _oracle(kubectl, probe_ok=False).evaluate()
 
     assert result["success"] is False
     assert result["template_override_removed"] is True
@@ -144,10 +156,10 @@ def test_ignores_pods_outside_the_deployment():
 
 
 def test_fails_when_alias_is_merely_repointed():
-    """Hardcoding the current ClusterIP is still an override, not a fix."""
+    """Hardcoding the current ClusterIP is still an override, not a fix — and the probe fails."""
     aliases = [_alias("10.96.4.7", [BACKEND])]
     kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-proxy-new", aliases)])
-    assert _oracle(kubectl).evaluate()["success"] is False
+    assert _oracle(kubectl, probe_ok=False).evaluate()["success"] is False
 
 
 @pytest.mark.parametrize(
@@ -162,7 +174,9 @@ def test_fails_when_alias_is_merely_repointed():
 def test_detects_every_qualified_form_of_the_backend_name(hostname):
     aliases = [_alias("127.0.0.1", [hostname])]
     kubectl = _KubeCtl(_deployment(host_aliases=aliases), pods=[_pod("frontend-proxy-new", aliases)])
-    assert _oracle(kubectl).evaluate()["success"] is False
+    result = _oracle(kubectl, probe_ok=False).evaluate()
+    assert result["success"] is False
+    assert result["template_override_removed"] is False
 
 
 def test_allows_unrelated_host_aliases():

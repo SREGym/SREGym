@@ -37,9 +37,10 @@ class _AppsV1:
 
 
 class _KubeCtl:
-    def __init__(self, host_aliases=None):
+    def __init__(self, host_aliases=None, rollout_fails=False):
         self.apps_v1_api = _AppsV1()
         self.commands = []
+        self.rollout_fails = rollout_fails
         self.deployment = SimpleNamespace(
             spec=SimpleNamespace(template=SimpleNamespace(spec=SimpleNamespace(host_aliases=host_aliases)))
         )
@@ -49,6 +50,12 @@ class _KubeCtl:
 
     def exec_command(self, command):
         self.commands.append(command)
+        return f'deployment "{DEPLOYMENT}" successfully rolled out'
+
+    def exec_command_checked(self, command, input_data=None, timeout=None):
+        self.commands.append(command)
+        if self.rollout_fails:
+            raise RuntimeError(f"Command failed (exit 1): {command}: error: timed out")
         return f'deployment "{DEPLOYMENT}" successfully rolled out'
 
 
@@ -89,6 +96,17 @@ def test_injection_waits_for_the_rollout_instead_of_sleeping():
     assert any("rollout status" in command for command in kubectl.commands)
 
 
+def test_injection_raises_on_rollout_timeout():
+    """A failed rollout must propagate so setup does not continue on a broken cluster."""
+    kubectl = _KubeCtl(rollout_fails=True)
+    with pytest.raises(RuntimeError, match="timed out"):
+        _injector(kubectl).inject_stale_hostaliases(
+            microservices=[DEPLOYMENT],
+            target_host=TARGET_BACKEND,
+            blackhole_ip="127.0.0.1",
+        )
+
+
 def test_recovery_removes_the_override_and_waits():
     kubectl = _KubeCtl(host_aliases=[SimpleNamespace(ip="127.0.0.1", hostnames=[TARGET_BACKEND])])
     _injector(kubectl).recover_stale_hostaliases(microservices=[DEPLOYMENT])
@@ -122,27 +140,35 @@ def test_backend_hostname_matches_the_proxy_env_in_the_chart():
 @pytest.mark.integration
 @pytest.mark.skipif(not _HAS_CLUSTER, reason="no kubeconfig or astronomy-shop chart submodule on disk")
 def test_lifecycle_against_a_live_cluster():
-    """inject -> oracle fails -> recover -> oracle passes, on a deployed app."""
+    """inject -> probe fails -> oracle fails -> recover -> probe passes -> oracle passes."""
     problem = StaleHostAliasesDNSPoisoningAstronomyShop()
     problem.app.deploy()
     problem.kubectl.wait_for_ready(problem.namespace)
     problem.mitigation_oracle.capture_baseline()
 
     try:
+        # Pre-injection: traffic must work and oracle must pass.
+        assert problem.mitigation_oracle._run_product_probe(), "pre-injection probe must succeed"
         assert problem.mitigation_oracle.evaluate()["success"] is True, "healthy cluster should pass"
 
+        # Inject the fault.
         problem.inject_fault()
         deployment = problem.kubectl.get_deployment(problem.faulty_service, problem.namespace)
         aliases = deployment.spec.template.spec.host_aliases
         assert aliases and aliases[0].ip == problem.blackhole_ip
         assert problem.target_backend in aliases[0].hostnames
 
+        # Post-injection: traffic must fail and oracle must fail.
+        assert not problem.mitigation_oracle._run_product_probe(), "post-injection probe must fail"
         assert problem.mitigation_oracle.evaluate()["success"] is False, "the oracle must fail while the fault is live"
 
+        # Recover.
         problem.recover_fault()
         deployment = problem.kubectl.get_deployment(problem.faulty_service, problem.namespace)
         assert not deployment.spec.template.spec.host_aliases
 
+        # Post-recovery: traffic must work and oracle must pass.
+        assert problem.mitigation_oracle._run_product_probe(), "post-recovery probe must succeed"
         assert problem.mitigation_oracle.evaluate()["success"] is True, (
             "the oracle must pass once the override is removed"
         )

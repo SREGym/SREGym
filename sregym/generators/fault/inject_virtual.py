@@ -3216,7 +3216,7 @@ class VirtualizationFaultInjector(FaultInjector):
     ############# HELPER FUNCTIONS ################
     def _wait_for_rollout(self, service: str, timeout: int = 180):
         """Block until the Deployment's new ReplicaSet is fully rolled out."""
-        result = self.kubectl.exec_command(
+        result = self.kubectl.exec_command_checked(
             f"kubectl rollout status deployment {service} -n {self.namespace} --timeout={timeout}s"
         )
         print(f"Rollout status for {service}: {result}")

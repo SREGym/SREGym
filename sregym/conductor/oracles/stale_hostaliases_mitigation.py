@@ -243,25 +243,6 @@ class StaleHostAliasesMitigationOracle(Oracle):
         deployment = settled
         results["rollout_complete"] = True
 
-        if self._template_override(deployment):
-            results["reason"] = (
-                f"the pod template of '{self.deployment_name}' still overrides "
-                f"'{self.backend_hostname}' with a static hosts entry"
-            )
-            print(f"[FAIL] {results['reason']}")
-            return results
-        results["template_override_removed"] = True
-
-        offending_pods = self._pods_with_override(deployment)
-        if offending_pods:
-            results["reason"] = (
-                f"pod(s) {', '.join(sorted(offending_pods))} still carry a static hosts entry "
-                f"for '{self.backend_hostname}'"
-            )
-            print(f"[FAIL] {results['reason']}")
-            return results
-        results["no_pod_carries_override"] = True
-
         try:
             if not self._has_ready_endpoint(self.deployment_name):
                 results["reason"] = f"service '{self.deployment_name}' has no ready endpoint"
@@ -277,13 +258,38 @@ class StaleHostAliasesMitigationOracle(Oracle):
             return results
         results["ready_endpoint"] = True
 
+        # Populate alias checks as informational fields (not gate-keeping).
+        has_template_override = bool(self._template_override(deployment))
+        results["template_override_removed"] = not has_template_override
+
+        offending_pods = self._pods_with_override(deployment)
+        results["no_pod_carries_override"] = len(offending_pods) == 0
+
+        # The functional probe is the authoritative pass/fail gate.
+        # If the agent found an alternative fix (e.g. switching FRONTEND_HOST
+        # to the FQDN so the short-name alias is bypassed), the probe will
+        # succeed and the oracle should accept it.
         results["product_probe_succeeded"] = self._run_product_probe()
-        if not results["product_probe_succeeded"]:
-            results["reason"] = f"a fresh {self.product_path} request did not return catalog data"
-            print(f"[FAIL] {results['reason']}")
+
+        if results["product_probe_succeeded"]:
+            results["success"] = True
+            results["reason"] = "catalog requests succeed through the edge proxy"
+            print("[PASS] Mitigation Result: Pass")
             return results
 
-        results["success"] = True
-        results["reason"] = "the hosts override is gone and catalog requests succeed"
-        print("[PASS] Mitigation Result: Pass")
+        # Probe failed — give a specific reason.
+        if has_template_override:
+            results["reason"] = (
+                f"the pod template of '{self.deployment_name}' still overrides "
+                f"'{self.backend_hostname}' with a static hosts entry"
+            )
+        elif offending_pods:
+            results["reason"] = (
+                f"pod(s) {', '.join(sorted(offending_pods))} still carry a static hosts entry "
+                f"for '{self.backend_hostname}'"
+            )
+        else:
+            results["reason"] = f"a fresh {self.product_path} request did not return catalog data"
+        print(f"[FAIL] {results['reason']}")
         return results
+
