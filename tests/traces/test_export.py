@@ -7,10 +7,12 @@ Everything else is bookkeeping.
 
 import csv
 import io
+import json
 import sqlite3
 
 import pytest
 
+from atif_converter import Trajectory
 from sregym.traces import export, store
 
 
@@ -208,6 +210,29 @@ def test_export_does_not_modify_the_database(db):
     assert db.read_bytes() == before
 
 
+@pytest.mark.parametrize("exit_mode", ["complete", "error", "early_close"])
+def test_export_closes_connection(db, monkeypatch, exit_mode):
+    conn = export._connect(db)
+    monkeypatch.setattr(export, "_connect", lambda _: conn)
+    rows = export.iter_rows(db, "runs")
+    try:
+        if exit_mode == "error":
+            conn.set_authorizer(lambda *_: sqlite3.SQLITE_DENY)
+            with pytest.raises(sqlite3.DatabaseError, match="not authorized"):
+                next(rows)
+        elif exit_mode == "early_close":
+            next(rows)
+            rows.close()
+        else:
+            list(rows)
+
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            conn.execute("SELECT 1")
+    finally:
+        rows.close()
+        conn.close()
+
+
 def test_cli_requires_a_table_for_stdout(db, capsys):
     with pytest.raises(SystemExit):
         export.main(["--db", str(db), "--stdout"])
@@ -223,3 +248,80 @@ def test_cli_writes_all_three_tables(db, tmp_path, capsys):
 def test_cli_rejects_a_missing_database(tmp_path):
     with pytest.raises(SystemExit):
         export.main(["--db", str(tmp_path / "nope.db"), "--out-dir", str(tmp_path)])
+
+
+def test_cli_exports_binary_json_from_the_real_store(tmp_path):
+    parts = [
+        {"type": "text", "text": "look at café"},
+        {"type": "image", "source": {"media_type": "image/png", "path": "screen.png"}},
+    ]
+    arguments = {"cmd": "printf café"}
+    trajectory = Trajectory.model_validate(
+        {
+            "schema_version": "ATIF-v1.7",
+            "trajectory_id": "binary-json",
+            "agent": {"name": "codex", "version": "1.0"},
+            "steps": [
+                {"step_id": 1, "source": "user", "message": parts},
+                {
+                    "step_id": 2,
+                    "source": "agent",
+                    "message": "checking",
+                    "tool_calls": [{"tool_call_id": "c1", "function_name": "shell", "arguments": arguments}],
+                },
+            ],
+        }
+    )
+    db = tmp_path / "traces.db"
+    store.upsert(trajectory, db)
+    before = db.read_bytes()
+    out = tmp_path / "export"
+
+    assert export.main(["--db", str(db), "--out-dir", str(out)]) == 0
+
+    with (out / "steps.csv").open(newline="") as handle:
+        steps = list(csv.DictReader(handle))
+    with (out / "tools.csv").open(newline="") as handle:
+        tools = list(csv.DictReader(handle))
+    assert int(steps[0]["message_chars"]) == len(json.dumps(parts))
+    assert int(tools[0]["arguments_chars"]) == len(json.dumps(arguments, ensure_ascii=False, separators=(",", ":")))
+    assert (out / "runs.csv").exists()
+    assert db.read_bytes() == before
+
+
+@pytest.mark.parametrize(
+    ("timestamps", "duration", "offsets"),
+    [
+        (["2026-09-08T10:00:00", "2026-09-08T10:00:30Z"], None, [0.0, None]),
+        (["2026-09-08T10:00:00Z", "2026-09-08T10:00:30"], None, [0.0, None]),
+        (["2026-09-08T10:00:00Z", "2026-09-08T10:00:15", "2026-09-08T10:00:30Z"], 30.0, [0.0, None, 30.0]),
+        (["2026-09-08T10:00:00+02:00", "2026-09-08T08:00:30Z"], 30.0, [0.0, 30.0]),
+        (["2026-09-08T10:00:00", "2026-09-08T10:00:30"], 30.0, [0.0, 30.0]),
+        ([None, "2026-09-08T10:00:00Z", "2026-09-08T10:00:30Z"], 30.0, [None, 0.0, 30.0]),
+        ([None, None], None, [None, None]),
+    ],
+)
+def test_export_handles_timestamp_variants(tmp_path, timestamps, duration, offsets):
+    trajectory = Trajectory.model_validate(
+        {
+            "schema_version": "ATIF-v1.7",
+            "trajectory_id": "timestamps",
+            "agent": {"name": "codex", "version": "1.0"},
+            "steps": [
+                {
+                    "step_id": index,
+                    "source": "agent",
+                    "timestamp": timestamp,
+                    "message": "checking",
+                    "tool_calls": [{"tool_call_id": f"c{index}", "function_name": "shell", "arguments": {}}],
+                }
+                for index, timestamp in enumerate(timestamps, start=1)
+            ],
+        }
+    )
+    db = tmp_path / "traces.db"
+    store.upsert(trajectory, db)
+
+    assert _rows(db, "runs")[0]["duration_s"] == duration
+    assert [row["offset_s"] for row in _rows(db, "steps")] == offsets
+    assert [row["offset_s"] for row in _rows(db, "tools")] == offsets

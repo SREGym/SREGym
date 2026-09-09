@@ -36,7 +36,8 @@ import json
 import logging
 import sqlite3
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Generator, Sequence
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
@@ -107,12 +108,20 @@ def _parse_ts(value: str | None) -> datetime | None:
     if not value:
         return None
     try:
-        # Stored as ISO-8601 with a trailing Z, which fromisoformat handles
-        # natively from 3.11.
+        # ATIF accepts ISO-8601 timestamps with or without timezone information.
         return datetime.fromisoformat(value)
     except ValueError:
         logger.debug(f"Unparseable timestamp {value!r}")
         return None
+
+
+def _elapsed_seconds(start: datetime | None, end: datetime | None) -> float | None:
+    """Leave the interval unknown rather than guess a missing timezone."""
+    if start is None or end is None:
+        return None
+    if (start.utcoffset() is None) != (end.utcoffset() is None):
+        return None
+    return (end - start).total_seconds()
 
 
 def _run_key(row: sqlite3.Row) -> str:
@@ -163,23 +172,27 @@ def _select_trajectories(
 def _steps_for(conn: sqlite3.Connection, trajectory_id: str) -> list[sqlite3.Row]:
     return list(
         conn.execute(
-            "SELECT * FROM steps WHERE trajectory_id = ? ORDER BY step_id",
+            "SELECT *, json(message_parts) AS message_parts_json FROM steps WHERE trajectory_id = ? ORDER BY step_id",
             (trajectory_id,),
         )
     )
 
 
 def _tool_calls_for(conn: sqlite3.Connection, step_pk: int) -> list[sqlite3.Row]:
-    return list(conn.execute("SELECT * FROM tool_calls WHERE step_pk = ? ORDER BY seq", (step_pk,)))
+    return list(
+        conn.execute(
+            "SELECT *, json(arguments) AS arguments_json FROM tool_calls WHERE step_pk = ? ORDER BY seq", (step_pk,)
+        )
+    )
 
 
 def _message_chars(row: sqlite3.Row) -> int:
     text = row["message"] or ""
-    if not text and row["message_parts"]:
+    if not text and row["message_parts_json"]:
         try:
-            text = json.dumps(json.loads(row["message_parts"]))
+            text = json.dumps(json.loads(row["message_parts_json"]))
         except (json.JSONDecodeError, TypeError):
-            text = str(row["message_parts"])
+            text = str(row["message_parts_json"])
     return len(text)
 
 
@@ -187,7 +200,7 @@ def iter_rows(
     db_path: Path | str,
     table: str,
     **filters,
-) -> Iterator[dict]:
+) -> Generator[dict, None, None]:
     """Yield export rows for one table.
 
     Streams rather than materialising: a step-level export of a long campaign is
@@ -196,14 +209,14 @@ def iter_rows(
     if table not in TABLES:
         raise ValueError(f"Unknown table {table!r}; expected one of {TABLES}")
 
-    with _connect(db_path) as conn:
+    with closing(_connect(db_path)) as conn:
         for traj in _select_trajectories(conn, **filters):
             key = _run_key(traj)
             steps = _steps_for(conn, traj["trajectory_id"])
             times = [_parse_ts(s["timestamp"]) for s in steps]
             known = [t for t in times if t is not None]
             first, last = (known[0], known[-1]) if known else (None, None)
-            duration = (last - first).total_seconds() if first and last else None
+            duration = _elapsed_seconds(first, last)
             last_index = max(len(steps) - 1, 1)
 
             # Tool calls are needed for both the runs summary and the per-step
@@ -241,7 +254,7 @@ def iter_rows(
             cum_prompt = cum_completion = 0
             cum_cost = 0.0
             for index, (step, ts) in enumerate(zip(steps, times, strict=True)):
-                offset = (ts - first).total_seconds() if ts and first else None
+                offset = _elapsed_seconds(first, ts)
                 cum_prompt += step["prompt_tokens"] or 0
                 cum_completion += step["completion_tokens"] or 0
                 cum_cost += step["cost_usd"] or 0.0
@@ -281,7 +294,7 @@ def iter_rows(
                             "seq": tool["seq"],
                             "function_name": tool["function_name"],
                             "tool_call_id": tool["tool_call_id"],
-                            "arguments_chars": len(tool["arguments"] or ""),
+                            "arguments_chars": len(tool["arguments_json"] or ""),
                         }
 
 
