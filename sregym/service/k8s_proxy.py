@@ -50,6 +50,7 @@ from sregym.service.kubernetes_access_policy import (
     merge_object,
     policy_tier,
     workload_adds_network_access,
+    workload_network_settings,
 )
 from sregym.service.kubernetes_response import include_table_objects, json_accept_header, stream_response
 
@@ -358,6 +359,35 @@ def _object_path(path: str) -> str:
     if parts[index] == "namespaces" and len(parts) >= index + 3:
         index += 2
     return "/" + "/".join(parts[: index + 2])
+
+
+def _object_subresource(path: str) -> str | None:
+    """Return the subresource segment of a Kubernetes object path, if any."""
+    parts = _decode_path_parts(path)
+    index = 2 if parts[0] == "api" else 3
+    if len(parts) <= index:
+        return None
+    if parts[index] == "namespaces" and len(parts) >= index + 3:
+        index += 2
+    return parts[index + 2] if len(parts) > index + 2 else None
+
+
+def _is_proxy_subresource_request(path: str) -> bool:
+    """Return whether a request targets a pod/service/node proxy subresource.
+
+    The API server dials the target's address directly from its own network,
+    not the pod's Calico-managed network namespace, so this subresource can
+    relay traffic to any address a workload can be made to claim (e.g. via a
+    forged ``status.podIP``), bypassing the egress boundary entirely.
+    """
+    resource, _ = _resource_request(path)
+    return resource in {"pods", "services", "nodes"} and _object_subresource(path) == "proxy"
+
+
+def _is_exec_or_attach_request(path: str) -> bool:
+    """Return whether a request opens an exec/attach stream into a pod."""
+    resource, _ = _resource_request(path)
+    return resource == "pods" and _object_subresource(path) in {"exec", "attach"}
 
 
 # Disable SSL warnings for self-signed certs
@@ -706,6 +736,17 @@ class KubernetesAPIProxy:
                 if restrict_network_access and _is_cluster_egress_control_mutation(path, method):
                     self.send_error(403, "Forbidden: cluster outbound policy changes are disabled in filtered mode")
                     return
+
+                if restrict_network_access and _is_proxy_subresource_request(path):
+                    self.send_error(403, "Forbidden: Proxying through a workload's status is not allowed")
+                    return
+
+                if restrict_network_access and _is_exec_or_attach_request(path):
+                    _, name = _resource_request(path)
+                    target = self._read_object(_object_path(path)) if name else None
+                    if target and workload_network_settings("pods", target).get("hostNetwork"):
+                        self.send_error(403, "Forbidden: Cannot exec into a host-network pod")
+                        return
 
                 # Block direct access to hidden namespaces
                 if _is_hidden_namespace_request(path, hidden_namespaces):

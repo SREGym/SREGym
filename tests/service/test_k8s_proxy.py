@@ -637,6 +637,58 @@ def test_host_network_restriction_does_not_change_open_mode(proxy, restricted):
     assert any(method == "PATCH" for method, _, _ in FakeHTTPSConnection.requests) is not restricted
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/namespaces/default/pods/forged:80/proxy/",
+        "/api/v1/namespaces/default/services/forged/proxy/",
+        "/api/v1/nodes/forged/proxy/stats",
+    ],
+)
+def test_filtered_proxy_blocks_status_relay_subresource(proxy, path):
+    proxy.stop()
+    proxy.restrict_network_access = True
+    proxy.start()
+
+    status, _, _ = request(proxy, path)
+
+    assert status == 403
+    assert FakeHTTPSConnection.requests == []
+
+
+def test_open_proxy_allows_status_relay_subresource(proxy):
+    status, _, _ = request(proxy, "/api/v1/namespaces/default/pods/forged:80/proxy/")
+
+    assert status == 200
+    assert FakeHTTPSConnection.requests
+
+
+def test_filtered_proxy_blocks_exec_into_a_host_network_pod(proxy):
+    proxy.stop()
+    proxy.restrict_network_access = True
+    proxy.start()
+    FakeHTTPSConnection.response = FakeResponse(json.dumps({"spec": {"hostNetwork": True}}).encode())
+
+    status, _, _ = request(proxy, "/api/v1/namespaces/kube-system/pods/calico-node-abcde/exec?command=sh")
+
+    assert status == 403
+    assert [(method, p) for method, p, _ in FakeHTTPSConnection.requests] == [
+        ("GET", "/api/v1/namespaces/kube-system/pods/calico-node-abcde")
+    ]
+
+
+def test_filtered_proxy_allows_exec_into_an_ordinary_pod(proxy):
+    proxy.stop()
+    proxy.restrict_network_access = True
+    proxy.start()
+    FakeHTTPSConnection.response = FakeResponse(json.dumps({"spec": {"containers": []}}).encode())
+
+    status, _, _ = request(proxy, "/api/v1/namespaces/astronomy-shop/pods/frontend-abcde/exec?command=sh")
+
+    assert status == 200
+    assert [method for method, _, _ in FakeHTTPSConnection.requests] == ["GET", "GET"]
+
+
 def test_ordinary_secret_remains_accessible(proxy):
     FakeHTTPSConnection.response = FakeResponse(json.dumps(ORDINARY_SECRET).encode())
 
