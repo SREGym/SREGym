@@ -755,6 +755,7 @@ class Conductor:
 
             if next_index < len(self.stage_sequence):
                 next_stage_name = self.stage_sequence[next_index]["name"]
+            stage_ledger = getattr(self, "phases", None)
 
         if next_stage_name is not None:
             # Keep the old stage marked busy while noise is restarted. The
@@ -792,24 +793,29 @@ class Conductor:
                         self.logger.warning(f"Failed to stop late NoiseManager restart: {e}")
                     return
 
+            # Keep submissions waiting until the start record is written.
+            # Use this attempt's ledger, and keep disk I/O outside the lock.
+            if stage_ledger is not None:
+                stage_ledger.record(f"stage:{next_stage_name}", "start")
             with self._submission_lock:
-                if generation != self._submission_generation or generation in self._aborted_submission_generations:
+                transition_aborted = (
+                    generation != self._submission_generation or generation in self._aborted_submission_generations
+                )
+                if transition_aborted:
                     self.logger.warning(
                         "Skipping %s stage transition because attempt generation %s was aborted or replaced",
                         next_stage_name,
                         generation,
                     )
-                    return
-                self.current_stage_index = next_index
-                self.submission_stage = next_stage_name
-                self.waiting_for_agent = True
-                self._evaluating = False
-                self._accepting_submissions = not self._attempt_closed
-                self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
-            # Second of the two places a stage opens -- _advance_to_next_stage
-            # is the other. Marked outside the lock: the ledger fsyncs, and a
-            # stuck disk must not hold the submission lock.
-            self._mark(f"stage:{next_stage_name}", "start")
+                else:
+                    self.current_stage_index = next_index
+                    self.submission_stage = next_stage_name
+                    self.waiting_for_agent = True
+                    self._evaluating = False
+                    self._accepting_submissions = not self._attempt_closed
+                    self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+            if transition_aborted and stage_ledger is not None:
+                stage_ledger.record(f"stage:{next_stage_name}", "end", outcome="aborted")
             return
 
         if next_index >= len(self.stage_sequence):
