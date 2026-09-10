@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from kubernetes.client.rest import ApiException
 
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.base import Oracle
@@ -1489,7 +1490,7 @@ class Conductor:
     _METRICS_SERVER_BINDING = "metrics-server:system:auth-delegator"
 
     def _metrics_server_configured(self) -> bool:
-        """True if metrics-server is deployed, patched, *and* still has its RBAC.
+        """True if metrics-server has its configuration, RBAC, and usable metrics.
 
         Checking more than existence matters because the Deployment and its
         cluster-scoped RBAC have different lifetimes: the Deployment sits in the
@@ -1513,7 +1514,16 @@ class Conductor:
         if not binding or not binding.strip():
             self.logger.info("[DEPLOY] metrics-server RBAC missing; re-applying components.yaml")
             return False
-        return True
+        # A Ready Deployment does not prove that its Service and aggregated API
+        # still work. Exercise the same API path used by kubectl top.
+        raw_metrics = self.kubectl.exec_command(
+            "kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes --request-timeout=10s"
+        )
+        try:
+            metrics = json.loads(raw_metrics)
+            return metrics.get("kind") == "NodeMetricsList" and bool(metrics.get("items"))
+        except (ValueError, TypeError, AttributeError):
+            return False
 
     def _openebs_ready(self, svelte: bool) -> bool:
         """True if the OpenEBS tier already matches what this profile wants.
@@ -1538,11 +1548,23 @@ class Conductor:
         if svelte:
             return True
 
-        ndm = self.kubectl.exec_command("kubectl -n openebs get daemonset openebs-ndm -o name --ignore-not-found")
-        if not ndm or not ndm.strip():
-            self.logger.info("[DEPLOY] OpenEBS node-disk-manager missing; re-applying operator manifest")
+        try:
+            ndm = self.kubectl.apps_v1_api.read_namespaced_daemon_set("openebs-ndm", "openebs", _request_timeout=10)
+        except ApiException:
             return False
-        return True
+        status = ndm.status
+        if status is None:
+            return False
+        desired = status.desired_number_scheduled or 0
+        return (
+            desired > 0
+            and (status.observed_generation or 0) >= (ndm.metadata.generation or 0)
+            and status.current_number_scheduled == desired
+            and status.updated_number_scheduled == desired
+            and status.number_ready == desired
+            and status.number_available == desired
+            and (status.number_misscheduled or 0) == 0
+        )
 
     # openebs-operator.yaml bundles the node-disk-manager alongside the LocalPV
     # provisioner. NDM exists to discover block devices and back the
@@ -1558,12 +1580,24 @@ class Conductor:
     )
 
     def _trim_openebs_ndm(self) -> None:
-        """Remove the node-disk-manager workloads left by openebs-operator.yaml.
+        """Remove unused device storage and node-disk-manager workloads.
 
         Deleting rather than scaling: the operator manifest is a plain apply with
         no controller to recreate them, and re-applying it recreates them for this
         method to remove again.
         """
+        baseline = self.cluster_state.baseline
+        if baseline is None:
+            raise RuntimeError("Cannot trim OpenEBS before the cluster baseline is available")
+        # Keep user-provided StorageClasses. The shared cluster baseline is
+        # captured before SREGym installs OpenEBS and survives interrupted runs.
+        if "openebs-device" not in baseline.storage_classes:
+            try:
+                self.cluster_state.storage_v1.delete_storage_class("openebs-device")
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+
         self.logger.info("[svelte] Removing OpenEBS node-disk-manager (openebs-hostpath does not use it)")
         for kind, name in self._OPENEBS_NDM_WORKLOADS:
             self.kubectl.exec_command(f"kubectl delete {kind} {name} -n openebs --ignore-not-found")

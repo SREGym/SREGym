@@ -1,6 +1,9 @@
 import json
 import logging
 import subprocess
+from pathlib import Path
+
+import yaml
 
 from sregym.paths import BASE_DIR, PROMETHEUS_METADATA
 from sregym.profile import is_svelte
@@ -62,8 +65,8 @@ class Prometheus:
 
     def deploy(self):
         """Deploy the metric collector using Helm."""
-        if self._is_prometheus_running():
-            self.logger.warning("Prometheus is already running. Skipping redeployment.")
+        if self._is_prometheus_running() and self._matches_requested_profile():
+            self.logger.info("Prometheus already uses the requested profile. Skipping redeployment.")
             return
 
         # Wait for namespace to be fully terminated before attempting fresh install
@@ -79,6 +82,40 @@ class Prometheus:
 
         Helm.install(**helm_configs)
         Helm.assert_if_deployed(self.namespace)
+
+    def _matches_requested_profile(self) -> bool:
+        """Compare installed Helm values with the settings controlled by the profile."""
+        result = subprocess.run(
+            [
+                "helm",
+                "get",
+                "values",
+                self.helm_configs["release_name"],
+                "-n",
+                self.namespace,
+                "--all",
+                "-o",
+                "json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        installed = json.loads(result.stdout)
+        with open(Path(self.helm_configs["chart_path"]) / "values.yaml") as file:
+            expected = yaml.safe_load(file)
+        # Compare actual values rather than a new marker, so releases installed
+        # before profile tracking also work. Other Helm values remain unrelated.
+        with open(BASE_DIR / "observer" / "prometheus" / "values-svelte.yaml") as file:
+            svelte_values = yaml.safe_load(file)
+        for component, settings in svelte_values.items():
+            for setting, svelte_value in settings.items():
+                wanted = svelte_value if is_svelte() else expected[component][setting]
+                if installed.get(component, {}).get(setting) != wanted:
+                    self.logger.info("Prometheus profile differs at %s.%s; redeploying", component, setting)
+                    return False
+        return True
 
     def teardown(self):
         """Teardown the metric collector deployment."""
