@@ -10,6 +10,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class LivenessProbeMisconfiguration(Problem):
+    """Deprecated in SREGym 1.1 after all variants reached 100% overall pass@3."""
+
     def __init__(self, app_name="social_network", faulty_service="user-service"):
         self.app_name = app_name
         self.faulty_service = faulty_service
