@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from atif_converter import convert
 from atif_converter.adapters import claudecode, codex, copilot, gemini, opencode, stratus
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
 from clients.codex.codex_agent import CodexAgent
@@ -158,7 +159,8 @@ def test_recorded_copilot_stream_matches_atif(fixture, tmp_path):
     assert_totals_match(agent.get_usage_metrics(), copilot.convert_file(agent.jsonl_path))
 
 
-def test_copilot_does_not_add_parent_totals_or_repeated_spans(tmp_path):
+@pytest.mark.parametrize("reasoning_key", ["gen_ai.usage.reasoning.output_tokens", "gen_ai.usage.reasoning_tokens"])
+def test_copilot_does_not_add_parent_totals_or_repeated_spans(tmp_path, reasoning_key):
     agent = CopilotCliAgent(tmp_path, "example")
     agent.otel_dir.mkdir()
     attrs = {
@@ -167,7 +169,7 @@ def test_copilot_does_not_add_parent_totals_or_repeated_spans(tmp_path):
         "gen_ai.usage.output_tokens": 40,
         "gen_ai.usage.cache_read.input_tokens": 50,
         "gen_ai.usage.cache_creation.input_tokens": 20,
-        "gen_ai.usage.reasoning_tokens": 10,
+        reasoning_key: 10,
     }
     chat = {"span_id": "chat1", "attributes": attrs}
     parent = {"span_id": "parent", "attributes": {**attrs, "gen_ai.operation.name": "invoke_agent"}}
@@ -179,6 +181,66 @@ def test_copilot_does_not_add_parent_totals_or_repeated_spans(tmp_path):
     assert usage["cached_input_tokens"] == 50
     assert usage["cache_creation_input_tokens"] == 20
     assert usage["reasoning_output_tokens"] == 10
+    # Native CLI streams can omit input usage entirely. The independent
+    # converter must get those counts from the explicitly supplied telemetry.
+    agent.jsonl_path.write_text(
+        json.dumps({"type": "assistant.message", "data": {"content": "ok", "outputTokens": 40}}) + "\n"
+    )
+    trajectory = convert(agent.jsonl_path, telemetry_files=[agent.otel_dir / "spans.jsonl"])
+    assert_totals_match(usage, trajectory)
+    assert trajectory.final_metrics.extra["reasoning_tokens"] == 10
+    assert trajectory.final_metrics.extra["cache_write_tokens"] == 20
+
+
+@pytest.mark.parametrize("reported_input", [100, 0])
+def test_copilot_telemetry_replaces_stream_totals_without_losing_unreported_fields(tmp_path, reported_input):
+    from sregym.traces.convert import convert_run
+
+    run = tmp_path / "results/b/copilot/problem/run_1"
+    agent = CopilotCliAgent(run, "example")
+    agent.jsonl_path.write_text(
+        json.dumps({"type": "message", "role": "assistant", "content": "ok"})
+        + "\n"
+        + json.dumps({"type": "usage", "input_tokens": 90, "output_tokens": 40})
+        + "\n"
+    )
+    agent.otel_dir.mkdir()
+    span = {
+        "type": "span",
+        "spanId": "one",
+        "attributes": {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.usage.input_tokens": reported_input,
+        },
+    }
+    telemetry = agent.otel_dir / "one.jsonl"
+    telemetry.write_text(json.dumps(span) + '\n{"truncated":')
+    # The same span can occur in overlapping exported files.
+    (agent.otel_dir / "two.jsonl").write_text(json.dumps(span) + "\n[]\n")
+    usage = agent.get_usage_metrics()
+    assert usage["input_tokens"] == reported_input
+    assert usage["output_tokens"] == 40
+    trajectory = convert_run(run)
+    assert_totals_match(usage, trajectory)
+    assert trajectory.final_metrics.total_prompt_tokens == reported_input
+
+
+def test_copilot_irrelevant_telemetry_preserves_stream_usage(tmp_path):
+    agent = CopilotCliAgent(tmp_path, "example")
+    agent.jsonl_path.write_text(
+        json.dumps({"type": "message", "role": "assistant", "content": "ok"})
+        + "\n"
+        + json.dumps({"type": "usage", "input_tokens": 100, "output_tokens": 40})
+        + "\n"
+    )
+    agent.otel_dir.mkdir()
+    telemetry = agent.otel_dir / "spans.jsonl"
+    telemetry.write_text(
+        json.dumps({"attributes": {"gen_ai.operation.name": "invoke_agent", "gen_ai.usage.input_tokens": 999}})
+    )
+    trajectory = convert(agent.jsonl_path, telemetry_files=[telemetry])
+    assert_totals_match(agent.get_usage_metrics(), trajectory)
+    assert trajectory.final_metrics.total_prompt_tokens == 100
 
 
 def test_copilot_native_usage_replaces_message_estimate(tmp_path):

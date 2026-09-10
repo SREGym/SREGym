@@ -36,6 +36,18 @@ Supported explicit agent names are `claudecode`, `codex`, `copilot`, `gemini`,
 Missing paths raise `FileNotFoundError`. Unknown formats and failed conversions
 raise subclasses of `AtifConverterError`.
 
+Some Copilot versions omit input and cache counts from the CLI stream.
+The converter accepts optional native OpenTelemetry JSONL files from the same run:
+
+```python
+trajectory = convert("copilot-cli.jsonl", telemetry_files=["copilot-otel.jsonl"])
+```
+
+Telemetry supplies final token counts without adding them to the CLI totals.
+The converter ignores duplicate spans and aggregate parent spans.
+CLI counts remain available for fields that telemetry does not report.
+Without telemetry, conversion works as before. Other agents do not accept this argument.
+
 ## Token metrics
 
 Prompt totals include cache reads and writes. Completion totals include

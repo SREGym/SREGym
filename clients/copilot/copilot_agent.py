@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from clients.harness.token_usage import aggregate_usage, read_jsonl, token_count, usage_metrics
+from clients.harness.token_usage import TOKEN_FIELDS, aggregate_usage, read_jsonl, token_count, usage_metrics
 
 logger = logging.getLogger("all.copilot.agent")
 
@@ -145,13 +145,17 @@ class CopilotCliAgent:
                             )
                         ),
                         cache_creation_input_tokens=token_count(attrs.get("gen_ai.usage.cache_creation.input_tokens")),
-                        reasoning_output_tokens=token_count(attrs.get("gen_ai.usage.reasoning_tokens")),
+                        reasoning_output_tokens=token_count(
+                            attrs.get(
+                                "gen_ai.usage.reasoning.output_tokens", attrs.get("gen_ai.usage.reasoning_tokens")
+                            )
+                        ),
                     )
                 )
-        if records:
-            return aggregate_usage(records)
+        telemetry_usage = aggregate_usage(records)
 
-        # Structured CLI output is also available when OTel is absent.
+        # Keep CLI fields that telemetry does not report. These are two views
+        # of the same calls, so never add their totals together.
         calls = {}
         messages = []
         if self.jsonl_path.exists():
@@ -176,7 +180,13 @@ class CopilotCliAgent:
                     )
                 elif event.get("type") == "assistant.message":
                     messages.append(usage_metrics(output_tokens=token_count(data.get("outputTokens"))))
-        return aggregate_usage(calls.values() if calls else messages)
+        stream_usage = aggregate_usage(calls.values() if calls else messages)
+        return usage_metrics(
+            **{
+                field: telemetry_usage[field] if telemetry_usage[field] is not None else stream_usage[field]
+                for field in TOKEN_FIELDS
+            }
+        )
 
     def _build_command(self, instruction: str) -> list[str]:
         """Build the Copilot command, preserving the CLI's default effort when unset."""

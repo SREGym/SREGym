@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -50,7 +51,7 @@ from ..atif import (
     ToolCall,
     Trajectory,
 )
-from ._common import TOKEN_METRICS_VERSION, _sum_tokens
+from ._common import TOKEN_METRICS_VERSION, _load_jsonl, _sum_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -524,6 +525,54 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
 # --------------------------------------------------------------------------- #
 # Public entrypoint
 # --------------------------------------------------------------------------- #
-def convert_file(session_file: Path | str) -> Trajectory | None:
-    """Convert one Copilot CLI JSONL output file to ATIF."""
-    return _convert_events(_read_copilot_cli_jsonl(Path(session_file)))
+def _telemetry_totals(files: Sequence[Path | str]) -> dict[str, int | None]:
+    """Count native chat spans once, excluding aggregate parent spans."""
+    fields = {
+        "total_prompt_tokens": ("gen_ai.usage.input_tokens",),
+        "total_completion_tokens": ("gen_ai.usage.output_tokens",),
+        "total_cached_tokens": ("gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_read_input_tokens"),
+        "reasoning_tokens": ("gen_ai.usage.reasoning.output_tokens", "gen_ai.usage.reasoning_tokens"),
+        "cache_write_tokens": ("gen_ai.usage.cache_creation.input_tokens",),
+    }
+    counts: dict[str, list[int | None]] = {name: [] for name in fields}
+    seen = set()
+    for file in files:
+        for event in _load_jsonl(Path(file)):
+            if not isinstance(event, dict):
+                continue
+            attrs = event.get("attributes")
+            if not isinstance(attrs, dict) or attrs.get("gen_ai.operation.name") not in {None, "chat"}:
+                continue
+            if not any(key in attrs for key in ("gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens")):
+                continue
+            span_id = event.get("span_id") or event.get("spanId")
+            if span_id and span_id in seen:
+                continue
+            if span_id:
+                seen.add(span_id)
+            for name, keys in fields.items():
+                value = next((attrs[key] for key in keys if key in attrs), None)
+                counts[name].append(value)
+    return {name: _sum_tokens(*values) for name, values in counts.items()}
+
+
+def convert_file(session_file: Path | str, *, telemetry_files: Sequence[Path | str] = ()) -> Trajectory | None:
+    """Convert CLI events and optional same-run OTel files to ATIF.
+
+    Telemetry replaces the final token fields it reports; it is not added to
+    the CLI totals. Step metrics remain based on CLI events because span order
+    does not reliably identify the corresponding step.
+    """
+    trajectory = _convert_events(_read_copilot_cli_jsonl(Path(session_file)))
+    if trajectory is None or not telemetry_files:
+        return trajectory
+    final = trajectory.final_metrics
+    if final is not None:
+        for name, value in _telemetry_totals(telemetry_files).items():
+            if value is None:
+                continue
+            if name.startswith("total_"):
+                setattr(final, name, value)
+            else:
+                final.extra = {**(final.extra or {}), name: value}
+    return trajectory

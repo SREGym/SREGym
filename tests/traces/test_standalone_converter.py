@@ -156,6 +156,13 @@ def test_deliberately_wrong_agent_raises_conversion_error():
         convert(claude_file, agent="codex")
 
 
+def test_telemetry_option_requires_copilot_and_existing_files(tmp_path):
+    with pytest.raises(ValueError, match="only supported for Copilot"):
+        convert(SESSION_CASES[1][1], telemetry_files=[])
+    with pytest.raises(FileNotFoundError):
+        convert(SESSION_CASES[2][1], telemetry_files=[tmp_path / "missing.jsonl"])
+
+
 def test_standalone_package_has_no_sregym_or_client_imports():
     package_root = Path(__file__).resolve().parents[2] / "atif_converter"
     offenders: list[str] = []
@@ -197,13 +204,36 @@ def test_copied_folder_imports_and_converts_without_importing_sregym(tmp_path: P
     shutil.copytree(source_root, tmp_path / "atif_converter")
     session_file = tmp_path / "session.jsonl"
     shutil.copy2(source_file, session_file)
+    # Explicit telemetry must still work after copying only this package.
+    if agent_name == "copilot":
+        (tmp_path / "telemetry.jsonl").write_text(
+            json.dumps(
+                {
+                    "type": "span",
+                    "spanId": "one",
+                    "attributes": {
+                        "gen_ai.operation.name": "chat",
+                        "gen_ai.usage.input_tokens": 100,
+                        "gen_ai.usage.output_tokens": 40,
+                        "gen_ai.usage.cache_read.input_tokens": 50,
+                        "gen_ai.usage.reasoning.output_tokens": 10,
+                    },
+                }
+            )
+        )
 
     script = """
 import sys
 from atif_converter import convert
 
-trajectory = convert("session.jsonl")
+kwargs = {"telemetry_files": ["telemetry.jsonl"]} if sys.argv[1] == "copilot" else {}
+trajectory = convert("session.jsonl", **kwargs)
 assert trajectory.agent.name == sys.argv[1]
+if kwargs:
+    assert trajectory.final_metrics.total_prompt_tokens == 100
+    assert trajectory.final_metrics.total_completion_tokens == 40
+    assert trajectory.final_metrics.total_cached_tokens == 50
+    assert trajectory.final_metrics.extra["reasoning_tokens"] == 10
 assert not any(name == "sregym" or name.startswith("sregym.") for name in sys.modules)
 assert not any(name == "clients" or name.startswith("clients.") for name in sys.modules)
 print(trajectory.schema_version)
