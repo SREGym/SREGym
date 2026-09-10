@@ -2,12 +2,13 @@
 GitHub Copilot CLI agent implementation for SREGym.
 """
 
-import json
 import logging
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
+from clients.harness.token_usage import aggregate_usage, read_jsonl, token_count, usage_metrics
 
 logger = logging.getLogger("all.copilot.agent")
 
@@ -113,54 +114,69 @@ class CopilotCliAgent:
         """Path to session transcript markdown."""
         return self.logs_dir / "copilot-session.md"
 
-    def get_usage_metrics(self) -> dict[str, int]:
-        """
-        Extract usage metrics from Copilot CLI OTel JSONL files.
+    def get_usage_metrics(self) -> dict[str, int | None]:
+        """Count chat spans, not both chat spans and their parent totals."""
+        records = []
+        seen = set()
+        for path in sorted(self.otel_dir.glob("*.jsonl")):
+            for event in read_jsonl(path):
+                attrs = event.get("attributes") or {}
+                if not isinstance(attrs, dict):
+                    continue
+                # Older files lack the operation attribute. Their usage rows
+                # already describe individual requests.
+                if attrs.get("gen_ai.operation.name") not in {None, "chat"}:
+                    continue
+                span_id = event.get("span_id") or event.get("spanId")
+                if span_id and span_id in seen:
+                    continue
+                if span_id:
+                    seen.add(span_id)
+                if not any(key in attrs for key in ("gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens")):
+                    continue
+                records.append(
+                    usage_metrics(
+                        input_tokens=token_count(attrs.get("gen_ai.usage.input_tokens")),
+                        output_tokens=token_count(attrs.get("gen_ai.usage.output_tokens")),
+                        cached_input_tokens=token_count(
+                            attrs.get(
+                                "gen_ai.usage.cache_read.input_tokens",
+                                attrs.get("gen_ai.usage.cache_read_input_tokens"),
+                            )
+                        ),
+                        cache_creation_input_tokens=token_count(attrs.get("gen_ai.usage.cache_creation.input_tokens")),
+                        reasoning_output_tokens=token_count(attrs.get("gen_ai.usage.reasoning_tokens")),
+                    )
+                )
+        if records:
+            return aggregate_usage(records)
 
-        Returns:
-            Dictionary with keys: input_tokens, cached_input_tokens, output_tokens
-        """
-        metrics = {
-            "input_tokens": 0,
-            "cached_input_tokens": 0,
-            "output_tokens": 0,
-        }
-
-        if not self.otel_dir.exists():
-            logger.debug("No OTel directory found for metrics")
-            return metrics
-
-        otel_files = list(self.otel_dir.glob("*.jsonl"))
-        if not otel_files:
-            logger.debug(f"No OTel JSONL files found in {self.otel_dir}")
-            return metrics
-
-        total_input = 0
-        total_output = 0
-        total_cached = 0
-
-        for otel_file in otel_files:
-            with open(otel_file) as handle:
-                for line in handle:
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        event = json.loads(stripped)
-                        attrs = event.get("attributes", {})
-                        # OTel semantic conventions for GenAI
-                        total_input += attrs.get("gen_ai.usage.input_tokens", 0)
-                        total_output += attrs.get("gen_ai.usage.output_tokens", 0)
-                        total_cached += attrs.get("gen_ai.usage.cache_read_input_tokens", 0)
-                    except json.JSONDecodeError:
-                        continue
-
-        metrics["input_tokens"] = total_input
-        metrics["output_tokens"] = total_output
-        metrics["cached_input_tokens"] = total_cached
-
-        logger.info(f"Extracted usage metrics: {metrics}")
-        return metrics
+        # Structured CLI output is also available when OTel is absent.
+        calls = {}
+        messages = []
+        if self.jsonl_path.exists():
+            for index, event in enumerate(read_jsonl(self.jsonl_path)):
+                data = event.get("data") or {}
+                if not isinstance(data, dict):
+                    continue
+                if event.get("type") == "assistant.usage":
+                    key = data.get("apiCallId") or event.get("id") or index
+                    calls[key] = usage_metrics(
+                        input_tokens=token_count(data.get("inputTokens")),
+                        output_tokens=token_count(data.get("outputTokens")),
+                        cached_input_tokens=token_count(data.get("cacheReadTokens")),
+                        cache_creation_input_tokens=token_count(data.get("cacheWriteTokens")),
+                        reasoning_output_tokens=token_count(data.get("reasoningTokens")),
+                    )
+                elif event.get("type") == "usage":
+                    calls[index] = usage_metrics(
+                        input_tokens=token_count(event.get("input_tokens")),
+                        output_tokens=token_count(event.get("output_tokens")),
+                        cached_input_tokens=token_count(event.get("cached_input_tokens")),
+                    )
+                elif event.get("type") == "assistant.message":
+                    messages.append(usage_metrics(output_tokens=token_count(data.get("outputTokens"))))
+        return aggregate_usage(calls.values() if calls else messages)
 
     def _build_command(self, instruction: str) -> list[str]:
         """Build the Copilot command, preserving the CLI's default effort when unset."""

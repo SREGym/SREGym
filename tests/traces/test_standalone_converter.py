@@ -156,7 +156,7 @@ def test_deliberately_wrong_agent_raises_conversion_error():
         convert(claude_file, agent="codex")
 
 
-def test_standalone_package_has_no_sregym_imports():
+def test_standalone_package_has_no_sregym_or_client_imports():
     package_root = Path(__file__).resolve().parents[2] / "atif_converter"
     offenders: list[str] = []
     for source_file in package_root.rglob("*.py"):
@@ -165,9 +165,9 @@ def test_standalone_package_has_no_sregym_imports():
             if (
                 isinstance(node, ast.ImportFrom)
                 and node.module
-                and (node.module == "sregym" or node.module.startswith("sregym."))
+                and node.module.split(".")[0] in {"sregym", "clients", "llm_backend"}
                 or isinstance(node, ast.Import)
-                and any(alias.name == "sregym" or alias.name.startswith("sregym.") for alias in node.names)
+                and any(alias.name.split(".")[0] in {"sregym", "clients", "llm_backend"} for alias in node.names)
             ):
                 offenders.append(f"{source_file}:{node.lineno}")
     assert offenders == []
@@ -191,25 +191,27 @@ def test_standalone_package_uses_relative_internal_imports():
     assert offenders == []
 
 
-def test_copied_folder_imports_and_converts_without_importing_sregym(tmp_path: Path):
+@pytest.mark.parametrize("agent_name,source_file", SESSION_CASES)
+def test_copied_folder_imports_and_converts_without_importing_sregym(tmp_path: Path, agent_name, source_file):
     source_root = Path(__file__).resolve().parents[2] / "atif_converter"
     shutil.copytree(source_root, tmp_path / "atif_converter")
     session_file = tmp_path / "session.jsonl"
-    shutil.copy2(SESSION_CASES[1][1], session_file)
+    shutil.copy2(source_file, session_file)
 
     script = """
 import sys
 from atif_converter import convert
 
 trajectory = convert("session.jsonl")
-assert trajectory.agent.name == "codex"
+assert trajectory.agent.name == sys.argv[1]
 assert not any(name == "sregym" or name.startswith("sregym.") for name in sys.modules)
+assert not any(name == "clients" or name.startswith("clients.") for name in sys.modules)
 print(trajectory.schema_version)
 """
     env = dict(os.environ)
     env["PYTHONPATH"] = str(tmp_path)
     result = subprocess.run(
-        [sys.executable, "-c", script],
+        [sys.executable, "-c", script, agent_name],
         cwd=tmp_path,
         env=env,
         text=True,

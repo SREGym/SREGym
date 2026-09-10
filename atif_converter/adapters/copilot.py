@@ -50,6 +50,7 @@ from ..atif import (
     ToolCall,
     Trajectory,
 )
+from ._common import TOKEN_METRICS_VERSION, _sum_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +256,8 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
     if not raw_events:
         return None
 
-    state = {"step_id": 1, "in": 0, "out": 0, "result": None}
+    state = {"step_id": 1, "out": None, "result": None}
+    call_metrics: dict[str | int, Metrics] = {}
     steps: list[Step] = []
     call_id_map: dict[str, Step] = {}
     skipped_event_types: dict[str, int] = {}
@@ -320,15 +322,30 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
 
         # --- usage (flat schema) ---
         elif event_type == "usage":
-            input_tokens = event.get("input_tokens", 0)
-            output_tokens = event.get("output_tokens", 0)
-            state["in"] += input_tokens
-            state["out"] += output_tokens
+            metrics = Metrics(
+                prompt_tokens=event.get("input_tokens"),
+                completion_tokens=event.get("output_tokens"),
+                cached_tokens=event.get("cached_input_tokens"),
+            )
+            call_metrics[len(call_metrics)] = metrics
             if steps and steps[-1].source == "agent":
-                steps[-1].metrics = Metrics(
-                    prompt_tokens=input_tokens,
-                    completion_tokens=output_tokens,
-                )
+                steps[-1].metrics = metrics
+
+        elif event_type == "assistant.usage":
+            data = event["data"]
+            key = data.get("apiCallId") or event.get("id") or len(call_metrics)
+            metrics = Metrics(
+                prompt_tokens=data.get("inputTokens"),
+                completion_tokens=data.get("outputTokens"),
+                cached_tokens=data.get("cacheReadTokens"),
+                extra={
+                    "reasoning_tokens": data.get("reasoningTokens"),
+                    "cache_write_tokens": data.get("cacheWriteTokens"),
+                },
+            )
+            call_metrics[key] = metrics
+            if steps and steps[-1].source == "agent":
+                steps[-1].metrics = metrics
 
         # --- assistant.message (session-event schema) ---
         elif event_type == "assistant.message":
@@ -343,8 +360,8 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
                 )
                 for request in data.get("toolRequests") or []
             ]
-            output_tokens = data.get("outputTokens") or 0
-            state["out"] += output_tokens
+            output_tokens = data.get("outputTokens")
+            state["out"] = _sum_tokens(state["out"], output_tokens)
 
             # Copilot carries the turn's reasoning inline on ``reasoningText``
             # (grounded in real session output). Map it to ATIF's first-class
@@ -377,7 +394,7 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
                 model_name=data.get("model") or None,
                 reasoning_content=reasoning_text,
                 tool_calls=tool_calls or None,
-                metrics=(Metrics(completion_tokens=output_tokens) if output_tokens else None),
+                metrics=(Metrics(completion_tokens=output_tokens) if output_tokens is not None else None),
                 extra=extra,
             )
             steps.append(step)
@@ -484,10 +501,22 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
         ),
         steps=steps,
         final_metrics=FinalMetrics(
-            total_prompt_tokens=state["in"] or None,
-            total_completion_tokens=state["out"] or None,
+            total_prompt_tokens=_sum_tokens(*(m.prompt_tokens for m in call_metrics.values())),
+            total_completion_tokens=(
+                _sum_tokens(*(m.completion_tokens for m in call_metrics.values())) if call_metrics else state["out"]
+            ),
+            total_cached_tokens=_sum_tokens(*(m.cached_tokens for m in call_metrics.values())),
             total_steps=len(steps),
-            extra={"copilot_result": state["result"]} if state["result"] else None,
+            extra={
+                "token_metrics_version": TOKEN_METRICS_VERSION,
+                "reasoning_tokens": _sum_tokens(
+                    *(m.extra.get("reasoning_tokens") for m in call_metrics.values() if m.extra)
+                ),
+                "cache_write_tokens": _sum_tokens(
+                    *(m.extra.get("cache_write_tokens") for m in call_metrics.values() if m.extra)
+                ),
+                **({"copilot_result": state["result"]} if state["result"] else {}),
+            },
         ),
     )
 

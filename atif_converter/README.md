@@ -36,6 +36,20 @@ Supported explicit agent names are `claudecode`, `codex`, `copilot`, `gemini`,
 Missing paths raise `FileNotFoundError`. Unknown formats and failed conversions
 raise subclasses of `AtifConverterError`.
 
+## Token metrics
+
+Prompt totals include cache reads and writes. Completion totals include
+reasoning. Cached tokens are a subset of prompt tokens, not additional tokens.
+Reasoning and cache-write counts remain in `extra` when the source reports them.
+Unknown counts remain unset; a reported zero remains zero.
+
+New conversions set `final_metrics.extra.token_metrics_version` to `2`.
+Earlier conversions did not use consistent token definitions. Existing files
+remain unchanged until the caller converts their source recordings again.
+
+Adapters normalize the source counts inside this package. They do not import
+SREGym clients or use SREGym result files to calculate token totals.
+
 ## Scope
 
 This is an importable source folder, not a separately published distribution.
