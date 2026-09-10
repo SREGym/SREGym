@@ -8,6 +8,7 @@ import pytest
 import yaml
 from kubernetes.client.rest import ApiException
 
+from sregym.conductor import conductor as conductor_module
 from sregym.conductor.conductor import Conductor
 from sregym.service import helm as helm_module
 from sregym.service.cluster_state import ClusterBaseline, ClusterStateManager
@@ -84,6 +85,96 @@ def test_new_ndm_without_status_is_not_reused(conductor):
     conductor.kubectl.exec_command.return_value = "1"
     conductor.kubectl.apps_v1_api.read_namespaced_daemon_set.return_value = SimpleNamespace(status=None)
     assert not conductor._openebs_ready(svelte=False)
+
+
+class ObserverSetupReached(Exception):
+    pass
+
+
+@pytest.fixture
+def startup(conductor, monkeypatch):
+    conductor._baseline_captured = True
+    conductor.problem = SimpleNamespace(requires_khaos=lambda: False)
+    conductor.prometheus = MagicMock()
+    conductor.prometheus.deploy.side_effect = ObserverSetupReached
+    conductor._metrics_server_configured = MagicMock(return_value=True)
+    conductor._openebs_ready = MagicMock(return_value=True)
+    conductor._preflight_openebs_udev_mount = MagicMock()
+    conductor._trim_openebs_ndm = MagicMock()
+    conductor._ensure_openebs_device_storageclass = MagicMock()
+    monkeypatch.setattr(conductor_module, "is_svelte", lambda: False)
+    monkeypatch.setattr(conductor_module.time, "sleep", MagicMock())
+    return conductor
+
+
+@pytest.mark.parametrize("svelte", [False, True])
+def test_startup_repairs_the_metrics_selector_then_waits_for_metrics(startup, monkeypatch, svelte):
+    monkeypatch.setattr(conductor_module, "is_svelte", lambda: svelte)
+    startup._metrics_server_configured.side_effect = [False, False, True]
+    with pytest.raises(ObserverSetupReached):
+        startup.deploy_app()
+    startup.kubectl.core_v1_api.patch_namespaced_service.assert_called_once_with(
+        "metrics-server",
+        "kube-system",
+        [{"op": "replace", "path": "/spec/selector", "value": {"k8s-app": "metrics-server"}}],
+        _request_timeout=10,
+    )
+    assert startup._metrics_server_configured.call_count == 3
+    conductor_module.time.sleep.assert_called_once_with(2)
+
+
+@pytest.mark.parametrize("svelte", [False, True])
+def test_startup_repairs_ndm_scheduling_only_in_full(startup, monkeypatch, svelte):
+    monkeypatch.setattr(conductor_module, "is_svelte", lambda: svelte)
+    startup._openebs_ready.side_effect = [False, False, True]
+    with pytest.raises(ObserverSetupReached):
+        startup.deploy_app()
+    patch = startup.kubectl.apps_v1_api.patch_namespaced_daemon_set
+    if svelte:
+        patch.assert_not_called()
+        startup._trim_openebs_ndm.assert_called_once()
+        startup._ensure_openebs_device_storageclass.assert_not_called()
+    else:
+        patch.assert_called_once_with(
+            "openebs-ndm",
+            "openebs",
+            [{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {}}],
+            _request_timeout=10,
+        )
+        startup._ensure_openebs_device_storageclass.assert_called_once()
+    assert startup._openebs_ready.call_count == 3
+
+
+def test_healthy_infrastructure_is_not_patched(startup):
+    with pytest.raises(ObserverSetupReached):
+        startup.deploy_app()
+    startup.kubectl.core_v1_api.patch_namespaced_service.assert_not_called()
+    startup.kubectl.apps_v1_api.patch_namespaced_daemon_set.assert_not_called()
+    assert startup._metrics_server_configured.call_count == 2
+    assert startup._openebs_ready.call_count == 2
+
+
+@pytest.mark.parametrize(
+    "check,name", [("_metrics_server_configured", "metrics-server"), ("_openebs_ready", "OpenEBS")]
+)
+def test_failed_repair_stops_before_observers_and_application(startup, monkeypatch, check, name):
+    getattr(startup, check).return_value = False
+    monkeypatch.setattr(conductor_module.time, "monotonic", MagicMock(side_effect=[0, 180]))
+    # An earlier healthy component can complete its own wait immediately.
+    if name == "OpenEBS":
+        conductor_module.time.monotonic.side_effect = [0, 0, 180]
+    with pytest.raises(RuntimeError, match=f"{name} did not become healthy within 180s"):
+        startup.deploy_app()
+    startup.prometheus.deploy.assert_not_called()
+    startup._ensure_openebs_device_storageclass.assert_not_called()
+
+
+def test_repair_api_errors_stop_setup(startup):
+    startup._metrics_server_configured.return_value = False
+    startup.kubectl.core_v1_api.patch_namespaced_service.side_effect = ApiException(status=403)
+    with pytest.raises(ApiException):
+        startup.deploy_app()
+    startup.prometheus.deploy.assert_not_called()
 
 
 def test_reconciliation_preserves_only_exact_infrastructure_identities():

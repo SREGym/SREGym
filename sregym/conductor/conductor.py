@@ -7,6 +7,7 @@ import shlex
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1367,7 +1368,16 @@ class Conductor:
                 '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
                 "]'"
             )
+            # Apply retains selector keys added outside the original manifest.
+            # Replace the complete selector so the Service reaches metrics-server.
+            self.kubectl.core_v1_api.patch_namespaced_service(
+                "metrics-server",
+                "kube-system",
+                [{"op": "replace", "path": "/spec/selector", "value": {"k8s-app": "metrics-server"}}],
+                _request_timeout=10,
+            )
         self.kubectl.wait_for_ready("kube-system")
+        self._wait_for_infrastructure_ready("metrics-server", self._metrics_server_configured)
 
         # Only deploy Khaos if the problem requires it
         if problem.requires_khaos():
@@ -1390,11 +1400,21 @@ class Conductor:
                 "kubectl patch storageclass openebs-hostpath "
                 '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
             )
+            if not svelte:
+                # The operator manifest has no NDM node selector. An extra
+                # selector can survive apply and prevent every NDM pod scheduling.
+                self.kubectl.apps_v1_api.patch_namespaced_daemon_set(
+                    "openebs-ndm",
+                    "openebs",
+                    [{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {}}],
+                    _request_timeout=10,
+                )
         # Idempotent and cheap; also covers an `openebs` left over from an
         # earlier full-profile run on the same cluster.
         if svelte:
             self._trim_openebs_ndm()
         self.kubectl.wait_for_ready("openebs")
+        self._wait_for_infrastructure_ready("OpenEBS", lambda: self._openebs_ready(svelte))
         if not svelte:
             self._ensure_openebs_device_storageclass()
 
@@ -1452,6 +1472,15 @@ class Conductor:
         if self.problem:
             self.problem.app.cleanup()
 
+    def _wait_for_infrastructure_ready(self, name: str, is_ready: Callable[[], bool], timeout: float = 180) -> None:
+        """Require functional infrastructure, not just Ready surviving pods."""
+        deadline = time.monotonic() + timeout
+        while not is_ready():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"{name} did not become healthy within {timeout:g}s; stopping application setup")
+            time.sleep(min(2, remaining))
+
     def _preflight_openebs_udev_mount(self) -> None:
         if shutil.which("docker") is None:
             self.logger.info("[DEPLOY] Docker is unavailable; skipping kind /run/udev preflight")
@@ -1501,7 +1530,7 @@ class Conductor:
         """
         args = self.kubectl.exec_command(
             "kubectl -n kube-system get deployment metrics-server "
-            "-o jsonpath='{.spec.template.spec.containers[0].args}' --ignore-not-found"
+            "-o jsonpath='{.spec.template.spec.containers[0].args}' --ignore-not-found --request-timeout=10s"
         )
         if not args or not args.strip():
             return False
@@ -1509,7 +1538,8 @@ class Conductor:
             return False
 
         binding = self.kubectl.exec_command(
-            f"kubectl get clusterrolebinding {self._METRICS_SERVER_BINDING} -o name --ignore-not-found"
+            f"kubectl get clusterrolebinding {self._METRICS_SERVER_BINDING} -o name "
+            "--ignore-not-found --request-timeout=10s"
         )
         if not binding or not binding.strip():
             self.logger.info("[DEPLOY] metrics-server RBAC missing; re-applying components.yaml")
@@ -1537,7 +1567,7 @@ class Conductor:
         """
         out = self.kubectl.exec_command(
             "kubectl -n openebs get deployment openebs-localpv-provisioner "
-            "-o jsonpath='{.status.readyReplicas}' --ignore-not-found"
+            "-o jsonpath='{.status.readyReplicas}' --ignore-not-found --request-timeout=10s"
         )
         try:
             if int(out.strip()) < 1:
