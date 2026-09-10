@@ -17,6 +17,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from clients.harness.token_usage import usage_metrics
+
 logger = logging.getLogger("all.cursor.agent")
 
 _INSTALL_URL = "https://cursor.com/install"
@@ -113,13 +115,13 @@ class CursorAgent:
         """Path to the raw `agent` CLI JSON output."""
         return self.logs_dir / self._OUTPUT_FILENAME
 
-    def get_usage_metrics(self) -> dict[str, int]:
+    def get_usage_metrics(self) -> dict[str, int | None]:
         """
         Cursor's `--output-format json` result does not report token usage,
-        so this always returns zeros. Kept for interface parity with the
+        so this returns unknown counts. Kept for interface parity with the
         other agent clients, whose usage metrics feed the same report.
         """
-        return {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
+        return usage_metrics()
 
     def generate_trajectory(self, problem_id: str) -> Path | None:
         """Cursor CLI trajectories are not wired into the visualizer yet."""

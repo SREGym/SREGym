@@ -51,7 +51,7 @@ from ..atif import (
     ToolCall,
     Trajectory,
 )
-from ._common import _load_jsonl, _stringify
+from ._common import TOKEN_METRICS_VERSION, _load_jsonl, _stringify, _sum_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,11 @@ def _metrics_from_usage(usage: dict[str, Any] | None, resp_meta: dict[str, Any] 
     if isinstance(details, dict):
         cached = details.get("cache_read")
     extra: dict[str, Any] = {}
+    if isinstance(details, dict) and details.get("cache_creation") is not None:
+        extra["cache_write_tokens"] = details["cache_creation"]
+    output_details = usage.get("output_token_details")
+    if isinstance(output_details, dict) and output_details.get("reasoning") is not None:
+        extra["reasoning_tokens"] = output_details["reasoning"]
     if resp_meta:
         # Keep model/cost breadcrumbs if the provider reported them.
         for key in ("model_name", "model", "finish_reason"):
@@ -265,6 +270,13 @@ def _aggregate_final_metrics(steps: list[Step]) -> FinalMetrics | None:
         total_cached_tokens=sum(cached) if cached else None,
         total_cost_usd=None,
         total_steps=len(steps),
+        extra={
+            "token_metrics_version": TOKEN_METRICS_VERSION,
+            **{
+                key: _sum_tokens(*(s.metrics.extra.get(key) for s in steps if s.metrics and s.metrics.extra))
+                for key in ("reasoning_tokens", "cache_write_tokens")
+            },
+        },
     )
 
 

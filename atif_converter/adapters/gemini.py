@@ -43,7 +43,6 @@ from typing import Any
 
 from ..atif import (
     Agent,
-    FinalMetrics,
     Metrics,
     Observation,
     ObservationResult,
@@ -51,7 +50,7 @@ from ..atif import (
     ToolCall,
     Trajectory,
 )
-from ._common import _stringify
+from ._common import _aggregate_final_metrics, _stringify, _sum_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -226,9 +225,6 @@ def _convert(gemini_trajectory: dict[str, Any]) -> Trajectory | None:
 
     steps: list[Step] = []
     step_id = 1
-    total_input = 0
-    total_output = 0
-    total_cached = 0
 
     for message in messages:
         msg_type = message.get("type")
@@ -277,17 +273,15 @@ def _convert(gemini_trajectory: dict[str, Any]) -> Trajectory | None:
 
             metrics: Metrics | None = None
             if tokens:
-                input_tokens = tokens.get("input", 0)
-                output_tokens = tokens.get("output", 0)
-                cached_tokens = tokens.get("cached", 0)
-                thoughts_tokens = tokens.get("thoughts", 0)
-                tool_tokens = tokens.get("tool", 0)
-                completion_tokens = output_tokens + thoughts_tokens + tool_tokens
-                total_input += input_tokens
-                total_output += completion_tokens
-                total_cached += cached_tokens
+                input_tokens = tokens.get("input")
+                output_tokens = tokens.get("output")
+                cached_tokens = tokens.get("cached")
+                thoughts_tokens = tokens.get("thoughts")
+                tool_tokens = tokens.get("tool")
+                # toolUsePromptTokenCount describes tool results used as input.
+                completion_tokens = _sum_tokens(output_tokens, thoughts_tokens)
                 metrics = Metrics(
-                    prompt_tokens=input_tokens,
+                    prompt_tokens=_sum_tokens(input_tokens, tool_tokens),
                     completion_tokens=completion_tokens,
                     cached_tokens=cached_tokens,
                     extra={"thoughts_tokens": thoughts_tokens, "tool_tokens": tool_tokens},
@@ -323,11 +317,13 @@ def _convert(gemini_trajectory: dict[str, Any]) -> Trajectory | None:
         session_id=session_id,
         agent=Agent(name=AGENT_NAME, version="unknown", model_name=default_model),
         steps=steps,
-        final_metrics=FinalMetrics(
-            total_prompt_tokens=total_input or None,
-            total_completion_tokens=total_output or None,
-            total_cached_tokens=total_cached or None,
-            total_steps=len(steps),
+        final_metrics=_aggregate_final_metrics(
+            steps,
+            extra={
+                "reasoning_tokens": _sum_tokens(
+                    *(s.metrics.extra.get("thoughts_tokens") for s in steps if s.metrics and s.metrics.extra)
+                )
+            },
         ),
     )
 
