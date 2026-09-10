@@ -6,3 +6,4 @@ class KhaosCapability(StrEnum):
 
     EBPF_SYSCALL = "ebpf-syscall"
     DM_FLAKEY = "dm-flakey"
+    DM_FLAKEY_RANDOM_CORRUPTION = "dm-flakey-random-corruption"

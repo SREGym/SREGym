@@ -6,7 +6,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_kernel import KernelInjector
 from sregym.service.apps.hotel_reservation import HotelReservation
-from sregym.service.dm_flakey_manager import DM_FLAKEY_DEVICE_NAME, DmFlakeyManager
+from sregym.service.dm_flakey_manager import DM_FLAKEY_STORAGE_CLASS, DmFlakeyManager
 from sregym.service.khaos_capabilities import KhaosCapability
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -63,7 +63,7 @@ class SilentDataCorruption(Problem):
         return True
 
     def khaos_capabilities(self) -> frozenset[KhaosCapability]:
-        return frozenset({KhaosCapability.DM_FLAKEY})
+        return frozenset({KhaosCapability.DM_FLAKEY_RANDOM_CORRUPTION})
 
     def _discover_node_for_deploy(self) -> str | None:
         """Return the node where the target deployment is running."""
@@ -179,10 +179,11 @@ class SilentDataCorruption(Problem):
         # Set up dm-flakey infrastructure, then redeploy the app so its PVs
         # land on the dm-flakey-backed storage where corruption can be injected.
         print("[SDC] Setting up dm-flakey infrastructure...")
+        self.app.cleanup()
         self.dm_flakey_manager.setup_openebs_dm_flakey_infrastructure()
 
         print("[SDC] Redeploying app onto dm-flakey-backed storage...")
-        self.app.cleanup()
+        self.app.storage_class_name = DM_FLAKEY_STORAGE_CLASS
         self.app.deploy()
         self.app.start_workload()
 
@@ -203,7 +204,7 @@ class SilentDataCorruption(Problem):
         print("[SDC] Configuring dm-flakey device for corruption...")
         self.injector.dm_flakey_reload(
             self.target_node,
-            DM_FLAKEY_DEVICE_NAME,
+            self.dm_flakey_manager.device_name(self.target_node),
             up_interval=self.up_interval,
             down_interval=self.down_interval,
             features=features,
@@ -236,7 +237,11 @@ class SilentDataCorruption(Problem):
         if hasattr(self, "target_node") and self.target_node:
             print(f"[SDC] Restoring dm-flakey device to normal operation on {self.target_node}")
             self.injector.dm_flakey_reload(
-                self.target_node, DM_FLAKEY_DEVICE_NAME, up_interval=1, down_interval=0, features=""
+                self.target_node,
+                self.dm_flakey_manager.device_name(self.target_node),
+                up_interval=1,
+                down_interval=0,
+                features="",
             )
             print("[SDC] ✅ dm-flakey device restored to normal operation")
 
@@ -258,6 +263,8 @@ class SilentDataCorruption(Problem):
 
         # Tear down dm-flakey to restore direct host storage, then redeploy clean
         self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
+        self.kubectl.exec_command_checked(f"kubectl delete storageclass {DM_FLAKEY_STORAGE_CLASS} --ignore-not-found")
+        self.app.storage_class_name = None
         self.app.deploy()
         self.app.start_workload()
 

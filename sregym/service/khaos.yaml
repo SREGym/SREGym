@@ -93,10 +93,10 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - key: node-role.kubernetes.io/worker
-                    operator: Exists
-      nodeSelector:
-        node-role.kubernetes.io/worker: ""   # explicit worker targeting
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+                  - key: node-role.kubernetes.io/master
+                    operator: DoesNotExist
       containers:
         - name: khaos
           image: ghcr.io/xlab-uiuc/khaos:latest
@@ -130,5 +130,5 @@ spec:
         - { name: btf,         hostPath: { path: /sys/kernel/btf, type: DirectoryOrCreate } }
         - { name: run-dir,     hostPath: { path: /run, type: Directory } }
         - { name: var-run,     hostPath: { path: /var/run, type: Directory } }
-        - { name: openebs,     hostPath: { path: /var/openebs, type: Directory } }
+        - { name: openebs,     hostPath: { path: /var/openebs, type: DirectoryOrCreate } }
         - { name: host-dev,    hostPath: { path: /dev, type: Directory } }

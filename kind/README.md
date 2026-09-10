@@ -56,6 +56,39 @@ The cluster is now ready to run SREGym.
 
 ## Troubleshooting
 
+### Khaos problems
+
+Khaos checks the capabilities of every required node. Worker pods use nodes
+without the control-plane or legacy master role; a worker role label is not
+required. The manifest creates `/var/openebs` when it is absent.
+
+eBPF problems require a Khaos image containing the nested PID namespace support
+and `--check` interface from Khaos PR #37. An older image is a deployment error,
+not an unsupported host kernel. To test an unpublished image after building it
+from the desired Khaos checkout:
+
+```bash
+kind load docker-image khaos:pr37-test --name kind
+export KHAOS_IMAGE=khaos:pr37-test
+export KHAOS_IMAGE_PULL_POLICY=Never
+```
+
+For a published image, `KHAOS_IMAGE` can instead contain an immutable registry
+digest. Leave `KHAOS_IMAGE_PULL_POLICY` unset to retain the manifest's policy.
+
+Silent data corruption requires the kernel's `random_read_corrupt` and
+`random_write_corrupt` dm-flakey features. Merely loading `dm_flakey` is not
+sufficient. Preflight creates and removes a small disposable device to verify
+formatting, mounting, and the requested table features. Older kernels can
+support basic dm-flakey while rejecting random corruption; those hosts are
+reported as unsupported before application deployment.
+
+kind nodes share device-mapper and loop devices. SREGym uses node-UID-specific
+device names and backing files, skips udev synchronization, and creates device
+nodes explicitly. The faulted application's PVCs use the non-default
+`sregym-dm-flakey` storage class at `/var/openebs/khaos`; observability storage
+stays on its original class. Stop the application before removing its devices.
+
 ### Docker issues
 
 Ensure Docker is running and accessible to your user:
