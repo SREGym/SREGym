@@ -14,7 +14,7 @@ set -euo pipefail
 CALICO_VERSION="v3.27.0"
 ARCH="${1:-x86}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KIND_CONFIG="${SCRIPT_DIR}/kind-config-${ARCH}.yaml"
+KIND_CONFIG="${KIND_CONFIG:-${SCRIPT_DIR}/kind-config-${ARCH}.yaml}"
 
 if [[ ! -f "${KIND_CONFIG}" ]]; then
     echo "❌ Config file not found: ${KIND_CONFIG}"
@@ -23,10 +23,28 @@ if [[ ! -f "${KIND_CONFIG}" ]]; then
 fi
 
 echo "==> Step 1: Create Kind cluster (arch: ${ARCH})"
-kind create cluster --config "${KIND_CONFIG}"
+CREATE_ARGS=(--config "${KIND_CONFIG}")
+if [[ -n ${KIND_NODE_IMAGE:-} ]]; then
+    CREATE_ARGS+=(--image "${KIND_NODE_IMAGE}")
+fi
+if [[ ${KIND_RETAIN_ON_FAILURE:-false} == true ]]; then
+    CREATE_ARGS+=(--retain)
+fi
+kind create cluster "${CREATE_ARGS[@]}"
 
 echo "==> Step 2: Install Calico CNI"
-kubectl apply -f "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml"
+# Cold parallel starts can briefly overload etcd while node images unpack.
+# Apply is declarative, so retrying also handles a partially applied manifest.
+for attempt in 1 2 3; do
+    if kubectl apply -f "https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/calico.yaml"; then
+        break
+    fi
+    if [[ $attempt == 3 ]]; then
+        echo "Calico installation failed after ${attempt} attempts." >&2
+        exit 1
+    fi
+    sleep 5
+done
 
 echo "==> Step 3: Wait for Calico to be ready"
 # 300s (vs 120s) accommodates first-time image pulls on slow CI runners,
