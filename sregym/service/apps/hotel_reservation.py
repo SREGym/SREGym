@@ -26,6 +26,7 @@ class HotelReservation(Application):
         self,
         mount_failure_scripts: bool = True,
         deployment_env_overrides: dict[str, dict[str, dict[str, str]]] | None = None,
+        storage_class_name: str | None = None,
     ):
         super().__init__(HOTEL_RES_METADATA)
         self.kubectl = KubeCtl()
@@ -33,6 +34,7 @@ class HotelReservation(Application):
         self.helm_deploy = False
         self.mount_failure_scripts = mount_failure_scripts
         self.deployment_env_overrides = deployment_env_overrides or {}
+        self.storage_class_name = storage_class_name
 
         self.load_app_json()
 
@@ -143,7 +145,7 @@ class HotelReservation(Application):
         Deployment/container overrides. Rendering a temporary manifest tree
         avoids a setup rollout and its misleading ReplicaSet history.
         """
-        if not self.deployment_env_overrides:
+        if not self.deployment_env_overrides and not self.storage_class_name:
             yield Path(self.k8s_deploy_path)
             return
 
@@ -162,6 +164,13 @@ class HotelReservation(Application):
 
                 changed = False
                 for document in documents:
+                    if (
+                        isinstance(document, dict)
+                        and document.get("kind") == "PersistentVolumeClaim"
+                        and self.storage_class_name
+                    ):
+                        document.setdefault("spec", {})["storageClassName"] = self.storage_class_name
+                        changed = True
                     if not isinstance(document, dict) or document.get("kind") != "Deployment":
                         continue
                     deployment_name = document.get("metadata", {}).get("name")

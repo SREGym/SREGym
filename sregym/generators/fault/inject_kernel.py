@@ -239,7 +239,7 @@ class KernelInjector:
             "-c",
             script,
         ]
-        out = self.kubectl.exec_command(" ".join(shlex.quote(x) for x in cmd))
+        out = self.kubectl.exec_command_checked(" ".join(shlex.quote(x) for x in cmd))
         return out or ""
 
     def _exec_with_nsenter_mount(self, node: str, script: str, check: bool = True) -> tuple[int, str, str]:
@@ -348,7 +348,7 @@ echo "Underlying device: $UNDERLYING, Sectors: $SECTORS"
 dmsetup reload {name_q} --table "0 $SECTORS flakey $UNDERLYING {int(offset_sectors)} {int(up_interval)} {int(down_interval)}{feat_tail}"
 
 # Activate the new table (this is atomic, no unmount needed)
-dmsetup resume {name_q}
+dmsetup resume --noudevsync {name_q}
 
 echo "dm-flakey device reloaded successfully"
 dmsetup status {name_q}
