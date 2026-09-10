@@ -25,8 +25,8 @@ The oracle checks four independent properties:
 2. **Accumulated Jobs are gone.** Active Jobs created from the old regular-
    sidecar template are rejected. A small number of current-template Jobs may
    be active at a schedule boundary.
-3. **App still healthy.** Every Deployment in the namespace reports
-   ``ready_replicas == spec.replicas``. We check Deployment status directly
+3. **App still healthy.** Every Deployment in the namespace has completed
+   its current rollout. We check Deployment status directly
    rather than walking pods so ``Succeeded`` Job pods don't produce false
    negatives.
 4. **Current template works at runtime.** The oracle creates one fresh Job from
@@ -43,6 +43,7 @@ from kubernetes.client.exceptions import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 5
@@ -185,13 +186,7 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
             deployments = kubectl.list_deployments(namespace)
             all_settled = True
             for dep in deployments.items:
-                status = dep.status
-                desired = dep.spec.replicas or 1
-                if (
-                    (status.updated_replicas or 0) < desired
-                    or (status.ready_replicas or 0) < desired
-                    or (status.unavailable_replicas or 0) > 0
-                ):
+                if not deployment_rollout_complete(dep, allow_zero=True):
                     all_settled = False
                     break
             if all_settled:
@@ -324,12 +319,10 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
         return any(ref.kind == "CronJob" and ref.name == cronjob_name for ref in job.metadata.owner_references or [])
 
     def _unhealthy_deployment(self, namespace):
-        """Return the name of the first under-replicated Deployment, or None."""
+        """Return the first Deployment with an incomplete rollout, or None."""
         deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
         for dep in deployments.items:
-            desired = dep.spec.replicas or 1
-            ready = dep.status.ready_replicas or 0
-            if ready < desired:
+            if not deployment_rollout_complete(dep):
                 return dep.metadata.name
         return None
 

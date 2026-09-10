@@ -1,3 +1,4 @@
+import json
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -92,9 +93,30 @@ def test_social_network_tls_lookup_keeps_existing_secret():
     assert fake.commands == [lookup]
 
 
-@pytest.mark.parametrize(("output", "expected"), [("", False), ("1", True)])
+@pytest.mark.parametrize(
+    ("output", "expected"),
+    [
+        ("", False),
+        (
+            json.dumps(
+                {
+                    "metadata": {"generation": 1},
+                    "spec": {"replicas": 1},
+                    "status": {
+                        "observedGeneration": 1,
+                        "replicas": 1,
+                        "updatedReplicas": 1,
+                        "readyReplicas": 1,
+                        "availableReplicas": 1,
+                    },
+                }
+            ),
+            True,
+        ),
+    ],
+)
 def test_mcp_lookup_ignores_expected_absence(output, expected):
-    command = "kubectl get deployment mcp-server -n sregym --ignore-not-found -o jsonpath='{.status.readyReplicas}'"
+    command = "kubectl get deployment mcp-server -n sregym --ignore-not-found -o json"
     fake = _FakeKubeCtl({command: output})
     server = object.__new__(MCPServer)
     server.service_name = "mcp-server"

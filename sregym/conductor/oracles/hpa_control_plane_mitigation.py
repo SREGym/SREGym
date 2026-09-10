@@ -17,6 +17,7 @@ from json import JSONDecodeError
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 _DEFAULT_TIMEOUT_SECONDS = 60
 _DEFAULT_POLL_INTERVAL_SECONDS = 5
@@ -148,7 +149,7 @@ class HPAControlPlaneMitigationOracle(Oracle):
         if desired < 1:
             return False, f"Deployment/{self.deployment_name} has desired replicas={desired}; expected at least 1"
 
-        if ready < desired or updated < desired or unavailable:
+        if not deployment_rollout_complete(deployment):
             return False, (
                 f"Deployment/{self.deployment_name} rollout not ready: "
                 f"ready={ready}, updated={updated}, unavailable={unavailable}, desired={desired}"

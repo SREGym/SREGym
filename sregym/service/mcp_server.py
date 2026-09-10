@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import signal
@@ -9,6 +10,7 @@ import requests
 
 from sregym.paths import MCP_SERVER_K8S
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 
 logger = logging.getLogger("all.sregym.mcp_server")
 
@@ -27,13 +29,14 @@ class MCPServer:
     def _is_running(self) -> bool:
         """Check if the MCP server deployment already exists and is ready."""
         result = self.kubectl.exec_command(
-            f"kubectl get deployment {self.service_name} -n {self.namespace} "
-            f"--ignore-not-found -o jsonpath='{{.status.readyReplicas}}'"
+            f"kubectl get deployment {self.service_name} -n {self.namespace} --ignore-not-found -o json"
         )
-        value = result.strip().strip("'")
         # exec_command returns stderr on failure (e.g. "Error from server (NotFound)"),
-        # so only treat a purely numeric positive value as "running".
-        return value.isdigit() and int(value) > 0
+        # so an empty or non-JSON response is not a healthy Deployment.
+        try:
+            return deployment_rollout_complete(json.loads(result))
+        except (ValueError, TypeError):
+            return False
 
     def _ensure_rbac(self):
         """Ensure RBAC resources exist even if the MCP server pod is already running."""

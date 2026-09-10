@@ -44,6 +44,7 @@ from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
 from sregym.service.mcp_server import MCPServer
+from sregym.service.rollout import deployment_rollout_complete
 from sregym.service.telemetry.loki import Loki
 from sregym.service.telemetry.prometheus import Prometheus
 
@@ -1567,12 +1568,12 @@ class Conductor:
         """
         out = self.kubectl.exec_command(
             "kubectl -n openebs get deployment openebs-localpv-provisioner "
-            "-o jsonpath='{.status.readyReplicas}' --ignore-not-found --request-timeout=10s"
+            "-o json --ignore-not-found --request-timeout=10s"
         )
         try:
-            if int(out.strip()) < 1:
+            if not deployment_rollout_complete(json.loads(out)):
                 return False
-        except (ValueError, AttributeError):
+        except (ValueError, TypeError):
             return False
 
         if svelte:

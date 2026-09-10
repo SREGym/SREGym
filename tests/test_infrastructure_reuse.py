@@ -20,6 +20,19 @@ def conductor():
     obj = Conductor.__new__(Conductor)
     obj.logger = logging.getLogger("test.infra")
     obj.kubectl = MagicMock()
+    obj.kubectl.exec_command.return_value = json.dumps(
+        {
+            "metadata": {"generation": 1},
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": 1,
+                "replicas": 1,
+                "updatedReplicas": 1,
+                "readyReplicas": 1,
+                "availableReplicas": 1,
+            },
+        }
+    )
     return obj
 
 
@@ -52,7 +65,6 @@ def test_metrics_reuse_requires_the_functional_api(conductor, response, healthy)
     ],
 )
 def test_ndm_reuse_requires_a_nonempty_current_rollout(conductor, changed):
-    conductor.kubectl.exec_command.return_value = "1"
     status = dict(
         desired_number_scheduled=3,
         current_number_scheduled=3,
@@ -70,19 +82,16 @@ def test_ndm_reuse_requires_a_nonempty_current_rollout(conductor, changed):
 
 
 def test_svelte_does_not_require_ndm(conductor):
-    conductor.kubectl.exec_command.return_value = "1"
     assert conductor._openebs_ready(svelte=True)
     conductor.kubectl.apps_v1_api.read_namespaced_daemon_set.assert_not_called()
 
 
 def test_missing_ndm_is_not_reused(conductor):
-    conductor.kubectl.exec_command.return_value = "1"
     conductor.kubectl.apps_v1_api.read_namespaced_daemon_set.side_effect = ApiException(status=404)
     assert not conductor._openebs_ready(svelte=False)
 
 
 def test_new_ndm_without_status_is_not_reused(conductor):
-    conductor.kubectl.exec_command.return_value = "1"
     conductor.kubectl.apps_v1_api.read_namespaced_daemon_set.return_value = SimpleNamespace(status=None)
     assert not conductor._openebs_ready(svelte=False)
 

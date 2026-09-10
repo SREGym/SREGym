@@ -8,6 +8,7 @@ from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class SearchRateRetryMitigationOracle(Oracle):
@@ -56,16 +57,7 @@ class SearchRateRetryMitigationOracle(Oracle):
 
     @staticmethod
     def _rollout_complete(deployment) -> bool:
-        desired = deployment.spec.replicas if deployment.spec.replicas is not None else 1
-        status = deployment.status
-        return desired >= 1 and (
-            (status.observed_generation or 0) >= (deployment.metadata.generation or 0)
-            and (status.replicas or 0) == desired
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _cluster_shape_unhealthy(self) -> dict | None:
         try:

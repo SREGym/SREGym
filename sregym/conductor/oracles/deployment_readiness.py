@@ -7,7 +7,7 @@ absent from the namespace's pod list, so a per-pod health walk reports success
 because the remaining pods are healthy.
 
 This oracle reads the Deployment object directly and verifies its
-``ready_replicas`` matches ``spec.replicas`` — which works regardless of
+current rollout is complete — which works regardless of
 whether the missing pod is Pending, CrashLooping, or completely absent.
 It also walks the rest of the namespace's pods to catch crashloops or other
 downstream breakage the agent may have introduced.
@@ -17,6 +17,7 @@ import time
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 5
@@ -49,13 +50,7 @@ class DeploymentReadinessOracle(Oracle):
             deployments = kubectl.list_deployments(namespace)
             all_settled = True
             for dep in deployments.items:
-                status = dep.status
-                desired = dep.spec.replicas or 1
-                if (
-                    (status.updated_replicas or 0) < desired
-                    or (status.ready_replicas or 0) < desired
-                    or (status.unavailable_replicas or 0) > 0
-                ):
+                if not deployment_rollout_complete(dep, allow_zero=True):
                     all_settled = False
                     break
             if all_settled:
@@ -82,8 +77,8 @@ class DeploymentReadinessOracle(Oracle):
 
         desired = deployment.spec.replicas or 0
         ready = deployment.status.ready_replicas or 0
-        if ready != desired:
-            print(f"❌ Deployment '{deployment_name}' has {ready}/{desired} replicas ready")
+        if not deployment_rollout_complete(deployment):
+            print(f"❌ Deployment '{deployment_name}' rollout is incomplete ({ready}/{desired} replicas ready)")
             return self.fail(
                 "faulty_deployment_not_ready",
                 deployment=deployment_name,
@@ -94,6 +89,9 @@ class DeploymentReadinessOracle(Oracle):
 
         # Secondary check: the rest of the namespace is healthy (no agent-induced
         # collateral damage to other services).
+        for dep in kubectl.list_deployments(namespace).items:
+            if not deployment_rollout_complete(dep, allow_zero=True):
+                return self.fail("deployment_replicas_unready", deployment=dep.metadata.name, namespace=namespace)
         unready = self.pods_unready(kubectl.list_pods(namespace).items, namespace=namespace)
         if unready is not None:
             return unready
