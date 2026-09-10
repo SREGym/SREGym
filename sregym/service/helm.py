@@ -3,6 +3,9 @@
 import logging
 import subprocess
 import time
+from pathlib import Path
+
+import yaml
 
 from sregym.service.kubectl import KubeCtl
 
@@ -76,22 +79,35 @@ class Helm:
         "ok" per dependency when the pinned version is present in charts/. Only fall
         through to the update when something is missing or the wrong version.
         """
-        listing = subprocess.run(f"helm dependency list {chart_path}", shell=True, capture_output=True, text=True)
+        chart_dir = Path(chart_path).expanduser()
+        with (chart_dir / "Chart.yaml").open() as file:
+            chart = yaml.safe_load(file) or {}
+        # Helm v1 charts can declare dependencies in requirements.yaml.
+        requirements = chart_dir / "requirements.yaml"
+        if chart.get("apiVersion") == "v1" and requirements.exists():
+            with requirements.open() as file:
+                chart = yaml.safe_load(file) or {}
+        dependencies = chart.get("dependencies", [])
+        if not dependencies:
+            return
+
+        listing = subprocess.run(["helm", "dependency", "list", str(chart_dir)], capture_output=True, text=True)
         if listing.returncode == 0:
-            # Header row plus one row per dependency; trailing text (e.g. WARNING
-            # lines) has fewer than 4 columns and is ignored.
-            rows = [ln.split() for ln in listing.stdout.splitlines()[1:]]
-            statuses = [r[-1] for r in rows if len(r) >= 4]
-            if statuses and all(s == "ok" for s in statuses):
+            # Keep empty repository columns for local subcharts. Warnings are
+            # outside the tab-separated table, and must not count as dependencies.
+            rows = [[field.strip() for field in line.split("\t")] for line in listing.stdout.splitlines()[1:]]
+            statuses = [row[-1] for row in rows if len(row) in (3, 4)]
+            if len(statuses) == len(dependencies) and all(status in {"ok", "unpacked"} for status in statuses):
                 logger.debug(f"Chart dependencies already satisfied for {chart_path}; skipping update")
                 return
             logger.info(f"Chart dependencies not satisfied for {chart_path} ({statuses or 'none listed'}); updating")
 
-        result = subprocess.run(f"helm dependency update {chart_path}", shell=True, capture_output=True, text=True)
+        result = subprocess.run(["helm", "dependency", "update", str(chart_dir)], capture_output=True, text=True)
         if result.returncode != 0:
-            # Previously swallowed. A failure here surfaces later as a confusing
-            # "chart not found" from helm install, so say so now.
-            logger.error(f"helm dependency update failed for {chart_path}:\n{result.stderr.strip()}")
+            raise RuntimeError(
+                f"Helm dependency update failed for chart '{chart_path}'. "
+                f"Error output:\n{result.stderr.strip()}\nStdout:\n{result.stdout.strip()}"
+            )
 
     @staticmethod
     def uninstall(**args):

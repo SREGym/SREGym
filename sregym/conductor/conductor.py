@@ -7,10 +7,12 @@ import shlex
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from kubernetes.client.rest import ApiException
 
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.oracles.base import Oracle
@@ -1366,7 +1368,16 @@ class Conductor:
                 '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
                 "]'"
             )
+            # Apply retains selector keys added outside the original manifest.
+            # Replace the complete selector so the Service reaches metrics-server.
+            self.kubectl.core_v1_api.patch_namespaced_service(
+                "metrics-server",
+                "kube-system",
+                [{"op": "replace", "path": "/spec/selector", "value": {"k8s-app": "metrics-server"}}],
+                _request_timeout=10,
+            )
         self.kubectl.wait_for_ready("kube-system")
+        self._wait_for_infrastructure_ready("metrics-server", self._metrics_server_configured)
 
         # Only deploy Khaos if the problem requires it
         if problem.requires_khaos():
@@ -1389,11 +1400,21 @@ class Conductor:
                 "kubectl patch storageclass openebs-hostpath "
                 '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
             )
+            if not svelte:
+                # The operator manifest has no NDM node selector. An extra
+                # selector can survive apply and prevent every NDM pod scheduling.
+                self.kubectl.apps_v1_api.patch_namespaced_daemon_set(
+                    "openebs-ndm",
+                    "openebs",
+                    [{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {}}],
+                    _request_timeout=10,
+                )
         # Idempotent and cheap; also covers an `openebs` left over from an
         # earlier full-profile run on the same cluster.
         if svelte:
             self._trim_openebs_ndm()
         self.kubectl.wait_for_ready("openebs")
+        self._wait_for_infrastructure_ready("OpenEBS", lambda: self._openebs_ready(svelte))
         if not svelte:
             self._ensure_openebs_device_storageclass()
 
@@ -1451,6 +1472,15 @@ class Conductor:
         if self.problem:
             self.problem.app.cleanup()
 
+    def _wait_for_infrastructure_ready(self, name: str, is_ready: Callable[[], bool], timeout: float = 180) -> None:
+        """Require functional infrastructure, not just Ready surviving pods."""
+        deadline = time.monotonic() + timeout
+        while not is_ready():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"{name} did not become healthy within {timeout:g}s; stopping application setup")
+            time.sleep(min(2, remaining))
+
     def _preflight_openebs_udev_mount(self) -> None:
         if shutil.which("docker") is None:
             self.logger.info("[DEPLOY] Docker is unavailable; skipping kind /run/udev preflight")
@@ -1489,7 +1519,7 @@ class Conductor:
     _METRICS_SERVER_BINDING = "metrics-server:system:auth-delegator"
 
     def _metrics_server_configured(self) -> bool:
-        """True if metrics-server is deployed, patched, *and* still has its RBAC.
+        """True if metrics-server has its configuration, RBAC, and usable metrics.
 
         Checking more than existence matters because the Deployment and its
         cluster-scoped RBAC have different lifetimes: the Deployment sits in the
@@ -1500,7 +1530,7 @@ class Conductor:
         """
         args = self.kubectl.exec_command(
             "kubectl -n kube-system get deployment metrics-server "
-            "-o jsonpath='{.spec.template.spec.containers[0].args}' --ignore-not-found"
+            "-o jsonpath='{.spec.template.spec.containers[0].args}' --ignore-not-found --request-timeout=10s"
         )
         if not args or not args.strip():
             return False
@@ -1508,12 +1538,22 @@ class Conductor:
             return False
 
         binding = self.kubectl.exec_command(
-            f"kubectl get clusterrolebinding {self._METRICS_SERVER_BINDING} -o name --ignore-not-found"
+            f"kubectl get clusterrolebinding {self._METRICS_SERVER_BINDING} -o name "
+            "--ignore-not-found --request-timeout=10s"
         )
         if not binding or not binding.strip():
             self.logger.info("[DEPLOY] metrics-server RBAC missing; re-applying components.yaml")
             return False
-        return True
+        # A Ready Deployment does not prove that its Service and aggregated API
+        # still work. Exercise the same API path used by kubectl top.
+        raw_metrics = self.kubectl.exec_command(
+            "kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes --request-timeout=10s"
+        )
+        try:
+            metrics = json.loads(raw_metrics)
+            return metrics.get("kind") == "NodeMetricsList" and bool(metrics.get("items"))
+        except (ValueError, TypeError, AttributeError):
+            return False
 
     def _openebs_ready(self, svelte: bool) -> bool:
         """True if the OpenEBS tier already matches what this profile wants.
@@ -1527,7 +1567,7 @@ class Conductor:
         """
         out = self.kubectl.exec_command(
             "kubectl -n openebs get deployment openebs-localpv-provisioner "
-            "-o jsonpath='{.status.readyReplicas}' --ignore-not-found"
+            "-o jsonpath='{.status.readyReplicas}' --ignore-not-found --request-timeout=10s"
         )
         try:
             if int(out.strip()) < 1:
@@ -1538,11 +1578,23 @@ class Conductor:
         if svelte:
             return True
 
-        ndm = self.kubectl.exec_command("kubectl -n openebs get daemonset openebs-ndm -o name --ignore-not-found")
-        if not ndm or not ndm.strip():
-            self.logger.info("[DEPLOY] OpenEBS node-disk-manager missing; re-applying operator manifest")
+        try:
+            ndm = self.kubectl.apps_v1_api.read_namespaced_daemon_set("openebs-ndm", "openebs", _request_timeout=10)
+        except ApiException:
             return False
-        return True
+        status = ndm.status
+        if status is None:
+            return False
+        desired = status.desired_number_scheduled or 0
+        return (
+            desired > 0
+            and (status.observed_generation or 0) >= (ndm.metadata.generation or 0)
+            and status.current_number_scheduled == desired
+            and status.updated_number_scheduled == desired
+            and status.number_ready == desired
+            and status.number_available == desired
+            and (status.number_misscheduled or 0) == 0
+        )
 
     # openebs-operator.yaml bundles the node-disk-manager alongside the LocalPV
     # provisioner. NDM exists to discover block devices and back the
@@ -1558,12 +1610,24 @@ class Conductor:
     )
 
     def _trim_openebs_ndm(self) -> None:
-        """Remove the node-disk-manager workloads left by openebs-operator.yaml.
+        """Remove unused device storage and node-disk-manager workloads.
 
         Deleting rather than scaling: the operator manifest is a plain apply with
         no controller to recreate them, and re-applying it recreates them for this
         method to remove again.
         """
+        baseline = self.cluster_state.baseline
+        if baseline is None:
+            raise RuntimeError("Cannot trim OpenEBS before the cluster baseline is available")
+        # Keep user-provided StorageClasses. The shared cluster baseline is
+        # captured before SREGym installs OpenEBS and survives interrupted runs.
+        if "openebs-device" not in baseline.storage_classes:
+            try:
+                self.cluster_state.storage_v1.delete_storage_class("openebs-device")
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+
         self.logger.info("[svelte] Removing OpenEBS node-disk-manager (openebs-hostpath does not use it)")
         for kind, name in self._OPENEBS_NDM_WORKLOADS:
             self.kubectl.exec_command(f"kubectl delete {kind} {name} -n openebs --ignore-not-found")
