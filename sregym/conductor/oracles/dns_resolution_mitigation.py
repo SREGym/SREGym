@@ -6,6 +6,7 @@ from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class DNSResolutionMitigationOracle(Oracle):
@@ -16,21 +17,7 @@ class DNSResolutionMitigationOracle(Oracle):
 
     @staticmethod
     def _rollout_complete(deployment) -> bool:
-        desired = deployment.spec.replicas
-        if desired is None:
-            desired = 1
-        if desired < 1:
-            return False
-
-        generation = deployment.metadata.generation or 0
-        status = deployment.status
-        return (
-            (status.observed_generation or 0) >= generation
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _wait_for_current_rollout(self, deployment):
         deadline = time.monotonic() + self.rollout_timeout_seconds

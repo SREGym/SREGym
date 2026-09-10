@@ -1,6 +1,7 @@
 import time
 
 from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.service.rollout import deployment_rollout_complete
 
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 5
@@ -27,16 +28,7 @@ class CpuThrottlingMitigationOracle(MitigationOracle):
 
     @staticmethod
     def _rollout_complete(deployment) -> bool:
-        desired = deployment.spec.replicas if deployment.spec.replicas is not None else 1
-        status = deployment.status
-        return (
-            desired > 0
-            and (status.observed_generation or 0) >= (deployment.metadata.generation or 0)
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _wait_for_required_deployments(self) -> dict | None:
         if not self.replica_count:

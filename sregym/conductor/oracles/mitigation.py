@@ -2,6 +2,7 @@ import time
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 # Time to wait for deployments to settle after agent submission, so we
 # evaluate a stable state rather than a transient rolling-update window.
@@ -54,13 +55,7 @@ class MitigationOracle(Oracle):
             deployments = kubectl.list_deployments(namespace)
             all_settled = True
             for dep in deployments.items:
-                status = dep.status
-                desired = dep.spec.replicas if dep.spec.replicas is not None else 1
-                if (
-                    (status.updated_replicas or 0) < desired
-                    or (status.ready_replicas or 0) < desired
-                    or (status.unavailable_replicas or 0) > 0
-                ):
+                if not deployment_rollout_complete(dep, allow_zero=True):
                     all_settled = False
                     break
             if all_settled:
@@ -85,14 +80,16 @@ class MitigationOracle(Oracle):
             if name not in current_deps:
                 print(f"❌ Deployment '{name}' was deleted")
                 return self.fail("required_deployment_missing", deployment=name, namespace=namespace)
-            dep = current_deps[name]
+        # Recheck after settling: a timeout must not turn an incomplete rollout
+        # into a pass. Include Deployments added after the baseline as well.
+        for name, dep in current_deps.items():
             desired = dep.spec.replicas if dep.spec.replicas is not None else 1
-            if desired == 0:
+            if desired == 0 and name in self.replica_count:
                 print(f"❌ Deployment '{name}' was scaled to 0")
                 return self.fail("required_deployment_scaled_to_zero", deployment=name, namespace=namespace)
-            ready = dep.status.ready_replicas or 0
-            if ready < desired:
-                print(f"❌ Deployment '{name}' has {ready}/{desired} replicas ready")
+            ready = getattr(dep.status, "ready_replicas", None) or 0
+            if not deployment_rollout_complete(dep, allow_zero=name not in self.replica_count):
+                print(f"❌ Deployment '{name}' rollout is incomplete ({ready}/{desired} replicas ready)")
                 return self.fail(
                     "deployment_replicas_unready",
                     deployment=name,

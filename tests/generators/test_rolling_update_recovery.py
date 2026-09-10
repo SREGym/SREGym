@@ -31,6 +31,7 @@ class _InjectionKubeCtl:
             metadata=SimpleNamespace(generation=1),
             spec=SimpleNamespace(replicas=3),
             status=SimpleNamespace(
+                replicas=3,
                 observed_generation=1,
                 updated_replicas=3,
                 ready_replicas=3,

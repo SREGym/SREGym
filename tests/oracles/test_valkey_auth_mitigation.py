@@ -29,8 +29,15 @@ class _KubeCtl:
     def get_deployment(self, name, namespace):
         assert name == "cart"
         return SimpleNamespace(
+            metadata=SimpleNamespace(generation=1),
             spec=SimpleNamespace(replicas=1),
-            status=SimpleNamespace(available_replicas=self.cart_available),
+            status=SimpleNamespace(
+                replicas=1,
+                observed_generation=1,
+                updated_replicas=1,
+                ready_replicas=1,
+                available_replicas=self.cart_available,
+            ),
         )
 
 

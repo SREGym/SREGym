@@ -23,7 +23,7 @@ def _oracle():
 
 def _deployment(name, replicas=1, ready=1, priority_class=None, memory="512Mi"):
     return SimpleNamespace(
-        metadata=SimpleNamespace(name=name),
+        metadata=SimpleNamespace(generation=1, name=name),
         spec=SimpleNamespace(
             replicas=replicas,
             template=SimpleNamespace(
@@ -39,7 +39,13 @@ def _deployment(name, replicas=1, ready=1, priority_class=None, memory="512Mi"):
                 )
             ),
         ),
-        status=SimpleNamespace(ready_replicas=ready),
+        status=SimpleNamespace(
+            replicas=1 if replicas is None else replicas,
+            observed_generation=1,
+            updated_replicas=1 if replicas is None else replicas,
+            available_replicas=ready,
+            ready_replicas=ready,
+        ),
     )
 
 

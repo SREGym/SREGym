@@ -1,5 +1,6 @@
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class ValkeyAuthMitigation(Oracle):
@@ -73,7 +74,7 @@ class ValkeyAuthMitigation(Oracle):
             if desired_replicas < 1:
                 print("❌ Cart deployment is scaled to zero")
                 return self.fail("required_deployment_scaled_to_zero", deployment="cart")
-            if available_replicas < desired_replicas:
+            if not deployment_rollout_complete(cart):
                 print(
                     f"❌ Cart deployment has not recovered: {available_replicas}/{desired_replicas} replicas available."
                 )
