@@ -32,7 +32,7 @@ from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
-from sregym.profile import PROFILES, set_profile
+from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
@@ -435,6 +435,7 @@ def driver_loop(
                     snapshot = {
                         "problem_id": pid,
                         "attempt": attempt,
+                        "deployment_profile": get_profile(),
                         "deploy_failed": True,
                     }
                     for stage, outcome in conductor.results.items():
@@ -669,6 +670,7 @@ def driver_loop(
                 snapshot = {
                     "problem_id": pid,
                     "attempt": attempt,
+                    "deployment_profile": get_profile(),
                 }
                 snapshot.update(LAUNCHER.internet_policy_result(agent_proc))
                 for stage, outcome in conductor.results.items():
@@ -840,6 +842,7 @@ def main(args):
     logger.info(
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
         f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
+        f"deployment_profile: {get_profile()}, "
         f"internet_access: {internet_policy.mode.value}, "
         f"container_hardening: {args.container_hardening}, "
         f"agent_api_base: {_env_status('AGENT_API_BASE')}, judge_api_base: {_env_status('JUDGE_API_BASE')}"

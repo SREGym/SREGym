@@ -14,6 +14,7 @@ from sregym.generators.fault.base import FaultInjector
 from sregym.paths import CACHE_DIR, TARGET_MICROSERVICES
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 
 DAEMON_SET_RECOVERY_STATE_DIR = CACHE_DIR / "daemon_set_recovery"
 
@@ -648,16 +649,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     @staticmethod
     def _deployment_rollout_complete(deployment) -> bool:
-        desired = deployment.spec.replicas if deployment.spec.replicas is not None else 1
-        status = deployment.status
-        return (
-            desired > 0
-            and (status.observed_generation or 0) >= (deployment.metadata.generation or 0)
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _wait_for_services_ready(
         self,
@@ -1899,20 +1891,7 @@ class VirtualizationFaultInjector(FaultInjector):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             deployment = self.kubectl.apps_v1_api.read_namespaced_deployment(service, self.namespace)
-            desired = deployment.spec.replicas
-            if desired is None:
-                desired = 1
-
-            status = deployment.status
-            generation = deployment.metadata.generation or 0
-            if (
-                desired > 0
-                and (status.observed_generation or 0) >= generation
-                and (status.updated_replicas or 0) == desired
-                and (status.ready_replicas or 0) == desired
-                and (status.available_replicas or 0) == desired
-                and (status.unavailable_replicas or 0) == 0
-            ):
+            if deployment_rollout_complete(deployment):
                 return
 
             time.sleep(sleep)

@@ -30,6 +30,7 @@ from ..atif import (
     ToolCall,
     Trajectory,
 )
+from ._common import TOKEN_METRICS_VERSION, _aggregate_final_metrics, _sum_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +54,12 @@ def _metrics_from_finish(finish: dict[str, Any]) -> tuple[Metrics | None, dict[s
     """Build per-step Metrics + a raw-tokens dict from a step-finish part."""
     tokens = finish.get("tokens", {})
     cost = finish.get("cost", 0) or 0
-    input_tok = tokens.get("input", 0) or 0
-    output_tok = tokens.get("output", 0) or 0
-    reasoning_tok = tokens.get("reasoning", 0) or 0
-    cache = tokens.get("cache", {})
-    cache_read = cache.get("read", 0) or 0
-    cache_write = cache.get("write", 0) or 0
+    input_tok = tokens.get("input")
+    output_tok = tokens.get("output")
+    reasoning_tok = tokens.get("reasoning")
+    cache = tokens.get("cache") or {}
+    cache_read = cache.get("read")
+    cache_write = cache.get("write")
 
     raw = {
         "input": input_tok,
@@ -70,11 +71,11 @@ def _metrics_from_finish(finish: dict[str, Any]) -> tuple[Metrics | None, dict[s
     }
 
     metrics: Metrics | None = None
-    if input_tok or output_tok or cache_read:
+    if tokens or cost:
         metrics = Metrics(
-            prompt_tokens=input_tok + cache_read,
-            completion_tokens=output_tok,
-            cached_tokens=cache_read if cache_read else None,
+            prompt_tokens=_sum_tokens(input_tok, cache_read, cache_write),
+            completion_tokens=_sum_tokens(output_tok, reasoning_tok),
+            cached_tokens=cache_read,
             cost_usd=cost if cost else None,
             extra={
                 k: v
@@ -82,7 +83,7 @@ def _metrics_from_finish(finish: dict[str, Any]) -> tuple[Metrics | None, dict[s
                     "reasoning_tokens": reasoning_tok,
                     "cache_write_tokens": cache_write,
                 }.items()
-                if v
+                if v is not None
             }
             or None,
         )
@@ -167,14 +168,11 @@ def _convert_from_session(session_path: Path) -> Trajectory | None:
     model_info = info.get("model", {}) if isinstance(info.get("model"), dict) else {}
     model_name = model_info.get("id") or model_info.get("modelID")
 
-    # Authoritative aggregate tokens (matches results JSON).
-    info_tokens = info.get("tokens", {}) if isinstance(info.get("tokens"), dict) else {}
-    agg_input = info_tokens.get("input", 0) or 0
-    agg_output = info_tokens.get("output", 0) or 0
-    agg_reasoning = info_tokens.get("reasoning", 0) or 0
-    agg_cache = info_tokens.get("cache", {}) if isinstance(info_tokens.get("cache"), dict) else {}
-    agg_cache_read = agg_cache.get("read", 0) or 0
-    agg_cache_write = agg_cache.get("write", 0) or 0
+    # Some exports include authoritative aggregates; others contain only
+    # per-message step-finish records.
+    info_tokens = info.get("tokens")
+    if not isinstance(info_tokens, dict):
+        info_tokens = {}
     agg_cost = info.get("cost", 0) or 0
 
     steps: list[Step] = []
@@ -211,23 +209,30 @@ def _convert_from_session(session_path: Path) -> Trajectory | None:
     if not steps:
         return None
 
-    final_metrics = FinalMetrics(
-        total_prompt_tokens=(agg_input + agg_cache_read) or None,
-        total_completion_tokens=agg_output or None,
-        total_cached_tokens=agg_cache_read or None,
-        total_cost_usd=agg_cost if agg_cost else None,
-        total_steps=len(steps),
-        extra={
-            k: v
-            for k, v in {
-                "input_tokens": agg_input or None,
-                "reasoning_tokens": agg_reasoning or None,
-                "cache_write_tokens": agg_cache_write or None,
-            }.items()
-            if v
-        }
-        or None,
-    )
+    final_metrics = _aggregate_final_metrics(steps, total_cost_usd=agg_cost or None)
+    metrics = None
+    if isinstance(info_tokens, dict) and info_tokens:
+        metrics, _raw = _metrics_from_finish({"tokens": info_tokens})
+    if metrics is not None:
+        final_metrics = FinalMetrics(
+            total_prompt_tokens=metrics.prompt_tokens,
+            total_completion_tokens=metrics.completion_tokens,
+            total_cached_tokens=metrics.cached_tokens,
+            total_cost_usd=agg_cost or None,
+            total_steps=len(steps),
+            extra={
+                "token_metrics_version": TOKEN_METRICS_VERSION,
+                "input_tokens": info_tokens.get("input"),
+                **(metrics.extra or {}),
+            },
+        )
+    else:
+        extra = dict(final_metrics.extra or {})
+        for key in ("reasoning_tokens", "cache_write_tokens"):
+            count = _sum_tokens(*(s.metrics.extra.get(key) for s in steps if s.metrics and s.metrics.extra))
+            if count is not None:
+                extra[key] = count
+        final_metrics.extra = extra
 
     return Trajectory(
         schema_version="ATIF-v1.7",

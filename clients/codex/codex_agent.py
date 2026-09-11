@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+from clients.harness.token_usage import read_jsonl, token_count, usage_metrics
+
 logger = logging.getLogger("all.codex.agent")
 
 _CUSTOM_PROVIDER_ID = "sregym_custom"
@@ -186,47 +188,41 @@ class CodexAgent:
 
         return str(parsed), None
 
-    def get_usage_metrics(self) -> dict[str, int]:
-        """
-        Extract usage metrics from Codex output.
+    def get_usage_metrics(self) -> dict[str, int | None]:
+        """Read cumulative session usage, with CLI output as a fallback."""
+        output = list(read_jsonl(self.output_path)) if self.output_path.exists() else []
+        thread_id = next((event.get("thread_id") for event in output if event.get("type") == "thread.started"), None)
+        sessions = list((self.logs_dir / "sessions").rglob("*.jsonl"))
+        if thread_id:
+            sessions = [path for path in sessions if thread_id in path.name]
 
-        Returns:
-            Dictionary with keys: input_tokens, cached_input_tokens, output_tokens
-        """
-        metrics = {
-            "input_tokens": 0,
-            "cached_input_tokens": 0,
-            "output_tokens": 0,
-        }
+        usage = None
+        # An ambiguous directory can include other sessions. Do not count them.
+        if len(sessions) == 1:
+            for event in read_jsonl(sessions[0]):
+                payload = event.get("payload") or {}
+                if (
+                    event.get("type") != "event_msg"
+                    or not isinstance(payload, dict)
+                    or payload.get("type") != "token_count"
+                ):
+                    continue
+                info = payload.get("info")
+                if not isinstance(info, dict):
+                    continue
+                total = info.get("total_token_usage")
+                if isinstance(total, dict):
+                    usage = total
+        if usage is None:
+            usage = next((event["usage"] for event in reversed(output) if isinstance(event.get("usage"), dict)), {})
 
-        if not self.output_path.exists():
-            logger.debug(f"Codex output file {self.output_path} does not exist")
-            return metrics
-
-        with open(self.output_path) as f:
-            lines = f.readlines()
-
-        # Parse from the end to get the most recent usage info
-        for line in reversed(lines):
-            line = line.strip()
-            if not line:
-                continue
-
-            try:
-                parsed = json.loads(line)
-
-                if isinstance(parsed, dict) and "usage" in parsed:
-                    usage = parsed["usage"]
-                    metrics["input_tokens"] = usage.get("input_tokens", 0)
-                    metrics["cached_input_tokens"] = usage.get("cached_input_tokens", 0)
-                    metrics["output_tokens"] = usage.get("output_tokens", 0)
-                    logger.info(f"Extracted usage metrics: {metrics}")
-                    return metrics
-
-            except json.JSONDecodeError:
-                continue
-
-        return metrics
+        # Codex totals already contain cache hits and reasoning.
+        return usage_metrics(
+            input_tokens=token_count(usage.get("input_tokens")),
+            output_tokens=token_count(usage.get("output_tokens")),
+            cached_input_tokens=token_count(usage.get("cached_input_tokens")),
+            reasoning_output_tokens=token_count(usage.get("reasoning_output_tokens")),
+        )
 
     def _setup_auth(self) -> bool:
         """Set up authentication for Codex.
