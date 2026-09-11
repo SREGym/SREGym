@@ -1,6 +1,7 @@
 import re
 
 from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.service.rollout import deployment_rollout_complete
 
 
 def _parse_config_threshold(value: str) -> float | None:
@@ -89,8 +90,8 @@ class KubeletEvictionThresholdMisconfigMitigationOracle(MitigationOracle):
         for dep in deployments.items:
             desired = dep.spec.replicas or 1
             ready = dep.status.ready_replicas or 0
-            if ready < desired:
-                print(f"❌ Deployment {dep.metadata.name}: {ready}/{desired} ready")
+            if not deployment_rollout_complete(dep):
+                print(f"❌ Deployment {dep.metadata.name}: incomplete rollout ({ready}/{desired} ready)")
                 all_ready = False
 
         if all_ready:

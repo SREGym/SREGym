@@ -25,6 +25,7 @@ from sregym.conductor.oracles.priority_preemption_mitigation import PriorityPree
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -167,21 +168,7 @@ class PriorityPreemptionCascadeHotelReservation(Problem):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             deployment = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
-            desired = deployment.spec.replicas or 0
-            observed = deployment.status.observed_generation or 0
-            generation = deployment.metadata.generation or 0
-            updated = deployment.status.updated_replicas or 0
-            ready = deployment.status.ready_replicas or 0
-            available = deployment.status.available_replicas or 0
-            unavailable = deployment.status.unavailable_replicas or 0
-            if (
-                desired > 0
-                and observed >= generation
-                and updated == desired
-                and ready == desired
-                and available == desired
-                and unavailable == 0
-            ):
+            if deployment_rollout_complete(deployment):
                 return deployment
             time.sleep(2)
         raise TimeoutError(f"Timed out waiting for deployment {namespace}/{name} to become ready")

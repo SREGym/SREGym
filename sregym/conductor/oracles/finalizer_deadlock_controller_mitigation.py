@@ -8,6 +8,7 @@ from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class FinalizerDeadlockControllerMitigationOracle(Oracle):
@@ -106,17 +107,7 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
             deployments = kubectl.list_deployments(namespace)
             all_settled = True
             for deployment in deployments.items:
-                desired = self._desired_replicas(deployment)
-                status = deployment.status
-                generation = deployment.metadata.generation or 0
-                if (
-                    desired < 1
-                    or (status.observed_generation or 0) < generation
-                    or (status.updated_replicas or 0) != desired
-                    or (status.ready_replicas or 0) != desired
-                    or (status.available_replicas or 0) != desired
-                    or (status.unavailable_replicas or 0) != 0
-                ):
+                if not deployment_rollout_complete(deployment):
                     all_settled = False
                     break
             if all_settled:
@@ -159,14 +150,7 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
             return False, "[FAIL] Controller Deployment is scaled to zero."
 
         status = deployment.status
-        generation = deployment.metadata.generation or 0
-        healthy = (
-            (status.observed_generation or 0) >= generation
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        healthy = deployment_rollout_complete(deployment)
         if not healthy:
             return False, (
                 f"[FAIL] Controller Deployment is not fully rolled out ({status.ready_replicas or 0}/{desired} ready)."
@@ -241,6 +225,9 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
 
     def _check_app_healthy(self, kubectl, namespace) -> tuple[bool, str]:
         try:
+            for deployment in kubectl.list_deployments(namespace).items:
+                if not deployment_rollout_complete(deployment):
+                    return False, f"[FAIL] Deployment `{deployment.metadata.name}` rollout is incomplete."
             pods = kubectl.list_pods(namespace).items
         except Exception as exc:
             return False, f"[FAIL] Could not list pods in `{namespace}`: {exc}"

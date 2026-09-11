@@ -8,6 +8,7 @@ from kubernetes.utils.quantity import parse_quantity
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 5
@@ -54,13 +55,7 @@ class PriorityPreemptionMitigationOracle(Oracle):
             deployments = self.apps_v1.list_namespaced_deployment(namespace)
             all_settled = True
             for dep in deployments.items:
-                desired = dep.spec.replicas or 0
-                status = dep.status
-                if (
-                    (status.updated_replicas or 0) < desired
-                    or (status.ready_replicas or 0) < desired
-                    or (status.unavailable_replicas or 0) > 0
-                ):
+                if not deployment_rollout_complete(dep, allow_zero=True):
                     all_settled = False
                     break
             if all_settled:
@@ -97,8 +92,8 @@ class PriorityPreemptionMitigationOracle(Oracle):
         if desired < 1:
             print(f"❌ Deployment '{name}' has invalid desired replica count: {desired}")
             return self.fail("invalid_replica_count", deployment=name, desired=desired), deployment
-        if ready != desired:
-            print(f"❌ Deployment '{name}' has {ready}/{desired} replicas ready")
+        if not deployment_rollout_complete(deployment):
+            print(f"❌ Deployment '{name}' rollout is incomplete ({ready}/{desired} replicas ready)")
             return (
                 self.fail("deployment_replicas_unready", deployment=name, ready=ready, desired=desired),
                 deployment,
@@ -125,8 +120,8 @@ class PriorityPreemptionMitigationOracle(Oracle):
             if desired < 1:
                 print(f"❌ Deployment '{name}' was scaled below one replica")
                 return self.fail("required_deployment_scaled_to_zero", deployment=name)
-            if ready != desired:
-                print(f"❌ Deployment '{name}' has {ready}/{desired} replicas ready")
+            if not deployment_rollout_complete(deployment):
+                print(f"❌ Deployment '{name}' rollout is incomplete ({ready}/{desired} replicas ready)")
                 return self.fail("deployment_replicas_unready", deployment=name, ready=ready, desired=desired)
         return None
 

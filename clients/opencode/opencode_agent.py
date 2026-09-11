@@ -12,6 +12,8 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
+from clients.harness.token_usage import aggregate_usage, read_jsonl, sum_counts, token_count, usage_metrics
+
 logger = logging.getLogger("all.opencode.agent")
 
 
@@ -291,66 +293,69 @@ class OpenCodeAgent:
 
         return None
 
-    def get_usage_metrics(self) -> dict[str, int]:
-        """
-        Extract usage metrics from OpenCode output.
+    @staticmethod
+    def _token_usage(tokens: dict) -> dict[str, int | None]:
+        """OpenCode reports uncached input and non-reasoning output separately."""
+        cache = tokens.get("cache") or {}
+        if not isinstance(cache, dict):
+            cache = {}
+        cached = token_count(cache.get("read"))
+        creation = token_count(cache.get("write"))
+        reasoning = token_count(tokens.get("reasoning"))
+        return usage_metrics(
+            input_tokens=sum_counts([token_count(tokens.get("input")), cached, creation]),
+            output_tokens=sum_counts([token_count(tokens.get("output")), reasoning]),
+            cached_input_tokens=cached,
+            cache_creation_input_tokens=creation,
+            reasoning_output_tokens=reasoning,
+        )
 
-        Returns:
-            Dictionary with keys: input_tokens, cached_input_tokens, output_tokens
-        """
-        metrics = {
-            "input_tokens": 0,
-            "cached_input_tokens": 0,
-            "output_tokens": 0,
-        }
+    def get_usage_metrics(self) -> dict[str, int | None]:
+        """Prefer the exported session; fall back to completed stream records."""
+        session_id = self._get_session_id()
+        sessions = list(self.sessions_dir.rglob(f"session-{session_id}.json" if session_id else "session-*.json"))
+        if len(sessions) == 1:
+            try:
+                session = json.loads(sessions[0].read_text())
+                tokens = (session.get("info") or {}).get("tokens")
+                if isinstance(tokens, dict) and tokens:
+                    return self._token_usage(tokens)
+                return aggregate_usage(
+                    self._token_usage(part["tokens"])
+                    for message in session.get("messages", [])
+                    if (message.get("info") or {}).get("role") == "assistant"
+                    for part in message.get("parts", [])
+                    if part.get("type") == "step-finish" and isinstance(part.get("tokens"), dict)
+                )
+            except (OSError, ValueError, TypeError, AttributeError) as error:
+                logger.warning("Could not read OpenCode session usage: %s", error)
 
-        if not self.output_path.exists():
-            logger.debug(f"OpenCode output file {self.output_path} does not exist")
-            return metrics
-
-        total_input = 0
-        total_output = 0
-        total_cached = 0
-
-        try:
-            with open(self.output_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
+        records = []
+        legacy_records = []
+        seen_parts = set()
+        if self.output_path.exists():
+            for event in read_jsonl(self.output_path):
+                part = event.get("part") or {}
+                if not isinstance(part, dict):
+                    continue
+                if event.get("type") == "step_finish" and isinstance(part.get("tokens"), dict):
+                    part_id = part.get("id")
+                    if part_id and part_id in seen_parts:
                         continue
-                    try:
-                        data = json.loads(line)
-                        if not isinstance(data, dict):
-                            continue
-
-                        # OpenCode format: step_finish events have tokens
-                        if data.get("type") == "step_finish":
-                            part = data.get("part", {})
-                            tokens = part.get("tokens", {})
-                            if tokens:
-                                total_input += tokens.get("input", 0)
-                                total_output += tokens.get("output", 0) + tokens.get("reasoning", 0)
-                                cache = tokens.get("cache", {})
-                                total_cached += cache.get("read", 0)
-
-                        # Also check for standard usage format
-                        if "usage" in data:
-                            usage = data["usage"]
-                            total_input += usage.get("input_tokens", 0)
-                            total_output += usage.get("output_tokens", 0)
-                            total_cached += usage.get("cached_input_tokens", 0)
-
-                    except json.JSONDecodeError:
-                        continue
-        except Exception as e:
-            logger.warning(f"Error parsing OpenCode output for metrics: {e}")
-
-        metrics["input_tokens"] = total_input
-        metrics["output_tokens"] = total_output
-        metrics["cached_input_tokens"] = total_cached
-
-        logger.info(f"Extracted usage metrics: {metrics}")
-        return metrics
+                    if part_id:
+                        seen_parts.add(part_id)
+                    records.append(self._token_usage(part["tokens"]))
+                elif isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
+                    legacy_records.append(
+                        usage_metrics(
+                            input_tokens=token_count(usage.get("input_tokens")),
+                            output_tokens=token_count(usage.get("output_tokens")),
+                            cached_input_tokens=token_count(usage.get("cached_input_tokens")),
+                            reasoning_output_tokens=token_count(usage.get("reasoning_output_tokens")),
+                        )
+                    )
+        return aggregate_usage(records or legacy_records)
 
     def _build_env(self) -> dict[str, str]:
         """Build environment variables for OpenCode execution."""

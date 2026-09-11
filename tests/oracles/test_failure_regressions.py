@@ -244,8 +244,15 @@ def test_hpa_transient_errors_do_not_bypass_consecutive_healthy_polls(monkeypatc
 def test_hpa_nested_observations_propagate_command_errors(monkeypatch, failure_at):
     oracle = _hpa_with_clock(monkeypatch, timeout=0)
     deployment = {
+        "metadata": {"generation": 1},
         "spec": {"replicas": 1, "selector": {"matchLabels": {"app": "frontend"}}},
-        "status": {"readyReplicas": 1, "updatedReplicas": 1},
+        "status": {
+            "observedGeneration": 1,
+            "replicas": 1,
+            "readyReplicas": 1,
+            "updatedReplicas": 1,
+            "availableReplicas": 1,
+        },
     }
     pods = {"items": [{"metadata": {"name": "frontend-1"}, "status": {"phase": "Running"}}]}
     responses = [json.dumps(deployment), json.dumps(pods), '{"items": []}']
