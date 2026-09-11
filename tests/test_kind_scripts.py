@@ -14,24 +14,18 @@ def shell_environment(tmp_path):
     repo = tmp_path / "repo"
     scripts = repo / "kind"
     scripts.mkdir(parents=True)
-    for name in ("setup_kind_cluster.sh", "build_lite_images.sh"):
-        (scripts / name).write_text((REPO_ROOT / "kind" / name).read_text())
+    (scripts / "setup_kind_cluster.sh").write_text((REPO_ROOT / "kind/setup_kind_cluster.sh").read_text())
     for architecture in ("arm", "x86"):
         (scripts / f"kind-config-{architecture}.yaml").touch()
-    hotel = repo / "SREGym-applications" / "hotelReservation"
-    hotel.mkdir(parents=True)
-    (hotel / "Dockerfile").touch()
     commands = tmp_path / "bin"
     commands.mkdir()
-    for command in ("kind", "kubectl", "docker", "rm", "uname"):
+    for command in ("kind", "kubectl", "rm", "uname"):
         executable = commands / command
         executable.write_text(
             "#!/bin/sh\n"
             f"command_name={command}\n"
             'if [ "$command_name" = uname ]; then echo "$KIND_TEST_ARCH"; exit; fi\n'
             'printf "%s %s\\n" "$command_name" "$*" >> "$KIND_TEST_CALL_LOG"\n'
-            'if [ "$command_name" = docker ] && [ "${KIND_TEST_BUILD_FAIL:-0}" = 1 ]; then exit 42; fi\n'
-            'if [ "$command_name" = kind ] && [ "$*" = "get clusters" ]; then echo kind; fi\n'
         )
         executable.chmod(0o755)
     log = tmp_path / "calls.txt"
@@ -40,13 +34,12 @@ def shell_environment(tmp_path):
         "PATH": str(commands) + os.pathsep + os.environ["PATH"],
         "KIND_TEST_CALL_LOG": str(log),
         "KIND_TEST_ARCH": "arm64",
-        "KIND_CLUSTER_NAME": "kind",
     }
 
-    def run(script, *args, architecture="arm64", fail_build=False):
+    def run(script, *args, architecture="arm64"):
         result = subprocess.run(
             ["/bin/bash", str(scripts / script), *args],
-            env={**env, "KIND_TEST_ARCH": architecture, "KIND_TEST_BUILD_FAIL": "1" if fail_build else "0"},
+            env={**env, "KIND_TEST_ARCH": architecture},
             capture_output=True,
             text=True,
         )
@@ -65,7 +58,7 @@ def test_kind_setup_selects_native_config(shell_environment, host, config):
     assert any("kubectl wait --for=condition=Ready nodes --all" in call for call in calls)
 
 
-def test_explicit_kind_architecture_overrides_host(shell_environment):
+def test_explicit_kind_config_overrides_host_detection(shell_environment):
     result, calls = shell_environment("setup_kind_cluster.sh", "x86", architecture="arm64")
     assert result.returncode == 0
     assert calls[0].endswith("kind-config-x86.yaml")
@@ -75,23 +68,3 @@ def test_unsupported_architecture_fails_before_creating_cluster(shell_environmen
     result, calls = shell_environment("setup_kind_cluster.sh", architecture="unknown")
     assert result.returncode != 0
     assert not calls
-
-
-@pytest.mark.parametrize("host,platform", [("arm64", "linux/arm64"), ("x86_64", "linux/amd64")])
-def test_lite_builds_and_loads_matching_images(shell_environment, host, platform):
-    result, calls = shell_environment("build_lite_images.sh", architecture=host)
-    assert result.returncode == 0, result.stderr
-    builds = [call for call in calls if call.startswith("docker build ")]
-    assert len(builds) == 6
-    assert all(f"--platform {platform}" in call for call in builds)
-    assert any("/docker/locust-exporter/Dockerfile" in call for call in builds)
-    assert any("/docker/wrk2/Dockerfile" in call for call in builds)
-    assert calls[-1].startswith("kind load docker-image --name kind ")
-    assert ("jacksonarthurclark/media-frontend:latest" in calls[-1]) == (platform == "linux/arm64")
-
-
-def test_failed_image_build_does_not_load_partial_results(shell_environment):
-    result, calls = shell_environment("build_lite_images.sh", fail_build=True)
-    assert result.returncode == 42
-    assert len(calls) == 1
-    assert calls[0].startswith("docker build ")

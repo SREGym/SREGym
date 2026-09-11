@@ -53,18 +53,11 @@ The setup creates one control-plane and three worker nodes. Confirm that all fou
 kubectl get nodes
 ```
 
-On Apple silicon, build and load the application images that are not yet
-published for ARM64:
-
-```bash
-bash kind/build_lite_images.sh
-```
-
-Run this after creating the KIND cluster. The script builds native images for
-Hotel Reservation, Social Network, wrk2, and the Locust exporter, then loads them
-into every KIND node. The first Social Network build compiles its legacy C++
-dependencies from source and can take a while; later builds reuse Docker's
-cache.
+The Lite applications, traffic generators, KIND node, and agent runtime use
+published multiarch images. Docker and Kubernetes select `linux/arm64` on Apple
+silicon or `linux/amd64` on x86-64. No local application-image build or registry
+login is required. See [container images](container-images.md) for the pinned
+releases and optional source-build commands.
 
 On macOS, the containers run inside Docker Desktop or OrbStack's Linux VM.
 Allocate the CPU and memory listed above to that VM. On smaller machines,
@@ -112,10 +105,10 @@ without authentication or model calls:
 uv run pytest tests/integration/test_agent_cli_bootstrap.py -m integration -v
 ```
 
-The agent image build selects native kubectl for the container architecture and
-matches the host's kubectl version when available. You can pin a version explicitly
-with `KUBECTL_VERSION=v1.33.9 bash docker/agents/build.sh`. Keep the host client
-within one minor version of the API server, as required by Kubernetes'
+The published agent image includes native kubectl matching the bundled KIND
+version. An optional local rebuild matches the host's kubectl version when
+available; override it with `KUBECTL_VERSION=v1.32.1 bash docker/agents/build.sh`.
+Keep the host client within one minor version of the API server, as required by Kubernetes'
 [version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
 
 ### macOS validation scope

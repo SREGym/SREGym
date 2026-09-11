@@ -20,6 +20,11 @@ logger = logging.getLogger("all.sregym.container_runner")
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
 DEFAULT_EGRESS_PROXY_IMAGE = "mitmproxy/mitmproxy:12.2.3"
+DEFAULT_AGENT_IMAGE = (
+    "ghcr.io/sregym/agent-base:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9"
+    "@sha256:92e8b52af763c6e165144d314ec25b1ad3ba0e0f1b0a28ffa4a1760e92ec6b61"
+)
+LOCAL_AGENT_IMAGE = "sregym-agent-base:latest"
 
 # DAC_OVERRIDE survives the drop because /logs and /workspace are bind mounts
 # owned by the host user: container root needs it to write through their mode
@@ -114,7 +119,7 @@ class ExecInput:
 
 @dataclass
 class ContainerConfig:
-    image: str = "sregym-agent-base:latest"
+    image: str = DEFAULT_AGENT_IMAGE
     network_mode: str = "host"
     kubeconfig_path: Path | None = None
     workspace_path: Path | None = None  # bind-mounted to /workspace for agent output
@@ -750,7 +755,7 @@ class ContainerRunner:
         )
 
     def ensure_image_exists(self) -> None:
-        """Check if the container image exists locally; build it if not."""
+        """Pull the selected release, or build the explicit local-development tag."""
         image = self.config.image
         result = subprocess.run(
             ["docker", "image", "inspect", image],
@@ -759,12 +764,19 @@ class ContainerRunner:
         if result.returncode == 0:
             return
 
-        logger.info(f"🐳 Container image '{image}' not found. Building automatically...")
-        self.build_image()
+        if image == LOCAL_AGENT_IMAGE:
+            self.build_image()
+            return
+        logger.info("Pulling agent image '%s'...", image)
+        self._run_docker_checked(["docker", "pull", image], f"pull agent image '{image}'")
 
     def build_image(self) -> None:
         """Build (or rebuild) the container image using docker/agents/build.sh."""
-        image = self.config.image
+        # Rebuilding a release creates a local development image; never pretend
+        # locally compiled bytes have the published release's digest.
+        image = LOCAL_AGENT_IMAGE if self.config.image == DEFAULT_AGENT_IMAGE else self.config.image
+        if "@" in image:
+            raise ValueError("Cannot rebuild a digest-pinned custom image; select a local image tag first")
         logger.info(f"🐳 Building container image '{image}'...")
 
         repo_root = Path(__file__).resolve().parent.parent.parent
@@ -775,13 +787,14 @@ class ContainerRunner:
                 f"Build script not found at {build_script}. Cannot auto-build container image '{image}'."
             )
 
-        build_script.chmod(build_script.stat().st_mode | 0o755)
         result = subprocess.run(
-            [str(build_script)],
+            ["bash", str(build_script)],
             cwd=str(repo_root),
+            env={**os.environ, "SREGYM_AGENT_IMAGE": image},
         )
         if result.returncode != 0:
             raise RuntimeError(f"Failed to build container image '{image}'. Check the build output above for errors.")
+        self.config.image = image
         logger.info(f"✅ Container image '{image}' built successfully.")
 
     @staticmethod

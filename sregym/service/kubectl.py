@@ -279,7 +279,7 @@ class KubeCtl:
             f"container '{status.name}', image '{status.image}', "
             f"node '{pod.spec.node_name}': {message.rstrip('.')}. "
             "Verify that the image and its executables support the node architecture. "
-            "For ARM64 KIND and SREGym-Lite, run: bash kind/build_lite_images.sh"
+            "See docs/container-images.md for multiarch images and source-build instructions."
         )
 
     def _check_container_platform_logs(self, pod, namespace: str, checked: set):

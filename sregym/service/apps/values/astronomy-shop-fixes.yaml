@@ -25,6 +25,28 @@ opentelemetry-collector:
 # maximum leaves room within the existing 300Mi limits for native memory and
 # instrumentation. Preserve the image's javaagent when overriding this variable.
 components:
+  load-generator:
+    # Helm replaces lists. Preserve the sidecar and use the multiarch build
+    # of the same upstream v0.5.0 source.
+    sidecarContainers:
+      - name: locust-exporter
+        useDefault:
+          env: false
+        imageOverride:
+          repository: ghcr.io/sregym/locust-exporter
+          tag: sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:03fc297fe4ecb360740da4c04810e530db72576fde4042a7addaa6ba666731da
+        service:
+          port: 9646
+        env:
+          - name: LOCUST_EXPORTER_URI
+            value: "http://localhost:8089"
+        resources:
+          requests:
+            memory: "32Mi"
+            cpu: "10m"
+          limits:
+            memory: "64Mi"
+            cpu: "50m"
   accounting:
     # The first successful upstream nightly after opentelemetry-demo#2876.
     # Source ebb18186819c510b39d64184d774a527a79e1525 changes only Consumer.cs

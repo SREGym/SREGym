@@ -1,4 +1,4 @@
-"""Verify that registry images offer both Linux architectures required by Lite.
+"""Verify that registry images offer both Linux architectures required by SREGym.
 
 Accept image references directly or extract containers (including init containers)
 from rendered Kubernetes YAML. Registry errors fail closed; a locally loaded

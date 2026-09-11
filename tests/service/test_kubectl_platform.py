@@ -44,10 +44,11 @@ def test_platform_failure_is_immediate_and_identifies_image_and_node(init, messa
     kubectl.list_pods = Mock(return_value=client.V1PodList(items=[_pod(message, init=init)]))
     with (
         patch("sregym.service.kubectl.time.sleep") as sleep,
-        pytest.raises(ContainerPlatformError, match="example/app:latest.*arm-worker"),
+        pytest.raises(ContainerPlatformError, match="example/app:latest.*arm-worker") as error,
     ):
         kubectl.wait_for_ready("test", max_wait=10)
     sleep.assert_not_called()
+    assert "docs/container-images.md" in str(error.value)
 
 
 def test_transient_pull_failure_can_recover():

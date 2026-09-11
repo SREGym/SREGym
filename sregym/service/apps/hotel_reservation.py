@@ -18,7 +18,10 @@ logger = logging.getLogger("all.application")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
 
-HOTEL_RESERVATION_APPLICATION_IMAGE = "ghcr.io/sregym/hotel-reservation:latest"
+HOTEL_RESERVATION_APPLICATION_IMAGE = (
+    "ghcr.io/sregym/hotel-reservation:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a"
+    "@sha256:1c685e1c4c304f327952397b3a99c54dadb086607774d71f222b200ec0d2e65e"
+)
 
 
 class HotelReservation(Application):

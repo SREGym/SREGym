@@ -9,22 +9,22 @@ networking:
 #      endpoint = ["http://128.105.144.30:5000"]
 nodes:
   - role: control-plane
-    image: jacksonarthurclark/aiopslab-kind-arm:latest
+    image: ghcr.io/sregym/kind-node:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:ccab5d6cdca66e0b83a77c2711b641fa788024fe217526980da028ac07385b93
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev
   - role: worker
-    image: jacksonarthurclark/aiopslab-kind-arm:latest
+    image: ghcr.io/sregym/kind-node:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:ccab5d6cdca66e0b83a77c2711b641fa788024fe217526980da028ac07385b93
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev
   - role: worker
-    image: jacksonarthurclark/aiopslab-kind-arm:latest
+    image: ghcr.io/sregym/kind-node:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:ccab5d6cdca66e0b83a77c2711b641fa788024fe217526980da028ac07385b93
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev
   - role: worker
-    image: jacksonarthurclark/aiopslab-kind-arm:latest
+    image: ghcr.io/sregym/kind-node:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:ccab5d6cdca66e0b83a77c2711b641fa788024fe217526980da028ac07385b93
     extraMounts:
       - hostPath: /run/udev
         containerPath: /run/udev

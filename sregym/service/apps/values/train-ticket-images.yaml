@@ -1,0 +1,3 @@
+# The job embeds the application charts; its release pins the multiarch helpers.
+job:
+  image: ghcr.io/sregym/train-ticket-deploy:20260911-multiarch@sha256:430e82d095da102214f70f4223f44545e668da40840e1ce4159371ce122d1a95

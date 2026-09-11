@@ -1,0 +1,9 @@
+# The jobs and their Python action runtime are multiarch. Flight Ticket
+# still requires a separately provisioned, configured OpenWhisk cluster.
+jobs:
+  deployActions:
+    image: ghcr.io/sregym/flight-ticket-action-deployer:20260911-runtime@sha256:0e51df267e8ef97a7009c9a00f93c6ca5e85d3e3b1b18543594c94c60a47525b
+  populateRedis:
+    image: ghcr.io/sregym/flight-ticket-populate-redis:20260911-multiarch@sha256:827ee94490e5a749358dbb3abdf4818e8bbbf07c705b1e777529d13ec5628bd9
+  loadGenerator:
+    image: ghcr.io/sregym/flight-ticket-load-generator:20260911-multiarch@sha256:a7d510972622ab558bf457f27ebe34f3d1e90a44dbed6790348d1049052e8e18

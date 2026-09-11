@@ -47,7 +47,7 @@ bash kind/setup_kind_cluster.sh arm
 
 The script:
 
-1. creates the four-node KIND cluster using the matching architecture image;
+1. creates the four-node KIND cluster using the published multiarch node image;
 2. installs Calico;
 3. waits for Calico and all nodes to become ready; and
 4. clears the previous SREGym cluster-baseline cache.
@@ -58,17 +58,13 @@ Confirm that all four nodes are `Ready`:
 kubectl get nodes
 ```
 
-On Apple silicon, build and load the native images required by SREGym-Lite:
-
-```bash
-bash kind/build_lite_images.sh
-```
-
-This includes Hotel Reservation, Social Network, and their traffic generators.
-The first Social Network build compiles its legacy C++ dependencies from source;
-subsequent builds reuse Docker's cache. See [SREGym-Lite](../docs/SREGym-Lite.md)
-for the supported problem set. Other applications still require their own ARM64
-images.
+SREGym-Lite pulls published multiarch application images directly. No local
+build-and-load step is needed on Apple silicon. See
+[SREGym-Lite](../docs/SREGym-Lite.md) for the supported problem set and
+[container images](../docs/container-images.md) for optional local source builds.
+The [multiarch validation report](../docs/macOS-multiarch-validation.md) covers
+the wider application catalog and lists the remaining source and infrastructure
+requirements.
 
 ## Troubleshooting
 

@@ -3,6 +3,10 @@
 Local validation on September 4, 2026 (America/Chicago), addressing the Lite
 portion of [issue #1001](https://github.com/SREGym/SREGym/issues/1001).
 
+This is a historical report of local builds. See the
+[September 11 multiarch validation](macOS-multiarch-validation.md) for published
+images, subsequent application checks, and remaining full-catalog limitations.
+
 ## Environment
 
 | Component | Tested configuration |

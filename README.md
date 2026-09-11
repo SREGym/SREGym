@@ -82,8 +82,10 @@ bash kind/setup_kind_cluster.sh x86
 bash kind/setup_kind_cluster.sh arm
 ```
 
-On Apple silicon, also run `bash kind/build_lite_images.sh` to build and load the
-native application images for [SREGym-Lite](./docs/SREGym-Lite.md).
+[SREGym-Lite](./docs/SREGym-Lite.md) pulls published multiarch images on both
+Apple silicon and x86-64. No local application-image build is required.
+See [container images](./docs/container-images.md) for the wider application
+image catalog and remaining compatibility requirements.
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
