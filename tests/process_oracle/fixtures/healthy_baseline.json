@@ -1,0 +1,27 @@
+{
+  "schema_version": "ATIF-v1.7",
+  "steps": [
+    {
+      "source": "agent",
+      "tool_calls": [
+        {"tool_call_id": "tc1", "function_name": "Bash", "arguments": {"command": "kubectl get pods -n hotel-reservation"}}
+      ],
+      "observation": {
+        "results": [
+          {"source_call_id": "tc1", "content": "NAME                          READY   STATUS\ngeo-6c8d9f-nvbzr              1/1     Running\nfrontend-7d9f8b-xkp2q         1/1     Running"}
+        ]
+      }
+    },
+    {
+      "source": "agent",
+      "tool_calls": [
+        {"tool_call_id": "tc2", "function_name": "Bash", "arguments": {"command": "kubectl top pods -n hotel-reservation"}}
+      ],
+      "observation": {
+        "results": [
+          {"source_call_id": "tc2", "content": "NAME                          CPU(cores)   MEMORY(bytes)\ngeo-6c8d9f-nvbzr              9m           48Mi\nfrontend-7d9f8b-xkp2q         12m          64Mi"}
+        ]
+      }
+    }
+  ]
+}
