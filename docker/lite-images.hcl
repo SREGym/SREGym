@@ -30,7 +30,8 @@ target "_common" {
 target "hotel-reservation" {
   inherits = ["_common"]
   context = "SREGym-applications/hotelReservation"
-  tags = ["${REGISTRY}/hotel-reservation:${IMAGE_TAG}"]
+  // The historical hotel-reservation package is managed outside this repo.
+  tags = ["${REGISTRY}/lite-hotel-reservation:${IMAGE_TAG}"]
 }
 
 target "locust-exporter" {

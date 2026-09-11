@@ -8,6 +8,7 @@ on:
       - .github/workflows/lite-images.yml
       - docker/lite-images.hcl
       - docker/test_lite_image.sh
+      - docker/check_image_platforms.py
       - docker/locust-exporter/**
       - docker/wrk2/**
       - SREGym-applications
@@ -71,8 +72,9 @@ jobs:
           TARGET: ${{ matrix.target }}
           ARCH: ${{ matrix.arch }}
         run: |
-          image="$REGISTRY/$TARGET:$IMAGE_TAG-$ARCH"
-          cache="$REGISTRY/$TARGET:buildcache-$ARCH"
+          reference=$(docker buildx bake -f docker/lite-images.hcl --print "$TARGET" | jq -r '.target[env.TARGET].tags[0]')
+          image="$reference-$ARCH"
+          cache="${reference%:*}:buildcache-$ARCH"
           docker buildx bake -f docker/lite-images.hcl "$TARGET" \
             --set "*.platform=linux/$ARCH" \
             --set "$TARGET.tags=$image" \
@@ -93,6 +95,9 @@ jobs:
         target: ${{ fromJSON(needs.matrix.outputs.targets) }}
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -103,8 +108,10 @@ jobs:
         env:
           TARGET: ${{ matrix.target }}
         run: |
-          image="$REGISTRY/$TARGET:$IMAGE_TAG"
+          image=$(docker buildx bake -f docker/lite-images.hcl --print "$TARGET" | jq -r '.target[env.TARGET].tags[0]')
           docker buildx imagetools create --tag "$image" "$image-amd64" "$image-arm64"
-          docker buildx imagetools inspect --raw "$image" | jq -e '
-            [.manifests[].platform | .os + "/" + .architecture] | sort == ["linux/amd64", "linux/arm64"]'
+          # A successful authenticated push is not enough: users must be able
+          # to pull both platforms without registry credentials.
+          docker logout ghcr.io
+          python3 docker/check_image_platforms.py "$image"
           echo "Published \`$image\` (linux/amd64, linux/arm64)" >> "$GITHUB_STEP_SUMMARY"

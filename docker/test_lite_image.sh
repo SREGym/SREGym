@@ -50,6 +50,11 @@ case "$TARGET" in
         ;;
     openresty-thrift|media-frontend)
         docker run --rm --entrypoint /usr/local/openresty/bin/openresty "$IMAGE" -t
+        if [[ "$TARGET" == media-frontend ]]; then
+            docker run --rm --entrypoint /usr/local/openresty/bin/resty "$IMAGE" -e '
+                require "resty-mongol"; require "socket"; require "chronos"; require "magick"
+            '
+        fi
         ;;
     *) echo "No smoke test for $TARGET" >&2; exit 1 ;;
 esac
