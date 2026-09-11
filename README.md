@@ -69,6 +69,9 @@ SREGym runs on a self-managed Kubernetes cluster that you provision on Linux hos
 ### b) Emulated cluster
 SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/) on your local machine. However, not all problems are supported.
 
+For an experimental Docker-in-Docker environment with a private cluster per run,
+including parallel problem execution, see the [DinD guide](./docker/dind/README.md).
+
 **Note:** If you run into pod crashes or "too many open files" errors, see the [kind README](./kind/README.md) for required host kernel settings and troubleshooting.
 
 ```bash
