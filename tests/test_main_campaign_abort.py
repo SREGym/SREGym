@@ -52,10 +52,12 @@ def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platf
     benchmark_main = _load_main_module()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
+    monkeypatch.setattr(benchmark_main, "get_profile", lambda: "full")
     error_type = benchmark_main.ContainerPlatformError if platform_failure else RuntimeError
     conductor = SimpleNamespace(
         problems=Mock(get_problem_ids=Mock(return_value=["problem"])),
         results={},
+        bind_phase_ledger=Mock(),
         start_problem=AsyncMock(side_effect=error_type("image could not start")),
         finish_problem_in_background=Mock(),
         wait_for_submission_work=AsyncMock(),
@@ -66,4 +68,7 @@ def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platf
     assert conductor.start_problem.await_count == expected_attempts
     assert conductor.finish_problem_in_background.call_count == expected_attempts
     assert conductor.wait_for_submission_work.await_count == expected_attempts
-    assert results == [{None: [{"problem_id": "problem", "attempt": 1, "deploy_failed": True}]}]
+    conductor.bind_phase_ledger.assert_called_once()
+    assert results == [
+        {None: [{"problem_id": "problem", "attempt": 1, "deployment_profile": "full", "deploy_failed": True}]}
+    ]

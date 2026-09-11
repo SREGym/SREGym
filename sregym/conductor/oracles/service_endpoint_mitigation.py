@@ -5,12 +5,23 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class ServiceEndpointMitigationOracle(Oracle):
     """Verify that the affected Service has current, reachable endpoints."""
 
     importance = 1.0
+
+    # Two local reasons, both spec edits rather than symptoms:
+    # ``unexpected_pods_selected`` is this problem's injected fault restated,
+    # and a Deployment with no matchLabels cannot have arrived that way from
+    # the chart -- someone removed it.
+    FAILURE_CLASSES = {
+        "unexpected_pods_selected": FailureClass.AGENT_ERROR,
+        "deployment_selector_missing": FailureClass.AGENT_ERROR,
+    }
     rollout_timeout_seconds = 120
     probe_timeout_seconds = 60
     connection_timeout_seconds = 5
@@ -27,17 +38,7 @@ class ServiceEndpointMitigationOracle(Oracle):
 
     @classmethod
     def _rollout_complete(cls, deployment) -> bool:
-        desired = cls._desired_replicas(deployment)
-        if desired < 1:
-            return False
-        status = deployment.status
-        return (
-            (status.observed_generation or 0) >= (deployment.metadata.generation or 0)
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _wait_for_current_rollout(self, deployment):
         deadline = time.monotonic() + self.rollout_timeout_seconds
@@ -125,16 +126,20 @@ class ServiceEndpointMitigationOracle(Oracle):
             deployment = kubectl.get_deployment(service_name, namespace)
             if self._desired_replicas(deployment) < 1:
                 print(f"❌ Deployment {service_name} is scaled to zero")
-                return {"success": False}
+                return self.fail("required_deployment_scaled_to_zero", deployment=service_name)
             deployment = self._wait_for_current_rollout(deployment)
             if deployment is None:
                 print(f"❌ Deployment {service_name} did not complete its current rollout")
-                return {"success": False}
+                return self.fail(
+                    "required_deployment_not_rolled_out",
+                    deployment=service_name,
+                    waited_seconds=self.rollout_timeout_seconds,
+                )
 
             deployment_selector = deployment.spec.selector.match_labels or {}
             if not deployment_selector:
                 print(f"❌ Deployment {service_name} has no matchLabels selector")
-                return {"success": False}
+                return self.fail("deployment_selector_missing", deployment=service_name)
 
             replica_sets = kubectl.get_matching_replicasets(namespace, service_name)
             active_replica_sets = {
@@ -142,7 +147,7 @@ class ServiceEndpointMitigationOracle(Oracle):
             }
             if not active_replica_sets:
                 print(f"❌ Deployment {service_name} has no active ReplicaSet")
-                return {"success": False}
+                return self.fail("no_active_replicaset", deployment=service_name)
 
             expected_pods = {
                 pod.metadata.name
@@ -153,7 +158,7 @@ class ServiceEndpointMitigationOracle(Oracle):
             }
             if not expected_pods:
                 print(f"❌ Deployment {service_name} has no matching pods")
-                return {"success": False}
+                return self.fail("no_matching_pods", deployment=service_name, selector=deployment_selector)
 
             endpoints = kubectl.core_v1_api.read_namespaced_endpoints(service_name, namespace)
             ready_addresses = [address for subset in (endpoints.subsets or []) for address in (subset.addresses or [])]
@@ -165,19 +170,28 @@ class ServiceEndpointMitigationOracle(Oracle):
 
             if not ready_pods:
                 print(f"❌ Service {service_name} has no ready pod endpoints")
-                return {"success": False}
+                return self.fail("no_ready_endpoints", service=service_name)
 
             unexpected_pods = ready_pods - expected_pods
             if unexpected_pods:
                 print(f"❌ Service {service_name} selects unexpected pods: {', '.join(sorted(unexpected_pods))}")
-                return {"success": False}
+                # The injected fault restated: the Service still routes to pods
+                # that are not its Deployment's.
+                return self.fail("unexpected_pods_selected", service=service_name, pods=sorted(unexpected_pods))
 
             if not self._run_connectivity_probe():
                 print(f"❌ Service {service_name} does not accept traffic on port {self.problem.expected_service_port}")
-                return {"success": False}
+                return self.fail(
+                    "connectivity_probe_failed",
+                    service=service_name,
+                    port=self.problem.expected_service_port,
+                )
         except Exception as e:
             print(f"❌ Error retrieving endpoints for service {service_name}: {e}")
-            return {"success": False}
+            # An ApiException here is the cluster refusing to answer, not a bug
+            # in this oracle. Collapsing both into one bare failure blamed us
+            # for the former and hid the latter.
+            return self.fail_from_exception(e, service=service_name)
 
         print(f"[✅] Service {service_name} has current, reachable endpoints for its intended Deployment.")
         return {"success": True}

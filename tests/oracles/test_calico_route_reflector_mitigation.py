@@ -3,6 +3,7 @@ import subprocess
 from types import SimpleNamespace
 
 from sregym.conductor.oracles.calico_route_reflector_mitigation import CalicoRouteReflectorMitigationOracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class _Problem:
@@ -64,7 +65,12 @@ def test_route_reflector_peer_rejects_unmatched_positive_legacy_selector():
         ],
     )
 
-    assert oracle._route_reflector_peer_selects_nodes() is False
+    # The injected fault restated -- the selector still names the legacy master
+    # label -- so this is the one branch here that attributes to the agent.
+    verdict = oracle._route_reflector_peer_selects_no_nodes()
+    assert verdict["reason"] == "fault_still_present"
+    assert verdict["failure_class"] == FailureClass.AGENT_ERROR
+    assert verdict["detail"]["peers"] == ["cluster-peer-policy"]
 
 
 def test_route_reflector_peer_accepts_current_control_plane_selector():
@@ -79,7 +85,7 @@ def test_route_reflector_peer_accepts_current_control_plane_selector():
         ],
     )
 
-    assert oracle._route_reflector_peer_selects_nodes() is True
+    assert oracle._route_reflector_peer_selects_no_nodes() is None
 
 
 def test_route_reflector_peer_accepts_custom_route_reflector_selector():
@@ -94,7 +100,7 @@ def test_route_reflector_peer_accepts_custom_route_reflector_selector():
         ],
     )
 
-    assert oracle._route_reflector_peer_selects_nodes() is True
+    assert oracle._route_reflector_peer_selects_no_nodes() is None
 
 
 def test_route_reflector_peer_accepts_restored_legacy_selector():
@@ -109,7 +115,7 @@ def test_route_reflector_peer_accepts_restored_legacy_selector():
         ],
     )
 
-    assert oracle._route_reflector_peer_selects_nodes() is True
+    assert oracle._route_reflector_peer_selects_no_nodes() is None
 
 
 def test_route_reflector_peer_rejects_selected_node_without_cluster_id():
@@ -118,7 +124,7 @@ def test_route_reflector_peer_rejects_selected_node_without_cluster_id():
         nodes=[_node("control-plane-0", {_Problem.CURRENT_CONTROL_PLANE_LABEL: ""})],
     )
 
-    assert oracle._route_reflector_peer_selects_nodes() is False
+    assert oracle._route_reflector_peer_selects_no_nodes() is not None
 
 
 def test_route_reflector_peer_rejects_broad_selector_that_selects_workers():
@@ -134,7 +140,7 @@ def test_route_reflector_peer_rejects_broad_selector_that_selects_workers():
         ],
     )
 
-    assert oracle._route_reflector_peer_selects_nodes() is False
+    assert oracle._route_reflector_peer_selects_no_nodes() is not None
 
 
 def test_route_reflector_peer_rejects_negated_legacy_selector_mesh_bypass():
@@ -149,7 +155,7 @@ def test_route_reflector_peer_rejects_negated_legacy_selector_mesh_bypass():
         ],
     )
 
-    assert oracle._route_reflector_peer_selects_nodes() is False
+    assert oracle._route_reflector_peer_selects_no_nodes() is not None
 
 
 def test_route_reflector_peer_does_not_treat_spaced_negated_legacy_selector_as_positive():
@@ -158,7 +164,7 @@ def test_route_reflector_peer_does_not_treat_spaced_negated_legacy_selector_as_p
         nodes=[],
     )
 
-    assert oracle._route_reflector_peer_selects_nodes() is False
+    assert oracle._route_reflector_peer_selects_no_nodes() is not None
 
 
 def test_cross_node_probe_requires_same_node_and_cross_node_paths():
@@ -238,7 +244,13 @@ def test_cross_node_probe_rejects_colocated_cross_node_server():
     assert oracle._cross_node_probe_ok() is False
 
 
-def test_app_replicas_not_reduced_rejects_scale_down():
+def test_app_replicas_scaled_down_is_attributed_to_the_agent():
+    """Compared against a replica count recorded at injection time.
+
+    Most checks in this oracle cannot attribute, because the problem invites
+    the agent to reconfigure Calico. This one can: there is a known-good
+    *before* to compare against.
+    """
     oracle = object.__new__(CalicoRouteReflectorMitigationOracle)
     oracle.problem = SimpleNamespace(_app_deployment_replicas={"frontend": 2})
     oracle.apps_v1 = SimpleNamespace(
@@ -252,4 +264,8 @@ def test_app_replicas_not_reduced_rejects_scale_down():
         )
     )
 
-    assert oracle._app_replicas_not_reduced("hotel-reservation") is False
+    verdict = oracle._app_replicas_were_reduced("hotel-reservation")
+
+    assert verdict["reason"] == "app_replicas_reduced"
+    assert verdict["failure_class"] == FailureClass.AGENT_ERROR
+    assert verdict["detail"] == {"deployment": "frontend", "expected": 2, "desired": 1}

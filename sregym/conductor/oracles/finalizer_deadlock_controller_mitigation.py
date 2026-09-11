@@ -7,6 +7,8 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class FinalizerDeadlockControllerMitigationOracle(Oracle):
@@ -28,6 +30,16 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
         self.configmap_name = configmap_name
         self.finalizer = finalizer
         self.controller_deployment_name = controller_deployment_name
+
+    FAILURE_CLASSES = {
+        # A ConfigMap still held by its finalizer is the injected deadlock,
+        # observed directly, so ``fault_still_present`` covers it.
+        #
+        # The controller being unhealthy or a fresh cleanup request not
+        # reconciling are both downstream of a real controller doing real work.
+        "controller_not_healthy": FailureClass.AMBIGUOUS,
+        "cleanup_request_not_reconciled": FailureClass.AMBIGUOUS,
+    }
 
     def evaluate(self, *args, **kwargs) -> dict:
         print("== Cleanup Controller Recovery Evaluation ==")
@@ -58,16 +70,31 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
             if configmap_deleted and controller_ok and app_ok:
                 durability_ok = self._run_cleanup_request(kubectl, namespace)
 
-            success = configmap_deleted and controller_ok and app_ok and durability_ok
+            # Report the first failed property rather than a conjunction: all
+            # four used to collapse into one bare failure, so a stuck finalizer
+            # and a broken app were indistinguishable.
+            first_failure = next(
+                (
+                    reason
+                    for ok, reason in (
+                        (configmap_deleted, "fault_still_present"),
+                        (controller_ok, "controller_not_healthy"),
+                        (app_ok, "pods_not_ready"),
+                        (durability_ok, "cleanup_request_not_reconciled"),
+                    )
+                    if not ok
+                ),
+                None,
+            )
         except Exception as exc:
             print(f"[FAIL] Error checking cleanup-controller recovery: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
 
-        if success:
+        if first_failure is None:
             print("[PASS] The controller successfully reconciled a new cleanup request.")
-        else:
-            print("[FAIL] Cleanup-controller recovery is incomplete.")
-        return {"success": success}
+            return {"success": True}
+        print("[FAIL] Cleanup-controller recovery is incomplete.")
+        return self.fail(first_failure)
 
     @staticmethod
     def _desired_replicas(deployment) -> int:
@@ -80,17 +107,7 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
             deployments = kubectl.list_deployments(namespace)
             all_settled = True
             for deployment in deployments.items:
-                desired = self._desired_replicas(deployment)
-                status = deployment.status
-                generation = deployment.metadata.generation or 0
-                if (
-                    desired < 1
-                    or (status.observed_generation or 0) < generation
-                    or (status.updated_replicas or 0) != desired
-                    or (status.ready_replicas or 0) != desired
-                    or (status.available_replicas or 0) != desired
-                    or (status.unavailable_replicas or 0) != 0
-                ):
+                if not deployment_rollout_complete(deployment):
                     all_settled = False
                     break
             if all_settled:
@@ -133,14 +150,7 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
             return False, "[FAIL] Controller Deployment is scaled to zero."
 
         status = deployment.status
-        generation = deployment.metadata.generation or 0
-        healthy = (
-            (status.observed_generation or 0) >= generation
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        healthy = deployment_rollout_complete(deployment)
         if not healthy:
             return False, (
                 f"[FAIL] Controller Deployment is not fully rolled out ({status.ready_replicas or 0}/{desired} ready)."
@@ -215,6 +225,9 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
 
     def _check_app_healthy(self, kubectl, namespace) -> tuple[bool, str]:
         try:
+            for deployment in kubectl.list_deployments(namespace).items:
+                if not deployment_rollout_complete(deployment):
+                    return False, f"[FAIL] Deployment `{deployment.metadata.name}` rollout is incomplete."
             pods = kubectl.list_pods(namespace).items
         except Exception as exc:
             return False, f"[FAIL] Could not list pods in `{namespace}`: {exc}"

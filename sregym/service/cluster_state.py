@@ -59,34 +59,26 @@ def _is_chaos_mesh_resource(name: str) -> bool:
     )
 
 
-def _is_openebs_resource(name: str) -> bool:
-    """True if a cluster-scoped resource belongs to OpenEBS and must be preserved.
+# Exact cluster-scoped identities from openebs-operator.yaml and the
+# metrics-server components.yaml used by Conductor. Keep this list aligned with
+# those manifests when changing infrastructure versions. A matching substring
+# or a matching name on another resource kind does not establish ownership.
+_PRESERVED_INFRA_RESOURCES = {
+    "ClusterRole": frozenset({"openebs-maya-operator", "system:aggregated-metrics-reader", "system:metrics-server"}),
+    "ClusterRoleBinding": frozenset(
+        {
+            "openebs-maya-operator",
+            "metrics-server:system:auth-delegator",
+            "system:metrics-server",
+        }
+    ),
+    "CustomResourceDefinition": frozenset({"blockdevices.openebs.io", "blockdeviceclaims.openebs.io"}),
+    "StorageClass": frozenset({"openebs-hostpath", "openebs-device"}),
+}
 
-    Protecting the `openebs` namespace alone is not enough: openebs-operator.yaml
-    also creates cluster-scoped RBAC, CRDs (`*.openebs.io`) and StorageClasses.
-    Deleting those while keeping the namespace leaves the provisioner running but
-    unable to act — a broken half-state that is harder to diagnose than a clean
-    rebuild. Preserve the whole tier together.
-    """
-    if not name:
-        return False
-    return name.endswith(".openebs.io") or "openebs" in name
 
-
-def _is_metrics_server_resource(name: str) -> bool:
-    """True if a cluster-scoped resource belongs to metrics-server.
-
-    The Deployment lives in kube-system and is protected, but its cluster-scoped
-    RBAC is not in the baseline and was being deleted here every problem. That
-    went unnoticed only because the conductor re-applied components.yaml on each
-    problem and silently recreated it. The binding that matters is
-    `metrics-server:system:auth-delegator`, which does not start with "system:"
-    and so escapes the generic guard below; without it metrics-server cannot
-    create subjectaccessreviews and every `kubectl top` fails with a 500.
-    """
-    if not name:
-        return False
-    return "metrics-server" in name
+def _is_preserved_infra_resource(kind: str, name: str) -> bool:
+    return name in _PRESERVED_INFRA_RESOURCES.get(kind, ())
 
 
 @dataclass
@@ -267,7 +259,7 @@ class ClusterStateManager:
             # Skip system roles that may have been auto-created
             if role.startswith("system:") or role.startswith("kubeadm:"):
                 continue
-            if _is_chaos_mesh_resource(role) or _is_openebs_resource(role) or _is_metrics_server_resource(role):
+            if _is_chaos_mesh_resource(role) or _is_preserved_infra_resource("ClusterRole", role):
                 continue
             logger.info(f"Deleting unexpected ClusterRole: {role}")
             try:
@@ -283,11 +275,7 @@ class ClusterStateManager:
         for binding in unexpected_bindings:
             if binding.startswith("system:") or binding.startswith("kubeadm:"):
                 continue
-            if (
-                _is_chaos_mesh_resource(binding)
-                or _is_openebs_resource(binding)
-                or _is_metrics_server_resource(binding)
-            ):
+            if _is_chaos_mesh_resource(binding) or _is_preserved_infra_resource("ClusterRoleBinding", binding):
                 continue
             logger.info(f"Deleting unexpected ClusterRoleBinding: {binding}")
             try:
@@ -331,7 +319,7 @@ class ClusterStateManager:
         current_scs = self._get_storage_classes()
         unexpected_scs = current_scs - self.baseline.storage_classes
         for sc in unexpected_scs:
-            if _is_openebs_resource(sc):
+            if _is_preserved_infra_resource("StorageClass", sc):
                 continue
             logger.info(f"Deleting unexpected StorageClass: {sc}")
             try:
@@ -345,7 +333,7 @@ class ClusterStateManager:
         current_crds = self._get_crds()
         unexpected_crds = current_crds - self.baseline.crds
         for crd in unexpected_crds:
-            if _is_chaos_mesh_resource(crd) or _is_openebs_resource(crd):
+            if _is_chaos_mesh_resource(crd) or _is_preserved_infra_resource("CustomResourceDefinition", crd):
                 continue
             logger.info(f"Deleting unexpected CRD: {crd}")
             self._strip_cr_finalizers(crd)
@@ -360,7 +348,7 @@ class ClusterStateManager:
         current_vwc = self._get_validating_webhook_configs()
         unexpected_vwc = current_vwc - self.baseline.validating_webhook_configs
         for vwc in unexpected_vwc:
-            if _is_chaos_mesh_resource(vwc) or _is_openebs_resource(vwc):
+            if _is_chaos_mesh_resource(vwc) or _is_preserved_infra_resource("ValidatingWebhookConfiguration", vwc):
                 continue
             logger.info(f"Deleting unexpected ValidatingWebhookConfiguration: {vwc}")
             try:
@@ -374,7 +362,7 @@ class ClusterStateManager:
         current_mwc = self._get_mutating_webhook_configs()
         unexpected_mwc = current_mwc - self.baseline.mutating_webhook_configs
         for mwc in unexpected_mwc:
-            if _is_chaos_mesh_resource(mwc) or _is_openebs_resource(mwc):
+            if _is_chaos_mesh_resource(mwc) or _is_preserved_infra_resource("MutatingWebhookConfiguration", mwc):
                 continue
             logger.info(f"Deleting unexpected MutatingWebhookConfiguration: {mwc}")
             try:

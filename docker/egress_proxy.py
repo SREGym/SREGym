@@ -12,7 +12,6 @@ from internet_policy import (
     DEFAULT_BLOCKED_GITHUB_REPOSITORIES,
     DEFAULT_BLOCKED_GITHUB_REPOSITORY_IDS,
     blocked_github_owner,
-    should_stream_response,
 )
 from mitmproxy import ctx, http
 
@@ -39,9 +38,16 @@ BLOCK_LOG = Path(os.environ.get("BLOCKED_REQUEST_LOG", "/state/blocked-requests.
 
 
 def responseheaders(flow: http.HTTPFlow) -> None:
-    """Forward long-lived SSE responses instead of buffering them forever."""
-    if should_stream_response(flow.response.headers.get("content-type")):
-        flow.response.stream = True
+    """Forward responses as they arrive instead of buffering them in full.
+
+    This addon only ever inspects request bodies (for the GitHub blocklist
+    below), never response bodies, so there is nothing that needs a fully
+    buffered response. Streaming unconditionally -- rather than only for a
+    recognized content type like text/event-stream -- avoids stalling any
+    long-lived agent connection for its whole duration before the client
+    sees a single byte, whatever content type it happens to use.
+    """
+    flow.response.stream = True
 
 
 def request(flow: http.HTTPFlow) -> None:

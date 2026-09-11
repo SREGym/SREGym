@@ -124,6 +124,36 @@ Use `--judge-model` to override the judge model separately (defaults to `--model
 uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627
 ```
 
+#### Stage Selection
+
+Each problem runs up to two agent stages, `diagnosis` then `mitigation`. By default a
+run attempts every stage the problem supports. `--stages` narrows that:
+
+```bash
+# Diagnose only; never enter the mitigation stage
+uv run main.py --problem network_policy_block --stages diagnosis
+
+# Both, stated explicitly (the default)
+uv run main.py --suite sregym-lite --stages diagnosis mitigation
+```
+
+`--stages` is independent of `--problem` and `--suite`: the stages decide what an
+attempt does, the problem selection decides which problems it does it to. Stages must
+be given in the order above.
+
+Useful mainly when iterating on a problem's diagnosis oracle, where a mitigation
+attempt is wasted time — note that `--agent-timeout` is a budget for the whole agent
+phase, so a slow diagnosis otherwise eats into mitigation's share.
+
+> [!NOTE]
+> A single-stage run is reported as `complete`, since completeness is measured against
+> the stages that were configured. It is not, however, useful input to
+> `sregym/results/report.py`'s difficulty tables, which treat a missing mitigation
+> result as inconclusive.
+
+Naming a stage the problem has no oracle for is an error rather than a silent skip, so
+a typo cannot produce a run that reports success having measured nothing.
+
 #### Container Isolation
 
 Agents always run in isolated Docker containers, preventing access to SREGym internals like problem definitions and grading logic. The image is built automatically on first run.
@@ -136,6 +166,15 @@ uv run main.py --agent codex --model gpt-5 --force-build
 
 Containerized agents can use the public internet by default, but direct access to the benchmark's GitHub source is
 blocked. Use `--internet-access open` only when you intentionally need the previous unrestricted network behavior.
+
+Agent containers are hardened by default: every Linux capability is dropped except `DAC_OVERRIDE`, which container
+root needs to write to the host-owned `/logs` and `/workspace` bind mounts, and `no-new-privileges` is set. This
+blocks `apt-get`, which cannot drop to the `_apt` user without `setuid`/`setgid`. If your agent installs tooling
+during a run, turn it off:
+
+```bash
+uv run main.py --agent codex --model gpt-5 --container-hardening off
+```
 
 ### Deployment Profiles
 

@@ -1,9 +1,25 @@
-from sregym.conductor.oracles.mitigation import MitigationOracle
-from sregym.service.kubectl import KubeCtl, ApiException
+import datetime
 import time
 
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.service.kafka_health import KafkaHealthCheck, broker_memory_failure, broker_pods
+from sregym.service.kubectl import ApiException, KubeCtl
+
+
 class KafkaProducerLeakOracle(MitigationOracle):
+    FAILURE_CLASSES = {
+        "kafka_still_restarting": FailureClass.AMBIGUOUS,
+        "kafka_not_serving": FailureClass.AMBIGUOUS,
+    }
+
     def evaluate(self) -> dict:
+        try:
+            return self._evaluate()
+        except Exception as exc:
+            return self.fail_from_exception(exc)
+
+    def _evaluate(self) -> dict:
         self.rollout_time = 300
 
         results = super().evaluate()
@@ -14,56 +30,80 @@ class KafkaProducerLeakOracle(MitigationOracle):
             try:
                 checkout_deployment = kubectl.get_deployment(self.problem.faulty_service, self.problem.namespace)
                 kafka_deployment = kubectl.get_deployment("kafka", self.problem.namespace)
-            except ApiException:
-                results["success"] = False
-                return results
-            
+            except ApiException as exc:
+                # Silently swallowed before: an unreadable Deployment scored
+                # identically to a heap limit the agent never restored.
+                return self.fail_from_exception(exc)
+
             if not checkout_deployment.spec.replicas or not kafka_deployment.spec.replicas:
-                results["success"] = False
-                return results
+                print("❌ checkout or kafka Deployment is scaled to zero")
+                return self.fail(
+                    "required_deployment_scaled_to_zero",
+                    checkout_replicas=checkout_deployment.spec.replicas,
+                    kafka_replicas=kafka_deployment.spec.replicas,
+                )
 
             for c in kafka_deployment.spec.template.spec.containers:
                 if "kafka" in c.name:
-                    for e in c.env:
-                        if e.name == "KAFKA_HEAP_OPTS":
-                            if e.value != self.problem.heap_limit:
-                                results["success"] = False
-                                return results
-                            
-                            break
-                            
-                    if (c.resources.limits.get("memory") if c.resources and c.resources.limits else None) != self.problem.memory_limit:
-                        results["success"] = False
-                        return results
-                    
+                    heap = next((e.value for e in c.env or [] if e.name == "KAFKA_HEAP_OPTS"), None)
+                    if heap != self.problem.heap_limit:
+                        return self.fail(
+                            "fault_still_present",
+                            setting="KAFKA_HEAP_OPTS",
+                            value=heap,
+                            expected=self.problem.heap_limit,
+                        )
+
+                    memory_limit = c.resources.limits.get("memory") if c.resources and c.resources.limits else None
+                    if memory_limit != self.problem.memory_limit:
+                        print(f"❌ kafka memory limit is '{memory_limit}', expected '{self.problem.memory_limit}'")
+                        return self.fail(
+                            "fault_still_present",
+                            setting="memory_limit",
+                            value=memory_limit,
+                            expected=self.problem.memory_limit,
+                        )
+
                     break
 
-            pods = kubectl.list_pods(self.problem.namespace)
-            rcnt_1 = None
-            for p in pods.items:
-                if "kafka" in p.metadata.name:
-                    for c in p.status.container_statuses:
-                        if "kafka" in c.name:
-                            rcnt_1 = c.restart_count
-                            break
-                    break
-
-            deadline = time.monotonic() + 120
-            while time.monotonic() < deadline:
-                pods = kubectl.list_pods(self.problem.namespace)
-                rcnt_2 = None
-                for p in pods.items:
-                    if "kafka" in p.metadata.name:
-                        for c in p.status.container_statuses:
-                            if "kafka" in c.name:
-                                rcnt_2 = c.restart_count
-                                break
+            with KafkaHealthCheck(kubectl, self.problem.namespace) as probe:
+                started = datetime.datetime.now(datetime.UTC)
+                # Kafka's container can be Ready before its protocol listener
+                # starts. Give a valid manual restart time to finish, then
+                # require the entire stability window below.
+                ready_deadline = time.monotonic() + 60
+                while True:
+                    if broker_memory_failure(kubectl, self.problem.namespace, started):
+                        return self.fail("fault_still_present", detail="Kafka has a new memory failure")
+                    if probe.check():
                         break
-
-                if rcnt_1 is None or rcnt_2 is None or rcnt_2 > rcnt_1:
-                    results["success"] = False
-                    return results
-
-                time.sleep(5)
+                    if time.monotonic() >= ready_deadline:
+                        return self.fail("kafka_not_serving")
+                    time.sleep(2)
+                before = self._broker_restarts()
+                deadline = time.monotonic() + 120
+                next_probe = 0
+                while True:
+                    after = self._broker_restarts()
+                    if not before or before != after:
+                        return self.fail("kafka_still_restarting", before=before, after=after)
+                    if broker_memory_failure(kubectl, self.problem.namespace, started):
+                        return self.fail("fault_still_present", detail="Kafka has a new memory failure")
+                    now = time.monotonic()
+                    if now >= next_probe or now >= deadline:
+                        if not probe.check():
+                            return self.fail("kafka_not_serving")
+                        next_probe = time.monotonic() + 20
+                    if now >= deadline:
+                        break
+                    time.sleep(min(5, max(0, deadline - time.monotonic())))
 
         return results
+
+    def _broker_restarts(self):
+        return {
+            str(pod.metadata.uid): status.restart_count
+            for pod in broker_pods(self.problem.kubectl, self.problem.namespace)
+            for status in pod.status.container_statuses or []
+            if status.name == "kafka"
+        }

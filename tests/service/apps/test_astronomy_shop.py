@@ -87,3 +87,19 @@ def test_arm_go_services_have_memory_headroom():
         service = values["components"][name]
         assert service["resources"]["limits"]["memory"] == "64Mi"
         assert service["envOverrides"] == [{"name": "GOMEMLIMIT", "value": "48MiB"}]
+
+
+def test_ui_fix_coexists_with_upstream_memory_fixes():
+    source = (AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text()
+    # Duplicate YAML mappings silently discard one side of a merge in safe_load.
+    root = yaml.compose(source)
+    assert sum(key.value == "components" for key, _ in root.value) == 1
+    components = yaml.safe_load(source)["components"]
+    assert {"flagd", "accounting", "ad", "fraud-detection", "kafka"} <= components.keys()
+    assert "@sha256:" in components["accounting"]["imageOverride"]["tag"]
+    for name, heap in (("ad", "200m"), ("fraud-detection", "180m")):
+        overrides = {env["name"]: env["value"] for env in components[name]["envOverrides"]}
+        assert "-javaagent:" in overrides["JAVA_TOOL_OPTIONS"]
+        assert f"-Xmx{heap}" in overrides["JAVA_TOOL_OPTIONS"]
+    assert components["kafka"]["resources"]["requests"]["memory"] == "600Mi"
+    assert components["kafka"]["resources"]["limits"]["memory"] == "1Gi"

@@ -19,7 +19,7 @@ def _problem():
 
 def _deployment(name, replicas=1, ready=1, priority_class=None, memory="512Mi", node_selector=None):
     return SimpleNamespace(
-        metadata=SimpleNamespace(name=name),
+        metadata=SimpleNamespace(generation=1, name=name),
         spec=SimpleNamespace(
             replicas=replicas,
             selector=SimpleNamespace(match_labels={"app": name}),
@@ -40,6 +40,7 @@ def _deployment(name, replicas=1, ready=1, priority_class=None, memory="512Mi", 
             ),
         ),
         status=SimpleNamespace(
+            replicas=1 if replicas is None else replicas,
             ready_replicas=ready,
             updated_replicas=ready,
             available_replicas=ready,

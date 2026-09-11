@@ -46,6 +46,7 @@ from ._common import (
     _aggregate_final_metrics,
     _load_jsonl,
     _stringify,
+    _sum_tokens,
 )
 
 logger = logging.getLogger(__name__)
@@ -120,11 +121,10 @@ def _build_metrics(usage: Any) -> Metrics | None:
     if not isinstance(usage, dict):
         return None
 
-    cached_tokens = usage.get("cache_read_input_tokens") or 0
-    creation = usage.get("cache_creation_input_tokens") or 0
-    input_tokens = usage.get("input_tokens") or 0
-    prompt_tokens = input_tokens + cached_tokens + creation
-    completion_tokens = usage.get("output_tokens") or 0
+    cached_tokens = usage.get("cache_read_input_tokens")
+    creation = usage.get("cache_creation_input_tokens")
+    prompt_tokens = _sum_tokens(usage.get("input_tokens"), cached_tokens, creation)
+    completion_tokens = usage.get("output_tokens")
 
     extra: dict[str, Any] = {}
     for key, value in usage.items():
