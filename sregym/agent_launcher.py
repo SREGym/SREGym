@@ -35,11 +35,18 @@ class AgentLauncher:
         self._use_containers: bool = True
         self._container_runner: ContainerRunner | None = None
         self._internet_policy = InternetPolicy()
+        # Per-problem source workspace bind-mounted into the agent at /workspace.
+        # None for problems that do not ship editable source (config-only faults).
+        self._problem_workspace: Path | None = None
 
     def set_internet_policy(self, policy: InternetPolicy) -> None:
         if self._container_runner is not None:
             raise RuntimeError("Internet policy cannot change after the container runner is initialized")
         self._internet_policy = policy
+
+    def set_problem_workspace(self, path: Path | None):
+        """Set (or clear) the host directory to bind-mount at /workspace."""
+        self._problem_workspace = path
 
     def set_agent_kubeconfig(self, kubeconfig_path: str | None):
         """
@@ -147,7 +154,9 @@ class AgentLauncher:
         # Otherwise fall back to the default per-agent logs directory.
         agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
         self._container_runner.config.logs_path = Path(agent_logs_dir) if agent_logs_dir else Path(f"./logs/{reg.name}")
-        self._container_runner.config.workspace_path = None
+        # Bind the per-problem source workspace at /workspace when the driver
+        # provisioned one. Config-only problems leave this None.
+        self._container_runner.config.workspace_path = self._problem_workspace
 
         composite_cmd = self._container_runner.build_composite_command(
             install_script=reg.install_script,

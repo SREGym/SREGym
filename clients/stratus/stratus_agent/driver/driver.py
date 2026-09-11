@@ -358,6 +358,7 @@ async def diagnosis_task_main():
                 app_name=app_name,
                 app_description=app_description,
                 app_namespace=app_namespace,
+                workspace_hint=app_info.get("workspace_hint", ""),
             )
         ),
     ]
@@ -403,6 +404,7 @@ async def diagnosis_with_localization_task_main():
                 app_name=app_name,
                 app_description=app_description,
                 app_namespace=app_namespace,
+                workspace_hint=app_info.get("workspace_hint", ""),
             )
         ),
     ]
@@ -479,6 +481,7 @@ async def mitigation_task_main(diagnosis_summary):
                 app_name=app_name,
                 app_description=app_description,
                 app_namespace=app_namespace,
+                workspace_hint=app_info.get("workspace_hint", ""),
             )
         ),
     ]
@@ -627,6 +630,7 @@ async def mitigation_task_main(diagnosis_summary):
                             app_name=app_name,
                             app_description=app_description,
                             app_namespace=app_namespace,
+                            workspace_hint=app_info.get("workspace_hint", ""),
                         )
                         + "\n\n"
                         + mitigation_agent_prompts["retry_user"].format(

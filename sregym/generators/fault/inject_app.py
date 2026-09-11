@@ -7,6 +7,13 @@ import time
 from kubernetes import client
 
 from sregym.generators.fault.base import FaultInjector
+from sregym.generators.fault.source_overlay import (
+    apply_source_file_overlay,
+    overlay_basename,
+    override_configmap_name,
+    override_volume_name,
+    remove_source_file_overlay,
+)
 from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE
 from sregym.service.kubectl import KubeCtl
 
@@ -684,6 +691,81 @@ class ApplicationFaultInjector(FaultInjector):
             f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout=120s"
         )
         time.sleep(5)
+
+    def inject_source_file_override(
+        self,
+        deployment_name: str,
+        source_path: str,
+        replacement_content: str,
+        configmap_name: str | None = None,
+        container_name: str | None = None,
+        rollout_timeout: str = "180s",
+    ) -> str:
+        """Overlay one file in a running container with a ConfigMap subPath mount.
+
+        Returns the ConfigMap name that holds the replacement content.
+        """
+        cm_name = override_configmap_name(deployment_name, configmap_name)
+        basename = overlay_basename(source_path)
+        volume_name = override_volume_name(cm_name)
+
+        self.kubectl.create_or_update_configmap(
+            cm_name,
+            self.namespace,
+            {basename: replacement_content},
+        )
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        apply_source_file_overlay(
+            deployment.spec.template.spec,
+            volume_name=volume_name,
+            configmap_name=cm_name,
+            source_path=source_path,
+            basename=basename,
+            container_name=container_name,
+        )
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        # subPath mounts snapshot ConfigMap data at pod start and do not hot-reload.
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout restart deployment/{deployment_name} -n {self.namespace}"
+        )
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout={rollout_timeout}"
+        )
+        print(
+            f"Mounted ConfigMap '{cm_name}' key '{basename}' over '{source_path}' "
+            f"in deployment '{deployment_name}'."
+        )
+        return cm_name
+
+    def recover_source_file_override(
+        self,
+        deployment_name: str,
+        source_path: str,
+        configmap_name: str | None = None,
+        container_name: str | None = None,
+        rollout_timeout: str = "180s",
+    ):
+        """Remove the source-file overlay added by inject_source_file_override."""
+        cm_name = override_configmap_name(deployment_name, configmap_name)
+        volume_name = override_volume_name(cm_name)
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        remove_source_file_overlay(
+            deployment.spec.template.spec,
+            volume_name=volume_name,
+            container_name=container_name,
+        )
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout={rollout_timeout}"
+        )
+
+        try:
+            self.kubectl.exec_command(f"kubectl delete configmap {cm_name} -n {self.namespace}")
+        except Exception as exc:
+            print(f"Warning: failed to delete ConfigMap {cm_name}: {exc}")
+        print(f"Removed source override for '{source_path}' from deployment '{deployment_name}'.")
 
 
 if __name__ == "__main__":
