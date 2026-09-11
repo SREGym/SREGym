@@ -7,8 +7,10 @@ import time
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.prometheus_query import catalog_list_products_total
 from sregym.generators.workload.recommendation_herd import HerdSnapshot
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class ThunderingHerdMitigationOracle(Oracle):
@@ -17,6 +19,17 @@ class ThunderingHerdMitigationOracle(Oracle):
     importance = 1.0
     guarded_deployments = ("recommendation", "product-catalog", "frontend")
     required_services = ("recommendation", "product-catalog", "frontend")
+
+    FAILURE_CLASSES = {
+        "required_deployment_missing": FailureClass.AGENT_ERROR,
+        "capacity_changed": FailureClass.AGENT_ERROR,
+        "invalid_recommendation_ids": FailureClass.AGENT_ERROR,
+        "hardcoded_recommendations": FailureClass.AGENT_ERROR,
+        "slo_not_met": FailureClass.AGENT_ERROR,
+        "insufficient_samples": FailureClass.AMBIGUOUS,
+        "empty_catalog": FailureClass.ENVIRONMENT_ERROR,
+        "baseline_not_captured": FailureClass.HARNESS_ERROR,
+    }
 
     # Offered load is owned by this oracle. Hidden-wave constants must not appear
     # in the problem root_cause text.
@@ -65,16 +78,7 @@ class ThunderingHerdMitigationOracle(Oracle):
 
     @staticmethod
     def _rollout_complete(deployment) -> bool:
-        desired = deployment.spec.replicas if deployment.spec.replicas is not None else 1
-        status = deployment.status
-        return desired >= 1 and (
-            (status.observed_generation or 0) >= (deployment.metadata.generation or 0)
-            and (status.replicas or 0) == desired
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     @staticmethod
     def _fingerprint_deployment(deployment) -> dict:
@@ -92,10 +96,10 @@ class ThunderingHerdMitigationOracle(Oracle):
         replicas = deployment.spec.replicas if deployment.spec.replicas is not None else 1
         return {"replicas": replicas, "containers": containers}
 
-    def _cluster_shape_healthy(self) -> bool:
+    def _cluster_shape_unhealthy(self) -> dict | None:
         if not self._baseline_deployments:
             print("[FAIL] No healthy baseline was captured")
-            return False
+            return self.fail("baseline_not_captured")
         try:
             deployments = self.problem.kubectl.apps_v1_api.list_namespaced_deployment(
                 namespace=self.problem.namespace
@@ -104,10 +108,11 @@ class ThunderingHerdMitigationOracle(Oracle):
             missing = sorted(self._baseline_deployments - current.keys())
             if missing:
                 print(f"[FAIL] Required Deployments are missing: {', '.join(missing)}")
-                return False
-            if any(not self._rollout_complete(current[name]) for name in self._baseline_deployments):
+                return self.fail("required_deployment_missing", deployments=missing)
+            unrolled = sorted(name for name in self._baseline_deployments if not self._rollout_complete(current[name]))
+            if unrolled:
                 print("[FAIL] One or more application Deployments are not fully rolled out and Ready")
-                return False
+                return self.fail("required_deployment_not_rolled_out", deployments=unrolled)
             for service_name in self.required_services:
                 endpoints = self.problem.kubectl.core_v1_api.read_namespaced_endpoints(
                     name=service_name,
@@ -115,13 +120,16 @@ class ThunderingHerdMitigationOracle(Oracle):
                 )
                 if not any(subset.addresses for subset in endpoints.subsets or []):
                     print(f"[FAIL] Service {service_name!r} has no Ready endpoints")
-                    return False
+                    return self.fail("no_ready_endpoints", service=service_name)
         except ApiException as exc:
             print(f"[FAIL] Could not verify the application topology: {exc}")
-            return False
-        return True
+            return self.fail_from_exception(exc)
+        return None
 
-    def _resources_unchanged(self) -> bool:
+    def _cluster_shape_healthy(self) -> bool:
+        return self._cluster_shape_unhealthy() is None
+
+    def _capacity_changed(self) -> dict | None:
         try:
             deployments = self.problem.kubectl.apps_v1_api.list_namespaced_deployment(
                 namespace=self.problem.namespace
@@ -129,11 +137,11 @@ class ThunderingHerdMitigationOracle(Oracle):
             current = {deployment.metadata.name: deployment for deployment in deployments.items}
         except ApiException as exc:
             print(f"[FAIL] Could not read Deployments for resource comparison: {exc}")
-            return False
+            return self.fail_from_exception(exc)
         for name, expected_replicas in self._baseline_replicas.items():
             if name not in current:
                 print(f"[FAIL] Deployment {name!r} is missing")
-                return False
+                return self.fail("required_deployment_missing", deployments=[name])
             observed_replicas = current[name].spec.replicas
             if observed_replicas is None:
                 observed_replicas = 1
@@ -142,22 +150,35 @@ class ThunderingHerdMitigationOracle(Oracle):
                     f"[FAIL] Deployment {name!r} replicas changed "
                     f"({expected_replicas} -> {observed_replicas})"
                 )
-                return False
+                return self.fail(
+                    "capacity_changed",
+                    deployment=name,
+                    expected_replicas=expected_replicas,
+                    observed_replicas=observed_replicas,
+                )
         for name, expected in self._baseline_shape.items():
             if name not in current:
                 print(f"[FAIL] Guarded Deployment {name!r} is missing")
-                return False
+                return self.fail("required_deployment_missing", deployments=[name])
             observed = self._fingerprint_deployment(current[name])
             if observed["replicas"] != expected["replicas"]:
                 print(
                     f"[FAIL] Deployment {name!r} replicas changed "
                     f"({expected['replicas']} -> {observed['replicas']})"
                 )
-                return False
+                return self.fail(
+                    "capacity_changed",
+                    deployment=name,
+                    expected_replicas=expected["replicas"],
+                    observed_replicas=observed["replicas"],
+                )
             if observed["containers"] != expected["containers"]:
                 print(f"[FAIL] Deployment {name!r} CPU/memory requests or limits changed")
-                return False
-        return True
+                return self.fail("capacity_changed", deployment=name)
+        return None
+
+    def _resources_unchanged(self) -> bool:
+        return self._capacity_changed() is None
 
     def _catalog_list_products_total(self) -> float | None:
         return catalog_list_products_total(self.problem.namespace)
@@ -167,14 +188,14 @@ class ThunderingHerdMitigationOracle(Oracle):
             return float("inf")
         return catalog_delta / succeeded
 
-    def _wave_healthy(
+    def _wave_failure(
         self,
         snapshot: HerdSnapshot,
         amplification: float,
         catalog_ids: set[str],
         *,
         concurrency: int,
-    ) -> bool:
+    ) -> dict | None:
         minimum_completed = max(5, concurrency * self.min_completed_per_worker)
         print(
             "[Health] "
@@ -184,36 +205,46 @@ class ThunderingHerdMitigationOracle(Oracle):
         )
         if snapshot.completed < minimum_completed:
             print(f"[FAIL] Too few completed recommendation requests ({snapshot.completed})")
-            return False
+            return self.fail("insufficient_samples", completed=snapshot.completed)
         if snapshot.success_rate < self.min_success_rate:
             print("[FAIL] Recommendation success rate is below the SLO")
-            return False
+            return self.fail("slo_not_met", success_rate=snapshot.success_rate)
         if snapshot.p95_latency_seconds is None or snapshot.p95_latency_seconds > self.max_p95_seconds:
             print("[FAIL] Recommendation p95 latency is above the SLO")
-            return False
+            return self.fail("slo_not_met", p95=snapshot.p95_latency_seconds)
         if snapshot.p99_latency_seconds is not None and snapshot.p99_latency_seconds > self.max_p99_seconds:
             print("[FAIL] Recommendation p99 latency is above the SLO")
-            return False
+            return self.fail("slo_not_met", p99=snapshot.p99_latency_seconds)
         if snapshot.succeeded >= 5 and amplification <= 0:
             print("[FAIL] Catalog ListProducts did not increase for successful recommendations")
-            return False
+            return self.fail("prometheus_unreachable")
         if amplification > self.max_amplification:
             print(
                 f"[FAIL] Catalog amplification is {amplification:.2f} "
                 f"(maximum {self.max_amplification:.2f} ListProducts per useful recommendation)"
             )
-            return False
+            return self.fail("fault_still_present", amplification=round(amplification, 2))
         if not snapshot.product_ids:
             print("[FAIL] Recommendations returned no product IDs")
-            return False
+            return self.fail("invalid_recommendation_ids")
         unknown = [item for item in snapshot.product_ids if item not in catalog_ids]
         if unknown:
             print(f"[FAIL] Recommendations returned IDs that are not in the catalog: {unknown}")
-            return False
+            return self.fail("invalid_recommendation_ids", unknown=unknown)
         if snapshot.succeeded >= 8 and snapshot.distinct_recommendation_sets < 2:
             print("[FAIL] Recommendations look hard-coded (the returned ID set never changed)")
-            return False
-        return True
+            return self.fail("hardcoded_recommendations")
+        return None
+
+    def _wave_healthy(
+        self,
+        snapshot: HerdSnapshot,
+        amplification: float,
+        catalog_ids: set[str],
+        *,
+        concurrency: int,
+    ) -> bool:
+        return self._wave_failure(snapshot, amplification, catalog_ids, concurrency=concurrency) is None
 
     def _run_wave(self, *, concurrency: int, product_ids: tuple[str, ...]) -> tuple[HerdSnapshot, float] | None:
         before = self._catalog_list_products_total()
@@ -258,50 +289,58 @@ class ThunderingHerdMitigationOracle(Oracle):
 
     def evaluate(self, *args, **kwargs) -> dict:
         print("== Thundering Herd Mitigation Evaluation ==")
-        if not self._cluster_shape_healthy():
-            return {"success": False}
-        if not self._resources_unchanged():
-            return {"success": False}
+        unhealthy = self._cluster_shape_unhealthy()
+        if unhealthy is not None:
+            return unhealthy
+        capacity = self._capacity_changed()
+        if capacity is not None:
+            return capacity
 
         try:
             self.problem.workload.start()
             catalog_ids = self.problem.workload.catalog_product_ids()
             if not catalog_ids:
                 print("[FAIL] The product catalog API returned no product IDs")
-                return {"success": False}
+                return self.fail("empty_catalog")
 
             first = self._run_wave(
                 concurrency=self.visible_concurrency,
                 product_ids=self.seed_product_ids,
             )
             if first is None:
-                return {"success": False}
+                return self.fail("prometheus_unreachable")
             snapshot, amplification = first
-            if not self._wave_healthy(
+            wave_fail = self._wave_failure(
                 snapshot, amplification, catalog_ids, concurrency=self.visible_concurrency
-            ):
-                return {"success": False}
+            )
+            if wave_fail is not None:
+                return wave_fail
 
             second = self._run_wave(
                 concurrency=self.hidden_concurrency,
                 product_ids=self.hidden_product_ids,
             )
             if second is None:
-                return {"success": False}
+                return self.fail("prometheus_unreachable")
             hidden_snapshot, hidden_amplification = second
-            if not self._wave_healthy(
+            wave_fail = self._wave_failure(
                 hidden_snapshot,
                 hidden_amplification,
                 catalog_ids,
                 concurrency=self.hidden_concurrency,
-            ):
-                return {"success": False}
+            )
+            if wave_fail is not None:
+                return wave_fail
 
-            if not self._cluster_shape_healthy() or not self._resources_unchanged():
-                return {"success": False}
+            unhealthy = self._cluster_shape_unhealthy()
+            if unhealthy is not None:
+                return unhealthy
+            capacity = self._capacity_changed()
+            if capacity is not None:
+                return capacity
         except Exception as exc:
             print(f"[FAIL] Error while verifying mitigation: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
         finally:
             self.problem.workload.stop()
 

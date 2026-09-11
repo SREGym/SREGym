@@ -35,6 +35,7 @@ class AgentLauncher:
         self._use_containers: bool = True
         self._container_runner: ContainerRunner | None = None
         self._internet_policy = InternetPolicy()
+        self._harden_container = True
         # Per-problem source workspace bind-mounted into the agent at /workspace.
         # None for problems that do not ship editable source (config-only faults).
         self._problem_workspace: Path | None = None
@@ -43,6 +44,11 @@ class AgentLauncher:
         if self._container_runner is not None:
             raise RuntimeError("Internet policy cannot change after the container runner is initialized")
         self._internet_policy = policy
+
+    def set_container_hardening(self, enabled: bool) -> None:
+        if self._container_runner is not None:
+            raise RuntimeError("Container hardening cannot change after the container runner is initialized")
+        self._harden_container = enabled
 
     def set_problem_workspace(self, path: Path | None):
         """Set (or clear) the host directory to bind-mount at /workspace."""
@@ -55,7 +61,7 @@ class AgentLauncher:
         """
         self._agent_kubeconfig_path = kubeconfig_path
 
-    def enable_container_isolation(self, force_build: bool = False):
+    def enable_container_isolation(self, force_build: bool = False, *, k8s_proxy_port: int = 16443):
         """Initialize the container runner and build/check the image."""
         if not self._container_runner:
             config = ContainerConfig(
@@ -64,6 +70,8 @@ class AgentLauncher:
                 sregym_apps_path=Path("./SREGym-applications"),
                 sregym_app_subdirs=["socialNetwork/wrk2", "hotelReservation/wrk2"],
                 internet_policy=self._internet_policy,
+                harden_container=self._harden_container,
+                k8s_proxy_port=k8s_proxy_port,
             )
             self._container_runner = ContainerRunner(config)
             if force_build:

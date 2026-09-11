@@ -16,10 +16,16 @@ import time
 from json import JSONDecodeError
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 _DEFAULT_TIMEOUT_SECONDS = 60
 _DEFAULT_POLL_INTERVAL_SECONDS = 5
 _DEFAULT_CONSECUTIVE_HEALTHY_POLLS = 2
+
+
+class HPAObservationError(ValueError):
+    """The command succeeded but did not return a Kubernetes JSON object."""
 
 
 class HPAControlPlaneMitigationOracle(Oracle):
@@ -44,16 +50,35 @@ class HPAControlPlaneMitigationOracle(Oracle):
         self.poll_interval_seconds = poll_interval_seconds
         self.consecutive_successes = consecutive_successes
 
+    FAILURE_CLASSES = {
+        # The HPA never reached the required run of healthy polls. That is what
+        # this problem breaks, measured over a window rather than once.
+        "hpa_never_became_healthy": FailureClass.AGENT_ERROR,
+        "hpa_observation_failed": FailureClass.AMBIGUOUS,
+    }
+
     def evaluate(self) -> dict:
         print("== HPA Control Plane Mitigation Evaluation ==")
 
         # Multiple consecutive healthy polls prevent a transient pass right after a rollout.
         consecutive_healthy = 0
         last_detail = "not evaluated"
+        observation_failure = None
         deadline = time.monotonic() + self.timeout_seconds
 
         while True:
-            healthy, detail = self._evaluate_once()
+            try:
+                healthy, detail = self._evaluate_once()
+            except Exception as exc:
+                healthy, detail = False, f"{type(exc).__name__}: {exc}"
+                if isinstance(exc, HPAObservationError):
+                    observation_failure = self.fail("hpa_observation_failed", error=detail)
+                else:
+                    observation_failure = self.fail_from_exception(exc)
+            else:
+                if not healthy:
+                    # A readable unhealthy poll replaces an earlier read error.
+                    observation_failure = None
             last_detail = detail
 
             if healthy:
@@ -68,31 +93,36 @@ class HPAControlPlaneMitigationOracle(Oracle):
                 print(f"❌ HPA not healthy: {detail}")
 
             if time.monotonic() >= deadline:
+                details = (
+                    f"Timed out after {self.timeout_seconds}s waiting for "
+                    f"{self.consecutive_successes} consecutive healthy HPA polls. "
+                    f"Last check: {last_detail}"
+                )
+                # ``details`` stays at the top level for anything already
+                # reading it; ``reason`` is the new filterable part.
+                if observation_failure is not None:
+                    return {"details": details, **observation_failure}
                 return {
-                    "success": False,
-                    "details": (
-                        f"Timed out after {self.timeout_seconds}s waiting for "
-                        f"{self.consecutive_successes} consecutive healthy HPA polls. "
-                        f"Last check: {last_detail}"
+                    "details": details,
+                    **self.fail(
+                        "hpa_never_became_healthy",
+                        timeout_seconds=self.timeout_seconds,
+                        last_check=last_detail,
                     ),
                 }
 
             time.sleep(self.poll_interval_seconds)
 
     def _evaluate_once(self) -> tuple[bool, str]:
-        deployment, error = self._kubectl_json(
+        deployment = self._kubectl_json(
             f"kubectl get deployment {self.deployment_name} -n {self.problem.namespace} -o json"
         )
-        if error:
-            return False, error
 
         ready, detail = self._deployment_ready(deployment)
         if not ready:
             return False, detail
 
-        hpas, error = self._kubectl_json(f"kubectl get hpa -n {self.problem.namespace} -o json")
-        if error:
-            return False, error
+        hpas = self._kubectl_json(f"kubectl get hpa -n {self.problem.namespace} -o json")
 
         target_hpas = [hpa for hpa in hpas.get("items", []) if self._hpa_targets_deployment(hpa, self.deployment_name)]
         if not target_hpas:
@@ -119,16 +149,14 @@ class HPAControlPlaneMitigationOracle(Oracle):
         if desired < 1:
             return False, f"Deployment/{self.deployment_name} has desired replicas={desired}; expected at least 1"
 
-        if ready < desired or updated < desired or unavailable:
+        if not deployment_rollout_complete(deployment):
             return False, (
                 f"Deployment/{self.deployment_name} rollout not ready: "
                 f"ready={ready}, updated={updated}, unavailable={unavailable}, desired={desired}"
             )
 
         selector = self._selector_from_deployment(deployment)
-        pods, error = self._kubectl_json(f"kubectl get pods -n {self.problem.namespace} -l '{selector}' -o json")
-        if error:
-            return False, error
+        pods = self._kubectl_json(f"kubectl get pods -n {self.problem.namespace} -l '{selector}' -o json")
 
         items = pods.get("items", [])
         if not items:
@@ -251,14 +279,12 @@ class HPAControlPlaneMitigationOracle(Oracle):
 
         return ",".join(f"{key}={value}" for key, value in sorted(labels.items()))
 
-    def _kubectl_json(self, command: str) -> tuple[dict | None, str | None]:
-        output = self.problem.kubectl.exec_command(command)
-        stripped = output.strip()
-
-        if not stripped:
-            return None, f"Command returned no output: {command}"
-
+    def _kubectl_json(self, command: str) -> dict:
+        output = self.problem.kubectl.exec_command_checked(command, timeout=30)
         try:
-            return json.loads(stripped), None
+            result = json.loads(output)
         except JSONDecodeError as exc:
-            return None, f"Failed to parse JSON from `{command}`: {exc}; output={stripped[:500]!r}"
+            raise HPAObservationError(f"Invalid JSON from `{command}`: {output[:500]!r}") from exc
+        if not isinstance(result, dict):
+            raise HPAObservationError(f"Expected a JSON object from `{command}`: {output[:500]!r}")
+        return result

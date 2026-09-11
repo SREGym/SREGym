@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +51,7 @@ from ..atif import (
     ToolCall,
     Trajectory,
 )
+from ._common import TOKEN_METRICS_VERSION, _load_jsonl, _sum_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +257,8 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
     if not raw_events:
         return None
 
-    state = {"step_id": 1, "in": 0, "out": 0, "result": None}
+    state = {"step_id": 1, "out": None, "result": None}
+    call_metrics: dict[str | int, Metrics] = {}
     steps: list[Step] = []
     call_id_map: dict[str, Step] = {}
     skipped_event_types: dict[str, int] = {}
@@ -320,15 +323,30 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
 
         # --- usage (flat schema) ---
         elif event_type == "usage":
-            input_tokens = event.get("input_tokens", 0)
-            output_tokens = event.get("output_tokens", 0)
-            state["in"] += input_tokens
-            state["out"] += output_tokens
+            metrics = Metrics(
+                prompt_tokens=event.get("input_tokens"),
+                completion_tokens=event.get("output_tokens"),
+                cached_tokens=event.get("cached_input_tokens"),
+            )
+            call_metrics[len(call_metrics)] = metrics
             if steps and steps[-1].source == "agent":
-                steps[-1].metrics = Metrics(
-                    prompt_tokens=input_tokens,
-                    completion_tokens=output_tokens,
-                )
+                steps[-1].metrics = metrics
+
+        elif event_type == "assistant.usage":
+            data = event["data"]
+            key = data.get("apiCallId") or event.get("id") or len(call_metrics)
+            metrics = Metrics(
+                prompt_tokens=data.get("inputTokens"),
+                completion_tokens=data.get("outputTokens"),
+                cached_tokens=data.get("cacheReadTokens"),
+                extra={
+                    "reasoning_tokens": data.get("reasoningTokens"),
+                    "cache_write_tokens": data.get("cacheWriteTokens"),
+                },
+            )
+            call_metrics[key] = metrics
+            if steps and steps[-1].source == "agent":
+                steps[-1].metrics = metrics
 
         # --- assistant.message (session-event schema) ---
         elif event_type == "assistant.message":
@@ -343,8 +361,8 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
                 )
                 for request in data.get("toolRequests") or []
             ]
-            output_tokens = data.get("outputTokens") or 0
-            state["out"] += output_tokens
+            output_tokens = data.get("outputTokens")
+            state["out"] = _sum_tokens(state["out"], output_tokens)
 
             # Copilot carries the turn's reasoning inline on ``reasoningText``
             # (grounded in real session output). Map it to ATIF's first-class
@@ -377,7 +395,7 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
                 model_name=data.get("model") or None,
                 reasoning_content=reasoning_text,
                 tool_calls=tool_calls or None,
-                metrics=(Metrics(completion_tokens=output_tokens) if output_tokens else None),
+                metrics=(Metrics(completion_tokens=output_tokens) if output_tokens is not None else None),
                 extra=extra,
             )
             steps.append(step)
@@ -484,10 +502,22 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
         ),
         steps=steps,
         final_metrics=FinalMetrics(
-            total_prompt_tokens=state["in"] or None,
-            total_completion_tokens=state["out"] or None,
+            total_prompt_tokens=_sum_tokens(*(m.prompt_tokens for m in call_metrics.values())),
+            total_completion_tokens=(
+                _sum_tokens(*(m.completion_tokens for m in call_metrics.values())) if call_metrics else state["out"]
+            ),
+            total_cached_tokens=_sum_tokens(*(m.cached_tokens for m in call_metrics.values())),
             total_steps=len(steps),
-            extra={"copilot_result": state["result"]} if state["result"] else None,
+            extra={
+                "token_metrics_version": TOKEN_METRICS_VERSION,
+                "reasoning_tokens": _sum_tokens(
+                    *(m.extra.get("reasoning_tokens") for m in call_metrics.values() if m.extra)
+                ),
+                "cache_write_tokens": _sum_tokens(
+                    *(m.extra.get("cache_write_tokens") for m in call_metrics.values() if m.extra)
+                ),
+                **({"copilot_result": state["result"]} if state["result"] else {}),
+            },
         ),
     )
 
@@ -495,6 +525,54 @@ def _convert_events(raw_events: list[dict[str, Any]]) -> Trajectory | None:
 # --------------------------------------------------------------------------- #
 # Public entrypoint
 # --------------------------------------------------------------------------- #
-def convert_file(session_file: Path | str) -> Trajectory | None:
-    """Convert one Copilot CLI JSONL output file to ATIF."""
-    return _convert_events(_read_copilot_cli_jsonl(Path(session_file)))
+def _telemetry_totals(files: Sequence[Path | str]) -> dict[str, int | None]:
+    """Count native chat spans once, excluding aggregate parent spans."""
+    fields = {
+        "total_prompt_tokens": ("gen_ai.usage.input_tokens",),
+        "total_completion_tokens": ("gen_ai.usage.output_tokens",),
+        "total_cached_tokens": ("gen_ai.usage.cache_read.input_tokens", "gen_ai.usage.cache_read_input_tokens"),
+        "reasoning_tokens": ("gen_ai.usage.reasoning.output_tokens", "gen_ai.usage.reasoning_tokens"),
+        "cache_write_tokens": ("gen_ai.usage.cache_creation.input_tokens",),
+    }
+    counts: dict[str, list[int | None]] = {name: [] for name in fields}
+    seen = set()
+    for file in files:
+        for event in _load_jsonl(Path(file)):
+            if not isinstance(event, dict):
+                continue
+            attrs = event.get("attributes")
+            if not isinstance(attrs, dict) or attrs.get("gen_ai.operation.name") not in {None, "chat"}:
+                continue
+            if not any(key in attrs for key in ("gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens")):
+                continue
+            span_id = event.get("span_id") or event.get("spanId")
+            if span_id and span_id in seen:
+                continue
+            if span_id:
+                seen.add(span_id)
+            for name, keys in fields.items():
+                value = next((attrs[key] for key in keys if key in attrs), None)
+                counts[name].append(value)
+    return {name: _sum_tokens(*values) for name, values in counts.items()}
+
+
+def convert_file(session_file: Path | str, *, telemetry_files: Sequence[Path | str] = ()) -> Trajectory | None:
+    """Convert CLI events and optional same-run OTel files to ATIF.
+
+    Telemetry replaces the final token fields it reports; it is not added to
+    the CLI totals. Step metrics remain based on CLI events because span order
+    does not reliably identify the corresponding step.
+    """
+    trajectory = _convert_events(_read_copilot_cli_jsonl(Path(session_file)))
+    if trajectory is None or not telemetry_files:
+        return trajectory
+    final = trajectory.final_metrics
+    if final is not None:
+        for name, value in _telemetry_totals(telemetry_files).items():
+            if value is None:
+                continue
+            if name.startswith("total_"):
+                setattr(final, name, value)
+            else:
+                final.extra = {**(final.extra or {}), name: value}
+    return trajectory

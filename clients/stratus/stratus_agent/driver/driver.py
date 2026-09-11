@@ -30,6 +30,7 @@ init_logger()
 import logging  # noqa: E402
 
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
+from clients.harness.token_usage import TOKEN_METRICS_VERSION  # noqa: E402
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig  # noqa: E402
 from clients.stratus.stratus_agent.diagnosis_agent import (  # noqa: E402
     single_run_with_predefined_prompts as diagnosis_single_run,
@@ -862,6 +863,7 @@ async def main():
         )
 
     agent_output_df["agent_name"] = agent_names
+    # LangChain usage totals already include cache hits and reasoning.
     agent_output_df["input_tokens"] = agent_in_tokens
     agent_output_df["output_tokens"] = agent_out_tokens
     agent_output_df["total_tokens"] = agent_total_tokens
@@ -895,6 +897,7 @@ async def main():
         agent_output_df = pd.concat([agent_output_df, summary_row], ignore_index=True)
 
     csv_path = problem_dir / f"{current_problem}_stratus_output.csv"
+    agent_output_df["token_metrics_version"] = TOKEN_METRICS_VERSION
     agent_output_df.to_csv(csv_path, index=False, header=True)
     save_combined_trajectory(all_trajectories, current_problem, output_dir=problem_dir)
 

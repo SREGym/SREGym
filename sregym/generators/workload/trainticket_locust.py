@@ -4,11 +4,13 @@ Extends the base LocustWorkloadManager to provide TrainTicket-specific
 workload generation capabilities.
 """
 
+import json
 import logging
 from typing import Any
 
 from sregym.generators.workload.locust import LocustWorkloadManager
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 
 logger = logging.getLogger(__name__)
 
@@ -121,11 +123,9 @@ class TrainTicketLocustWorkloadManager(LocustWorkloadManager):
         """
         try:
             # Check if Locust master is running
-            result = self.kubectl.exec_command(
-                f"kubectl get deployment locust-master -n {self.namespace} -o jsonpath='{{.status.readyReplicas}}'"
-            )
+            result = self.kubectl.exec_command(f"kubectl get deployment locust-master -n {self.namespace} -o json")
 
-            return result == "1"
+            return deployment_rollout_complete(json.loads(result))
 
         except Exception as e:
             logger.error(f"Error checking Locust readiness: {e}")

@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
+from clients.codex.codex_agent import CodexAgent
 from clients.copilot.copilot_agent import CopilotCliAgent
 from clients.geminicli.geminicli_agent import GeminiCliAgent
 from sregym.agent_launcher import AgentLauncher
@@ -19,7 +20,7 @@ from sregym.service.container_runner import (
     ContainerRunner,
     _find_host_ca_bundle,
 )
-from sregym.service.internet_policy import InternetPolicy, blocked_github_owner, should_stream_response
+from sregym.service.internet_policy import InternetPolicy, blocked_github_owner
 from sregym.service.k8s_proxy import KubernetesAPIProxy, _is_workload_create_path, is_valid_bearer_token
 
 
@@ -69,19 +70,6 @@ def test_resolves_dot_segments_before_applying_github_policy(target):
 
 def test_allows_unconfigured_numeric_github_repository_id():
     assert blocked_github_owner("api.github.com", "/repositories/12345/contents/README.md", None) is None
-
-
-@pytest.mark.parametrize(
-    ("content_type", "expected"),
-    [
-        ("text/event-stream", True),
-        ("Text/Event-Stream; charset=utf-8", True),
-        ("application/json", False),
-        (None, False),
-    ],
-)
-def test_only_event_stream_responses_are_streamed(content_type, expected):
-    assert should_stream_response(content_type) is expected
 
 
 def test_ignores_unrelated_query_and_json_text():
@@ -336,6 +324,30 @@ def test_open_mode_keeps_claude_web_search(monkeypatch):
     monkeypatch.setenv("AGENT_INTERNET_ACCESS", "open")
     assert "WebFetch" in ClaudeCodeAgent.allowed_tools()
     assert "WebSearch" in ClaudeCodeAgent.allowed_tools()
+
+
+def test_filtered_mode_disables_codex_hosted_tools(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_INTERNET_ACCESS", "filtered")
+    agent = CodexAgent(logs_dir=tmp_path, model_name="gpt-5.6-sol")
+
+    command = agent._build_command("inspect the cluster")
+    option_pairs = list(zip(command, command[1:], strict=False))
+
+    assert 'web_search="disabled"' in command
+    assert ("--disable", "apps") in option_pairs
+    assert ("--disable", "plugins") in option_pairs
+
+
+def test_open_mode_keeps_codex_hosted_tools(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENT_INTERNET_ACCESS", "open")
+    agent = CodexAgent(logs_dir=tmp_path, model_name="gpt-5.6-sol")
+
+    command = agent._build_command("inspect the cluster")
+    option_pairs = list(zip(command, command[1:], strict=False))
+
+    assert 'web_search="disabled"' not in command
+    assert ("--disable", "apps") not in option_pairs
+    assert ("--disable", "plugins") not in option_pairs
 
 
 def test_filtered_mode_disables_gemini_provider_web_tools(monkeypatch, tmp_path):

@@ -7,6 +7,8 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class WrongPodSelectionMitigationOracle(Oracle):
@@ -17,27 +19,23 @@ class WrongPodSelectionMitigationOracle(Oracle):
     probe_timeout_seconds = 60
     poll_interval_seconds = 2
 
+    # Everything else this oracle reports -- the unhealthy-Deployment reasons and
+    # the two ambiguous symptoms -- is spelled the same way by other oracles and
+    # lives in ``SHARED_FAILURE_CLASSES``. Only the fault-specific reason is
+    # local: "the Service still selects pods it should not" is this problem's
+    # injected fault restated, and is the one branch here that unambiguously
+    # means the agent did not fix it.
+    FAILURE_CLASSES = {
+        "wrong_pods_selected": FailureClass.AGENT_ERROR,
+    }
+
     def __init__(self, problem):
         super().__init__(problem)
         self.discovery_v1 = client.DiscoveryV1Api()
 
     @staticmethod
     def _rollout_complete(deployment) -> bool:
-        desired = deployment.spec.replicas
-        if desired is None:
-            desired = 1
-        if desired < 1:
-            return False
-
-        status = deployment.status
-        generation = deployment.metadata.generation or 0
-        return (
-            (status.observed_generation or 0) >= generation
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _wait_for_current_rollout(self, deployment):
         deadline = time.monotonic() + self.rollout_timeout_seconds
@@ -52,24 +50,31 @@ class WrongPodSelectionMitigationOracle(Oracle):
                 self.problem.namespace,
             )
 
-    def _required_deployments_healthy(self) -> bool:
+    def _required_deployments_unhealthy(self) -> dict | None:
+        """Return a failure verdict if a required Deployment is unfit, else None.
+
+        Three distinct conditions used to collapse into one bare `False`, so a
+        Deployment that never existed was indistinguishable from one still
+        rolling out. The prints are kept: they are the human debugging path and
+        carry the Deployment name, which the reason code deliberately does not.
+        """
         for name in (self.problem.frontend_service, self.problem.wrong_deployment):
             try:
                 deployment = self.problem.kubectl.get_deployment(name, self.problem.namespace)
             except ApiException as exc:
                 if exc.status == 404:
                     print(f"Required Deployment {name} is missing.")
-                    return False
+                    return self.fail("required_deployment_missing", deployment=name)
                 raise
 
             if deployment.spec.replicas is not None and deployment.spec.replicas < 1:
                 print(f"Required Deployment {name} is scaled to zero.")
-                return False
+                return self.fail("required_deployment_scaled_to_zero", deployment=name)
 
             if self._wait_for_current_rollout(deployment) is None:
                 print(f"Required Deployment {name} is not fully rolled out and Ready.")
-                return False
-        return True
+                return self.fail("required_deployment_not_rolled_out", deployment=name)
+        return None
 
     def _active_replica_sets(self, deployment_name: str) -> set[str]:
         replica_sets = self.problem.kubectl.get_matching_replicasets(
@@ -144,18 +149,19 @@ class WrongPodSelectionMitigationOracle(Oracle):
         service_name = self.problem.frontend_service
         expected_pod_label = self.problem.expected_endpoint_pod_label
 
-        if not self._required_deployments_healthy():
-            return {"success": False}
+        unhealthy = self._required_deployments_unhealthy()
+        if unhealthy is not None:
+            return unhealthy
 
         selected_pods = self._endpoint_pod_names(kubectl, namespace, service_name)
         if not selected_pods:
             print(f"Service {service_name} has no Ready endpoint pods")
-            return {"success": False}
+            return self.fail("no_ready_endpoints", service=service_name)
 
         active_frontend_replica_sets = self._active_replica_sets(service_name)
         if not active_frontend_replica_sets:
             print(f"Deployment {service_name} has no active ReplicaSet.")
-            return {"success": False}
+            return self.fail("no_active_replicaset", deployment=service_name)
 
         wrong_pods = []
         for pod_name in selected_pods:
@@ -170,14 +176,20 @@ class WrongPodSelectionMitigationOracle(Oracle):
 
         if wrong_pods:
             print(f"Service {service_name} still selects non-frontend endpoint pods: {wrong_pods}")
-            return {"success": False}
+            # The injected fault is still present: this is the one branch that
+            # unambiguously means the agent did not fix the problem.
+            return self.fail("wrong_pods_selected", service=service_name, pods=sorted(wrong_pods))
 
         if not self._run_connectivity_probe():
             print(
                 f"Service {service_name} does not accept TCP traffic on expected port "
                 f"{self.problem.expected_service_port}."
             )
-            return {"success": False}
+            return self.fail(
+                "connectivity_probe_failed",
+                service=service_name,
+                port=self.problem.expected_service_port,
+            )
 
         print(
             f"Service {service_name} selects only frontend endpoints and accepts traffic on "

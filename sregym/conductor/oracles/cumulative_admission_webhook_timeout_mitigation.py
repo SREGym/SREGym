@@ -30,8 +30,8 @@ The oracle checks four properties in order:
    the fix must add the allow, not tear down the isolation. (Deleting
    only the baseline default-deny does not even work, because the other
    targeted allow policies still select and isolate the backends.)
-3. **Pod healthy.** The target deployment reports
-   ``ready_replicas == spec.replicas``; the Service has at least one
+3. **Pod healthy.** The target deployment has completed its current
+   rollout; the Service has at least one
    endpoint.
 4. **Fix verified at runtime.** A fresh probe pod is created in the
    application namespace and observed transitioning to Running within
@@ -49,6 +49,8 @@ from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,16 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
 
     importance = 1.0
 
+    FAILURE_CLASSES = {
+        # Both are removals, and this oracle exists to insist the fix is
+        # additive -- so both are the agent's.
+        "workload_not_intact": FailureClass.AGENT_ERROR,
+        "network_isolation_removed": FailureClass.AGENT_ERROR,
+        # Ground truth that admission works again, but it is still one probe
+        # pod against a real API server.
+        "admission_probe_failed": FailureClass.AMBIGUOUS,
+    }
+
     def __init__(self, problem):
         super().__init__(problem)
         self.core_v1 = client.CoreV1Api()
@@ -101,24 +113,29 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
         #    least one webhook remains, policy namespace still exists.
         intact_ok, intact_reason = self._workload_intact()
         if not intact_ok:
-            return self._fail(intact_reason)
+            # The deployment, a webhook or the policy namespace is gone. This
+            # oracle's whole premise is that the fix must be additive, so
+            # removing any of them is the agent's error by construction.
+            return self._fail_with("workload_not_intact", intact_reason)
 
         # 2. The webhook backends remain network-isolated (the fix must be
         #    additive: add the missing apiserver allow, not remove isolation).
         isolated_ok, isolated_reason = self._backends_network_isolated()
         if not isolated_ok:
-            return self._fail(isolated_reason)
+            # Dropping the isolation makes admission work without adding the
+            # apiserver allow rule: the documented way to game this problem.
+            return self._fail_with("network_isolation_removed", isolated_reason)
 
         # 3. Target pod is healthy and its Service has endpoints.
         healthy_ok, healthy_reason = self._pod_healthy()
         if not healthy_ok:
-            return self._fail(healthy_reason)
+            return self._fail_with("pods_not_ready", healthy_reason, deployment=target_deployment)
 
         # 4. A fresh probe pod admits within the deadline. This is the
         #    ground truth that admission actually works again.
         probe_ok, probe_reason = self._functional_probe()
         if not probe_ok:
-            return self._fail(probe_reason)
+            return self._fail_with("admission_probe_failed", probe_reason)
 
         print(
             f"✅ All properties passed: workload intact, backends still isolated, "
@@ -271,11 +288,11 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
         d = self.apps_v1.read_namespaced_deployment(name=target_deployment, namespace=app_namespace)
         desired = d.spec.replicas or 1
         ready = d.status.ready_replicas or 0
-        if ready < desired:
+        if not deployment_rollout_complete(d):
             return False, (
                 f"Deployment '{target_deployment}' in '{app_namespace}' shows "
                 f"ready_replicas={ready} (expected {desired}). The application is "
-                "still missing a replica; admission is likely still failing."
+                "rollout is incomplete."
             )
 
         # Service endpoints
@@ -353,11 +370,7 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
             deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
             settled = True
             for dep in deployments.items:
-                desired = dep.spec.replicas or 1
-                ready = dep.status.ready_replicas or 0
-                updated = dep.status.updated_replicas or 0
-                unavailable = dep.status.unavailable_replicas or 0
-                if ready < desired or updated < desired or unavailable > 0:
+                if not deployment_rollout_complete(dep):
                     # only block on the target; let the others settle in background
                     if dep.metadata.name == self.problem.TARGET_DEPLOYMENT:
                         settled = False
@@ -388,7 +401,11 @@ class CumulativeAdmissionWebhookTimeoutMitigationOracle(Oracle):
         with contextlib.suppress(ApiException):
             self.core_v1.delete_namespaced_pod(name=name, namespace=namespace, grace_period_seconds=0)
 
-    @staticmethod
-    def _fail(reason: str) -> dict:
-        print(f"❌ {reason}")
-        return {"success": False, "reason": reason}
+    def _fail_with(self, reason: str, message: str, **detail) -> dict:
+        """Print the check's own explanation and return a coded verdict.
+
+        The four checks already produce a human-readable message; what they
+        lacked was a stable code beside it. The message stays a print.
+        """
+        print(f"❌ {message}")
+        return self.fail(reason, message=message, **detail)

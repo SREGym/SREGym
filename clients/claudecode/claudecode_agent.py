@@ -3,12 +3,13 @@ Claude Code agent implementation for SREGym.
 Based on Harbor's Claude Code agent implementation for parity experiments.
 """
 
-import json
 import logging
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
+from clients.harness.token_usage import aggregate_usage, read_jsonl, sum_counts, token_count, usage_metrics
 
 logger = logging.getLogger("all.claudecode.agent")
 
@@ -168,59 +169,36 @@ class ClaudeCodeAgent:
         logger.warning("Multiple Claude Code session directories found; could not identify the correct one")
         return None
 
-    def get_usage_metrics(self) -> dict[str, int]:
-        """
-        Extract usage metrics from Claude Code session files.
-
-        Returns:
-            Dictionary with keys: input_tokens, cached_input_tokens, output_tokens
-        """
-        metrics = {
-            "input_tokens": 0,
-            "cached_input_tokens": 0,
-            "output_tokens": 0,
-        }
-
+    def get_usage_metrics(self) -> dict[str, int | None]:
+        """Count each assistant message once, using its last usage update."""
         session_dir = self._get_session_dir()
         if not session_dir:
-            logger.debug("No Claude Code session directory found")
-            return metrics
+            return usage_metrics()
 
-        session_files = list(session_dir.glob("*.jsonl"))
-        if not session_files:
-            logger.debug(f"No session files found in {session_dir}")
-            return metrics
+        messages = {}
+        for session_file in sorted(session_dir.glob("*.jsonl")):
+            for index, event in enumerate(read_jsonl(session_file)):
+                if event.get("type") != "assistant":
+                    continue
+                message = event.get("message")
+                if not isinstance(message, dict) or not isinstance(message.get("usage"), dict):
+                    continue
+                key = message.get("id") or (str(session_file), index)
+                messages[key] = message["usage"]
 
-        total_input_tokens = 0
-        total_cached_tokens = 0
-        total_output_tokens = 0
-
-        for session_file in session_files:
-            with open(session_file) as handle:
-                for line in handle:
-                    stripped = line.strip()
-                    if not stripped:
-                        continue
-                    try:
-                        event = json.loads(stripped)
-                        message = event.get("message")
-                        if not isinstance(message, dict):
-                            continue
-
-                        usage = message.get("usage")
-                        if isinstance(usage, dict):
-                            total_input_tokens += usage.get("input_tokens", 0)
-                            total_cached_tokens += usage.get("cache_read_input_tokens", 0)
-                            total_output_tokens += usage.get("output_tokens", 0)
-                    except json.JSONDecodeError:
-                        continue
-
-        metrics["input_tokens"] = total_input_tokens
-        metrics["cached_input_tokens"] = total_cached_tokens
-        metrics["output_tokens"] = total_output_tokens
-
-        logger.info(f"Extracted usage metrics: {metrics}")
-        return metrics
+        records = []
+        for usage in messages.values():
+            cached = token_count(usage.get("cache_read_input_tokens"))
+            creation = token_count(usage.get("cache_creation_input_tokens"))
+            records.append(
+                usage_metrics(
+                    input_tokens=sum_counts([token_count(usage.get("input_tokens")), cached, creation]),
+                    output_tokens=token_count(usage.get("output_tokens")),
+                    cached_input_tokens=cached,
+                    cache_creation_input_tokens=creation,
+                )
+            )
+        return aggregate_usage(records)
 
     def _setup_sessions_structure(self) -> None:
         """Create required Claude Code session directory structure."""

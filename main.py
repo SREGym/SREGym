@@ -26,10 +26,13 @@ from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
-from sregym.conductor.conductor import Conductor, ConductorConfig
+from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.phases import read_ledger as read_phase_ledger
+from sregym.phases import results_columns as phase_results_columns
+from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
 from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
@@ -42,7 +45,8 @@ logger = logging.getLogger(__name__)
 _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
 _driver_error: BaseException | None = None
-SUBMISSION_DRAIN_TIMEOUT_SECONDS = float(os.getenv("SUBMISSION_DRAIN_TIMEOUT_SECONDS", "300"))
+EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
+CLEANUP_DRAIN_TIMEOUT_SECONDS = 300
 
 
 class BenchmarkCampaignAborted(RuntimeError):
@@ -68,6 +72,7 @@ def run_preflight_check(
         "copilot": "clients.copilot.driver",
         "opencode": "clients.opencode.driver",
         "gemini": "clients.geminicli.driver",
+        "cursor": "clients.cursor.driver",
     }
 
     module_path = agent_driver_modules.get(agent_name)
@@ -251,13 +256,13 @@ def driver_loop(
             """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
             try:
                 conductor.finish_problem_in_background()
-                await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
             except TimeoutError:
                 conductor.abandon_submission_work()
                 conductor.results["cleanup_timed_out"] = True
                 conductor.record_incomplete_attempt(timeout_reason)
                 console.log(
-                    "⛔ Conductor cleanup did not finish before the drain deadline; "
+                    "⛔ Conductor cleanup did not finish before the cleanup deadline; "
                     "aborting without starting another attempt"
                 )
                 return False
@@ -362,6 +367,25 @@ def driver_loop(
                 )
                 console.log(f"\n🔍 Starting problem: {pid} (Attempt {attempt} of {n_attempts})")
 
+                # Bind the phase ledger before the first phase runs. It cannot
+                # live inside the run directory: RunArtifacts.create() happens
+                # after deploy, and deploy is a phase we want recorded. Sitting
+                # beside the run directories keeps it per-attempt and out of the
+                # way of artifact publication.
+                #
+                # The models are recorded too: without them a ledger is only
+                # interpretable next to the log that produced it. Read from the
+                # environment, where _configure_model_environment already put
+                # them, so agent and judge cannot drift apart.
+                phases_path = Path(base_dir) / (agent_to_run or "agent") / pid / f"phases_attempt{attempt}.jsonl"
+                conductor.bind_phase_ledger(
+                    phases_path,
+                    attempt=attempt,
+                    agent=agent_to_run,
+                    model=os.environ.get("AGENT_MODEL_ID"),
+                    judge_model=os.environ.get("JUDGE_MODEL_ID"),
+                )
+
                 # Retry start_problem up to 3 times to handle transient deploy failures
                 max_deploy_retries = 3
                 result = None
@@ -404,6 +428,7 @@ def driver_loop(
                     snapshot = {
                         "problem_id": pid,
                         "attempt": attempt,
+                        "deployment_profile": get_profile(),
                         "deploy_failed": True,
                     }
                     for stage, outcome in conductor.results.items():
@@ -485,7 +510,7 @@ def driver_loop(
                     console.log("⏩ No agent stages are configured; waiting only for bounded cleanup")
                     if conductor.close_submissions():
                         try:
-                            await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                            await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
                         except TimeoutError:
                             abort_campaign_after_attempt = True
                             conductor.abandon_submission_work()
@@ -511,13 +536,15 @@ def driver_loop(
                         if submission_work:
                             console.log("⏳ Waiting for the accepted submission evaluation to complete...")
                             try:
-                                await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                                await conductor.wait_for_submission_evaluations(
+                                    timeout=EVALUATION_DRAIN_TIMEOUT_SECONDS
+                                )
                             except TimeoutError:
                                 evaluation_failed = True
                                 abort_campaign_after_attempt = True
                                 conductor.abandon_submission_work()
                                 console.log(
-                                    "⛔ Submission evaluation did not finish before the drain deadline; "
+                                    "⛔ Submission evaluation did not finish before the evaluation deadline; "
                                     "aborting the campaign without concurrent cluster cleanup"
                                 )
                             except Exception as e:
@@ -548,19 +575,22 @@ def driver_loop(
                             if submission_work:
                                 console.log("⏳ Waiting for conductor evaluation to complete...")
                                 try:
-                                    await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                                    await conductor.wait_for_submission_evaluations(
+                                        timeout=EVALUATION_DRAIN_TIMEOUT_SECONDS
+                                    )
                                 except TimeoutError:
                                     evaluation_failed = True
                                     abort_campaign_after_attempt = True
                                     conductor.abandon_submission_work()
                                     console.log(
-                                        "⛔ Submission evaluation did not finish before the drain deadline; "
+                                        "⛔ Submission evaluation did not finish before the evaluation deadline; "
                                         "aborting the campaign without concurrent cluster cleanup"
                                     )
                                 except Exception as e:
                                     evaluation_failed = True
                                     console.log(f"⚠️  Conductor evaluation raised: {e}")
-                            if conductor.submission_stage != "done":
+                            missing_stages = conductor.missing_submission_stages()
+                            if abort_campaign_after_attempt or evaluation_failed or missing_stages:
                                 if abort_campaign_after_attempt:
                                     reason = "evaluation_timeout_after_agent_exit"
                                 elif evaluation_failed:
@@ -585,18 +615,28 @@ def driver_loop(
                 # freezing the attempt snapshot or starting another attempt.
                 if not abort_campaign_after_attempt and conductor.close_submissions():
                     try:
-                        await conductor.wait_for_submission_work(timeout=SUBMISSION_DRAIN_TIMEOUT_SECONDS)
+                        await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
                     except TimeoutError:
                         abort_campaign_after_attempt = True
                         conductor.abandon_submission_work()
-                        conductor.record_incomplete_attempt("evaluation_timeout_after_stage_completion")
+                        conductor.results["cleanup_timed_out"] = True
+                        conductor.record_incomplete_attempt("cleanup_timeout_after_stage_completion")
                         console.log(
-                            "⛔ Submission evaluation did not finish before the drain deadline; "
-                            "aborting the campaign without concurrent cluster cleanup"
+                            "⛔ Conductor cleanup did not finish before the cleanup deadline; "
+                            "aborting without starting another attempt"
                         )
                     except Exception as e:
-                        console.log(f"⚠️  Conductor evaluation raised after stage completion: {e}")
-                        conductor.record_incomplete_attempt("evaluation_failed_after_stage_completion")
+                        console.log(f"⚠️  Conductor cleanup raised after stage completion: {e}")
+                        conductor.results["cleanup_failed"] = True
+                        conductor.results["cleanup_error"] = f"{type(e).__name__}: {e}"
+                        conductor.record_incomplete_attempt("cleanup_failed")
+
+                # Fold the phase ledger into the results so infra-vs-agent time
+                # is a column rather than something to reconstruct from logs.
+                # Read from the file, not from memory, so a phase that ended in
+                # a process that later died is still counted.
+                if conductor.phases is not None:
+                    conductor.results.update(phase_results_columns(read_phase_ledger(conductor.phases.path)))
 
                 run_status = conductor.finalize_attempt_status()
                 if conductor.results.get("cleanup_failed"):
@@ -629,6 +669,7 @@ def driver_loop(
                 snapshot = {
                     "problem_id": pid,
                     "attempt": attempt,
+                    "deployment_profile": get_profile(),
                 }
                 snapshot.update(LAUNCHER.internet_policy_result(agent_proc))
                 for stage, outcome in conductor.results.items():
@@ -782,18 +823,29 @@ def main(args):
 
     agent_model, judge_model = _configure_model_environment(args)
     internet_policy = InternetPolicy.from_mode(args.internet_access)
+    harden_container = args.container_hardening == "on"
+
+    set_profile(args.profile)
 
     if args.noise:
         logger.info("Noise injection enabled.")
     os.environ["API_HOSTNAME"] = "0.0.0.0"
-    os.environ["API_PORT"] = "8000"
-    os.environ["MCP_SERVER_PORT"] = "9954"
-    os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
+    # Host-facing ports are defaults, not constants: a run has to be able to
+    # step around whatever else is already listening on the workstation.
+    # Assigning unconditionally here would clobber the caller's value, which
+    # then surfaces far away as a connection to the wrong service.
+    os.environ.setdefault("API_PORT", "8000")
+    os.environ.setdefault("MCP_SERVER_PORT", "9954")
+    # Derived, never duplicated: a literal here silently disagrees with
+    # MCP_SERVER_PORT, and consumers prefer the URL over the parts.
+    os.environ["MCP_SERVER_URL"] = f"http://127.0.0.1:{os.environ['MCP_SERVER_PORT']}"
 
     logger.info(
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
         f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
+        f"deployment_profile: {get_profile()}, "
         f"internet_access: {internet_policy.mode.value}, "
+        f"container_hardening: {args.container_hardening}, "
         f"agent_api_base: {_env_status('AGENT_API_BASE')}, judge_api_base: {_env_status('JUDGE_API_BASE')}"
     )
 
@@ -827,13 +879,19 @@ def main(args):
         enable_noise=args.noise,
         internet_policy=internet_policy,
         k8s_proxy_listen_host=k8s_proxy_listen_host,
+        k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
         block_workload_creation=internet_policy.is_filtered,
+        stages=tuple(args.stages) if args.stages else None,
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
+    LAUNCHER.set_container_hardening(harden_container)
 
     try:
         if not agent_reg or agent_reg.container_isolation:
-            LAUNCHER.enable_container_isolation(force_build=args.force_build)
+            LAUNCHER.enable_container_isolation(
+                force_build=args.force_build,
+                k8s_proxy_port=conductor_config.k8s_proxy_listen_port,
+            )
 
         # Pre-flight check — makes a real (minimal) API call inside the agent
         # container to validate model and credentials in one shot.
@@ -946,6 +1004,20 @@ if __name__ == "__main__":
         default=None,
         help="Run a named problem set (e.g., 'sregym-lite')",
     )
+    # Deliberately outside the selection group: which stages run is independent
+    # of which problems run, so --stages composes with both --problem and
+    # --suite.
+    parser.add_argument(
+        "--stages",
+        nargs="+",
+        choices=ALL_STAGES,
+        default=None,
+        help=(
+            "Stages to attempt, in order (default: every stage the problem supports). "
+            "Use '--stages diagnosis' to skip mitigation entirely. Naming a stage the "
+            "problem has no oracle for is an error rather than a silent skip."
+        ),
+    )
     parser.add_argument(
         "--agent",
         type=str,
@@ -974,6 +1046,18 @@ if __name__ == "__main__":
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
     )
     parser.add_argument(
+        "--profile",
+        choices=PROFILES,
+        default=os.environ.get("SREGYM_PROFILE", "full"),
+        help=(
+            "Deployment profile (independent of --suite). 'full' (default) deploys the standard "
+            "stack. 'svelte' additionally drops components no part of SREGym reads — astronomy-shop's "
+            "bundled OpenSearch/Grafana/Jaeger, Prometheus Alertmanager/Pushgateway, the OpenEBS NDM "
+            "stack — and shortens metric retention. 'svelte' changes what an agent can observe, so "
+            "its results are not comparable with 'full'."
+        ),
+    )
+    parser.add_argument(
         "--noise",
         action="store_true",
         help="Enable transient noise injection via Chaos Mesh during problem runs",
@@ -983,6 +1067,16 @@ if __name__ == "__main__":
         choices=("filtered", "open"),
         default="filtered",
         help="Agent internet policy. Filtered mode blocks direct access to SREGym GitHub source.",
+    )
+    parser.add_argument(
+        "--container-hardening",
+        choices=("on", "off"),
+        default="on",
+        help=(
+            "Agent container hardening. 'on' (default) drops every Linux capability except "
+            "DAC_OVERRIDE and sets no-new-privileges. Use 'off' for agents that need to install "
+            "tooling mid-run: apt-get cannot drop to the _apt user without setuid/setgid."
+        ),
     )
     parser.add_argument(
         "--n-attempts",

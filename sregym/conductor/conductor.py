@@ -1,17 +1,21 @@
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
 import shlex
 import shutil
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from kubernetes.client.rest import ApiException
 
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
 from sregym.conductor.problems.registry import ProblemRegistry
@@ -30,6 +34,8 @@ from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
 from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import CLUSTER_BASELINE_STATE_FILE
+from sregym.phases import PhaseLedger
+from sregym.profile import is_svelte
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
@@ -38,8 +44,14 @@ from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController
 from sregym.service.kubectl import KubeCtl
 from sregym.service.mcp_server import MCPServer
+from sregym.service.rollout import deployment_rollout_complete
 from sregym.service.telemetry.loki import Loki
 from sregym.service.telemetry.prometheus import Prometheus
+
+# The agent-facing stages, in the only order they can run. Shared with
+# `--stages`' choices so the CLI and the conductor cannot disagree about what
+# exists.
+ALL_STAGES = ("diagnosis", "mitigation")
 
 
 @dataclass
@@ -50,7 +62,11 @@ class ConductorConfig:
     enable_noise: bool = False
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     k8s_proxy_listen_host: str = "127.0.0.1"
+    k8s_proxy_listen_port: int = 16443
     block_workload_creation: bool = False
+    # Which stages this run should attempt. None means every stage the problem
+    # supports, which is what an unset --stages leaves in place.
+    stages: tuple[str, ...] | None = None
 
 
 class Conductor:
@@ -76,7 +92,7 @@ class Conductor:
         # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
-            listen_port=16443,
+            listen_port=self.config.k8s_proxy_listen_port,
             listen_host=self.config.k8s_proxy_listen_host,
             block_workload_creation=self.config.block_workload_creation,
         )
@@ -102,6 +118,11 @@ class Conductor:
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
+
+        # Phase-boundary ledger, bound per attempt by whoever owns the run
+        # directory (main.py). Left unset by cli.py, the external harness and
+        # the tests, where `_phase` degrades to a no-op.
+        self.phases: PhaseLedger | None = None
 
         self.stage_sequence: list[dict] = []
         self.current_stage_index: int = 0
@@ -149,13 +170,30 @@ class Conductor:
                 raise RuntimeError(f"[❌] Required dependency '{b}' not found.")
 
     def get_problem_stages(self):
+        """Record which stages this run intends to attempt.
+
+        Precedence: the run's own configuration (`--stages`), then the legacy
+        per-problem `tasklist.yml`, then every stage. Whether a stage *can* run
+        is a separate question, answered in `_build_stage_sequence` from the
+        oracles the problem actually attaches; this method only records intent.
+        """
+        if self.config.stages is not None:
+            requested = list(self.config.stages)
+            if not is_ordered_subset(requested, list(ALL_STAGES)):
+                msg = f"Requested stages {requested} must be a subset of {list(ALL_STAGES)}, in that order"
+                self.logger.error(msg)
+                raise ValueError(msg)
+            self.logger.info(f"Stages requested for this run: {requested}")
+            self.tasklist = requested
+            return
+
         file_dir = Path(__file__).resolve().parent
         tasklist_path = file_dir / "tasklist.yml"
 
         # If tasklist file doesn't exist, default to running diagnosis + mitigation
         if not tasklist_path.exists():
             self.logger.info("No tasklist.yml found. Defaulting to running diagnosis and mitigation for this problem.")
-            self.tasklist = ["diagnosis", "mitigation"]
+            self.tasklist = list(ALL_STAGES)
             return
 
         with open(tasklist_path) as f:
@@ -168,7 +206,7 @@ class Conductor:
 
         if self.problem_id not in (problems if problems else []):
             self.logger.warning("problem_id not found in tasklist. Defaulting to running diagnosis and mitigation.")
-            self.tasklist = ["diagnosis", "mitigation"]
+            self.tasklist = list(ALL_STAGES)
         else:
             problem_tasklist = problems[self.problem_id]
             if not problem_tasklist:
@@ -176,7 +214,7 @@ class Conductor:
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
-            if not is_ordered_subset(problem_tasklist, ["diagnosis", "mitigation"]):
+            if not is_ordered_subset(problem_tasklist, list(ALL_STAGES)):
                 msg = f"Task list for {self.problem_id} is either out of order or has an unknown step (allowed: diagnosis, mitigation)"
                 self.logger.error(msg)
                 raise RuntimeError(msg)
@@ -205,33 +243,35 @@ class Conductor:
             "mitigation": self._evaluate_mitigation,
         }
 
+        # A stage the caller named explicitly is a different thing from one that
+        # came from the default or tasklist.yml: an absent oracle is a conflict
+        # in the first case and merely a fact in the second.
+        explicitly_requested = self.config.stages is not None
+
         # Determine which stages are actually available (oracle attached)
         for name in self.tasklist:
-            if name not in stage_definitions:
+            evaluation = stage_definitions.get(name)
+            if evaluation is None:
                 self.logger.warning(f"Unknown stage '{name}' in tasklist; skipping.")
                 continue
 
-            if name == "diagnosis":
-                if getattr(self.problem, "diagnosis_oracle", None):
-                    self.stage_sequence.append(
-                        {
-                            "name": name,
-                            "evaluation": stage_definitions[name],
-                        }
-                    )
-                else:
-                    self.logger.info("⏩ Diagnosis oracle is not attached. Skipping diagnosis.")
+            if getattr(self.problem, f"{name}_oracle", None):
+                self.stage_sequence.append(
+                    {
+                        "name": name,
+                        "evaluation": evaluation,
+                    }
+                )
+                continue
 
-            elif name == "mitigation":
-                if getattr(self.problem, "mitigation_oracle", None):
-                    self.stage_sequence.append(
-                        {
-                            "name": name,
-                            "evaluation": stage_definitions[name],
-                        }
-                    )
-                else:
-                    self.logger.info("⏩ Mitigation oracle is not attached. Skipping mitigation.")
+            if explicitly_requested:
+                # Skipping quietly here would report a successful run that
+                # measured nothing at all.
+                msg = f"Stage {name!r} was requested for {self.problem_id!r}, but it has no {name}_oracle"
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            self.logger.info(f"⏩ {name.capitalize()} oracle is not attached. Skipping {name}.")
 
         if not self.stage_sequence:
             self.logger.warning(
@@ -274,7 +314,7 @@ class Conductor:
             r = problem.diagnosis_oracle.evaluate(solution)
         except Exception as e:
             self.logger.exception("Diagnosis oracle raised; recording as failure to avoid a stuck stage.")
-            r = {"success": False, "error": f"{type(e).__name__}: {e}"}
+            r = {**Oracle.fail_from_exception(e), "error": f"{type(e).__name__}: {e}"}
         r["submission"] = solution
         self.logger.info(
             f"[EVAL] Diagnosis {'Succeed' if r.get('success') else 'Failed'}\n "
@@ -291,12 +331,52 @@ class Conductor:
             r = problem.mitigation_oracle.evaluate()
         except Exception as e:
             self.logger.exception("Mitigation oracle raised; recording as failure to avoid a stuck stage.")
-            r = {"success": False, "error": f"{type(e).__name__}: {e}"}
+            # Keep the existing top-level error field for result consumers.
+            r = {**Oracle.fail_from_exception(e), "error": f"{type(e).__name__}: {e}"}
         self.logger.info(
             f"[EVAL] Mitigation {'Succeed' if r.get('success') else 'Failed'}\n "
             f"TTM: {time.time() - self.execution_start_time}"
         )
         return r
+
+    def bind_phase_ledger(self, path, **context) -> None:
+        """Point the phase ledger at this attempt's run directory.
+
+        Called per attempt by the caller that owns the directory, so each
+        attempt gets its own `phases.jsonl` rather than appending to a shared
+        one.
+        """
+        self.phases = PhaseLedger(path, context={"problem_id": self.problem_id, **context})
+
+    def _phase(self, name: str, **fields):
+        """Time a block as a phase, or do nothing if no ledger is bound.
+
+        A missing ledger must never change control flow, so the fallback is a
+        real no-op context manager rather than a branch at every call site.
+        `getattr` rather than attribute access: instrumentation must also
+        survive a Conductor built without __init__, which several tests and
+        external callers do.
+        """
+        ledger = getattr(self, "phases", None)
+        if ledger is None:
+            return contextlib.nullcontext()
+        return ledger.phase(name, **fields)
+
+    def _mark(self, name: str, event: str, **fields) -> None:
+        """Record one boundary for a phase that is not a block.
+
+        The agent stages start when the conductor opens them for submission and
+        end when their evaluation returns -- two different call sites, so they
+        cannot use the context manager.
+        """
+        ledger = getattr(self, "phases", None)
+        if ledger is not None:
+            ledger.record(name, event, **fields)
+
+    def _phase_is_open(self, name: str) -> bool:
+        """True if `name` was started and not yet ended. False with no ledger."""
+        ledger = getattr(self, "phases", None)
+        return ledger is not None and ledger.is_open(name)
 
     def _advance_to_next_stage(self, start_index: int = 0):
         """
@@ -314,7 +394,8 @@ class Conductor:
 
         # Inject fault before the first stage if not already done
         if start_index == 0 and not self.fault_injected:
-            self._inject_fault()
+            with self._phase("inject_fault"):
+                self._inject_fault()
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
@@ -325,6 +406,9 @@ class Conductor:
             self.submission_stage = stage_name
             self._accepting_submissions = not self._attempt_closed
             self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+            # The agent's clock for this stage starts here: submissions are now
+            # accepted. Ends where its evaluation returns.
+            self._mark(f"stage:{stage_name}", "start")
 
             # Update NoiseManager stage
             if self.config.enable_noise:
@@ -464,16 +548,31 @@ class Conductor:
                 )
                 return
             self.logger.info("[STAGE] Done, starting teardown")
+            # A stage still open at teardown never received a submission -- the
+            # agent exited, timed out, or was killed. Close it here with a
+            # written-down end rather than leaving the reader to infer one from
+            # the next phase's start.
+            open_stage = self.submission_stage
             self._accepting_submissions = False
             self._attempt_closed = True
             self.submission_stage = "tearing_down"
-        self._cleanup_sync(cleanup_generation)
+        # Only close a stage that is genuinely still open. `submission_stage`
+        # still names the last stage after it has been evaluated, so closing on
+        # that alone writes a second end for a stage that finished cleanly.
+        if open_stage in {stage["name"] for stage in self.stage_sequence} and self._phase_is_open(
+            f"stage:{open_stage}"
+        ):
+            self._mark(f"stage:{open_stage}", "end", outcome="no_submission")
+        with self._phase("cleanup"):
+            self._cleanup_sync(cleanup_generation)
         self.logger.info("[STAGE] Teardown complete")
 
     def finish_problem_in_background(self) -> concurrent.futures.Future:
-        """Start safety cleanup on a daemon thread so the driver can enforce a deadline."""
+        """Return running teardown or start it so the driver can enforce a deadline."""
         with self._submission_lock:
             if self._submit_future is not None:
+                if self.submission_stage in ("tearing_down", "done"):
+                    return self._submit_future
                 raise RuntimeError("Cannot start cleanup while submission work is still active.")
             if self.submission_stage == "tearing_down":
                 raise RuntimeError(
@@ -563,16 +662,19 @@ class Conductor:
             )
             return StartProblemResult.SKIPPED_KHAOS_REQUIRED
 
-        self.fix_kubernetes()
+        with self._phase("fix_kubernetes"):
+            self.fix_kubernetes()
 
         self.get_problem_stages()
         self._build_stage_sequence()
 
         self.logger.info("Undeploying app leftovers...")
-        self.undeploy_app()  # Cleanup any leftovers
+        with self._phase("undeploy_leftovers"):
+            self.undeploy_app()  # Cleanup any leftovers
         self.logger.info("App leftovers undeployed.")
         self.logger.info("Deploying app...")
-        self.deploy_app()
+        with self._phase("deploy"):
+            self.deploy_app()
         self.logger.info("App deployed.")
 
         # Update NoiseManager with problem context
@@ -619,13 +721,18 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to stop noise manager: {e}")
 
+        # The agent's time on this stage ends when a submission arrives to be
+        # evaluated; grading time is its own phase, not the agent's.
+        self._mark(f"stage:{stage_name}", "end", outcome="submitted")
+
         outcome = None
         # Run the evaluation function for the current stage. The per-stage
         # _evaluate_* methods catch their own oracle exceptions; this outer
         # guard is defense in depth so an ordinary evaluation error still
         # produces a failed stage result.
         try:
-            outcome = current_stage["evaluation"](sol)
+            with self._phase(f"evaluate:{stage_name}"):
+                outcome = current_stage["evaluation"](sol)
         except Exception:
             self.logger.exception(
                 f"Stage '{stage_name}' evaluation raised unexpectedly; advancing anyway "
@@ -651,6 +758,7 @@ class Conductor:
 
             if next_index < len(self.stage_sequence):
                 next_stage_name = self.stage_sequence[next_index]["name"]
+            stage_ledger = getattr(self, "phases", None)
 
         if next_stage_name is not None:
             # Keep the old stage marked busy while noise is restarted. The
@@ -688,20 +796,29 @@ class Conductor:
                         self.logger.warning(f"Failed to stop late NoiseManager restart: {e}")
                     return
 
+            # Keep submissions waiting until the start record is written.
+            # Use this attempt's ledger, and keep disk I/O outside the lock.
+            if stage_ledger is not None:
+                stage_ledger.record(f"stage:{next_stage_name}", "start")
             with self._submission_lock:
-                if generation != self._submission_generation or generation in self._aborted_submission_generations:
+                transition_aborted = (
+                    generation != self._submission_generation or generation in self._aborted_submission_generations
+                )
+                if transition_aborted:
                     self.logger.warning(
                         "Skipping %s stage transition because attempt generation %s was aborted or replaced",
                         next_stage_name,
                         generation,
                     )
-                    return
-                self.current_stage_index = next_index
-                self.submission_stage = next_stage_name
-                self.waiting_for_agent = True
-                self._evaluating = False
-                self._accepting_submissions = not self._attempt_closed
-                self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+                else:
+                    self.current_stage_index = next_index
+                    self.submission_stage = next_stage_name
+                    self.waiting_for_agent = True
+                    self._evaluating = False
+                    self._accepting_submissions = not self._attempt_closed
+                    self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+            if transition_aborted and stage_ledger is not None:
+                stage_ledger.record(f"stage:{next_stage_name}", "end", outcome="aborted")
             return
 
         if next_index >= len(self.stage_sequence):
@@ -874,6 +991,54 @@ class Conductor:
             self.submission_stage = "aborted"
             self._submit_future = None
 
+    async def wait_for_submission_evaluations(self, timeout: float | None) -> None:
+        """Wait for accepted stage requests and grading, but not teardown.
+
+        Give each accepted stage evaluation a fresh deadline. An early
+        mitigation request can wait behind diagnosis grading. Each will get
+        their own deadlines.
+
+        The final stage worker performs teardown in the same future. Return as
+        soon as that worker enters ``tearing_down`` so the driver can apply a
+        separate cleanup deadline without allowing attempts to overlap.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout if timeout is not None else None
+        observed_future: concurrent.futures.Future | None = None
+
+        while True:
+            with self._submission_lock:
+                stage = self.submission_stage
+                future = self._submit_future
+                pending = bool(self._pending_submission_stages)
+
+            if future is not None and future is not observed_future:
+                observed_future = future
+                deadline = loop.time() + timeout if timeout is not None else None
+
+            if future is not None and future.done():
+                try:
+                    future.result()
+                finally:
+                    with self._submission_lock:
+                        if self._submit_future is future:
+                            self._submit_future = None
+                continue
+
+            if stage in {"tearing_down", "done"}:
+                return
+
+            if future is None and not pending:
+                return
+
+            if deadline is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError
+                await asyncio.sleep(min(0.05, remaining))
+            else:
+                await asyncio.sleep(0.05)
+
     async def wait_for_submission_work(self, timeout: float | None) -> None:
         """Wait for all accepted evaluations and registered stage requests.
 
@@ -1000,13 +1165,15 @@ class Conductor:
             ]
             marked_nodes = [node for node in marked_nodes if node]
 
-            bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} -o json")
+            bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} --ignore-not-found -o json")
             bgppeers = (kubectl_json("kubectl get bgppeers -o json") or {}).get("items", [])
-            bgp_config = kubectl_json("kubectl get bgpconfiguration default -o json")
-            support_namespace = kubectl_json(f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} -o json")
+            bgp_config = kubectl_json("kubectl get bgpconfiguration default --ignore-not-found -o json")
+            support_namespace = kubectl_json(
+                f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} --ignore-not-found -o json"
+            )
             state_configmap = kubectl_json(
                 f"kubectl -n {self._q(problem.STATE_NAMESPACE)} get configmap "
-                f"{self._q(problem.STATE_CONFIGMAP_NAME)} -o json"
+                f"{self._q(problem.STATE_CONFIGMAP_NAME)} --ignore-not-found -o json"
             )
             state_data = (state_configmap or {}).get("data", {}) or {}
 
@@ -1202,7 +1369,16 @@ class Conductor:
                 '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
                 "]'"
             )
+            # Apply retains selector keys added outside the original manifest.
+            # Replace the complete selector so the Service reaches metrics-server.
+            self.kubectl.core_v1_api.patch_namespaced_service(
+                "metrics-server",
+                "kube-system",
+                [{"op": "replace", "path": "/spec/selector", "value": {"k8s-app": "metrics-server"}}],
+                _request_timeout=10,
+            )
         self.kubectl.wait_for_ready("kube-system")
+        self._wait_for_infrastructure_ready("metrics-server", self._metrics_server_configured)
 
         # Only deploy Khaos if the problem requires it
         if problem.requires_khaos():
@@ -1210,19 +1386,38 @@ class Conductor:
             self.khaos.ensure_deployed()
 
         self.logger.info("[DEPLOY] Setting up OpenEBS…")
+        svelte = is_svelte()
         # `openebs` is protected from reconciliation, so it persists across
         # problems and the operator manifest only needs fetching once.
-        if self._openebs_ready():
+        if self._openebs_ready(svelte):
             self.logger.info("[DEPLOY] OpenEBS already deployed; skipping operator re-apply")
         else:
-            self._preflight_openebs_udev_mount()
+            if not svelte:
+                # The udev preflight exists solely for the node-disk-manager,
+                # which svelte does not deploy.
+                self._preflight_openebs_udev_mount()
             self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
             self.kubectl.exec_command(
                 "kubectl patch storageclass openebs-hostpath "
                 '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
             )
+            if not svelte:
+                # The operator manifest has no NDM node selector. An extra
+                # selector can survive apply and prevent every NDM pod scheduling.
+                self.kubectl.apps_v1_api.patch_namespaced_daemon_set(
+                    "openebs-ndm",
+                    "openebs",
+                    [{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {}}],
+                    _request_timeout=10,
+                )
+        # Idempotent and cheap; also covers an `openebs` left over from an
+        # earlier full-profile run on the same cluster.
+        if svelte:
+            self._trim_openebs_ndm()
         self.kubectl.wait_for_ready("openebs")
-        self._ensure_openebs_device_storageclass()
+        self._wait_for_infrastructure_ready("OpenEBS", lambda: self._openebs_ready(svelte))
+        if not svelte:
+            self._ensure_openebs_device_storageclass()
 
         self.logger.info("[DEPLOY] Deploying Prometheus…")
         self.prometheus.deploy()
@@ -1278,6 +1473,15 @@ class Conductor:
         if self.problem:
             self.problem.app.cleanup()
 
+    def _wait_for_infrastructure_ready(self, name: str, is_ready: Callable[[], bool], timeout: float = 180) -> None:
+        """Require functional infrastructure, not just Ready surviving pods."""
+        deadline = time.monotonic() + timeout
+        while not is_ready():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"{name} did not become healthy within {timeout:g}s; stopping application setup")
+            time.sleep(min(2, remaining))
+
     def _preflight_openebs_udev_mount(self) -> None:
         if shutil.which("docker") is None:
             self.logger.info("[DEPLOY] Docker is unavailable; skipping kind /run/udev preflight")
@@ -1316,7 +1520,7 @@ class Conductor:
     _METRICS_SERVER_BINDING = "metrics-server:system:auth-delegator"
 
     def _metrics_server_configured(self) -> bool:
-        """True if metrics-server is deployed, patched, *and* still has its RBAC.
+        """True if metrics-server has its configuration, RBAC, and usable metrics.
 
         Checking more than existence matters because the Deployment and its
         cluster-scoped RBAC have different lifetimes: the Deployment sits in the
@@ -1327,7 +1531,7 @@ class Conductor:
         """
         args = self.kubectl.exec_command(
             "kubectl -n kube-system get deployment metrics-server "
-            "-o jsonpath='{.spec.template.spec.containers[0].args}' --ignore-not-found"
+            "-o jsonpath='{.spec.template.spec.containers[0].args}' --ignore-not-found --request-timeout=10s"
         )
         if not args or not args.strip():
             return False
@@ -1335,35 +1539,99 @@ class Conductor:
             return False
 
         binding = self.kubectl.exec_command(
-            f"kubectl get clusterrolebinding {self._METRICS_SERVER_BINDING} -o name --ignore-not-found"
+            f"kubectl get clusterrolebinding {self._METRICS_SERVER_BINDING} -o name "
+            "--ignore-not-found --request-timeout=10s"
         )
         if not binding or not binding.strip():
             self.logger.info("[DEPLOY] metrics-server RBAC missing; re-applying components.yaml")
             return False
-        return True
+        # A Ready Deployment does not prove that its Service and aggregated API
+        # still work. Exercise the same API path used by kubectl top.
+        raw_metrics = self.kubectl.exec_command(
+            "kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes --request-timeout=10s"
+        )
+        try:
+            metrics = json.loads(raw_metrics)
+            return metrics.get("kind") == "NodeMetricsList" and bool(metrics.get("items"))
+        except (ValueError, TypeError, AttributeError):
+            return False
 
-    def _openebs_ready(self) -> bool:
-        """True if the OpenEBS tier is already fully deployed.
+    def _openebs_ready(self, svelte: bool) -> bool:
+        """True if the OpenEBS tier already matches what this profile wants.
 
-        Checks the node-disk-manager as well as the LocalPV provisioner so that a
+        Under `full` that includes the node-disk-manager, so that a
         partially-present `openebs` namespace is repaired by re-applying the
-        operator manifest rather than silently accepted.
+        operator manifest rather than silently accepted. Checking it also matters
+        because `openebs` persists between problems: a cluster whose last run was
+        `svelte` has had NDM removed, and accepting the provisioner alone would
+        leave `openebs-device` permanently unbacked after switching back.
         """
         out = self.kubectl.exec_command(
             "kubectl -n openebs get deployment openebs-localpv-provisioner "
-            "-o jsonpath='{.status.readyReplicas}' --ignore-not-found"
+            "-o json --ignore-not-found --request-timeout=10s"
         )
         try:
-            if int(out.strip()) < 1:
+            if not deployment_rollout_complete(json.loads(out)):
                 return False
-        except (ValueError, AttributeError):
+        except (ValueError, TypeError):
             return False
 
-        ndm = self.kubectl.exec_command("kubectl -n openebs get daemonset openebs-ndm -o name --ignore-not-found")
-        if not ndm or not ndm.strip():
-            self.logger.info("[DEPLOY] OpenEBS node-disk-manager missing; re-applying operator manifest")
+        if svelte:
+            return True
+
+        try:
+            ndm = self.kubectl.apps_v1_api.read_namespaced_daemon_set("openebs-ndm", "openebs", _request_timeout=10)
+        except ApiException:
             return False
-        return True
+        status = ndm.status
+        if status is None:
+            return False
+        desired = status.desired_number_scheduled or 0
+        return (
+            desired > 0
+            and (status.observed_generation or 0) >= (ndm.metadata.generation or 0)
+            and status.current_number_scheduled == desired
+            and status.updated_number_scheduled == desired
+            and status.number_ready == desired
+            and status.number_available == desired
+            and (status.number_misscheduled or 0) == 0
+        )
+
+    # openebs-operator.yaml bundles the node-disk-manager alongside the LocalPV
+    # provisioner. NDM exists to discover block devices and back the
+    # `openebs-device` StorageClass; SREGym only ever provisions through
+    # `openebs-hostpath`, which needs the provisioner alone. Measured on one
+    # problem, these seven pods cost 603m CPU (13% of the cluster) scanning
+    # disks nothing claims.
+    _OPENEBS_NDM_WORKLOADS = (
+        ("daemonset", "openebs-ndm"),
+        ("daemonset", "openebs-ndm-node-exporter"),
+        ("deployment", "openebs-ndm-operator"),
+        ("deployment", "openebs-ndm-cluster-exporter"),
+    )
+
+    def _trim_openebs_ndm(self) -> None:
+        """Remove unused device storage and node-disk-manager workloads.
+
+        Deleting rather than scaling: the operator manifest is a plain apply with
+        no controller to recreate them, and re-applying it recreates them for this
+        method to remove again.
+        """
+        baseline = self.cluster_state.baseline
+        if baseline is None:
+            raise RuntimeError("Cannot trim OpenEBS before the cluster baseline is available")
+        # Keep user-provided StorageClasses. The shared cluster baseline is
+        # captured before SREGym installs OpenEBS and survives interrupted runs.
+        if "openebs-device" not in baseline.storage_classes:
+            try:
+                self.cluster_state.storage_v1.delete_storage_class("openebs-device")
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+
+        self.logger.info("[svelte] Removing OpenEBS node-disk-manager (openebs-hostpath does not use it)")
+        for kind, name in self._OPENEBS_NDM_WORKLOADS:
+            self.kubectl.exec_command(f"kubectl delete {kind} {name} -n openebs --ignore-not-found")
 
     def _ensure_openebs_device_storageclass(self) -> None:
         self.logger.info("[DEPLOY] Ensuring OpenEBS LocalPV-Device StorageClass…")

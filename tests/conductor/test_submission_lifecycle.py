@@ -18,6 +18,7 @@ from sregym.conductor.conductor import (
     SubmissionAttemptClosed,
     SubmissionAttemptMismatch,
 )
+from sregym.phases import read_ledger, summarize
 
 
 def _conductor(diagnosis_evaluation=None, mitigation_evaluation=None) -> Conductor:
@@ -135,6 +136,82 @@ def test_legacy_early_mitigation_waits_and_is_accepted_for_mitigation(monkeypatc
     assert mitigation_evaluated.is_set()
     assert conductor.results["Diagnosis"]["submission"] == "diagnosis"
     assert conductor.results["Mitigation"]["success"] is True
+
+
+@pytest.mark.parametrize("interrupt", [None, "close", "abort", "replace"])
+def test_stage_start_is_recorded_before_mitigation_accepts_submissions(monkeypatch, tmp_path, interrupt):
+    conductor = _conductor(lambda _: {"success": True}, lambda _: {"success": True})
+    conductor.problem_id = "demo"
+    path = tmp_path / "phases.jsonl"
+    conductor.bind_phase_ledger(path)
+    ledger = conductor.phases
+    assert ledger is not None
+    conductor._mark("stage:diagnosis", "start")
+    monkeypatch.setattr(conductor_api, "_conductor", conductor)
+    write_started = threading.Event()
+    release_write = threading.Event()
+    record = ledger.record
+
+    def slow_record(phase, event, **fields):
+        if (phase, event) == ("stage:mitigation", "start"):
+            write_started.set()
+            assert release_write.wait(5)
+        record(phase, event, **fields)
+
+    monkeypatch.setattr(ledger, "record", slow_record)
+
+    async def run():
+        await conductor.submit("diagnosis", expected_stage="diagnosis")
+        diagnosis_future = conductor._submit_future
+        assert diagnosis_future is not None
+        mitigation_request = None
+        try:
+            assert await asyncio.to_thread(write_started.wait, 2)
+            # A slow ledger write must not hold the submission lock or expose
+            # mitigation before its start record is complete.
+            assert conductor._submission_lock.acquire(timeout=1)
+            try:
+                assert conductor.submission_state() == ("diagnosis", True, 1)
+            finally:
+                conductor._submission_lock.release()
+            if interrupt in {"abort", "replace"}:
+                conductor.abandon_submission_work()
+                if interrupt == "replace":
+                    conductor._submission_generation += 1
+                    conductor.submission_stage = "setup"
+                    conductor.bind_phase_ledger(tmp_path / "next-attempt.jsonl")
+            else:
+                mitigation_request = asyncio.create_task(
+                    conductor_api.submit_solution(conductor_api.SubmitRequest(stage="mitigation", solution=""))
+                )
+                await asyncio.sleep(0)
+                assert not mitigation_request.done()
+                assert conductor._pending_submission_stages == {(1, "mitigation"): 1}
+                if interrupt == "close":
+                    assert conductor.close_submissions() is True
+        finally:
+            release_write.set()
+            await asyncio.to_thread(diagnosis_future.result, 2)
+        if mitigation_request is not None:
+            response = await asyncio.wait_for(mitigation_request, timeout=2)
+            assert response["stage"] == "mitigation"
+            await conductor.wait_for_submission_work(timeout=2)
+
+    asyncio.run(run())
+    records = read_ledger(path)
+    assert [r["event"] for r in records if r["phase"] == "stage:mitigation"] == ["start", "end"]
+    summary = summarize(records)
+    assert "stage:mitigation#2" not in summary
+    assert summary["stage:mitigation"]["duration_s"] is not None
+    if interrupt in {"abort", "replace"}:
+        assert summary["stage:mitigation"]["outcome"] == "aborted"
+        assert conductor.submission_stage == ("setup" if interrupt == "replace" else "aborted")
+        assert "Mitigation" not in conductor.results
+        assert not (tmp_path / "next-attempt.jsonl").exists()
+    else:
+        assert summary["stage:mitigation"]["outcome"] == "submitted"
+        assert conductor.results["Mitigation"]["success"] is True
+        assert conductor.submission_stage == "done"
 
 
 def test_registered_early_mitigation_survives_atomic_agent_exit_close(monkeypatch):
@@ -445,7 +522,7 @@ def test_abandoned_evaluator_cannot_publish_or_advance_late_result():
         old_future = conductor._submit_future
         assert old_future is not None
         with pytest.raises(TimeoutError):
-            await conductor.wait_for_submission_work(timeout=0.01)
+            await conductor.wait_for_submission_evaluations(timeout=0.01)
         conductor.abandon_submission_work()
         gate.set()
         old_future.result(timeout=2)
@@ -453,6 +530,142 @@ def test_abandoned_evaluator_cannot_publish_or_advance_late_result():
     asyncio.run(run())
     assert conductor.submission_stage == "aborted"
     assert "Diagnosis" not in conductor.results
+    assert conductor._submit_future is None
+
+
+def test_evaluation_wait_times_out_while_a_request_remains_pending():
+    conductor = _conductor()
+    generation = conductor.register_pending_submission("mitigation")
+
+    try:
+        with pytest.raises(TimeoutError):
+            asyncio.run(conductor.wait_for_submission_evaluations(timeout=0.01))
+    finally:
+        conductor.unregister_pending_submission("mitigation", generation)
+
+
+def test_each_queued_stage_evaluation_gets_its_own_deadline(monkeypatch):
+    diagnosis_started = threading.Event()
+    release_diagnosis = threading.Event()
+    mitigation_started = threading.Event()
+    release_mitigation = threading.Event()
+
+    def evaluate_diagnosis(_solution):
+        diagnosis_started.set()
+        release_diagnosis.wait(2)
+        return {"success": True}
+
+    def evaluate_mitigation(_solution):
+        mitigation_started.set()
+        release_mitigation.wait(2)
+        return {"success": True}
+
+    conductor = _conductor(evaluate_diagnosis, evaluate_mitigation)
+    monkeypatch.setattr(conductor_api, "_conductor", conductor)
+
+    async def release_after_start(started, release):
+        while not started.is_set():
+            await asyncio.sleep(0.005)
+        await asyncio.sleep(0.12)
+        release.set()
+
+    async def wait_for_pending_request():
+        while not conductor._pending_submission_stages:
+            await asyncio.sleep(0.005)
+
+    async def run():
+        transport = httpx.ASGITransport(app=conductor_api.app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            diagnosis_response = await client.post(
+                "/submit",
+                json={"stage": "diagnosis", "solution": "diagnosis"},
+            )
+            assert diagnosis_response.status_code == 200
+
+            mitigation_request = asyncio.create_task(
+                client.post(
+                    "/submit",
+                    json={"stage": "mitigation", "solution": ""},
+                )
+            )
+            await asyncio.wait_for(wait_for_pending_request(), timeout=1)
+            conductor.close_submissions()
+
+            diagnosis_release = asyncio.create_task(release_after_start(diagnosis_started, release_diagnosis))
+            mitigation_release = asyncio.create_task(release_after_start(mitigation_started, release_mitigation))
+            started_at = time.monotonic()
+            await conductor.wait_for_submission_evaluations(timeout=0.2)
+            elapsed = time.monotonic() - started_at
+
+            mitigation_response = await mitigation_request
+            await diagnosis_release
+            await mitigation_release
+            await conductor.wait_for_submission_work(timeout=1)
+            return elapsed, mitigation_response
+
+    elapsed, mitigation_response = asyncio.run(run())
+
+    assert elapsed > 0.2
+    assert mitigation_response.status_code == 200
+    assert mitigation_response.json()["stage"] == "mitigation"
+    assert conductor.results["Diagnosis"]["success"] is True
+    assert conductor.results["Mitigation"]["success"] is True
+    assert conductor.submission_stage == "done"
+
+
+def test_evaluation_and_cleanup_have_separate_deadlines():
+    evaluation_started = threading.Event()
+    release_evaluation = threading.Event()
+    cleanup_started = threading.Event()
+    release_cleanup = threading.Event()
+
+    def evaluate_mitigation(_solution):
+        evaluation_started.set()
+        release_evaluation.wait(2)
+        return {"success": True}
+
+    def recover_fault():
+        cleanup_started.set()
+        release_cleanup.wait(2)
+
+    conductor = _conductor()
+    conductor.stage_sequence = [{"name": "mitigation", "evaluation": evaluate_mitigation}]
+    conductor.current_stage_index = 0
+    conductor.submission_stage = "mitigation"
+    conductor.problem = SimpleNamespace(
+        recover_fault=recover_fault,
+        app=SimpleNamespace(cleanup=lambda: None),
+    )
+
+    async def release_after(delay, event):
+        await asyncio.sleep(delay)
+        event.set()
+
+    async def run():
+        started_at = time.monotonic()
+        await conductor.submit("", expected_stage="mitigation")
+        assert evaluation_started.wait(1)
+
+        evaluation_release = asyncio.create_task(release_after(0.12, release_evaluation))
+        await conductor.wait_for_submission_evaluations(timeout=0.2)
+        await evaluation_release
+
+        assert conductor.submission_stage == "tearing_down"
+        assert cleanup_started.wait(1)
+        cleanup_future = conductor.finish_problem_in_background()
+        assert cleanup_future is conductor._submit_future
+
+        cleanup_release = asyncio.create_task(release_after(0.12, release_cleanup))
+        await conductor.wait_for_submission_work(timeout=0.2)
+        await cleanup_release
+        return time.monotonic() - started_at
+
+    elapsed = asyncio.run(run())
+
+    assert elapsed > 0.2
+    assert conductor.results["Mitigation"]["success"] is True
+    assert conductor.missing_submission_stages() == []
+    assert conductor.submission_stage == "done"
     assert conductor._submit_future is None
 
 

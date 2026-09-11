@@ -144,8 +144,8 @@ def test_resources_unchanged_rejects_replica_and_limit_cheats():
 
 def test_evaluate_passes_both_waves_and_stops_workload(monkeypatch):
     oracle = _oracle()
-    oracle._cluster_shape_healthy = Mock(return_value=True)
-    oracle._resources_unchanged = Mock(return_value=True)
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
     oracle._catalog_list_products_total = Mock(side_effect=[100.0, 140.0, 140.0, 180.0])
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
@@ -163,20 +163,24 @@ def test_evaluate_passes_both_waves_and_stops_workload(monkeypatch):
 
 def test_evaluate_fails_closed_when_prometheus_is_empty(monkeypatch):
     oracle = _oracle()
-    oracle._cluster_shape_healthy = Mock(return_value=True)
-    oracle._resources_unchanged = Mock(return_value=True)
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
     oracle._catalog_list_products_total = Mock(return_value=None)
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
-    assert oracle.evaluate() == {"success": False}
+    result = oracle.evaluate()
+    assert result["success"] is False
+    assert result["reason"] == "prometheus_unreachable"
     oracle.problem.workload.stop.assert_called()
 
 
 def test_evaluate_rejects_high_amplification_even_when_latency_is_fine(monkeypatch):
     oracle = _oracle()
-    oracle._cluster_shape_healthy = Mock(return_value=True)
-    oracle._resources_unchanged = Mock(return_value=True)
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
     oracle._catalog_list_products_total = Mock(side_effect=[0.0, 400.0])
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
-    assert oracle.evaluate() == {"success": False}
+    result = oracle.evaluate()
+    assert result["success"] is False
+    assert result["reason"] == "fault_still_present"
