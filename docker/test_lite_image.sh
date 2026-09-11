@@ -12,6 +12,21 @@ if [[ "$actual" != "linux/$ARCH" ]]; then
 fi
 
 case "$TARGET" in
+    kind-node)
+        docker run --rm --entrypoint sh "$IMAGE" -ec '
+            kubelet --version
+            command -v udevadm
+            command -v socat
+        '
+        ;;
+    agent-base)
+        docker run --rm --entrypoint bash "$IMAGE" -ec '
+            kubectl version --client
+            node --version
+            python3 -c "import clients, logger, llm_backend; from sregym.service.kubectl import KubeCtl"
+            test -x /opt/sregym/install-scripts/install-codex.sh
+        '
+        ;;
     hotel-reservation)
         docker run --rm --entrypoint sh "$IMAGE" -ec '
             for service in frontend geo profile rate recommendation reservation search user; do

@@ -16,7 +16,7 @@ group "default" {
 }
 
 group "publish" {
-  targets = ["hotel-reservation", "locust-exporter", "wrk2", "social-network-deps", "social-network", "openresty-thrift", "media-frontend"]
+  targets = ["hotel-reservation", "locust-exporter", "wrk2", "social-network-deps", "social-network", "openresty-thrift", "media-frontend", "kind-node", "agent-base"]
 }
 
 target "_common" {
@@ -73,4 +73,19 @@ target "media-frontend" {
   context = "SREGym-applications/socialNetwork/docker/media-frontend"
   dockerfile = "xenial/Dockerfile"
   tags = ["${REGISTRY}/media-frontend:${IMAGE_TAG}"]
+}
+
+target "kind-node" {
+  inherits = ["_common"]
+  context = "kind"
+  tags = ["${REGISTRY}/kind-node:${IMAGE_TAG}"]
+}
+
+target "agent-base" {
+  inherits = ["_common"]
+  context = "."
+  dockerfile = "docker/agents/Dockerfile"
+  // Match the Kubernetes version used by the bundled KIND node image.
+  args = { KUBECTL_VERSION = "v1.32.1" }
+  tags = ["${REGISTRY}/agent-base:${IMAGE_TAG}"]
 }

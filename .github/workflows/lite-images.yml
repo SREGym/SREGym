@@ -11,6 +11,17 @@ on:
       - docker/check_image_platforms.py
       - docker/locust-exporter/**
       - docker/wrk2/**
+      - docker/agents/**
+      - kind/Dockerfile
+      - kind/.dockerignore
+      - clients/**
+      - logger/**
+      - llm_backend/**
+      - sregym/paths.py
+      - sregym/service/kubectl.py
+      - sregym/service/helm.py
+      - sregym/service/apps/base.py
+      - sregym/service/apps/helpers.py
       - SREGym-applications
 
 permissions:
