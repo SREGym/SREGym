@@ -55,8 +55,14 @@ def _oracle():
     kubectl = SimpleNamespace(
         apps_v1_api=SimpleNamespace(list_namespaced_deployment=Mock()),
         core_v1_api=SimpleNamespace(read_namespaced_endpoints=Mock()),
+        exec_command_checked=Mock(return_value=""),
     )
-    problem = SimpleNamespace(namespace="astronomy-shop", kubectl=kubectl, workload=workload)
+    problem = SimpleNamespace(
+        namespace="astronomy-shop",
+        kubectl=kubectl,
+        workload=workload,
+        recommendation_deployment="recommendation",
+    )
     return ThunderingHerdMitigationOracle(problem)
 
 
@@ -161,6 +167,15 @@ def test_run_wave_polls_until_catalog_counter_moves(monkeypatch):
     assert snapshot.succeeded == 40
     assert amplification == 6.0
     assert sleeps == [5.0, 5.0, 5.0]
+
+
+def test_overlay_log_amplification_uses_refetch_ratio():
+    oracle = _oracle()
+    refetch = "\n".join(["recommendation catalog refetch"] * 20)
+    oracle.problem.kubectl.exec_command_checked = Mock(
+        return_value="\n".join(["recommendation catalog refetch"] * 20)
+    )
+    assert oracle._overlay_log_amplification(2) == 10.0
 
 
 def test_run_wave_uses_rpc_ratio_when_http_is_cached(monkeypatch):

@@ -9,6 +9,7 @@ def test_asset_fans_out_ten_list_products_calls():
     source = _ASSET.read_text(encoding="utf-8")
     assert "for _ in range(10):" in source
     assert "product_catalog_stub.ListProducts" in source
+    assert "recommendation catalog refetch" in source
     assert "ListRecommendations" in source
     assert "GetProduct" not in source
     assert "check_feature_flag" not in source

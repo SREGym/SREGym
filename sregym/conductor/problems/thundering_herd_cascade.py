@@ -37,6 +37,11 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
     source_path = "/app/recommendation_server.py"
     configmap_name = "recommendation-src-override"
     cache_flag = "recommendationCacheFailure"
+    overlay_command = (
+        "/venv/bin/opentelemetry-instrument",
+        "/venv/bin/python",
+        "/app/recommendation_server.py",
+    )
 
     def __init__(self):
         super().__init__(app=AstronomyShop())
@@ -72,6 +77,7 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
             replacement_content=self._replacement_content,
             configmap_name=self.configmap_name,
             container_name=self.recommendation_deployment,
+            command=list(self.overlay_command),
         )
 
     def _unoverlay(self, injector: ApplicationFaultInjector) -> None:

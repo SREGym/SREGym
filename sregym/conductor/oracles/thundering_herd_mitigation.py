@@ -43,6 +43,7 @@ class ThunderingHerdMitigationOracle(Oracle):
 
     max_amplification = 2.0
     min_fault_amplification = 6.0
+    overlay_log_marker = "recommendation catalog refetch"
     min_success_rate = 0.90
     max_p95_seconds = 5.0
     max_p99_seconds = 8.0
@@ -291,6 +292,23 @@ class ThunderingHerdMitigationOracle(Oracle):
         )
         return snapshot, amplification
 
+    def _overlay_log_amplification(self, succeeded: int) -> float | None:
+        if succeeded <= 0:
+            return None
+        deployment = getattr(self.problem, "recommendation_deployment", "recommendation")
+        command = (
+            f"kubectl logs -n {self.problem.namespace} deploy/{deployment} "
+            f"-c {deployment} --since=2m --tail=20000"
+        )
+        try:
+            logs = self.problem.kubectl.exec_command_checked(command)
+        except (AttributeError, RuntimeError) as exc:
+            print(f"[Fault] recommendation logs unavailable: {exc}")
+            return None
+        refetches = logs.count(self.overlay_log_marker)
+        print(f"[Fault] log refetch={refetches} succeeded={succeeded}")
+        return refetches / succeeded
+
     def assert_fault_present(self) -> None:
         """Fail injection if the overlay is not multiplying catalog RPCs."""
         self.problem.workload.start()
@@ -302,16 +320,20 @@ class ThunderingHerdMitigationOracle(Oracle):
             if measured is None:
                 raise RuntimeError("catalog RPC metrics were not available while verifying the fault")
             snapshot, amplification = measured
+            log_amplification = self._overlay_log_amplification(snapshot.succeeded)
+            observed = amplification
+            if log_amplification is not None:
+                observed = max(amplification, log_amplification)
             print(
                 "[Fault] "
                 f"completed={snapshot.completed} success={snapshot.success_rate:.1%} "
-                f"amplification={amplification:.2f}"
+                f"amplification={amplification:.2f} log_amplification={log_amplification}"
             )
             if snapshot.succeeded < 5:
                 raise RuntimeError("fault verification did not complete enough recommendations")
-            if amplification < self.min_fault_amplification:
+            if observed < self.min_fault_amplification:
                 raise RuntimeError(
-                    f"catalog amplification was {amplification:.2f}; "
+                    f"catalog amplification was {observed:.2f}; "
                     f"expected at least {self.min_fault_amplification:.2f}"
                 )
         finally:
@@ -340,6 +362,13 @@ class ThunderingHerdMitigationOracle(Oracle):
             if first is None:
                 return self.fail("prometheus_unreachable")
             snapshot, amplification = first
+            log_amplification = self._overlay_log_amplification(snapshot.succeeded)
+            if log_amplification is not None and log_amplification >= self.min_fault_amplification:
+                print(
+                    f"[FAIL] Catalog amplification is {log_amplification:.2f} "
+                    f"(maximum {self.max_amplification:.2f} ListProducts per useful recommendation)"
+                )
+                return self.fail("fault_still_present", amplification=round(log_amplification, 2))
             wave_fail = self._wave_failure(
                 snapshot, amplification, catalog_ids, concurrency=self.visible_concurrency
             )

@@ -77,6 +77,7 @@ def get_product_list(request_product_ids):
         # fault and must not hide the duplicated in-flight ListProducts fan-out.
         responses = []
         for _ in range(10):
+            print("recommendation catalog refetch", flush=True)
             responses.append(
                 product_catalog_stub.ListProducts(demo_pb2.Empty())
             )

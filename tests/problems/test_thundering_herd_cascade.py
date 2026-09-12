@@ -26,6 +26,7 @@ def test_asset_fans_out_ten_list_products_calls():
     source = _ASSET.read_text(encoding="utf-8")
     assert "for _ in range(10):" in source
     assert "product_catalog_stub.ListProducts" in source
+    assert "recommendation catalog refetch" in source
     assert "ListRecommendations" in source
     assert "GetProduct" not in source
     assert "check_feature_flag" not in source
@@ -119,6 +120,11 @@ def test_inject_overlays_recommendation_and_keeps_cache_flag_off(monkeypatch):
     assert created[0].injected["source_path"] == "/app/recommendation_server.py"
     assert created[0].injected["replacement_content"] == "buggy-recommendation"
     assert created[0].injected["container_name"] == "recommendation"
+    assert created[0].injected["command"] == [
+        "/venv/bin/opentelemetry-instrument",
+        "/venv/bin/python",
+        "/app/recommendation_server.py",
+    ]
     problem.kubectl.exec_command_checked.assert_called_once()
     problem.mitigation_oracle.assert_fault_present.assert_called_once_with()
     problem.kubectl.wait_for_ready.assert_called_once()

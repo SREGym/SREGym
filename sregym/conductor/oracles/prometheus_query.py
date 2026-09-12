@@ -7,7 +7,7 @@ import subprocess
 from urllib.parse import quote
 
 _PROMETHEUS_URL = "http://localhost:9090"
-_LIST_PRODUCTS_MATCHER = 'span_name=~".*ListProducts.*",service_name=~".*recommendation.*"'
+_LIST_PRODUCTS_MATCHER = 'span_name=~".*ListProducts.*",service_name=~".*product-catalog.*"'
 _LIST_RECOMMENDATIONS_MATCHER = (
     'span_name=~".*ListRecommendations.*",service_name=~".*recommendation.*"'
 )
@@ -74,7 +74,7 @@ def _namespaced_span_total(namespace: str, matcher: str) -> float | None:
 
 
 def catalog_list_products_total(namespace: str) -> float | None:
-    """Count recommendation-client ListProducts spans, failing closed if Prom is down."""
+    """Count product-catalog ListProducts spans, failing closed if Prom is down."""
     return _namespaced_span_total(namespace, _LIST_PRODUCTS_MATCHER)
 
 

@@ -56,8 +56,7 @@ def test_catalog_list_products_prefers_namespaced_query(monkeypatch):
     assert catalog_list_products_total("astronomy-shop") == 42.0
     assert "namespace=\"astronomy-shop\"" in calls[0]
     assert "ListProducts" in calls[0]
-    assert "recommendation" in calls[0]
-    assert "product-catalog" not in calls[0]
+    assert "product-catalog" in calls[0]
 
 
 def test_catalog_list_products_falls_back_without_namespace(monkeypatch):
