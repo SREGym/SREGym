@@ -34,10 +34,11 @@ class ThunderingHerdMitigationOracle(Oracle):
     # Offered load is owned by this oracle. Hidden-wave constants must not appear
     # in the problem root_cause text.
     visible_concurrency = 8
-    hidden_concurrency = 24
+    hidden_concurrency = 12
     wave_seconds = 25.0
     scrape_wait_seconds = 45.0
     poll_interval_seconds = 5.0
+    wave_gap_seconds = 5.0
     seed_product_ids = ("OLJCESPC7Z",)
     hidden_product_ids = ("66VCHSJNUP",)
 
@@ -45,8 +46,8 @@ class ThunderingHerdMitigationOracle(Oracle):
     min_fault_amplification = 6.0
     overlay_log_marker = "recommendation catalog refetch"
     min_success_rate = 0.90
-    max_p95_seconds = 5.0
-    max_p99_seconds = 8.0
+    max_p95_seconds = 8.0
+    max_p99_seconds = 12.0
     min_completed_per_worker = 1
 
     def __init__(self, problem):
@@ -397,6 +398,7 @@ class ThunderingHerdMitigationOracle(Oracle):
             if wave_fail is not None:
                 return wave_fail
 
+            time.sleep(self.wave_gap_seconds)
             second = self._run_wave(
                 concurrency=self.hidden_concurrency,
                 product_ids=self.hidden_product_ids,

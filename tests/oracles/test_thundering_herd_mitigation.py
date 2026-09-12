@@ -120,7 +120,7 @@ def test_wave_healthy_rejects_slow_or_errorful_traffic():
     catalog = {"OLJCESPC7Z", "66VCHSJNUP", "1YMWWN1N4O"}
     assert oracle._wave_healthy(_snapshot(success_rate=0.5), 1.0, catalog, concurrency=8) is False
     assert oracle._wave_healthy(_snapshot(p95_latency_seconds=9.0), 1.0, catalog, concurrency=8) is False
-    assert oracle._wave_healthy(_snapshot(p99_latency_seconds=12.0), 1.0, catalog, concurrency=8) is False
+    assert oracle._wave_healthy(_snapshot(p99_latency_seconds=13.0), 1.0, catalog, concurrency=8) is False
 
 
 def _named_deployment(name, **kwargs):

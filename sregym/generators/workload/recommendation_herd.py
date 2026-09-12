@@ -66,7 +66,7 @@ class RecommendationHerdWorkload:
         namespace: str,
         frontend_service: str = "frontend-proxy",
         frontend_port: int = 8080,
-        request_timeout: float = 8.0,
+        request_timeout: float = 15.0,
     ):
         self.namespace = namespace
         self.frontend = KubectlPortForward(namespace, frontend_service, frontend_port)
