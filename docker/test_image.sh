@@ -17,6 +17,31 @@ run_image() {
 }
 
 case "$TARGET" in
+    hotel-geo-misconfig)
+        run_image --network none --entrypoint sh "$IMAGE" -ec '
+            grep -q '\''"GeoMongoAddress": "mongodb-geo:27777"'\'' config.json
+            status=0
+            output="$(timeout 30 geo 2>&1)" || status=$?
+            test "$status" -eq 2
+            printf "%s\n" "$output" | grep "Read database URL: mongodb-geo:27777"
+            printf "%s\n" "$output" | grep "panic: no reachable servers"
+        '
+        ;;
+    hotel-correlated-fault)
+        run_image --network none --entrypoint sh "$IMAGE" -ec '
+            test -x /usr/local/bin/ComposePostService
+            for service in frontend geo profile rate recommendation reservation search user; do
+                status=0
+                "$service" 2>/dev/null || status=$?
+                test "$status" -eq 127
+                ! command -v "$service"
+            done
+        '
+        ;;
+    stress)
+        run_image --network none --entrypoint stress "$IMAGE" --version | grep -Fx 'stress 1.0.4'
+        run_image --network none --cpus 1 --memory 64m --entrypoint stress "$IMAGE" --cpu 1 --timeout 1
+        ;;
     flight-ticket-python-runtime)
         run_image -i --entrypoint python "$IMAGE" < "$SCRIPT_DIR/flight-ticket/test_python_runtime.py"
         ;;

@@ -31,6 +31,9 @@ group "default" {
     "train-ticket-mysqld-exporter",
     "train-ticket-alertsnitch-mysql",
     "train-ticket-deploy",
+    "hotel-geo-misconfig",
+    "hotel-correlated-fault",
+    "stress",
   ]
 }
 
@@ -57,6 +60,9 @@ group "publish" {
     "train-ticket-mysqld-exporter",
     "train-ticket-alertsnitch-mysql",
     "train-ticket-deploy",
+    "hotel-geo-misconfig",
+    "hotel-correlated-fault",
+    "stress",
   ]
 }
 
@@ -234,4 +240,24 @@ target "train-ticket-deploy" {
   dockerfile = "deployer.Dockerfile"
   contexts = { image-releases = "./docker" }
   tags = ["${REGISTRY}/train-ticket-deploy:${IMAGE_TAG}"]
+}
+
+target "hotel-geo-misconfig" {
+  inherits = ["_common"]
+  context = "docker/hotel-faults"
+  dockerfile = "geo.Dockerfile"
+  tags = ["${REGISTRY}/hotel-geo-misconfig:${IMAGE_TAG}"]
+}
+
+target "hotel-correlated-fault" {
+  inherits = ["_common"]
+  context = "docker/hotel-faults"
+  dockerfile = "correlated.Dockerfile"
+  tags = ["${REGISTRY}/hotel-correlated-fault:${IMAGE_TAG}"]
+}
+
+target "stress" {
+  inherits = ["_common"]
+  context = "docker/stress"
+  tags = ["${REGISTRY}/stress:${IMAGE_TAG}"]
 }
