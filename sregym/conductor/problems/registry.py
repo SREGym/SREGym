@@ -75,6 +75,7 @@ from sregym.conductor.problems.operator_misoperation.overload_replicas import K8
 from sregym.conductor.problems.operator_misoperation.security_context_fault import K8SOperatorSecurityContextFault
 from sregym.conductor.problems.operator_misoperation.wrong_operator_image import K8SOperatorWrongOperatorImage
 from sregym.conductor.problems.operator_misoperation.wrong_update_strategy import K8SOperatorWrongUpdateStrategyFault
+from sregym.conductor.problems.oversized_config_artifact import OversizedConfigArtifact
 from sregym.conductor.problems.payment_service_failure import PaymentServiceFailure
 from sregym.conductor.problems.payment_service_unreachable import PaymentServiceUnreachable
 from sregym.conductor.problems.persistent_volume_affinity_violation import PersistentVolumeAffinityViolation
@@ -157,6 +158,7 @@ class ProblemRegistry:
             "cfs_cpu_throttling_hotel_reservation": lambda: CpuThrottling(faulty_service="geo"),
             "feature_flag_latent_bug_hotel_reservation": lambda: FeatureFlagLatentBugHotelReservation(),
             "finalizer_deadlock_controller_hotel_reservation": FinalizerDeadlockController,
+            "oversized_config_artifact_hotel_reservation": lambda: OversizedConfigArtifact(),
             "duplicate_pvc_mounts_astronomy_shop": lambda: DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="frontend"),
             "duplicate_pvc_mounts_hotel_reservation": lambda: DuplicatePVCMounts(app_name="hotel_reservation", faulty_service="frontend"),
             "duplicate_pvc_mounts_social_network": lambda: DuplicatePVCMounts(app_name="social_network", faulty_service="jaeger"),
