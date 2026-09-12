@@ -28,6 +28,7 @@ from sregym.profile import is_svelte
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
+from sregym.utils.decorators import mark_fault_injected
 
 CART_CLIENT = r"""
 import json,sys,time,urllib.request,urllib.parse,urllib.error
@@ -433,6 +434,7 @@ class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
         self.assert_native_history()
         self._prepared = True
 
+    @mark_fault_injected
     def inject_fault(self):
         if not self._prepared or self.fault_injected:
             raise RuntimeError("a healthy, non-faulted baseline is required")
@@ -662,6 +664,7 @@ class StaleHostAliasesDNSPoisoningAstronomyShop(Problem):
                 time.sleep(2)
         self.wait_reads()
 
+    @mark_fault_injected(strict=True)
     def recover_fault(self):
         self.stop_traffic()
         # Deployment cleanup also calls recovery when baseline setup failed.
