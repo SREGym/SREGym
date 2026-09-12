@@ -56,23 +56,24 @@ def prometheus_scalar(query: str, *, announce: bool = True) -> float | None:
     return total
 
 
+# Client spans land on recommendation; server spans land on product-catalog.
+# Either series is enough to see the 10x fan-out. Frontend catalog browsing is
+# excluded so load-generator product-page traffic cannot mask the fault.
+_LIST_PRODUCTS_MATCHER = (
+    'span_name=~".*ListProducts.*",service_name=~".*(product-catalog|recommendation).*"'
+)
+
+
 def catalog_list_products_total(namespace: str) -> float | None:
-    """Count product-catalog ListProducts spans, failing closed if Prom is down."""
-    matcher = 'span_name=~".*ListProducts.*",service_name=~".*product-catalog.*"'
+    """Count ListProducts spans on catalog or recommendation, failing closed if Prom is down."""
+    matcher = _LIST_PRODUCTS_MATCHER
     scoped = prometheus_scalar(
         f'sum(traces_span_metrics_calls_total{{{matcher},namespace="{namespace}"}})',
         announce=False,
     )
-    if scoped:
+    if scoped is not None:
         return scoped
-    unscoped = prometheus_scalar(
+    return prometheus_scalar(
         f"sum(traces_span_metrics_calls_total{{{matcher}}})",
-        announce=scoped is None,
+        announce=True,
     )
-    if scoped is None and unscoped is None:
-        return None
-    if scoped is None:
-        return unscoped
-    if unscoped is None:
-        return scoped
-    return unscoped if unscoped > scoped else scoped

@@ -54,16 +54,29 @@ def test_catalog_list_products_prefers_namespaced_query(monkeypatch):
     monkeypatch.setattr("sregym.conductor.oracles.prometheus_query.prometheus_scalar", fake_scalar)
     assert catalog_list_products_total("astronomy-shop") == 42.0
     assert "namespace=\"astronomy-shop\"" in calls[0]
+    assert "ListProducts" in calls[0]
+    assert "product-catalog" in calls[0]
+    assert "recommendation" in calls[0]
 
 
 def test_catalog_list_products_falls_back_without_namespace(monkeypatch):
     def fake_scalar(query, *, announce=True):
         if "namespace=" in query:
-            return 0.0
+            return None
         return 7.0
 
     monkeypatch.setattr("sregym.conductor.oracles.prometheus_query.prometheus_scalar", fake_scalar)
     assert catalog_list_products_total("astronomy-shop") == 7.0
+
+
+def test_catalog_list_products_keeps_namespaced_zero(monkeypatch):
+    def fake_scalar(query, *, announce=True):
+        if "namespace=" in query:
+            return 0.0
+        raise AssertionError("must not fall back to leftover unscoped series")
+
+    monkeypatch.setattr("sregym.conductor.oracles.prometheus_query.prometheus_scalar", fake_scalar)
+    assert catalog_list_products_total("astronomy-shop") == 0.0
 
 
 def test_catalog_list_products_fails_closed_when_prom_is_down(monkeypatch):

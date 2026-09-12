@@ -71,6 +71,7 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
             source_path=self.source_path,
             replacement_content=self._replacement_content,
             configmap_name=self.configmap_name,
+            container_name=self.recommendation_deployment,
         )
 
     def _unoverlay(self, injector: ApplicationFaultInjector) -> None:
@@ -78,7 +79,25 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
             deployment_name=self.recommendation_deployment,
             source_path=self.source_path,
             configmap_name=self.configmap_name,
+            container_name=self.recommendation_deployment,
         )
+
+    def _assert_overlay_live(self) -> None:
+        marker = "for _ in range(10)"
+        command = (
+            f"kubectl exec -n {self.namespace} deploy/{self.recommendation_deployment} "
+            f"-c {self.recommendation_deployment} -- grep -F '{marker}' {self.source_path}"
+        )
+        try:
+            output = self.kubectl.exec_command_checked(command)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"recommendation overlay is not live at {self.source_path}"
+            ) from exc
+        if marker not in output:
+            raise RuntimeError(
+                f"recommendation overlay is not live at {self.source_path}: {output!r}"
+            )
 
     def _wait_for_recommendation(self) -> None:
         self.kubectl.wait_for_ready(
@@ -97,6 +116,7 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
             self.app.set_flag(self.cache_flag, False)
             self._overlay(injector)
             self._wait_for_recommendation()
+            self._assert_overlay_live()
             self.mitigation_oracle.assert_fault_present()
         except Exception:
             try:

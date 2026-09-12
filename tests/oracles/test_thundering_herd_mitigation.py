@@ -142,6 +142,26 @@ def test_resources_unchanged_rejects_replica_and_limit_cheats():
     assert oracle._resources_unchanged() is True
 
 
+def test_run_wave_polls_until_catalog_counter_moves(monkeypatch):
+    oracle = _oracle()
+    oracle.scrape_wait_seconds = 15.0
+    oracle.poll_interval_seconds = 5.0
+    oracle._catalog_list_products_total = Mock(side_effect=[100.0, 100.0, 100.0, 340.0])
+    sleeps = []
+    monkeypatch.setattr(
+        "sregym.conductor.oracles.thundering_herd_mitigation.time.sleep",
+        lambda seconds: sleeps.append(seconds),
+    )
+
+    measured = oracle._run_wave(concurrency=8, product_ids=("OLJCESPC7Z",))
+
+    assert measured is not None
+    snapshot, amplification = measured
+    assert snapshot.succeeded == 40
+    assert amplification == 6.0
+    assert sleeps == [5.0, 5.0, 5.0]
+
+
 def test_evaluate_passes_both_waves_and_stops_workload(monkeypatch):
     oracle = _oracle()
     oracle._cluster_shape_unhealthy = Mock(return_value=None)

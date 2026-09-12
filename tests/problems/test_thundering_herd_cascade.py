@@ -27,6 +27,8 @@ def test_asset_fans_out_ten_list_products_calls():
     assert "for _ in range(10):" in source
     assert "product_catalog_stub.ListProducts" in source
     assert "ListRecommendations" in source
+    assert "GetProduct" not in source
+    assert "check_feature_flag" not in source
 
 
 def test_root_cause_names_duplicated_inflight_work_not_retries():
@@ -74,7 +76,10 @@ def _problem():
     problem.cache_flag = "recommendationCacheFailure"
     problem._replacement_content = "buggy-recommendation"
     problem.app = SimpleNamespace(set_flag=Mock())
-    problem.kubectl = SimpleNamespace(wait_for_ready=Mock())
+    problem.kubectl = SimpleNamespace(
+        wait_for_ready=Mock(),
+        exec_command_checked=Mock(return_value="        for _ in range(10):"),
+    )
     problem.workload = SimpleNamespace(stop=Mock())
     problem.mitigation_oracle = SimpleNamespace(assert_fault_present=Mock())
     return problem
@@ -113,6 +118,8 @@ def test_inject_overlays_recommendation_and_keeps_cache_flag_off(monkeypatch):
     assert created[0].injected["deployment_name"] == "recommendation"
     assert created[0].injected["source_path"] == "/app/recommendation_server.py"
     assert created[0].injected["replacement_content"] == "buggy-recommendation"
+    assert created[0].injected["container_name"] == "recommendation"
+    problem.kubectl.exec_command_checked.assert_called_once()
     problem.mitigation_oracle.assert_fault_present.assert_called_once_with()
     problem.kubectl.wait_for_ready.assert_called_once()
     assert problem.fault_injected is True
@@ -143,6 +150,32 @@ def test_inject_removes_overlay_when_fault_verification_fails(monkeypatch):
     assert problem.fault_injected is False
 
 
+def test_inject_removes_overlay_when_mounted_file_is_missing(monkeypatch):
+    recovered = []
+
+    class FakeInjector:
+        def __init__(self, namespace):
+            pass
+
+        def inject_source_file_override(self, **kwargs):
+            return None
+
+        def recover_source_file_override(self, **kwargs):
+            recovered.append(kwargs)
+
+    monkeypatch.setattr(module, "ApplicationFaultInjector", FakeInjector)
+    problem = _problem()
+    problem.kubectl.exec_command_checked = Mock(side_effect=RuntimeError("grep: not found"))
+
+    with pytest.raises(RuntimeError, match="not live"):
+        problem.inject_fault()
+
+    assert recovered and recovered[0]["deployment_name"] == "recommendation"
+    problem.mitigation_oracle.assert_fault_present.assert_not_called()
+    problem.workload.stop.assert_called()
+    assert problem.fault_injected is False
+
+
 def test_recovery_unmounts_the_overlay(monkeypatch):
     recovered = {}
 
@@ -163,6 +196,7 @@ def test_recovery_unmounts_the_overlay(monkeypatch):
     problem.recover_fault()
 
     assert recovered["kwargs"]["deployment_name"] == "recommendation"
+    assert recovered["kwargs"]["container_name"] == "recommendation"
     problem.kubectl.wait_for_ready.assert_called_once()
     problem.workload.stop.assert_called_once()
     assert problem.fault_injected is False

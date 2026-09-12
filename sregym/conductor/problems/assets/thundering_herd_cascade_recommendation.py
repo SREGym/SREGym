@@ -36,9 +36,6 @@ from metrics import (
     init_metrics
 )
 
-cached_ids = []
-first_run = True
-
 class RecommendationService(demo_pb2_grpc.RecommendationServiceServicer):
     def ListRecommendations(self, request, context):
         prod_list = get_product_list(request.product_ids)
@@ -65,8 +62,6 @@ class RecommendationService(demo_pb2_grpc.RecommendationServiceServicer):
 
 
 def get_product_list(request_product_ids):
-    global first_run
-    global cached_ids
     with tracer.start_as_current_span("get_product_list") as span:
         max_responses = 5
 
@@ -74,34 +69,19 @@ def get_product_list(request_product_ids):
         request_product_ids_str = ''.join(request_product_ids)
         request_product_ids = request_product_ids_str.split(',')
 
-        # Feature flag scenario - Cache Leak
-        if check_feature_flag("recommendationCacheFailure"):
-            span.set_attribute("app.recommendation.cache_enabled", True)
-            if random.random() < 0.5 or first_run:
-                first_run = False
-                span.set_attribute("app.cache_hit", False)
-                logger.info("get_product_list: cache miss")
-                cat_response = product_catalog_stub.GetProduct(demo_pb2.Empty())
-                response_ids = [x.id for x in cat_response.products]
-                cached_ids = cached_ids + response_ids
-                cached_ids = cached_ids + cached_ids[:len(cached_ids) // 4]
-                product_ids = cached_ids
-            else:
-                span.set_attribute("app.cache_hit", True)
-                logger.info("get_product_list: cache hit")
-                product_ids = cached_ids
-        else:
-            span.set_attribute("app.recommendation.cache_enabled", False)
-            # Defensive refetch: every request does 10 fresh product-catalog
-            # calls "to guard against stale data". No single-flight / coalescing
-            # -- concurrent clients multiply the upstream load by 10x each.
-            responses = []
-            for _ in range(10):
-                responses.append(
-                    product_catalog_stub.ListProducts(demo_pb2.Empty())
-                )
-            cat_response = responses[-1]
-            product_ids = [x.id for x in cat_response.products]
+        span.set_attribute("app.recommendation.cache_enabled", False)
+        # Defensive refetch: every request does 10 fresh product-catalog
+        # calls "to guard against stale data". No single-flight / coalescing
+        # -- concurrent clients multiply the upstream load by 10x each.
+        # Do not gate this on flagd: recommendationCacheFailure is a different
+        # fault and must not hide the duplicated in-flight ListProducts fan-out.
+        responses = []
+        for _ in range(10):
+            responses.append(
+                product_catalog_stub.ListProducts(demo_pb2.Empty())
+            )
+        cat_response = responses[-1]
+        product_ids = [x.id for x in cat_response.products]
 
         span.set_attribute("app.products.count", len(product_ids))
 
@@ -126,12 +106,6 @@ def must_map_env(key: str):
     if value is None:
         raise Exception(f'{key} environment variable must be set')
     return value
-
-
-def check_feature_flag(flag_name: str):
-    # Initialize OpenFeature
-    client = api.get_client()
-    return client.get_boolean_value("recommendationCacheFailure", False)
 
 
 if __name__ == "__main__":

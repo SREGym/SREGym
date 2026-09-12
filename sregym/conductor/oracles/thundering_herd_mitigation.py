@@ -36,7 +36,8 @@ class ThunderingHerdMitigationOracle(Oracle):
     visible_concurrency = 8
     hidden_concurrency = 24
     wave_seconds = 25.0
-    scrape_wait_seconds = 20.0
+    scrape_wait_seconds = 45.0
+    poll_interval_seconds = 5.0
     seed_product_ids = ("OLJCESPC7Z",)
     hidden_product_ids = ("66VCHSJNUP",)
 
@@ -255,10 +256,21 @@ class ThunderingHerdMitigationOracle(Oracle):
             duration_seconds=self.wave_seconds,
             product_ids=product_ids,
         )
-        time.sleep(self.scrape_wait_seconds)
-        after = self._catalog_list_products_total()
-        if after is None:
-            return None
+        after = before
+        waited = 0.0
+        while waited < self.scrape_wait_seconds:
+            time.sleep(self.poll_interval_seconds)
+            waited += self.poll_interval_seconds
+            sample = self._catalog_list_products_total()
+            if sample is None:
+                return None
+            after = sample
+            if after > before:
+                break
+        print(
+            f"[Prom] ListProducts before={before:.0f} after={after:.0f} "
+            f"delta={after - before:.0f} waited={waited:.0f}s"
+        )
         return snapshot, self._amplification(after - before, snapshot.succeeded)
 
     def assert_fault_present(self) -> None:
