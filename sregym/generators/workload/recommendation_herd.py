@@ -92,7 +92,8 @@ class RecommendationHerdWorkload:
         started = time.monotonic()
         try:
             response = requests.get(
-                self._url(f"/api/recommendations?productIds={query}"),
+                self._url(f"/api/recommendations?productIds={query}&_={time.time_ns()}"),
+                headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
                 timeout=self.request_timeout,
             )
             elapsed = time.monotonic() - started
