@@ -296,14 +296,27 @@ class ThunderingHerdMitigationOracle(Oracle):
         if succeeded <= 0:
             return None
         deployment = getattr(self.problem, "recommendation_deployment", "recommendation")
-        command = (
-            f"kubectl logs -n {self.problem.namespace} deploy/{deployment} "
-            f"-c {deployment} --since=2m --tail=20000"
+        commands = (
+            (
+                f"kubectl logs -n {self.problem.namespace} "
+                f"-l app.kubernetes.io/component={deployment} -c {deployment} "
+                f"--since=5m --tail=50000 --max-log-requests=20"
+            ),
+            (
+                f"kubectl logs -n {self.problem.namespace} deploy/{deployment} "
+                f"-c {deployment} --since=5m --tail=50000"
+            ),
         )
-        try:
-            logs = self.problem.kubectl.exec_command_checked(command)
-        except (AttributeError, RuntimeError) as exc:
-            print(f"[Fault] recommendation logs unavailable: {exc}")
+        logs = ""
+        last_error = None
+        for command in commands:
+            try:
+                logs = self.problem.kubectl.exec_command_checked(command)
+                break
+            except (AttributeError, RuntimeError) as exc:
+                last_error = exc
+        else:
+            print(f"[Fault] recommendation logs unavailable: {last_error}")
             return None
         refetches = logs.count(self.overlay_log_marker)
         print(f"[Fault] log refetch={refetches} succeeded={succeeded}")

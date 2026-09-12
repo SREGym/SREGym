@@ -91,8 +91,11 @@ class RecommendationHerdWorkload:
         query = ",".join(product_ids)
         started = time.monotonic()
         try:
+            nonce = time.time_ns()
             response = requests.get(
-                self._url(f"/api/recommendations?productIds={query}&_={time.time_ns()}"),
+                self._url(
+                    f"/api/recommendations?productIds={query}&sessionId={nonce}&_={nonce}"
+                ),
                 headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
                 timeout=self.request_timeout,
             )

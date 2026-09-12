@@ -123,9 +123,13 @@ def test_inject_overlays_recommendation_and_keeps_cache_flag_off(monkeypatch):
     assert created[0].injected["command"] == [
         "/venv/bin/opentelemetry-instrument",
         "/venv/bin/python",
-        "-c",
-        "import runpy; runpy.run_path('/app/recommendation_server.py', run_name='__main__')",
+        "-B",
+        "/src-override/recommendation_server.py",
     ]
+    assert created[0].injected["extra_env"] == {
+        "PYTHONPATH": "/app",
+        "PYTHONPYCACHEPREFIX": "/tmp/pycache",
+    }
     problem.kubectl.exec_command_checked.assert_called()
     problem.mitigation_oracle.assert_fault_present.assert_called_once_with()
     problem.kubectl.wait_for_ready.assert_called_once()
