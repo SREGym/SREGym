@@ -1,23 +1,8 @@
-"""Mitigation oracle for the pod-local hosts-override problem on Astronomy Shop.
+"""Check persistent routing and acknowledged cart state, not just pod health.
 
-The generic :class:`~sregym.conductor.oracles.mitigation.MitigationOracle` only
-looks at Deployment and pod health. That is not enough here: a pod-local
-``/etc/hosts`` override keeps every control-plane signal green while the
-frontend-proxy cannot reach the frontend service at all, so a health-only
-oracle reports success on an unmitigated cluster.
-
-This oracle therefore checks three independent things:
-
-1. **Configuration** - the Deployment pod template declares no ``hostAliases``
-   entry for the backend hostname.
-2. **Runtime** - no live pod of that Deployment still carries such an entry.
-   ``pod.spec.hostAliases`` is what the kubelet writes into ``/etc/hosts``, so
-   this rejects a stale pod that survived a template-only edit, and it also
-   rejects the "fix" of hand-editing ``/etc/hosts`` inside a running container
-   (which leaves the template, and therefore the next pod, still poisoned).
-3. **Function** - a fresh request through the edge proxy actually returns
-   catalog data, i.e. the frontend-proxy really can reach frontend and
-   downstream services again.
+An unused host alias is acceptable: a persistent FQDN route can bypass it.
+For the cart cutover, all serving edges must agree on recovered customer state
+and new mutations, both before and after replacement of the callers.
 """
 
 import contextlib
@@ -26,13 +11,55 @@ import time
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
-from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.mitigation import MitigationOracle
 
 
-class StaleHostAliasesMitigationOracle(Oracle):
-    """Verify the hosts override is gone from config *and* runtime, and traffic works."""
+class ServingCapacityError(RuntimeError):
+    """A required healthy edge is absent from the public serving route."""
+
+
+class CartRequestError(RuntimeError):
+    """A real application request failed, rather than the Kubernetes command."""
+
+
+def cart_operations(traces, customers, unacknowledged=()):
+    """Reconstruct successful native cart RPCs without counting their child spans."""
+    events, seen = [], set()
+    for trace in traces:
+        if trace["traceID"] in unacknowledged:
+            continue
+        for span in trace["spans"]:
+            identity = (trace["traceID"], span["spanID"])
+            tags = {tag["key"]: tag["value"] for tag in span.get("tags", [])}
+            method = span["operationName"].rsplit("/", 1)[-1]
+            user = tags.get("app.user.id")
+            if user not in customers or method not in ("AddItem", "EmptyCart") or identity in seen:
+                continue
+            if tags.get("span.kind") != "server":
+                continue
+            if (
+                tags.get("error")
+                or tags.get("otel.status_code") == "ERROR"
+                or str(tags.get("rpc.grpc.status_code", 0)) != "0"
+            ):
+                continue
+            seen.add(identity)
+            operation = (user, "clear", None, None)
+            if method == "AddItem":
+                operation = (user, "add", tags["app.product.id"], int(tags["app.product.quantity"]))
+            events.append((span["startTime"], identity, operation))
+    return [operation for _, _, operation in sorted(events)]
+
+
+class StaleHostAliasesMitigationOracle(MitigationOracle):
+    """Verify functional recovery while accepting equivalent persistent routes."""
 
     importance = 1.0
+    FAILURE_CLASSES = {
+        "serving_capacity_reduced": "agent_error",
+        "cart_request_failed": "agent_error",
+        "retired_route_dependency": "agent_error",
+    }
     rollout_timeout_seconds = 180
     probe_timeout_seconds = 90
     poll_interval_seconds = 2
@@ -46,6 +73,13 @@ class StaleHostAliasesMitigationOracle(Oracle):
         super().__init__(problem)
         self.deployment_name = problem.faulty_service
         self.backend_hostname = problem.target_backend
+
+    def capture_baseline(self) -> None:
+        super().capture_baseline()
+        # These callers may be removed when their declared Service entrypoints
+        # are retired. Public capacity and cart operations are checked below.
+        for name in getattr(self.problem, "RETIRED_ROUTES", ()):
+            self.replica_count.pop(name, None)
 
     # ── rollout helpers ────────────────────────────────────────────────
     @staticmethod
@@ -73,8 +107,10 @@ class StaleHostAliasesMitigationOracle(Oracle):
     def _wait_for_current_rollout(self, deployment):
         deadline = time.monotonic() + self.rollout_timeout_seconds
         while True:
-            if self._rollout_complete(deployment):
+            if self._ready_for_validation(deployment):
                 return deployment
+            if getattr(deployment.spec, "paused", False) and not getattr(self.problem, "_prepared", False):
+                return None
             if time.monotonic() >= deadline:
                 return None
 
@@ -83,6 +119,55 @@ class StaleHostAliasesMitigationOracle(Oracle):
                 deployment.metadata.name,
                 self.problem.namespace,
             )
+
+    def _ready_for_validation(self, deployment):
+        # A repaired legacy route can remain intentionally paused. Readiness
+        # alone does not pass it: cart consistency and replacement Pods below
+        # must prove the running route works without applying a pending template.
+        if (
+            getattr(self.problem, "_prepared", False)
+            and deployment.metadata.name in self.problem.EDGES
+            and getattr(deployment.spec, "paused", False)
+        ):
+            desired, status = self._desired_replicas(deployment), deployment.status
+            return (
+                desired >= 1
+                and (status.observed_generation or 0) >= (deployment.metadata.generation or 0)
+                and (status.replicas or 0) == desired
+                and (status.ready_replicas or 0) == desired
+                and (status.available_replicas or 0) == desired
+                and (status.unavailable_replicas or 0) == 0
+            )
+        return self._rollout_complete(deployment)
+
+    def _namespace_health(self):
+        """Retain baseline and pod-health checks without rejecting a sound paused route."""
+        namespace, kubectl = self.problem.namespace, self.problem.kubectl
+        deployments = {dep.metadata.name: dep for dep in kubectl.list_deployments(namespace).items}
+        for name in self.replica_count:
+            if name not in deployments:
+                return self.fail("required_deployment_missing", deployment=name, namespace=namespace)
+        for name, deployment in deployments.items():
+            desired = self._desired_replicas(deployment)
+            if desired == 0:
+                if name in self.replica_count:
+                    return self.fail("required_deployment_scaled_to_zero", deployment=name, namespace=namespace)
+                continue
+            if self._wait_for_current_rollout(deployment) is None:
+                return self.fail("deployment_replicas_unready", deployment=name, namespace=namespace)
+        retired = {
+            name
+            for name in self.problem.RETIRED_ROUTES
+            if name not in deployments or self._desired_replicas(deployments[name]) == 0
+        }
+        pods = [
+            pod
+            for pod in kubectl.list_pods(namespace).items
+            if (pod.metadata.labels or {}).get("opentelemetry.io/name") not in retired
+        ]
+        if not pods:
+            return self.fail("no_pods_found", namespace=namespace)
+        return self.pods_unready(pods, namespace=namespace)
 
     # ── hosts-override checks ──────────────────────────────────────────
     def _aliases_for_backend(self, host_aliases) -> list:
@@ -141,6 +226,8 @@ class StaleHostAliasesMitigationOracle(Oracle):
     # ── functional probe ───────────────────────────────────────────────
     def _run_product_probe(self) -> bool:
         """Fetch the catalog through the edge proxy, which routes via the frontend."""
+        if getattr(self.problem, "_prepared", False):
+            self.problem.cart_mismatches = []
         namespace = self.problem.namespace
         core_v1 = self.problem.kubectl.core_v1_api
 
@@ -196,7 +283,10 @@ class StaleHostAliasesMitigationOracle(Oracle):
 
             logs = core_v1.read_namespaced_pod_log(name=pod_name, namespace=namespace)
             print(logs.strip())
-            return phase == "Succeeded" and "PRODUCTS_OK" in logs
+            healthy = phase == "Succeeded" and "PRODUCTS_OK" in logs
+            if healthy and getattr(self.problem, "_prepared", False):
+                healthy = self.problem.carts_match()
+            return healthy
         except ApiException as exc:
             print(f"[FAIL] Catalog availability probe could not run: {exc}")
             return False
@@ -210,9 +300,36 @@ class StaleHostAliasesMitigationOracle(Oracle):
 
     # ── entry point ────────────────────────────────────────────────────
     def evaluate(self, *args, **kwargs) -> dict:
+        try:
+            results = self._evaluate()
+            code = results.pop("reason_code", "connectivity_probe_failed")
+            if results["success"]:
+                results.pop("failure_class", None)
+            else:
+                # Keep the original human-readable reason for existing callers,
+                # alongside a stable code and the shared failure classification.
+                results["reason_code"] = code
+                results["failure_class"] = self.fail(code)["failure_class"]
+            return results
+        except ServingCapacityError as exc:
+            print(f"[FAIL] {exc}")
+            return self.fail("serving_capacity_reduced", error=str(exc))
+        except CartRequestError as exc:
+            return self.fail("cart_request_failed", error=str(exc))
+        except Exception as exc:
+            return self.fail_from_exception(exc)
+
+    def _evaluate(self) -> dict:
         print("== Hosts Override Mitigation Evaluation ==")
+        migration = getattr(self.problem, "_prepared", False)
+        if migration:
+            self.problem.stop_traffic()
+            health_failure = self._namespace_health()
+            if health_failure is not None:
+                health_failure["reason_code"] = health_failure["reason"]
+                return health_failure
         results = {
-            "success": False,
+            **self.fail("connectivity_probe_failed"),
             "deployment_exists": False,
             "rollout_complete": False,
             "template_override_removed": False,
@@ -231,17 +348,21 @@ class StaleHostAliasesMitigationOracle(Oracle):
         results["deployment_exists"] = True
 
         if self._desired_replicas(deployment) < 1:
+            results["reason_code"] = "required_deployment_scaled_to_zero"
             results["reason"] = f"deployment '{self.deployment_name}' is scaled to zero"
             print(f"[FAIL] {results['reason']}")
             return results
 
         settled = self._wait_for_current_rollout(deployment)
         if settled is None:
+            if getattr(deployment.spec, "paused", False):
+                results["reason_code"] = "fault_still_present"
             results["reason"] = f"deployment '{self.deployment_name}' did not complete its current rollout"
             print(f"[FAIL] {results['reason']}")
             return results
         deployment = settled
-        results["rollout_complete"] = True
+        results["rollout_complete"] = self._rollout_complete(deployment)
+        results["runtime_available"] = True
 
         try:
             if not self._has_ready_endpoint(self.deployment_name):
@@ -272,13 +393,78 @@ class StaleHostAliasesMitigationOracle(Oracle):
         results["product_probe_succeeded"] = self._run_product_probe()
 
         if results["product_probe_succeeded"]:
+            if migration:
+                results["customer_state_restored"] = True
+                results["cross_instance_operations"] = False
+                results["persistent_after_replacement"] = False
+                intake = self.problem._get("configmap", self.problem.OPERATIONS)["data"].get("acceptWrites")
+                if intake != "true" or self.problem.traffic_error:
+                    results["reason_code"] = (
+                        "oracle_command_failed" if self.problem.traffic_error else "fault_still_present"
+                    )
+                    results["reason"] = "customer intake is paused or has an unresolved request failure"
+                    return results
+                for name in ("cart", "cart-retained", "frontend", "frontend-retained", *self.problem.EDGES):
+                    try:
+                        current = self.problem.kubectl.get_deployment(name, self.problem.namespace)
+                    except ApiException as exc:
+                        if exc.status == 404 and name in self.problem.RETIRED_ROUTES:
+                            continue
+                        raise
+                    if name in self.problem.RETIRED_ROUTES and self._desired_replicas(current) == 0:
+                        continue
+                    if not self._ready_for_validation(current):
+                        results["reason"] = f"deployment '{name}' has not converged before replacement validation"
+                        return results
+                for name in self.problem.EDGES:
+                    if not self._has_ready_endpoint(name):
+                        results["reason"] = f"edge '{name}' has no ready endpoint"
+                        return results
+                results["cross_instance_operations"] = self.problem.fresh_operations_work()
+                if not results["cross_instance_operations"]:
+                    results["reason_code"] = "fault_still_present"
+                    results["reason"] = "new acknowledged cart changes differ between serving endpoints"
+                    return results
+                # This runs only after the live routes already agree; it cannot
+                # complete a paused rollout or reconcile an unfinished repair.
+                retirement_required = bool(getattr(self.problem, "fault_injected", False))
+                if retirement_required:
+                    results["retired_release_independent"] = False
+                try:
+                    retirement = (
+                        self.problem.retired_routes_withdrawn() if retirement_required else contextlib.nullcontext()
+                    )
+                    with retirement:
+                        self.problem.restart_callers()
+                        results["persistent_after_replacement"] = (
+                            self.problem.carts_match() and self.problem.fresh_operations_work()
+                        )
+                        if retirement_required:
+                            results["retired_release_independent"] = results["persistent_after_replacement"]
+                except CartRequestError as exc:
+                    results["reason_code"] = (
+                        "retired_route_dependency" if retirement_required else "cart_request_failed"
+                    )
+                    results["reason"] = f"post-replacement public cart request failed: {exc}"
+                    return results
+                if not results["persistent_after_replacement"]:
+                    results["reason_code"] = "fault_still_present"
+                    results["reason"] = "cart state or routing did not survive legacy withdrawal and caller replacement"
+                    return results
             results["success"] = True
-            results["reason"] = "catalog requests succeed through the edge proxy"
+            results["reason"] = (
+                "customer state and new cart operations agree across persistent routes"
+                if migration
+                else "catalog requests succeed through the edge proxy"
+            )
             print("[PASS] Mitigation Result: Pass")
             return results
 
         # Probe failed — give a specific reason.
-        if has_template_override:
+        if migration and getattr(self.problem, "cart_mismatches", []):
+            results["reason_code"] = "fault_still_present"
+            results["reason"] = "acknowledged customer carts are missing or inconsistent between serving routes"
+        elif has_template_override:
             results["reason"] = (
                 f"the pod template of '{self.deployment_name}' still overrides "
                 f"'{self.backend_hostname}' with a static hosts entry"
@@ -292,4 +478,3 @@ class StaleHostAliasesMitigationOracle(Oracle):
             results["reason"] = f"a fresh {self.product_path} request did not return catalog data"
         print(f"[FAIL] {results['reason']}")
         return results
-
