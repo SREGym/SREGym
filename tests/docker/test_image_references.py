@@ -22,7 +22,7 @@ from sregym.service.apps.train_ticket import TrainTicket
 from sregym.service.container_runner import DEFAULT_AGENT_IMAGE
 from sregym.service.helm import Helm
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 IMAGES = json.loads((ROOT / "docker/images.lock.json").read_text())
 
 
@@ -159,9 +159,8 @@ def test_workload_node_and_agent_use_the_recorded_releases():
     workload = yaml.safe_load((ROOT / "sregym/generators/workload/wrk-job-template.yaml").read_text())
     assert workload["spec"]["template"]["spec"]["containers"][0]["image"] == IMAGES["wrk2"]
     assert IMAGES["agent-base"] == DEFAULT_AGENT_IMAGE
-    for arch in ("arm", "x86"):
-        config = yaml.safe_load((ROOT / f"kind/kind-config-{arch}.yaml").read_text())
-        assert [node["image"] for node in config["nodes"]] == [IMAGES["kind-node"]] * 4
+    config = yaml.safe_load((ROOT / "kind/kind-config.yaml").read_text())
+    assert [node["image"] for node in config["nodes"]] == [IMAGES["kind-node"]] * 4
 
 
 def test_fleetcast_loads_the_published_backend_override():
@@ -214,12 +213,6 @@ def test_flight_ticket_loads_all_three_published_job_images():
         "populateRedis": {"image": IMAGES["flight-ticket-populate-redis"]},
         "loadGenerator": {"image": IMAGES["flight-ticket-load-generator"]},
     }
-
-
-def test_flight_ticket_action_packaging_and_execution_use_the_published_runtime():
-    dockerfile = (ROOT / "docker/flight-ticket/action-deployer.Dockerfile").read_text()
-    assert f"ARG PYTHON_RUNTIME_IMAGE={IMAGES['flight-ticket-python-runtime']}" in dockerfile
-    assert "${PYTHON_RUNTIME_IMAGE}" in dockerfile
 
 
 def test_train_ticket_uses_the_same_multiarch_locust_exporter():

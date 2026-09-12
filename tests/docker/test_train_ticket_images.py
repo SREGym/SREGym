@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 PINNER = runpy.run_path(str(ROOT / "docker/train-ticket/pin_images.py"))
 SOURCE = ROOT / "SREGym-applications/train-ticket/deploy-job/deployment"
 TARGETS = (

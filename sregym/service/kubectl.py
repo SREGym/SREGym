@@ -203,24 +203,32 @@ class KubeCtl:
 
         console.log(f"[bold yellow]Waiting for all pods in {display_name} to be ready...")
 
-        wait = 0
-        checked_platform_logs = set()
+        deadline = time.monotonic() + max_wait
+        platform_log_retry_at = {}
 
-        while wait < max_wait:
+        while time.monotonic() < deadline:
             try:
                 if label_selectors:
                     # Collect pods from all services
                     all_pods = []
                     for selector in label_selectors:
-                        pod_list = self.core_v1_api.list_namespaced_pod(namespace=namespace, label_selector=selector)
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("Pod readiness deadline reached")
+                        pod_list = self.core_v1_api.list_namespaced_pod(
+                            namespace=namespace, label_selector=selector, _request_timeout=remaining
+                        )
                         all_pods.extend(pod_list.items)
                 else:
-                    all_pods = self.list_pods(namespace).items or []
+                    all_pods = self.list_pods(namespace, timeout=max(0.001, deadline - time.monotonic())).items or []
 
                 if all_pods:
                     for pod in all_pods:
                         self._check_container_platform(pod, namespace)
-                        self._check_container_platform_logs(pod, namespace, checked_platform_logs)
+                    for pod in all_pods:
+                        self._check_container_platform_logs(pod, namespace, platform_log_retry_at, deadline=deadline)
+                    if time.monotonic() >= deadline:
+                        break
                     ready_pods = [
                         pod
                         for pod in all_pods
@@ -242,8 +250,9 @@ class KubeCtl:
             except Exception as e:
                 console.log(f"[red]Error checking pod statuses: {e}")
 
-            time.sleep(sleep)
-            wait += sleep
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(sleep, remaining))
 
         raise Exception(
             f"[red]Timeout: Not all pods in {display_name} reached the Ready state within {max_wait} seconds."
@@ -282,12 +291,12 @@ class KubeCtl:
             "See docs/container-images.md for multiarch images and source-build instructions."
         )
 
-    def _check_container_platform_logs(self, pod, namespace: str, checked: set):
+    def _check_container_platform_logs(self, pod, namespace: str, retry_at: dict, *, deadline: float):
         """Some runtimes report exec/loader failures only in container stderr.
 
-        Inspect a small tail once per failed container instance, never healthy
-        containers. Do not turn a log-fetch error or an ordinary crash into a
-        platform error. Only include the matching error line in diagnostics.
+        Cache successful reads per container instance. Retry unavailable logs
+        after five seconds, within the readiness deadline. Ordinary application
+        crashes and log-fetch failures are not platform errors.
         """
         statuses = [*(pod.status.init_container_statuses or []), *(pod.status.container_statuses or [])]
         for status in statuses:
@@ -301,8 +310,12 @@ class KubeCtl:
             if terminated is None or terminated.exit_code == 0:
                 continue
             key = (pod.metadata.uid or pod.metadata.name, status.name, status.restart_count, status.container_id)
-            if key in checked:
+            now = time.monotonic()
+            if now >= deadline:
+                return
+            if now < retry_at.get(key, 0):
                 continue
+            retry_at[key] = now + 5
             try:
                 logs = self.core_v1_api.read_namespaced_pod_log(
                     name=pod.metadata.name,
@@ -311,14 +324,14 @@ class KubeCtl:
                     previous=previous,
                     tail_lines=20,
                     limit_bytes=4096,
-                    _request_timeout=3,
+                    _request_timeout=min(3, deadline - now),
                 )
             except Exception:
                 # Log files may not yet be available immediately after exit.
                 continue
             if not isinstance(logs, str) or not logs:
                 continue
-            checked.add(key)
+            retry_at[key] = float("inf")
             for line in logs.splitlines():
                 if any(marker in line.lower() for marker in PLATFORM_ERROR_MARKERS):
                     raise self._container_platform_error(pod, namespace, status, line[:512])

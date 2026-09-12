@@ -29,21 +29,14 @@ These host commands are not needed on macOS.
 
 ## Create the cluster
 
-From the repository root, let the setup script select the correct node image:
+From the repository root, create the cluster with the shared multiarch image:
 
 ```bash
 bash kind/setup_kind_cluster.sh
 ```
 
-You can also select the architecture explicitly:
-
-```bash
-# x86-64 Linux, WSL2, or Intel Mac
-bash kind/setup_kind_cluster.sh x86
-
-# ARM64 Linux or Apple silicon Mac
-bash kind/setup_kind_cluster.sh arm
-```
+The old `arm` and `x86` arguments remain accepted for compatibility. They use
+the same configuration and do not force a different platform.
 
 The script:
 
@@ -62,9 +55,6 @@ SREGym-Lite pulls published multiarch application images directly. No local
 build-and-load step is needed on Apple silicon. See
 [SREGym-Lite](../docs/SREGym-Lite.md) for the supported problem set and
 [container images](../docs/container-images.md) for optional local source builds.
-The [multiarch validation report](../docs/macOS-multiarch-validation.md) covers
-the wider application catalog and lists the remaining source and infrastructure
-requirements.
 
 ## Troubleshooting
 
@@ -111,9 +101,9 @@ WSL2 may require additional resources. Adjust the WSL2 settings in your `.wslcon
 Some KIND/containerd configurations give containers an extremely high file
 descriptor limit. Erlang can exhaust memory at startup because of that limit.
 The Astronomy Shop compatibility values cap the UI process's descriptor limit
-at 65,536 while retaining its original 250 MiB memory limit. Simply increasing
-the container's memory is not sufficient. Ensure the current compatibility
-values are applied by deploying through SREGym.
+at 65,536 while retaining its original 250 MiB memory limit. Increasing
+the container's memory is not sufficient. Deploy through SREGym to apply the
+current compatibility values.
 
 ### Deployment timeout on a slow network
 

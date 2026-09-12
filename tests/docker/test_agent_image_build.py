@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Image build uses a Unix shell")
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize("explicit,expected", [(None, "v1.33.9"), ("v1.32.1", "v1.32.1")])
@@ -15,22 +15,6 @@ def test_agent_image_matches_host_client_unless_explicitly_pinned(tmp_path, expl
     build_dir = repo / "docker" / "agents"
     build_dir.mkdir(parents=True)
     (build_dir / "build.sh").write_text((REPO_ROOT / "docker" / "agents" / "build.sh").read_text())
-    for directory in ("clients", "logger", "llm_backend", "docker/agents/install-scripts"):
-        (repo / directory).mkdir(parents=True)
-    for path in (
-        "sregym/__init__.py",
-        "sregym/paths.py",
-        "sregym/service/__init__.py",
-        "sregym/service/kubectl.py",
-        "sregym/service/helm.py",
-        "sregym/service/apps/base.py",
-        "sregym/service/apps/helpers.py",
-        "docker/agents/Dockerfile",
-        "docker/agents/requirements-container.txt",
-    ):
-        target = repo / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.touch()
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     log = tmp_path / "calls.txt"

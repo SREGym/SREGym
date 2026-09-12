@@ -160,15 +160,12 @@ target "agent-base" {
 target "fleetcast-backend" {
   inherits = ["_common"]
   context = "SREGym-applications/FleetCast/backend"
-  dockerfile = "../../../docker/fleetcast/Dockerfile"
-  contexts = { python-dependencies = "./docker/fleetcast" }
   tags = ["${REGISTRY}/fleetcast-backend:${IMAGE_TAG}"]
 }
 
 target "flight-ticket-action-deployer" {
   inherits = ["_common"]
   context = "SREGym-applications/flight-ticket/deploy_ow_actions"
-  dockerfile = "../../../docker/flight-ticket/action-deployer.Dockerfile"
   tags = ["${REGISTRY}/flight-ticket-action-deployer:${IMAGE_TAG}"]
 }
 
@@ -181,7 +178,6 @@ target "flight-ticket-populate-redis" {
 target "flight-ticket-load-generator" {
   inherits = ["_common"]
   context = "SREGym-applications/flight-ticket/load_generator"
-  dockerfile = "../../../docker/flight-ticket/load-generator.Dockerfile"
   tags = ["${REGISTRY}/flight-ticket-load-generator:${IMAGE_TAG}"]
 }
 

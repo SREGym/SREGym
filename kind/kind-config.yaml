@@ -1,3 +1,4 @@
+# Shared AMD64/ARM64 configuration. Image platforms are selected by Docker.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 networking:

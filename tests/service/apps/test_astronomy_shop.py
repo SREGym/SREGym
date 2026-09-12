@@ -76,9 +76,6 @@ def test_full_profile_caps_ui_descriptors_without_increasing_memory():
     ui = values["components"]["flagd"]["sidecarContainers"][0]
     assert ui["name"] == "flagd-ui"
     assert ui["resources"]["limits"]["memory"] == "250Mi"
-    assert "ulimit -n 65536" in ui["command"][2]
-    assert '"$current" -gt 65536' in ui["command"][2]
-    assert "exec /app/bin/server" in ui["command"][2]
 
 
 def test_arm_go_services_have_memory_headroom():

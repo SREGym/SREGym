@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-_checker = runpy.run_path(str(Path(__file__).resolve().parents[1] / "docker/check_image_platforms.py"))
+_checker = runpy.run_path(str(Path(__file__).resolve().parents[2] / "docker/check_image_platforms.py"))
 REQUIRED_PLATFORMS = _checker["REQUIRED_PLATFORMS"]
 check_image = _checker["check_image"]
 container_images = _checker["container_images"]

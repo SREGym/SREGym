@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-ENTRYPOINT = Path(__file__).resolve().parents[1] / "docker/train-ticket/mysql-nofile-entrypoint.sh"
+ENTRYPOINT = Path(__file__).resolve().parents[2] / "docker/train-ticket/mysql-nofile-entrypoint.sh"
 
 
 @pytest.mark.parametrize(

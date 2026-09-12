@@ -12,20 +12,8 @@
 set -euo pipefail
 
 CALICO_VERSION="v3.27.0"
-REQUESTED_ARCH="${1:-auto}"
-
-case "${REQUESTED_ARCH}" in
-    auto)
-        case "$(uname -m)" in
-            arm64|aarch64) ARCH="arm" ;;
-            x86_64|amd64) ARCH="x86" ;;
-            *)
-                echo "❌ Unsupported host architecture: $(uname -m)"
-                exit 1
-                ;;
-        esac
-        ;;
-    arm|x86) ARCH="${REQUESTED_ARCH}" ;;
+case "${1:-auto}" in
+    auto|arm|x86) ;; # Legacy aliases; the Docker daemon selects the native platform.
     *)
         echo "Usage: bash kind/setup_kind_cluster.sh [auto|arm|x86]"
         exit 1
@@ -33,7 +21,7 @@ case "${REQUESTED_ARCH}" in
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KIND_CONFIG="${SCRIPT_DIR}/kind-config-${ARCH}.yaml"
+KIND_CONFIG="${SCRIPT_DIR}/kind-config.yaml"
 
 if [[ ! -f "${KIND_CONFIG}" ]]; then
     echo "❌ Config file not found: ${KIND_CONFIG}"
@@ -41,7 +29,7 @@ if [[ ! -f "${KIND_CONFIG}" ]]; then
     exit 1
 fi
 
-echo "==> Step 1: Create Kind cluster (arch: ${ARCH})"
+echo "==> Step 1: Create Kind cluster"
 kind create cluster --config "${KIND_CONFIG}"
 
 echo "==> Step 2: Install Calico CNI"

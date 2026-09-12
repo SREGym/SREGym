@@ -1,3 +1,5 @@
+"""TiDB operator image injection and recovery tests."""
+
 import copy
 import json
 import shlex

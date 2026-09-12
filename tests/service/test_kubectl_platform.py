@@ -1,3 +1,4 @@
+import time
 from unittest.mock import Mock, patch
 
 import pytest
@@ -64,6 +65,15 @@ def test_transient_pull_failure_can_recover():
     sleep.assert_called_once()
 
 
+def test_platform_status_is_checked_before_slow_logs_from_other_pods():
+    kubectl = KubeCtl.__new__(KubeCtl)
+    kubectl.list_pods = Mock(return_value=client.V1PodList(items=[_failed_pod(), _pod("exec format error")]))
+    kubectl.core_v1_api = Mock()
+    with pytest.raises(ContainerPlatformError):
+        kubectl.wait_for_ready("test", max_wait=5)
+    kubectl.core_v1_api.read_namespaced_pod_log.assert_not_called()
+
+
 def test_ready_container_does_not_fail_on_stale_platform_error():
     KubeCtl._check_container_platform(_pod("exec format error", ready=True, previous=True), "test")
 
@@ -128,9 +138,9 @@ def test_ordinary_crash_log_is_checked_only_once_per_container_instance():
     kubectl.core_v1_api = Mock()
     kubectl.core_v1_api.read_namespaced_pod_log.return_value = "Connection refused\n"
     pod = _failed_pod()
-    checked = set()
-    kubectl._check_container_platform_logs(pod, "test", checked)
-    kubectl._check_container_platform_logs(pod, "test", checked)
+    checked = {}
+    kubectl._check_container_platform_logs(pod, "test", checked, deadline=time.monotonic() + 10)
+    kubectl._check_container_platform_logs(pod, "test", checked, deadline=time.monotonic() + 10)
     kubectl.core_v1_api.read_namespaced_pod_log.assert_called_once()
 
 
@@ -138,13 +148,15 @@ def test_log_fetch_failure_does_not_become_a_platform_error():
     kubectl = KubeCtl.__new__(KubeCtl)
     kubectl.core_v1_api = Mock()
     kubectl.core_v1_api.read_namespaced_pod_log.side_effect = RuntimeError("log file not yet available")
-    kubectl._check_container_platform_logs(_failed_pod(), "test", set())
+    kubectl._check_container_platform_logs(_failed_pod(), "test", {}, deadline=time.monotonic() + 10)
 
 
 def test_successful_init_container_does_not_trigger_log_inspection():
     kubectl = KubeCtl.__new__(KubeCtl)
     kubectl.core_v1_api = Mock()
-    kubectl._check_container_platform_logs(_failed_pod(init=True, exit_code=0), "test", set())
+    kubectl._check_container_platform_logs(
+        _failed_pod(init=True, exit_code=0), "test", {}, deadline=time.monotonic() + 10
+    )
     kubectl.core_v1_api.read_namespaced_pod_log.assert_not_called()
 
 
@@ -156,5 +168,44 @@ def test_restarting_container_uses_previous_logs():
     status = pod.status.container_statuses[0]
     status.last_state = status.state
     status.state = client.V1ContainerState(running=client.V1ContainerStateRunning())
-    kubectl._check_container_platform_logs(pod, "test", set())
+    kubectl._check_container_platform_logs(pod, "test", {}, deadline=time.monotonic() + 10)
     assert kubectl.core_v1_api.read_namespaced_pod_log.call_args.kwargs["previous"] is True
+
+
+def test_slow_log_requests_share_the_readiness_deadline(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(time, "sleep", lambda delay: now.__setitem__(0, now[0] + delay))
+    kubectl = KubeCtl.__new__(KubeCtl)
+    pods = [_failed_pod() for _ in range(10)]
+    for i, pod in enumerate(pods):
+        pod.metadata.uid = f"pod-{i}"
+    kubectl.list_pods = Mock(return_value=client.V1PodList(items=pods))
+    kubectl.core_v1_api = Mock()
+
+    def unavailable(**kwargs):
+        now[0] += kwargs["_request_timeout"]
+        raise TimeoutError("kubelet did not respond")
+
+    kubectl.core_v1_api.read_namespaced_pod_log.side_effect = unavailable
+    with pytest.raises(Exception, match="within 5 seconds"):
+        kubectl.wait_for_ready("test", sleep=2, max_wait=5)
+    assert now[0] == 5
+    assert kubectl.core_v1_api.read_namespaced_pod_log.call_count == 2
+    assert kubectl.list_pods.call_args.kwargs["timeout"] <= 5
+
+
+def test_unavailable_logs_retry_after_backoff_and_can_report_platform_failure(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    kubectl = KubeCtl.__new__(KubeCtl)
+    kubectl.core_v1_api = Mock()
+    kubectl.core_v1_api.read_namespaced_pod_log.side_effect = [RuntimeError("not yet available"), "exec format error"]
+    pod, retry_at = _failed_pod(), {}
+    kubectl._check_container_platform_logs(pod, "test", retry_at, deadline=10)
+    now[0] = 4
+    kubectl._check_container_platform_logs(pod, "test", retry_at, deadline=10)
+    assert kubectl.core_v1_api.read_namespaced_pod_log.call_count == 1
+    now[0] = 5
+    with pytest.raises(ContainerPlatformError):
+        kubectl._check_container_platform_logs(pod, "test", retry_at, deadline=10)
