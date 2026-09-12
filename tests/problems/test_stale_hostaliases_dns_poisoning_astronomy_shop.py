@@ -177,11 +177,41 @@ def test_lifecycle_against_a_live_cluster():
         # Inject the fault.
         problem.inject_fault()
         deployment = problem.kubectl.get_deployment(problem.faulty_service, problem.namespace)
-        aliases = deployment.spec.template.spec.host_aliases
-        assert aliases and aliases[0].ip == problem.blackhole_ip
-        assert problem.target_backend in aliases[0].hostnames
+        # The desired template is corrected, but a paused rollout retains one
+        # old serving Pod with the short hostname and its stale hosts entry.
+        assert deployment.spec.paused is True
+        assert not deployment.spec.template.spec.host_aliases
+        current_host = f"{problem.target_backend}.{problem.namespace}.svc.cluster.local"
+        template_hosts = [
+            entry.value
+            for container in deployment.spec.template.spec.containers
+            for entry in container.env or []
+            if entry.name == "FRONTEND_HOST"
+        ]
+        assert template_hosts == [current_host]
+        pods = problem._edge_pods()
+        assert len(pods) == problem.EDGE_REPLICAS
+        hosts = []
+        for pod in pods:
+            pod_hosts = [
+                entry.get("value")
+                for container in pod["spec"]["containers"]
+                for entry in container.get("env", [])
+                if entry["name"] == "FRONTEND_HOST"
+            ]
+            assert len(pod_hosts) == 1
+            hosts.extend(pod_hosts)
+            aliases = pod["spec"].get("hostAliases") or []
+            if pod_hosts[0] == problem.target_backend:
+                assert any(
+                    alias["ip"] == problem.blackhole_ip and problem.target_backend in alias["hostnames"]
+                    for alias in aliases
+                )
+            else:
+                assert not aliases
+        assert sorted(hosts) == sorted([problem.target_backend, current_host])
 
-        # Post-injection: traffic must fail and oracle must fail.
+        # Post-injection: carts must disagree even though both routes are healthy.
         assert not hosts_oracle._run_product_probe(), "post-injection probe must fail"
         assert problem.mitigation_oracle.evaluate()["success"] is False, "the oracle must fail while the fault is live"
 
@@ -197,4 +227,3 @@ def test_lifecycle_against_a_live_cluster():
         )
     finally:
         problem.app.cleanup()
-
