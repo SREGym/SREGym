@@ -222,7 +222,7 @@ Provide a clear, concise diagnosis identifying:
 - The root cause of the failure
 - Supporting evidence from your investigation
 
-Be specific and technical. State the root cause clearly."""
+Be specific and technical. State the root cause clearly.{workspace_hint}"""
 
 MITIGATION_PROMPT = """Your previous diagnosis is available in the conversation context.
 
@@ -237,7 +237,7 @@ Instructions:
 3. Verify the fix by checking that pods are Running and containers are Ready
 4. Confirm services are responding correctly
 
-After applying the fix, provide a summary of what you changed and verification that it is working."""
+After applying the fix, provide a summary of what you changed and verification that it is working.{workspace_hint}"""
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +279,7 @@ def main():
         "app_name": app_info.get("app_name", "unknown"),
         "namespace": app_info.get("namespace", "default"),
         "descriptions": app_info.get("descriptions", ""),
+        "workspace_hint": app_info.get("workspace_hint", ""),
     }
 
     # ================================================================

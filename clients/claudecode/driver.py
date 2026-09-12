@@ -15,6 +15,7 @@ import requests
 
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
 from clients.harness.problem_id import resolve_problem_id
+from clients.harness.workspace import append_workspace_hint
 from logger import init_logger
 
 # Add SREGym root to path
@@ -189,7 +190,7 @@ Important:
 """
 
     logger.info(f"Built instruction:\n{instruction}")
-    return instruction
+    return append_workspace_hint(instruction, app_info)
 
 
 def save_results(

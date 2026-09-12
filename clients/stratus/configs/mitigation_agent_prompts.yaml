@@ -88,7 +88,7 @@ user: |
   You can run up to {max_step} rounds to finish the tasks.
   If you call f_submit_tool in tool-call stage, the process will end immediately.
   If you exceed this limitation, the system will force you to make a submission.
-  You will begin by analyzing the service's state and telemetry with the tools.
+  You will begin by analyzing the service's state and telemetry with the tools.{workspace_hint}
 
 retry_user: |
   The result from the last attempt of mitigation is as follows:

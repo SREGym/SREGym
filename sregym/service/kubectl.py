@@ -210,13 +210,21 @@ class KubeCtl:
                     ready_pods = [
                         pod
                         for pod in all_pods
+                        # Terminating pods may stay Ready and serve existing
+                        # keep-alive/gRPC connections during their grace period.
+                        if getattr(pod.metadata, "deletion_timestamp", None) is None
                         # Completed Job pods (e.g. k3s's helm-install-* pods in
                         # kube-system) finish "Succeeded" with terminated, never-ready
                         # containers — they're done, not pending — so don't block on
                         # them. Scoped to Job-owned pods so a stray Succeeded pod (or
                         # any Failed pod) still has to be accounted for.
-                        if self._is_completed_job_pod(pod)
-                        or (pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses))
+                        and (
+                            self._is_completed_job_pod(pod)
+                            or (
+                                pod.status.container_statuses
+                                and all(cs.ready for cs in pod.status.container_statuses)
+                            )
+                        )
                     ]
 
                     if len(ready_pods) == len(all_pods):
