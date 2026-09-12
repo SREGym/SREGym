@@ -54,6 +54,16 @@ deployed Astronomy Shop image instead of the nonexistent historical recovery
 tag. That lifecycle's oracle checks the image reference; it is not an
 application-level request test.
 
+The two Hotel images were subsequently republished as `hotel-reservation:20260912.1`
+and `hotel-reservation:20260912.2` so their names do not reveal the injected
+fault. Their runtime layers and configuration are identical to the tested
+images, apart from the build-revision label. Both architectures passed the
+smoke checks again. Anonymous registry checks verified both platform configs
+and confirmed the old names are absent from runtime and provenance metadata.
+Two temporary ARM KIND pods also pulled these references with `Always` pull
+policy, without registry credentials, and ran natively; both pods and their
+test namespace were removed afterward.
+
 ## TrainTicket component checks
 
 The actual deployment job embeds its own charts and manifests. Its 46 service
@@ -98,7 +108,7 @@ test environment; reducing the benchmark's defaults was not part of this work.
 
 ## Regression and image checks
 
-- Broad non-live suite on September 12: **1,433 passed, 1 skipped**. The skipped fixture-dependent
+- Broad non-live suite on September 12: **1,435 passed, 1 skipped**. The skipped fixture-dependent
   trace test and excluded live/model suites are not counted as passes.
 - Image reference tests check deployed pins, recovery images, Helm value files,
   sidecar preservation, and agent pull/rebuild behavior.
@@ -152,10 +162,11 @@ Raw local evidence is under `.runtime/multiarch-validation/` and task-specific
   No full OpenWhisk/FlightTicket deployment was tested, and the external example
   endpoint in the upstream chart was not used or modified.
 - **Package visibility:** the 21 packages published before September 12 are
-  now public. The three new packages (`hotel-geo-misconfig`,
-  `hotel-correlated-fault`, `stress`) defaulted to internal. Their tests use
-  authenticated registry access and exact image bytes loaded into disposable
-  ARM nodes. They still require public visibility for credential-free pulls.
+  now public. The Hotel variants have since been republished in the existing
+  public `hotel-reservation` package as neutral releases `20260912.1` and
+  `20260912.2`. The earlier lifecycle tests loaded the exact runtime bytes into
+  disposable ARM nodes. The separate `stress` package still needs public
+  visibility for credential-free pulls.
 - Hardware/Khaos requirements are separate from container architecture;
   multiarch images do not make bare-metal-only faults runnable inside KIND.
 

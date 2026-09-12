@@ -1,6 +1,7 @@
 import copy
 import importlib
 import json
+import re
 import shlex
 from pathlib import Path
 from types import SimpleNamespace
@@ -26,9 +27,17 @@ IMAGES = json.loads((ROOT / "docker/images.lock.json").read_text())
 
 
 def test_fault_and_stress_helpers_use_the_recorded_releases():
-    assert IMAGES["hotel-geo-misconfig"] == HOTEL_GEO_MISCONFIG_IMAGE
-    assert IMAGES["hotel-correlated-fault"] == HOTEL_CORRELATED_FAULT_IMAGE
+    assert IMAGES["hotel-reservation-1"] == HOTEL_GEO_MISCONFIG_IMAGE
+    assert IMAGES["hotel-reservation-2"] == HOTEL_CORRELATED_FAULT_IMAGE
     assert IMAGES["stress"] == STRESS_IMAGE
+
+
+@pytest.mark.parametrize("image", [HOTEL_GEO_MISCONFIG_IMAGE, HOTEL_CORRELATED_FAULT_IMAGE])
+def test_hotel_image_names_do_not_disclose_the_injected_fault(image):
+    # The agent can inspect image references. Use the normal application
+    # repository and an ordinary numbered release, not a diagnosis in the name.
+    assert re.fullmatch(r"ghcr\.io/sregym/hotel-reservation:\d{8}\.\d+@sha256:[a-f0-9]{64}", image)
+    assert image != HOTEL_RESERVATION_APPLICATION_IMAGE
 
 
 @pytest.mark.parametrize(

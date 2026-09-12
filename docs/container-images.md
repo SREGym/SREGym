@@ -47,7 +47,9 @@ left unchanged. The earlier `lite-hotel-reservation` package is no longer used.
   Go version, and incorrect MongoDB port. The correlated fault image preserves
   the original wrong-application rollout: Social Network binaries with none of
   Hotel's eight startup commands. See the
-  [fault image recipes and provenance](../docker/hotel-faults/README.md).
+  [image recipes and provenance](../docker/hotel-reservation/README.md).
+  Both variants use the public `hotel-reservation` package and neutral numbered
+  release tags; their names do not reveal the injected fault.
 - The CPU-stress helper retains stress 1.0.4 and its existing invocation.
 - `incorrect_image` deliberately injects a nonexistent image; that tag must
   remain nonexistent. Recovery now restores the exact pre-injection reference
@@ -73,11 +75,11 @@ bash docker/test_image.sh media-frontend ghcr.io/sregym/media-frontend:local arm
 
 To publish a new version locally, authenticate Docker to GHCR with an account
 authorized to write the packages. A GitHub CLI login alone does not guarantee
-`write:packages` permission. Select a new tag and use a Buildx builder that
-supports both platforms:
+`write:packages` permission. Select an unused date-based tag (keeping the Hotel
+variants' names neutral) and use a Buildx builder that supports both platforms:
 
 ```bash
-IMAGE_TAG=my-new-version REVISION="$(git rev-parse HEAD)" \
+IMAGE_TAG=20260913 REVISION="$(git rev-parse HEAD)" \
   docker buildx bake -f docker/images.hcl --push publish
 ```
 
@@ -101,10 +103,11 @@ On September 12, all 21 previously maintained packages were public, including
 the 11 FleetCast/FlightTicket/TrainTicket packages that were internal on
 September 11. Both platform manifests were accessible anonymously.
 
-The new `hotel-geo-misconfig`, `hotel-correlated-fault`, and `stress` packages
-also need public visibility for credential-free pulls. GitHub defaults new
-packages to internal; publishing and multiarch support do not establish public
-access. The validation report records their latest checked visibility.
+The Hotel variants use the existing public `hotel-reservation` package with
+tags `20260912.1` and `20260912.2`; they do not require registry credentials.
+The new `stress` package still needs public visibility for credential-free
+pulls. GitHub defaults new packages to internal; publishing and multiarch
+support do not establish public access.
 
 ## Verification
 

@@ -1,6 +1,6 @@
 {
-  "hotel-geo-misconfig": "ghcr.io/sregym/hotel-geo-misconfig:20260912-multiarch@sha256:7a4b1eca66e124ca9abe452e512f005a646869d33ae0a493c735259d59694499",
-  "hotel-correlated-fault": "ghcr.io/sregym/hotel-correlated-fault:20260912-multiarch@sha256:082c9ffa9764f8c82cce7ac3f00f54af351575fc1d38cf0e8672da1b63b86220",
+  "hotel-reservation-1": "ghcr.io/sregym/hotel-reservation:20260912.1@sha256:8bc558a555f65f7522d1404ca47d70d95fc0cb58449bc039b741bd3074817838",
+  "hotel-reservation-2": "ghcr.io/sregym/hotel-reservation:20260912.2@sha256:d3c82fbcbe2fc74f47c7cb35dc72040c93c6db62084b98b560e3f69a8f130766",
   "stress": "ghcr.io/sregym/stress:20260912-multiarch@sha256:60eba58b6c432c989d837e898286ff8df0d11065498b1f55090e6ed8d495dc94",
   "train-ticket-deploy": "ghcr.io/sregym/train-ticket-deploy:20260911-multiarch@sha256:430e82d095da102214f70f4223f44545e668da40840e1ce4159371ce122d1a95",
   "train-ticket-percona": "ghcr.io/sregym/train-ticket-percona:20260911-multiarch@sha256:33369d8c876f95b19de9b52cb56073e69cba6aac9abbc02138d4be887dac37ba",
