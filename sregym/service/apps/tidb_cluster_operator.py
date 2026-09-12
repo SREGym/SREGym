@@ -5,6 +5,8 @@ import time
 from pathlib import Path
 from textwrap import dedent
 
+import yaml
+
 from sregym.paths import BASE_DIR
 from sregym.service.helm import Helm
 
@@ -23,6 +25,16 @@ class TiDBClusterDeployer:
         self.operator_chart = self.metadata["Helm Operator Config"]["chart_path"]
         self.operator_version = self.metadata["Helm Operator Config"]["version"]
         self.operator_crd_url = self.metadata["Helm Operator Config"]["CRD"]
+
+        # Use the vendored chart only when it matches the requested release.
+        # Fresh installations must not depend on the chart mirror being online.
+        repo_root = Path(__file__).resolve().parents[3]
+        local_operator_chart = repo_root / "SREGym-applications/FleetCast/tidb-operator"
+        chart_metadata = local_operator_chart / "Chart.yaml"
+        if chart_metadata.is_file():
+            chart_version = yaml.safe_load(chart_metadata.read_text())["version"]
+            if str(chart_version).lstrip("v") == self.operator_version.lstrip("v"):
+                self.operator_chart = str(local_operator_chart)
 
         env_path = os.environ.get("TIDB_OPERATOR_VALUES")
         self.operator_values_path = ""
@@ -86,19 +98,9 @@ class TiDBClusterDeployer:
         print(f"Installing/upgrading TiDB Operator via Helm in namespace '{self.operator_namespace}'...")
         self.create_namespace(self.operator_namespace)
 
-        # Add pingcap repo with retry logic to handle transient DNS/network issues
-        try:
+        if not Path(self.operator_chart).is_dir():
             Helm.add_repo("pingcap", "https://charts.pingcap.org")
-        except RuntimeError as e:
-            print(f"[warn] Failed to add pingcap repo after retries: {e}")
-            print("[info] Continuing with cached charts if available")
-
-        # Update repos with retry logic
-        try:
             Helm.repo_update()
-        except RuntimeError as e:
-            print(f"[warn] Failed to update helm repos after retries: {e}")
-            print("[info] Continuing with cached charts if available")
 
         values_arg = ""
         if self.operator_values_path:

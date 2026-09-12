@@ -72,12 +72,20 @@ SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/)
 **Note:** If you run into pod crashes or "too many open files" errors, see the [kind README](./kind/README.md) for required host kernel settings and troubleshooting.
 
 ```bash
-# For x86 machines
+# Auto-detect x86-64 or ARM64 (recommended)
+bash kind/setup_kind_cluster.sh
+
+# Or select x86 explicitly
 bash kind/setup_kind_cluster.sh x86
 
-# For ARM machines
+# Or select ARM explicitly
 bash kind/setup_kind_cluster.sh arm
 ```
+
+[SREGym-Lite](./docs/SREGym-Lite.md) pulls published multiarch images on both
+Apple silicon and x86-64. No local application-image build is required.
+See [container images](./docs/container-images.md) for the wider application
+image catalog and remaining compatibility requirements.
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
 

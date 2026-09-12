@@ -29,7 +29,13 @@ These host commands are not needed on macOS.
 
 ## Create the cluster
 
-From the repository root, run the command matching your machine:
+From the repository root, let the setup script select the correct node image:
+
+```bash
+bash kind/setup_kind_cluster.sh
+```
+
+You can also select the architecture explicitly:
 
 ```bash
 # x86-64 Linux, WSL2, or Intel Mac
@@ -41,7 +47,7 @@ bash kind/setup_kind_cluster.sh arm
 
 The script:
 
-1. creates the four-node KIND cluster using the matching architecture image;
+1. creates the four-node KIND cluster using the published multiarch node image;
 2. installs Calico;
 3. waits for Calico and all nodes to become ready; and
 4. clears the previous SREGym cluster-baseline cache.
@@ -52,7 +58,13 @@ Confirm that all four nodes are `Ready`:
 kubectl get nodes
 ```
 
-The cluster is now ready to run SREGym.
+SREGym-Lite pulls published multiarch application images directly. No local
+build-and-load step is needed on Apple silicon. See
+[SREGym-Lite](../docs/SREGym-Lite.md) for the supported problem set and
+[container images](../docs/container-images.md) for optional local source builds.
+The [multiarch validation report](../docs/macOS-multiarch-validation.md) covers
+the wider application catalog and lists the remaining source and infrastructure
+requirements.
 
 ## Troubleshooting
 
@@ -87,7 +99,21 @@ All KIND nodes share the host's `fs.inotify.max_user_instances` limit. When this
 
 ### Resource allocation
 
+On macOS, allocate at least 16 GB to Docker Desktop or OrbStack's Linux VM for
+the full Lite profile, leaving additional RAM for macOS and the agent. Keep the
+Mac awake during long campaigns; `caffeinate -i <command>` prevents idle sleep
+for the lifetime of that command.
+
 WSL2 may require additional resources. Adjust the WSL2 settings in your `.wslconfig` file on Windows if you encounter performance issues.
+
+### Astronomy Shop's flag UI is OOMKilled immediately
+
+Some KIND/containerd configurations give containers an extremely high file
+descriptor limit. Erlang can exhaust memory at startup because of that limit.
+The Astronomy Shop compatibility values cap the UI process's descriptor limit
+at 65,536 while retaining its original 250 MiB memory limit. Simply increasing
+the container's memory is not sufficient. Ensure the current compatibility
+values are applied by deploying through SREGym.
 
 ### Deployment timeout on a slow network
 

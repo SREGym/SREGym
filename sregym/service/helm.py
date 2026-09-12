@@ -1,6 +1,7 @@
 """Interface for helm operations"""
 
 import logging
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -24,6 +25,7 @@ class Helm:
             chart_path (str): Path to the helm chart
             namespace (str): Namespace to install the chart
             version (str): Version of the chart
+            values_file (str): Optional values override file
             extra_args (List[str)]: Extra arguments for the helm install command
             remote_chart (bool): Whether the chart is remote (from a Helm repo)
         """
@@ -44,6 +46,9 @@ class Helm:
 
         if version:
             command += f" --version {version}"
+
+        if values_file := args.get("values_file"):
+            command += f" -f {shlex.quote(str(values_file))}"
 
         if extra_args:
             command += " " + " ".join(extra_args)

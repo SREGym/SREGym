@@ -33,6 +33,13 @@ sudo sysctl -w fs.inotify.max_user_watches=1048576
 Create the cluster from the repository root:
 
 ```bash
+# Auto-detect x86-64 or ARM64 (recommended)
+bash kind/setup_kind_cluster.sh
+```
+
+Or select the architecture explicitly:
+
+```bash
 # x86-64
 bash kind/setup_kind_cluster.sh x86
 
@@ -46,7 +53,77 @@ The setup creates one control-plane and three worker nodes. Confirm that all fou
 kubectl get nodes
 ```
 
+The Lite applications, traffic generators, KIND node, and agent runtime use
+published multiarch images. Docker and Kubernetes select `linux/arm64` on Apple
+silicon or `linux/amd64` on x86-64. No local application-image build or registry
+login is required. See [container images](container-images.md) for the pinned
+releases and optional source-build commands.
+
+On macOS, the containers run inside Docker Desktop or OrbStack's Linux VM.
+Allocate the CPU and memory listed above to that VM. On smaller machines,
+`--profile svelte` reduces the bundled observability services for local
+experiments; it is not intended for leaderboard submissions.
+
 See the [KIND guide](../kind/README.md) for installation details and troubleshooting.
+
+### Validate a local installation without model calls
+
+On a **disposable local KIND cluster**, run the deployment, workload, fault,
+mitigation-oracle, recovery, and cleanup checks for all 21 Lite problems:
+
+```bash
+uv run python tests/integration/validate_lite.py \
+  --profile full --output-dir .runtime/lite-validation/full
+```
+
+This runs serially, includes Loki/Promtail, and makes no LLM requests. It deletes
+application namespaces and exercises cluster-scoped faults, so do not use a
+cluster containing other work. Logs, per-problem Markdown/JSON reports, and an
+aggregate `suite.json` are saved in the output directory. It stops on the first
+failure; inspect the report and verify cleanup before adding `--resume` to
+continue. Resume requires the same cluster node identities and profile.
+
+On macOS, prefix the command with `caffeinate -i` to prevent idle sleep while it
+runs. Explicit sleep or closing the lid can still interrupt the Linux VM. Use
+`--profile svelte` and a different output directory to validate that profile.
+
+After deployment, check the native agent container's Kubernetes and observability
+connections in both open and filtered network modes:
+
+```bash
+uv run pytest tests/integration/test_agent_connectivity.py -m integration -v
+```
+
+This requires the agent image and the shared monitoring/MCP stack installed by
+the lifecycle runner. It queries Kubernetes, Prometheus, Loki, and Jaeger without
+installing an agent CLI or contacting a model provider.
+
+To verify the five supported CLI installers and their native startup paths,
+without authentication or model calls:
+
+```bash
+uv run pytest tests/integration/test_agent_cli_bootstrap.py -m integration -v
+```
+
+The published agent image includes native kubectl matching the bundled KIND
+version. An optional local rebuild matches the host's kubectl version when
+available; override it with `KUBECTL_VERSION=v1.32.1 bash docker/agents/build.sh`.
+Keep the host client within one minor version of the API server, as required by Kubernetes'
+[version-skew policy](https://kubernetes.io/releases/version-skew-policy/#kubectl).
+
+### macOS validation scope
+
+All **21 Lite fault lifecycles passed with the full profile** on Apple silicon,
+OrbStack, and a four-node ARM64 KIND cluster with 16 GiB allocated to the Linux
+VM. Each check deployed the application, injected the fault, verified oracle
+failure, recovered it, verified oracle success, and cleaned up. Native workloads,
+agent-container Kubernetes/MCP connectivity, and all five agent CLI installers
+were also checked.
+
+These checks use the built-in recovery functions, not an LLM-driven agent
+campaign. Docker Desktop and Intel Mac hardware were not tested. See the
+[validation report](macOS-Lite-validation.md) for the environment, complete
+problem list, reproduction commands, and limitations.
 
 ## Run the benchmark
 

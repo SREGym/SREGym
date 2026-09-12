@@ -70,7 +70,7 @@ spec:
             memory: "512Mi"
             cpu: "500m"
       - name: locust-exporter
-        image: containersol/locust_exporter:v0.5.0
+        image: ghcr.io/sregym/locust-exporter:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:03fc297fe4ecb360740da4c04810e530db72576fde4042a7addaa6ba666731da
         ports:
         - containerPort: 9646
           name: metrics
