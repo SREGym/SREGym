@@ -8,7 +8,7 @@ from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
-from sregym.conductor.oracles.prometheus_query import catalog_list_products_total
+from sregym.conductor.oracles.prometheus_query import catalog_list_products_total, list_recommendations_total
 from sregym.generators.workload.recommendation_herd import HerdSnapshot
 from sregym.service.rollout import deployment_rollout_complete
 
@@ -184,10 +184,20 @@ class ThunderingHerdMitigationOracle(Oracle):
     def _catalog_list_products_total(self) -> float | None:
         return catalog_list_products_total(self.problem.namespace)
 
+    def _list_recommendations_total(self) -> float | None:
+        return list_recommendations_total(self.problem.namespace)
+
     def _amplification(self, catalog_delta: float, succeeded: int) -> float:
         if succeeded <= 0:
             return float("inf")
         return catalog_delta / succeeded
+
+    def _rpc_amplification(
+        self, product_delta: float, recommendation_delta: float, succeeded: int
+    ) -> float:
+        if recommendation_delta > 0:
+            return product_delta / recommendation_delta
+        return self._amplification(product_delta, succeeded)
 
     def _wave_failure(
         self,
@@ -248,30 +258,38 @@ class ThunderingHerdMitigationOracle(Oracle):
         return self._wave_failure(snapshot, amplification, catalog_ids, concurrency=concurrency) is None
 
     def _run_wave(self, *, concurrency: int, product_ids: tuple[str, ...]) -> tuple[HerdSnapshot, float] | None:
-        before = self._catalog_list_products_total()
-        if before is None:
+        before_products = self._catalog_list_products_total()
+        before_recs = self._list_recommendations_total()
+        if before_products is None or before_recs is None:
             return None
         snapshot = self.problem.workload.run(
             concurrency=concurrency,
             duration_seconds=self.wave_seconds,
             product_ids=product_ids,
         )
-        after = before
+        after_products = before_products
+        after_recs = before_recs
         waited = 0.0
         while waited < self.scrape_wait_seconds:
             time.sleep(self.poll_interval_seconds)
             waited += self.poll_interval_seconds
-            sample = self._catalog_list_products_total()
-            if sample is None:
+            sample_products = self._catalog_list_products_total()
+            sample_recs = self._list_recommendations_total()
+            if sample_products is None or sample_recs is None:
                 return None
-            after = sample
-            if after > before:
+            after_products = sample_products
+            after_recs = sample_recs
+            if after_products > before_products or after_recs > before_recs:
                 break
+        product_delta = after_products - before_products
+        rec_delta = after_recs - before_recs
+        amplification = self._rpc_amplification(product_delta, rec_delta, snapshot.succeeded)
         print(
-            f"[Prom] ListProducts before={before:.0f} after={after:.0f} "
-            f"delta={after - before:.0f} waited={waited:.0f}s"
+            "[Prom] "
+            f"ListProducts delta={product_delta:.0f} ListRecommendations delta={rec_delta:.0f} "
+            f"amplification={amplification:.2f} waited={waited:.0f}s"
         )
-        return snapshot, self._amplification(after - before, snapshot.succeeded)
+        return snapshot, amplification
 
     def assert_fault_present(self) -> None:
         """Fail injection if the overlay is not multiplying catalog RPCs."""

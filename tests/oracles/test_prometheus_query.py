@@ -3,6 +3,7 @@ from unittest.mock import Mock
 
 from sregym.conductor.oracles.prometheus_query import (
     catalog_list_products_total,
+    list_recommendations_total,
     prometheus_query_url,
     prometheus_scalar,
 )
@@ -55,8 +56,8 @@ def test_catalog_list_products_prefers_namespaced_query(monkeypatch):
     assert catalog_list_products_total("astronomy-shop") == 42.0
     assert "namespace=\"astronomy-shop\"" in calls[0]
     assert "ListProducts" in calls[0]
-    assert "product-catalog" in calls[0]
     assert "recommendation" in calls[0]
+    assert "product-catalog" not in calls[0]
 
 
 def test_catalog_list_products_falls_back_without_namespace(monkeypatch):
@@ -85,3 +86,16 @@ def test_catalog_list_products_fails_closed_when_prom_is_down(monkeypatch):
         lambda *args, **kwargs: None,
     )
     assert catalog_list_products_total("astronomy-shop") is None
+
+
+def test_list_recommendations_query_is_namespaced(monkeypatch):
+    calls = []
+
+    def fake_scalar(query, *, announce=True):
+        calls.append(query)
+        return 3.0
+
+    monkeypatch.setattr("sregym.conductor.oracles.prometheus_query.prometheus_scalar", fake_scalar)
+    assert list_recommendations_total("astronomy-shop") == 3.0
+    assert "ListRecommendations" in calls[0]
+    assert "namespace=\"astronomy-shop\"" in calls[0]

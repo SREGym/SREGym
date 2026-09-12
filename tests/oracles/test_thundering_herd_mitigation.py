@@ -147,6 +147,7 @@ def test_run_wave_polls_until_catalog_counter_moves(monkeypatch):
     oracle.scrape_wait_seconds = 15.0
     oracle.poll_interval_seconds = 5.0
     oracle._catalog_list_products_total = Mock(side_effect=[100.0, 100.0, 100.0, 340.0])
+    oracle._list_recommendations_total = Mock(side_effect=[10.0, 10.0, 10.0, 50.0])
     sleeps = []
     monkeypatch.setattr(
         "sregym.conductor.oracles.thundering_herd_mitigation.time.sleep",
@@ -162,11 +163,25 @@ def test_run_wave_polls_until_catalog_counter_moves(monkeypatch):
     assert sleeps == [5.0, 5.0, 5.0]
 
 
+def test_run_wave_uses_rpc_ratio_when_http_is_cached(monkeypatch):
+    oracle = _oracle()
+    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 100.0])
+    oracle._list_recommendations_total = Mock(side_effect=[0.0, 10.0])
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
+
+    measured = oracle._run_wave(concurrency=8, product_ids=("OLJCESPC7Z",))
+
+    assert measured is not None
+    _, amplification = measured
+    assert amplification == 10.0
+
+
 def test_evaluate_passes_both_waves_and_stops_workload(monkeypatch):
     oracle = _oracle()
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
     oracle._catalog_list_products_total = Mock(side_effect=[100.0, 140.0, 140.0, 180.0])
+    oracle._list_recommendations_total = Mock(side_effect=[50.0, 90.0, 90.0, 130.0])
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
     result = oracle.evaluate()
@@ -186,6 +201,7 @@ def test_evaluate_fails_closed_when_prometheus_is_empty(monkeypatch):
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
     oracle._catalog_list_products_total = Mock(return_value=None)
+    oracle._list_recommendations_total = Mock(return_value=None)
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
     result = oracle.evaluate()
@@ -199,6 +215,7 @@ def test_evaluate_rejects_high_amplification_even_when_latency_is_fine(monkeypat
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
     oracle._catalog_list_products_total = Mock(side_effect=[0.0, 400.0])
+    oracle._list_recommendations_total = Mock(side_effect=[0.0, 40.0])
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
     result = oracle.evaluate()

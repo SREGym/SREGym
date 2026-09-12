@@ -7,6 +7,10 @@ import subprocess
 from urllib.parse import quote
 
 _PROMETHEUS_URL = "http://localhost:9090"
+_LIST_PRODUCTS_MATCHER = 'span_name=~".*ListProducts.*",service_name=~".*recommendation.*"'
+_LIST_RECOMMENDATIONS_MATCHER = (
+    'span_name=~".*ListRecommendations.*",service_name=~".*recommendation.*"'
+)
 
 
 def prometheus_query_url(query: str) -> str:
@@ -56,17 +60,7 @@ def prometheus_scalar(query: str, *, announce: bool = True) -> float | None:
     return total
 
 
-# Client spans land on recommendation; server spans land on product-catalog.
-# Either series is enough to see the 10x fan-out. Frontend catalog browsing is
-# excluded so load-generator product-page traffic cannot mask the fault.
-_LIST_PRODUCTS_MATCHER = (
-    'span_name=~".*ListProducts.*",service_name=~".*(product-catalog|recommendation).*"'
-)
-
-
-def catalog_list_products_total(namespace: str) -> float | None:
-    """Count ListProducts spans on catalog or recommendation, failing closed if Prom is down."""
-    matcher = _LIST_PRODUCTS_MATCHER
+def _namespaced_span_total(namespace: str, matcher: str) -> float | None:
     scoped = prometheus_scalar(
         f'sum(traces_span_metrics_calls_total{{{matcher},namespace="{namespace}"}})',
         announce=False,
@@ -77,3 +71,13 @@ def catalog_list_products_total(namespace: str) -> float | None:
         f"sum(traces_span_metrics_calls_total{{{matcher}}})",
         announce=True,
     )
+
+
+def catalog_list_products_total(namespace: str) -> float | None:
+    """Count recommendation-client ListProducts spans, failing closed if Prom is down."""
+    return _namespaced_span_total(namespace, _LIST_PRODUCTS_MATCHER)
+
+
+def list_recommendations_total(namespace: str) -> float | None:
+    """Count recommendation ListRecommendations spans, failing closed if Prom is down."""
+    return _namespaced_span_total(namespace, _LIST_RECOMMENDATIONS_MATCHER)

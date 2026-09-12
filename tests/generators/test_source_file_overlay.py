@@ -37,18 +37,24 @@ def test_apply_adds_configmap_subpath_mount_on_first_container():
         basename="recommendation_server.py",
     )
 
-    assert len(pod_spec.volumes) == 1
+    assert [volume.name for volume in pod_spec.volumes] == [
+        "recommendation-src-override-vol",
+        "recommendation-src-override-vol-pycache",
+    ]
     volume = pod_spec.volumes[0]
-    assert volume.name == "recommendation-src-override-vol"
     assert volume.config_map.name == "recommendation-src-override"
+    assert pod_spec.volumes[1].empty_dir is not None
 
     rec = pod_spec.containers[0]
-    assert len(rec.volume_mounts) == 1
+    assert [mount.name for mount in rec.volume_mounts] == [
+        "recommendation-src-override-vol",
+        "recommendation-src-override-vol-pycache",
+    ]
     mount = rec.volume_mounts[0]
-    assert mount.name == "recommendation-src-override-vol"
     assert mount.mount_path == "/app/recommendation_server.py"
     assert mount.sub_path == "recommendation_server.py"
     assert mount.read_only is True
+    assert rec.volume_mounts[1].mount_path == "/app/__pycache__"
     assert pod_spec.containers[1].volume_mounts in (None, [])
 
 
@@ -65,9 +71,9 @@ def test_apply_is_idempotent_and_can_target_named_container():
     apply_source_file_overlay(pod_spec, **kwargs)
     apply_source_file_overlay(pod_spec, **kwargs)
 
-    assert [volume.name for volume in pod_spec.volumes] == ["src-vol"]
+    assert [volume.name for volume in pod_spec.volumes] == ["src-vol", "src-vol-pycache"]
     rec = select_container(pod_spec, "recommendation")
-    assert [mount.name for mount in rec.volume_mounts] == ["src-vol"]
+    assert [mount.name for mount in rec.volume_mounts] == ["src-vol", "src-vol-pycache"]
     assert pod_spec.containers[0].volume_mounts in (None, [])
 
 
