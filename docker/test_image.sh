@@ -17,7 +17,7 @@ run_image() {
 }
 
 case "$TARGET" in
-    hotel-geo-misconfig)
+    hotel-reservation-1)
         run_image --network none --entrypoint sh "$IMAGE" -ec '
             grep -q '\''"GeoMongoAddress": "mongodb-geo:27777"'\'' config.json
             status=0
@@ -27,7 +27,7 @@ case "$TARGET" in
             printf "%s\n" "$output" | grep "panic: no reachable servers"
         '
         ;;
-    hotel-correlated-fault)
+    hotel-reservation-2)
         run_image --network none --entrypoint sh "$IMAGE" -ec '
             test -x /usr/local/bin/ComposePostService
             for service in frontend geo profile rate recommendation reservation search user; do

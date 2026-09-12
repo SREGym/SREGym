@@ -1,12 +1,22 @@
-# Hotel fault images
+# Hotel Reservation image releases
 
 These are deliberately broken application images, not healthy deployment
 defaults. Build them through `docker/images.hcl` and run `docker/test_image.sh`
 on both platforms before publishing.
 
+Publish them in the existing `hotel-reservation` package with neutral numbered
+release tags. Image names are visible to the benchmark agent and must not
+disclose the injected fault. Internal code and these maintainer notes keep
+the behavior explicit.
+
+| Build target | Tag with `IMAGE_TAG=20260912` | Recipe |
+|---|---|---|
+| `hotel-reservation-1` | `20260912.1` | `release1.Dockerfile` |
+| `hotel-reservation-2` | `20260912.2` | `release2.Dockerfile` |
+
 ## Geo misconfiguration
 
-`geo.Dockerfile` uses `yinfangchen/geo:app3`, pinned by its original image
+`release1.Dockerfile` uses `yinfangchen/geo:app3`, pinned by its original image
 digest. That image includes the complete Go source, vendored dependencies and
 configuration. Its `GeoMongoAddress` is `mongodb-geo:27777`, while the database
 listens on `27017`. Geo panics when the connection fails.
@@ -24,7 +34,7 @@ actually contains Social Network's C++ services. None of Hotel's eight
 entrypoint commands exists. Rolling it out to Hotel therefore fails before
 application startup, with a missing executable error.
 
-`correlated.Dockerfile` preserves that failure using SREGym's pinned multiarch
+`release2.Dockerfile` preserves that failure using SREGym's pinned multiarch
 Social Network image. It does not claim binary identity with the old image:
 the compatibility contract is the same wrong application and missing Hotel
 commands. Build and smoke checks enforce that contract for all eight services.
