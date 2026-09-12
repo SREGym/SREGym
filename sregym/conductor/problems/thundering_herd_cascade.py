@@ -40,7 +40,8 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
     overlay_command = (
         "/venv/bin/opentelemetry-instrument",
         "/venv/bin/python",
-        "/app/recommendation_server.py",
+        "-c",
+        "import runpy; runpy.run_path('/app/recommendation_server.py', run_name='__main__')",
     )
 
     def __init__(self):
@@ -104,6 +105,14 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
             raise RuntimeError(
                 f"recommendation overlay is not live at {self.source_path}: {output!r}"
             )
+        print(
+            "[Overlay] command="
+            + self.kubectl.exec_command_checked(
+                "kubectl get deploy "
+                f"{self.recommendation_deployment} -n {self.namespace} "
+                "-o jsonpath='{.spec.template.spec.containers[*].command}'"
+            ).strip()
+        )
 
     def _wait_for_recommendation(self) -> None:
         self.kubectl.wait_for_ready(
