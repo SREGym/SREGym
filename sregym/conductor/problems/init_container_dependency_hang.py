@@ -44,6 +44,9 @@ class InitContainerDependencyHang(Problem):
     `Init:0/1`, the new ReplicaSet has zero ready replicas, and the rollout
     stalls.  Mitigation requires either removing the broken init container or
     pointing it at a real (or always-resolvable) dependency.
+
+    The ``init_container_dependency_hang_astronomy_shop`` configuration is
+    deprecated in SREGym 1.1 after reaching 100% overall pass@3.
     """
 
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "frontend"):

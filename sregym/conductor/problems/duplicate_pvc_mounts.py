@@ -10,6 +10,12 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class DuplicatePVCMounts(Problem):
+    """Model duplicate PVC mounts across applications.
+
+    The ``duplicate_pvc_mounts_astronomy_shop`` configuration is deprecated in
+    SREGym 1.1 after reaching 100% overall pass@3.
+    """
+
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "mongodb-rate"):
         self.app_name = app_name
         self.faulty_service = faulty_service
