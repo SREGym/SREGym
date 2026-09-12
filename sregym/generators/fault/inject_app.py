@@ -9,6 +9,7 @@ import time
 from kubernetes import client
 
 from sregym.generators.fault.base import FaultInjector
+from sregym.generators.images import HOTEL_GEO_MISCONFIG_IMAGE
 from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE
 from sregym.service.kafka_health import KafkaHealthCheck, broker_memory_failure
 from sregym.service.kubectl import KubeCtl
@@ -158,7 +159,7 @@ class ApplicationFaultInjector(FaultInjector):
                 # Modify the image to use the buggy image
                 for container in deployment.spec.template.spec.containers:
                     if container.name == f"hotel-reserv-{service}":
-                        container.image = "yinfangchen/geo:app3"
+                        container.image = HOTEL_GEO_MISCONFIG_IMAGE
                 self.kubectl.update_deployment(service, self.namespace, deployment)
                 time.sleep(10)
 

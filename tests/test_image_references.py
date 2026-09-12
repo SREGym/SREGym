@@ -1,11 +1,17 @@
 import copy
+import importlib
 import json
 import shlex
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import pytest
 import yaml
 
+from sregym.generators.fault.inject_app import ApplicationFaultInjector
+from sregym.generators.images import HOTEL_CORRELATED_FAULT_IMAGE, HOTEL_GEO_MISCONFIG_IMAGE, STRESS_IMAGE
+from sregym.generators.workload.blueprint_hotel_work import BHotelWrkWorkloadManager
 from sregym.service.apps.fleet_cast import FleetCast
 from sregym.service.apps.flight_ticket import FlightTicket
 from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE
@@ -17,6 +23,67 @@ from sregym.service.helm import Helm
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGES = json.loads((ROOT / "docker/images.lock.json").read_text())
+
+
+def test_fault_and_stress_helpers_use_the_recorded_releases():
+    assert IMAGES["hotel-geo-misconfig"] == HOTEL_GEO_MISCONFIG_IMAGE
+    assert IMAGES["hotel-correlated-fault"] == HOTEL_CORRELATED_FAULT_IMAGE
+    assert IMAGES["stress"] == STRESS_IMAGE
+
+
+@pytest.mark.parametrize(
+    "module_name,class_name,image",
+    [
+        ("misconfig_app", "MisconfigAppHotelRes", HOTEL_GEO_MISCONFIG_IMAGE),
+        ("faulty_image_correlated", "FaultyImageCorrelated", HOTEL_CORRELATED_FAULT_IMAGE),
+    ],
+)
+def test_fault_oracle_tracks_the_same_image_as_injection(module_name, class_name, image):
+    module = importlib.import_module(f"sregym.conductor.problems.{module_name}")
+    with (
+        patch.object(module, "HotelReservation", return_value=Mock(namespace="hotel-reservation")),
+        patch.object(module, "KubeCtl"),
+        patch.object(module, "LLMAsAJudgeOracle"),
+        patch.object(module, "ApplicationFaultInjector") as injector,
+    ):
+        problem = getattr(module, class_name)()
+        assert problem.mitigation_oracle.actual_images == dict.fromkeys(problem.faulty_service, image)
+        assert image in problem.root_cause
+        problem.inject_fault()
+        if module_name == "faulty_image_correlated":
+            calls = injector.return_value.inject_incorrect_image.call_args_list
+            assert len(calls) == len(problem.faulty_service)
+            assert all(call.kwargs["bad_image"] == image for call in calls)
+        else:
+            injector.return_value._inject.assert_called_once_with(fault_type="misconfig_app", microservices=["geo"])
+
+
+def test_geo_injection_and_recovery_do_not_change_sidecar_images():
+    geo = SimpleNamespace(name="hotel-reserv-geo", image=HOTEL_RESERVATION_APPLICATION_IMAGE)
+    sidecar = SimpleNamespace(name="sidecar", image="sidecar:v1")
+    deployment = SimpleNamespace(
+        spec=SimpleNamespace(template=SimpleNamespace(spec=SimpleNamespace(containers=[geo, sidecar])))
+    )
+    with patch("sregym.generators.fault.inject_app.KubeCtl"), patch("sregym.generators.fault.inject_app.time.sleep"):
+        injector = ApplicationFaultInjector(namespace="hotel-reservation")
+        injector.kubectl.get_deployment.return_value = deployment
+        injector.inject_misconfig_app(["geo"])
+        assert geo.image == HOTEL_GEO_MISCONFIG_IMAGE
+        assert sidecar.image == "sidecar:v1"
+        injector.recover_misconfig_app(["geo"])
+        assert geo.image == HOTEL_RESERVATION_APPLICATION_IMAGE
+        assert sidecar.image == "sidecar:v1"
+
+
+def test_blueprint_cpu_stress_daemonset_preserves_its_command():
+    workload = BHotelWrkWorkloadManager.__new__(BHotelWrkWorkloadManager)
+    workload.namespace = "blueprint-hotel-reservation"
+    with patch("sregym.generators.workload.blueprint_hotel_work.client.AppsV1Api") as api:
+        workload._deploy_cpu_stress_daemonset()
+    body = api.return_value.create_namespaced_daemon_set.call_args.kwargs["body"]
+    assert body["spec"]["template"]["spec"]["containers"] == [
+        {"name": "stress", "image": STRESS_IMAGE, "command": ["/bin/sh", "-c"], "args": ["stress --cpu $(nproc)"]}
+    ]
 
 
 def test_hotel_manifests_and_recovery_use_the_published_image():

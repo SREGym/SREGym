@@ -4,14 +4,15 @@ SREGym targets both `linux/amd64` and `linux/arm64`. Published replacements
 pin the **multiarch index digest**, not a single-architecture image digest.
 One reference works on both architectures. This covers the whole application
 catalog, not only SREGym-Lite. The migration is not yet complete: Blueprint's
-custom source is missing, and some full-application validations need additional
-infrastructure. See the [validation report](macOS-multiarch-validation.md).
+custom source and the workload-imbalance kube-proxy patch are missing, and some
+full-application validations need additional infrastructure. See the
+[validation report](macOS-multiarch-validation.md).
 
 The SREGym-maintained releases are recorded in
 [`docker/images.lock.json`](../docker/images.lock.json): Hotel
 Reservation, Social Network services and dependency base, its two frontends,
 wrk2, the Locust exporter, the KIND node, the agent runtime, Fleet Cast, and
-FlightTicket/TrainTicket helpers. Selected upstream replacements are recorded
+FlightTicket/TrainTicket helpers, two Hotel fault images, and stress. Selected upstream replacements are recorded
 there too; other already-multiarch upstream dependencies remain in use.
 
 The Hotel build uses `ghcr.io/sregym/hotel-reservation`; historical tags are
@@ -42,6 +43,16 @@ left unchanged. The earlier `lite-hotel-reservation` package is no longer used.
   on both architectures. Database settings and chart memory limits stay intact.
 - Blueprint's nine `777lefty` images cannot be faithfully rebuilt without their
   modified source. Substituting public upstream code would change the faults.
+- Hotel's Geo fault image retains its original source, vendored dependencies,
+  Go version, and incorrect MongoDB port. The correlated fault image preserves
+  the original wrong-application rollout: Social Network binaries with none of
+  Hotel's eight startup commands. See the
+  [fault image recipes and provenance](../docker/hotel-faults/README.md).
+- The CPU-stress helper retains stress 1.0.4 and its existing invocation.
+- `incorrect_image` deliberately injects a nonexistent image; that tag must
+  remain nonexistent. Recovery now restores the exact pre-injection reference
+  and container name, rather than guessing a hardcoded release. Its snapshot
+  belongs to the problem instance and rejects a recreated Deployment.
 
 These preserve benchmark versions, including legacy/EOL dependencies. They are
 compatibility images for isolated benchmark environments, not a production
@@ -84,25 +95,16 @@ credential-free Kubernetes pulls, or the deployment needs explicit registry
 credentials. Local KIND validation can load the verified images instead;
 that does not establish anonymous registry access.
 
-### Packages awaiting public visibility
+### Package visibility
 
-As checked on September 11, these 11 packages remain internal. The user plans
-to make them public after validation; no package visibility was changed here.
+On September 12, all 21 previously maintained packages were public, including
+the 11 FleetCast/FlightTicket/TrainTicket packages that were internal on
+September 11. Both platform manifests were accessible anonymously.
 
-- `fleetcast-backend`
-- `flight-ticket-action-deployer`
-- `flight-ticket-populate-redis`
-- `flight-ticket-load-generator`
-- `flight-ticket-python-runtime`
-- `train-ticket-percona`
-- `train-ticket-xenon`
-- `train-ticket-nacos`
-- `train-ticket-mysqlclient`
-- `train-ticket-mysqld-exporter`
-- `train-ticket-alertsnitch-mysql`
-
-`train-ticket-deploy` is already public, but its internal dependencies still
-require public visibility or explicit registry credentials for a fresh cluster.
+The new `hotel-geo-misconfig`, `hotel-correlated-fault`, and `stress` packages
+also need public visibility for credential-free pulls. GitHub defaults new
+packages to internal; publishing and multiarch support do not establish public
+access. The validation report records their latest checked visibility.
 
 ## Verification
 
@@ -110,6 +112,12 @@ Check the recorded releases against the registry:
 
 ```bash
 uv run python docker/check_image_platforms.py $(jq -r '.[]' docker/images.lock.json)
+
+# Include fault/helper images pulled after deployment and Blueprint's manifests.
+# This still fails for the known source-blocked kube-proxy and Blueprint images.
+uv run python docker/check_image_platforms.py \
+  $(uv run python -c 'from sregym.generators import images; print(" ".join(v for k, v in vars(images).items() if k.endswith("_IMAGE")))') \
+  --manifest SREGym-applications/BlueprintHotelReservation
 ```
 
 The checker also accepts `--manifest path.yaml` for rendered Kubernetes YAML
