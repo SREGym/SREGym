@@ -16,6 +16,28 @@ def test_problem_disables_the_unrelated_default_application_workload():
     assert ThunderingHerdCascadeAstronomyShop.run_default_workload is False
 
 
+def test_problem_disables_the_bundled_astronomy_shop_load_generator(monkeypatch):
+    configured = {}
+
+    class FakeAstronomyShop:
+        namespace = "astronomy-shop"
+        frontend_service = "frontend-proxy"
+        frontend_port = 8080
+
+        def __init__(self, *, load_generator_enabled):
+            configured["load_generator_enabled"] = load_generator_enabled
+
+    monkeypatch.setattr(module, "AstronomyShop", FakeAstronomyShop)
+    monkeypatch.setattr(module, "KubeCtl", Mock)
+    monkeypatch.setattr(module, "RecommendationHerdWorkload", Mock)
+    monkeypatch.setattr(module, "LLMAsAJudgeOracle", Mock)
+    monkeypatch.setattr(module, "ThunderingHerdMitigationOracle", Mock)
+
+    ThunderingHerdCascadeAstronomyShop()
+
+    assert configured["load_generator_enabled"] is False
+
+
 def test_problem_module_does_not_leak_hidden_wave_constants():
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "24" not in source
@@ -120,16 +142,8 @@ def test_inject_overlays_recommendation_and_keeps_cache_flag_off(monkeypatch):
     assert created[0].injected["source_path"] == "/app/recommendation_server.py"
     assert created[0].injected["replacement_content"] == "buggy-recommendation"
     assert created[0].injected["container_name"] == "recommendation"
-    assert created[0].injected["command"] == [
-        "/venv/bin/opentelemetry-instrument",
-        "/venv/bin/python",
-        "-B",
-        "/src-override/recommendation_server.py",
-    ]
-    assert created[0].injected["extra_env"] == {
-        "PYTHONPATH": "/app",
-        "PYTHONPYCACHEPREFIX": "/tmp/pycache",
-    }
+    assert "command" not in created[0].injected
+    assert "extra_env" not in created[0].injected
     problem.kubectl.exec_command_checked.assert_called()
     problem.mitigation_oracle.assert_fault_present.assert_called_once_with()
     problem.kubectl.wait_for_ready.assert_called_once()

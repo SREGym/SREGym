@@ -51,19 +51,39 @@ def test_deploy_dry_run_does_not_patch(monkeypatch, tmp_path, capsys):
 def test_deploy_patches_changed_file_and_rolls_out(monkeypatch, tmp_path):
     workspace, _ = _workspace(tmp_path, proposed="fixed\n", live="buggy\n")
     commands = []
+    pod_reads = 0
 
     def fake_run(cmd, *, check=True, stdin=None):
+        nonlocal pod_reads
         commands.append(cmd)
         if cmd[:3] == ["kubectl", "get", "configmap"]:
             return json.dumps({"data": {"recommendation_server.py": "buggy\n"}})
+        if cmd[:3] == ["kubectl", "get", "deployment"]:
+            return json.dumps(
+                {"spec": {"selector": {"matchLabels": {"app": "recommendation"}}}}
+            )
+        if cmd[:3] == ["kubectl", "get", "pods"]:
+            pod_reads += 1
+            old_pod = {
+                "metadata": {
+                    "name": "recommendation-old",
+                    "deletionTimestamp": "2026-09-12T00:00:00Z",
+                }
+            }
+            current_pod = {"metadata": {"name": "recommendation-current"}}
+            return json.dumps(
+                {"items": [current_pod, old_pod] if pod_reads == 1 else [current_pod]}
+            )
         return ""
 
     monkeypatch.setattr(deploy, "_run", fake_run)
+    monkeypatch.setattr(deploy.time, "sleep", lambda _: None)
 
     assert deploy.main(["--workspace", str(workspace)]) == 0
     assert any(cmd[:2] == ["kubectl", "patch"] for cmd in commands)
     assert any(cmd[:3] == ["kubectl", "rollout", "restart"] for cmd in commands)
     assert any(cmd[:3] == ["kubectl", "rollout", "status"] for cmd in commands)
+    assert pod_reads == 2
 
 
 def test_deploy_skips_unchanged_file(monkeypatch, tmp_path, capsys):

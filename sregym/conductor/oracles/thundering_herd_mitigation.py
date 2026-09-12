@@ -188,17 +188,15 @@ class ThunderingHerdMitigationOracle(Oracle):
     def _list_recommendations_total(self) -> float | None:
         return list_recommendations_total(self.problem.namespace)
 
-    def _amplification(self, catalog_delta: float, succeeded: int) -> float:
-        if succeeded <= 0:
-            return float("inf")
-        return catalog_delta / succeeded
-
     def _rpc_amplification(
-        self, product_delta: float, recommendation_delta: float, succeeded: int
-    ) -> float:
+        self, product_delta: float, recommendation_delta: float
+    ) -> float | None:
         if recommendation_delta > 0:
             return product_delta / recommendation_delta
-        return self._amplification(product_delta, succeeded)
+        # HTTP responses are not a valid denominator for an RPC amplification
+        # ratio. Missing recommendation spans must fail closed rather than make
+        # a partial product-catalog export look healthy.
+        return None
 
     def _wave_failure(
         self,
@@ -258,7 +256,9 @@ class ThunderingHerdMitigationOracle(Oracle):
     ) -> bool:
         return self._wave_failure(snapshot, amplification, catalog_ids, concurrency=concurrency) is None
 
-    def _run_wave(self, *, concurrency: int, product_ids: tuple[str, ...]) -> tuple[HerdSnapshot, float] | None:
+    def _run_wave(
+        self, *, concurrency: int, product_ids: tuple[str, ...]
+    ) -> tuple[HerdSnapshot, float | None] | None:
         before_products = self._catalog_list_products_total()
         before_recs = self._list_recommendations_total()
         if before_products is None or before_recs is None:
@@ -280,15 +280,16 @@ class ThunderingHerdMitigationOracle(Oracle):
                 return None
             after_products = sample_products
             after_recs = sample_recs
-            if after_products > before_products or after_recs > before_recs:
+            if after_products > before_products and after_recs > before_recs:
                 break
         product_delta = after_products - before_products
         rec_delta = after_recs - before_recs
-        amplification = self._rpc_amplification(product_delta, rec_delta, snapshot.succeeded)
+        amplification = self._rpc_amplification(product_delta, rec_delta)
+        amplification_text = f"{amplification:.2f}" if amplification is not None else "unavailable"
         print(
             "[Prom] "
             f"ListProducts delta={product_delta:.0f} ListRecommendations delta={rec_delta:.0f} "
-            f"amplification={amplification:.2f} waited={waited:.0f}s"
+            f"amplification={amplification_text} waited={waited:.0f}s"
         )
         return snapshot, amplification
 
@@ -334,13 +335,19 @@ class ThunderingHerdMitigationOracle(Oracle):
                 raise RuntimeError("catalog RPC metrics were not available while verifying the fault")
             snapshot, amplification = measured
             log_amplification = self._overlay_log_amplification(snapshot.succeeded)
-            observed = amplification
-            if log_amplification is not None:
-                observed = max(amplification, log_amplification)
+            observed_values = [
+                value for value in (amplification, log_amplification) if value is not None
+            ]
+            if not observed_values:
+                raise RuntimeError("catalog RPC metrics and recommendation logs were not available")
+            observed = max(observed_values)
+            amplification_text = (
+                f"{amplification:.2f}" if amplification is not None else "unavailable"
+            )
             print(
                 "[Fault] "
                 f"completed={snapshot.completed} success={snapshot.success_rate:.1%} "
-                f"amplification={amplification:.2f} log_amplification={log_amplification}"
+                f"amplification={amplification_text} log_amplification={log_amplification}"
             )
             if snapshot.succeeded < 5:
                 raise RuntimeError("fault verification did not complete enough recommendations")
@@ -375,6 +382,8 @@ class ThunderingHerdMitigationOracle(Oracle):
             if first is None:
                 return self.fail("prometheus_unreachable")
             snapshot, amplification = first
+            if amplification is None:
+                return self.fail("prometheus_unreachable")
             log_amplification = self._overlay_log_amplification(snapshot.succeeded)
             if log_amplification is not None and log_amplification >= self.min_fault_amplification:
                 print(
@@ -395,6 +404,8 @@ class ThunderingHerdMitigationOracle(Oracle):
             if second is None:
                 return self.fail("prometheus_unreachable")
             hidden_snapshot, hidden_amplification = second
+            if hidden_amplification is None:
+                return self.fail("prometheus_unreachable")
             wave_fail = self._wave_failure(
                 hidden_snapshot,
                 hidden_amplification,

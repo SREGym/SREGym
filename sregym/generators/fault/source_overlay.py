@@ -30,12 +30,6 @@ def pycache_mount_path(source_path: str) -> str:
     return f"{parent}/__pycache__" if parent else "/__pycache__"
 
 
-# Directory mount of the same ConfigMap. Starting Python from this path avoids
-# container-runtime quirks where a subPath over the image file is visible to
-# grep but is not the inode the process executes.
-OVERLAY_DIR = "/src-override"
-
-
 def select_container(pod_spec, container_name: str | None):
     containers = list(pod_spec.containers or [])
     if not containers:
@@ -75,20 +69,12 @@ def apply_source_file_overlay(
 
     container = select_container(pod_spec, container_name)
     existing_mounts = list(container.volume_mounts or [])
-    if not any(mount.mount_path == source_path for mount in existing_mounts):
+    if not any(mount.name == volume_name for mount in existing_mounts):
         existing_mounts.append(
             client.V1VolumeMount(
                 name=volume_name,
                 mount_path=source_path,
                 sub_path=basename,
-                read_only=True,
-            )
-        )
-    if not any(mount.mount_path == OVERLAY_DIR for mount in existing_mounts):
-        existing_mounts.append(
-            client.V1VolumeMount(
-                name=volume_name,
-                mount_path=OVERLAY_DIR,
                 read_only=True,
             )
         )

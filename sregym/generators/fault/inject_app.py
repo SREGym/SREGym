@@ -15,7 +15,6 @@ from sregym.generators.fault.source_overlay import (
     override_configmap_name,
     override_volume_name,
     remove_source_file_overlay,
-    select_container,
 )
 from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE
 from sregym.service.kafka_health import KafkaHealthCheck, broker_memory_failure
@@ -725,8 +724,6 @@ class ApplicationFaultInjector(FaultInjector):
         replacement_content: str,
         configmap_name: str | None = None,
         container_name: str | None = None,
-        command: list[str] | None = None,
-        extra_env: dict[str, str] | None = None,
         rollout_timeout: str = "180s",
     ) -> str:
         """Overlay one file in a running container with a ConfigMap subPath mount.
@@ -752,25 +749,18 @@ class ApplicationFaultInjector(FaultInjector):
             basename=basename,
             container_name=container_name,
         )
-        target = select_container(deployment.spec.template.spec, container_name)
-        if command is not None:
-            target.command = list(command)
-            target.args = []
-        if extra_env:
-            existing = list(target.env or [])
-            by_name = {item.name: index for index, item in enumerate(existing)}
-            for key, value in extra_env.items():
-                var = client.V1EnvVar(name=key, value=value)
-                if key in by_name:
-                    existing[by_name[key]] = var
-                else:
-                    existing.append(var)
-            target.env = existing
+        template = deployment.spec.template
+        if template.metadata is None:
+            template.metadata = client.V1ObjectMeta()
+        annotations = dict(template.metadata.annotations or {})
+        annotations["kubectl.kubernetes.io/restartedAt"] = datetime.datetime.now(
+            datetime.UTC
+        ).isoformat()
+        template.metadata.annotations = annotations
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
-        # subPath mounts snapshot ConfigMap data at pod start and do not hot-reload.
-        self.kubectl.exec_command_checked(
-            f"kubectl rollout restart deployment/{deployment_name} -n {self.namespace}"
-        )
+        # The template annotation guarantees one rollout even when an existing
+        # subPath overlay is updated. Patching again with ``rollout restart``
+        # would create a second ReplicaSet and leave extra draining pods.
         self.kubectl.exec_command_checked(
             f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout={rollout_timeout}"
         )
@@ -798,8 +788,6 @@ class ApplicationFaultInjector(FaultInjector):
             volume_name=volume_name,
             container_name=container_name,
         )
-        select_container(deployment.spec.template.spec, container_name).command = None
-        select_container(deployment.spec.template.spec, container_name).args = None
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
         self.kubectl.exec_command_checked(
             f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout={rollout_timeout}"

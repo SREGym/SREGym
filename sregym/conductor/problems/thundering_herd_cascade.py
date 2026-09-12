@@ -37,19 +37,9 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
     source_path = "/app/recommendation_server.py"
     configmap_name = "recommendation-src-override"
     cache_flag = "recommendationCacheFailure"
-    overlay_command = (
-        "/venv/bin/opentelemetry-instrument",
-        "/venv/bin/python",
-        "-B",
-        "/src-override/recommendation_server.py",
-    )
-    overlay_env = {
-        "PYTHONPATH": "/app",
-        "PYTHONPYCACHEPREFIX": "/tmp/pycache",
-    }
 
     def __init__(self):
-        super().__init__(app=AstronomyShop())
+        super().__init__(app=AstronomyShop(load_generator_enabled=False))
         self.kubectl = KubeCtl()
         self.workload = RecommendationHerdWorkload(
             self.namespace,
@@ -82,8 +72,6 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
             replacement_content=self._replacement_content,
             configmap_name=self.configmap_name,
             container_name=self.recommendation_deployment,
-            command=list(self.overlay_command),
-            extra_env=dict(self.overlay_env),
         )
 
     def _unoverlay(self, injector: ApplicationFaultInjector) -> None:
@@ -110,29 +98,6 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
             raise RuntimeError(
                 f"recommendation overlay is not live at {self.source_path}: {output!r}"
             )
-        alt = self.kubectl.exec_command_checked(
-            f"kubectl exec -n {self.namespace} deploy/{self.recommendation_deployment} "
-            f"-c {self.recommendation_deployment} -- grep -F '{marker}' /src-override/recommendation_server.py"
-        )
-        if marker not in alt:
-            raise RuntimeError(f"recommendation overlay is not live at /src-override: {alt!r}")
-        print(
-            "[Overlay] command="
-            + self.kubectl.exec_command_checked(
-                "kubectl get deploy "
-                f"{self.recommendation_deployment} -n {self.namespace} "
-                "-o jsonpath='{.spec.template.spec.containers[*].command}'"
-            ).strip()
-        )
-        print(
-            "[Overlay] cmdline="
-            + self.kubectl.exec_command_checked(
-                f"kubectl exec -n {self.namespace} deploy/{self.recommendation_deployment} "
-                f"-c {self.recommendation_deployment} -- cat /proc/1/cmdline"
-            )
-            .replace("\x00", " ")
-            .strip()
-        )
 
     def _wait_for_recommendation(self) -> None:
         self.kubectl.wait_for_ready(

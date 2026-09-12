@@ -1,6 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
+
 from sregym.conductor.oracles.thundering_herd_mitigation import ThunderingHerdMitigationOracle
 from sregym.generators.workload.recommendation_herd import HerdSnapshot
 
@@ -148,11 +150,11 @@ def test_resources_unchanged_rejects_replica_and_limit_cheats():
     assert oracle._resources_unchanged() is True
 
 
-def test_run_wave_polls_until_catalog_counter_moves(monkeypatch):
+def test_run_wave_polls_until_both_rpc_counters_move(monkeypatch):
     oracle = _oracle()
     oracle.scrape_wait_seconds = 15.0
     oracle.poll_interval_seconds = 5.0
-    oracle._catalog_list_products_total = Mock(side_effect=[100.0, 100.0, 100.0, 340.0])
+    oracle._catalog_list_products_total = Mock(side_effect=[100.0, 100.0, 340.0, 340.0])
     oracle._list_recommendations_total = Mock(side_effect=[10.0, 10.0, 10.0, 50.0])
     sleeps = []
     monkeypatch.setattr(
@@ -178,7 +180,7 @@ def test_overlay_log_amplification_uses_refetch_ratio():
     assert oracle._overlay_log_amplification(2) == 10.0
 
 
-def test_run_wave_uses_rpc_ratio_when_http_is_cached(monkeypatch):
+def test_run_wave_uses_rpc_ratio_when_http_success_count_differs(monkeypatch):
     oracle = _oracle()
     oracle._catalog_list_products_total = Mock(side_effect=[0.0, 100.0])
     oracle._list_recommendations_total = Mock(side_effect=[0.0, 10.0])
@@ -189,6 +191,39 @@ def test_run_wave_uses_rpc_ratio_when_http_is_cached(monkeypatch):
     assert measured is not None
     _, amplification = measured
     assert amplification == 10.0
+
+
+def test_rpc_amplification_fails_closed_without_recommendation_spans():
+    oracle = _oracle()
+
+    assert oracle._rpc_amplification(100.0, 0.0) is None
+    assert oracle._rpc_amplification(0.0, 0.0) is None
+
+
+def test_fault_verification_can_use_logs_when_rpc_ratio_is_incomplete(monkeypatch):
+    oracle = _oracle()
+    oracle.scrape_wait_seconds = 5.0
+    oracle.poll_interval_seconds = 5.0
+    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 100.0])
+    oracle._list_recommendations_total = Mock(side_effect=[0.0, 0.0])
+    oracle.problem.kubectl.exec_command_checked = Mock(
+        return_value="\n".join([oracle.overlay_log_marker] * 400)
+    )
+    monkeypatch.setattr(
+        "sregym.conductor.oracles.thundering_herd_mitigation.time.sleep",
+        lambda _: None,
+    )
+
+    oracle.assert_fault_present()
+
+
+def test_fault_verification_rejects_when_metrics_and_logs_are_unavailable():
+    oracle = _oracle()
+    oracle._catalog_list_products_total = Mock(return_value=None)
+    oracle._list_recommendations_total = Mock(return_value=None)
+
+    with pytest.raises(RuntimeError, match="metrics were not available"):
+        oracle.assert_fault_present()
 
 
 def test_evaluate_passes_both_waves_and_stops_workload(monkeypatch):
@@ -223,6 +258,25 @@ def test_evaluate_fails_closed_when_prometheus_is_empty(monkeypatch):
     assert result["success"] is False
     assert result["reason"] == "prometheus_unreachable"
     oracle.problem.workload.stop.assert_called()
+
+
+def test_evaluate_fails_closed_when_rpc_counters_do_not_move(monkeypatch):
+    oracle = _oracle()
+    oracle.scrape_wait_seconds = 5.0
+    oracle.poll_interval_seconds = 5.0
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
+    oracle._catalog_list_products_total = Mock(return_value=0.0)
+    oracle._list_recommendations_total = Mock(return_value=0.0)
+    monkeypatch.setattr(
+        "sregym.conductor.oracles.thundering_herd_mitigation.time.sleep",
+        lambda _: None,
+    )
+
+    result = oracle.evaluate()
+
+    assert result["success"] is False
+    assert result["reason"] == "prometheus_unreachable"
 
 
 def test_evaluate_rejects_high_amplification_even_when_latency_is_fine(monkeypatch):

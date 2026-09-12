@@ -18,6 +18,7 @@ import difflib
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -99,6 +100,43 @@ def _rollout_status(namespace: str, deployment: str, timeout: str = "180s") -> N
     )
 
 
+def _wait_for_rollout_drain(
+    namespace: str,
+    deployment: str,
+    *,
+    timeout_seconds: float = 180,
+    poll_seconds: float = 1,
+) -> None:
+    raw_deployment = _run(
+        ["kubectl", "get", "deployment", deployment, "-n", namespace, "-o", "json"]
+    )
+    deployment_data = json.loads(raw_deployment)
+    labels = deployment_data.get("spec", {}).get("selector", {}).get("matchLabels") or {}
+    if not labels:
+        sys.stderr.write(f"[deploy] deployment/{deployment} has no matchLabels selector\n")
+        raise SystemExit(1)
+    selector = ",".join(f"{key}={value}" for key, value in sorted(labels.items()))
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        raw_pods = _run(
+            ["kubectl", "get", "pods", "-n", namespace, "-l", selector, "-o", "json"]
+        )
+        pods = json.loads(raw_pods).get("items") or []
+        terminating = [
+            pod
+            for pod in pods
+            if (pod.get("metadata") or {}).get("deletionTimestamp")
+        ]
+        if pods and not terminating:
+            return
+        if time.monotonic() >= deadline:
+            sys.stderr.write(
+                f"[deploy] timed out waiting for old deployment/{deployment} pods to terminate\n"
+            )
+            raise SystemExit(1)
+        time.sleep(poll_seconds)
+
+
 def _show_diff(workspace_path: str, live: str | None, proposed: str) -> None:
     live_lines = (live or "").splitlines(keepends=True)
     proposed_lines = proposed.splitlines(keepends=True)
@@ -157,6 +195,7 @@ def cmd_deploy(args: argparse.Namespace) -> int:
         _rollout_restart(namespace, deployment)
         print(f"-> waiting for rollout of deployment/{deployment} ...")
         _rollout_status(namespace, deployment)
+        _wait_for_rollout_drain(namespace, deployment)
         print(f"  deployment/{deployment} ready")
 
     if not changed_deployments:

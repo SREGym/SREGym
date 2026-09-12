@@ -46,18 +46,15 @@ def test_apply_adds_configmap_subpath_mount_on_first_container():
     assert pod_spec.volumes[1].empty_dir is not None
 
     rec = pod_spec.containers[0]
-    assert [mount.mount_path for mount in rec.volume_mounts] == [
-        "/app/recommendation_server.py",
-        "/src-override",
-        "/app/__pycache__",
+    assert [mount.name for mount in rec.volume_mounts] == [
+        "recommendation-src-override-vol",
+        "recommendation-src-override-vol-pycache",
     ]
     mount = rec.volume_mounts[0]
-    assert mount.name == "recommendation-src-override-vol"
+    assert mount.mount_path == "/app/recommendation_server.py"
     assert mount.sub_path == "recommendation_server.py"
     assert mount.read_only is True
-    assert rec.volume_mounts[1].name == "recommendation-src-override-vol"
-    assert rec.volume_mounts[1].sub_path in (None, "")
-    assert rec.volume_mounts[2].mount_path == "/app/__pycache__"
+    assert rec.volume_mounts[1].mount_path == "/app/__pycache__"
     assert pod_spec.containers[1].volume_mounts in (None, [])
 
 
@@ -76,11 +73,7 @@ def test_apply_is_idempotent_and_can_target_named_container():
 
     assert [volume.name for volume in pod_spec.volumes] == ["src-vol", "src-vol-pycache"]
     rec = select_container(pod_spec, "recommendation")
-    assert [mount.mount_path for mount in rec.volume_mounts] == [
-        "/app/recommendation_server.py",
-        "/src-override",
-        "/app/__pycache__",
-    ]
+    assert [mount.name for mount in rec.volume_mounts] == ["src-vol", "src-vol-pycache"]
     assert pod_spec.containers[0].volume_mounts in (None, [])
 
 
@@ -117,7 +110,8 @@ def test_select_container_rejects_unknown_name():
 
 def test_inject_source_file_override_writes_configmap_and_rolls_out():
     pod_spec = _pod_spec("recommendation")
-    deployment = SimpleNamespace(spec=SimpleNamespace(template=SimpleNamespace(spec=pod_spec)))
+    template = SimpleNamespace(spec=pod_spec, metadata=None)
+    deployment = SimpleNamespace(spec=SimpleNamespace(template=template))
     injector = ApplicationFaultInjector.__new__(ApplicationFaultInjector)
     injector.namespace = "astronomy-shop"
     injector.kubectl = SimpleNamespace(
@@ -141,45 +135,12 @@ def test_inject_source_file_override_writes_configmap_and_rolls_out():
     )
     injector.kubectl.update_deployment.assert_called_once_with("recommendation", "astronomy-shop", deployment)
     restarted = [call.args[0] for call in injector.kubectl.exec_command_checked.call_args_list]
-    assert any("rollout restart deployment/recommendation" in cmd for cmd in restarted)
+    assert not any("rollout restart deployment/recommendation" in cmd for cmd in restarted)
     assert any("rollout status deployment/recommendation" in cmd for cmd in restarted)
+    assert "kubectl.kubernetes.io/restartedAt" in template.metadata.annotations
     mount = pod_spec.containers[0].volume_mounts[0]
     assert mount.sub_path == "recommendation_server.py"
     assert mount.mount_path == "/app/recommendation_server.py"
-    assert [m.mount_path for m in pod_spec.containers[0].volume_mounts] == [
-        "/app/recommendation_server.py",
-        "/src-override",
-        "/app/__pycache__",
-    ]
-
-
-def test_inject_source_file_override_replaces_command_and_clears_args():
-    pod_spec = _pod_spec("recommendation")
-    pod_spec.containers[0].command = ["python"]
-    pod_spec.containers[0].args = ["recommendation_server.py"]
-    deployment = SimpleNamespace(spec=SimpleNamespace(template=SimpleNamespace(spec=pod_spec)))
-    injector = ApplicationFaultInjector.__new__(ApplicationFaultInjector)
-    injector.namespace = "astronomy-shop"
-    injector.kubectl = SimpleNamespace(
-        create_or_update_configmap=Mock(),
-        get_deployment=Mock(return_value=deployment),
-        update_deployment=Mock(),
-        exec_command_checked=Mock(return_value=""),
-    )
-
-    injector.inject_source_file_override(
-        "recommendation",
-        "/app/recommendation_server.py",
-        "print('buggy')\n",
-        command=["/venv/bin/python", "-B", "/src-override/recommendation_server.py"],
-        extra_env={"PYTHONPATH": "/app"},
-    )
-
-    target = pod_spec.containers[0]
-    assert target.command == ["/venv/bin/python", "-B", "/src-override/recommendation_server.py"]
-    assert target.args == []
-    assert target.env[0].name == "PYTHONPATH"
-    assert target.env[0].value == "/app"
 
 
 def test_recover_source_file_override_unmounts_and_deletes_configmap():
@@ -201,14 +162,10 @@ def test_recover_source_file_override_unmounts_and_deletes_configmap():
         exec_command_checked=Mock(return_value=""),
     )
 
-    pod_spec.containers[0].command = ["/venv/bin/python", "-c", "pass"]
-    pod_spec.containers[0].args = []
     injector.recover_source_file_override("recommendation", "/app/recommendation_server.py")
 
     assert pod_spec.volumes == []
     assert pod_spec.containers[0].volume_mounts == []
-    assert pod_spec.containers[0].command is None
-    assert pod_spec.containers[0].args is None
     deleted = injector.kubectl.exec_command.call_args.args[0]
     assert "delete configmap recommendation-src-override" in deleted
     assert any(
