@@ -11,7 +11,12 @@ import pytest
 import yaml
 
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
-from sregym.generators.images import HOTEL_CORRELATED_FAULT_IMAGE, HOTEL_GEO_MISCONFIG_IMAGE, STRESS_IMAGE
+from sregym.generators.images import (
+    HOTEL_CORRELATED_FAULT_IMAGE,
+    HOTEL_GEO_MISCONFIG_IMAGE,
+    STRESS_IMAGE,
+    WORKLOAD_IMBALANCE_PROXY_IMAGE,
+)
 from sregym.generators.workload.blueprint_hotel_work import BHotelWrkWorkloadManager
 from sregym.service.apps.fleet_cast import FleetCast
 from sregym.service.apps.flight_ticket import FlightTicket
@@ -30,6 +35,27 @@ def test_fault_and_stress_helpers_use_the_recorded_releases():
     assert IMAGES["hotel-reservation-1"] == HOTEL_GEO_MISCONFIG_IMAGE
     assert IMAGES["hotel-reservation-2"] == HOTEL_CORRELATED_FAULT_IMAGE
     assert IMAGES["stress"] == STRESS_IMAGE
+    assert IMAGES["kube-proxy-1"] == WORKLOAD_IMBALANCE_PROXY_IMAGE
+
+
+def test_kube_proxy_release_name_does_not_disclose_the_fault():
+    assert re.fullmatch(r"ghcr\.io/sregym/kube-proxy:\d{8}\.\d+@sha256:[a-f0-9]{64}", WORKLOAD_IMBALANCE_PROXY_IMAGE)
+
+
+def test_workload_imbalance_uses_the_multiarch_proxy_release():
+    module = importlib.import_module("sregym.conductor.problems.workload_imbalance")
+    with (
+        patch.object(module, "AstronomyShop", return_value=Mock(namespace="astronomy-shop")),
+        patch.object(module, "KubeCtl"),
+        patch.object(module, "LLMAsAJudgeOracle"),
+        patch.object(module, "VirtualizationFaultInjector") as injector,
+        patch.object(module.time, "sleep"),
+    ):
+        problem = module.WorkloadImbalance()
+        problem.inject_fault()
+    injector.return_value.inject_daemon_set_image_replacement.assert_called_once_with(
+        daemon_set_name="kube-proxy", new_image=IMAGES["kube-proxy-1"]
+    )
 
 
 @pytest.mark.parametrize("image", [HOTEL_GEO_MISCONFIG_IMAGE, HOTEL_CORRELATED_FAULT_IMAGE])

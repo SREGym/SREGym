@@ -17,6 +17,15 @@ run_image() {
 }
 
 case "$TARGET" in
+    blueprint-hotel-*)
+        python3 "$SCRIPT_DIR/blueprint-hotel/test_behavior.py" "$IMAGE" "$ARCH" "${TARGET#blueprint-hotel-}"
+        ;;
+    kube-proxy-1)
+        run_image --network none --entrypoint /usr/local/bin/kube-proxy "$IMAGE" --version | grep '^Kubernetes v1.31.12'
+        # NET_ADMIN is confined to a disposable container, never the host or
+        # a KIND node. The fixture API has no real cluster data or credentials.
+        python3 "$SCRIPT_DIR/kube-proxy/test_rules.py" "$IMAGE" "$ARCH"
+        ;;
     hotel-reservation-1)
         run_image --network none --entrypoint sh "$IMAGE" -ec '
             grep -q '\''"GeoMongoAddress": "mongodb-geo:27777"'\'' config.json

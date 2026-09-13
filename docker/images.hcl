@@ -33,6 +33,8 @@ group "default" {
     "train-ticket-deploy",
     "hotel-reservation-1",
     "hotel-reservation-2",
+    "kube-proxy-1",
+    "blueprint-hotel",
     "stress",
   ]
 }
@@ -62,6 +64,8 @@ group "publish" {
     "train-ticket-deploy",
     "hotel-reservation-1",
     "hotel-reservation-2",
+    "kube-proxy-1",
+    "blueprint-hotel",
     "stress",
   ]
 }
@@ -256,4 +260,113 @@ target "stress" {
   inherits = ["_common"]
   context = "docker/stress"
   tags = ["${REGISTRY}/stress:${IMAGE_TAG}"]
+}
+
+target "kube-proxy-1" {
+  inherits = ["_common"]
+  context = "docker/kube-proxy"
+  dockerfile = "release1.Dockerfile"
+  tags = ["${REGISTRY}/kube-proxy:${IMAGE_TAG}.1"]
+}
+
+group "blueprint-hotel" {
+  targets = [
+    "blueprint-hotel-frontend",
+    "blueprint-hotel-geo",
+    "blueprint-hotel-profile",
+    "blueprint-hotel-rate",
+    "blueprint-hotel-recomd",
+    "blueprint-hotel-reserv",
+    "blueprint-hotel-search",
+    "blueprint-hotel-user",
+    "blueprint-hotel-workload",
+  ]
+}
+
+target "_blueprint-hotel-service" {
+  inherits = ["_common"]
+  context = "docker/blueprint-hotel"
+  target = "service"
+}
+
+target "blueprint-hotel-frontend" {
+  inherits = ["_blueprint-hotel-service"]
+  args = {
+    SERVICE = "frontend"
+    ORIGINAL_IMAGE = "777lefty/docker-frontend-service-container@sha256:f8f8f2345c60bb2a4af74970a5fa09503d19fcf83cf277fb3aa22c7bb72a5487"
+  }
+  tags = ["${REGISTRY}/blueprint-hotel:${IMAGE_TAG}-frontend"]
+}
+
+target "blueprint-hotel-geo" {
+  inherits = ["_blueprint-hotel-service"]
+  args = {
+    SERVICE = "geo"
+    ORIGINAL_IMAGE = "777lefty/docker-geo-service-container@sha256:baabf51dcae4a2f92a7c3b6fd8deff0fe067f59ecdfe76f892da19e8b95a5e1c"
+  }
+  tags = ["${REGISTRY}/blueprint-hotel:${IMAGE_TAG}-geo"]
+}
+
+target "blueprint-hotel-profile" {
+  inherits = ["_blueprint-hotel-service"]
+  args = {
+    SERVICE = "profile"
+    ORIGINAL_IMAGE = "777lefty/docker-profile-service-container@sha256:360ca11f17db4487e396b2e25f711d890501c2209666e1ced2096229e45f1184"
+  }
+  tags = ["${REGISTRY}/blueprint-hotel:${IMAGE_TAG}-profile"]
+}
+
+target "blueprint-hotel-rate" {
+  inherits = ["_blueprint-hotel-service"]
+  args = {
+    SERVICE = "rate"
+    ORIGINAL_IMAGE = "777lefty/docker-rate-service-container@sha256:4bd401cbc2ddcd4b32daa6cfe5af4777aa14d8135652a3888546a273e4b128f4"
+  }
+  tags = ["${REGISTRY}/blueprint-hotel:${IMAGE_TAG}-rate"]
+}
+
+target "blueprint-hotel-recomd" {
+  inherits = ["_blueprint-hotel-service"]
+  args = {
+    SERVICE = "recomd"
+    ORIGINAL_IMAGE = "777lefty/docker-recomd-service-container@sha256:834b68108041da4a2ed65b19a13e043f372a9c83505127d3b893a661f0287f93"
+  }
+  tags = ["${REGISTRY}/blueprint-hotel:${IMAGE_TAG}-recomd"]
+}
+
+target "blueprint-hotel-reserv" {
+  inherits = ["_blueprint-hotel-service"]
+  args = {
+    SERVICE = "reserv"
+    ORIGINAL_IMAGE = "777lefty/docker-reserv-service-container@sha256:f40c8aecd6ac89cb440699a8964f5e488db57855d0cd7a17e616f220775296df"
+  }
+  tags = ["${REGISTRY}/blueprint-hotel:${IMAGE_TAG}-reserv"]
+}
+
+target "blueprint-hotel-search" {
+  inherits = ["_blueprint-hotel-service"]
+  args = {
+    SERVICE = "search"
+    ORIGINAL_IMAGE = "777lefty/docker-search-service-container@sha256:7f8fc1950a72f442c8e743bafa226ad81ad6180bf645fa2f35643aa0db9f327c"
+  }
+  tags = ["${REGISTRY}/blueprint-hotel:${IMAGE_TAG}-search"]
+}
+
+target "blueprint-hotel-user" {
+  inherits = ["_blueprint-hotel-service"]
+  args = {
+    SERVICE = "user"
+    ORIGINAL_IMAGE = "777lefty/docker-user-service-container@sha256:051f0d5c94226173a0834706651ab48b7c5e7ae5f3bd5302fb81b1589c604b9a"
+  }
+  tags = ["${REGISTRY}/blueprint-hotel:${IMAGE_TAG}-user"]
+}
+
+target "blueprint-hotel-workload" {
+  inherits = ["_common"]
+  context = "docker/blueprint-hotel"
+  target = "workload"
+  args = {
+    ORIGINAL_IMAGE = "777lefty/wlgen-proc@sha256:2fc11305b6aa148893965c675952a1033c54ef65f56147e1c65835a4e125826c"
+  }
+  tags = ["${REGISTRY}/blueprint-hotel:${IMAGE_TAG}-workload"]
 }

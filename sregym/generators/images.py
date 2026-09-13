@@ -19,6 +19,6 @@ STRESS_IMAGE = (
     "ghcr.io/sregym/stress:20260912-multiarch@sha256:60eba58b6c432c989d837e898286ff8df0d11065498b1f55090e6ed8d495dc94"
 )
 
-# Still AMD64-only. Its modified source is required for a faithful ARM rebuild;
-# replacing it with an upstream healthy kube-proxy would remove the fault.
-WORKLOAD_IMBALANCE_PROXY_IMAGE = "docker.io/jackcuii/kube-proxy:v1.31.12"
+WORKLOAD_IMBALANCE_PROXY_IMAGE = (
+    "ghcr.io/sregym/kube-proxy:20260913.1@sha256:e46c633ac400a65de905cea638d44af7b77b382556e4aa7a93ab9bb2c5fd8c1c"
+)
