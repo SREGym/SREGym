@@ -1,4 +1,5 @@
 import contextlib
+from pathlib import Path
 
 import yaml
 
@@ -17,6 +18,8 @@ class ChaosInjector:
             "chart_path": "chaos-mesh/chaos-mesh",
             "namespace": "chaos-mesh",
             "version": "2.8.0",
+            "remote_chart": True,
+            "values_file": str(Path(__file__).with_name("chaos-mesh-values.yaml")),
         }
 
         container_runtime = self.kubectl.get_container_runtime()

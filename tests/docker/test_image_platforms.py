@@ -9,6 +9,7 @@ _checker = runpy.run_path(str(Path(__file__).resolve().parents[2] / "docker/chec
 REQUIRED_PLATFORMS = _checker["REQUIRED_PLATFORMS"]
 check_image = _checker["check_image"]
 container_images = _checker["container_images"]
+configuration_images = _checker["configuration_images"]
 index_platforms = _checker["index_platforms"]
 runtime_images = _checker["runtime_images"]
 
@@ -41,6 +42,50 @@ def test_runtime_images_cover_every_language_and_blackbox():
 def test_invalid_embedded_runtime_manifest_fails_closed():
     with pytest.raises(ValueError):
         container_images({"name": "RUNTIMES_MANIFEST", "value": "not json"})
+
+
+def test_controller_launched_images_are_included_without_an_initial_pod():
+    document = {
+        "env": [
+            {"name": "JOB_CONTAINER_IMAGE", "value": "registry.example/provisioner:v2"},
+            {"name": "OPENEBS_IO_HELPER_IMAGE", "value": "openebs/linux-utils:3.5.0"},
+            {"name": "OTHER_CONFIG", "value": "not-an-image"},
+        ]
+    }
+    assert container_images(document) == {"registry.example/provisioner:v2", "openebs/linux-utils:3.5.0"}
+
+
+def test_operator_images_include_disabled_components_and_backup_helpers():
+    values = {
+        "operatorImage": "pingcap/tidb-operator:v1.6.0",
+        "tidbBackupManagerImage": "pingcap/tidb-backup-manager:v1.6.0",
+        "advancedStatefulset": {"create": False, "image": "pingcap/advanced-statefulset:v0.7.0"},
+    }
+    assert configuration_images(values) == {
+        "pingcap/tidb-operator:v1.6.0",
+        "pingcap/tidb-backup-manager:v1.6.0",
+        "pingcap/advanced-statefulset:v0.7.0",
+    }
+
+
+def test_operator_custom_resources_inherit_or_override_versions():
+    document = {
+        "spec": {
+            "version": "v8.1.0",
+            "tidb": {"baseImage": "pingcap/tidb"},
+            "pd": {"baseImage": "pingcap/pd", "version": "v8.2.0"},
+        }
+    }
+    assert configuration_images(document) == {"pingcap/tidb:v8.1.0", "pingcap/pd:v8.2.0"}
+    with pytest.raises(ValueError, match="No version"):
+        configuration_images({"baseImage": "pingcap/tidb"})
+
+
+def test_chart_repository_and_tag_are_resolved_before_registry_checks():
+    assert configuration_images({"image": "docker.elastic.co/beats/filebeat", "imageTag": "8.7.1"}) == {
+        "docker.elastic.co/beats/filebeat:8.7.1",
+    }
+    assert configuration_images({"image": "localhost:5000/app", "tag": "v2"}) == {"localhost:5000/app:v2"}
 
 
 def test_extracts_all_container_types_without_treating_config_values_as_images():

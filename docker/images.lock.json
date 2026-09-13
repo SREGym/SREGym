@@ -42,5 +42,8 @@
   "openresty-thrift": "ghcr.io/sregym/openresty-thrift:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:fa344a1bf5320c40e57476eea23706b91819c6d6faa03b34ec846c4d2e3c0d18",
   "media-frontend": "ghcr.io/sregym/media-frontend:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:32de5e0371ccb7f47f36e1f027ae0075a7e265e4eed374c1b1020fe213754d00",
   "kind-node": "ghcr.io/sregym/kind-node:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:ccab5d6cdca66e0b83a77c2711b641fa788024fe217526980da028ac07385b93",
-  "agent-base": "ghcr.io/sregym/agent-base:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:92e8b52af763c6e165144d314ec25b1ad3ba0e0f1b0a28ffa4a1760e92ec6b61"
+  "agent-base": "ghcr.io/sregym/agent-base:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9@sha256:92e8b52af763c6e165144d314ec25b1ad3ba0e0f1b0a28ffa4a1760e92ec6b61",
+  "local-volume-provisioner": "registry.k8s.io/sig-storage/local-volume-provisioner:v2.5.0@sha256:a112f1625aad84e4f425141199ab6ddbb49432c66e05dbbaab033d0ab2e8dfaf",
+  "advanced-statefulset": "pingcap/advanced-statefulset:v0.7.0@sha256:2aff07392d168e3a02d6cbe4bc76eb1dd3b9eec2117fb49e6101e4180f63c849",
+  "chaos-pause": "registry.k8s.io/pause:3.9@sha256:7031c1b283388d2c2e09b57badb803c05ebed362dc88d84b480cc47f72a21097"
 }

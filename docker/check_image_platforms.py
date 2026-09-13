@@ -37,6 +37,10 @@ def container_images(document: object) -> set[str]:
     if isinstance(document, dict):
         if document.get("name") == "RUNTIMES_MANIFEST" and "value" in document:
             images.update(runtime_images(json.loads(document["value"])))
+        # Controllers launch these images later, so they never appear in the
+        # initial pod's containers list (for example local-volume cleanup jobs).
+        if str(document.get("name", "")).endswith("_IMAGE") and document.get("value"):
+            images.add(document["value"])
         for key, value in document.items():
             if key in {"containers", "initContainers", "ephemeralContainers"} and isinstance(value, list):
                 images.update(item["image"] for item in value if isinstance(item, dict) and item.get("image"))
@@ -44,6 +48,30 @@ def container_images(document: object) -> set[str]:
     elif isinstance(document, list):
         for item in document:
             images.update(container_images(item))
+    return images
+
+
+def configuration_images(document: object, version: str | None = None) -> set[str]:
+    """Read operator CRs/values as well as ordinary Kubernetes workloads.
+
+    Use this on configuration sources, not arbitrary ConfigMap payloads. Helm
+    charts should still be rendered to resolve inherited/default image tags.
+    """
+    images = container_images(document)
+    if isinstance(document, dict):
+        version = document.get("version", version)
+        for key, value in document.items():
+            if key == "baseImage" and isinstance(value, str):
+                if not version:
+                    raise ValueError(f"No version for operator baseImage {value}")
+                images.add(f"{value}:{version}")
+            elif key.lower().endswith("image") and isinstance(value, str) and value:
+                tag = document.get("imageTag", document.get("tag"))
+                images.add(f"{value}:{tag}" if tag and ":" not in value.rsplit("/", 1)[-1] else value)
+            images.update(configuration_images(value, version))
+    elif isinstance(document, list):
+        for value in document:
+            images.update(configuration_images(value, version))
     return images
 
 
