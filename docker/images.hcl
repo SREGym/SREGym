@@ -36,6 +36,7 @@ group "default" {
     "kube-proxy-1",
     "blueprint-hotel",
     "stress",
+    "openwhisk",
   ]
 }
 
@@ -67,6 +68,7 @@ group "publish" {
     "kube-proxy-1",
     "blueprint-hotel",
     "stress",
+    "openwhisk",
   ]
 }
 
@@ -76,7 +78,47 @@ group "flight-ticket" {
     "flight-ticket-populate-redis",
     "flight-ticket-load-generator",
     "flight-ticket-python-runtime",
+    "openwhisk",
   ]
+}
+
+group "openwhisk" {
+  targets = [
+    "openwhisk-controller", "openwhisk-invoker", "openwhisk-utility",
+    "openwhisk-zookeeper", "openwhisk-apigateway", "openwhisk-alarmprovider",
+    "openwhisk-kafkaprovider", "openwhisk-nodejs14", "openwhisk-python37",
+  ]
+}
+
+target "_openwhisk" {
+  inherits = ["_common"]
+  context = "docker/openwhisk"
+}
+
+target "openwhisk-controller" {
+  inherits = ["_openwhisk"]
+  dockerfile = "java.Dockerfile"
+  tags = ["${REGISTRY}/openwhisk:${IMAGE_TAG}-controller"]
+}
+
+target "openwhisk-invoker" {
+  inherits = ["_openwhisk"]
+  dockerfile = "java.Dockerfile"
+  args = {
+    COMPONENT = "invoker"
+    UPSTREAM_IMAGE = "openwhisk/invoker@sha256:535ae356d136036743a8e74a3662386d8c8a3c152be626a167fcac9b5647c01f"
+  }
+  tags = ["${REGISTRY}/openwhisk:${IMAGE_TAG}-invoker"]
+}
+
+target "openwhisk-components" {
+  inherits = ["_openwhisk"]
+  name = "openwhisk-${component}"
+  matrix = {
+    component = ["utility", "zookeeper", "apigateway", "alarmprovider", "kafkaprovider", "nodejs14", "python37"]
+  }
+  dockerfile = "${component}.Dockerfile"
+  tags = ["${REGISTRY}/openwhisk:${IMAGE_TAG}-${component}"]
 }
 
 group "train-ticket" {

@@ -1,4 +1,13 @@
 {
+  "openwhisk-controller": "ghcr.io/sregym/openwhisk:20260913-controller@sha256:5e0192aa01f0f1dd01aeec01a4ca94880060afd5a1507b8bc5420e8af6fdce36",
+  "openwhisk-invoker": "ghcr.io/sregym/openwhisk:20260913-invoker@sha256:458fe8a374cbfc31fe6375a6888e23834589422ef4af672d1979ae4d26bf55fc",
+  "openwhisk-utility": "ghcr.io/sregym/openwhisk:20260913-utility@sha256:26279c46d843b2772542267b022cb4f265c48b18f259ef9a9d0b8bd2fcdb6fe4",
+  "openwhisk-zookeeper": "ghcr.io/sregym/openwhisk:20260913-zookeeper@sha256:8e8731e619215175125a220faacaa056a7303337aa846243a33a3eec4d8eb04a",
+  "openwhisk-apigateway": "ghcr.io/sregym/openwhisk:20260913-apigateway@sha256:f267e09cafc271ac389333b1e18d8ab139eb17632b33713ae570e7e3151329f8",
+  "openwhisk-alarmprovider": "ghcr.io/sregym/openwhisk:20260913-alarmprovider@sha256:6800bfe0da58434d300db7b5cb4eec9052e607eeae114961c79db5d4558d1c5e",
+  "openwhisk-kafkaprovider": "ghcr.io/sregym/openwhisk:20260913-kafkaprovider@sha256:ca817c3d7f91c3326c407d18443752293b9c50e6fb3e49f8f8145575e5191981",
+  "openwhisk-nodejs14": "ghcr.io/sregym/openwhisk:20260913-nodejs14@sha256:1637290226dd351bff9323dabe39d18e40550033905686791d42b61eefaa4f90",
+  "openwhisk-python37": "ghcr.io/sregym/openwhisk:20260913-python37@sha256:1c4dc4cfa8552adad92ede3a779bff2b237b2400ec790862b27c902b5affc583",
   "blueprint-hotel-frontend": "ghcr.io/sregym/blueprint-hotel:20260913-frontend@sha256:e853a492c6de4da95809d0aae3a3a62aa9ab860aa3d43f5de5d9af0c50fd950f",
   "blueprint-hotel-geo": "ghcr.io/sregym/blueprint-hotel:20260913-geo@sha256:2b511768f33cd50181eb68a941c91a01c85586dd9e069f5eee973163dfc904c2",
   "blueprint-hotel-profile": "ghcr.io/sregym/blueprint-hotel:20260913-profile@sha256:47c0b5d95c085901b46fd30685daca60694d47285fbae349a2b8a4ebc1011d3d",

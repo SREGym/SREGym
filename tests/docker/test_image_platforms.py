@@ -10,6 +10,37 @@ REQUIRED_PLATFORMS = _checker["REQUIRED_PLATFORMS"]
 check_image = _checker["check_image"]
 container_images = _checker["container_images"]
 index_platforms = _checker["index_platforms"]
+runtime_images = _checker["runtime_images"]
+
+
+def test_runtime_images_cover_every_language_and_blackbox():
+    manifest = {
+        "runtimes": {
+            "nodejs": [{"image": {"prefix": "ghcr.io/sregym", "name": "openwhisk", "tag": "node@sha256:abc"}}],
+            "python": [{"image": {"prefix": "", "name": "python", "tag": "3"}}],
+        },
+        "blackboxes": [{"registry": "example.org/", "prefix": "", "name": "custom", "tag": "v1"}],
+    }
+    expected = {"ghcr.io/sregym/openwhisk:node@sha256:abc", "python:3", "example.org/custom:v1"}
+    assert runtime_images(manifest) == expected
+    pod = {
+        "spec": {
+            "containers": [
+                {
+                    "image": "controller:v1",
+                    "env": [
+                        {"name": "RUNTIMES_MANIFEST", "value": json.dumps(manifest)},
+                    ],
+                }
+            ]
+        }
+    }
+    assert container_images(pod) == expected | {"controller:v1"}
+
+
+def test_invalid_embedded_runtime_manifest_fails_closed():
+    with pytest.raises(ValueError):
+        container_images({"name": "RUNTIMES_MANIFEST", "value": "not json"})
 
 
 def test_extracts_all_container_types_without_treating_config_values_as_images():

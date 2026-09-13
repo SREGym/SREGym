@@ -14,9 +14,29 @@ from pathlib import Path
 REQUIRED_PLATFORMS = {"linux/amd64", "linux/arm64"}
 
 
+def runtime_images(manifest: dict) -> set[str]:
+    """Include images OpenWhisk launches later, not just its initial pods."""
+    descriptors = list(manifest.get("blackboxes", []))
+    for runtimes in manifest.get("runtimes", {}).values():
+        descriptors.extend(runtime["image"] for runtime in runtimes)
+    images = set()
+    for descriptor in descriptors:
+        prefix = descriptor.get("prefix", "").rstrip("/")
+        name = descriptor["name"]
+        image = f"{prefix}/{name}" if prefix else name
+        if descriptor.get("registry"):
+            image = f"{descriptor['registry'].rstrip('/')}/{image}"
+        if descriptor.get("tag"):
+            image += f":{descriptor['tag']}"
+        images.add(image)
+    return images
+
+
 def container_images(document: object) -> set[str]:
     images: set[str] = set()
     if isinstance(document, dict):
+        if document.get("name") == "RUNTIMES_MANIFEST" and "value" in document:
+            images.update(runtime_images(json.loads(document["value"])))
         for key, value in document.items():
             if key in {"containers", "initContainers", "ephemeralContainers"} and isinstance(value, list):
                 images.update(item["image"] for item in value if isinstance(item, dict) and item.get("image"))
@@ -58,8 +78,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("images", nargs="*")
     parser.add_argument("--manifest", type=Path, action="append", default=[], help="Rendered YAML file or directory")
+    parser.add_argument(
+        "--runtimes-manifest", type=Path, action="append", default=[], help="OpenWhisk runtime JSON file"
+    )
     args = parser.parse_args()
     images = set(args.images)
+    for path in args.runtimes_manifest:
+        images.update(runtime_images(json.loads(path.read_text())))
     if args.manifest:
         import yaml  # Available via `uv run`; direct image checks need only stdlib.
 
@@ -69,7 +94,7 @@ def main() -> int:
                 for document in yaml.safe_load_all(file.read_text()):
                     images.update(container_images(document))
     if not images:
-        parser.error("No container images found; pass references or --manifest")
+        parser.error("No container images found; pass references, --manifest, or --runtimes-manifest")
     with ThreadPoolExecutor(max_workers=6) as executor:
         results = list(executor.map(check_image, sorted(images)))
     for image, error in results:
