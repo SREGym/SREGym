@@ -130,6 +130,12 @@ def run_judge_preflight_check() -> None:
     logger.info("✅ Judge pre-flight check passed")
 
 
+def _problem_result_paths(base_dir: Path, agent: str, problem_id: str) -> tuple[Path, Path]:
+    final_path = base_dir / agent / problem_id / f"{problem_id}_{agent}_results.csv"
+    final_path.parent.mkdir(parents=True, exist_ok=True)
+    return final_path.with_name(f"_running_{final_path.name}"), final_path
+
+
 def get_current_datetime_formatted():
     now = datetime.now()
     formatted_datetime = now.strftime("%m%d_%H%M")
@@ -353,8 +359,9 @@ def driver_loop(
 
             conductor.problem_id = pid
 
-            # Keep a record of results for this problem in a temp file in case an attempt fails
-            tmp_path = f"_running_{pid}_{agent_to_run}_results.csv"
+            # Keep partial results on the destination filesystem so publication
+            # remains atomic when results/ is a container bind mount.
+            tmp_path, final_csv_path = _problem_result_paths(base_dir, str(agent_to_run), pid)
 
             attempts_to_run = [
                 attempt for attempt in range(1, n_attempts + 1) if attempt not in completed_attempts.get(pid, set())
@@ -444,8 +451,6 @@ def driver_loop(
                         writer.writeheader()
                         writer.writerows(all_results_for_agent)
                     if deploy_cleanup_failed:
-                        final_csv_path = base_dir / str(agent_to_run) / pid / f"{pid}_{agent_to_run}_results.csv"
-                        final_csv_path.parent.mkdir(parents=True, exist_ok=True)
                         os.replace(tmp_path, final_csv_path)
                         progress.advance(task_id, len(attempts_to_run) - attempt_position)
                         progress.stop()
@@ -484,7 +489,9 @@ def driver_loop(
                 assert agent_to_run is not None
 
                 run = RunArtifacts.create(
-                    staging_root=Path(".runtime"),
+                    # Opaque artifacts must share the final output filesystem
+                    # too: finalization publishes them with an atomic rename.
+                    staging_root=base_dir / ".runtime",
                     results_root=base_dir,
                     problem_id=pid,
                     agent=agent_to_run,
@@ -726,8 +733,6 @@ def driver_loop(
                         logger.warning(f"⚠️ ATIF trajectory conversion skipped for {published_run_dir}")
 
                 if attempt == attempts_to_run[-1] or abort_campaign_after_attempt:
-                    final_csv_path = base_dir / agent_to_run / pid / f"{pid}_{agent_to_run}_results.csv"
-                    final_csv_path.parent.mkdir(parents=True, exist_ok=True)
                     os.replace(tmp_path, final_csv_path)
                     if abort_campaign_after_attempt:
                         logger.error(
@@ -860,7 +865,9 @@ def main(args):
             "Run it with --internet-access open or enable container isolation."
         )
 
-    if not args.use_external_harness:
+    # Mitigation-only runs use the problem's executable oracle, not the
+    # diagnosis judge. They must also work with key-free agents like autosubmit.
+    if not args.use_external_harness and (args.stages is None or "diagnosis" in args.stages):
         run_judge_preflight_check()
 
     k8s_proxy_listen_host = (
