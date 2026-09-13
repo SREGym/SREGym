@@ -32,7 +32,7 @@
   "train-ticket-rabbitmq": "rabbitmq:3.8.19@sha256:20064e7c237879e71311bbfedfc0101df9826fd756edb37806ab9c9b72d39d1e",
   "flight-ticket-action-deployer": "ghcr.io/sregym/flight-ticket-action-deployer:20260911-runtime@sha256:0e51df267e8ef97a7009c9a00f93c6ca5e85d3e3b1b18543594c94c60a47525b",
   "flight-ticket-populate-redis": "ghcr.io/sregym/flight-ticket-populate-redis:20260913.2@sha256:c1dab090dd9ee71c451acee922a0a84dfe430a2c59c303cb2cda93085500ec01",
-  "flight-ticket-load-generator": "ghcr.io/sregym/flight-ticket-load-generator:20260911-multiarch@sha256:a7d510972622ab558bf457f27ebe34f3d1e90a44dbed6790348d1049052e8e18",
+  "flight-ticket-load-generator": "ghcr.io/sregym/flight-ticket-load-generator:20260913-amd64-fixes@sha256:c171471c914260188d934a64342f8a133be3eb7cc23c99f67e7d12bd40da5c8a",
   "fleetcast-backend": "ghcr.io/sregym/fleetcast-backend:20260911-multiarch@sha256:e4c330ab7365c3b47ec05815f73ca945783d58d936e2f9103c1a19bd5078458c",
   "hotel-reservation": "ghcr.io/sregym/hotel-reservation:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:1c685e1c4c304f327952397b3a99c54dadb086607774d71f222b200ec0d2e65e",
   "locust-exporter": "ghcr.io/sregym/locust-exporter:sha-d2c036bc3d1138f5a0bdaffd3d87f37522c3461a@sha256:03fc297fe4ecb360740da4c04810e530db72576fde4042a7addaa6ba666731da",

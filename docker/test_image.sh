@@ -117,6 +117,7 @@ case "$TARGET" in
         ;;
     flight-ticket-load-generator)
         run_image --entrypoint bash "$IMAGE" -ec 'wsk --help >/dev/null; python -m py_compile /app/run-all.py; test -x /app/entrypoint.sh'
+        run_image --entrypoint python "$IMAGE" -c 'import redis; assert redis.Redis().connection_pool.connection_kwargs["protocol"] == 2'
         ;;
     flight-ticket-populate-redis)
         python3 "$SCRIPT_DIR/flight-ticket/test_population.py" "$IMAGE" "$ARCH"

@@ -41,7 +41,7 @@ def test_runtime_defaults_are_explicit_and_unambiguous():
 
 def test_catalog_adaptation_preserves_every_non_swift_action(tmp_path):
     # Run the actual embedded adaptation, not a duplicate implementation.
-    patch = (PROFILE / "catalog.patch").read_text()
+    patch = (PROFILE / "chart.patch").read_text()
     added = "\n".join(line[1:] for line in patch.splitlines() if line.startswith("+") and not line.startswith("+++"))
     script = added.split("python - <<'PY'\n", 1)[1].split("\nPY", 1)[0]
     samples = tmp_path / "samples"
@@ -61,7 +61,31 @@ def test_catalog_adaptation_preserves_every_non_swift_action(tmp_path):
 def test_setup_pins_chart_and_applies_profile_without_editing_workflows():
     script = (FLIGHT / "setup_openwhisk.sh").read_text()
     assert re.search(r"^chart_revision=[a-f0-9]{40}$", script, re.MULTILINE)
-    assert 'git -C "$chart_dir" apply "$script_dir/openwhisk/catalog.patch"' in script
+    assert 'git -C "$chart_dir" apply "$script_dir/openwhisk/chart.patch"' in script
     assert '"$script_dir/openwhisk/runtimes.json"' in script
+    assert '"$script_dir/openwhisk/action-data-policy.yaml"' in script
     assert '--values "$script_dir/openwhisk/values.yaml" "$@"' in script
     subprocess.run(["bash", "-n", str(FLIGHT / "setup_openwhisk.sh")], check=True)
+
+
+def test_action_data_access_is_limited_to_each_store_and_current_release(tmp_path):
+    (tmp_path / "Chart.yaml").write_text("apiVersion: v2\nname: policy-test\nversion: 0.1.0\n")
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "policy.yaml").write_text((PROFILE / "action-data-policy.yaml").read_text())
+    output = subprocess.check_output(["helm", "template", "another-release", str(tmp_path)], text=True)
+    policies = list(yaml.safe_load_all(output))
+    assert len(policies) == 2
+    for policy, (service, port) in zip(policies, (("couchdb", 5984), ("redis", 6379)), strict=True):
+        assert policy["spec"] == {
+            "podSelector": {"matchLabels": {"name": f"another-release-{service}"}},
+            "policyTypes": ["Ingress"],
+            "ingress": [
+                {
+                    "from": [
+                        {"podSelector": {"matchLabels": {"release": "another-release", "user-action-pod": "true"}}}
+                    ],
+                    "ports": [{"protocol": "TCP", "port": port}],
+                }
+            ],
+        }

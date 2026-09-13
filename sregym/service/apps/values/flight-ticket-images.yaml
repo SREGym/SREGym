@@ -6,4 +6,4 @@ jobs:
   populateRedis:
     image: ghcr.io/sregym/flight-ticket-populate-redis:20260913.2@sha256:c1dab090dd9ee71c451acee922a0a84dfe430a2c59c303cb2cda93085500ec01
   loadGenerator:
-    image: ghcr.io/sregym/flight-ticket-load-generator:20260911-multiarch@sha256:a7d510972622ab558bf457f27ebe34f3d1e90a44dbed6790348d1049052e8e18
+    image: ghcr.io/sregym/flight-ticket-load-generator:20260913-amd64-fixes@sha256:c171471c914260188d934a64342f8a133be3eb7cc23c99f67e7d12bd40da5c8a
