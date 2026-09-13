@@ -217,7 +217,9 @@ target "flight-ticket-action-deployer" {
 
 target "flight-ticket-populate-redis" {
   inherits = ["_common"]
-  context = "SREGym-applications/flight-ticket/populate_redis"
+  context = "docker/flight-ticket"
+  dockerfile = "populate-redis.Dockerfile"
+  contexts = { population-source = "./SREGym-applications/flight-ticket/populate_redis" }
   tags = ["${REGISTRY}/flight-ticket-populate-redis:${IMAGE_TAG}"]
 }
 

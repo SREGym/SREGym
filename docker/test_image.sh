@@ -56,6 +56,13 @@ case "$TARGET" in
         ;;
     train-ticket-xenon)
         run_image --entrypoint xenoncli "$IMAGE" version
+        # Docker can allow unprivileged ICMP by default, masking a missing
+        # setuid bit that crashes Xenon under Kubernetes' stricter setting.
+        run_image --network none --sysctl net.ipv4.ping_group_range='0 0' \
+            --entrypoint sh "$IMAGE" -ec '
+                test "$(id -u)" -eq 777
+                ping -c 1 -W 2 127.0.0.1
+            '
         ;;
     train-ticket-deploy)
         # Never execute deploy.sh here: it mutates the configured cluster.
@@ -112,7 +119,7 @@ case "$TARGET" in
         run_image --entrypoint bash "$IMAGE" -ec 'wsk --help >/dev/null; python -m py_compile /app/run-all.py; test -x /app/entrypoint.sh'
         ;;
     flight-ticket-populate-redis)
-        run_image --entrypoint python "$IMAGE" -c 'import redis, pandas'
+        python3 "$SCRIPT_DIR/flight-ticket/test_population.py" "$IMAGE" "$ARCH"
         ;;
     fleetcast-backend)
         run_image --entrypoint python "$IMAGE" -c '

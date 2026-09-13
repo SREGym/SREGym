@@ -18,6 +18,9 @@ RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
 
 FROM alpine:3.13
 RUN apk add --no-cache curl bash \
+    # The original image has setuid BusyBox. Xenon's UID 777 network probe
+    # needs it when Kubernetes disallows unprivileged ICMP sockets.
+    && chmod u+s /bin/busybox \
     && addgroup -S -g 777 mysql \
     && adduser -S -H -u 777 -G mysql mysql \
     && mkdir -p /etc/xenon /var/lib/xenon \
