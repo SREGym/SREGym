@@ -49,7 +49,7 @@ def test_platform_failure_is_immediate_and_identifies_image_and_node(init, messa
     ):
         kubectl.wait_for_ready("test", max_wait=10)
     sleep.assert_not_called()
-    assert "docs/container-images.md" in str(error.value)
+    assert "Verify that the image and its executables support the node architecture." in str(error.value)
 
 
 def test_transient_pull_failure_can_recover():

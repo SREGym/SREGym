@@ -75,11 +75,6 @@ SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/)
 bash kind/setup_kind_cluster.sh
 ```
 
-[SREGym-Lite](./docs/SREGym-Lite.md) pulls published multiarch images on both
-Apple silicon and x86-64. No local application-image build is required.
-See [container images](./docs/container-images.md) for the wider application
-image catalog and remaining compatibility requirements.
-
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
 ### Running an Agent

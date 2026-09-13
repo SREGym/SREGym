@@ -35,9 +35,6 @@ From the repository root, create the cluster with the shared multiarch image:
 bash kind/setup_kind_cluster.sh
 ```
 
-The old `arm` and `x86` arguments remain accepted for compatibility. They use
-the same configuration and do not force a different platform.
-
 The script:
 
 1. creates the four-node KIND cluster using the published multiarch node image;
@@ -51,10 +48,7 @@ Confirm that all four nodes are `Ready`:
 kubectl get nodes
 ```
 
-SREGym-Lite pulls published multiarch application images directly. No local
-build-and-load step is needed on Apple silicon. See
-[SREGym-Lite](../docs/SREGym-Lite.md) for the supported problem set and
-[container images](../docs/container-images.md) for optional local source builds.
+The cluster is now ready to run SREGym.
 
 ## Troubleshooting
 
@@ -90,20 +84,9 @@ All KIND nodes share the host's `fs.inotify.max_user_instances` limit. When this
 ### Resource allocation
 
 On macOS, allocate at least 16 GB to Docker Desktop or OrbStack's Linux VM for
-the full Lite profile, leaving additional RAM for macOS and the agent. Keep the
-Mac awake during long campaigns; `caffeinate -i <command>` prevents idle sleep
-for the lifetime of that command.
+the full Lite profile. Leave additional RAM for macOS and the agent.
 
 WSL2 may require additional resources. Adjust the WSL2 settings in your `.wslconfig` file on Windows if you encounter performance issues.
-
-### Astronomy Shop's flag UI is OOMKilled immediately
-
-Some KIND/containerd configurations give containers an extremely high file
-descriptor limit. Erlang can exhaust memory at startup because of that limit.
-The Astronomy Shop compatibility values cap the UI process's descriptor limit
-at 65,536 while retaining its original 250 MiB memory limit. Increasing
-the container's memory is not sufficient. Deploy through SREGym to apply the
-current compatibility values.
 
 ### Deployment timeout on a slow network
 

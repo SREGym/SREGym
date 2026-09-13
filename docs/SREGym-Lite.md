@@ -42,21 +42,7 @@ The setup creates one control-plane and three worker nodes. Confirm that all fou
 kubectl get nodes
 ```
 
-The Lite applications, traffic generators, KIND node, and agent runtime use
-published multiarch images. Docker and Kubernetes select `linux/arm64` on Apple
-silicon or `linux/amd64` on x86-64. No local application-image build or registry
-login is required. See [container images](container-images.md) for the pinned
-releases and optional source-build commands.
-
-On macOS, the containers run inside Docker Desktop or OrbStack's Linux VM.
-Allocate the CPU and memory listed above to that VM. On smaller machines,
-`--profile svelte` reduces the bundled observability services for local
-experiments; it is not intended for leaderboard submissions.
-
 See the [KIND guide](../kind/README.md) for installation details and troubleshooting.
-
-For model-free lifecycle checks and agent-container checks, see
-[local validation](../tests/integration/README.md).
 
 ## Run the benchmark
 

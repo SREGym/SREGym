@@ -287,8 +287,7 @@ class KubeCtl:
             f"Container platform failure in {namespace}/{pod.metadata.name}, "
             f"container '{status.name}', image '{status.image}', "
             f"node '{pod.spec.node_name}': {message.rstrip('.')}. "
-            "Verify that the image and its executables support the node architecture. "
-            "See docs/container-images.md for multiarch images and source-build instructions."
+            "Verify that the image and its executables support the node architecture."
         )
 
     def _check_container_platform_logs(self, pod, namespace: str, retry_at: dict, *, deadline: float):
