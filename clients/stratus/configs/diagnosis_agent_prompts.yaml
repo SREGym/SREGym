@@ -74,7 +74,7 @@ user: >
   You can run up to {max_step} rounds to finish the tasks.
   If you call submit_tool in tool-call stage, the process will end immediately.
   If you exceed this limitation, the system will force you to make a submission.
-  You will begin by analyzing the service's state and telemetry with the tools.
+  You will begin by analyzing the service's state and telemetry with the tools.{workspace_hint}
 
 diagnosis_summary_prompt: |
   You are a helper agent to an autonomous SRE agent.

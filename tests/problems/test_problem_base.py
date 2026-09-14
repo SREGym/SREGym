@@ -37,3 +37,12 @@ def test_explicit_empty_namespace_is_preserved():
     problem = ExampleProblem(app=app, namespace="")
 
     assert problem.namespace == ""
+
+
+def test_config_only_problem_has_no_workspace(tmp_path):
+    problem = ExampleProblem(app=SimpleNamespace(namespace="ns"))
+
+    assert problem.has_workspace() is False
+    assert problem.workspace_hint() == ""
+    assert problem.provision_workspace(tmp_path / "workspace") is None
+    assert not (tmp_path / "workspace").exists()

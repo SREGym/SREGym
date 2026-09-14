@@ -248,11 +248,19 @@ async def get_app():
     app_inst = _conductor.app
     logger.debug(f"API returns App instance: {app_inst}")
     namespaces = getattr(app_inst, "namespaces", None) or [app_inst.namespace]
+    workspace_hint = ""
+    problem = getattr(_conductor, "problem", None)
+    if problem is not None:
+        try:
+            workspace_hint = problem.workspace_hint() or ""
+        except Exception as exc:
+            logger.warning(f"workspace_hint() raised: {exc}")
     return {
         "app_name": app_inst.app_name,
         "namespace": app_inst.namespace,
         "namespaces": namespaces,
         "descriptions": str(app_inst.description),
+        "workspace_hint": workspace_hint,
     }
 
 

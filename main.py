@@ -494,6 +494,12 @@ def driver_loop(
 
                 if conductor.stage_sequence:
                     with _artifact_environment(run):
+                        workspace_path = None
+                        if conductor.problem is not None and conductor.problem.has_workspace():
+                            workspace_path = conductor.problem.provision_workspace(run.active_dir / "workspace")
+                            if workspace_path is not None:
+                                console.log(f"Provisioned source workspace at {workspace_path}")
+                        LAUNCHER.set_problem_workspace(workspace_path)
                         reg = get_agent(
                             agent_to_run,
                             path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml",

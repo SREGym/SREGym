@@ -23,6 +23,7 @@ from logger import init_logger  # noqa: E402
 init_logger()
 
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
+from clients.harness.workspace import append_workspace_hint  # noqa: E402
 from clients.opencode.opencode_agent import OpenCodeAgent  # noqa: E402
 
 logger = logging.getLogger("all.opencode.driver")
@@ -198,7 +199,7 @@ Important:
 """
 
     logger.info(f"Built instruction:\n{instruction}")
-    return instruction
+    return append_workspace_hint(instruction, app_info)
 
 
 def save_results(

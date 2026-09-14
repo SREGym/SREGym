@@ -20,7 +20,8 @@ class AstronomyShop(Application):
     _VARIANT_ON = "on"
     _VARIANT_OFF = "off"
 
-    def __init__(self):
+    def __init__(self, *, load_generator_enabled: bool = True):
+        self.load_generator_enabled = load_generator_enabled
         super().__init__(ASTRONOMY_SHOP_METADATA)
         self.load_app_json()
         self.kubectl = KubeCtl()
@@ -56,6 +57,8 @@ class AstronomyShop(Application):
             "-f",
             str(self._VALUES_DIR / "astronomy-shop-fixes.yaml"),
         ]
+        if not self.load_generator_enabled:
+            extra_args += ["--set", "components.load-generator.enabled=false"]
         if is_svelte():
             extra_args += ["-f", str(self._VALUES_DIR / "astronomy-shop-svelte.yaml")]
             self.logger.info("[svelte] Dropping bundled OpenSearch, Grafana and Jaeger from astronomy-shop")

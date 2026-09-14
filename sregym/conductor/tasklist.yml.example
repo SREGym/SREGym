@@ -48,6 +48,9 @@ all:
     search_rate_retry_collapse_hotel_reservation:
     - diagnosis
     - mitigation
+    thundering_herd_cascade_astronomy_shop:
+    - diagnosis
+    - mitigation
     assign_to_non_existent_node:
     - diagnosis
     - mitigation
