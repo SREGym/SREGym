@@ -42,6 +42,7 @@ from sregym.service.container_runner import (
     get_container_host_bind_address,
 )
 from sregym.service.internet_policy import InternetPolicy
+from sregym.service.judge_runtime import JUDGE_BACKENDS, managed_judge_backend
 from sregym.service.kubectl import ContainerPlatformError
 from sregym.traces import postprocess as trace_postprocess
 from sregym.traces import store as trace_store
@@ -128,9 +129,7 @@ def run_judge_preflight_check() -> None:
         get_llm_backend_for_judge().inference("Say ok.", system_prompt="Reply with exactly 'ok'.")
     except Exception as e:
         logger.error(f"❌ Judge pre-flight check failed: {e}")
-        logger.error(
-            "The judge uses LiteLLM. Ensure the model is LiteLLM-compatible or pass a compatible --judge-model."
-        )
+        logger.error("Check --judge-model and credentials for the selected judge backend.")
         sys.exit(1)
 
     logger.info("✅ Judge pre-flight check passed")
@@ -179,6 +178,9 @@ def _configure_model_environment(args) -> tuple[str, str]:
     else:
         os.environ.pop("AGENT_REASONING_EFFORT", None)
 
+    if os.environ.get("SREGYM_JUDGE_BRIDGE_URL"):
+        return agent_model, judge_model
+
     if not getattr(args, "judge_model", None) or normalizes_opencode_local_judge:
         if not os.environ.get("JUDGE_API_BASE") and os.environ.get("AGENT_API_BASE"):
             os.environ["JUDGE_API_BASE"] = os.environ["AGENT_API_BASE"]
@@ -219,6 +221,7 @@ def driver_loop(
     n_attempts: int = 1,
     agent_timeout: int = 1800,
     resume_csv: str | None = None,
+    judge_backend: str = "api",
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -390,6 +393,7 @@ def driver_loop(
                     agent=agent_to_run,
                     model=os.environ.get("AGENT_MODEL_ID"),
                     judge_model=os.environ.get("JUDGE_MODEL_ID"),
+                    judge_backend=judge_backend,
                 )
 
                 # Retry start_problem up to 3 times to handle transient deploy failures
@@ -675,6 +679,7 @@ def driver_loop(
                     "problem_id": pid,
                     "attempt": attempt,
                     "deployment_profile": get_profile(),
+                    "judge_backend": judge_backend,
                 }
                 snapshot.update(LAUNCHER.internet_policy_result(agent_proc))
                 for stage, outcome in conductor.results.items():
@@ -792,6 +797,7 @@ def _run_driver_and_shutdown(
     n_attempts: int = 1,
     agent_timeout: int = 1800,
     resume_csv: str | None = None,
+    judge_backend: str = "api",
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     global _driver_error, _driver_results
@@ -804,6 +810,7 @@ def _run_driver_and_shutdown(
             n_attempts=n_attempts,
             agent_timeout=agent_timeout,
             resume_csv=resume_csv,
+            judge_backend=judge_backend,
         )
         _driver_results = results
     except BenchmarkCampaignAborted as exc:
@@ -819,12 +826,16 @@ def _run_driver_and_shutdown(
 
 
 def main(args):
+    init_logger()
+    backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
+    with managed_judge_backend(backend, force_build=args.force_build):
+        return _run_benchmark(args, judge_backend=backend)
+
+
+def _run_benchmark(args, *, judge_backend: str = "api"):
     global _driver_error, _driver_results
     _driver_error = None
     _driver_results = []
-
-    # set up the logger
-    init_logger()
 
     agent_model, judge_model = _configure_model_environment(args)
     internet_policy = InternetPolicy.from_mode(args.internet_access)
@@ -846,7 +857,8 @@ def main(args):
     os.environ["MCP_SERVER_URL"] = f"http://127.0.0.1:{os.environ['MCP_SERVER_PORT']}"
 
     logger.info(
-        f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
+        f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, "
+        f"judge_backend: {judge_backend}, judge_model: {judge_model}, "
         f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
         f"deployment_profile: {get_profile()}, "
         f"internet_access: {internet_policy.mode.value}, "
@@ -894,7 +906,7 @@ def main(args):
     try:
         if not agent_reg or agent_reg.container_isolation:
             LAUNCHER.enable_container_isolation(
-                force_build=args.force_build,
+                force_build=args.force_build and judge_backend == "api",
                 k8s_proxy_port=conductor_config.k8s_proxy_listen_port,
             )
 
@@ -929,6 +941,7 @@ def main(args):
             args.resume,
         ),
         name="driver",
+        kwargs={"judge_backend": judge_backend},
         daemon=True,
     )
     driver_thread.start()
@@ -1040,6 +1053,12 @@ if __name__ == "__main__":
         type=str,
         default=None,
         help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set)",
+    )
+    parser.add_argument(
+        "--judge-backend",
+        choices=JUDGE_BACKENDS,
+        default="api",
+        help="Judge access: existing API endpoint (default), or a CLI using the existing agent subscription setup",
     )
     parser.add_argument(
         "--reasoning-effort",

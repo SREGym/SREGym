@@ -212,6 +212,7 @@ SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings dire
 |----------|---------|---------|
 | `--model` | `gpt-5` | Sets both agent and judge model |
 | `--judge-model` | (same as `--model`) | Override just the judge evaluator model |
+| `--judge-backend` | `api` | Judge access through the existing API endpoint, or `codex`, `claudecode`, `copilot`, or `cursor` |
 
 Set the required environment variable for your provider before running:
 
@@ -270,6 +271,26 @@ export JUDGE_API_BASE="https://example.test/v1"
 export JUDGE_API_KEY="..."
 uv run main.py --agent stratus --model ollama_chat/qwen3-coder:30b --judge-model gpt-5
 ```
+
+### Subscription-backed judges
+
+Choose a subscription judge independently of the agent with `--judge-backend` (default `api`).
+
+```bash
+uv run main.py --agent cursor --model auto --judge-backend codex --judge-model gpt-5.5
+```
+
+| Judge backend | Credentials |
+| --- | --- |
+| `codex` | Subscription login in `$CODEX_HOME/auth.json`, default `~/.codex/auth.json` |
+| `claudecode` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `copilot` | `COPILOT_GITHUB_TOKEN` |
+| `cursor` | `CURSOR_API_KEY` |
+
+For an existing GitHub CLI OAuth login, use `export COPILOT_GITHUB_TOKEN="$(gh auth token)"`.
+Set `--judge-model` to a model supported by that CLI; it defaults to `--model`.
+SREGym starts and cleans up the judge automatically. Codex refreshes update the selected auth file.
+Subscription limits apply; CLI judge usage is not recorded. Logs are in `logs/judge-<backend>-*/`.
 
 <details>
 <summary><strong>Provider Examples</strong></summary>
