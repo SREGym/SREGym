@@ -30,7 +30,7 @@
   "train-ticket-mysqlclient": "ghcr.io/sregym/train-ticket-mysqlclient:20260911-multiarch@sha256:d6f86c7b70c48c1360dc0e39d07e13b436bc2f111cf3ce38dc14a1ddf474e3b7",
   "train-ticket-mysqld-exporter": "ghcr.io/sregym/train-ticket-mysqld-exporter:20260911-multiarch@sha256:d0c36b42255bbf3b3c465788a41b5c1db770d032e0a620bb55a666915b37ef5d",
   "train-ticket-rabbitmq": "rabbitmq:3.8.19@sha256:20064e7c237879e71311bbfedfc0101df9826fd756edb37806ab9c9b72d39d1e",
-  "flight-ticket-action-deployer": "ghcr.io/sregym/flight-ticket-action-deployer:20260911-runtime@sha256:0e51df267e8ef97a7009c9a00f93c6ca5e85d3e3b1b18543594c94c60a47525b",
+  "flight-ticket-action-deployer": "ghcr.io/sregym/flight-ticket-action-deployer:20260914-actions@sha256:7ca2768cd8d094ff9c5d100715c1fedac8ec2ceebbe14182597ae170802f8964",
   "flight-ticket-populate-redis": "ghcr.io/sregym/flight-ticket-populate-redis:20260913.2@sha256:c1dab090dd9ee71c451acee922a0a84dfe430a2c59c303cb2cda93085500ec01",
   "flight-ticket-load-generator": "ghcr.io/sregym/flight-ticket-load-generator:20260913-amd64-fixes@sha256:c171471c914260188d934a64342f8a133be3eb7cc23c99f67e7d12bd40da5c8a",
   "fleetcast-backend": "ghcr.io/sregym/fleetcast-backend:20260911-multiarch@sha256:e4c330ab7365c3b47ec05815f73ca945783d58d936e2f9103c1a19bd5078458c",

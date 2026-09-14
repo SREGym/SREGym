@@ -1,4 +1,3 @@
-import json
 import os
 import subprocess
 import sys
@@ -34,39 +33,6 @@ def test_redis_patch_rejects_an_unknown_source_without_modifying_it(tmp_path):
     )
     assert result.returncode != 0
     assert header.read_text() == "unexpected source\n"
-
-
-def test_flight_ticket_uses_one_runtime_for_packaging_and_all_actions(tmp_path):
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    calls = tmp_path / "calls.jsonl"
-    for command in ("docker", "wsk", "zip"):
-        script = bin_dir / command
-        script.write_text(
-            '#!/usr/bin/env python3\nimport json, os, sys\nwith open(os.environ["CALL_LOG"], "a") as stream:\n    stream.write(json.dumps(sys.argv) + "\\n")\n'
-        )
-        script.chmod(0o755)
-    (tmp_path / "actions/example").mkdir(parents=True)
-    runtime = "registry.test/python-runtime:release"
-    env = {
-        **os.environ,
-        "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
-        "CALL_LOG": str(calls),
-        "PYTHON_RUNTIME_IMAGE": runtime,
-        "WSK_API_HOST": "http://example.test",
-        "WSK_AUTH_KEY": "test",
-        "REDIS_HOST": "redis",
-        "REDIS_PORT": "6379",
-    }
-    script = ROOT / "SREGym-applications/flight-ticket/deploy_ow_actions/deploy_ow_actions.sh"
-    subprocess.run(["bash", str(script)], cwd=tmp_path, env=env, check=True, capture_output=True)
-    commands = [json.loads(line) for line in calls.read_text().splitlines()]
-    packaging = [cmd for cmd in commands if Path(cmd[0]).name == "docker"]
-    actions = [cmd for cmd in commands if "--docker" in cmd]
-    assert len(packaging) == 1
-    assert runtime in packaging[0]
-    assert len(actions) == 14
-    assert all(cmd[cmd.index("--docker") + 1] == runtime for cmd in actions)
 
 
 def test_ui_descriptor_wrapper_preserves_lower_limits():

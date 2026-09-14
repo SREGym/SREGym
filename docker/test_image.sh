@@ -114,6 +114,7 @@ case "$TARGET" in
         ;;
     flight-ticket-action-deployer)
         run_image --entrypoint bash "$IMAGE" -ec 'wsk --help >/dev/null; test -x /app/deploy_ow_actions.sh; test -d /app/actions'
+        python3 "$SCRIPT_DIR/flight-ticket/test_action_packages.py" "$IMAGE" "$ARCH"
         ;;
     flight-ticket-load-generator)
         run_image --entrypoint bash "$IMAGE" -ec 'wsk --help >/dev/null; python -m py_compile /app/run-all.py; test -x /app/entrypoint.sh'
