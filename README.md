@@ -287,10 +287,9 @@ uv run main.py --agent cursor --model auto --judge-backend codex --judge-model g
 | `copilot` | `COPILOT_GITHUB_TOKEN` |
 | `cursor` | `CURSOR_API_KEY` |
 
-For an existing GitHub CLI OAuth login, use `export COPILOT_GITHUB_TOKEN="$(gh auth token)"`.
-Set `--judge-model` to a model supported by that CLI; it defaults to `--model`.
-SREGym starts and cleans up the judge automatically. Codex refreshes update the selected auth file.
-Subscription limits apply; CLI judge usage is not recorded. Logs are in `logs/judge-<backend>-*/`.
+Set `--judge-model` to a model supported by the selected CLI.
+
+For Copilot, use `export COPILOT_GITHUB_TOKEN="$(gh auth token)"` to reuse an existing GitHub CLI OAuth login.
 
 <details>
 <summary><strong>Provider Examples</strong></summary>
