@@ -334,6 +334,8 @@ class ClaudeCodeAgent:
             "--verbose",
             "--output-format",
             "stream-json",
+            "--thinking-display",
+            "summarized",
             "-p",
             instruction,
         ]

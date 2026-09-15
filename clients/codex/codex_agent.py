@@ -328,6 +328,8 @@ class CodexAgent:
             "--model",
             model,
             "--json",
+            "-c",
+            'model_reasoning_summary="detailed"',
             "--enable",
             "unified_exec",
         ]
