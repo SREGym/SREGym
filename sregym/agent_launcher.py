@@ -54,7 +54,9 @@ class AgentLauncher:
         """
         self._agent_kubeconfig_path = kubeconfig_path
 
-    def enable_container_isolation(self, force_build: bool = False, *, k8s_proxy_port: int = 16443):
+    def enable_container_isolation(
+        self, force_build: bool = False, *, k8s_proxy_port: int = 16443, image: str | None = None
+    ):
         """Initialize the container runner and build/check the image."""
         if not self._container_runner:
             config = ContainerConfig(
@@ -66,6 +68,8 @@ class AgentLauncher:
                 harden_container=self._harden_container,
                 k8s_proxy_port=k8s_proxy_port,
             )
+            if image is not None:
+                config.image = image
             self._container_runner = ContainerRunner(config)
             if force_build:
                 self._container_runner.build_image()

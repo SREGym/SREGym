@@ -179,8 +179,13 @@ def test_open_runner_uses_host_appropriate_network(monkeypatch, host_system):
         runner.cleanup_credential_tmps()
 
 
-def test_codex_auth_mount_does_not_expose_writable_host_directory(monkeypatch, tmp_path):
-    codex_dir = tmp_path / ".codex"
+@pytest.mark.parametrize("custom_home", [False, True])
+def test_codex_auth_mount_does_not_expose_writable_host_directory(monkeypatch, tmp_path, custom_home):
+    codex_dir = tmp_path / ("selected-profile" if custom_home else ".codex")
+    if custom_home:
+        monkeypatch.setenv("CODEX_HOME", str(codex_dir))
+    else:
+        monkeypatch.delenv("CODEX_HOME", raising=False)
     codex_dir.mkdir()
     (codex_dir / "auth.json").write_text('{"tokens": {}}')
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -193,6 +198,7 @@ def test_codex_auth_mount_does_not_expose_writable_host_directory(monkeypatch, t
         mount = args[args.index("-v") + 1]
         host_path, container_path, mode = mount.split(":")
         assert Path(host_path).name == "auth.json"
+        assert Path(host_path).read_text() == (codex_dir / "auth.json").read_text()
         assert container_path == "/root/.codex/auth.json"
         assert mode == "ro"
     finally:
