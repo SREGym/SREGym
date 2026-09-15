@@ -72,11 +72,7 @@ SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/)
 **Note:** If you run into pod crashes or "too many open files" errors, see the [kind README](./kind/README.md) for required host kernel settings and troubleshooting.
 
 ```bash
-# For x86 machines
-bash kind/setup_kind_cluster.sh x86
-
-# For ARM machines
-bash kind/setup_kind_cluster.sh arm
+bash kind/setup_kind_cluster.sh
 ```
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
