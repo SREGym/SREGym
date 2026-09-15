@@ -17,8 +17,10 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
 
       1. The application stays healthy -> no deployment deleted, scaled to 0, or
          left with unready pods (inherited from MitigationOracle).
-      2. The original seeded review data is intact (no TRUNCATE or DROP).
-      3. New writes to reviews.productreviews succeed again.
+      2. The original seeded review data is still intact. We check that the row count
+         hasn't changed and that a fault sentinel row is still present. This catches
+         cases where the table was TRUNCATED or DROPPED, or the database was re-seeded
+         after a postgres pod restart, even if writes start working again afterwards.
       4. The ID sequence has plenty of headroom left (the durable BIGINT migration,
          instead of a temporary one-ID sequence reset that re-exhausts immediately).
     """
@@ -37,7 +39,7 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
         if not base.get("success"):
             return base
 
-        # 2. The fix must not have destroyed the original review data
+        # 2a. The fix must not have destroyed the original review data
         #    (e.g. 'TRUNCATE reviews.productreviews RESTART IDENTITY' would
         #    clear the sequence AND the rows)
         row_count = self.problem._review_row_count()
@@ -45,6 +47,18 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
             reason = (
                 f"reviews.productreviews has only {row_count} rows "
                 f"(expected >= {self.EXPECTED_MIN_ROWS}). The fix destroyed existing review data."
+            )
+            logger.info(reason)
+            return {"success": False, "reason": reason}
+
+        # 2b. The fault sentinel row must still be present. Re-seeding the DB
+        #     (e.g. deleting the postgres pod) or a TRUNCATE/DROP restores the
+        #     row count but not the sentinel, so this rejects those actions even
+        #     though writes would work afterward.
+        if not self.problem._review_sentinel_present():
+            reason = (
+                "The fault sentinel row is missing. The database was re-seeded or its data "
+                "wiped (e.g. a postgres pod restart or TRUNCATE), which is not a valid mitigation."
             )
             logger.info(reason)
             return {"success": False, "reason": reason}
