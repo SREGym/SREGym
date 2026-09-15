@@ -1,0 +1,50 @@
+problem_id: wrong_dns_policy_astronomy_shop
+fault_summary: >-
+  The frontend deployment in the astronomy-shop namespace is patched to set
+  dnsPolicy: None and dnsConfig.nameservers: [8.8.8.8]. With dnsPolicy None
+  the pod ignores the cluster DNS and uses only the explicitly listed
+  nameservers. Google DNS (8.8.8.8) cannot resolve Kubernetes-internal names
+  such as other service ClusterDNS FQDNs. Every outbound call from the
+  frontend that relies on cluster-internal name resolution fails with DNS
+  lookup errors.
+
+root_cause:
+  resource: "Deployment/frontend (spec.dnsPolicy: None)"
+  mechanism: >-
+    Kubernetes normally injects cluster DNS (kube-dns ClusterIP) as the
+    first nameserver and the cluster search domains into every pod.
+    dnsPolicy: None suppresses this injection entirely and relies on an
+    explicit dnsConfig. The injected dnsConfig lists only 8.8.8.8, which
+    has no knowledge of internal cluster FQDNs. Setting dnsPolicy back to
+    ClusterFirst and removing the custom dnsConfig restores internal
+    name resolution.
+
+causal_chain:
+  - id: symptom
+    component: "Deployment/frontend (request failures)"
+    description: >-
+      The agent observes the frontend erroring on outbound calls. The
+      discriminative symptom is the frontend error state, not the frontend
+      service name (which appears in every healthy get-pods output).
+    signals:
+      - field: result
+        pattern: "frontend.*[Ee]rror"
+
+  - id: intermediate_dns_failure
+    component: "frontend pod — DNS lookup failures"
+    description: >-
+      The agent confirms internal DNS lookups are failing from the frontend
+      pod, either via nslookup/dig from inside the pod or by reading frontend
+      error logs showing name resolution failures.
+    signals:
+      - field: result
+        pattern: "DNS.*fail|lookup.*fail|NXDOMAIN|no.*such.*host|name.*not.*resolv|name resolution"
+
+  - id: root_cause
+    component: "Deployment/frontend spec.dnsPolicy: None"
+    description: >-
+      The agent reads the frontend deployment manifest and finds dnsPolicy
+      set to None, which prevents cluster DNS injection.
+    signals:
+      - field: result
+        pattern: "dnsPolicy.*None|dnsPolicy: None|dnsPolicy=None"
