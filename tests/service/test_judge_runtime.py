@@ -1,5 +1,6 @@
 import json
 import os
+import subprocess
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,8 +9,9 @@ from unittest.mock import Mock
 import pytest
 
 from llm_backend.init_backend import get_llm_backend_for_judge
+from sregym.agent_launcher import AgentLauncher
 from sregym.service import judge_runtime as runtime
-from sregym.service.container_runner import ContainerRunner
+from sregym.service.container_runner import DEFAULT_AGENT_IMAGE, LOCAL_AGENT_IMAGE, ContainerRunner
 
 
 @pytest.fixture(autouse=True)
@@ -96,7 +98,60 @@ def test_main_selects_backend_and_skips_it_for_external_harness(docker, monkeypa
     monkeypatch.setattr(main, "_run_benchmark", run)
     args = SimpleNamespace(judge_backend=backend, use_external_harness=external, force_build=False)
     assert main.main(args) == "finished"
-    run.assert_called_once_with(args, judge_backend="api" if external else backend)
+    selected_backend = "api" if external else backend
+    run.assert_called_once_with(
+        args,
+        judge_backend=selected_backend,
+        agent_image=None if selected_backend == "api" else DEFAULT_AGENT_IMAGE,
+    )
+
+
+@pytest.mark.parametrize("backend,external", [(name, False) for name in runtime.JUDGE_BACKENDS] + [("codex", True)])
+@pytest.mark.parametrize("force_build", [False, True])
+def test_main_image_selection_reuses_one_build(monkeypatch, backend, external, force_build):
+    import main
+
+    class StopBeforeCluster(Exception):
+        pass
+
+    for variable in runtime.AUTH_VARIABLES.values():
+        monkeypatch.setenv(variable, "test-credential")
+    run = Mock(return_value=subprocess.CompletedProcess([], 0))
+    popen = Mock(return_value=Mock())
+    monkeypatch.setattr(runtime.subprocess, "run", run)
+    monkeypatch.setattr(runtime.subprocess, "Popen", popen)
+    monkeypatch.setattr(runtime, "_wait_for_bridge", lambda *_: "http://127.0.0.1:41001/v1")
+    monkeypatch.setattr(main, "init_logger", lambda: None)
+    monkeypatch.setattr(main, "set_profile", lambda _: None)
+    monkeypatch.setattr(main, "run_judge_preflight_check", Mock())
+    monkeypatch.setattr(main, "run_preflight_check", Mock())
+    monkeypatch.setattr(main, "Conductor", Mock(side_effect=StopBeforeCluster))
+    launcher = AgentLauncher()
+    monkeypatch.setattr(main, "LAUNCHER", launcher)
+    args = SimpleNamespace(
+        judge_backend=backend,
+        use_external_harness=external,
+        force_build=force_build,
+        agent="codex",
+        model="gpt-5.6-sol",
+        judge_model=None,
+        internet_access="open",
+        container_hardening="on",
+        profile="full",
+        noise=False,
+        stages=None,
+    )
+    with pytest.raises(StopBeforeCluster):
+        main.main(args)
+
+    expected_image = LOCAL_AGENT_IMAGE if force_build else DEFAULT_AGENT_IMAGE
+    assert launcher._container_runner.config.image == expected_image
+    if backend != "api" and not external:
+        assert popen.call_args.args[0][-2] == expected_image
+    else:
+        popen.assert_not_called()
+    build_calls = [call for call in run.call_args_list if call.args[0][0] == "bash"]
+    assert len(build_calls) == int(force_build)
 
 
 @pytest.mark.parametrize("backend,variable", runtime.AUTH_VARIABLES.items())

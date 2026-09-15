@@ -828,11 +828,11 @@ def _run_driver_and_shutdown(
 def main(args):
     init_logger()
     backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
-    with managed_judge_backend(backend, force_build=args.force_build):
-        return _run_benchmark(args, judge_backend=backend)
+    with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
+        return _run_benchmark(args, judge_backend=backend, agent_image=agent_image)
 
 
-def _run_benchmark(args, *, judge_backend: str = "api"):
+def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None = None):
     global _driver_error, _driver_results
     _driver_error = None
     _driver_results = []
@@ -906,8 +906,10 @@ def _run_benchmark(args, *, judge_backend: str = "api"):
     try:
         if not agent_reg or agent_reg.container_isolation:
             LAUNCHER.enable_container_isolation(
-                force_build=args.force_build and judge_backend == "api",
+                # Reuse the image already prepared for a subscription judge.
+                force_build=args.force_build and agent_image is None,
                 k8s_proxy_port=conductor_config.k8s_proxy_listen_port,
+                image=agent_image,
             )
 
         # Pre-flight check — makes a real (minimal) API call inside the agent

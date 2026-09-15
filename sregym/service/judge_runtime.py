@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from urllib.request import ProxyHandler, build_opener
 
@@ -70,10 +71,10 @@ def _wait_for_bridge(proc: subprocess.Popen, container: str, log_path: Path) -> 
 
 
 @contextlib.contextmanager
-def managed_judge_backend(backend: str = "api", *, force_build: bool = False):
-    """Keep existing endpoint behavior for API runs; manage a CLI bridge when selected."""
+def managed_judge_backend(backend: str = "api", *, force_build: bool = False) -> Iterator[str | None]:
+    """Manage a CLI bridge and yield its prepared image for reuse by the agent."""
     if backend == "api":
-        yield
+        yield None
         return
     if backend not in JUDGE_BACKENDS:
         raise ValueError(f"Unknown judge backend: {backend}")
@@ -115,7 +116,7 @@ def managed_judge_backend(backend: str = "api", *, force_build: bool = False):
             url = _wait_for_bridge(proc, request.container_name, logs / "container.log")
             os.environ["SREGYM_JUDGE_BRIDGE_URL"] = url
             logger.info("Using %s for the judge; CLI logs: %s", backend, logs)
-            yield
+            yield runner.config.image
     finally:
         if previous_url is None:
             os.environ.pop("SREGYM_JUDGE_BRIDGE_URL", None)
