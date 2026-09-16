@@ -24,6 +24,8 @@ init_logger()
 
 from clients.codex.codex_agent import CodexAgent, custom_provider_args  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
+from clients.jev.config import INSTRUCTION as JEV_INSTRUCTION  # noqa: E402
+from clients.jev.config import MODEL_ENV as JEV_MODEL_ENV
 
 logger = logging.getLogger("all.codex.driver")
 
@@ -58,6 +60,13 @@ def run_preflight() -> None:
         "--skip-git-repo-check",
     ]
     command.extend(provider_args)
+    if os.environ.get(JEV_MODEL_ENV):
+        from clients.jev.config import codex_args
+        from clients.jev.server import run_preflight as jev_preflight
+
+        logs = Path(os.environ.get("AGENT_LOGS_DIR", "/logs"))
+        jev_preflight(logs / "jev_preflight.jsonl")
+        command.extend(codex_args(logs))
     reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
     if reasoning_effort:
         command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
@@ -200,6 +209,8 @@ Important:
 - The conductor API is available at {get_api_base_url()}
 """
 
+    if os.environ.get(JEV_MODEL_ENV):
+        instruction += JEV_INSTRUCTION
     logger.info(f"Built instruction:\n{instruction}")
     return instruction
 

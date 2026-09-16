@@ -535,6 +535,11 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
+        # Jev is opt-in; do not expose its credential to ordinary agent/judge runs.
+        if self.config.forward_host_credentials and os.environ.get("AGENT_JEV_MODEL"):
+            env_vars.setdefault("AGENT_JEV_MODEL", os.environ["AGENT_JEV_MODEL"])
+            env_vars.setdefault("TYPESAFE_API_KEY", os.environ.get("TYPESAFE_API_KEY", ""))
+
         env_vars["AGENT_INTERNET_ACCESS"] = self.internet_access_mode
         if self.config.internet_policy.is_filtered:
             if self._egress_proxy_name is None or self._egress_proxy_ca is None or self._egress_ca_bundle is None:

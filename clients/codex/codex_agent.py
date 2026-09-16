@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from clients.harness.token_usage import read_jsonl, token_count, usage_metrics
+from clients.jev.config import codex_args as jev_codex_args
 
 logger = logging.getLogger("all.codex.agent")
 
@@ -334,6 +335,7 @@ class CodexAgent:
             "unified_exec",
         ]
         command.extend(custom_provider_args())
+        command.extend(jev_codex_args(self.logs_dir))
         if os.environ.get("AGENT_INTERNET_ACCESS") == "filtered":
             command.extend(["-c", 'web_search="disabled"'])
             command.extend(["--disable", "apps", "--disable", "plugins"])
