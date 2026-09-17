@@ -56,7 +56,17 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
             logger.info(reason)
             return {"success": False, "reason": reason}
 
-        # 3. Writes must succeed AS THE APPLICATION USER, not just the superuser.
+        # 4. id must still be uniqueness-protected. Dropping the primary key so
+        #    overflowing/duplicate ids are accepted destroys review-id uniqueness.
+        if not p._id_uniqueness_enforced():
+            reason = (
+                "reviews.productreviews.id no longer has a primary key / unique constraint, "
+                "so duplicate ids are accepted. Uniqueness must be preserved."
+            )
+            logger.info(reason)
+            return {"success": False, "reason": reason}
+
+        # 5. Writes must succeed AS THE APPLICATION USER, not just the superuser.
         status = p._review_write_status()
         if status != "ok":
             cause = {

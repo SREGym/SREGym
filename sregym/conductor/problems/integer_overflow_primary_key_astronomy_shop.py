@@ -335,6 +335,25 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
             return False, "original review contents were modified"
         return True, "intact"
 
+    def _id_uniqueness_enforced(self) -> bool:
+        """True if a single-column PRIMARY KEY / UNIQUE constraint still covers id.
+
+        Dropping the primary key so that overflowing/duplicate ids "work" is not a
+        valid fix -- review ids must stay unique.
+        """
+        sql = (
+            "SELECT count(*) FROM pg_constraint c "
+            "WHERE c.conrelid = 'reviews.productreviews'::regclass "
+            "AND c.contype IN ('p', 'u') "
+            "AND c.conkey = ARRAY[(SELECT attnum FROM pg_attribute "
+            "WHERE attrelid = 'reviews.productreviews'::regclass AND attname = 'id')];"
+        )
+        out = self._psql_super(sql, tuples_only=True).strip()
+        try:
+            return int(out.splitlines()[-1].strip()) >= 1
+        except (ValueError, IndexError):
+            return False
+
     def _namespace_exists(self) -> bool:
         """True if the problem's app namespace currently exists"""
 
