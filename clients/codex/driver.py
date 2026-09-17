@@ -26,6 +26,7 @@ from clients.codex.codex_agent import CodexAgent, custom_provider_args  # noqa: 
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 from clients.jev.config import INSTRUCTION as JEV_INSTRUCTION  # noqa: E402
 from clients.jev.config import MODEL_ENV as JEV_MODEL_ENV
+from clients.jev.config import SUBMISSION_INSTRUCTION as JEV_SUBMISSION_INSTRUCTION
 
 logger = logging.getLogger("all.codex.driver")
 
@@ -163,6 +164,23 @@ def build_instruction(app_info: dict) -> str:
     app_name = app_info.get("app_name", "unknown")
     namespace = app_info.get("namespace", "default")
     descriptions = app_info.get("descriptions", "")
+    submission_instruction = (
+        JEV_SUBMISSION_INSTRUCTION
+        if os.environ.get(JEV_MODEL_ENV)
+        else f"""HOW TO SUBMIT:
+
+The submission endpoint is: {get_api_base_url()}/submit
+
+For DIAGNOSIS stage:
+- Submit with a natural language description of the issue
+- Example: POST {get_api_base_url()}/submit with JSON: {{"solution": "The frontend service is crashing due to missing environment variable"}}
+
+For MITIGATION stage:
+- After applying your fix, YOU MUST submit with an EMPTY STRING
+- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
+- This submission is MANDATORY - the conductor needs it to validate your fix
+"""
+    ).rstrip("\n")
 
     # Build instruction similar to how it would be done in Harbor
     instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
@@ -190,18 +208,7 @@ TASK 2: MITIGATION
 - Your mitigation is evaluated on whether the application is healthy after your changes
 - Your fix is also evaluated on whether it addresses the root cause, not just the symptoms
 
-HOW TO SUBMIT:
-
-The submission endpoint is: {get_api_base_url()}/submit
-
-For DIAGNOSIS stage:
-- Submit with a natural language description of the issue
-- Example: POST {get_api_base_url()}/submit with JSON: {{"solution": "The frontend service is crashing due to missing environment variable"}}
-
-For MITIGATION stage:
-- After applying your fix, YOU MUST submit with an EMPTY STRING
-- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
-- This submission is MANDATORY - the conductor needs it to validate your fix
+{submission_instruction}
 
 Important:
 - You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'
