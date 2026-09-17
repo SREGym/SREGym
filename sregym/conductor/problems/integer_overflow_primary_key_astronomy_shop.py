@@ -242,32 +242,57 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
         except (ValueError, IndexError):
             return -1
 
-    def _review_id_headroom(self) -> int:
+    def _resolve_id_sequence(self) -> str | None:
+        """Sequence currently backing reviews.productreviews.id, resolved live.
+
+        Uses pg_get_serial_sequence so a correct repair that renames the sequence
+        is still handled. Returns None if the column has no owned sequence.
         """
-        Number of IDs remaining before the identity sequence hits its limit (seqmax - last_value).
+        out = self._psql_super(
+            "SELECT pg_get_serial_sequence('reviews.productreviews', 'id');", tuples_only=True
+        ).strip()
+        name = out.splitlines()[-1].strip() if out else ""
+        return name or None
 
-        This should be a very large number after a BIGINT migration. If it's still tiny,
-        the sequence was probably just reset instead of being fixed correctly.
+    def _id_sequence_capacity(self) -> dict | None:
+        """Direction-aware capacity of the id sequence.
 
-        This helps the check make sure that the sequence was fixed properly, instead of
-        only verifying that one insert happened to work.
-
-        Returns -1 if the value can't be read.
+        Returns a dict with:
+            headroom       - ids left before the sequence's own bound, honoring the
+                             sequence direction (ascending: seqmax-last_value;
+                             descending: last_value-seqmin)
+            collision_free - the sequence is positioned past every id already in the
+                             table (ascending: last_value >= max(id); descending:
+                             last_value <= min(id)), so its next values will not
+                             duplicate an existing id
+            cycle          - whether the sequence wraps (which would reuse ids)
+        or None if the id column has no resolvable sequence.
         """
+        seq = self._resolve_id_sequence()
+        if seq is None:
+            return None
         sql = (
-            f"SELECT (SELECT seqmax FROM pg_sequence WHERE seqrelid = '{self.SEQUENCE}'::regclass) "
-            f"- (SELECT last_value FROM {self.SEQUENCE});"
+            "SELECT s.seqincrement, s.seqmax, s.seqmin, s.seqcycle, "
+            f"(SELECT last_value FROM {seq}), "
+            "COALESCE((SELECT max(id) FROM reviews.productreviews), 0), "
+            "COALESCE((SELECT min(id) FROM reviews.productreviews), 0) "
+            f"FROM pg_sequence s WHERE s.seqrelid = '{seq}'::regclass;"
         )
-        cmd = (
-            f"kubectl exec -n {self.namespace} deploy/{self.POSTGRES_DEPLOY} -- "
-            f"env PGPASSWORD=otel psql -U {self.PG_SUPERUSER} -d {self.PG_DB} "
-            f'-tA -c "{sql}"'
-        )
-        out = self.kubectl.exec_command(cmd).strip()
+        out = self._psql_super(sql, tuples_only=True).strip()
         try:
-            return int(out.splitlines()[-1].strip())
+            fields = out.splitlines()[-1].strip().split("|")
+            increment, seqmax, seqmin = int(fields[0]), int(fields[1]), int(fields[2])
+            cycle = fields[3] == "t"
+            last_value, max_id, min_id = int(fields[4]), int(fields[5]), int(fields[6])
         except (ValueError, IndexError):
-            return -1
+            return None
+        if increment >= 0:
+            headroom = seqmax - last_value
+            collision_free = last_value >= max_id
+        else:
+            headroom = last_value - seqmin
+            collision_free = last_value <= min_id
+        return {"headroom": headroom, "collision_free": collision_free, "cycle": cycle}
 
     def _psql_super(self, query: str, tuples_only: bool = False) -> str:
         """Run a read/DDL query as the postgres superuser and return its output.

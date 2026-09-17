@@ -78,18 +78,35 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
             logger.info(reason)
             return {"success": False, "reason": reason}
 
-        # 4. The durable BIGINT migration
-        headroom = self.problem._review_id_headroom()
-        if headroom < self.MIN_ID_HEADROOM:
+        # 6. The sequence must have real, collision-free headroom and not cycle.
+        cap = p._id_sequence_capacity()
+        if cap is None:
+            reason = "Could not resolve the identity sequence backing reviews.productreviews.id."
+            logger.info(reason)
+            return {"success": False, "reason": reason}
+        if cap["cycle"]:
+            reason = "The id sequence is set to CYCLE, so ids will eventually be reused."
+            logger.info(reason)
+            return {"success": False, "reason": reason}
+        if not cap["collision_free"]:
             reason = (
-                f"Writes succeed but the id sequence has only {headroom} ids left "
-                f"(require >= {self.MIN_ID_HEADROOM}); widen the id column and sequence to "
-                "BIGINT rather than resetting the sequence."
+                "The id sequence is positioned to hand out ids that already exist "
+                "(a reset toward occupied ids), which will collide on the next inserts."
+            )
+            logger.info(reason)
+            return {"success": False, "reason": reason}
+        if cap["headroom"] < self.MIN_ID_HEADROOM:
+            reason = (
+                f"Writes succeed but the id sequence has only {cap['headroom']} collision-free ids "
+                f"left (require >= {self.MIN_ID_HEADROOM}); widen the id column and sequence to BIGINT "
+                "rather than resetting the sequence."
             )
             logger.info(reason)
             return {"success": False, "reason": reason}
 
         logger.info(
-            "App is healthy, review data is intact, writes are working again, and the ID sequence has plenty of headroom. Mitigation accepted!"
+            "App healthy, original reviews intact, marker present, id uniqueness enforced, "
+            "application-user writes working, and the sequence has durable collision-free headroom. "
+            "Mitigation accepted!"
         )
         return {"success": True}
