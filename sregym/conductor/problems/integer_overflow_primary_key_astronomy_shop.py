@@ -39,11 +39,17 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
     SEQUENCE = "reviews.productreviews_id_seq"
     INT4_MAX = 2147483647
 
-    # Marker row inserted when the fault is triggered. A proper fix should leave it
-    # untouched. If the database is re-seeded (for example, by deleting the postgres
-    # pod) or the table is TRUNCATED, this row disappears allowing the oracle to
-    # reject those as invalid mitigations.
-    SENTINEL_MARKER = "seq_overflow_sentinel"
+    # A marker review inserted at fault-injection time, disguised as a genuine
+    # review (a real product_id, a plausible handle, an ordinary blurb) so an
+    # agent scanning the table cannot single it out and preserve it. The oracle
+    # matches it by content. A DB re-seed (postgres pod restart), TRUNCATE or DROP
+    # restores the seeded rows but not this one, so its absence flags them.
+    SENTINEL_PRODUCT_ID = "OLJCESPC7Z"
+    SENTINEL_USERNAME = "orion_hunter"
+    SENTINEL_DESCRIPTION = (
+        "Crisp optics and a rock-steady mount. Tracked Saturn for an hour and the rings were razor sharp."
+    )
+    SENTINEL_SCORE = "4.5"
 
     def __init__(self):
         super().__init__(app=AstronomyShop())
@@ -88,13 +94,12 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
         # neither deleted nor rewrote them.
         self._baseline_review_ids, self._baseline_review_sig = self._capture_review_baseline()
 
-        # Insert a sentinel row while the sequence is still healthy.
-        # re-seeding the DB (deleting the postgres pod) or TRUNCATE wipes it,
-        # so the oracle can reject those actions.
-        self._run_sql(
-            "INSERT INTO reviews.productreviews (product_id, username, description, score) "
-            f"VALUES ('SENTINEL', '{self.SENTINEL_MARKER}', 'fault marker row; do not delete', 5.0);"
-        )
+        # Insert a marker review while the sequence is still healthy. It looks
+        # like an ordinary review so an agent cannot spot and preserve it
+        # specifically; the oracle matches it by content. Re-seeding the DB
+        # (deleting the postgres pod), TRUNCATE or DROP restores the seeded rows
+        # but not this one, so the oracle can reject those actions.
+        self._insert_sentinel_row()
 
         # Pin the identity sequence at INT4 max (is_called=true) so the very next
         # nextval() overflows and product-review writes start failing
@@ -195,20 +200,30 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
             return "collision"
         return "other"
 
+    def _insert_sentinel_row(self) -> None:
+        """Insert the disguised marker review (the oracle matches it by content)."""
+        self._run_sql(
+            "INSERT INTO reviews.productreviews (product_id, username, description, score) "
+            f"VALUES ('{self.SENTINEL_PRODUCT_ID}', '{self.SENTINEL_USERNAME}', "
+            f"'{self.SENTINEL_DESCRIPTION}', {self.SENTINEL_SCORE});"
+        )
+
     def _review_sentinel_present(self) -> bool:
         """
-        True if the fault sentinel row is still present.
+        True if the marker review injected with the fault is still present.
 
-        Injected while the sequence was healthy. A real fix should preserve it.
-        If this row disappears, the DB was likely reset or wiped, so the 'fix'
-        is rejected because it destroyed the existing data.
+        Matched by its (disguised, normal-looking) content rather than any
+        tell-tale text or its id. Content matching is what makes this re-seed
+        proof: a re-seed restores the original rows and its fresh sequence can
+        re-issue the marker's old id to a brand-new writer row, so an id-only
+        check would be fooled -- but no re-seeded or app-written row carries this
+        exact username+description. A real fix leaves the row untouched.
         """
-        cmd = (
-            f"kubectl exec -n {self.namespace} deploy/{self.POSTGRES_DEPLOY} -- "
-            f"env PGPASSWORD=otel psql -U {self.PG_SUPERUSER} -d {self.PG_DB} "
-            f"-tA -c \"SELECT count(*) FROM reviews.productreviews WHERE username = '{self.SENTINEL_MARKER}';\""
-        )
-        out = self.kubectl.exec_command(cmd).strip()
+        out = self._psql_super(
+            "SELECT count(*) FROM reviews.productreviews "
+            f"WHERE username = '{self.SENTINEL_USERNAME}' AND description = '{self.SENTINEL_DESCRIPTION}';",
+            tuples_only=True,
+        ).strip()
         try:
             return int(out.splitlines()[-1].strip()) >= 1
         except (ValueError, IndexError):

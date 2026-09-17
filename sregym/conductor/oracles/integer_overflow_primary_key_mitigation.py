@@ -46,13 +46,11 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
             logger.info(reason)
             return {"success": False, "reason": reason}
 
-        # 2b. The fault sentinel row must still be present. Re-seeding the DB
-        #     (e.g. deleting the postgres pod) or a TRUNCATE/DROP restores the
-        #     row count but not the sentinel, so this rejects those actions even
-        #     though writes would work afterward.
-        if not self.problem._review_sentinel_present():
+        # 3. The injected marker review must still be present. Its absence means the
+        #    data was re-seeded or wiped (postgres pod restart / TRUNCATE / DROP).
+        if not p._review_sentinel_present():
             reason = (
-                "The fault sentinel row is missing. The database was re-seeded or its data "
+                "The injected marker review is missing. The database was re-seeded or "
                 "wiped (e.g. a postgres pod restart or TRUNCATE), which is not a valid mitigation."
             )
             logger.info(reason)
