@@ -27,8 +27,6 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
 
     # A durable fix leaves plenty of ids.
     MIN_ID_HEADROOM = 2147483647 // 2  # 1.07B ids
-    # init.sql seeds 50 reviews, so a valid fix must not delete them.
-    EXPECTED_MIN_ROWS = 50
 
     def evaluate(self) -> dict:
         print("--- Mitigation Evaluation (product-reviews integer overflow) ---")
@@ -40,15 +38,11 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
         if not base.get("success"):
             return base
 
-        # 2a. The fix must not have destroyed the original review data
-        #    (e.g. 'TRUNCATE reviews.productreviews RESTART IDENTITY' would
-        #    clear the sequence AND the rows)
-        row_count = self.problem._review_row_count()
-        if row_count < self.EXPECTED_MIN_ROWS:
-            reason = (
-                f"reviews.productreviews has only {row_count} rows "
-                f"(expected >= {self.EXPECTED_MIN_ROWS}). The fix destroyed existing review data."
-            )
+        # 2. The original seeded reviews must survive intact -- not deleted, not
+        #    overwritten, not swapped out for fresh padding rows.
+        intact, detail = p._original_reviews_intact()
+        if not intact:
+            reason = f"The original seeded reviews were not preserved: {detail}."
             logger.info(reason)
             return {"success": False, "reason": reason}
 

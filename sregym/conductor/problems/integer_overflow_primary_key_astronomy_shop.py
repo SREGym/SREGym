@@ -52,6 +52,11 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
         self.problem_id = "integer_overflow_primary_key_astronomy_shop"
         self.faulty_service = ["product-reviews"]
 
+        # Captured at fault-injection time so the mitigation oracle can verify the
+        # original seeded reviews survived intact.
+        self._baseline_review_ids: list[int] | None = None
+        self._baseline_review_sig: str | None = None
+
         # Starts a review-submission workload during fault injection so write failures
         # come from the application user, not just the oracle's checks.
         self.writer_manifest = os.path.join(os.path.dirname(__file__), "manifests", "review_writer.yaml")
@@ -77,6 +82,11 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
     @mark_fault_injected
     def inject_fault(self) -> bool:
         logger.info("Injecting integer-overflow (sequence exhaustion) fault...")
+
+        # Snapshot the original seeded reviews (their ids + a content signature)
+        # while the table is pristine, so the oracle can later confirm a "fix"
+        # neither deleted nor rewrote them.
+        self._baseline_review_ids, self._baseline_review_sig = self._capture_review_baseline()
 
         # Insert a sentinel row while the sequence is still healthy.
         # re-seeding the DB (deleting the postgres pod) or TRUNCATE wipes it,
@@ -243,6 +253,72 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
             return int(out.splitlines()[-1].strip())
         except (ValueError, IndexError):
             return -1
+
+    def _psql_super(self, query: str, tuples_only: bool = False) -> str:
+        """Run a read/DDL query as the postgres superuser and return its output.
+
+        Unlike _run_sql this does not raise on a non-zero exit, so callers can
+        inspect error text (permission denied, duplicate key, ...). Pass
+        tuples_only=True (-tA) for bare scalar/column output.
+        """
+        flags = "-tA " if tuples_only else ""
+        cmd = (
+            f"kubectl exec -n {self.namespace} deploy/{self.POSTGRES_DEPLOY} -- "
+            f'env PGPASSWORD=otel psql -U {self.PG_SUPERUSER} -d {self.PG_DB} {flags}-c "{query}"'
+        )
+        return self.kubectl.exec_command(cmd)
+
+    def _review_data_signature(self, ids: list[int]) -> str:
+        """md5 over (id, product_id, username, description, score) of the given rows.
+
+        A stable fingerprint of specific review rows: deleting or editing any of
+        them changes it. Empty string if ``ids`` is empty.
+        """
+        if not ids:
+            return ""
+        id_list = ",".join(str(i) for i in ids)
+        sql = (
+            "SELECT md5(COALESCE(string_agg("
+            "id || '|' || product_id || '|' || username || '|' || COALESCE(description, '') || '|' || score, "
+            "',' ORDER BY id), '')) "
+            f"FROM reviews.productreviews WHERE id IN ({id_list});"
+        )
+        out = self._psql_super(sql, tuples_only=True).strip()
+        return out.splitlines()[-1].strip() if out else ""
+
+    def _capture_review_baseline(self) -> tuple[list[int], str]:
+        """Snapshot the ids and content signature of the reviews present now.
+
+        Called at inject time while the table still holds only the original seed,
+        so the oracle can later confirm those rows survived a candidate fix.
+        """
+        out = self._psql_super("SELECT id FROM reviews.productreviews ORDER BY id;", tuples_only=True)
+        ids = [int(line.strip()) for line in out.splitlines() if line.strip().lstrip("-").isdigit()]
+        return ids, self._review_data_signature(ids)
+
+    def _original_reviews_intact(self) -> tuple[bool, str]:
+        """True if every originally seeded review still exists unchanged.
+
+        Guards against a "fix" that deletes the seeded reviews and pads the table
+        back up with fresh rows: the baseline ids would be missing or their
+        content signature would differ. Returns (ok, human-readable detail).
+        """
+        if not self._baseline_review_ids:
+            return True, "no baseline captured"
+        expected = len(self._baseline_review_ids)
+        id_list = ",".join(str(i) for i in self._baseline_review_ids)
+        out = self._psql_super(
+            f"SELECT count(*) FROM reviews.productreviews WHERE id IN ({id_list});", tuples_only=True
+        ).strip()
+        try:
+            present = int(out.splitlines()[-1].strip())
+        except (ValueError, IndexError):
+            return False, "could not read the reviews table"
+        if present != expected:
+            return False, f"{expected - present} of {expected} original reviews are gone"
+        if self._review_data_signature(self._baseline_review_ids) != self._baseline_review_sig:
+            return False, "original review contents were modified"
+        return True, "intact"
 
     def _namespace_exists(self) -> bool:
         """True if the problem's app namespace currently exists"""
