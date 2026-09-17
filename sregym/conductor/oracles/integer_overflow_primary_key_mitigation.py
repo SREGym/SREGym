@@ -7,39 +7,55 @@ logger = logging.getLogger(__name__)
 
 class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
     """
-    Mitigation oracle for the integer-overflow primary-key problem:
+    Mitigation oracle for the integer-overflow primary-key problem.
 
-    The default pod-health oracle isn't enough here because the application can
-    keep running even after the ID sequence is exhausted. This oracle adds a few
-    database checks to make sure the fix actually solves the problem.
+    The default pod-health oracle isn't enough here because product-reviews keeps
+    running even after the ID sequence is exhausted. This oracle adds a set of
+    database checks to make sure the mitigation actually fixes the problem, rather
+    than just making the symptoms disappear.
 
     A mitigation only passes if all of the following are true:
 
       1. The application stays healthy -> no deployment deleted, scaled to 0, or
          left with unready pods (inherited from MitigationOracle).
-      2. The original seeded review data is still intact. We check that the row count
-         hasn't changed and that a fault sentinel row is still present. This catches
-         cases where the table was TRUNCATED or DROPPED, or the database was re-seeded
-         after a postgres pod restart, even if writes start working again afterwards.
-      4. The ID sequence has plenty of headroom left (the durable BIGINT migration,
-         instead of a temporary one-ID sequence reset that re-exhausts immediately).
+      2. The original seeded review data is still intact. Deleting the data and
+         recreating enough rows to match the original count is rejected (verified
+         using the original primary keys and a content signature captured during
+         fault injection).
+      3. The marker review inserted during fault injection is still present. This
+         catches database re-seeds (for example, restarting the postgres pod) as
+         well as TRUNCATE or DROP, which restore the data but not the marker row.
+      4. The `id` column is still protected by its original PRIMARY KEY/UNIQUE
+         constraint. Simply dropping the constraint so duplicate or overflowing IDs
+         are accepted is not considered as a valid fix.
+      5. A review can be inserted as the application user (`otelu`). Fixing the
+         sequence as a superuser isn't enough if the application's normal write path
+         is still broken (for example, if INSERT privileges were removed).
+      6. The ID sequence has plenty of safe headroom, doesn't cycle, can't generate
+         values outside the column's type, and won't hand out IDs that already exist.
+         This accepts a proper BIGINT migration (or other genuinely durable fixes,
+         like descending sequence using the unused negative range) while rejecting
+         quick fixes like resetting the sequence, widening only the sequence while
+         leaving the column as INTEGER, or any repair that would eventually collide
+         with existing IDs. The sequence is resolved dynamically using
+         `pg_get_serial_sequence`, so renaming it after a valid repair still passes.
+
     """
 
     # A durable fix leaves plenty of ids.
-    MIN_ID_HEADROOM = 2147483647 // 2  # 1.07B ids
+    MIN_ID_HEADROOM = 2147483647 // 2  # 1.07B
 
     def evaluate(self) -> dict:
         print("--- Mitigation Evaluation (product-reviews integer overflow) ---")
         p = self.problem
 
         # 1. Application health first: reject "fixes" that repair the database but
-        #    break the service (deployment deleted, scaled to 0, or pods not ready)
+        #    break the service (deployment deleted, scaled to 0, or pods not ready).
         base = super().evaluate()
         if not base.get("success"):
             return base
 
-        # 2. The original seeded reviews must survive intact -- not deleted, not
-        #    overwritten, not swapped out for fresh padding rows.
+        # 2. The fix must not have destroyed the original review data
         intact, detail = p._original_reviews_intact()
         if not intact:
             reason = f"The original seeded reviews were not preserved: {detail}."
@@ -47,21 +63,21 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
             return {"success": False, "reason": reason}
 
         # 3. The injected marker review must still be present. Its absence means the
-        #    data was re-seeded or wiped (postgres pod restart / TRUNCATE / DROP).
+        #    data was either re-seeded or wiped (postgres pod restart / TRUNCATE / DROP).
         if not p._review_sentinel_present():
             reason = (
                 "The injected marker review is missing. The database was re-seeded or "
-                "wiped (e.g. a postgres pod restart or TRUNCATE), which is not a valid mitigation."
+                "wiped (e.g. a postgres pod restart or TRUNCATE), which is not a valid mitigation"
             )
             logger.info(reason)
             return {"success": False, "reason": reason}
 
         # 4. id must still be uniqueness-protected. Dropping the primary key so
-        #    overflowing/duplicate ids are accepted destroys review-id uniqueness.
+        #    overflowing/duplicate ids are accepted, destroys review-id uniqueness.
         if not p._id_uniqueness_enforced():
             reason = (
                 "reviews.productreviews.id no longer has a primary key / unique constraint, "
-                "so duplicate ids are accepted. Uniqueness must be preserved."
+                "so duplicate ids are accepted. Uniqueness must be preserved"
             )
             logger.info(reason)
             return {"success": False, "reason": reason}
@@ -74,27 +90,40 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
                 "denied": "the application user (otelu) can no longer INSERT; the write path is still broken",
                 "collision": "writes collide with existing ids (the sequence hands out ids that are already used)",
             }.get(status, f"a write by the application user did not succeed (status={status})")
-            reason = f"A review write did not succeed: {cause}."
+
+            reason = f"A review write did not succeed: {cause}"
             logger.info(reason)
             return {"success": False, "reason": reason}
 
         # 6. The sequence must have real, collision-free headroom and not cycle.
         cap = p._id_sequence_capacity()
         if cap is None:
-            reason = "Could not resolve the identity sequence backing reviews.productreviews.id."
+            reason = "Could not resolve the identity sequence backing reviews.productreviews.id"
             logger.info(reason)
             return {"success": False, "reason": reason}
-        if cap["cycle"]:
-            reason = "The id sequence is set to CYCLE, so ids will eventually be reused."
-            logger.info(reason)
-            return {"success": False, "reason": reason}
-        if not cap["collision_free"]:
+
+        if not cap["fits_column"]:
             reason = (
-                "The id sequence is positioned to hand out ids that already exist "
-                "(a reset toward occupied ids), which will collide on the next inserts."
+                "The id sequence can generate values beyond the id column's type range, so the new ids "
+                "overflow the column and are silently stored corrupted (e.g. widening the sequence to "
+                "BIGINT without widening the id column). Widen the id column to match the sequence"
             )
             logger.info(reason)
             return {"success": False, "reason": reason}
+
+        if cap["cycle"]:
+            reason = "The id sequence is set to CYCLE, so ids will eventually be reused"
+            logger.info(reason)
+            return {"success": False, "reason": reason}
+
+        if not cap["collision_free"]:
+            reason = (
+                "The id sequence is positioned to hand out ids that already exist "
+                "(a reset toward occupied ids), which will collide on the next inserts"
+            )
+            logger.info(reason)
+            return {"success": False, "reason": reason}
+
         if cap["headroom"] < self.MIN_ID_HEADROOM:
             reason = (
                 f"Writes succeed but the id sequence has only {cap['headroom']} collision-free ids "
@@ -105,8 +134,8 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
             return {"success": False, "reason": reason}
 
         logger.info(
-            "App healthy, original reviews intact, marker present, id uniqueness enforced, "
-            "application-user writes working, and the sequence has durable collision-free headroom. "
+            "App is healthy, original reviews intact, marker present, id uniqueness enforced, "
+            "application-user writes are working again, and the sequence has durable collision-free headroom"
             "Mitigation accepted!"
         )
         return {"success": True}

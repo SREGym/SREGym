@@ -32,18 +32,20 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
     POSTGRES_DEPLOY = "postgresql"
 
     PG_SUPERUSER = "root"
-    # The application role product-reviews connects as (see postgresql/init.sql).
+    # The application role product-reviews connects as,
     PG_APP_USER = "otelu"
     PG_APP_PASSWORD = "otelp"
     PG_DB = "otel"
     SEQUENCE = "reviews.productreviews_id_seq"
     INT4_MAX = 2147483647
 
-    # A marker review inserted at fault-injection time, disguised as a genuine
-    # review (a real product_id, a plausible handle, an ordinary blurb) so an
-    # agent scanning the table cannot single it out and preserve it. The oracle
-    # matches it by content. A DB re-seed (postgres pod restart), TRUNCATE or DROP
-    # restores the seeded rows but not this one, so its absence flags them.
+    # Marker review inserted when the fault is injected. It looks like a normal
+    # review like a real product ID, a believable username, and an ordinary review
+    # message, so it can't be easily identified and preserved. The oracle matches it
+    # by its original content. If the database is re-seeded (for example, by
+    # restarting the postgres pod) or the table is TRUNCATED or DROPPED, the seeded
+    # reviews come back but this one doesn't, which lets the oracle catch those
+    # "fixes."
     SENTINEL_PRODUCT_ID = "OLJCESPC7Z"
     SENTINEL_USERNAME = "orion_hunter"
     SENTINEL_DESCRIPTION = (
@@ -89,14 +91,14 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
     def inject_fault(self) -> bool:
         logger.info("Injecting integer-overflow (sequence exhaustion) fault...")
 
-        # Snapshot the original seeded reviews (their ids + a content signature)
-        # while the table is pristine, so the oracle can later confirm a "fix"
-        # neither deleted nor rewrote them.
+        # Capture the original seeded reviews (their IDs and a content signature) while
+        # the table is still untouched. Later, the oracle uses this to verify that a
+        # "fix" didn't delete or modify the original data
         self._baseline_review_ids, self._baseline_review_sig = self._capture_review_baseline()
 
         # Insert a marker review while the sequence is still healthy. It looks
         # like an ordinary review so an agent cannot spot and preserve it
-        # specifically; the oracle matches it by content. Re-seeding the DB
+        # specifically, the oracle matches it by content. Re-seeding the DB
         # (deleting the postgres pod), TRUNCATE or DROP restores the seeded rows
         # but not this one, so the oracle can reject those actions.
         self._insert_sentinel_row()
@@ -164,14 +166,14 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
         Probe whether reviews.productreviews accepts a write FROM THE APPLICATION
         USER (otelu), without persisting a row.
 
-        The probe connects as otelu -- the same role product-reviews uses -- rather
+        The probe connects as otelu (the same role product-reviews uses) rather
         than the superuser, so a "fix" that repairs the sequence as root while the
         app user's write path stays broken (for example its INSERT privilege was
         revoked) is still caught. The INSERT runs inside a rolled-back transaction,
         so a successful probe leaves no data. Returns one of:
             "ok"        - the insert succeeded
-            "exhausted" - the id sequence overflowed / has no room left
-            "denied"    - otelu lacks privilege to insert (write path still broken)
+            "exhausted" - the insert failed because the id sequence overflowed
+            "denied"    - otelu lacks the privilege to insert (write path still broken)
             "collision" - the insert hit a duplicate id (sequence over occupied ids)
             "other"     - some other failure (postgres restarting, table missing, ...)
         """
@@ -190,6 +192,7 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
         )
 
         out = self.kubectl.exec_command(cmd).lower()
+
         if "insert 0 1" in out:
             return "ok"
         if "reached maximum value of sequence" in out or "integer out of range" in out:
@@ -201,7 +204,8 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
         return "other"
 
     def _insert_sentinel_row(self) -> None:
-        """Insert the disguised marker review (the oracle matches it by content)."""
+        """Insert the disguised marker review (the oracle matches it by content)"""
+
         self._run_sql(
             "INSERT INTO reviews.productreviews (product_id, username, description, score) "
             f"VALUES ('{self.SENTINEL_PRODUCT_ID}', '{self.SENTINEL_USERNAME}', "
@@ -212,18 +216,19 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
         """
         True if the marker review injected with the fault is still present.
 
-        Matched by its (disguised, normal-looking) content rather than any
-        tell-tale text or its id. Content matching is what makes this re-seed
-        proof: a re-seed restores the original rows and its fresh sequence can
-        re-issue the marker's old id to a brand-new writer row, so an id-only
-        check would be fooled -- but no re-seeded or app-written row carries this
-        exact username+description. A real fix leaves the row untouched.
+        # The oracle identifies the marker by its original content, not by its ID or
+        # any obvious marker text. This makes it resilient to database re-seeds. After
+        # a re-seed, the sequence starts over and may reuse the marker's old ID for a
+        # completely different review, so checking only the ID could be fooled. The
+        # original username and review text, however, won't come back unless the marker
+        # row itself was preserved. A real fix leaves the row untouched.
         """
         out = self._psql_super(
             "SELECT count(*) FROM reviews.productreviews "
             f"WHERE username = '{self.SENTINEL_USERNAME}' AND description = '{self.SENTINEL_DESCRIPTION}';",
             tuples_only=True,
         ).strip()
+
         try:
             return int(out.splitlines()[-1].strip()) >= 1
         except (ValueError, IndexError):
@@ -237,10 +242,21 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
             f'-tA -c "SELECT count(*) FROM reviews.productreviews;"'
         )
         out = self.kubectl.exec_command(cmd).strip()
+
         try:
             return int(out.splitlines()[-1].strip())
         except (ValueError, IndexError):
             return -1
+
+    def _id_column_type(self) -> str:
+        """The SQL type of reviews.productreviews.id, e.g. 'integer' or 'bigint'"""
+
+        out = self._psql_super(
+            "SELECT data_type FROM information_schema.columns "
+            "WHERE table_schema = 'reviews' AND table_name = 'productreviews' AND column_name = 'id';",
+            tuples_only=True,
+        ).strip()
+        return out.splitlines()[-1].strip() if out else ""
 
     def _resolve_id_sequence(self) -> str | None:
         """Sequence currently backing reviews.productreviews.id, resolved live.
@@ -248,6 +264,7 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
         Uses pg_get_serial_sequence so a correct repair that renames the sequence
         is still handled. Returns None if the column has no owned sequence.
         """
+
         out = self._psql_super(
             "SELECT pg_get_serial_sequence('reviews.productreviews', 'id');", tuples_only=True
         ).strip()
@@ -255,22 +272,31 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
         return name or None
 
     def _id_sequence_capacity(self) -> dict | None:
-        """Direction-aware capacity of the id sequence.
-
-        Returns a dict with:
-            headroom       - ids left before the sequence's own bound, honoring the
-                             sequence direction (ascending: seqmax-last_value;
-                             descending: last_value-seqmin)
-            collision_free - the sequence is positioned past every id already in the
-                             table (ascending: last_value >= max(id); descending:
-                             last_value <= min(id)), so its next values will not
-                             duplicate an existing id
-            cycle          - whether the sequence wraps (which would reuse ids)
-        or None if the id column has no resolvable sequence.
         """
+        Returns information about how much usable space is left in the ID sequence.
+
+        The result includes:
+            headroom       - How many IDs the sequence can still generate before reaching
+                             its own limit, taking the sequence direction into account
+                             (ascending: seqmax - last_value; descending: last_value - seqmin)
+            collision_free - Whether the sequence has already moved past every existing
+                             ID in the table, so the next generated IDs won't collide
+                             with rows that already exist
+            cycle          - Whether the sequence is configured to wrap around after
+                             reaching its limit, which would eventually reuse IDs
+            fits_column    - Whether the sequence's full range fits within the ID
+                             column's type. For example, widening the sequence to
+                             BIGINT while leaving the column as INTEGER lets nextval
+                             exceed int4 and the value silently wraps to a corrupt
+                             (negative) id on insert
+
+            Returns None if the ID column isn't backed by a resolvable sequence.
+        """
+
         seq = self._resolve_id_sequence()
         if seq is None:
             return None
+
         sql = (
             "SELECT s.seqincrement, s.seqmax, s.seqmin, s.seqcycle, "
             f"(SELECT last_value FROM {seq}), "
@@ -286,21 +312,40 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
             last_value, max_id, min_id = int(fields[4]), int(fields[5]), int(fields[6])
         except (ValueError, IndexError):
             return None
+
+        # Range the id column can actually store. Unknown/other types are not
+        # gated (fits_column stays True) so this only ever rejects a real mismatch.
+        col_bounds = {
+            "smallint": (-32768, 32767),
+            "integer": (-2147483648, 2147483647),
+            "bigint": (-9223372036854775808, 9223372036854775807),
+        }
+        col_min, col_max = col_bounds.get(self._id_column_type(), (seqmin, seqmax))
+
         if increment >= 0:
             headroom = seqmax - last_value
             collision_free = last_value >= max_id
+            fits_column = seqmax <= col_max
         else:
             headroom = last_value - seqmin
             collision_free = last_value <= min_id
-        return {"headroom": headroom, "collision_free": collision_free, "cycle": cycle}
+            fits_column = seqmin >= col_min
+        return {
+            "headroom": headroom,
+            "collision_free": collision_free,
+            "cycle": cycle,
+            "fits_column": fits_column,
+        }
 
     def _psql_super(self, query: str, tuples_only: bool = False) -> str:
-        """Run a read/DDL query as the postgres superuser and return its output.
+        """
+        Run a read/DDL query as the postgres superuser and return its output.
 
         Unlike _run_sql this does not raise on a non-zero exit, so callers can
-        inspect error text (permission denied, duplicate key, ...). Pass
+        inspect error text like permission denied, duplicate key, .... Pass
         tuples_only=True (-tA) for bare scalar/column output.
         """
+
         flags = "-tA " if tuples_only else ""
         cmd = (
             f"kubectl exec -n {self.namespace} deploy/{self.POSTGRES_DEPLOY} -- "
@@ -311,11 +356,11 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
     def _review_data_signature(self, ids: list[int]) -> str:
         """md5 over (id, product_id, username, description, score) of the given rows.
 
-        A stable fingerprint of specific review rows: deleting or editing any of
-        them changes it. Empty string if ``ids`` is empty.
+        Empty string if ``ids`` is empty.
         """
         if not ids:
             return ""
+
         id_list = ",".join(str(i) for i in ids)
         sql = (
             "SELECT md5(COALESCE(string_agg("
@@ -324,48 +369,62 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
             f"FROM reviews.productreviews WHERE id IN ({id_list});"
         )
         out = self._psql_super(sql, tuples_only=True).strip()
+
         return out.splitlines()[-1].strip() if out else ""
 
     def _capture_review_baseline(self) -> tuple[list[int], str]:
-        """Snapshot the ids and content signature of the reviews present now.
+        """
+        Snapshot the ids and content signature of the reviews present now.
 
-        Called at inject time while the table still holds only the original seed,
+        Called at fault inject time while the table still holds only the original seed,
         so the oracle can later confirm those rows survived a candidate fix.
         """
+
         out = self._psql_super("SELECT id FROM reviews.productreviews ORDER BY id;", tuples_only=True)
         ids = [int(line.strip()) for line in out.splitlines() if line.strip().lstrip("-").isdigit()]
         return ids, self._review_data_signature(ids)
 
     def _original_reviews_intact(self) -> tuple[bool, str]:
-        """True if every originally seeded review still exists unchanged.
-
-        Guards against a "fix" that deletes the seeded reviews and pads the table
-        back up with fresh rows: the baseline ids would be missing or their
-        content signature would differ. Returns (ok, human-readable detail).
         """
+        True if every originally seeded review still exists unchanged.
+
+        Prevents a "fix" from deleting the original seeded reviews and filling the
+        table back up with new rows. The oracle checks that the original IDs still
+        exist and that their content hasn't changed. Returns (ok, human-readable
+        detail).
+        """
+
         if not self._baseline_review_ids:
             return True, "no baseline captured"
+
         expected = len(self._baseline_review_ids)
         id_list = ",".join(str(i) for i in self._baseline_review_ids)
+
         out = self._psql_super(
             f"SELECT count(*) FROM reviews.productreviews WHERE id IN ({id_list});", tuples_only=True
         ).strip()
+
         try:
             present = int(out.splitlines()[-1].strip())
         except (ValueError, IndexError):
             return False, "could not read the reviews table"
+
         if present != expected:
             return False, f"{expected - present} of {expected} original reviews are gone"
+
         if self._review_data_signature(self._baseline_review_ids) != self._baseline_review_sig:
             return False, "original review contents were modified"
+
         return True, "intact"
 
     def _id_uniqueness_enforced(self) -> bool:
-        """True if a single-column PRIMARY KEY / UNIQUE constraint still covers id.
-
-        Dropping the primary key so that overflowing/duplicate ids "work" is not a
-        valid fix -- review ids must stay unique.
         """
+        True if a single-column PRIMARY KEY / UNIQUE constraint still covers id.
+
+        Dropping the primary key to make overflowing or duplicate IDs insert
+        successfully is not considered a fix. Review IDs must remain unique.
+        """
+
         sql = (
             "SELECT count(*) FROM pg_constraint c "
             "WHERE c.conrelid = 'reviews.productreviews'::regclass "
@@ -374,6 +433,7 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
             "WHERE attrelid = 'reviews.productreviews'::regclass AND attname = 'id')];"
         )
         out = self._psql_super(sql, tuples_only=True).strip()
+
         try:
             return int(out.splitlines()[-1].strip()) >= 1
         except (ValueError, IndexError):
