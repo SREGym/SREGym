@@ -32,6 +32,7 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
 
     def evaluate(self) -> dict:
         print("--- Mitigation Evaluation (product-reviews integer overflow) ---")
+        p = self.problem
 
         # 1. Application health first: reject "fixes" that repair the database but
         #    break the service (deployment deleted, scaled to 0, or pods not ready)
@@ -63,13 +64,15 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
             logger.info(reason)
             return {"success": False, "reason": reason}
 
-        # 3. Writes must succeed again
-        status = self.problem._review_write_status()
+        # 3. Writes must succeed AS THE APPLICATION USER, not just the superuser.
+        status = p._review_write_status()
         if status != "ok":
-            reason = (
-                f"A write to reviews.productreviews did not succeed (status={status}); "
-                "the id sequence is still exhausted."
-            )
+            cause = {
+                "exhausted": "the id sequence is still exhausted",
+                "denied": "the application user (otelu) can no longer INSERT; the write path is still broken",
+                "collision": "writes collide with existing ids (the sequence hands out ids that are already used)",
+            }.get(status, f"a write by the application user did not succeed (status={status})")
+            reason = f"A review write did not succeed: {cause}."
             logger.info(reason)
             return {"success": False, "reason": reason}
 

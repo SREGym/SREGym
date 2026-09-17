@@ -32,6 +32,9 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
     POSTGRES_DEPLOY = "postgresql"
 
     PG_SUPERUSER = "root"
+    # The application role product-reviews connects as (see postgresql/init.sql).
+    PG_APP_USER = "otelu"
+    PG_APP_PASSWORD = "otelp"
     PG_DB = "otel"
     SEQUENCE = "reviews.productreviews_id_seq"
     INT4_MAX = 2147483647
@@ -143,25 +146,31 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
 
     def _review_write_status(self) -> str:
         """
-        Probe whether reviews.productreviews accepts a write, without persisting a row.
+        Probe whether reviews.productreviews accepts a write FROM THE APPLICATION
+        USER (otelu), without persisting a row.
 
-        Runs INSERT inside a transaction that is rolled back, so a successful probe leaves no
-        data. Returns one of:
-            "ok"        - the insert succeeded (sequence has headroom)
-            "exhausted" - the insert failed because the id sequence overflowed
+        The probe connects as otelu -- the same role product-reviews uses -- rather
+        than the superuser, so a "fix" that repairs the sequence as root while the
+        app user's write path stays broken (for example its INSERT privilege was
+        revoked) is still caught. The INSERT runs inside a rolled-back transaction,
+        so a successful probe leaves no data. Returns one of:
+            "ok"        - the insert succeeded
+            "exhausted" - the id sequence overflowed / has no room left
+            "denied"    - otelu lacks privilege to insert (write path still broken)
+            "collision" - the insert hit a duplicate id (sequence over occupied ids)
             "other"     - some other failure (postgres restarting, table missing, ...)
         """
 
         sql = (
             "BEGIN; "
             "INSERT INTO reviews.productreviews (product_id, username, description, score) "
-            "VALUES ('PROBE', 'health_probe', 'oracle smoke', 5.0); "
+            "VALUES ('OLJCESPC7Z', 'app_write_probe', 'application write probe', 5.0); "
             "ROLLBACK;"
         )
 
         cmd = (
             f"kubectl exec -n {self.namespace} deploy/{self.POSTGRES_DEPLOY} -- "
-            f"env PGPASSWORD=otel psql -U {self.PG_SUPERUSER} -d {self.PG_DB} "
+            f"env PGPASSWORD={self.PG_APP_PASSWORD} psql -h 127.0.0.1 -U {self.PG_APP_USER} -d {self.PG_DB} "
             f'-v ON_ERROR_STOP=1 -c "{sql}"'
         )
 
@@ -170,7 +179,10 @@ class IntegerOverflowPrimaryKeyAstronomyShop(Problem):
             return "ok"
         if "reached maximum value of sequence" in out or "integer out of range" in out:
             return "exhausted"
-
+        if "permission denied" in out:
+            return "denied"
+        if "duplicate key" in out or "unique constraint" in out:
+            return "collision"
         return "other"
 
     def _review_sentinel_present(self) -> bool:
