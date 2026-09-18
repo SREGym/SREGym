@@ -9,10 +9,11 @@ import httpx
 import pytest
 
 from clients.codex.codex_agent import CodexAgent
-from clients.jev.config import INSTRUCTION, KEY_ENV, MODEL_ENV, codex_args, configure_experiment
+from clients.jev.client import MAX_CALLS, QUESTIONS, JevEvaluator, validate_response
+from clients.jev.config import INSTRUCTION, KEY_ENV, MODEL_ENV, codex_args, configure
 from clients.jev.planning import DiagnosticTest, planning_guidance, planning_questions
 from clients.jev.review import collect_snapshot, compact_snapshot, review_guidance, review_questions
-from clients.jev.server import MAX_CALLS, QUESTIONS, JevEvaluator, create_server, validate_response
+from clients.jev.server import create_server
 from clients.jev.submission import SubmissionClient
 
 QUESTION = {"supported": {"type": "noul", "instructions": "Does the evidence support the claim?"}}
@@ -79,7 +80,7 @@ def test_provider_errors_and_bounded_retry(tmp_path, monkeypatch, status):
     async def no_sleep(_):
         pass
 
-    monkeypatch.setattr("clients.jev.server.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("clients.jev.client.asyncio.sleep", no_sleep)
 
     def handler(request):
         calls.append(request)
@@ -100,7 +101,7 @@ def test_retry_then_success(tmp_path, monkeypatch):
     async def no_sleep(_):
         pass
 
-    monkeypatch.setattr("clients.jev.server.asyncio.sleep", no_sleep)
+    monkeypatch.setattr("clients.jev.client.asyncio.sleep", no_sleep)
     tool = evaluator(tmp_path, lambda _: responses.pop(0))
     assert "answers" in asyncio.run(tool.evaluate("evidence", QUESTION))
     assert json.loads(tool.log_path.read_text())["http_attempts"] == 2
@@ -121,7 +122,7 @@ def test_transport_failure_is_visible_and_not_retried(tmp_path, error, kind):
 
 
 def test_deadline(tmp_path, monkeypatch):
-    monkeypatch.setattr("clients.jev.server.CALL_TIMEOUT", 0.01)
+    monkeypatch.setattr("clients.jev.client.CALL_TIMEOUT", 0.01)
 
     async def handler(_):
         await asyncio.sleep(1)
@@ -176,23 +177,14 @@ def test_all_question_types_and_malformed_probabilities():
         validate_response(data, questions)
 
 
-def test_mcp_schema_and_dispatch(tmp_path):
-    tool = evaluator(tmp_path, lambda _: httpx.Response(200, json=RESPONSE))
+def test_mcp_exposes_only_supported_tools(tmp_path):
+    tool = evaluator(tmp_path, lambda _: pytest.fail("Unexpected provider call"))
     server = create_server(tool)
 
     async def check():
         tools = await server.list_tools()
-        assert {t.name for t in tools} == {
-            "jev_evaluate",
-            "jev_review",
-            "jev_submit",
-            "jev_plan",
-            "jev_triage",
-            "jev_observe",
-        }
-        assert {t.name: t.annotations.readOnlyHint for t in tools}["jev_submit"] is False
-        result = await server.call_tool("jev_evaluate", {"state": "evidence", "questions": QUESTION})
-        assert "0.9" in str(result)
+        assert {t.name for t in tools} == {"jev_plan", "jev_submit"}
+        assert {t.name: t.annotations.readOnlyHint for t in tools} == {"jev_plan": True, "jev_submit": False}
 
     asyncio.run(check())
 
@@ -257,15 +249,10 @@ def test_review_snapshot_uses_existing_kubectl_connection(monkeypatch):
     assert snapshot["namespace"] == "app" and snapshot["resources"] == []
 
 
-def test_review_fixed_questions_cover_all_components_and_durability():
-    snapshot = {"resources": [{"kind": "Service", "name": f"service-{i}"} for i in range(30)]}
-    questions = review_questions(snapshot, "investigate")
+def test_review_questions_cover_durability():
+    questions = review_questions("verify")
     QUESTIONS.validate_python(questions)
-    assert len(questions["next_component"]["criteria"]) == 31
-    questions = review_questions(snapshot, "verify")
-    assert "next_component" not in questions and "next_area" not in questions
-    assert "durable_repair" in questions and "functional_evidence" in questions
-    assert "criteria" not in questions["causal_support"]
+    assert set(questions) == {"causal_support", "durable_repair", "functional_evidence"}
 
 
 def test_review_empty_endpoint_slice():
@@ -299,14 +286,13 @@ def test_review_guidance_requires_functional_evidence_for_recovery():
             )
         }
     }
-    assert review_guidance(result, "mitigate")["assessment"] == "supported"
     assert review_guidance(result, "verify")["assessment"] == "unsupported"
     assert review_guidance({"error": "timeout"}, "verify")["assessment"] == "unavailable"
 
 
-@pytest.mark.parametrize("phase", ["diagnose", "mitigate", "verify"])
+@pytest.mark.parametrize("phase", ["diagnose", "verify"])
 def test_decision_review_does_not_return_triage_rankings(phase):
-    questions = review_questions({"resources": [{"kind": "Service", "name": "app"}]}, phase)
+    questions = review_questions(phase)
     QUESTIONS.validate_python(questions)
     assert all(question["type"] == "noul" for question in questions.values())
     assert ("active_failure" in questions) == (phase != "verify")
@@ -317,49 +303,6 @@ def test_review_rejects_causal_claim_without_active_failure():
     assert review_guidance(result, "diagnose")["assessment"] == "unsupported"
 
 
-def test_review_dispatch_and_audit(tmp_path, monkeypatch):
-    async def snapshot(_):
-        return {"resources": [{"kind": "Service", "name": "app", "spec": {"type": "ClusterIP"}}]}
-
-    monkeypatch.setattr("clients.jev.server.collect_snapshot", snapshot)
-
-    def handler(request):
-        body = json.loads(request.content)
-        assert body["state"]["direct_snapshot"]["resources"][0]["name"] == "app"
-        answers = {}
-        for name, question in body["questions"].items():
-            if question["type"] == "noul":
-                answers[name] = {"type": "noul", "noul": 0.2}
-            else:
-                options = list(question["criteria"])
-                answers[name] = {
-                    "type": "choice",
-                    "choice": options[0],
-                    "confidence": 1,
-                    "probabilities": {key: int(key == options[0]) for key in options},
-                }
-        return httpx.Response(
-            200, json={"model": "jev-test", "answers": answers, "usage": {"input_tokens": 10, "output_tokens": 10}}
-        )
-
-    tool = evaluator(tmp_path, handler)
-    result = asyncio.run(
-        create_server(tool).call_tool(
-            "jev_review",
-            {
-                "namespace": "app",
-                "phase": "diagnose",
-                "observations": "Requests fail",
-                "hypothesis": "Unknown",
-            },
-        )
-    )
-    assert "causal_support" in str(result)
-    records = [json.loads(line) for line in tool.log_path.read_text().splitlines()]
-    assert records[0]["request"]["state"]["phase"] == "diagnose"
-    assert records[1]["guidance"]["assessment"] == "unsupported"
-
-
 def test_review_snapshot_failure_does_not_call_provider(tmp_path, monkeypatch):
     async def fail(_):
         raise ValueError("Do not expose raw credential-bearing errors")
@@ -368,10 +311,11 @@ def test_review_snapshot_failure_does_not_call_provider(tmp_path, monkeypatch):
     tool = evaluator(tmp_path, lambda _: pytest.fail("Unexpected provider call"))
     result = asyncio.run(
         create_server(tool).call_tool(
-            "jev_review",
+            "jev_submit",
             {
                 "namespace": "app",
-                "phase": "investigate",
+                "stage": "diagnosis",
+                "diagnosis": "Requests fail",
                 "observations": [],
             },
         )
@@ -643,148 +587,18 @@ def test_prompt_only_changes_when_enabled(monkeypatch):
     assert build_instruction({"app_name": "test", "namespace": "test"}) == baseline
 
 
-def test_evidence_triage_preserves_controls_and_raw_outputs(tmp_path, monkeypatch):
-    from clients.jev.evidence import Observation, evidence_guidance, evidence_questions
-
-    observations = [Observation(source=f"check {i}", observed_at="now", output=f"raw {i}") for i in range(3)]
-    assert len(QUESTIONS.validate_python(evidence_questions(observations))) == 6
-    assert len(QUESTIONS.validate_python(evidence_questions(observations * 2 + observations[:2]))) == 16
-
-    async def forbidden_snapshot(_):
-        raise AssertionError("Triage must not collect hidden context")
-
-    monkeypatch.setattr("clients.jev.server.collect_snapshot", forbidden_snapshot)
-
-    def handler(request):
-        body = json.loads(request.content)
-        assert body["state"]["observation_1"]["output"] == "raw 0"
-        answers = {}
-        for i in range(1, 4):
-            choices = body["questions"][f"kind_{i}"]["criteria"]
-            selected = "application_failure" if i == 2 else "healthy_control"
-            answers[f"kind_{i}"] = {
-                "type": "choice",
-                "choice": selected,
-                "confidence": 0.8,
-                "probabilities": {key: float(key == selected) for key in choices},
-            }
-            answers[f"priority_{i}"] = {"type": "score", "score": 3.0 if i == 2 else 1.0, "confidence": 0.8}
-        return httpx.Response(
-            200, json={"model": "jev-test", "answers": answers, "usage": {"input_tokens": 1, "output_tokens": 1}}
-        )
-
-    tool = evaluator(tmp_path, handler)
-    result = asyncio.run(
-        create_server(tool).call_tool("jev_triage", {"observations": [o.model_dump() for o in observations]})
-    )
-    assert "raw 0" in str(result)
-    record = json.loads(tool.log_path.read_text().splitlines()[-1])
-    assert record["tool"] == "jev_triage"
-    rows = record["guidance"]["observations"]
-    assert rows[0]["id"] == "observation_2"
-    assert len(rows) == 3
-    assert rows[1]["category"] == "healthy_control"
-    assert "unavailable" in evidence_guidance({"error": "timeout"}, observations)["next_step"]
-
-
-def test_observation_collection_is_read_only_bounded_and_omits_credentials(monkeypatch):
-    from clients.jev.observations import collect_observations, safe_log_excerpt
-
-    commands = []
-
-    def run(command, **kwargs):
-        commands.append(command)
-        assert kwargs["timeout"] == 4
-        assert kwargs["check"] is False
-        if command[1] == "get":
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps(
-                    {
-                        "items": [
-                            {
-                                "metadata": {"name": "app-1", "annotations": {"private": "not-forwarded"}},
-                                "spec": {"containers": [{"env": [{"name": "KEY", "value": "not-forwarded"}]}]},
-                                "status": {
-                                    "phase": "Running",
-                                    "containerStatuses": [{"name": "app", "ready": True, "restartCount": 0}],
-                                },
-                            }
-                        ]
-                    }
-                ),
-            )
-        return SimpleNamespace(
-            returncode=0,
-            stdout='ERROR request failed\npassword="private-password"\nAuthorization: Bearer private-token\n',
-        )
-
-    monkeypatch.setattr("clients.jev.observations.subprocess.run", run)
-    observations = asyncio.run(collect_observations("application"))
-    output = observations[0].output
-    assert "ERROR request failed" in output
-    assert "private-password" not in output and "private-token" not in output and "not-forwarded" not in output
-    assert len(output) <= 3000
-    assert len(commands) == 2
-    assert commands[1][1] == "logs"
-    assert "--since=60s" in commands[1] and "--limit-bytes=2200" in commands[1]
-    assert "Log omitted" in safe_log_excerpt("BEGIN PRIVATE KEY\nkey-data")
-    with pytest.raises(ValueError):
-        asyncio.run(collect_observations("bad;command"))
-    assert len(commands) == 2
-
-
-def test_observation_dispatch_batches_and_preserves_all_sources(tmp_path, monkeypatch):
-    from clients.jev.evidence import Observation
-
-    async def collect(_):
-        return [Observation(source=f"pod-{i}", observed_at="now", output=f"output {i}") for i in range(9)]
-
-    monkeypatch.setattr("clients.jev.server.collect_observations", collect)
-    sizes = []
-
-    def handler(request):
-        body = json.loads(request.content)
-        sizes.append(len(body["state"]))
-        answers = {}
-        for key, question in body["questions"].items():
-            if question["type"] == "choice":
-                selected = "application_failure" if key == "kind_1" else "healthy_control"
-                answers[key] = {
-                    "type": "choice",
-                    "choice": selected,
-                    "confidence": 0.7,
-                    "probabilities": {k: float(k == selected) for k in question["criteria"]},
-                }
-            else:
-                answers[key] = {"type": "score", "score": 2.0, "confidence": 0.7}
-        return httpx.Response(
-            200, json={"model": "jev-test", "answers": answers, "usage": {"input_tokens": 1, "output_tokens": 1}}
-        )
-
-    tool = evaluator(tmp_path, handler)
-    result = asyncio.run(create_server(tool).call_tool("jev_observe", {"namespace": "app"}))
-    assert "output 8" in str(result)
-    assert sizes == [8, 1]
-    record = json.loads(tool.log_path.read_text().splitlines()[-1])
-    assert record["tool"] == "jev_observe"
-    rows = record["result"]["active_failure_candidates"] + record["result"]["other_observations"]
-    assert len({r["id"] for r in rows}) == 9
-    assert {r["source"] for r in rows} == {f"pod-{i}" for i in range(9)}
-
-
 def test_configuration_validation_and_reset(monkeypatch):
     args = SimpleNamespace(jev_model="jev-test", agent="codex", use_external_harness=False, force_build=True)
     with pytest.raises(ValueError, match=KEY_ENV):
-        configure_experiment(args)
+        configure(args)
     monkeypatch.setenv(KEY_ENV, "test-key")
-    configure_experiment(args)
+    configure(args)
     assert __import__("os").environ[MODEL_ENV] == "jev-test"
     args.agent = "claudecode"
     with pytest.raises(ValueError, match="Codex"):
-        configure_experiment(args)
+        configure(args)
     args.jev_model = None
-    configure_experiment(args)
+    configure(args)
     assert MODEL_ENV not in __import__("os").environ
 
 
@@ -794,7 +608,7 @@ def test_unsupported_run_rejected_before_deployment(monkeypatch, overrides):
     values = dict(jev_model="jev-test", agent="codex", use_external_harness=False, force_build=True)
     values.update(overrides)
     with pytest.raises(ValueError):
-        configure_experiment(SimpleNamespace(**values))
+        configure(SimpleNamespace(**values))
 
 
 def test_preflight_rejects_api_failure(monkeypatch, tmp_path):
@@ -809,19 +623,6 @@ def test_preflight_rejects_api_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(JevEvaluator, "evaluate", failure)
     with pytest.raises(RuntimeError, match="HTTP 401"):
         run_preflight(tmp_path / "preflight.jsonl")
-
-
-def test_mcp_errors_do_not_poison_next_call(tmp_path):
-    tool = evaluator(tmp_path, lambda _: httpx.Response(200, json=RESPONSE))
-    server = create_server(tool)
-
-    async def check():
-        with pytest.raises(Exception, match="validation"):
-            await server.call_tool("jev_evaluate", {"state": "evidence", "questions": {}})
-        result = await server.call_tool("jev_evaluate", {"state": "evidence", "questions": QUESTION})
-        assert "0.9" in str(result)
-
-    asyncio.run(check())
 
 
 def test_container_forwards_only_when_enabled(monkeypatch):

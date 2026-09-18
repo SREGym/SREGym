@@ -23,7 +23,7 @@ from rich.progress import (
 )
 
 from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
-from clients.jev.config import configure_experiment as configure_jev_experiment
+from clients.jev.config import configure as configure_jev
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
@@ -829,7 +829,7 @@ def _run_driver_and_shutdown(
 
 
 def main(args):
-    configure_jev_experiment(args)
+    configure_jev(args)
     init_logger()
     backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
     with managed_judge_backend(backend, force_build=args.force_build) as agent_image:

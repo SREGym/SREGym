@@ -1,4 +1,4 @@
-"""Read-only, credential-free Kubernetes evidence for the Jev experiment."""
+"""Kubernetes snapshots and evidence checks for Jev submissions."""
 
 import asyncio
 import json
@@ -14,11 +14,9 @@ def review_guidance(result: dict, phase: str) -> dict:
     if "error" in result:
         return {"assessment": "unavailable", "next_step": "Continue without this review; it supplied no advice."}
     required = ["causal_support"]
-    if phase in {"diagnose", "mitigate"}:
+    if phase == "diagnose":
         required.append("active_failure")
-    if phase == "mitigate":
-        required.append("durable_repair")
-    elif phase == "verify":
+    if phase == "verify":
         required.extend(["durable_repair", "functional_evidence"])
     scores = {key: result["answers"][key]["noul"] for key in required}
     weakest = min(scores.values())
@@ -27,13 +25,11 @@ def review_guidance(result: dict, phase: str) -> dict:
         "assessment": assessment,
         "claim_scores": scores,
         "next_step": (
-            "Inspect and test the suggested area/component. Do not treat this ranking as a diagnosis."
-            if phase == "investigate"
-            else "The claim has support, but still requires your direct evidence and functional verification."
+            "The claim has support, but still requires your direct evidence and functional verification."
             if assessment == "supported"
             else "Do not describe this review as approval. Collect a new observation that distinguishes competing explanations before this repair or submission."
         ),
-        "interpretation": "These are experimental guidance bands, not calibrated guarantees. Component/area rankings never override claim scores.",
+        "interpretation": "These are experimental guidance bands, not calibrated guarantees.",
     }
 
 
@@ -152,44 +148,14 @@ async def collect_snapshot(namespace: str) -> dict:
     return snapshot
 
 
-def review_questions(snapshot: dict, phase: str) -> dict:
+def review_questions(phase: str) -> dict:
     questions = {
-        "next_area": {
-            "type": "choice",
-            "instructions": "Which area most deserves the next diagnostic check? Use the observed resource relationships and symptoms, not just the agent's preferred explanation. This is a triage priority, not a proven diagnosis.",
-            "criteria": {
-                "application_behavior": "Application logic, feature behavior, or data processing.",
-                "resources": "CPU, memory, quota, or capacity.",
-                "workload_lifecycle": "Images, startup, rollout, probes, or process failures.",
-                "service_connectivity": "Service selection, address resolution, endpoint reachability, or traffic routing.",
-                "access_control": "Authentication, authorization, or network access rules.",
-                "persistent_data": "Volumes, database state, schema, or durable queues.",
-                "observability": "Telemetry collection without an established application failure.",
-                "insufficient_evidence": "The snapshot and observations do not identify a useful priority.",
-            },
-        },
         "causal_support": {
             "type": "noul",
             "instructions": "Does the evidence establish the agent's proposed causal mechanism for an active or repeatable application failure? An unusual setting, historical error, or correlation alone is insufficient. If there is no proposed mechanism, answer no.",
         },
     }
-    components = sorted(
-        {r["name"] for r in snapshot["resources"] if r["kind"] in {"Deployment", "StatefulSet", "DaemonSet", "Service"}}
-    )
-    if components and len(components) < 64:
-        questions["next_component"] = {
-            "type": "choice",
-            "instructions": "Which component most deserves direct inspection next, based on the complete snapshot and supplied observations? Compare its configuration with its actual dependencies and placement. Do not assume that the agent's suspected component is faulty. Selecting a component is not proof of its fault.",
-            "criteria": {
-                **{name: f"Inspect the workload or Service named {name}." for name in components},
-                "insufficient_evidence": "No component has enough supporting evidence to prioritize.",
-            },
-        }
-    if phase != "investigate":
-        # Triage priorities are not evidence for a proposed cause. Returning both
-        # together led the pilot agent to mistake a high rank for causal support.
-        questions = {"causal_support": questions["causal_support"]}
-    if phase in {"diagnose", "mitigate"}:
+    if phase == "diagnose":
         questions["active_failure"] = {
             "type": "noul",
             "instructions": "Do the supplied observations demonstrate a recent or repeatable failed application operation relevant to the proposed diagnosis? Historical startup errors, healthy-workload restart counts, unusual settings, and hypothetical risks alone are insufficient. Judge the actual evidence, not the agent's assertion that an outage exists.",
@@ -198,7 +164,7 @@ def review_questions(snapshot: dict, phase: str) -> dict:
         questions["causal_support"]["instructions"] = (
             "Do the supplied before-and-after observations support that the applied repair addressed the demonstrated cause of the original application failure? Evaluate the historical failure together with the current state. A healthy state after repair does not contradict a previously demonstrated failure, but fixing an unrelated anomaly or testing an unaffected path is insufficient."
         )
-    if phase in {"mitigate", "verify"}:
+    if phase == "verify":
         questions["durable_repair"] = {
             "type": "noul",
             "instructions": "Does the proposed or applied repair correct the established mechanism while preserving application behavior during ordinary restarts, placement changes, and requests? A workaround that only avoids the currently failing path or relies on accidental placement is insufficient. Repeated successes under unchanged conditions alone do not prove this.",

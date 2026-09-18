@@ -1,4 +1,4 @@
-"""Jev experiment configuration, without SDK or MCP imports."""
+"""Opt-in Jev configuration, without SDK or MCP imports."""
 
 import json
 import os
@@ -54,7 +54,7 @@ These scores are experimental evidence checks, not guarantees of correctness.
 """
 
 
-def configure_experiment(args) -> None:
+def configure(args) -> None:
     """Reject unsupported runs before deployment and clear stale opt-in state."""
     model = getattr(args, "jev_model", None)
     if model is None:
