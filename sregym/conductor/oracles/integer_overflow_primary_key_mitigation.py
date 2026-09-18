@@ -1,5 +1,6 @@
 import logging
 
+from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.mitigation import MitigationOracle
 
 logger = logging.getLogger(__name__)
@@ -25,8 +26,8 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
       3. The marker review inserted during fault injection is still present. This
          catches database re-seeds (for example, restarting the postgres pod) as
          well as TRUNCATE or DROP, which restore the data but not the marker row.
-      4. The `id` column is still protected by its original PRIMARY KEY/UNIQUE
-         constraint. Simply dropping the constraint so duplicate or overflowing IDs
+      4. The `id` column is still protected by a PRIMARY KEY, UNIQUE constraint,
+         or equivalent unique index. Simply dropping protection so duplicate IDs
          are accepted is not considered as a valid fix.
       5. A review can be inserted as the application user (`otelu`). Fixing the
          sequence as a superuser isn't enough if the application's normal write path
@@ -45,6 +46,16 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
     # A durable fix leaves plenty of ids.
     MIN_ID_HEADROOM = 2147483647 // 2  # 1.07B
 
+    FAILURE_CLASSES = {
+        "review_sequence_exhausted": FailureClass.AGENT_ERROR,
+        "review_write_denied": FailureClass.AGENT_ERROR,
+        "review_id_collision": FailureClass.AGENT_ERROR,
+        "review_sequence_type_mismatch": FailureClass.AGENT_ERROR,
+        "review_sequence_cycles": FailureClass.AGENT_ERROR,
+        "review_sequence_collision_risk": FailureClass.AGENT_ERROR,
+        "review_sequence_capacity_low": FailureClass.AGENT_ERROR,
+    }
+
     def evaluate(self) -> dict:
         print("--- Mitigation Evaluation (product-reviews integer overflow) ---")
         p = self.problem
@@ -60,7 +71,7 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
         if not intact:
             reason = f"The original seeded reviews were not preserved: {detail}."
             logger.info(reason)
-            return {"success": False, "reason": reason}
+            return self.fail("review_data_not_preserved", message=reason)
 
         # 3. The injected marker review must still be present. Its absence means the
         #    data was either re-seeded or wiped (postgres pod restart / TRUNCATE / DROP).
@@ -70,17 +81,17 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
                 "wiped (e.g. a postgres pod restart or TRUNCATE), which is not a valid mitigation"
             )
             logger.info(reason)
-            return {"success": False, "reason": reason}
+            return self.fail("preserved_review_missing", message=reason)
 
         # 4. id must still be uniqueness-protected. Dropping the primary key so
         #    overflowing/duplicate ids are accepted, destroys review-id uniqueness.
         if not p._id_uniqueness_enforced():
             reason = (
-                "reviews.productreviews.id no longer has a primary key / unique constraint, "
+                "reviews.productreviews.id no longer has unconditional unique protection, "
                 "so duplicate ids are accepted. Uniqueness must be preserved"
             )
             logger.info(reason)
-            return {"success": False, "reason": reason}
+            return self.fail("review_id_uniqueness_missing", message=reason)
 
         # 5. Writes must succeed AS THE APPLICATION USER, not just the superuser.
         status = p._review_write_status()
@@ -93,28 +104,33 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
 
             reason = f"A review write did not succeed: {cause}"
             logger.info(reason)
-            return {"success": False, "reason": reason}
+            code = {
+                "exhausted": "review_sequence_exhausted",
+                "denied": "review_write_denied",
+                "collision": "review_id_collision",
+            }.get(status, "review_write_failed")
+            return self.fail(code, message=reason)
 
         # 6. The sequence must have real, collision-free headroom and not cycle.
         cap = p._id_sequence_capacity()
         if cap is None:
             reason = "Could not resolve the identity sequence backing reviews.productreviews.id"
             logger.info(reason)
-            return {"success": False, "reason": reason}
+            return self.fail("review_sequence_unavailable", message=reason)
 
         if not cap["fits_column"]:
             reason = (
                 "The id sequence can generate values beyond the id column's type range, so the new ids "
-                "overflow the column and are silently stored corrupted (e.g. widening the sequence to "
+                "overflow the column and make inserts fail (e.g. widening the sequence to "
                 "BIGINT without widening the id column). Widen the id column to match the sequence"
             )
             logger.info(reason)
-            return {"success": False, "reason": reason}
+            return self.fail("review_sequence_type_mismatch", message=reason)
 
         if cap["cycle"]:
             reason = "The id sequence is set to CYCLE, so ids will eventually be reused"
             logger.info(reason)
-            return {"success": False, "reason": reason}
+            return self.fail("review_sequence_cycles", message=reason)
 
         if not cap["collision_free"]:
             reason = (
@@ -122,7 +138,7 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
                 "(a reset toward occupied ids), which will collide on the next inserts"
             )
             logger.info(reason)
-            return {"success": False, "reason": reason}
+            return self.fail("review_sequence_collision_risk", message=reason)
 
         if cap["headroom"] < self.MIN_ID_HEADROOM:
             reason = (
@@ -131,7 +147,12 @@ class IntegerOverflowPrimaryKeyMitigationOracle(MitigationOracle):
                 "rather than resetting the sequence."
             )
             logger.info(reason)
-            return {"success": False, "reason": reason}
+            return self.fail("review_sequence_capacity_low", message=reason)
+
+        if not p._review_reads_work():
+            return self.fail(
+                "review_frontend_read_failed", message="The frontend could not retrieve the preserved product review."
+            )
 
         logger.info(
             "App is healthy, original reviews intact, marker present, id uniqueness enforced, "
