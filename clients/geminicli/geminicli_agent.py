@@ -13,6 +13,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from clients.harness.token_usage import aggregate_usage, read_jsonl, sum_counts, token_count, usage_metrics
+
 logger = logging.getLogger("all.geminicli.agent")
 
 
@@ -157,49 +159,68 @@ class GeminiCliAgent:
             logger.warning(f"Could not copy session file: {e}")
             return None
 
-    def get_usage_metrics(self) -> dict[str, int]:
-        """
-        Extract usage metrics from Gemini CLI session file.
-
-        Returns:
-            Dictionary with keys: input_tokens, cached_input_tokens, output_tokens
-        """
-        metrics = {
-            "input_tokens": 0,
-            "cached_input_tokens": 0,
-            "output_tokens": 0,
-        }
-
-        # Read directly from the session file
+    def get_usage_metrics(self) -> dict[str, int | None]:
+        """Read inclusive totals from the native JSON or JSONL session."""
         session_file = self._find_session_file()
         if not session_file or not session_file.exists():
-            logger.debug("No session file found for metrics")
-            return metrics
+            return usage_metrics()
 
         try:
             trajectory = json.loads(session_file.read_text())
-        except Exception as e:
-            logger.warning(f"Error loading session: {e}")
-            return metrics
+            messages = trajectory.get("messages", []) if isinstance(trajectory, dict) else []
+        except json.JSONDecodeError:
+            messages = self._usage_messages(session_file)
+        except OSError as error:
+            logger.warning("Could not read Gemini usage: %s", error)
+            return usage_metrics()
 
-        total_input = 0
-        total_output = 0
-        total_cached = 0
+        records = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            tokens = message.get("tokens")
+            if message.get("type") != "gemini" or not isinstance(tokens, dict):
+                continue
+            reasoning = token_count(tokens.get("thoughts"))
+            # `tool` is toolUsePromptTokenCount: tool results sent as input.
+            records.append(
+                usage_metrics(
+                    input_tokens=sum_counts([token_count(tokens.get("input")), token_count(tokens.get("tool"))]),
+                    output_tokens=sum_counts([token_count(tokens.get("output")), reasoning]),
+                    cached_input_tokens=token_count(tokens.get("cached")),
+                    reasoning_output_tokens=reasoning,
+                )
+            )
+        return aggregate_usage(records)
 
-        for message in trajectory.get("messages", []):
-            if message.get("type") == "gemini":
-                tokens = message.get("tokens", {})
-                total_input += tokens.get("input", 0)
-                # output includes: output + thoughts + tool tokens
-                total_output += tokens.get("output", 0) + tokens.get("thoughts", 0) + tokens.get("tool", 0)
-                total_cached += tokens.get("cached", 0)
-
-        metrics["input_tokens"] = total_input
-        metrics["output_tokens"] = total_output
-        metrics["cached_input_tokens"] = total_cached
-
-        logger.info(f"Extracted usage metrics: {metrics}")
-        return metrics
+    @staticmethod
+    def _usage_messages(session_file: Path) -> list[dict]:
+        """Replay usage updates by message ID without importing the converter."""
+        messages = {}
+        pending = {}
+        for record in read_jsonl(session_file):
+            if "$rewindTo" in record:
+                ids = list(messages)
+                target = record["$rewindTo"]
+                removed = ids[ids.index(target) :] if target in messages else ids
+                for message_id in removed:
+                    messages.pop(message_id, None)
+                    pending.pop(message_id, None)
+                continue
+            message_id = record.get("id")
+            if not isinstance(message_id, str):
+                continue
+            if record.get("type") in {"gemini", "user"}:
+                message = messages.setdefault(message_id, {})
+                message.update(record)
+                if message_id in pending:
+                    message.setdefault("tokens", {}).update(pending.pop(message_id))
+            elif record.get("type") == "message_update" and isinstance(record.get("tokens"), dict):
+                if message_id in messages:
+                    messages[message_id].setdefault("tokens", {}).update(record["tokens"])
+                else:
+                    pending.setdefault(message_id, {}).update(record["tokens"])
+        return list(messages.values())
 
     def _build_command(self, instruction: str) -> str:
         model = self.model_name.split("/")[-1]

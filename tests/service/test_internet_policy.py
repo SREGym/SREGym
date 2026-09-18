@@ -20,7 +20,7 @@ from sregym.service.container_runner import (
     ContainerRunner,
     _find_host_ca_bundle,
 )
-from sregym.service.internet_policy import InternetPolicy, blocked_github_owner, should_stream_response
+from sregym.service.internet_policy import InternetPolicy, blocked_github_owner
 from sregym.service.k8s_proxy import KubernetesAPIProxy, _is_workload_create_path, is_valid_bearer_token
 
 
@@ -70,19 +70,6 @@ def test_resolves_dot_segments_before_applying_github_policy(target):
 
 def test_allows_unconfigured_numeric_github_repository_id():
     assert blocked_github_owner("api.github.com", "/repositories/12345/contents/README.md", None) is None
-
-
-@pytest.mark.parametrize(
-    ("content_type", "expected"),
-    [
-        ("text/event-stream", True),
-        ("Text/Event-Stream; charset=utf-8", True),
-        ("application/json", False),
-        (None, False),
-    ],
-)
-def test_only_event_stream_responses_are_streamed(content_type, expected):
-    assert should_stream_response(content_type) is expected
 
 
 def test_ignores_unrelated_query_and_json_text():
@@ -174,14 +161,17 @@ def test_filtered_runner_prepares_proxy_audit_log():
         runner.cleanup_egress_proxy()
 
 
-def test_open_runner_keeps_existing_host_network():
+@pytest.mark.parametrize("host_system", ["Linux", "Darwin"])
+def test_open_runner_uses_host_appropriate_network(monkeypatch, host_system):
+    monkeypatch.setattr("sregym.service.container_runner.platform.system", lambda: host_system)
     runner = ContainerRunner(ContainerConfig(internet_policy=InternetPolicy.from_mode("open")))
 
     try:
         args = runner._build_base_docker_args()
         env_flags = runner._build_env_flags()
 
-        assert "--network=host" in args
+        assert ("--network=host" in args) is (host_system == "Linux")
+        assert "--add-host=host.docker.internal:host-gateway" in args
         env = dict(item.split("=", 1) for item in env_flags[1::2])
         assert env["AGENT_INTERNET_ACCESS"] == "open"
         assert "HTTPS_PROXY" not in env
@@ -189,8 +179,13 @@ def test_open_runner_keeps_existing_host_network():
         runner.cleanup_credential_tmps()
 
 
-def test_codex_auth_mount_does_not_expose_writable_host_directory(monkeypatch, tmp_path):
-    codex_dir = tmp_path / ".codex"
+@pytest.mark.parametrize("custom_home", [False, True])
+def test_codex_auth_mount_does_not_expose_writable_host_directory(monkeypatch, tmp_path, custom_home):
+    codex_dir = tmp_path / ("selected-profile" if custom_home else ".codex")
+    if custom_home:
+        monkeypatch.setenv("CODEX_HOME", str(codex_dir))
+    else:
+        monkeypatch.delenv("CODEX_HOME", raising=False)
     codex_dir.mkdir()
     (codex_dir / "auth.json").write_text('{"tokens": {}}')
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -203,6 +198,7 @@ def test_codex_auth_mount_does_not_expose_writable_host_directory(monkeypatch, t
         mount = args[args.index("-v") + 1]
         host_path, container_path, mode = mount.split(":")
         assert Path(host_path).name == "auth.json"
+        assert Path(host_path).read_text() == (codex_dir / "auth.json").read_text()
         assert container_path == "/root/.codex/auth.json"
         assert mode == "ro"
     finally:

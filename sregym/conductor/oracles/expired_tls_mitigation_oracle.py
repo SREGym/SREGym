@@ -77,12 +77,10 @@ class ExpiredTlsMitigationOracle(Oracle):
                     secret_name,
                     expiry.isoformat(),
                 )
-                return {
-                    "success": False,
-                    "reason": (
-                        f"Secret '{secret_name}' still contains a certificate that expired on {expiry.isoformat()}."
-                    ),
-                }
+                # An expired certificate in the Ingress Secret is the injected
+                # fault, read straight off the object. Was free text; the
+                # sentence is already in the log line above.
+                return self.fail("fault_still_present", secret=secret_name, expired_on=expiry.isoformat())
 
         logger.info("No expired TLS certificates found on the Ingress -- mitigation accepted.")
         return {"success": True}

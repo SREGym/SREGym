@@ -155,6 +155,8 @@ def _convert_native_run(run_dir: Path, tool: str) -> Trajectory | None:
         session_file = _find_session_file(run_dir, tool)
         if session_file is None:
             return None
+        if tool == "copilot":
+            return convert_session(session_file, agent=tool, telemetry_files=sorted((run_dir / "otel").glob("*.jsonl")))
         return convert_session(session_file, agent=tool)
     except AtifConverterError as exc:
         logger.debug("Could not convert %s run %s: %s", tool, run_dir, exc)

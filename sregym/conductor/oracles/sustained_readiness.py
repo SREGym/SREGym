@@ -1,10 +1,22 @@
 import time
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class SustainedReadinessOracle(Oracle):
     importance = 1.0
+
+    # Pod readiness is a symptom, not a fault signature, so neither branch is
+    # the agent's by construction. The distinction worth keeping is *when* it
+    # failed: never becoming ready within the buffer is the shared
+    # ``pods_not_ready``, while readiness that held and then regressed is this
+    # oracle's own reason -- the only thing that separates "the mitigation did
+    # not work" from "the mitigation was unstable", which are different
+    # findings even though both are undecidable from here.
+    FAILURE_CLASSES = {
+        "readiness_not_sustained": FailureClass.AMBIGUOUS,
+    }
 
     def __init__(self, problem, buffer_period=10, sustained_period=60, check_interval=0.5):
         super().__init__(problem)
@@ -31,7 +43,7 @@ class SustainedReadinessOracle(Oracle):
 
         if all_ready_start is None:
             print(f"❌ All the pods did not become ready within {self.buffer_period}s buffer period")
-            return {"success": False}
+            return self.fail("pods_not_ready", namespace=namespace, buffer_period=self.buffer_period)
 
         print(f"⏱️  Monitoring pods for {self.sustained_period}s sustained readiness...")
         monitoring_start = time.time()
@@ -41,7 +53,12 @@ class SustainedReadinessOracle(Oracle):
 
             if not self._check_all_pods_ready(kubectl, namespace, verbose=True):
                 print(f"❌ Pod readiness check failed after {elapsed:.1f}s of monitoring")
-                return {"success": False}
+                return self.fail(
+                    "readiness_not_sustained",
+                    namespace=namespace,
+                    held_for_seconds=round(elapsed, 1),
+                    required_seconds=self.sustained_period,
+                )
 
             if int(elapsed) % 10 == 0 and elapsed > 0:
                 print(f"🚧 Pods still ready after {int(elapsed)}s...")

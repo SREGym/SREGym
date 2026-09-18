@@ -25,8 +25,8 @@ The oracle checks four independent properties:
 2. **Accumulated Jobs are gone.** Active Jobs created from the old regular-
    sidecar template are rejected. A small number of current-template Jobs may
    be active at a schedule boundary.
-3. **App still healthy.** Every Deployment in the namespace reports
-   ``ready_replicas == spec.replicas``. We check Deployment status directly
+3. **App still healthy.** Every Deployment in the namespace has completed
+   its current rollout. We check Deployment status directly
    rather than walking pods so ``Succeeded`` Job pods don't produce false
    negatives.
 4. **Current template works at runtime.** The oracle creates one fresh Job from
@@ -42,6 +42,8 @@ from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 _ROLLOUT_SETTLE_SECONDS = 60
 _ROLLOUT_POLL_INTERVAL = 5
@@ -63,6 +65,21 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
     """
 
     importance = 1.0
+
+    FAILURE_CLASSES = {
+        # Deleting the workload, leaving the blocking template in place, or
+        # letting Jobs pile up are all things the agent did; the fault
+        # injection created the CronJob and does not touch it afterwards. The
+        # oracle's own messages say deletion is an unacceptable fix, so scoring
+        # it as anything other than the agent's error would contradict them.
+        "cronjob_deleted": FailureClass.AGENT_ERROR,
+        "stale_jobs_not_cleaned_up": FailureClass.AGENT_ERROR,
+        "active_jobs_accumulated": FailureClass.AGENT_ERROR,
+        # A fresh Job from the current template failing to complete is strong
+        # evidence but runs a real workload against a real cluster, so it stays
+        # undecidable.
+        "fresh_job_did_not_complete": FailureClass.AMBIGUOUS,
+    }
 
     def __init__(self, problem):
         super().__init__(problem)
@@ -87,55 +104,70 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
         cj = self._get_cronjob(cronjob_name, namespace)
         if not self._is_spec_fixed(cj):
             if cj is None:
-                return self._fail(
+                return self._fail_with(
+                    "cronjob_deleted",
                     f"CronJob '{cronjob_name}' was deleted. Deletion is not an acceptable "
                     "fix here -- the audit-log archival workload exists for a real reason "
                     "(compliance log forwarding) and the bug is the Pod lifecycle, not the "
                     "workload. Convert the sidecar to the K8s 1.28+ native pattern: move "
                     "it to spec.jobTemplate.spec.template.spec.initContainers with "
-                    "restartPolicy=Always."
+                    "restartPolicy=Always.",
+                    cronjob=cronjob_name,
                 )
-            return self._fail(
+            return self._fail_with(
+                "fault_still_present",
                 f"CronJob '{cronjob_name}' is not in an acceptable post-fix state. The "
                 "only accepted fix for this lifecycle bug is the K8s 1.28+ native sidecar "
                 "pattern: move the sidecar container from spec.jobTemplate.spec.template."
                 "spec.containers to spec.jobTemplate.spec.template.spec.initContainers, "
                 "and set restartPolicy=Always on it. activeDeadlineSeconds and removing "
                 "the sidecar are not accepted -- they either time-bomb the workload or "
-                "delete its functional purpose."
+                "delete its functional purpose.",
+                cronjob=cronjob_name,
             )
 
         # 2. Were Jobs created from the old, blocking template cleaned up?
         active_jobs = self._active_jobs(cronjob_name, namespace)
         stale_jobs = [job.metadata.name for job in active_jobs if not self._job_spec_is_safe(job.spec)]
         if stale_jobs:
-            return self._fail(
-                f"Active Jobs still use the old blocking sidecar template and must be cleaned up: {sorted(stale_jobs)}"
+            return self._fail_with(
+                "stale_jobs_not_cleaned_up",
+                f"Active Jobs still use the old blocking sidecar template and must be cleaned up: {sorted(stale_jobs)}",
+                jobs=sorted(stale_jobs),
             )
 
         n_active = len(active_jobs)
         if n_active > _MAX_ACTIVE_JOBS:
-            return self._fail(
+            return self._fail_with(
+                "active_jobs_accumulated",
                 f"{n_active} Jobs owned by '{cronjob_name}' are still active "
-                f"(threshold: {_MAX_ACTIVE_JOBS}). Accumulated Jobs must be cleaned up."
+                f"(threshold: {_MAX_ACTIVE_JOBS}). Accumulated Jobs must be cleaned up.",
+                active=n_active,
+                threshold=_MAX_ACTIVE_JOBS,
             )
 
         # 3. Is the rest of the namespace's application still healthy?
         problem_dep = self._unhealthy_deployment(namespace)
         if problem_dep is not None:
-            return self._fail(
+            return self._fail_with(
+                "deployment_replicas_unready",
                 f"Deployment '{problem_dep}' in '{namespace}' is under-replicated; "
-                "agent's mitigation produced collateral damage to the application."
+                "agent's mitigation produced collateral damage to the application.",
+                deployment=problem_dep,
+                namespace=namespace,
             )
 
         # 4. Prove the current template, not historical Job state. Create one
         # controlled Job directly from the current CronJob's Job template.
         print(f"Waiting up to {_BEHAVIOR_PROOF_TIMEOUT_S}s for the current template to complete a Job...")
         if not self._run_controlled_job(cj, namespace):
-            return self._fail(
+            return self._fail_with(
+                "fresh_job_did_not_complete",
                 f"The current template for '{cronjob_name}' did not complete a fresh Job within "
                 f"{_BEHAVIOR_PROOF_TIMEOUT_S}s. Check that the real sidecar is functional and uses "
-                "the native sidecar lifecycle."
+                "the native sidecar lifecycle.",
+                cronjob=cronjob_name,
+                timeout_seconds=_BEHAVIOR_PROOF_TIMEOUT_S,
             )
 
         print(
@@ -154,13 +186,7 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
             deployments = kubectl.list_deployments(namespace)
             all_settled = True
             for dep in deployments.items:
-                status = dep.status
-                desired = dep.spec.replicas or 1
-                if (
-                    (status.updated_replicas or 0) < desired
-                    or (status.ready_replicas or 0) < desired
-                    or (status.unavailable_replicas or 0) > 0
-                ):
+                if not deployment_rollout_complete(dep, allow_zero=True):
                     all_settled = False
                     break
             if all_settled:
@@ -293,16 +319,21 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
         return any(ref.kind == "CronJob" and ref.name == cronjob_name for ref in job.metadata.owner_references or [])
 
     def _unhealthy_deployment(self, namespace):
-        """Return the name of the first under-replicated Deployment, or None."""
+        """Return the first Deployment with an incomplete rollout, or None."""
         deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
         for dep in deployments.items:
-            desired = dep.spec.replicas or 1
-            ready = dep.status.ready_replicas or 0
-            if ready < desired:
+            if not deployment_rollout_complete(dep):
                 return dep.metadata.name
         return None
 
-    @staticmethod
-    def _fail(reason: str) -> dict:
-        print(f"❌ {reason}")
-        return {"success": False, "reason": reason}
+    def _fail_with(self, reason: str, message: str, **detail) -> dict:
+        """Print the long-form explanation and return a coded verdict.
+
+        The messages here are unusually long because they spell out which fixes
+        are accepted and why -- that is worth keeping verbatim in the run log.
+        What it is not is a ``reason`` anything can filter on, since every
+        message interpolates names. So the prose stays a print and ``reason``
+        becomes a code.
+        """
+        print(f"❌ {message}")
+        return self.fail(reason, **detail)

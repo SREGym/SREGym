@@ -5,6 +5,8 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class DNSResolutionMitigationOracle(Oracle):
@@ -15,21 +17,7 @@ class DNSResolutionMitigationOracle(Oracle):
 
     @staticmethod
     def _rollout_complete(deployment) -> bool:
-        desired = deployment.spec.replicas
-        if desired is None:
-            desired = 1
-        if desired < 1:
-            return False
-
-        generation = deployment.metadata.generation or 0
-        status = deployment.status
-        return (
-            (status.observed_generation or 0) >= generation
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _wait_for_current_rollout(self, deployment):
         deadline = time.monotonic() + self.rollout_timeout_seconds
@@ -105,10 +93,14 @@ class DNSResolutionMitigationOracle(Oracle):
             return phase == "Succeeded" and "DNS_OK" in logs
         except ApiException as exc:
             print(f"❌ DNS probe pod failed: {exc}")
-            return False
+            raise
         finally:
             with contextlib.suppress(ApiException):
                 core_v1.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=0)
+
+    FAILURE_CLASSES = {
+        "service_has_no_ports": FailureClass.AMBIGUOUS,
+    }
 
     def evaluate(self) -> dict:
         print("== DNS Resolution Mitigation Check ==")
@@ -120,23 +112,25 @@ class DNSResolutionMitigationOracle(Oracle):
             service, deployment = self._find_service_and_deployment(kubectl.list_services(namespace).items)
             if service is None or deployment is None:
                 print(f"❌ Service or Deployment {self.problem.faulty_service or '<with selector>'} not found.")
-                return {"success": False}
+                return self.fail("required_deployment_missing", service=self.problem.faulty_service)
 
             deployment = self._wait_for_current_rollout(deployment)
             if deployment is None:
                 print("❌ Affected Deployment did not complete its current rollout.")
-                return {"success": False}
+                return self.fail("required_deployment_not_rolled_out")
 
             service_ports = service.spec.ports or []
             if not service_ports or service_ports[0].port is None:
                 print(f"❌ Service {service.metadata.name} has no usable port.")
-                return {"success": False}
+                return self.fail("service_has_no_ports", service=service.metadata.name)
 
             dns_name = f"{service.metadata.name}.{namespace}.svc.cluster.local"
             service_port = service_ports[0].port
             if not self._run_dns_probe(deployment, dns_name, service_port):
                 print(f"[❌] Failed DNS resolution or TCP connection for {dns_name}:{service_port}")
-                return {"success": False}
+                # DNS resolution is what this problem breaks, and the probe runs
+                # with the affected Deployment's own DNS settings.
+                return self.fail("fault_still_present", dns_name=dns_name, port=service_port)
 
             print(
                 f"[✅] Successfully resolved and connected to {dns_name}:{service_port} "
@@ -145,4 +139,4 @@ class DNSResolutionMitigationOracle(Oracle):
             return {"success": True}
         except Exception as exc:
             print(f"❌ Error checking DNS resolution: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)

@@ -17,12 +17,15 @@ Example:
 """
 
 import argparse
+import json
 import logging
 import sys
 import time
+from pathlib import Path
 
 from logger import init_logger
 from sregym.conductor.conductor import Conductor, ConductorConfig
+from sregym.profile import PROFILES, set_profile
 
 logger = logging.getLogger("all.sregym.validate_problem")
 
@@ -83,7 +86,9 @@ def _mark_failure(stages: dict, message: str):
             return
 
 
-def validate(problem_id: str, inject_timeout: int, recover_timeout: int, poll_interval: int):
+def validate(
+    problem_id: str, inject_timeout: int, recover_timeout: int, poll_interval: int, *, deploy_loki: bool = False
+):
     """Run the full deploy/inject/recover lifecycle. Returns (passed, stages)."""
     stages = {
         "resolve": Stage("Resolve problem in registry"),
@@ -92,11 +97,14 @@ def validate(problem_id: str, inject_timeout: int, recover_timeout: int, poll_in
         "oracle_fail": Stage("Oracle fails after fault injection"),
         "recover": Stage("Recover fault"),
         "oracle_pass": Stage("Oracle passes after recovery"),
+        "cleanup": Stage("Clean up application and local port forwards"),
     }
 
     conductor = None
+    injection_attempted = False
+    recovery_verified = False
     try:
-        conductor = Conductor(config=ConductorConfig(deploy_loki=False))
+        conductor = Conductor(config=ConductorConfig(deploy_loki=deploy_loki))
 
         # --- Resolve the problem ----------------------------------------------
         logger.info(f"[STAGE] Resolving problem '{problem_id}'")
@@ -141,6 +149,7 @@ def validate(problem_id: str, inject_timeout: int, recover_timeout: int, poll_in
 
         # --- Inject the fault -------------------------------------------------
         logger.info("[STAGE] Injecting fault")
+        injection_attempted = True
         problem.inject_fault()
         stages["inject"].status = PASS
         stages["inject"].detail = "inject_fault() completed without error"
@@ -174,24 +183,50 @@ def validate(problem_id: str, inject_timeout: int, recover_timeout: int, poll_in
             )
         stages["oracle_pass"].status = PASS
         stages["oracle_pass"].detail = f"oracle reported success after {checks} check(s)"
-
-        return True, stages
+        recovery_verified = True
 
     except ValidationError as e:
         logger.error(f"Validation failed: {e}")
         _mark_failure(stages, str(e))
-        return False, stages
     except Exception as e:  # noqa: BLE001 - any crash is a validation failure
         logger.exception("Validation crashed with an unexpected error")
         _mark_failure(stages, f"unexpected error: {type(e).__name__}: {e}")
-        return False, stages
     finally:
-        # Best-effort teardown so the script is re-runnable locally.
-        try:
-            if conductor is not None and conductor.problem is not None:
-                conductor.problem.app.cleanup()
-        except Exception:  # noqa: BLE001
-            logger.warning("App cleanup after validation failed", exc_info=True)
+        # Namespace deletion alone cannot undo cluster-scoped webhooks or DNS
+        # changes. Attempt fault recovery even after a partially failed inject.
+        cleanup_actions = []
+        if conductor is not None:
+            if conductor.problem is not None:
+                if injection_attempted and not recovery_verified:
+                    cleanup_actions.append(("recover fault", conductor.problem.recover_fault))
+                cleanup_actions.extend(
+                    [
+                        ("remove application", conductor.problem.app.cleanup),
+                        (
+                            "wait for namespace deletion",
+                            lambda: conductor.kubectl.wait_for_namespace_deletion(conductor.problem.namespace),
+                        ),
+                    ]
+                )
+            cleanup_actions.extend(
+                [
+                    ("stop MCP port forward", conductor.mcp_server.stop_port_forward),
+                    ("stop Kubernetes proxy", conductor.stop_k8s_proxy),
+                ]
+            )
+        cleanup_errors = []
+        for name, action in cleanup_actions:
+            try:
+                action()
+            except Exception as exc:  # noqa: BLE001 - attempt every cleanup action
+                logger.warning("Cleanup action failed: %s", name, exc_info=True)
+                cleanup_errors.append(f"{name}: {exc}")
+        stages["cleanup"].status = FAIL if cleanup_errors else PASS
+        stages["cleanup"].detail = (
+            "; ".join(cleanup_errors) if cleanup_errors else "application namespace and local port forwards removed"
+        )
+
+    return all(stage.status == PASS for stage in stages.values()), stages
 
 
 def write_summary(path: str, problem_id: str, passed: bool, stages: dict):
@@ -240,6 +275,9 @@ def main():
     )
     parser.add_argument("--problem", required=True, help="Registered problem ID to validate")
     parser.add_argument("--summary", default="validation-summary.md", help="Path for the Markdown summary")
+    parser.add_argument("--json-summary", type=Path, help="Optional machine-readable lifecycle results")
+    parser.add_argument("--profile", choices=PROFILES, default="full")
+    parser.add_argument("--with-loki", action="store_true", help="Also validate deployment of Loki and Promtail")
     parser.add_argument(
         "--inject-timeout",
         type=int,
@@ -261,13 +299,31 @@ def main():
     args = parser.parse_args()
 
     init_logger()
+    set_profile(args.profile)
     logger.info(f"Starting validation for problem: {args.problem}")
     start = time.time()
 
-    passed, stages = validate(args.problem, args.inject_timeout, args.recover_timeout, args.poll_interval)
+    passed, stages = validate(
+        args.problem, args.inject_timeout, args.recover_timeout, args.poll_interval, deploy_loki=args.with_loki
+    )
 
     elapsed = time.time() - start
     write_summary(args.summary, args.problem, passed, stages)
+    if args.json_summary:
+        args.json_summary.write_text(
+            json.dumps(
+                {
+                    "problem": args.problem,
+                    "profile": args.profile,
+                    "with_loki": args.with_loki,
+                    "passed": passed,
+                    "elapsed_seconds": round(elapsed, 2),
+                    "stages": {key: vars(stage) for key, stage in stages.items()},
+                },
+                indent=2,
+            )
+            + "\n"
+        )
 
     print("\n" + "=" * 64)
     print(f"PROBLEM VALIDATION — {args.problem}")

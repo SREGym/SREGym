@@ -72,11 +72,7 @@ SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/)
 **Note:** If you run into pod crashes or "too many open files" errors, see the [kind README](./kind/README.md) for required host kernel settings and troubleshooting.
 
 ```bash
-# For x86 machines
-bash kind/setup_kind_cluster.sh x86
-
-# For ARM machines
-bash kind/setup_kind_cluster.sh arm
+bash kind/setup_kind_cluster.sh
 ```
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
@@ -118,6 +114,36 @@ Use `--judge-model` to override the judge model separately (defaults to `--model
 uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627
 ```
 
+#### Stage Selection
+
+Each problem runs up to two agent stages, `diagnosis` then `mitigation`. By default a
+run attempts every stage the problem supports. `--stages` narrows that:
+
+```bash
+# Diagnose only; never enter the mitigation stage
+uv run main.py --problem network_policy_block --stages diagnosis
+
+# Both, stated explicitly (the default)
+uv run main.py --suite sregym-lite --stages diagnosis mitigation
+```
+
+`--stages` is independent of `--problem` and `--suite`: the stages decide what an
+attempt does, the problem selection decides which problems it does it to. Stages must
+be given in the order above.
+
+Useful mainly when iterating on a problem's diagnosis oracle, where a mitigation
+attempt is wasted time — note that `--agent-timeout` is a budget for the whole agent
+phase, so a slow diagnosis otherwise eats into mitigation's share.
+
+> [!NOTE]
+> A single-stage run is reported as `complete`, since completeness is measured against
+> the stages that were configured. It is not, however, useful input to
+> `sregym/results/report.py`'s difficulty tables, which treat a missing mitigation
+> result as inconclusive.
+
+Naming a stage the problem has no oracle for is an error rather than a silent skip, so
+a typo cannot produce a run that reports success having measured nothing.
+
 #### Container Isolation
 
 Agents always run in isolated Docker containers, preventing access to SREGym internals like problem definitions and grading logic. The image is built automatically on first run.
@@ -130,6 +156,15 @@ uv run main.py --agent codex --model gpt-5 --force-build
 
 Containerized agents can use the public internet by default, but direct access to the benchmark's GitHub source is
 blocked. Use `--internet-access open` only when you intentionally need the previous unrestricted network behavior.
+
+Agent containers are hardened by default: every Linux capability is dropped except `DAC_OVERRIDE`, which container
+root needs to write to the host-owned `/logs` and `/workspace` bind mounts, and `no-new-privileges` is set. This
+blocks `apt-get`, which cannot drop to the `_apt` user without `setuid`/`setgid`. If your agent installs tooling
+during a run, turn it off:
+
+```bash
+uv run main.py --agent codex --model gpt-5 --container-hardening off
+```
 
 ### Deployment Profiles
 
@@ -177,6 +212,7 @@ SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings dire
 |----------|---------|---------|
 | `--model` | `gpt-5` | Sets both agent and judge model |
 | `--judge-model` | (same as `--model`) | Override just the judge evaluator model |
+| `--judge-backend` | `api` | Judge access through the existing API endpoint, or `codex`, `claudecode`, `copilot`, or `cursor` |
 
 Set the required environment variable for your provider before running:
 
@@ -235,6 +271,25 @@ export JUDGE_API_BASE="https://example.test/v1"
 export JUDGE_API_KEY="..."
 uv run main.py --agent stratus --model ollama_chat/qwen3-coder:30b --judge-model gpt-5
 ```
+
+### Subscription-backed judges
+
+Choose a subscription judge independently of the agent with `--judge-backend` (default `api`).
+
+```bash
+uv run main.py --agent cursor --model auto --judge-backend codex --judge-model gpt-5.5
+```
+
+| Judge backend | Credentials |
+| --- | --- |
+| `codex` | Subscription login in `$CODEX_HOME/auth.json`, default `~/.codex/auth.json` |
+| `claudecode` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `copilot` | `COPILOT_GITHUB_TOKEN` |
+| `cursor` | `CURSOR_API_KEY` |
+
+Set `--judge-model` to a model supported by the selected CLI.
+
+For Copilot, use `export COPILOT_GITHUB_TOKEN="$(gh auth token)"` to reuse an existing GitHub CLI OAuth login.
 
 <details>
 <summary><strong>Provider Examples</strong></summary>

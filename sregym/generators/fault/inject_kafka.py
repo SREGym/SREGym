@@ -10,6 +10,7 @@ from kubernetes import client
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 
 logger = logging.getLogger("all.sregym.inject_kafka")
 logger.propagate = True
@@ -568,8 +569,7 @@ class KafkaFaultInjector(FaultInjector):
         deadline = time.time() + timeout
         while time.time() < deadline:
             dep = api.read_namespaced_deployment(name, self.namespace)
-            desired = dep.spec.replicas or 1
-            if (dep.status.ready_replicas or 0) >= desired:
+            if deployment_rollout_complete(dep):
                 logger.info("[Kafka pipeline] Deployment '%s' is ready", name)
                 return
             time.sleep(5)
