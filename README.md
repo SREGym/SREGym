@@ -168,23 +168,14 @@ uv run main.py --agent codex --model gpt-5 --container-hardening off
 
 #### Optional Jev decision support
 
-Codex can use Jev to rank diagnostic tests and review evidence before submission.
-Jev is disabled by default. To enable it, set `TYPESAFE_API_KEY` in your environment and run:
+Jev is disabled by default. To enable it for Codex, set `TYPESAFE_API_KEY` and run:
 
 ```bash
 uv run main.py --agent codex --model gpt-5.6-luna --reasoning-effort medium \
   --problem <problem-id> --jev-model jev-latest --force-build
 ```
 
-`jev_plan` ranks agent-proposed checks. `jev_submit` reviews the evidence and submits
-only when each required support score reaches 0.7. The agent still runs commands;
-Jev does not make repairs or change the benchmark's grading.
-
-This sends supplied evidence and a selected Kubernetes resource snapshot to TypeSafe.
-Do not include credentials in evidence. Each attempt permits 40 Jev evaluations,
-with at most one provider retry per evaluation. Provider failures can prevent submission.
-Calls and separate Jev token usage are recorded in `jev_calls.jsonl` with the run artifacts.
-Normal runs without `--jev-model` keep their existing prompts and tools.
+Jev reviews diagnostic tests and submissions using evidence sent to TypeSafe.
 
 ### Deployment Profiles
 
