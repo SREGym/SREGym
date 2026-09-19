@@ -76,3 +76,83 @@ def test_every_prompt_mode_has_a_diagnosis_and_a_mitigation_prompt(driver):
     for mode, (diagnosis, mitigation) in driver.PROMPT_MODES.items():
         assert diagnosis.strip(), mode
         assert mitigation.strip(), mode
+
+
+def test_run_turn_returns_resume_failure(driver, monkeypatch):
+    conversation_id = "00000000-0000-0000-0000-000000000001"
+    responses = iter(
+        [
+            {"status": "complete", "conversation_id": conversation_id, "answer": "partial"},
+            {"status": "error", "conversation_id": conversation_id, "error": "resume failed"},
+        ]
+    )
+    monkeypatch.setattr(driver, "CT_GATE_SETTLE_SECONDS", 0)
+    monkeypatch.setattr(driver, "CT_RESUME_RETRIES", 0)
+    monkeypatch.setattr(driver, "ct_chat", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(driver, "pending_approval", lambda value: True)
+
+    result = driver.run_turn("diagnose")
+
+    assert result["error"] == "resume failed"
+    assert result["answer"] == "partial"
+
+
+def test_run_turn_fails_when_approval_budget_is_exhausted(driver, monkeypatch):
+    conversation_id = "00000000-0000-0000-0000-000000000001"
+    monkeypatch.setattr(driver, "CT_MAX_APPROVALS", 0)
+    monkeypatch.setattr(
+        driver,
+        "ct_chat",
+        lambda *args, **kwargs: {
+            "status": "complete",
+            "conversation_id": conversation_id,
+            "answer": "partial",
+        },
+    )
+    monkeypatch.setattr(driver, "pending_approval", lambda value: True)
+
+    result = driver.run_turn("diagnose")
+
+    assert result["status"] == "error"
+    assert result["error"] == "approval_limit_exceeded"
+
+
+def test_prompt_params_include_every_namespace(driver):
+    params = driver.prompt_params(
+        {
+            "app_name": "multi-app",
+            "namespace": "first",
+            "namespaces": ["first", "second"],
+            "descriptions": "two failures",
+        }
+    )
+
+    assert params["namespace_block"] == (
+        "Namespaces: first, second\n(This scenario spans multiple namespaces; investigate all of them.)"
+    )
+
+
+def test_mitigation_harness_failure_is_invalidated(driver, tmp_path, monkeypatch):
+    submissions = []
+    saved = []
+    sessions = []
+    monkeypatch.setattr(driver, "submit_to_conductor", submissions.append)
+    monkeypatch.setattr(driver, "_save_stage_result", lambda logs, stage, summary: saved.append(stage))
+    monkeypatch.setattr(driver, "write_session", lambda logs, problem, stages: sessions.extend(stages))
+    monkeypatch.setattr(driver, "_finish", lambda logs, problem: None)
+
+    with pytest.raises(SystemExit) as exc:
+        driver.abort_harness_failure(
+            tmp_path,
+            "problem",
+            {"harness_failure": True, "error": "resume failed", "conversation_id": "conv-1"},
+            reason="mitigation never reached the agent",
+            stage="mitigation",
+            stages=[{"name": "diagnosis"}, {"name": "mitigation"}],
+        )
+
+    assert exc.value.code == 2
+    assert submissions == [""]
+    assert saved == ["mitigation"]
+    assert [stage["name"] for stage in sessions] == ["diagnosis", "mitigation"]
+    assert (tmp_path / "HARNESS_FAILURE.txt").is_file()

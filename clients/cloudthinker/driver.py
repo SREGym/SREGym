@@ -515,6 +515,7 @@ def run_turn(message: str, conversation_id: str | None = None) -> dict:
                 # because a busy poll deliberately does not count as a failure.
                 if busy_waited >= CT_TURN_TIMEOUT:
                     logger.error(f"{conversation_id} still streaming after {busy_waited}s — abandoning approvals")
+                    summary = resumed
                     break
                 busy_waited += CT_RESUME_POLL_SECONDS
                 logger.info(
@@ -527,6 +528,7 @@ def run_turn(message: str, conversation_id: str | None = None) -> dict:
             retries += 1
             if retries > CT_RESUME_RETRIES:
                 logger.error(f"Resume failed {retries}x — abandoning approvals")
+                summary = resumed
                 break
             logger.warning(f"Resume rejected (attempt {retries}, {resumed.get('error')!r}) — backing off")
             time.sleep(CT_RESUME_BACKOFF * retries)
@@ -544,6 +546,7 @@ def run_turn(message: str, conversation_id: str | None = None) -> dict:
 
     if approvals >= CT_MAX_APPROVALS and pending_approval(conversation_id):
         logger.warning(f"Still gated after {approvals} approvals — giving up on this turn")
+        summary = {**summary, "status": "error", "error": "approval_limit_exceeded"}
 
     return {
         **summary,
@@ -784,6 +787,23 @@ def submit_to_conductor(solution: str) -> None:
     logger.info(f"Submit response: {resp.json()}")
 
 
+def prompt_params(app_info: dict) -> dict[str, str]:
+    """Build prompt fields while preserving every application namespace."""
+    namespace = app_info.get("namespace", "default")
+    namespaces = app_info.get("namespaces") or [namespace]
+    if len(namespaces) > 1:
+        namespace_block = (
+            f"Namespaces: {', '.join(namespaces)}\n(This scenario spans multiple namespaces; investigate all of them.)"
+        )
+    else:
+        namespace_block = f"Namespace: {namespaces[0]}"
+    return {
+        "app_name": app_info.get("app_name", "unknown"),
+        "namespace_block": namespace_block,
+        "descriptions": app_info.get("descriptions", ""),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Prompt templates
 # ---------------------------------------------------------------------------
@@ -839,7 +859,7 @@ def submit_to_conductor(solution: str) -> None:
 DIAGNOSIS_PROMPT_NEUTRAL = """You are an SRE agent tasked with diagnosing issues in a Kubernetes application.
 
 Application: {app_name}
-Namespace: {namespace}
+{namespace_block}
 {descriptions}
 
 CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all
@@ -859,7 +879,7 @@ the root cause."""
 DIAGNOSIS_PROMPT_GUIDED = """You are on call for a Kubernetes application that is failing.
 
 Application: {app_name}
-Namespace: {namespace}
+{namespace_block}
 Description: {descriptions}
 
 Investigate the live cluster and determine the root cause. Your MCP connections
@@ -960,7 +980,7 @@ If useful, scout `./_skills/public/root-cause-analysis/incidents/` for a matchin
 MITIGATION_PROMPT_BASE = """Now fix it.
 
 Application: {app_name}
-Namespace: {namespace}
+{namespace_block}
 
 You have write access to the cluster. Apply the fix yourself by running
 `kubectl` in your sandbox (patch, edit, scale, rollout, apply). This is a
@@ -1042,11 +1062,7 @@ def main():
     problem_id = resolve_problem_id()
     logger.info(f"Problem ID (harness): {problem_id}")
 
-    params = {
-        "app_name": app_info.get("app_name", "unknown"),
-        "namespace": app_info.get("namespace", "default"),
-        "descriptions": app_info.get("descriptions", ""),
-    }
+    params = prompt_params(app_info)
 
     # ================================================================
     # PHASE 1: DIAGNOSIS
@@ -1143,6 +1159,20 @@ def main():
     # retry must never fall back to a fresh one. `resume_turn_retrying` waits out
     # the conversation's still-open stream instead of recording an instant failure.
     mitigation = resume_turn_retrying(MITIGATION_PROMPT.format(**params), conversation_id=conversation_id)
+    mitigation_stage = {
+        "name": "mitigation",
+        "conversation_id": mitigation.get("conversation_id") or conversation_id,
+        "submitted": mitigation.get("answer"),
+    }
+    if mitigation.get("harness_failure"):
+        abort_harness_failure(
+            logs_dir,
+            problem_id,
+            mitigation,
+            reason=f"the agent harness could not complete mitigation ({mitigation.get('error')})",
+            stage="mitigation",
+            stages=[*stages, mitigation_stage],
+        )
     approvals = mitigation.get("approvals", 0)
     # Whole-conversation list, so it includes the diagnosis tools too.
     logger.info(f"Tools after mitigation: {db_tool_calls(conversation_id)} (approvals granted: {approvals})")
@@ -1150,13 +1180,7 @@ def main():
     # Empty solution: the fix is applied in-cluster, the oracle checks the cluster.
     submit_to_conductor("")
     _save_stage_result(logs_dir, "mitigation", mitigation)
-    stages.append(
-        {
-            "name": "mitigation",
-            "conversation_id": mitigation.get("conversation_id") or conversation_id,
-            "submitted": mitigation.get("answer"),
-        }
-    )
+    stages.append(mitigation_stage)
 
     try:
         stage = wait_for_stage({"resolution", "done", "tearing_down"}, timeout=300)
@@ -1171,35 +1195,40 @@ def main():
     _finish(logs_dir, problem_id)
 
 
-def abort_harness_failure(logs_dir: Path, problem_id: str, diagnosis: dict, reason: str) -> None:
+def abort_harness_failure(
+    logs_dir: Path,
+    problem_id: str,
+    summary: dict,
+    reason: str,
+    stage: str = "diagnosis",
+    stages: list[dict] | None = None,
+) -> None:
     """End the run as infrastructure failure rather than as a CloudThinker score.
 
-    Submits a marker instead of whatever text is in hand: the run must be
-    greppable as broken, never averaged in as a low score. Still advances the
-    conductor so a suite does not stall 300s per problem waiting on a submission
-    that is not coming. Exits 2, so a chain script can tell this apart from both
-    a clean run (0) and a crash.
+    Writes a greppable marker so the run is never averaged in as a low score.
+    Still advances the conductor with the submission shape required by the current
+    stage. Exits 2, so a chain script can tell this apart from both a clean run (0)
+    and a crash.
     """
     (logs_dir / "HARNESS_FAILURE.txt").write_text(
         f"{HARNESS_FAILURE_MARKER}\nproblem={problem_id}\nreason={reason}\n"
-        f"error={diagnosis.get('error')}\n"
-        f"conversation_id={diagnosis.get('conversation_id')}\n"
-        f"partial_answer={(diagnosis.get('answer') or '')[:2000]}\n"
+        f"stage={stage}\n"
+        f"error={summary.get('error')}\n"
+        f"conversation_id={summary.get('conversation_id')}\n"
+        f"partial_answer={(summary.get('answer') or '')[:2000]}\n"
     )
     logger.error(f"{HARNESS_FAILURE_MARKER}: {problem_id} — result is INVALID, exclude it. {reason}")
-    submit_to_conductor(f"{HARNESS_FAILURE_MARKER}: {reason}")
-    _save_stage_result(logs_dir, "diagnosis", diagnosis)
-    write_session(
-        logs_dir,
-        problem_id,
-        [
+    submit_to_conductor(f"{HARNESS_FAILURE_MARKER}: {reason}" if stage == "diagnosis" else "")
+    _save_stage_result(logs_dir, stage, summary)
+    if stages is None:
+        stages = [
             {
-                "name": "diagnosis",
-                "conversation_id": diagnosis.get("conversation_id"),
-                "submitted": diagnosis.get("answer"),
+                "name": stage,
+                "conversation_id": summary.get("conversation_id"),
+                "submitted": summary.get("answer"),
             }
-        ],
-    )
+        ]
+    write_session(logs_dir, problem_id, stages)
     _finish(logs_dir, problem_id)
     sys.exit(2)
 
