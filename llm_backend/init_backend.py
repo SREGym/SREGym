@@ -10,6 +10,8 @@ def get_llm_backend(
     provider: str | None = None,
     temperature: float = 0.0,
     max_tokens: int | None = None,
+    usage_available: bool = True,
+    retry: bool = True,
 ) -> LiteLLMBackend:
     """Initialize an LLM backend for the given litellm model string."""
     endpoint_status = "set" if api_base else "unset"
@@ -21,6 +23,8 @@ def get_llm_backend(
         provider=provider,
         temperature=temperature,
         max_tokens=max_tokens,
+        usage_available=usage_available,
+        retry=retry,
     )
 
 
@@ -49,6 +53,10 @@ def get_llm_backend_for_judge(
     model_id = model_name or os.environ.get("JUDGE_MODEL_ID")
     if not model_id:
         raise ValueError("A judge model must be passed or set in JUDGE_MODEL_ID.")
+    if bridge_url := os.environ.get("SREGYM_JUDGE_BRIDGE_URL"):
+        # The selected CLI owns inference, even for Claude/native model names or
+        # explicit oracle provider settings. Never fall through to API billing.
+        provider, api_base, api_key = "openai", bridge_url, "dummy"
     return get_llm_backend(
         model_id,
         api_base=api_base if api_base is not None else os.environ.get("JUDGE_API_BASE"),
@@ -56,4 +64,6 @@ def get_llm_backend_for_judge(
         provider=provider,
         temperature=temperature,
         max_tokens=max_tokens,
+        usage_available=not bool(bridge_url),
+        retry=not bool(bridge_url),
     )

@@ -13,6 +13,9 @@ class Problem(ABC):
         self.results = {}
         self.root_cause = None  # root cause of the problem in natural language
 
+        # Seconds of steady-state traffic to run before fault injection. Override in subclass.
+        self.baseline_duration_s: int = 0
+
         # Optional: attach oracles in subclass
         self.diagnosis_oracle = None
         self.mitigation_oracle = None

@@ -98,14 +98,13 @@ if [[ ${SREGYM_ETCD_TMPFS_SIZE:-512m} != 0 ]]; then
     mkdir -p /run/sregym-etcd
     mount -t tmpfs -o "size=${SREGYM_ETCD_TMPFS_SIZE:-512m}" tmpfs /run/sregym-etcd
     export KIND_CONFIG=/run/sregym-kind.yaml
-    python - "$arch" <<'PY'
+    python - <<'PY'
 import os
-import sys
 from pathlib import Path
 
 import yaml
 
-config = yaml.safe_load(Path(f"kind/kind-config-{sys.argv[1]}.yaml").read_text())
+config = yaml.safe_load(Path("kind/kind-config.yaml").read_text())
 config["nodes"][0].setdefault("extraMounts", []).append(
     {"hostPath": "/run/sregym-etcd", "containerPath": "/var/lib/etcd"}
 )
