@@ -51,7 +51,7 @@ def _conductor(diagnosis_evaluation=None, mitigation_evaluation=None) -> Conduct
     conductor._accepting_submissions = True
     conductor._attempt_closed = False
 
-    def advance(self, start_index=0):
+    async def advance(self, start_index=0):
         self.waiting_for_agent = False
         self.current_stage_index = start_index
         if start_index < len(self.stage_sequence):
@@ -900,7 +900,7 @@ def test_no_stage_path_starts_bounded_background_cleanup():
     conductor.stage_sequence = []
 
     started_at = time.monotonic()
-    Conductor._advance_to_next_stage(conductor)
+    asyncio.run(Conductor._advance_to_next_stage(conductor))
     elapsed = time.monotonic() - started_at
 
     assert elapsed < 0.2

@@ -905,6 +905,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         block_workload_creation=internet_policy.is_filtered,
         stages=tuple(args.stages) if args.stages else None,
         baseline_override_s=args.baseline,
+        propagation_override_s=args.propagation,
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
     LAUNCHER.set_container_hardening(harden_container)
@@ -1148,12 +1149,21 @@ if __name__ == "__main__":
         metavar="SECONDS",
         help="Override per-problem baseline duration (seconds of steady-state traffic before fault injection)",
     )
+    parser.add_argument(
+        "--propagation",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="Override per-problem propagation duration (seconds to wait after fault injection, before the agent starts)",
+    )
     args = parser.parse_args()
 
     if args.n_attempts is not None and args.n_attempts < 1:
         parser.error("--n-attempts must be a positive integer")
     if args.baseline is not None and args.baseline < 0:
         parser.error("--baseline must be a non-negative integer")
+    if args.propagation is not None and args.propagation < 0:
+        parser.error("--propagation must be a non-negative integer")
     if args.use_external_harness and args.suite:
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
 

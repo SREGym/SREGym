@@ -61,7 +61,7 @@ async def run_problem(problem_id):
     except Exception as e:
         print(f"Failed to update NoiseManager context: {e}")
 
-    conductor._advance_to_next_stage(start_index=0)
+    await conductor._advance_to_next_stage(start_index=0)
 
     print(f"[READY] Current stage: {conductor.submission_stage}")
 
