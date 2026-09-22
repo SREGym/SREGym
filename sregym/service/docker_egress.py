@@ -54,8 +54,9 @@ def _find_host_ca_bundle() -> Path:
 
 
 class DockerEgress:
-    def __init__(self, image: str = DEFAULT_EGRESS_PROXY_IMAGE):
+    def __init__(self, image: str = DEFAULT_EGRESS_PROXY_IMAGE, *, k8s_proxy_port: int = 16443):
         self.image = image
+        self.k8s_proxy_port = k8s_proxy_port
         self._network_name: str | None = None
         self._proxy_name: str | None = None
         self._tmp_dir: Path | None = None
@@ -195,7 +196,7 @@ class DockerEgress:
                     # certificate from its kubeconfig; mitmproxy must not
                     # replace it with an egress certificate.
                     "--set",
-                    r"ignore_hosts=^host\.docker\.internal:16443$",
+                    rf"ignore_hosts=^host\.docker\.internal:{self.k8s_proxy_port}$",
                     "-s",
                     "/addons/egress_proxy.py",
                 ],

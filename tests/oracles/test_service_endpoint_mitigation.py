@@ -8,6 +8,7 @@ def _deployment(name, replicas=1, ready=1):
         metadata=SimpleNamespace(name=name, generation=1),
         spec=SimpleNamespace(replicas=replicas, selector=SimpleNamespace(match_labels={"service": name})),
         status=SimpleNamespace(
+            replicas=1 if replicas is None else replicas,
             observed_generation=1,
             updated_replicas=ready,
             ready_replicas=ready,

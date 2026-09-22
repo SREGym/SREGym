@@ -29,19 +29,15 @@ These host commands are not needed on macOS.
 
 ## Create the cluster
 
-From the repository root, run the command matching your machine:
+From the repository root, create the cluster with the shared multiarch image:
 
 ```bash
-# x86-64 Linux, WSL2, or Intel Mac
-bash kind/setup_kind_cluster.sh x86
-
-# ARM64 Linux or Apple silicon Mac
-bash kind/setup_kind_cluster.sh arm
+bash kind/setup_kind_cluster.sh
 ```
 
 The script:
 
-1. creates the four-node KIND cluster using the matching architecture image;
+1. creates the four-node KIND cluster using the published multiarch node image;
 2. installs Calico;
 3. waits for Calico and all nodes to become ready; and
 4. clears the previous SREGym cluster-baseline cache.
@@ -86,6 +82,9 @@ kubectl get events -A --sort-by='.lastTimestamp'
 All KIND nodes share the host's `fs.inotify.max_user_instances` limit. When this limit is exhausted, new pods that need inotify instances, such as kube-proxy, crash immediately. Apply the Linux or WSL2 inotify settings above.
 
 ### Resource allocation
+
+On macOS, allocate at least 16 GB to Docker Desktop or OrbStack's Linux VM for
+the full Lite profile. Leave additional RAM for macOS and the agent.
 
 WSL2 may require additional resources. Adjust the WSL2 settings in your `.wslconfig` file on Windows if you encounter performance issues.
 

@@ -3,7 +3,7 @@
 # Creates a Kind cluster with Calico CNI for SREGym.
 #
 # Usage (from repo root):
-#   bash kind/setup_kind_cluster.sh [arm|x86]
+#   bash kind/setup_kind_cluster.sh [auto|arm|x86]
 #
 # Requirements:
 #   - kind
@@ -13,17 +13,23 @@ set -euo pipefail
 
 # Filtered agent runs require Calico policy tiers (available since 3.29).
 CALICO_VERSION="v3.29.3"
-ARCH="${1:-x86}"
+case "${1:-auto}" in
+    auto|arm|x86) ;; # Legacy aliases; the Docker daemon selects the native platform.
+    *)
+        echo "Usage: bash kind/setup_kind_cluster.sh [auto|arm|x86]"
+        exit 1
+        ;;
+esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KIND_CONFIG="${SCRIPT_DIR}/kind-config-${ARCH}.yaml"
+KIND_CONFIG="${SCRIPT_DIR}/kind-config.yaml"
 
 if [[ ! -f "${KIND_CONFIG}" ]]; then
     echo "❌ Config file not found: ${KIND_CONFIG}"
-    echo "Usage: bash kind/setup_kind_cluster.sh [arm|x86]"
+    echo "Usage: bash kind/setup_kind_cluster.sh [auto|arm|x86]"
     exit 1
 fi
 
-echo "==> Step 1: Create Kind cluster (arch: ${ARCH})"
+echo "==> Step 1: Create Kind cluster"
 kind create cluster --config "${KIND_CONFIG}"
 
 echo "==> Step 2: Install Calico CNI"
@@ -42,9 +48,12 @@ dump_calico_diagnostics() {
     echo "--- calico pods ---"
     kubectl -n kube-system get pods -l k8s-app=calico-node -o wide || true
     echo "--- describe unready calico pods ---"
-    kubectl -n kube-system get pods -l k8s-app=calico-node \
-        --field-selector=status.phase!=Running -o name 2>/dev/null \
-        | xargs -r -I{} kubectl -n kube-system describe {} || true
+    while IFS= read -r pod; do
+        [[ -n "${pod}" ]] && kubectl -n kube-system describe "${pod}" || true
+    done < <(
+        kubectl -n kube-system get pods -l k8s-app=calico-node \
+            --field-selector=status.phase!=Running -o name 2>/dev/null || true
+    )
     echo "--- recent kube-system events ---"
     kubectl -n kube-system get events --sort-by='.lastTimestamp' | tail -40 || true
 }

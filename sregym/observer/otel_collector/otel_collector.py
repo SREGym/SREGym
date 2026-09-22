@@ -1,7 +1,10 @@
+import json
 import logging
 import subprocess
 import time
 from pathlib import Path
+
+from sregym.service.rollout import deployment_rollout_complete
 
 logger = logging.getLogger("all.sregym.otel_collector")
 
@@ -46,10 +49,8 @@ class OtelCollector:
         t0 = time.time()
         while time.time() - t0 < timeout:
             try:
-                out = self.run_cmd(
-                    f"kubectl -n {self.namespace} get deployment otel-collector -o jsonpath='{{.status.readyReplicas}}'"
-                )
-                if out.strip("'") == "1":
+                out = self.run_cmd(f"kubectl -n {self.namespace} get deployment otel-collector -o json")
+                if deployment_rollout_complete(json.loads(out)):
                     return
             except Exception:
                 pass

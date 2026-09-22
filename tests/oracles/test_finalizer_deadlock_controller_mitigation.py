@@ -16,6 +16,7 @@ def _deployment(*, replicas=1, ready=1, generation=2, observed_generation=2):
         metadata=SimpleNamespace(name="cleanup-controller", generation=generation),
         spec=SimpleNamespace(replicas=replicas),
         status=SimpleNamespace(
+            replicas=1 if replicas is None else replicas,
             observed_generation=observed_generation,
             updated_replicas=ready,
             ready_replicas=ready,

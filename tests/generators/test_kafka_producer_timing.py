@@ -23,6 +23,22 @@ def injector(monkeypatch):
     clock = SimpleNamespace(now=0)
     monkeypatch.setattr(inject_app.time, "monotonic", lambda: clock.now)
     monkeypatch.setattr(inject_app.time, "sleep", lambda seconds: setattr(clock, "now", clock.now + seconds))
+    monkeypatch.setattr(inject_app, "broker_memory_failure", lambda *args: False)
+
+    class Probe:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def wait_until_available(self):
+            return True
+
+        def check(self):
+            return False
+
+    monkeypatch.setattr(inject_app, "KafkaHealthCheck", lambda *args: Probe())
     injector = object.__new__(ApplicationFaultInjector)
     injector.namespace = "test"
     injector.kubectl = Mock()
@@ -51,7 +67,7 @@ def test_waits_for_new_oom_past_old_deadline(injector, delay):
 def test_old_oom_or_unrelated_crash_does_not_pass(injector, evidence):
     subject, clock = injector
     subject.kubectl.get_deployment_pods.return_value = evidence
-    with pytest.raises(TimeoutError, match="new OOM within 600"):
+    with pytest.raises(TimeoutError, match="serving failure within 600"):
         subject.inject_kafka_producer_leak()
     assert clock.now == 600
 

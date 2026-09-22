@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from sregym.service.container_runner import DEFAULT_AGENT_IMAGE
+
 
 class ArtifactFinalizationError(RuntimeError):
     """An opaque artifact tree could not be safely published."""
@@ -64,7 +66,7 @@ class RunArtifacts:
         *,
         snapshot: dict[str, Any],
         fieldnames: list[str],
-        ownership_image: str = "sregym-agent-base:latest",
+        ownership_image: str = DEFAULT_AGENT_IMAGE,
     ) -> Path:
         """Run only after the evaluated runtime has been stopped and reaped."""
         self._assert_target_available()

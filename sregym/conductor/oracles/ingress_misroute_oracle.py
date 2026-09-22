@@ -3,6 +3,7 @@ import logging
 from kubernetes import client
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class IngressMisrouteMitigationOracle(Oracle):
@@ -10,6 +11,11 @@ class IngressMisrouteMitigationOracle(Oracle):
         super().__init__(problem=problem)
         self.networking_v1 = client.NetworkingV1Api()
         self.logger = logging.getLogger(__name__)
+
+    FAILURE_CLASSES = {
+        # Deleting the path is an edit to the Ingress, not a symptom of one.
+        "ingress_path_missing": FailureClass.AGENT_ERROR,
+    }
 
     def evaluate(self) -> bool:
         results = {}
@@ -30,11 +36,17 @@ class IngressMisrouteMitigationOracle(Oracle):
                             self.logger.info(
                                 f"Ingress path '{self.problem.path}' still routed to '{path.backend.service.name}', mitigation incomplete."
                             )
-                            results["success"] = False
-                            return results
+                            # The misrouted path is the injected fault, read
+                            # straight off the Ingress.
+                            return self.fail(
+                                "fault_still_present",
+                                path=self.problem.path,
+                                routed_to=path.backend.service.name,
+                            )
             self.logger.error("Path not found in ingress, mitigation incomplete.")
-            results["success"] = False
+            # The path is gone from the Ingress entirely rather than pointing
+            # somewhere wrong: removal, not misroute.
+            return self.fail("ingress_path_missing", path=self.problem.path)
         except client.exceptions.ApiException as e:
             self.logger.error(f"Error checking ingress configuration: {e}")
-            results["success"] = False
-        return results
+            return self.fail_from_exception(e)

@@ -201,6 +201,7 @@ def test_driver_persists_audit_before_shutdown(audit_runner, tmp_path, monkeypat
     launcher, runner, log = audit_runner
     append(log, record("preflight.test"))
     conductor = Mock()
+    conductor.phases = None
     conductor.problems.get_problem_ids.return_value = ["test_fault"]
     conductor.get_agent_kubeconfig_path.return_value = None
     conductor.stage_sequence = ["Diagnosis", "Mitigation"]

@@ -10,6 +10,7 @@ import tempfile
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 import yaml
@@ -21,6 +22,16 @@ from sregym.service.provider_endpoints import provider_endpoint_rules
 logger = logging.getLogger("all.sregym.container_runner")
 
 LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+DEFAULT_AGENT_IMAGE = (
+    "ghcr.io/sregym/agent-base:sha-b97d6810e994bb7354b4bc15c6bc81cb66e816b9"
+    "@sha256:92e8b52af763c6e165144d314ec25b1ad3ba0e0f1b0a28ffa4a1760e92ec6b61"
+)
+LOCAL_AGENT_IMAGE = "sregym-agent-base:latest"
+HARDENING_FLAGS = (
+    "--cap-drop=ALL",
+    "--cap-add=DAC_OVERRIDE",
+    "--security-opt=no-new-privileges",
+)
 AGENT_TOOLS_CONTAINER_PATH = "/opt/agent-tools"
 CONTAINER_PATH = f"{AGENT_TOOLS_CONTAINER_PATH}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
@@ -93,7 +104,7 @@ class ExecInput:
 
 @dataclass
 class ContainerConfig:
-    image: str = "sregym-agent-base:latest"
+    image: str = DEFAULT_AGENT_IMAGE
     network_mode: str = "host"
     kubeconfig_path: Path | None = None
     workspace_path: Path | None = None  # bind-mounted to /workspace for agent output
@@ -105,6 +116,11 @@ class ContainerConfig:
     memory: str = "8g"
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     egress_proxy_image: str = DEFAULT_EGRESS_PROXY_IMAGE
+    harden_container: bool = True
+    k8s_proxy_port: int = 16443
+    published_ports: list[str] = field(default_factory=list)
+    forward_host_credentials: bool = True
+    codex_auth: Literal["copy", "shared", "none"] = "copy"
 
 
 class ContainerRunner:
@@ -211,6 +227,8 @@ class ContainerRunner:
         "ZAI_API_KEY",
         "ZAI_API_BASE",
         "ZHIPU_API_KEY",
+        # Cursor CLI
+        "CURSOR_API_KEY",
         # Claude Code
         "CLAUDE_CODE_OAUTH_TOKEN",
         # GitHub Copilot CLI
@@ -237,10 +255,32 @@ class ContainerRunner:
         "WAIT_FOR_POD_READY_TIMEOUT",
     ]
 
+    # Vars that select AWS credentials. Region vars are excluded on purpose:
+    # they say where to call, not which identity to call with.
+    AWS_CREDENTIAL_VARS = (
+        "AWS_PROFILE",
+        "AWS_PROFILE_NAME",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_ROLE_ARN",
+        "AWS_ROLE_NAME",
+        "AWS_WEB_IDENTITY_TOKEN",
+        "AWS_WEB_IDENTITY_TOKEN_FILE",
+        "AWS_BEARER_TOKEN_BEDROCK",
+    )
+
+    # Only the agent model. The judge runs host-side in the conductor, where it
+    # reads ~/.aws directly, so a Bedrock judge is no reason to mount anything
+    # into an agent container that may only speak to OpenAI.
+    MODEL_ID_VARS = ("AGENT_MODEL_ID",)
+
+    # Model-id providers that resolve AWS credentials. "amazon-bedrock" is the
+    # spelling OpenCode uses; see PROVIDER_ENV_VARS in clients/opencode.
+    AWS_MODEL_PROVIDERS = ("bedrock", "amazon-bedrock", "sagemaker")
+
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
         self._credential_tmps: list[str] = []
-        self._egress = DockerEgress(self.config.egress_proxy_image)
+        self._egress = DockerEgress(self.config.egress_proxy_image, k8s_proxy_port=self.config.k8s_proxy_port)
         self._agent_tools_volume: str | None = None
 
     @property
@@ -273,7 +313,7 @@ class ContainerRunner:
     def _configured_egress_rules(self, env_vars: dict[str, str]) -> tuple[EndpointRule, ...]:
         rules = {
             EndpointRule("host.docker.internal", int(env_vars.get("API_PORT", "8000")), inspect_tools=False),
-            EndpointRule("host.docker.internal", 16443, inspect_tools=False),
+            EndpointRule("host.docker.internal", self.config.k8s_proxy_port, inspect_tools=False),
             EndpointRule("host.docker.internal", int(env_vars.get("MCP_SERVER_PORT", "9954")), inspect_tools=False),
         }
         rules.update(
@@ -356,28 +396,46 @@ class ContainerRunner:
         return result
 
     def _mount_codex_credentials(self, args: list[str]) -> None:
-        """Mount Codex auth into a throwaway tempdir.
+        """Copy auth read-only for agents; share only the auth file for judge refreshes."""
+        if self.config.codex_auth == "none":
+            return
+        auth_src = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "auth.json"
+        # Reject symlinks + check readability (files may be root-owned from container writes).
+        if auth_src.is_symlink() or not auth_src.is_file() or not os.access(auth_src, os.R_OK):
+            return
 
-        Only the copied auth file is mounted from the host. Codex can write its
-        generated state elsewhere in /root/.codex, but that state remains in
-        the disposable container instead of making the host tempdir root-owned.
-        """
-        codex_dir = Path.home() / ".codex"
-        if not codex_dir.is_dir():
+        if self.config.codex_auth == "shared":
+            args.extend(["-v", f"{auth_src.resolve()}:/root/.codex/auth.json:rw"])
             return
 
         tmp = tempfile.mkdtemp(prefix="sregym-codex-")
-        auth_src = codex_dir / "auth.json"
-        # Reject symlinks + check readability (files may be root-owned from container writes).
-        if auth_src.is_symlink() or not auth_src.is_file() or not os.access(auth_src, os.R_OK):
-            shutil.rmtree(tmp, ignore_errors=True)
-            return
-
         auth_dst = Path(tmp) / "auth.json"
         shutil.copy2(auth_src, auth_dst)
 
         args.extend(["-v", f"{auth_dst}:/root/.codex/auth.json:ro"])
         self._credential_tmps.append(tmp)
+
+    def _run_uses_aws(self, extra_env: dict[str, str] | None = None) -> bool:
+        """Whether this run resolves AWS credentials, and so needs ~/.aws."""
+
+        def lookup(name: str) -> str:
+            # First source that *defines* the var wins, matching how
+            # _build_env_flags layers them. A caller setting it empty is
+            # masking it, not deferring to the host.
+            for source in (extra_env or {}, self.config.env_vars, os.environ):
+                if name in source:
+                    return str(source[name] or "")
+            return ""
+
+        def is_aws_model(model: str) -> bool:
+            provider = model.split("/", 1)[0].casefold()
+            return any(provider == p or provider.startswith(f"{p}-") for p in self.AWS_MODEL_PROVIDERS)
+
+        if any(lookup(var) for var in self.AWS_CREDENTIAL_VARS):
+            return True
+        # A default profile in ~/.aws/config needs no AWS_* var set, so the
+        # model id is the only signal left that an AWS run needs the mount.
+        return any(is_aws_model(lookup(var)) for var in self.MODEL_ID_VARS)
 
     def cleanup_credential_tmps(self) -> None:
         """Remove throwaway credential directories."""
@@ -390,7 +448,7 @@ class ContainerRunner:
 
         # Forward API keys from host (skip empty values to avoid overriding
         # other auth mechanisms like OAuth subscription tokens)
-        for var in self.API_KEY_VARS:
+        for var in self.API_KEY_VARS if self.config.forward_host_credentials else ():
             if var in os.environ and var not in env_vars and os.environ[var]:
                 env_vars[var] = os.environ[var]
 
@@ -401,6 +459,10 @@ class ContainerRunner:
         # to the evaluated agent and must not enter the agent container.
         for name in ("JUDGE_MODEL_ID", "JUDGE_API_BASE", "JUDGE_API_KEY"):
             env_vars.pop(name, None)
+
+        if self.config.forward_host_credentials and os.environ.get("AGENT_JEV_MODEL"):
+            env_vars.setdefault("AGENT_JEV_MODEL", os.environ["AGENT_JEV_MODEL"])
+            env_vars.setdefault("TYPESAFE_API_KEY", os.environ.get("TYPESAFE_API_KEY", ""))
 
         env_vars["AGENT_INTERNET_ACCESS"] = self.internet_access_mode
 
@@ -439,7 +501,7 @@ class ContainerRunner:
             flags.extend(["-e", f"{key}={value}"])
         return flags
 
-    def _build_base_docker_args(self) -> list[str]:
+    def _build_base_docker_args(self, extra_env: dict[str, str] | None = None) -> list[str]:
         args = [
             "docker",
             "run",
@@ -447,6 +509,9 @@ class ContainerRunner:
             f"--cpus={self.config.cpus}",
             f"--memory={self.config.memory}",
         ]
+
+        if self.config.harden_container:
+            args.extend(HARDENING_FLAGS)
 
         # Filtered agents have no direct external route. The proxy container is
         # the only member of their private network that also joins a public one.
@@ -473,12 +538,20 @@ class ContainerRunner:
             args.extend(["-v", f"{kubeconfig_path.resolve()}:/root/.kube/config:ro"])
             args.extend(["-e", "KUBECONFIG=/root/.kube/config"])
 
-        # Mount AWS credentials directory (read-only) for Bedrock and other AWS services
+        # Gated on the run resolving AWS credentials: the directory holds live
+        # SSO and CLI cache tokens, which a run against another provider has no
+        # use for.
         aws_dir = Path.home() / ".aws"
-        if aws_dir.is_dir():
-            args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
+        if self.config.forward_host_credentials and aws_dir.is_dir():
+            if self._run_uses_aws(extra_env):
+                args.extend(["-v", f"{aws_dir.resolve()}:/root/.aws:ro"])
+            else:
+                logger.debug("Skipping ~/.aws mount: no AWS credentials selected for this run")
 
         self._mount_codex_credentials(args)
+
+        for port in self.config.published_ports:
+            args.extend(["-p", port])
 
         # Mount workspace directory for agent output (logs, results, trajectories)
         if self.config.workspace_path:
@@ -528,7 +601,7 @@ class ContainerRunner:
     def build_docker_command(self, exec_input: ExecInput) -> list[str]:
         env_vars = self._build_env_vars(exec_input.env)
         self._ensure_filtered_egress(env_vars)
-        cmd = self._build_base_docker_args()
+        cmd = self._build_base_docker_args(exec_input.env)
         suffix = uuid.uuid4().hex[:8]
         if exec_input.label:
             container_name = f"sregym-{exec_input.label}-{suffix}"
@@ -610,7 +683,7 @@ class ContainerRunner:
         )
 
     def ensure_image_exists(self) -> None:
-        """Check if the container image exists locally; build it if not."""
+        """Pull the selected release, or build the explicit local-development tag."""
         image = self.config.image
         result = subprocess.run(
             ["docker", "image", "inspect", image],
@@ -619,12 +692,19 @@ class ContainerRunner:
         if result.returncode == 0:
             return
 
-        logger.info(f"🐳 Container image '{image}' not found. Building automatically...")
-        self.build_image()
+        if image == LOCAL_AGENT_IMAGE:
+            self.build_image()
+            return
+        logger.info("Pulling agent image '%s'...", image)
+        self._run_docker_checked(["docker", "pull", image], f"pull agent image '{image}'")
 
     def build_image(self) -> None:
         """Build (or rebuild) the container image using docker/agents/build.sh."""
-        image = self.config.image
+        # Rebuilding a release creates a local development image; never pretend
+        # locally compiled bytes have the published release's digest.
+        image = LOCAL_AGENT_IMAGE if self.config.image == DEFAULT_AGENT_IMAGE else self.config.image
+        if "@" in image:
+            raise ValueError("Cannot rebuild a digest-pinned custom image; select a local image tag first")
         logger.info(f"🐳 Building container image '{image}'...")
 
         repo_root = Path(__file__).resolve().parent.parent.parent
@@ -635,13 +715,14 @@ class ContainerRunner:
                 f"Build script not found at {build_script}. Cannot auto-build container image '{image}'."
             )
 
-        build_script.chmod(build_script.stat().st_mode | 0o755)
         result = subprocess.run(
-            [str(build_script)],
+            ["bash", str(build_script)],
             cwd=str(repo_root),
+            env={**os.environ, "SREGYM_AGENT_IMAGE": image},
         )
         if result.returncode != 0:
             raise RuntimeError(f"Failed to build container image '{image}'. Check the build output above for errors.")
+        self.config.image = image
         logger.info(f"✅ Container image '{image}' built successfully.")
 
     @staticmethod

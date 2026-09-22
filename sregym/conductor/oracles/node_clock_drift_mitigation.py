@@ -7,6 +7,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 
 class NodeClockDriftMitigationOracle(Oracle):
@@ -18,6 +19,12 @@ class NodeClockDriftMitigationOracle(Oracle):
         super().__init__(problem)
         self.core_v1 = client.CoreV1Api()
 
+    FAILURE_CLASSES = {
+        # Both are "we could not get the measurement", not "the agent failed".
+        "affected_node_not_found": FailureClass.ENVIRONMENT_ERROR,
+        "clock_skew_unreadable": FailureClass.ENVIRONMENT_ERROR,
+    }
+
     def evaluate(self) -> dict:
         print("== Node Clock Drift Mitigation Evaluation ==")
         results = {}
@@ -26,7 +33,9 @@ class NodeClockDriftMitigationOracle(Oracle):
                 target_node = self._find_affected_node(self.problem.namespace)
                 if not target_node:
                     print("Could not identify the affected node")
-                    return {"success": False, "reason": "affected_node_not_found"}
+                    # Already a snake_case code -- the only one in the codebase
+                    # that was. It keeps its spelling and gains a class.
+                    return self.fail("affected_node_not_found", namespace=self.problem.namespace)
             else:
                 target_node = self.problem.target_node
             print(f"Checking target node: {target_node}")
@@ -34,11 +43,19 @@ class NodeClockDriftMitigationOracle(Oracle):
             clock_skew = self._check_clock_skew(target_node)
             if clock_skew is None:
                 print(f"Could not determine clock skew on {target_node}")
-                return {"success": False, "clock_synchronized": False}
+                return {
+                    "clock_synchronized": False,
+                    **self.fail("clock_skew_unreadable", node=target_node),
+                }
             max_skew_seconds = 60
             if abs(clock_skew) > max_skew_seconds:
                 print(f"Clock on {target_node} still skewed by {clock_skew}s (> {max_skew_seconds}s threshold)")
-                return {"success": False, "clock_synchronized": False, "clock_skew_seconds": clock_skew}
+                return {
+                    "clock_synchronized": False,
+                    "clock_skew_seconds": clock_skew,
+                    # The skew is the injected fault, read straight off the node.
+                    **self.fail("fault_still_present", node=target_node, skew_seconds=clock_skew),
+                }
             print(f"Clock on {target_node} is synchronized (skew: {clock_skew}s)")
             results["clock_synchronized"] = True
             results["clock_skew_seconds"] = clock_skew
@@ -46,7 +63,7 @@ class NodeClockDriftMitigationOracle(Oracle):
             pods_healthy = self._check_pod_health(self.problem.namespace, target_node)
             if not pods_healthy:
                 print(f"Pods on {target_node} still show failures")
-                return {"success": False, "pods_recovered": False}
+                return {"pods_recovered": False, **self.fail("pods_not_ready", node=target_node)}
             print(f"Pods on {target_node} have recovered")
             results["pods_recovered"] = True
             results["success"] = True
@@ -55,7 +72,7 @@ class NodeClockDriftMitigationOracle(Oracle):
             return results
         except Exception as e:
             print(f"Error during mitigation evaluation: {e}")
-            return {"success": False, "error": str(e)}
+            return self.fail_from_exception(e)
 
     def _find_affected_node(self, namespace: str) -> str:
         try:

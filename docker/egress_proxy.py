@@ -19,10 +19,8 @@ POLICY_STATE = Path(os.environ.get("EGRESS_POLICY_STATE", "/state/policy.json"))
 
 
 def responseheaders(flow: http.HTTPFlow) -> None:
-    """Forward long-lived SSE responses instead of buffering them forever."""
-    content_type = flow.response.headers.get("content-type", "")
-    if content_type.partition(";")[0].strip().casefold() == "text/event-stream":
-        flow.response.stream = True
+    """Forward responses without buffering; the addon only inspects requests."""
+    flow.response.stream = True
 
 
 def http_connect(flow: http.HTTPFlow) -> None:

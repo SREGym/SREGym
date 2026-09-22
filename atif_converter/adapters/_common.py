@@ -15,6 +15,13 @@ from typing import Any
 from ..atif import FinalMetrics, Step
 
 logger = logging.getLogger(__name__)
+TOKEN_METRICS_VERSION = 2
+
+
+def _sum_tokens(*values: int | None) -> int | None:
+    """Sum reported token counts; preserve zero and leave absent counts unknown."""
+    known = [v for v in values if isinstance(v, int) and not isinstance(v, bool) and v >= 0]
+    return sum(known) if known else None
 
 
 def _stringify(value: Any) -> str:
@@ -78,5 +85,5 @@ def _aggregate_final_metrics(
         total_cached_tokens=sum(cached_values) if cached_values else None,
         total_cost_usd=total_cost_usd,
         total_steps=len(steps),
-        extra=extra,
+        extra={"token_metrics_version": TOKEN_METRICS_VERSION, **(extra or {})},
     )

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import platform
 import stat
 from pathlib import Path
 
@@ -271,7 +272,8 @@ def test_open_runner_keeps_existing_host_network():
         args = runner._build_base_docker_args()
         env_flags = runner._build_env_flags()
 
-        assert "--network=host" in args
+        assert ("--network=host" in args) is (platform.system() == "Linux")
+        assert "--add-host=host.docker.internal:host-gateway" in args
         env = dict(item.split("=", 1) for item in env_flags[1::2])
         assert env["AGENT_INTERNET_ACCESS"] == "open"
         assert "HTTPS_PROXY" not in env
@@ -306,6 +308,7 @@ def test_codex_auth_mount_does_not_expose_writable_host_directory(monkeypatch, t
         mount = args[args.index("-v") + 1]
         host_path, container_path, mode = mount.split(":")
         assert Path(host_path).name == "auth.json"
+        assert Path(host_path).read_text() == (codex_dir / "auth.json").read_text()
         assert container_path == "/root/.codex/auth.json"
         assert mode == "ro"
     finally:

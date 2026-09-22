@@ -31,11 +31,15 @@ class LiteLLMBackend:
         temperature: float = 0.0,
         max_tokens: int | None = None,
         provider: str | None = None,
+        usage_available: bool = True,
+        retry: bool = True,
     ):
         self.model_name = model_name
         self.api_key = api_key
         self.api_base = api_base
         self.provider = provider
+        self.usage_available = usage_available
+        self.retry = retry
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
@@ -55,6 +59,22 @@ class LiteLLMBackend:
             return True
         base = (self.api_base or "").lower()
         return "anthropic" in base or base.endswith("/anthropic") or "/anthropic/" in base
+
+    def _invoke(self, llm, prompt_messages, usage_type: str) -> AIMessage:
+        request_start = time.perf_counter()
+        completion = llm.invoke(input=prompt_messages)
+        if self.usage_available:
+            record_usage(
+                completion,
+                model=self.model_name,
+                usage_type=usage_type,
+                duration_seconds=time.perf_counter() - request_start,
+            )
+        else:
+            # LiteLLM fills omitted usage with zeros; keep unmeasured usage absent.
+            completion.usage_metadata = None
+            completion.response_metadata.pop("token_usage", None)
+        return completion
 
     def inference(
         self,
@@ -110,10 +130,16 @@ class LiteLLMBackend:
                 ]
             }
 
+        if not self.retry:
+            model_config["max_retries"] = 0
+            model_config.setdefault("model_kwargs", {})["num_retries"] = 0
         llm = ChatLiteLLM(**model_config)
 
         if tools:
             llm = llm.bind_tools(tools, tool_choice="auto")
+
+        if not self.retry:
+            return self._invoke(llm, prompt_messages, usage_type)
 
         retry_delay = LLM_QUERY_INIT_RETRY_DELAY
         trim_message = False
@@ -124,15 +150,7 @@ class LiteLLMBackend:
                     new_prompt_messages, trim_sum = trim_messages_conservative(prompt_messages)
                     logger.info(f"Trimming the {trim_sum}/{len(prompt_messages)} messages")
                     prompt_messages = new_prompt_messages
-                request_start = time.perf_counter()
-                completion = llm.invoke(input=prompt_messages)
-                record_usage(
-                    completion,
-                    model=self.model_name,
-                    usage_type=usage_type,
-                    duration_seconds=time.perf_counter() - request_start,
-                )
-                return completion
+                return self._invoke(llm, prompt_messages, usage_type)
             except openai.BadRequestError as e:
                 logger.error(f"Bad request error - request is malformed: {e}")
                 logger.error(f"Error details: {_safe_response_details(e)}")

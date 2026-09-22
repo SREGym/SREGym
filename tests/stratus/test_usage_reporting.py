@@ -49,3 +49,4 @@ def test_completed_run_adds_summary_usage_to_csv(monkeypatch, tmp_path):
     output = pd.read_csv(tmp_path / f"{problem_id}_stratus_output.csv")
     assert output["agent_name"].tolist() == ["diagnosis_agent", "run_summary"]
     assert output["total_tokens"].tolist() == [6, 15]
+    assert output["token_metrics_version"].tolist() == [2, 2]

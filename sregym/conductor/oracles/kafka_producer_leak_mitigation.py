@@ -1,13 +1,20 @@
 """Require a stable Kafka broker after the producer workload is mitigated."""
 
 import time
+from datetime import UTC, datetime
 
 from kubernetes.client.exceptions import ApiException
 
+from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.mitigation import MitigationOracle
+from sregym.service.kafka_health import KafkaHealthCheck, broker_memory_failure
 
 
 class KafkaProducerLeakOracle(MitigationOracle):
+    FAILURE_CLASSES = {
+        "kafka_still_restarting": FailureClass.AMBIGUOUS,
+        "kafka_not_serving": FailureClass.AMBIGUOUS,
+    }
     STABILITY_SECONDS = 600
     POLL_SECONDS = 5
     ROLLOUT_SECONDS = 300
@@ -107,17 +114,35 @@ class KafkaProducerLeakOracle(MitigationOracle):
             result = super().evaluate()
             if not result["success"]:
                 return result
-            initial = self._snapshot()
-            deadline = time.monotonic() + self.STABILITY_SECONDS
-            while True:
-                result = self._evaluate_current_state()
-                if not result["success"]:
-                    return result
-                if self._snapshot() != initial:
-                    raise ValueError("A required workload changed or restarted during observation")
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return {"success": True, "stable_seconds": self.STABILITY_SECONDS}
-                time.sleep(min(self.POLL_SECONDS, remaining))
-        except (ApiException, ValueError) as exc:
-            return {"success": False, "reason": str(exc), "observed_seconds": round(time.monotonic() - started, 2)}
+            with KafkaHealthCheck(self.problem.kubectl, self.problem.namespace) as probe:
+                observed_at = datetime.now(UTC)
+                ready_deadline = time.monotonic() + 60
+                while not probe.check():
+                    if broker_memory_failure(self.problem.kubectl, self.problem.namespace, observed_at):
+                        return self.fail("fault_still_present", detail="Kafka has a new memory failure")
+                    if time.monotonic() >= ready_deadline:
+                        return self.fail("kafka_not_serving")
+                    time.sleep(2)
+                initial = self._snapshot()
+                deadline = time.monotonic() + self.STABILITY_SECONDS
+                while True:
+                    result = self._evaluate_current_state()
+                    if not result["success"]:
+                        return result
+                    if broker_memory_failure(self.problem.kubectl, self.problem.namespace, observed_at):
+                        return self.fail("fault_still_present", detail="Kafka has a new memory failure")
+                    if not probe.check():
+                        return self.fail("kafka_not_serving")
+                    if self._snapshot() != initial:
+                        return self.fail("kafka_still_restarting")
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return {"success": True, "stable_seconds": self.STABILITY_SECONDS}
+                    time.sleep(min(self.POLL_SECONDS, remaining))
+        except ApiException as exc:
+            return self.fail_from_exception(exc, observed_seconds=round(time.monotonic() - started, 2))
+        except ValueError as exc:
+            reason = "fault_still_present" if "heap or memory limit" in str(exc) else "kafka_still_restarting"
+            return self.fail(reason, error=str(exc), observed_seconds=round(time.monotonic() - started, 2))
+        except Exception as exc:
+            return self.fail_from_exception(exc, observed_seconds=round(time.monotonic() - started, 2))

@@ -5,6 +5,7 @@ from sregym.conductor.oracles.namespace_memory_limit_mitigation import Namespace
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -51,16 +52,7 @@ class NamespaceMemoryLimit(Problem):
         if cls._desired_replicas(deployment) != expected:
             return False
 
-        status = deployment.status
-        generation = deployment.metadata.generation or 0
-        return (
-            (status.observed_generation or 0) >= generation
-            and (status.replicas or 0) == expected
-            and (status.updated_replicas or 0) == expected
-            and (status.ready_replicas or 0) == expected
-            and (status.available_replicas or 0) == expected
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment, allow_zero=True)
 
     def _wait_for_rollout(self, expected_replicas: int):
         deadline = time.monotonic() + self.rollout_timeout_seconds

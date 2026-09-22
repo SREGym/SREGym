@@ -87,11 +87,11 @@ def test_internal_application_data_is_not_a_provider_tool_declaration(addon, mon
         ("", False),
     ],
 )
-def test_only_event_stream_responses_are_streamed(addon, content_type, stream):
+def test_responses_are_streamed(addon, content_type, stream):
     request_flow = flow(None)
     request_flow.response = SimpleNamespace(headers={"content-type": content_type}, stream=False)
     addon.responseheaders(request_flow)
-    assert request_flow.response.stream is stream
+    assert request_flow.response.stream is True
 
 
 @pytest.mark.parametrize(

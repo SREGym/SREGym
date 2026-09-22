@@ -118,7 +118,8 @@ def _oracle(kubectl):
 
 def test_accepts_current_endpoint_while_ignoring_old_failed_and_unrelated_pods():
     core_v1 = _CoreV1()
-    deployment = _deployment(total_replicas=2)
+    # Terminal pods are not counted in Deployment.status.replicas.
+    deployment = _deployment(total_replicas=1)
     pods = [
         _pod("user-current", "user-current-rs"),
         _pod("user-old-error", "user-old-rs", phase="Failed"),
@@ -137,6 +138,14 @@ def test_accepts_current_endpoint_while_ignoring_old_failed_and_unrelated_pods()
 def test_rejects_injected_not_ready_rollout_without_starting_check():
     core_v1 = _CoreV1()
     deployment = _deployment(total_replicas=1, updated=1, ready=0, available=0, unavailable=1)
+
+    assert _oracle(_KubeCtl(deployment=deployment, core_v1=core_v1)).evaluate()["success"] is False
+    assert core_v1.created_pods == []
+
+
+def test_rejects_extra_nonterminal_old_replica_without_starting_check():
+    core_v1 = _CoreV1()
+    deployment = _deployment(total_replicas=2)
 
     assert _oracle(_KubeCtl(deployment=deployment, core_v1=core_v1)).evaluate()["success"] is False
     assert core_v1.created_pods == []

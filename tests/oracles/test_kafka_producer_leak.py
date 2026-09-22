@@ -65,6 +65,19 @@ def case(monkeypatch):
     monkeypatch.setattr(module.time, "sleep", clock.sleep)
     monkeypatch.setattr(MitigationOracle, "_wait_for_rollouts", lambda *args: None)
     monkeypatch.setattr(MitigationOracle, "_evaluate_current_state", lambda *args: {"success": True})
+    monkeypatch.setattr(module, "broker_memory_failure", lambda *args: False)
+
+    class Probe:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def check(self):
+            return True
+
+    monkeypatch.setattr(module, "KafkaHealthCheck", lambda *args: Probe())
     resources = {name: workload(name) for name in ("checkout", "kafka")}
     kubectl = Mock()
     kubectl.get_deployment.side_effect = lambda name, namespace: resources[name][0]
@@ -120,7 +133,8 @@ def test_initial_pod_drain_shares_bounded_rollout_grace(case, monkeypatch, rollo
     monkeypatch.setattr(MitigationOracle, "_wait_for_rollouts", lambda *_: clock.sleep(rollout_seconds))
     result = oracle.evaluate()
     assert not result["success"]
-    assert "stable set" in result["reason"]
+    assert result["reason"] == "kafka_still_restarting"
+    assert "stable set" in result["detail"]["error"]
     assert clock.now == 300
 
 
@@ -135,7 +149,7 @@ def test_rejects_restart_after_old_deadline_and_at_final_sample(case, at):
     clock.on_sleep = restart
     result = oracle.evaluate()
     assert not result["success"]
-    assert "restarted" in result["reason"]
+    assert result["reason"] == "kafka_still_restarting"
     assert clock.now == at
 
 

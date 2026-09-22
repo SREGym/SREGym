@@ -2,6 +2,7 @@ import argparse
 import asyncio
 import contextlib
 import csv
+import importlib
 import logging
 import os
 import sys
@@ -22,18 +23,23 @@ from rich.progress import (
 )
 
 from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
+from clients.jev.config import configure as configure_jev
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
-from sregym.conductor.conductor import Conductor, ConductorConfig
+from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
-from sregym.profile import PROFILES, set_profile
+from sregym.phases import read_ledger as read_phase_ledger
+from sregym.phases import results_columns as phase_results_columns
+from sregym.profile import PROFILES, get_profile, set_profile
 from sregym.results.resume import complete_resume_rows
 from sregym.run_artifacts import ArtifactFinalizationError, RunArtifacts
-from sregym.service.container_runner import get_container_host_bind_address
+from sregym.service.container_runner import ContainerRunner, ExecInput, get_container_host_bind_address
 from sregym.service.internet_policy import EndpointRule, InternetPolicy
+from sregym.service.judge_runtime import JUDGE_BACKENDS, managed_judge_backend
+from sregym.service.kubectl import ContainerPlatformError
 from sregym.traces import postprocess as trace_postprocess
 from sregym.traces import store as trace_store
 
@@ -63,6 +69,47 @@ class BenchmarkCampaignAborted(RuntimeError):
         self.partial_results = partial_results
 
 
+def run_preflight_check(
+    agent_name: str,
+    container_runner: ContainerRunner | None = None,
+    install_script: str | None = None,
+) -> None:
+    """Run the agent's pre-flight check inside the container."""
+    agent_driver_modules = {
+        "stratus": "clients.stratus.stratus_agent.driver.driver",
+        "claudecode": "clients.claudecode.driver",
+        "codex": "clients.codex.driver",
+        "copilot": "clients.copilot.driver",
+        "opencode": "clients.opencode.driver",
+        "gemini": "clients.geminicli.driver",
+        "cursor": "clients.cursor.driver",
+    }
+    module_path = agent_driver_modules.get(agent_name)
+    if not module_path:
+        return
+    driver_mod = importlib.import_module(module_path)
+    if not hasattr(driver_mod, "run_preflight"):
+        return
+    if container_runner is None:
+        logger.warning("No container runner — skipping pre-flight check for '%s'", agent_name)
+        return
+    check_cmd = f"python3 -c 'from {module_path} import run_preflight; run_preflight()'"
+    if install_script and not container_runner.has_prepared_agent_tools:
+        check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
+    try:
+        result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
+    except BaseException:
+        container_runner.close()
+        raise
+    if result.returncode != 0:
+        if result.stdout:
+            print(result.stdout.strip())
+        if result.stderr:
+            print(result.stderr.strip())
+        container_runner.close()
+        raise RuntimeError(f"Pre-flight check failed for '{agent_name}'")
+
+
 def run_judge_preflight_check() -> None:
     """Validate the judge model and credentials through its LiteLLM backend."""
     from llm_backend.init_backend import get_llm_backend_for_judge
@@ -72,9 +119,7 @@ def run_judge_preflight_check() -> None:
         get_llm_backend_for_judge().inference("Say ok.", system_prompt="Reply with exactly 'ok'.")
     except Exception as e:
         logger.error(f"❌ Judge pre-flight check failed: {e}")
-        logger.error(
-            "The judge uses LiteLLM. Ensure the model is LiteLLM-compatible or pass a compatible --judge-model."
-        )
+        logger.error("Check --judge-model and credentials for the selected judge backend.")
         sys.exit(1)
 
     logger.info("✅ Judge pre-flight check passed")
@@ -123,6 +168,9 @@ def _configure_model_environment(args) -> tuple[str, str]:
     else:
         os.environ.pop("AGENT_REASONING_EFFORT", None)
 
+    if os.environ.get("SREGYM_JUDGE_BRIDGE_URL"):
+        return agent_model, judge_model
+
     if not getattr(args, "judge_model", None) or normalizes_opencode_local_judge:
         if not os.environ.get("JUDGE_API_BASE") and os.environ.get("AGENT_API_BASE"):
             os.environ["JUDGE_API_BASE"] = os.environ["AGENT_API_BASE"]
@@ -163,6 +211,7 @@ def driver_loop(
     n_attempts: int = 1,
     agent_timeout: int = 1800,
     resume_csv: str | None = None,
+    judge_backend: str = "api",
 ):
     """
     Deploy each problem and wait for HTTP grading via POST /submit.
@@ -322,6 +371,26 @@ def driver_loop(
                 )
                 console.log(f"\n🔍 Starting problem: {pid} (Attempt {attempt} of {n_attempts})")
 
+                # Bind the phase ledger before the first phase runs. It cannot
+                # live inside the run directory: RunArtifacts.create() happens
+                # after deploy, and deploy is a phase we want recorded. Sitting
+                # beside the run directories keeps it per-attempt and out of the
+                # way of artifact publication.
+                #
+                # The models are recorded too: without them a ledger is only
+                # interpretable next to the log that produced it. Read from the
+                # environment, where _configure_model_environment already put
+                # them, so agent and judge cannot drift apart.
+                phases_path = Path(base_dir) / (agent_to_run or "agent") / pid / f"phases_attempt{attempt}.jsonl"
+                conductor.bind_phase_ledger(
+                    phases_path,
+                    attempt=attempt,
+                    agent=agent_to_run,
+                    model=os.environ.get("AGENT_MODEL_ID"),
+                    judge_model=os.environ.get("JUDGE_MODEL_ID"),
+                    judge_backend=judge_backend,
+                )
+
                 # Retry start_problem up to 3 times to handle transient deploy failures
                 max_deploy_retries = 3
                 result = None
@@ -335,6 +404,11 @@ def driver_loop(
                             f"❌ start_problem failed for '{pid}' "
                             f"(deploy attempt {deploy_attempt}/{max_deploy_retries}): {e}"
                         )
+                        if isinstance(e, ContainerPlatformError):
+                            console.log(
+                                "⛔ Image platform failures require a compatible image; skipping deploy retries"
+                            )
+                            break
                         if deploy_attempt < max_deploy_retries:
                             console.log("🧹 Cleaning up before retry...")
                             cleanup_succeeded = await finish_problem_with_deadline(
@@ -364,6 +438,7 @@ def driver_loop(
                     snapshot = {
                         "problem_id": pid,
                         "attempt": attempt,
+                        "deployment_profile": get_profile(),
                         "deploy_failed": True,
                     }
                     for stage, outcome in conductor.results.items():
@@ -560,6 +635,13 @@ def driver_loop(
                         conductor.results["cleanup_error"] = f"{type(e).__name__}: {e}"
                         conductor.record_incomplete_attempt("cleanup_failed")
 
+                # Fold the phase ledger into the results so infra-vs-agent time
+                # is a column rather than something to reconstruct from logs.
+                # Read from the file, not from memory, so a phase that ended in
+                # a process that later died is still counted.
+                if conductor.phases is not None:
+                    conductor.results.update(phase_results_columns(read_phase_ledger(conductor.phases.path)))
+
                 run_status = conductor.finalize_attempt_status()
                 if conductor.results.get("cleanup_failed"):
                     abort_campaign_after_attempt = True
@@ -591,7 +673,11 @@ def driver_loop(
                 snapshot = {
                     "problem_id": pid,
                     "attempt": attempt,
+                    "deployment_profile": get_profile(),
+                    "judge_backend": judge_backend,
                 }
+                if os.environ.get("AGENT_JEV_MODEL"):
+                    snapshot["jev_model"] = os.environ["AGENT_JEV_MODEL"]
                 internet_audit = LAUNCHER.internet_policy_result(agent_proc)
                 snapshot.update(
                     {key: value for key, value in internet_audit.items() if key != "blocked_request_details"}
@@ -714,6 +800,7 @@ def _run_driver_and_shutdown(
     n_attempts: int = 1,
     agent_timeout: int = 1800,
     resume_csv: str | None = None,
+    judge_backend: str = "api",
 ):
     """Run the benchmark driver, stash results, then tell the API to exit."""
     global _driver_error, _driver_results
@@ -726,6 +813,7 @@ def _run_driver_and_shutdown(
             n_attempts=n_attempts,
             agent_timeout=agent_timeout,
             resume_csv=resume_csv,
+            judge_backend=judge_backend,
         )
         _driver_results = results
     except BenchmarkCampaignAborted as exc:
@@ -741,12 +829,17 @@ def _run_driver_and_shutdown(
 
 
 def main(args):
+    configure_jev(args)
+    init_logger()
+    backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
+    with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
+        return _run_benchmark(args, judge_backend=backend, agent_image=agent_image)
+
+
+def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None = None):
     global _driver_error, _driver_results
     _driver_error = None
     _driver_results = []
-
-    # set up the logger
-    init_logger()
 
     agent_model, judge_model = _configure_model_environment(args)
     internet_policy = InternetPolicy.from_mode(
@@ -755,20 +848,31 @@ def main(args):
         model_id=agent_model,
         additional_allowed_endpoints=getattr(args, "allow_agent_endpoint", ()),
     )
+    harden_container = args.container_hardening == "on"
 
     set_profile(args.profile)
 
     if args.noise:
         logger.info("Noise injection enabled.")
     os.environ["API_HOSTNAME"] = "0.0.0.0"
-    os.environ["API_PORT"] = "8000"
-    os.environ["MCP_SERVER_PORT"] = "9954"
-    os.environ["MCP_SERVER_URL"] = "http://127.0.0.1:9954"
+    # Host-facing ports are defaults, not constants: a run has to be able to
+    # step around whatever else is already listening on the workstation.
+    # Assigning unconditionally here would clobber the caller's value, which
+    # then surfaces far away as a connection to the wrong service.
+    os.environ.setdefault("API_PORT", "8000")
+    os.environ.setdefault("MCP_SERVER_PORT", "9954")
+    # Derived, never duplicated: a literal here silently disagrees with
+    # MCP_SERVER_PORT, and consumers prefer the URL over the parts.
+    os.environ["MCP_SERVER_URL"] = f"http://127.0.0.1:{os.environ['MCP_SERVER_PORT']}"
 
     logger.info(
-        f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, judge_model: {judge_model}, "
+        f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, "
+        f"judge_backend: {judge_backend}, judge_model: {judge_model}, "
         f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
+        f"jev_model: {getattr(args, 'jev_model', None) or 'disabled'}, "
+        f"deployment_profile: {get_profile()}, "
         f"internet_access: {internet_policy.mode.value}, "
+        f"container_hardening: {args.container_hardening}, "
         f"agent_api_base: {_env_status('AGENT_API_BASE')}, judge_api_base: {_env_status('JUDGE_API_BASE')}"
     )
 
@@ -802,10 +906,32 @@ def main(args):
         enable_noise=args.noise,
         internet_policy=internet_policy,
         k8s_proxy_listen_host=k8s_proxy_listen_host,
+        k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
+        block_workload_creation=internet_policy.is_filtered,
+        stages=tuple(args.stages) if args.stages else None,
+        baseline_override_s=getattr(args, "baseline", None),
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
+    LAUNCHER.set_container_hardening(harden_container)
 
-    LAUNCHER.prepare_agent(agent_reg, force_build=args.force_build)
+    try:
+        if not args.use_external_harness:
+            if not agent_reg or agent_reg.container_isolation:
+                LAUNCHER.enable_container_isolation(
+                    force_build=args.force_build and agent_image is None,
+                    k8s_proxy_port=conductor_config.k8s_proxy_listen_port,
+                    image=agent_image,
+                )
+            if agent_reg and LAUNCHER._container_runner is not None:
+                LAUNCHER._container_runner.prepare_agent_tools(agent_reg.install_script, agent_reg.agent_version)
+            run_preflight_check(
+                args.agent,
+                container_runner=LAUNCHER._container_runner,
+                install_script=agent_reg.install_script if agent_reg else None,
+            )
+    except BaseException:
+        LAUNCHER.cleanup_all()
+        raise
 
     conductor = Conductor(config=conductor_config)
 
@@ -827,6 +953,7 @@ def main(args):
             args.resume,
         ),
         name="driver",
+        kwargs={"judge_backend": judge_backend},
         daemon=True,
     )
     driver_thread.start()
@@ -909,6 +1036,20 @@ if __name__ == "__main__":
         default=None,
         help="Run a named problem set (e.g., 'sregym-lite')",
     )
+    # Deliberately outside the selection group: which stages run is independent
+    # of which problems run, so --stages composes with both --problem and
+    # --suite.
+    parser.add_argument(
+        "--stages",
+        nargs="+",
+        choices=ALL_STAGES,
+        default=None,
+        help=(
+            "Stages to attempt, in order (default: every stage the problem supports). "
+            "Use '--stages diagnosis' to skip mitigation entirely. Naming a stage the "
+            "problem has no oracle for is an error rather than a silent skip."
+        ),
+    )
     parser.add_argument(
         "--agent",
         type=str,
@@ -928,10 +1069,21 @@ if __name__ == "__main__":
         help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set)",
     )
     parser.add_argument(
+        "--judge-backend",
+        choices=JUDGE_BACKENDS,
+        default="api",
+        help="Judge access: existing API endpoint (default), or a CLI using the existing agent subscription setup",
+    )
+    parser.add_argument(
         "--reasoning-effort",
         choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
         default=None,
         help="Reasoning effort for Codex, Copilot, OpenCode, and Claude Code (uses the agent default when omitted)",
+    )
+    parser.add_argument(
+        "--jev-model",
+        default=None,
+        help="Enable experimental Jev decision support for Codex (e.g. jev-latest). Requires TYPESAFE_API_KEY and --force-build.",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
@@ -970,6 +1122,16 @@ if __name__ == "__main__":
         help=("Allow one additional HTTP(S) endpoint in filtered mode. Repeat this option for multiple endpoints."),
     )
     parser.add_argument(
+        "--container-hardening",
+        choices=("on", "off"),
+        default="on",
+        help=(
+            "Agent container hardening. 'on' (default) drops every Linux capability except "
+            "DAC_OVERRIDE and sets no-new-privileges. Use 'off' for agents that need to install "
+            "tooling mid-run: apt-get cannot drop to the _apt user without setuid/setgid."
+        ),
+    )
+    parser.add_argument(
         "--n-attempts",
         type=int,
         default=1,
@@ -992,10 +1154,19 @@ if __name__ == "__main__":
         default=None,
         help="Resume from a previous results CSV file. Problems already in the CSV will be skipped.",
     )
+    parser.add_argument(
+        "--baseline",
+        type=int,
+        default=None,
+        metavar="SECONDS",
+        help="Override per-problem baseline duration (seconds of steady-state traffic before fault injection)",
+    )
     args = parser.parse_args()
 
     if args.n_attempts is not None and args.n_attempts < 1:
         parser.error("--n-attempts must be a positive integer")
+    if args.baseline is not None and args.baseline < 0:
+        parser.error("--baseline must be a non-negative integer")
     if args.use_external_harness and args.suite:
         parser.error("--use-external-harness cannot be used with --suite; use --problem instead")
 
