@@ -139,7 +139,9 @@ def test_filtered_runner_uses_private_network_and_proxy(tmp_path):
         assert "--network=host" not in args
         env = dict(item.split("=", 1) for item in env_flags[1::2])
         assert env["HTTPS_PROXY"] == "http://filter-proxy:8080"
-        assert env["NO_PROXY"] == ""
+        assert set(env["NO_PROXY"].split(",")) == {"localhost", "127.0.0.1", "::1"}
+        assert env["no_proxy"] == env["NO_PROXY"]
+        assert "host.docker.internal" not in env["NO_PROXY"]
         assert env["SSL_CERT_FILE"] == PROXY_BUNDLE_CONTAINER_PATH
         assert env["NODE_EXTRA_CA_CERTS"] == PROXY_CA_CONTAINER_PATH
         assert env["AGENT_API_BASE"] == "http://host.docker.internal:8001/v1"

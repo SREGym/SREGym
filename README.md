@@ -166,6 +166,17 @@ during a run, turn it off:
 uv run main.py --agent codex --model gpt-5 --container-hardening off
 ```
 
+#### Optional Jev decision support
+
+Jev is disabled by default. To enable it for Codex, set `TYPESAFE_API_KEY` and run:
+
+```bash
+uv run main.py --agent codex --model gpt-5.6-luna --reasoning-effort medium \
+  --problem <problem-id> --jev-model jev-latest --force-build
+```
+
+Jev reviews diagnostic tests and submissions using evidence sent to TypeSafe.
+
 ### Deployment Profiles
 
 `--profile` controls how much infrastructure SREGym stands up. It is independent of

@@ -535,6 +535,11 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
+        # Jev is opt-in; do not expose its credential to ordinary agent/judge runs.
+        if self.config.forward_host_credentials and os.environ.get("AGENT_JEV_MODEL"):
+            env_vars.setdefault("AGENT_JEV_MODEL", os.environ["AGENT_JEV_MODEL"])
+            env_vars.setdefault("TYPESAFE_API_KEY", os.environ.get("TYPESAFE_API_KEY", ""))
+
         env_vars["AGENT_INTERNET_ACCESS"] = self.internet_access_mode
         if self.config.internet_policy.is_filtered:
             if self._egress_proxy_name is None or self._egress_proxy_ca is None or self._egress_ca_bundle is None:
@@ -546,11 +551,11 @@ class ContainerRunner:
                     "HTTPS_PROXY": proxy_url,
                     "http_proxy": proxy_url,
                     "https_proxy": proxy_url,
-                    # The private agent network cannot route directly to the
-                    # host. Local Kubernetes HTTPS traffic uses the egress
-                    # proxy's CONNECT tunnel instead of being intercepted.
-                    "NO_PROXY": "",
-                    "no_proxy": "",
+                    # Keep agent-local services (including kubectl port-forward)
+                    # inside this container. Host endpoints still use the proxy:
+                    # the private network cannot route directly to the host.
+                    "NO_PROXY": "localhost,127.0.0.1,::1",
+                    "no_proxy": "localhost,127.0.0.1,::1",
                     "SSL_CERT_FILE": PROXY_BUNDLE_CONTAINER_PATH,
                     "REQUESTS_CA_BUNDLE": PROXY_BUNDLE_CONTAINER_PATH,
                     "CURL_CA_BUNDLE": PROXY_BUNDLE_CONTAINER_PATH,

@@ -1,0 +1,39 @@
+# Continuous review-submission workload for the integer_overflow_primary_key_astronomy_shop problem
+
+# `product-reviews` does not expose a review-creation RPC, so this issue
+# normally shows up only when the oracle tries to write.
+
+# The writer continuously inserts reviews AS THE APPLICATION USER (otelu),
+# into the same table the app uses. That way, once the ID sequence is exhausted,
+# failed writes show up continuously in the system instead of only during evaluation.
+
+# Applied into the app namespace at inject time and removed on recover.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: review-writer
+  labels:
+    app: review-writer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: review-writer
+  template:
+    metadata:
+      labels:
+        app: review-writer
+    spec:
+      containers:
+        - name: writer
+          image: postgres:17.6
+          command: ["sh", "-c"]
+          args:
+            - |
+              echo "[review-writer] submitting product reviews";
+              while true; do
+                PGPASSWORD=otelp psql -h postgresql -U otelu -d otel \
+                  -c "INSERT INTO reviews.productreviews (product_id, username, description, score) VALUES ('OLJCESPC7Z', 'shopper', 'Great product, works as described.', 5.0);" \
+                  || echo "[review-writer] review submission failed";
+                sleep 5;
+              done

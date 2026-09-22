@@ -23,6 +23,7 @@ from rich.progress import (
 )
 
 from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
+from clients.jev.config import configure as configure_jev
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
@@ -681,6 +682,8 @@ def driver_loop(
                     "deployment_profile": get_profile(),
                     "judge_backend": judge_backend,
                 }
+                if os.environ.get("AGENT_JEV_MODEL"):
+                    snapshot["jev_model"] = os.environ["AGENT_JEV_MODEL"]
                 snapshot.update(LAUNCHER.internet_policy_result(agent_proc))
                 for stage, outcome in conductor.results.items():
                     if isinstance(outcome, dict):
@@ -826,6 +829,7 @@ def _run_driver_and_shutdown(
 
 
 def main(args):
+    configure_jev(args)
     init_logger()
     backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
     with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
@@ -860,6 +864,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, "
         f"judge_backend: {judge_backend}, judge_model: {judge_model}, "
         f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
+        f"jev_model: {getattr(args, 'jev_model', None) or 'disabled'}, "
         f"deployment_profile: {get_profile()}, "
         f"internet_access: {internet_policy.mode.value}, "
         f"container_hardening: {args.container_hardening}, "
@@ -904,21 +909,24 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     LAUNCHER.set_container_hardening(harden_container)
 
     try:
-        if not agent_reg or agent_reg.container_isolation:
-            LAUNCHER.enable_container_isolation(
-                # Reuse the image already prepared for a subscription judge.
-                force_build=args.force_build and agent_image is None,
-                k8s_proxy_port=conductor_config.k8s_proxy_listen_port,
-                image=agent_image,
-            )
+        # An external harness exits before the agent runs: the container build
+        # and credential preflight are wasted, and fatal without agent creds.
+        if not args.use_external_harness:
+            if not agent_reg or agent_reg.container_isolation:
+                LAUNCHER.enable_container_isolation(
+                    # Reuse the image already prepared for a subscription judge.
+                    force_build=args.force_build and agent_image is None,
+                    k8s_proxy_port=conductor_config.k8s_proxy_listen_port,
+                    image=agent_image,
+                )
 
-        # Pre-flight check — makes a real (minimal) API call inside the agent
-        # container to validate model and credentials in one shot.
-        run_preflight_check(
-            args.agent,
-            container_runner=LAUNCHER._container_runner,
-            install_script=agent_reg.install_script if agent_reg else None,
-        )
+            # Pre-flight check — makes a real (minimal) API call inside the agent
+            # container to validate model and credentials in one shot.
+            run_preflight_check(
+                args.agent,
+                container_runner=LAUNCHER._container_runner,
+                install_script=agent_reg.install_script if agent_reg else None,
+            )
     except BaseException:
         LAUNCHER.cleanup_all()
         raise
@@ -1067,6 +1075,11 @@ if __name__ == "__main__":
         choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
         default=None,
         help="Reasoning effort for Codex, Copilot, OpenCode, and Claude Code (uses the agent default when omitted)",
+    )
+    parser.add_argument(
+        "--jev-model",
+        default=None,
+        help="Enable experimental Jev decision support for Codex (e.g. jev-latest). Requires TYPESAFE_API_KEY and --force-build.",
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."
