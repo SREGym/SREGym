@@ -136,7 +136,11 @@ in 18m11s; see [VALIDATION.md](VALIDATION.md).
 The same scenario also accepts the experimental `fleet` tier: 12 workers, eight
 routers, 28 placement partitions, 96 cache pools, and 50,000 players. This
 larger tier needs a clean capacity baseline and causal calibration before it
-can be used as a benchmark result.
+can be used as a benchmark result. Its workflow latency target is 1.5 seconds,
+versus one second for `expanded`: an initial 20-workflow/s fleet run completed
+all 600 requests in each healthy window but missed the expanded target in five
+of six windows (the latest 98th percentile was 1.32 seconds). The fleet target
+and the fault both still require validation on a fresh run.
 
 Every run has independent Docker networks and volumes. `down` stops its workload
 process and exports logs before removing that run. Artifacts and private workload

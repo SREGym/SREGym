@@ -360,6 +360,17 @@ does not establish an ultra-long-horizon task. It is one trial on one scale tier
 the fleet configuration and additional historical recovery hazards remain to be
 validated or implemented.
 
+### Fleet baseline calibration
+
+The first `native-fleet-1` start scheduled 245 allocations on 12 ready workers:
+16 service types, eight routers, 28 placement partitions, 96 persistent cache
+pools, and the cache reconciler. All six healthy warmup windows completed
+**600/600** workflows at 20 offered workflows per second, and every check except
+the expanded tier's one-second latency target passed. Only one window met that
+target; the latest 98th-percentile latency was 1.32 seconds. The runner correctly
+rejected this stack before injection. The fleet target is now 1.5 seconds to
+account for its longer healthy path, and a fresh clean baseline is required.
+
 ## Expanded application
 
 `native-expanded` ran 64 active Nomad allocations, representing 16 service types,

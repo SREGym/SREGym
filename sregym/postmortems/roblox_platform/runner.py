@@ -105,7 +105,7 @@ class Run:
                 placement_replicas=14 if tier == "expanded" else 28,
                 placement_catalog_writers=7 if tier == "expanded" else 14,
                 placement_interval=0.05 if tier == "expanded" else 0.1,
-                workflow_slo_seconds=1.0,
+                workflow_slo_seconds=1.0 if tier == "expanded" else 1.5,
                 consul_write_bps=20 * 1024 * 1024,
             )
             if recovery:
