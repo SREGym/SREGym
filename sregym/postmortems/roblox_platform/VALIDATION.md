@@ -427,7 +427,19 @@ their replacement cache services were passing. The prepared follower won a
 native election, and two valid pre-agent grades failed **0/240** with the cache
 fleet, worker readiness, Consul quorum, and durable-data checks intact. This
 models the stale-state consequence, not the historical snapshot-reset path.
-The source-blind Codex recovery is being measured.
+The source-blind Codex CLI 0.155.1 (`gpt-6-astra`) run exited normally after
+**17m37s**. It mitigated the streaming load, compacted the 6.1 GB slow-leader
+Raft file, repaired the cache worker's storage permissions, then encountered
+the controller's placement conflict at `cache-3`. It compared Consul KV records
+with live Nomad allocations and repaired the four stale records. The native
+controller completed all 24 replacements in **7m36s** from its first stop,
+including three logged placement conflicts. After sustained service and
+idempotency checks, the independent grade passed **240/240** workflows and
+every integrity, latency, capacity, backlog, cache-generation, and placement-
+consistency check. The sanitized result is in
+[benchmarks/recovery-stale-trial.json](benchmarks/recovery-stale-trial.json).
+This validates a real deferred state conflict, but it did not increase agent
+time over the earlier 18m11s cold-cache run.
 
 The next source revision also stops provisioning the upstream `bbolt` CLI on
 incident hosts. Earlier agents used that preinstalled tool to compact the

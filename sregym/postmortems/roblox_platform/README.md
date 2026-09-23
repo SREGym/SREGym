@@ -136,7 +136,8 @@ stale placement state during the later rollout. The grader requires all records
 to match serving Nomad allocations. This models the resulting state conflict,
 but not the historical snapshot reset that produced it, the incremental-only
 deployment tool, or staged DNS return. Earlier source versions passed a clean
-cold-cache agent trial in 18m11s; the new placement state is under validation.
+cold-cache agent trial in 18m11s. A clean trial of the placement-state revision
+also passed, but took only 17m37s; see [VALIDATION.md](VALIDATION.md).
 
 The same scenario also accepts the experimental `fleet` tier: 12 workers, eight
 routers, 28 placement partitions, 96 cache pools, and 50,000 players. This
