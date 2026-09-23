@@ -112,5 +112,10 @@
     "cache_write_input_tokens": 0,
     "output_tokens": 18557,
     "reasoning_output_tokens": 5294
+  },
+  "agent_milestones_seconds_from_start": {
+    "slow_voter_state_preserved": 231.6,
+    "stale_placement_repair_started": 442.6,
+    "cache_generation_complete": 751.2
   }
 }

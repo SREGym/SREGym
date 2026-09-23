@@ -461,6 +461,10 @@ sanitized result is in
 [benchmarks/recovery-no-compact-trial.json](benchmarks/recovery-no-compact-trial.json).
 Removing the post-incident tool changed the repair path but did not create an
 hours-long task.
+The saved agent trace places its first slow-voter state-preservation action
+**3m52s** after start and its stale-placement repair at **7m23s**; the requested
+cache generation completed at **12m31s**. Much of the 18m23s wrapper duration
+was therefore rollout and verification rather than root-cause investigation.
 
 ## Expanded application
 
