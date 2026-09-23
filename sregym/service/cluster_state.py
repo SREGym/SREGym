@@ -171,17 +171,17 @@ class ClusterStateManager:
         logger.info("Capturing cluster baseline state...")
 
         self.baseline = ClusterBaseline(
-            namespaces=self._get_namespaces(),
-            cluster_roles=self._get_cluster_roles(),
-            cluster_role_bindings=self._get_cluster_role_bindings(),
-            persistent_volumes=self._get_persistent_volumes(),
-            storage_classes=self._get_storage_classes(),
-            crds=self._get_crds(),
-            validating_webhook_configs=self._get_validating_webhook_configs(),
-            mutating_webhook_configs=self._get_mutating_webhook_configs(),
-            node_labels=self._get_node_labels(),
-            node_taints=self._get_node_taints(),
-            coredns_configmap_data=self._get_coredns_configmap_data(),
+            namespaces=self._get_namespaces(raise_on_error=True),
+            cluster_roles=self._get_cluster_roles(raise_on_error=True),
+            cluster_role_bindings=self._get_cluster_role_bindings(raise_on_error=True),
+            persistent_volumes=self._get_persistent_volumes(raise_on_error=True),
+            storage_classes=self._get_storage_classes(raise_on_error=True),
+            crds=self._get_crds(raise_on_error=True),
+            validating_webhook_configs=self._get_validating_webhook_configs(raise_on_error=True),
+            mutating_webhook_configs=self._get_mutating_webhook_configs(raise_on_error=True),
+            node_labels=self._get_node_labels(raise_on_error=True),
+            node_taints=self._get_node_taints(raise_on_error=True),
+            coredns_configmap_data=self._get_coredns_configmap_data(raise_on_error=True),
         )
 
         return self.baseline
@@ -387,49 +387,59 @@ class ClusterStateManager:
         logger.info(f"Reconciliation complete: {changes}")
         return changes
 
-    def _get_namespaces(self) -> set[str]:
+    def _get_namespaces(self, raise_on_error: bool = False) -> set[str]:
         """Get all namespace names in the cluster."""
         try:
             ns_list = self.core_v1.list_namespace()
             return {ns.metadata.name for ns in ns_list.items}
         except ApiException as e:
             logger.error(f"Failed to list namespaces: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_cluster_roles(self) -> set[str]:
+    def _get_cluster_roles(self, raise_on_error: bool = False) -> set[str]:
         """Get all ClusterRole names."""
         try:
             roles = self.rbac_v1.list_cluster_role()
             return {role.metadata.name for role in roles.items}
         except ApiException as e:
             logger.error(f"Failed to list ClusterRoles: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_cluster_role_bindings(self) -> set[str]:
+    def _get_cluster_role_bindings(self, raise_on_error: bool = False) -> set[str]:
         """Get all ClusterRoleBinding names."""
         try:
             bindings = self.rbac_v1.list_cluster_role_binding()
             return {binding.metadata.name for binding in bindings.items}
         except ApiException as e:
             logger.error(f"Failed to list ClusterRoleBindings: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_persistent_volumes(self) -> set[str]:
+    def _get_persistent_volumes(self, raise_on_error: bool = False) -> set[str]:
         """Get all PersistentVolume names."""
         try:
             pvs = self.core_v1.list_persistent_volume()
             return {pv.metadata.name for pv in pvs.items}
         except ApiException as e:
             logger.error(f"Failed to list PersistentVolumes: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_storage_classes(self) -> set[str]:
+    def _get_storage_classes(self, raise_on_error: bool = False) -> set[str]:
         """Get all StorageClass names."""
         try:
             scs = self.storage_v1.list_storage_class()
             return {sc.metadata.name for sc in scs.items}
         except ApiException as e:
             logger.error(f"Failed to list StorageClasses: {e}")
+            if raise_on_error:
+                raise
             return set()
 
     def _strip_cr_finalizers(self, crd_name: str):
@@ -486,43 +496,51 @@ class ClusterStateManager:
                 if e.status != 404:
                     logger.warning(f"Failed to strip finalizers from {crd_name} CR {ns}/{name}: {e}")
 
-    def _get_crds(self) -> set[str]:
+    def _get_crds(self, raise_on_error: bool = False) -> set[str]:
         """Get all CustomResourceDefinition names."""
         try:
             crds = self.apiextensions_v1.list_custom_resource_definition()
             return {crd.metadata.name for crd in crds.items}
         except ApiException as e:
             logger.error(f"Failed to list CRDs: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_validating_webhook_configs(self) -> set[str]:
+    def _get_validating_webhook_configs(self, raise_on_error: bool = False) -> set[str]:
         """Get all ValidatingWebhookConfiguration names."""
         try:
             configs = self.admission_v1.list_validating_webhook_configuration()
             return {cfg.metadata.name for cfg in configs.items}
         except ApiException as e:
             logger.error(f"Failed to list ValidatingWebhookConfigurations: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_mutating_webhook_configs(self) -> set[str]:
+    def _get_mutating_webhook_configs(self, raise_on_error: bool = False) -> set[str]:
         """Get all MutatingWebhookConfiguration names."""
         try:
             configs = self.admission_v1.list_mutating_webhook_configuration()
             return {cfg.metadata.name for cfg in configs.items}
         except ApiException as e:
             logger.error(f"Failed to list MutatingWebhookConfigurations: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_node_labels(self) -> dict[str, dict[str, str]]:
+    def _get_node_labels(self, raise_on_error: bool = False) -> dict[str, dict[str, str]]:
         """Get labels for all nodes."""
         try:
             nodes = self.core_v1.list_node()
             return {node.metadata.name: dict(node.metadata.labels or {}) for node in nodes.items}
         except ApiException as e:
             logger.error(f"Failed to get node labels: {e}")
+            if raise_on_error:
+                raise
             return {}
 
-    def _get_node_taints(self) -> dict[str, list]:
+    def _get_node_taints(self, raise_on_error: bool = False) -> dict[str, list]:
         """Get taints for all nodes."""
         try:
             nodes = self.core_v1.list_node()
@@ -534,9 +552,11 @@ class ClusterStateManager:
             return result
         except ApiException as e:
             logger.error(f"Failed to get node taints: {e}")
+            if raise_on_error:
+                raise
             return {}
 
-    def _get_coredns_configmap_data(self) -> dict[str, str]:
+    def _get_coredns_configmap_data(self, raise_on_error: bool = False) -> dict[str, str]:
         """Get CoreDNS ConfigMap data."""
         try:
             cm = self.core_v1.read_namespaced_config_map(name="coredns", namespace="kube-system")
@@ -546,6 +566,8 @@ class ClusterStateManager:
                 logger.warning("CoreDNS ConfigMap not found")
                 return {}
             logger.error(f"Failed to get CoreDNS ConfigMap: {e}")
+            if raise_on_error:
+                raise
             return {}
 
     def _is_coredns_modified(self) -> bool:
