@@ -34,7 +34,6 @@ HARDENING_FLAGS = (
 )
 AGENT_TOOLS_CONTAINER_PATH = "/opt/agent-tools"
 CONTAINER_PATH = f"{AGENT_TOOLS_CONTAINER_PATH}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-FILTERED_CODEX_CONFIG = 'web_search = "disabled"\n\n[features]\napps = false\nplugins = false\n'
 
 
 def _docker_uses_separate_host() -> bool:
@@ -281,7 +280,6 @@ class ContainerRunner:
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
         self._credential_tmps: list[str] = []
-        self._codex_config_paths: list[Path] = []
         self._egress = DockerEgress(self.config.egress_proxy_image, k8s_proxy_port=self.config.k8s_proxy_port)
         self._agent_tools_volume: str | None = None
 
@@ -310,16 +308,7 @@ class ContainerRunner:
             try:
                 self.cleanup_credential_tmps()
             finally:
-                try:
-                    self._cleanup_codex_configs()
-                finally:
-                    self.cleanup_agent_tools()
-
-    def _cleanup_codex_configs(self) -> None:
-        for path in self._codex_config_paths:
-            if path.is_file() and not path.is_symlink() and path.read_text() == FILTERED_CODEX_CONFIG:
-                path.unlink()
-        self._codex_config_paths.clear()
+                self.cleanup_agent_tools()
 
     def _configured_egress_rules(self, env_vars: dict[str, str]) -> tuple[EndpointRule, ...]:
         rules = {
@@ -466,7 +455,6 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
-        # ponytail: /logs keeps the pinned image working until its driver fix is published.
         if self.config.internet_policy.agent_name == "codex" and env_vars.get("AGENT_API_BASE"):
             env_vars.setdefault("CODEX_HOME", "/logs")
 
@@ -577,24 +565,6 @@ class ContainerRunner:
         if self.config.logs_path:
             self.config.logs_path.mkdir(parents=True, exist_ok=True)
             args.extend(["-v", f"{self.config.logs_path.resolve()}:/logs"])
-
-        # ponytail: The pinned image lacks filtered Codex flags; remove after republishing it.
-        if (
-            self.config.internet_policy.is_filtered
-            and (self.config.internet_policy.agent_name or "").casefold() == "codex"
-        ):
-            if not self.config.logs_path:
-                raise RuntimeError("Filtered Codex requires a logs path")
-            config = self.config.logs_path.resolve() / "config.toml"
-            try:
-                with config.open("x") as handle:
-                    handle.write(FILTERED_CODEX_CONFIG)
-            except FileExistsError:
-                if config.is_symlink() or config.read_text() != FILTERED_CODEX_CONFIG:
-                    raise RuntimeError(f"Filtered Codex cannot replace existing {config}") from None
-            else:
-                self._codex_config_paths.append(config)
-            args.extend(["--mount", f"type=bind,src={config},dst=/root/.codex/config.toml,readonly"])
 
         # Mount only the needed SREGym-applications subdirectories (read-only)
         if self.config.sregym_apps_path and self.config.sregym_app_subdirs:

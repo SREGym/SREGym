@@ -87,31 +87,6 @@ def test_preflight_and_run_share_the_install_decision(prepared, capture_logs):
     assert "run-agent" in command
 
 
-def test_filtered_codex_mounts_config_for_preflight_and_agent(monkeypatch, tmp_path):
-    runner = ContainerRunner(
-        ContainerConfig(
-            internet_policy=InternetPolicy.from_mode("filtered", agent_name="codex"),
-            logs_path=tmp_path,
-            forward_host_credentials=False,
-            codex_auth="none",
-        )
-    )
-    monkeypatch.setattr(runner._egress, "docker_args", lambda: [])
-
-    args = runner._build_base_docker_args()
-    config = tmp_path / "config.toml"
-    assert config.read_text().startswith('web_search = "disabled"')
-    assert f"type=bind,src={config},dst=/root/.codex/config.toml,readonly" in args
-
-    runner.close()
-    assert not config.exists()
-
-    config.write_text("user config")
-    with pytest.raises(RuntimeError, match="cannot replace existing"):
-        runner._build_base_docker_args()
-    assert config.read_text() == "user config"
-
-
 @pytest.mark.parametrize(
     "kickoff_env", [None, {"AGENT_API_BASE": "https://custom.test/v1", "AGENT_API_KEY": "test-key"}]
 )
