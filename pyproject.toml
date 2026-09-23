@@ -156,6 +156,8 @@ dependencies = [
     "setuptools==80.10.2",
     "opentelemetry-exporter-jaeger>=1.21.0",
     "opentelemetry-exporter-otlp>=1.11.1",
+    "typesafe-sdk>=0.6.0",
+    "python-dotenv>=1.1.0",
 ]
 
 [tool.black]

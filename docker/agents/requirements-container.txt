@@ -20,3 +20,6 @@ tiktoken>=0.8.0
 nest-asyncio==1.6.0
 fastmcp>=2.9.2
 mcp[cli]>=1.9.1
+
+# Jev diagnosis agent (clients/jev_diag)
+typesafe-sdk>=0.6.0
