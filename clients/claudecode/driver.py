@@ -46,13 +46,23 @@ def run_preflight() -> None:
     if reasoning_effort:
         command.extend(["--effort", reasoning_effort])
 
-    r = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env=env,
-    )
+    timeout_seconds = 150
+    try:
+        r = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if exc.stdout:
+            print(exc.stdout)
+        if exc.stderr:
+            print(exc.stderr)
+        print(f"Claude Code preflight timed out after {timeout_seconds} seconds")
+        sys.exit(1)
     if r.returncode:
         print(r.stdout or r.stderr)
     sys.exit(r.returncode)

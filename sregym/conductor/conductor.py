@@ -70,6 +70,7 @@ class ConductorConfig:
     # supports, which is what an unset --stages leaves in place.
     stages: tuple[str, ...] | None = None
     baseline_override_s: int | None = None  # overrides per-problem baseline_duration_s when set
+    propagation_override_s: int | None = None  # overrides per-problem propagation_duration_s when set
 
     @property
     def restrict_network_access(self) -> bool:
@@ -406,7 +407,7 @@ class Conductor:
         ledger = getattr(self, "phases", None)
         return ledger is not None and ledger.is_open(name)
 
-    def _advance_to_next_stage(self, start_index: int = 0):
+    async def _advance_to_next_stage(self, start_index: int = 0):
         """
         Advance to the next stage starting from start_index.
         If there are more stages, set up for agent submission.
@@ -420,10 +421,23 @@ class Conductor:
             self.finish_problem_in_background()
             return
 
-        # Inject fault before the first stage if not already done
+        # Inject fault before the first stage if not already done -- the
+        # interactive visualizer injects itself before calling this.
         if start_index == 0 and not self.fault_injected:
             with self._phase("inject_fault"):
                 self._inject_fault()
+
+            # Let the fault surface in telemetry before the agent sees it.
+            propagation = (
+                self.config.propagation_override_s
+                if self.config.propagation_override_s is not None
+                else self.problem.propagation_duration_s
+            )
+            if propagation > 0:
+                self.logger.info(f"[PROPAGATION] Waiting {propagation}s for the fault to reach telemetry...")
+                with self._phase("propagation", seconds=propagation):
+                    await asyncio.sleep(propagation)
+                self.logger.info("[PROPAGATION] Propagation window complete.")
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
@@ -731,7 +745,7 @@ class Conductor:
                 self.logger.warning(f"Failed to update NoiseManager context: {e}")
 
         # After deployment, advance to the first stage
-        self._advance_to_next_stage(start_index=0)
+        await self._advance_to_next_stage(start_index=0)
 
         self.execution_start_time = time.time()  # Reset: measure agent time only
 

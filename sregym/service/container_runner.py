@@ -455,6 +455,10 @@ class ContainerRunner:
         if extra_env:
             env_vars.update(extra_env)
 
+        # ponytail: /logs keeps the pinned image working until its driver fix is published.
+        if self.config.internet_policy.agent_name == "codex" and env_vars.get("AGENT_API_BASE"):
+            env_vars.setdefault("CODEX_HOME", "/logs")
+
         # The judge runs on the host. Its model and credentials are not inputs
         # to the evaluated agent and must not enter the agent container.
         for name in ("JUDGE_MODEL_ID", "JUDGE_API_BASE", "JUDGE_API_KEY"):

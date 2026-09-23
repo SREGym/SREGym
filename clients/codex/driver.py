@@ -44,8 +44,8 @@ def run_preflight() -> None:
         print(f"missing {auth} and OPENAI_API_KEY")
         sys.exit(1)
 
+    home.mkdir(parents=True, exist_ok=True)
     if not provider_args and not auth.exists():
-        home.mkdir(parents=True, exist_ok=True)
         auth.write_text(json.dumps({"OPENAI_API_KEY": key}))
 
     m = os.environ["AGENT_MODEL_ID"].split("/")[-1]

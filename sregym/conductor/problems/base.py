@@ -16,6 +16,9 @@ class Problem(ABC):
         # Seconds of steady-state traffic to run before fault injection. Override in subclass.
         self.baseline_duration_s: int = 0
 
+        # Seconds to wait after fault injection for it to reach telemetry. Override in subclass.
+        self.propagation_duration_s: int = 0
+
         # Optional: attach oracles in subclass
         self.diagnosis_oracle = None
         self.mitigation_oracle = None
