@@ -30,6 +30,7 @@ from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
+from sregym.env_file import load_env_file
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
@@ -827,6 +828,7 @@ def _run_driver_and_shutdown(
 
 def main(args):
     init_logger()
+    load_env_file()
     backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
     with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
         return _run_benchmark(args, judge_backend=backend, agent_image=agent_image)

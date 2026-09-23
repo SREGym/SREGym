@@ -22,6 +22,7 @@ from rich.panel import Panel
 from logger import init_logger
 from sregym.conductor.conductor import Conductor
 from sregym.conductor.constants import StartProblemResult
+from sregym.env_file import load_env_file
 from sregym.service.shell import Shell
 
 WELCOME = """
@@ -142,6 +143,7 @@ class HumanAgent:
 
 async def main():
     init_logger()
+    load_env_file()
 
     conductor = Conductor()
     agent = HumanAgent(conductor)

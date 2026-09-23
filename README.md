@@ -83,7 +83,8 @@ bash kind/setup_kind_cluster.sh
 
 To get started with the included Stratus agent:
 
-1. Set your LLM API keys in the environment (required for your chosen model provider):
+1. Set your LLM API keys, either by exporting them or by copying `.env.example` to `.env` at the
+   repository root and filling it in (`.env` is git-ignored; exported values take precedence):
 ```bash
 # OpenAI
 export OPENAI_API_KEY="sk-proj-..."

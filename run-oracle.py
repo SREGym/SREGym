@@ -18,6 +18,7 @@ import time
 
 from logger import init_logger
 from sregym.conductor.problems.registry import ProblemRegistry
+from sregym.env_file import load_env_file
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ def run_oracle_for_problem(problem_id: str) -> dict:
 
 
 def main():
+    load_env_file()
     parser = argparse.ArgumentParser(
         description="Run the mitigation oracle for a given SREGym problem",
         formatter_class=argparse.RawDescriptionHelpFormatter,
