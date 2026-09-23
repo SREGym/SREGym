@@ -138,6 +138,9 @@ but not the historical snapshot reset that produced it, the incremental-only
 deployment tool, or staged DNS return. Earlier source versions passed a clean
 cold-cache agent trial in 18m11s. A clean trial of the placement-state revision
 also passed, but took only 17m37s; see [VALIDATION.md](VALIDATION.md).
+With no preinstalled compaction CLI on incident hosts, a further clean agent
+trial passed in 18m23s by preserving and replacing the slow voter's local state.
+This remains far shorter than the historical outage.
 
 The same scenario also accepts the experimental `fleet` tier: 12 workers, eight
 routers, 28 placement partitions, 96 cache pools, and 50,000 players. This

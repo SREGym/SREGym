@@ -447,8 +447,20 @@ slow leader directly, although the [Roblox postmortem](https://about.roblox.com/
 says the BoltDB freelist root cause was established after return to service;
 during the outage, responders kept slow leaders from staying elected. The
 runner still uses a private storage fixture to create real free pages. This
-tool-availability change needs a fresh agent validation and should not be
-attributed to the `native-stale-1` result.
+tool-availability change should not be attributed to the `native-stale-1`
+result. A separate fresh `native-no-compact-1` trial tested it. All three
+clean baselines passed **240/240**, the three Consul hosts had no `bbolt`
+binary, and two valid pre-agent grades failed **0/240**. Codex preserved the
+slow voter's original data directory, brought that voter back with fresh local
+state from its peers, repaired cache worker storage and four stale placement
+records, and completed all 24 replacements in **8m42s** from the first stop.
+It exited normally after **18m23s**. The independent grade passed **240/240**
+and every integrity, latency, capacity, quorum, backlog, cache-generation, and
+placement-consistency check, including 7,821 acknowledged requests. The
+sanitized result is in
+[benchmarks/recovery-no-compact-trial.json](benchmarks/recovery-no-compact-trial.json).
+Removing the post-incident tool changed the repair path but did not create an
+hours-long task.
 
 ## Expanded application
 
