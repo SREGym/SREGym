@@ -110,6 +110,7 @@ class Run:
             )
             if recovery:
                 spec["cache_jobs"] = 24 if tier == "expanded" else 96
+                spec["cache_controller"] = True
         self.root.mkdir(parents=True, exist_ok=True)
         operations = self.root / "operations"
         operations.mkdir()
@@ -320,6 +321,7 @@ class Run:
         environment = {
             "CONSUL_HTTP_ADDR": "http://127.0.0.1:8500",
             "CONSUL_SERVERS": ",".join(self.ip(n) for n in consul_names),
+            "NOMAD_ADDR": self.url("nomad-1", 4646),
             "VAULT_ADDR": vault_url,
             "VAULT_TOKEN": token,
             "DATABASE_URLS": ",".join(
@@ -339,6 +341,11 @@ class Run:
             f"cache-{i}": cache_job(f"cache-{i}", workers[i % len(workers)])
             for i in range(spec.get("cache_jobs", 0))
         }
+        if recovery:
+            jobs["cache-reconciler"] = job(
+                "cache-reconciler", count=1, environment=environment,
+                command="cache_reconciler.py", cpu=100, memory=128,
+            )
         jobs.update({name: job(name, count=spec["replicas"], environment=environment) for name in SERVICES})
         jobs["routing"] = job(
             "routing", count=spec.get("routing_replicas", spec["replicas"]), environment=environment,
@@ -509,6 +516,8 @@ These hosts use a minimal init system: launch a daemon with its configuration
 file after stopping its old process when a restart is necessary. Keep SSH alive.
 
 The application has two database shards, sharded cache pools, and a durable queue.
+The cache-reconciler manages requested pool redeployments through Nomad; inspect
+its allocation logs and metrics when cache rollout stalls.
 Player identities are immutable. Each purchase costs one coin and creates one
 inventory item and one asynchronous receipt. Request IDs make retries idempotent.
 Sessions, purchases, and receipts must agree about the player. Processing workers
@@ -773,12 +782,14 @@ read access to their own key. Changes to shared storage can affect secret access
         )
         cache_fault = meta.get("scenario") == "recovery-tail"
         if cache_fault:
-            self.inject_cache_bootstrap_fault()
+            initial_allocations, cache_epoch = self.arm_cache_rebootstrap(meta["spec"])
+            meta["cache_initial_allocations"] = initial_allocations
+            meta["cache_redeploy_epoch"] = cache_epoch
         meta.update(
             injected_at=time.time(),
             trigger={
                 "elections": elections, "nomad_jobs_changed": False,
-                **({"cache_bootstrap": "worker-1 cache stores unwritable"} if cache_fault else {}),
+                **({"cache_redeploy_requested": cache_epoch} if cache_fault else {}),
             },
             fidelity="native Consul leader election over fragmented Raft log with equal bounded disk throughput",
         )
@@ -788,11 +799,41 @@ read access to their own key. Changes to shared storage can affect secret access
             result = self.grade(30)
             (self.root / f"fault-grade-{index}.json").write_text(json.dumps(result, indent=2))
             grades.append(result)
+        if cache_fault and not all(
+            self.consul(f"health/service/cache-{i}?passing=true")
+            for i in range(meta["spec"]["cache_jobs"])
+        ):
+            raise RuntimeError("cache rebootstrap began before operator entry")
         meta["fault_validated"] = all(g["valid"] and not g["passed"] for g in grades)
         (self.root / "run.json").write_text(json.dumps(meta, indent=2))
         if not meta["fault_validated"]:
             raise RuntimeError("latent incident did not fail two settled grades")
         return meta["trigger"]
+
+    def arm_cache_rebootstrap(self, spec):
+        """Prepare a latent worker defect and request an ordinary fleet rollout.
+
+        Running Redis processes keep serving. The cache controller only begins
+        replacing pools after Consul writes meet its normal readiness target.
+        """
+        initial = {}
+        for index in range(spec["cache_jobs"]):
+            name = f"cache-{index}"
+            current = [
+                row for row in self.nomad("job/" + name + "/allocations")
+                if row["DesiredStatus"] == "run" and row["ClientStatus"] == "running"
+            ]
+            if len(current) != 1:
+                raise RuntimeError(f"expected one running {name} allocation before rebootstrap")
+            initial[name] = current[0]["ID"]
+        for index in range(0, spec["cache_jobs"], spec["workers"]):
+            self.exec("worker-1", "chmod", "-R", "a-w", f"/state/cache-pools/cache-{index}")
+        epoch = uuid.uuid4().hex
+        self.wait(
+            lambda: self.consul("kv/platform/cache/redeploy_epoch", "PUT", epoch.encode()) is True,
+            "cache redeployment request", attempts=10,
+        )
+        return initial, epoch
 
     def inject_cache_bootstrap_fault(self):
         """Leave one Nomad-ready worker unable to start its assigned cache pools.
@@ -886,7 +927,8 @@ read access to their own key. Changes to shared storage can affect secret access
         return result
 
     def _grade(self, duration):
-        spec = self.metadata()["spec"]
+        meta = self.metadata()
+        spec = meta["spec"]
         must_process = set()
         for shard in range(2):
             must_process.update(self.sql(shard, "SELECT request_id FROM purchases").splitlines())
@@ -942,6 +984,8 @@ read access to their own key. Changes to shared storage can affect secret access
             expected = {name: spec["replicas"] for name in SERVICES}
             expected["routing"] = spec.get("routing_replicas", spec["replicas"])
             expected.update({f"cache-{i}": 1 for i in range(spec.get("cache_jobs", 0))})
+            if spec.get("cache_controller"):
+                expected["cache-reconciler"] = 1
             # In the latent incident, placement is partitioned. Its outcome is
             # checked through the live shard endpoints below, not job count.
             if "placement_replicas" in spec:
@@ -968,6 +1012,24 @@ read access to their own key. Changes to shared storage can affect secret access
             checks["workflow_latency"] = sum(
                 row["ok"] and row["elapsed"] <= spec["workflow_slo_seconds"] for row in samples
             ) >= 0.98 * len(samples)
+        if meta.get("cache_redeploy_epoch"):
+            try:
+                complete = self.consul("kv/platform/cache/redeploy_complete?raw", raw=True).decode().strip()
+                initial = meta["cache_initial_allocations"]
+                replaced = all(
+                    any(
+                        row["ID"] != initial[f"cache-{i}"]
+                        and row["DesiredStatus"] == "run"
+                        and row["ClientStatus"] == "running"
+                        for row in self.nomad(f"job/cache-{i}/allocations")
+                    )
+                    for i in range(spec["cache_jobs"])
+                )
+                checks["cache_redeployment_complete"] = (
+                    complete == meta["cache_redeploy_epoch"] and replaced
+                )
+            except (OSError, urllib.error.URLError, KeyError, ValueError):
+                checks["cache_redeployment_complete"] = False
         result = {
             "passed": all(checks.values()),
             "checks": checks,

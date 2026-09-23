@@ -119,12 +119,16 @@ not a claim about Roblox's exact disk throughput.
 
 The experimental `recovery-tail` scenario uses the same latent Consul trigger
 and schedules 24 Redis cache pools across six Nomad workers on persistent storage.
-It then makes one worker's four cache stores unwritable and stops those allocations.
-Nomad still sees the worker as ready but its replacement Redis tasks cannot start.
-The application discovers cache endpoints through Consul; a missing pool breaks
-the corresponding player cohorts. Use `--scenario recovery-tail` with the expanded
-tier. This is an executable cache bootstrap failure, not yet a reproduction of
-the postmortem's stale Consul KV scheduling data, incremental deployment tool,
+An independent cache-reconciler job probes real Consul KV write latency and rolls
+pools one at a time when a requested redeployment becomes safe. The incident arms
+unwritable cache storage on one still-ready worker and requests that redeployment.
+The existing pools keep serving during the Consul outage; replacement Redis tasks
+on that worker fail only after the control plane recovers enough for the rollout
+to start. The application discovers cache endpoints through Consul, so each failed
+pool breaks its player cohort. The grader requires the requested generation to
+finish with all pools serving. Use `--scenario recovery-tail` with the expanded
+tier. This is an executable recovery tail, not yet a reproduction of the
+postmortem's stale Consul KV scheduling data, incremental-only deployment tool,
 or staged DNS return. It remains under agent validation.
 
 The same scenario also accepts the experimental `fleet` tier: 12 workers, eight
