@@ -74,7 +74,7 @@ def job(name, *, count, environment, command="application.py", cpu=200, memory=1
 
 
 def cache_job(name, worker):
-    """Schedule a transient Redis pool through Nomad on its assigned worker."""
+    """Schedule a persistent Redis pool through Nomad on its assigned worker."""
     return {
         "ID": name,
         "Name": name,
@@ -95,8 +95,10 @@ def cache_job(name, worker):
                             "image": "redis:7.2.10-bookworm",
                             "network_mode": "host",
                             "command": "sh",
-                            "args": ["-c", 'exec redis-server --port "$NOMAD_PORT_cache" --save "" --appendonly no'],
+                            "args": ["-c", 'exec redis-server --port "$NOMAD_PORT_cache" --save "" --appendonly yes'],
+                            "volumes": [f"/state/cache-pools/{name}:/data"],
                         },
+                        "User": "999",
                         "Resources": {"CPU": 200, "MemoryMB": 512},
                         "Services": [
                             {

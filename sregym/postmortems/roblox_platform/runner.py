@@ -161,7 +161,10 @@ class Run:
                             "cpu_total_compute": 10000,
                             "memory_total_mb": 6144,
                         },
-                        plugin=[{"docker": {"config": {"allow_privileged": False}}}],
+                        plugin=[{"docker": {"config": {
+                            "allow_privileged": False,
+                            "volumes": {"enabled": recovery},
+                        }}}],
                     )
                 else:
                     configs["nomad"]["server"] = {"enabled": True, "bootstrap_expect": 1}
@@ -300,10 +303,14 @@ class Run:
         if recovery:
             redis_image = self.root / "redis-image.tar"
             docker("save", "-o", redis_image, "redis:7.2.10-bookworm")
-            for worker in workers:
+            for i, worker in enumerate(workers):
                 docker("cp", redis_image, self.cid(worker) + ":/tmp/redis-image.tar")
                 self.exec(worker, "docker", "load", "-i", "/tmp/redis-image.tar")
                 self.exec(worker, "rm", "/tmp/redis-image.tar")
+                if i < spec["cache_jobs"]:
+                    path = f"/state/cache-pools/cache-{i}"
+                    self.exec(worker, "mkdir", "-p", path)
+                    self.exec(worker, "chown", "-R", "999:999", path)
             redis_image.unlink()
         environment = {
             "CONSUL_HTTP_ADDR": "http://127.0.0.1:8500",
