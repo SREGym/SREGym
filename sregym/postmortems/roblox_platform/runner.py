@@ -100,7 +100,7 @@ class Run:
             spec.update(
                 routing_tenants=512, routing_replicas=4, placement_replicas=14,
                 placement_interval=0.05, workflow_slo_seconds=1.0,
-                consul_write_bps=10 * 1024 * 1024,
+                consul_write_bps=20 * 1024 * 1024,
             )
         self.root.mkdir(parents=True, exist_ok=True)
         operations = self.root / "operations"
@@ -596,7 +596,7 @@ read access to their own key. Changes to shared storage can affect secret access
 
     def start_traffic(self):
         pidfile = self.root / "traffic.pid"
-        if pidfile.exists() and Path(f"/proc/{pidfile.read_text().strip()}").exists():
+        if self.traffic_running():
             raise ValueError("traffic process already exists")
         with (self.root / "traffic-process.log").open("a") as output:
             process = subprocess.Popen(
@@ -609,17 +609,25 @@ read access to their own key. Changes to shared storage can affect secret access
         pidfile.write_text(str(process.pid))
         return {"pid": process.pid}
 
+    def traffic_running(self):
+        pidfile = self.root / "traffic.pid"
+        if not pidfile.exists():
+            return False
+        try:
+            pid = int(pidfile.read_text())
+            cmd = Path(f"/proc/{pid}/cmdline").read_bytes()
+        except (OSError, ValueError):
+            return False
+        return b"sregym.postmortems.roblox_platform" in cmd and self.name.encode() in cmd.split(b"\0")
+
     def stop_traffic(self):
         pidfile = self.root / "traffic.pid"
         if pidfile.exists():
-            pid = int(pidfile.read_text())
-            cmd = Path(f"/proc/{pid}/cmdline")
-            if (
-                cmd.exists()
-                and b"sregym.postmortems.roblox_platform" in cmd.read_bytes()
-                and self.name.encode() in cmd.read_bytes().split(b"\0")
-            ):
-                os.kill(pid, signal.SIGTERM)
+            if self.traffic_running():
+                try:
+                    os.kill(int(pidfile.read_text()), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
             pidfile.unlink()
 
     def inject(self, tenants=512, placement_interval=0.05):
@@ -672,6 +680,9 @@ read access to their own key. Changes to shared storage can affect secret access
         paused = []
         elections = []
         elected = None
+        traffic_was_running = self.traffic_running()
+        if traffic_was_running:
+            self.stop_traffic()
         try:
             self.set_consul_io_cap(None)
             paused = self.pause_placement()
@@ -682,12 +693,13 @@ read access to their own key. Changes to shared storage can affect secret access
 
             self.wait(caught_up, "prepared follower catch-up", attempts=90)
             (self.root / "pre-election.snap").write_bytes(self.consul("snapshot", raw=True))
-            for _ in range(8):
+            for _ in range(16):
                 peers = self.consul("operator/raft/configuration")["Servers"]
                 current = next(p["Node"] for p in peers if p["Leader"])
                 if current in fragmented:
                     elected = current
                     break
+                self.wait(caught_up, "prepared follower catch-up before election", attempts=30)
                 self.exec(current, "pkill", "-TERM", "-x", "consul")
                 try:
                     def follower_elected():
@@ -719,8 +731,10 @@ read access to their own key. Changes to shared storage can affect secret access
             finally:
                 for node, ids in paused:
                     self.exec(node, "docker", "unpause", *ids, check=False)
+                if traffic_was_running:
+                    self.start_traffic()
         if elected not in fragmented:
-            raise RuntimeError("prepared follower was not elected after eight attempts")
+            raise RuntimeError("prepared follower was not elected after sixteen attempts")
         self.wait(
             lambda: len(self.consul("health/service/placement?passing=true")) >= meta["spec"]["placement_replicas"],
             "placement writers after election", attempts=120,
