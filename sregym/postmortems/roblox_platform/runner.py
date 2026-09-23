@@ -421,17 +421,24 @@ class Run:
 
     def pause_placement(self):
         paused = []
-        for worker in range(1, self.metadata()["spec"]["workers"] + 1):
-            node = f"worker-{worker}"
-            rows = self.exec(node, "docker", "ps", "--format", "{{.ID}} {{.Names}}").stdout.splitlines()
-            ids = [row.split()[0] for row in rows if len(row.split()) == 2 and row.split()[1].startswith("placement-")]
-            if ids:
-                self.exec(node, "docker", "pause", *ids)
-                paused.append((node, ids))
-        if sum(len(ids) for _, ids in paused) != self.metadata()["spec"]["placement_replicas"]:
+        try:
+            for worker in range(1, self.metadata()["spec"]["workers"] + 1):
+                node = f"worker-{worker}"
+                rows = self.exec(node, "docker", "ps", "--format", "{{.ID}} {{.Names}}").stdout.splitlines()
+                ids = []
+                for row in rows:
+                    fields = row.split()
+                    if len(fields) == 2 and fields[1].startswith("placement-"):
+                        ids.append(fields[0])
+                if ids:
+                    self.exec(node, "docker", "pause", *ids)
+                    paused.append((node, ids))
+            if sum(len(ids) for _, ids in paused) != self.metadata()["spec"]["placement_replicas"]:
+                raise RuntimeError("cannot quiesce all placement writers")
+        except Exception:
             for node, ids in paused:
                 self.exec(node, "docker", "unpause", *ids, check=False)
-            raise RuntimeError("cannot quiesce all placement writers")
+            raise
         return paused
 
     def initialize_data(self, players):
