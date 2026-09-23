@@ -116,6 +116,16 @@ do not change. Two independent post-injection grades must fail for the runner
 to accept the incident. The bound normalizes this fast laboratory disk; it is
 not a claim about Roblox's exact disk throughput.
 
+The experimental `recovery-tail` scenario uses the same latent Consul trigger
+and schedules four Redis cache pools through Nomad on persistent worker storage.
+It then makes one worker's cache store unwritable and stops that pool's allocation.
+Nomad still sees the worker as ready but its replacement Redis task cannot start.
+The application discovers cache endpoints through Consul; a missing pool breaks
+the corresponding player cohort. Use `--scenario recovery-tail` with the expanded
+tier. This is an executable cache bootstrap failure, not yet a reproduction of
+the postmortem's stale Consul KV scheduling data, incremental deployment tool,
+or staged DNS return. It remains under agent validation.
+
 Every run has independent Docker networks and volumes. `down` stops its workload
 process and exports logs before removing that run. Artifacts and private workload
 acknowledgments live in `results/roblox-platform/<run>/`. Application and host

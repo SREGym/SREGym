@@ -766,9 +766,15 @@ read access to their own key. Changes to shared storage can affect secret access
             lambda: len(self.consul("health/service/placement?passing=true")) >= meta["spec"]["placement_replicas"],
             "placement writers after election", attempts=120,
         )
+        cache_fault = meta.get("scenario") == "recovery-tail"
+        if cache_fault:
+            self.inject_cache_bootstrap_fault()
         meta.update(
             injected_at=time.time(),
-            trigger={"elections": elections, "nomad_jobs_changed": False},
+            trigger={
+                "elections": elections, "nomad_jobs_changed": False,
+                **({"cache_bootstrap": "worker-1 persistent store unwritable"} if cache_fault else {}),
+            },
             fidelity="native Consul leader election over fragmented Raft log with equal bounded disk throughput",
         )
         (self.root / "run.json").write_text(json.dumps(meta, indent=2))
@@ -782,6 +788,38 @@ read access to their own key. Changes to shared storage can affect secret access
         if not meta["fault_validated"]:
             raise RuntimeError("latent incident did not fail two settled grades")
         return meta["trigger"]
+
+    def inject_cache_bootstrap_fault(self):
+        """Leave one Nomad-ready worker unable to start its assigned cache pool.
+
+        The defect lives in the worker's actual storage permissions. Nomad can
+        still place the allocation, but Redis cannot open its append-only store.
+        A normal allocation stop exercises the native replacement path.
+        """
+        path = "/state/cache-pools/cache-0"
+        allocations = [
+            row for row in self.nomad("job/cache-0/allocations")
+            if row["DesiredStatus"] == "run" and row["ClientStatus"] == "running"
+        ]
+        if len(allocations) != 1:
+            raise RuntimeError("expected one healthy cache-0 allocation before fault")
+        self.exec("worker-1", "chmod", "-R", "a-w", path)
+        self.nomad("allocation/" + allocations[0]["ID"] + "/stop", "POST", {})
+        def failed_replacement():
+            if self.consul("health/service/cache-0?passing=true"):
+                return False
+            for row in self.nomad("job/cache-0/allocations"):
+                if row["ID"] == allocations[0]["ID"]:
+                    continue
+                task = self.nomad("allocation/" + row["ID"]).get("TaskStates", {}).get("redis", {})
+                if any(
+                    event.get("Type") == "Terminated" and "Exit Code: 1" in str(event.get("DisplayMessage", ""))
+                    for event in task.get("Events", [])
+                ):
+                    return True
+            return False
+
+        self.wait(failed_replacement, "cache bootstrap failure", attempts=60)
 
     def prepare_storage(self, node, mib=256):
         """Offline real page-layout fixture, preserving native Raft buckets.
