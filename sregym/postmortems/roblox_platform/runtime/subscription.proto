@@ -1,0 +1,18 @@
+// Wire-compatible subset of Consul v1.10.4 proto/pbsubscribe/subscribe.proto
+// and pbservice/{node,healthcheck}.proto. Unused fields remain unknown fields.
+syntax = "proto3";
+package subscribe;
+message SubscribeRequest { int32 Topic = 1; string Key = 2; uint64 Index = 4; }
+message Node { string Node = 2; string Address = 3; }
+message Service { string ID = 2; string Service = 3; string Address = 5; int32 Port = 7; }
+message Check { string Status = 4; }
+message CheckServiceNode { Node Node = 1; Service Service = 2; repeated Check Checks = 3; }
+message ServiceHealthUpdate { int32 Op = 1; CheckServiceNode CheckServiceNode = 2; }
+message EventBatch { repeated Event Events = 1; }
+message Event {
+  uint64 Index = 1;
+  bool EndOfSnapshot = 2;
+  bool NewSnapshotToFollow = 3;
+  EventBatch EventBatch = 4;
+  ServiceHealthUpdate ServiceHealth = 10;
+}

@@ -228,6 +228,9 @@ packages = [
     "atif_converter.atif",
     "sregym",
     "sregym.traces",
+    "sregym.postmortems",
+    "sregym.postmortems.roblox_consul",
+    "sregym.postmortems.roblox_platform",
     "clients",
     "scripts",
     "llm_backend",
@@ -237,3 +240,5 @@ packages = [
 [tool.setuptools.package-data]
 atif_converter = ["README.md"]
 "atif_converter.atif" = ["UPSTREAM.md"]
+"sregym.postmortems.roblox_consul" = ["README.md", "VALIDATION.md", "briefing.md", "Dockerfile", "Dockerfile.toolbox", ".dockerignore"]
+"sregym.postmortems.roblox_platform" = ["README.md", "VALIDATION.md", "briefing.md", "Dockerfile.*", "runtime/*", "storage/*", "toolchain.json"]
