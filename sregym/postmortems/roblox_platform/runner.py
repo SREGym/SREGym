@@ -830,6 +830,10 @@ read access to their own key. Changes to shared storage can affect secret access
                 raise RuntimeError(f"expected one running {name} allocation before rebootstrap")
             initial[name] = current[0]["ID"]
         for index in range(0, spec["cache_jobs"], spec["workers"]):
+            # Cache contents are reconstructible from the database. The live
+            # Redis process keeps its in-memory entries until the controlled
+            # redeployment; its replacement must cold-start on this worker.
+            self.exec("worker-1", "find", f"/state/cache-pools/cache-{index}", "-type", "f", "-delete")
             self.exec("worker-1", "chmod", "-R", "a-w", f"/state/cache-pools/cache-{index}")
         def controller_saw_degradation():
             rows = self.consul("health/service/cache-reconciler?passing=true")

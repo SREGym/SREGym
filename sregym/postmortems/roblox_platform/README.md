@@ -122,11 +122,12 @@ and schedules 24 Redis cache pools across six Nomad workers on persistent storag
 An independent cache-reconciler job probes real Consul KV write latency and rolls
 pools one at a time when a requested redeployment becomes safe. The incident arms
 unwritable cache storage on one still-ready worker and requests that redeployment.
-The existing pools keep serving during the Consul outage; replacement Redis tasks
-on that worker fail only after the control plane recovers enough for the rollout
-to start. The application discovers cache endpoints through Consul, so each failed
-pool breaks its player cohort. The grader requires the requested generation to
-finish with all pools serving. Use `--scenario recovery-tail` with the expanded
+The existing pools keep serving during the Consul outage. Replacement Redis tasks
+on that worker must cold-start and fail only after the control plane recovers
+enough for the rollout to start. The application discovers cache endpoints
+through Consul, so each failed pool breaks its player cohort. The grader requires
+the requested generation to finish with all pools serving. Use
+`--scenario recovery-tail` with the expanded
 tier. This is an executable recovery tail, not yet a reproduction of the
 postmortem's stale Consul KV scheduling data, incremental-only deployment tool,
 or staged DNS return. It remains under agent validation.
