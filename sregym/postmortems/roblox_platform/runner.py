@@ -753,6 +753,17 @@ read access to their own key. Changes to shared storage can affect secret access
             workers_ready = len([n for n in self.nomad("nodes") if n["Status"] == "ready"]) == spec["workers"]
         except (OSError, urllib.error.URLError):
             workers_ready = False
+        try:
+            expected = {name: spec["replicas"] for name in SERVICES}
+            expected["routing"] = spec.get("routing_replicas", spec["replicas"])
+            expected["placement"] = spec.get("placement_replicas", spec["replicas"])
+            service_capacity = all(
+                self.nomad("job/" + name)["TaskGroups"][0]["Count"] >= count
+                and len(self.consul(f"health/service/{name}?passing=true")) >= count
+                for name, count in expected.items()
+            )
+        except (OSError, urllib.error.URLError, KeyError, IndexError, TypeError):
+            service_capacity = False
         checks = {
             "full_admission": admission,
             "workflows": sum(row["ok"] for row in samples) >= 0.98 * len(samples),
@@ -760,6 +771,7 @@ read access to their own key. Changes to shared storage can affect secret access
             **durable,
             "consul_quorum": quorum,
             "workers_ready": workers_ready,
+            "service_capacity": service_capacity,
         }
         result = {
             "passed": all(checks.values()),
