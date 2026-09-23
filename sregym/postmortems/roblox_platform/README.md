@@ -130,7 +130,8 @@ the requested generation to finish with all pools serving. Use
 `--scenario recovery-tail` with the expanded
 tier. This is an executable recovery tail, not yet a reproduction of the
 postmortem's stale Consul KV scheduling data, incremental-only deployment tool,
-or staged DNS return. It remains under agent validation.
+or staged DNS return. One clean cold-cache agent trial passed the outcome grade
+in 18m11s; see [VALIDATION.md](VALIDATION.md).
 
 The same scenario also accepts the experimental `fleet` tier: 12 workers, eight
 routers, 28 placement partitions, 96 cache pools, and 50,000 players. This

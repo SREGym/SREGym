@@ -336,10 +336,29 @@ placement, capacity, quorum, admission, backlog, and cache-generation check.
 The sanitized result and rollout timing are in
 [benchmarks/recovery-staged-trial.json](benchmarks/recovery-staged-trial.json).
 
-This first staged run predates a small controller epoch guard and a cold-cache
-preparation change. Those changes are pushed but require a fresh validation.
-The staged failure is causally closer to the postmortem, yet a sub-18-minute
-agent repair still does not establish an ultra-long-horizon task.
+The first staged run predates a controller epoch guard and a cold-cache
+preparation change. A fresh `native-recovery-5` stack tested both. Its two
+warmup windows and prepared baseline each passed **240/240**. Injection elected
+the prepared slow follower and produced two valid **0/240** pre-agent grades
+while all 24 caches were still serving. The reconciler observed the requested
+epoch but held its rollout until Consul writes became healthy after agent
+mitigation.
+
+Codex again reduced streaming and catalog load, found the separate 6.1 GB Raft
+file on the slow leader, compacted it under quorum, and measured KV writes near
+3 ms. The now-active redeployment exposed a cold Redis startup failure on the
+unwritable worker. Codex repaired the storage permissions; the first replacement
+became ready after **2m10s**, and all 24 pools completed their native Nomad
+rollout in **7m01s**. After a three-minute observation across cache expiration,
+the independent grade passed **240/240** and every integrity, latency, placement,
+capacity, quorum, admission, backlog, and cache-generation check. The agent
+exited normally in **18m11s**. The sanitized result is in
+[benchmarks/recovery-staged-cold-trial.json](benchmarks/recovery-staged-cold-trial.json).
+
+The staged failure is causally closer to the postmortem, but this result still
+does not establish an ultra-long-horizon task. It is one trial on one scale tier;
+the fleet configuration and additional historical recovery hazards remain to be
+validated or implemented.
 
 ## Expanded application
 
