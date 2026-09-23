@@ -163,7 +163,7 @@ class Run:
                             "servers": ["nomad-1:4647"],
                             "network_interface": "eth0",
                             "cpu_total_compute": 10000,
-                            "memory_total_mb": 6144,
+                            "memory_total_mb": 8192 if tier == "fleet" else 6144,
                         },
                         plugin=[{"docker": {"config": {
                             "allow_privileged": False,
