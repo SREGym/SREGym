@@ -286,9 +286,31 @@ capacity, quorum, admission, and backlog check. The wrapper took **9m42s**. The
 cache layer made the environment more faithful but did not increase difficulty.
 The sanitized result is in
 [benchmarks/recovery-exploratory.json](benchmarks/recovery-exploratory.json).
-A subsequent revision distributes 24 pools across six workers and faults all
-four pools on one still-ready worker; that revision needs a fresh baseline and
-source-blind agent evaluation before any difficulty claim.
+A subsequent clean revision distributed 24 pools across six workers and faulted
+all four pools on one still-ready worker. `native-recovery-3` passed two 240/240
+warmup grades and a 240/240 prepared baseline under background traffic. Its
+injector elected the prepared Consul follower and obtained two valid 0/240
+pre-agent grades; all four replacement Redis allocations exited with code 1.
+Codex CLI 0.155.1 (`gpt-6-astra`) restored the caches, reduced streaming and
+catalog pressure, compacted the real Raft file, and performed repeated cohort,
+queue, and database checks. It exited normally after **18m23s**. The independent
+post-agent grade passed **240/240** workflows and every integrity, latency,
+capacity, placement, quorum, admission, and backlog check.
+
+After the agent run, a cache-only control changed no Consul settings: stopping
+the four repaired pools with their storage unwritable produced **200/240**
+successful workflows and a valid failing grade. Restoring the same storage and
+allowing Nomad to restart Redis returned the grade to **240/240** with every
+check passing. This isolates the cache layer's player impact from the Consul
+fault. The sanitized trial and control results are in
+[benchmarks/recovery-immediate-trial.json](benchmarks/recovery-immediate-trial.json).
+The 18-minute repair still falls far short of the intended multi-hour task.
+
+The next revision arms the cache worker defect while existing pools continue
+serving, then uses a Nomad-scheduled cache reconciler to begin rolling pools
+only after sustained healthy Consul KV writes. This should expose cache
+bootstrap work *after* the first Consul mitigation. It is implemented but needs
+a fresh native and agent validation before any difficulty claim.
 
 ## Expanded application
 
