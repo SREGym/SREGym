@@ -19,8 +19,9 @@ The old `roblox_consul` package remains the frozen three-trial baseline.
   sessions, persistence, economy, outbox, analytics, telemetry, placement, routing.
   User requests cross several layers and create real database records.
 - Two PostgreSQL shards hold players, sessions, purchases, outboxes and receipts;
-  four Redis cache pools hold expiring application data; another Redis instance
-  holds the durable processing stream. Purchases are transactional and retries
+  four Redis cache pools in the base scenario, or 24 in the recovery-tail scenario,
+  hold expiring application data; another Redis instance holds the durable processing
+  stream. Purchases are transactional and retries
   are idempotent. Consumers reclaim pending messages after restarts.
 - The routing layer builds actual endpoint tables from native streaming events.
   Placement allocations make real catalog updates and, in the latent-leader

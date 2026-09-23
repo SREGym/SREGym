@@ -504,7 +504,7 @@ Host configuration lives in /etc/platform, state in /state, and daemon logs in
 These hosts use a minimal init system: launch a daemon with its configuration
 file after stopping its old process when a restart is necessary. Keep SSH alive.
 
-The application has two database shards, four cache pools, and a durable queue.
+The application has two database shards, sharded cache pools, and a durable queue.
 Player identities are immutable. Each purchase costs one coin and creates one
 inventory item and one asynchronous receipt. Request IDs make retries idempotent.
 Sessions, purchases, and receipts must agree about the player. Processing workers
