@@ -99,7 +99,7 @@ def cache_job(name, worker):
                             "volumes": [f"/state/cache-pools/{name}:/data"],
                         },
                         "User": "999",
-                        "Resources": {"CPU": 200, "MemoryMB": 512},
+                        "Resources": {"CPU": 100, "MemoryMB": 128},
                         "Services": [
                             {
                                 "Name": name,

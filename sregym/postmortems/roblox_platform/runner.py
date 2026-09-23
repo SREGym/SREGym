@@ -105,7 +105,7 @@ class Run:
                 consul_write_bps=20 * 1024 * 1024,
             )
             if recovery:
-                spec["cache_jobs"] = 4
+                spec["cache_jobs"] = 24
         self.root.mkdir(parents=True, exist_ok=True)
         operations = self.root / "operations"
         operations.mkdir()
@@ -307,10 +307,11 @@ class Run:
                 docker("cp", redis_image, self.cid(worker) + ":/tmp/redis-image.tar")
                 self.exec(worker, "docker", "load", "-i", "/tmp/redis-image.tar")
                 self.exec(worker, "rm", "/tmp/redis-image.tar")
-                if i < spec["cache_jobs"]:
-                    path = f"/state/cache-pools/cache-{i}"
-                    self.exec(worker, "mkdir", "-p", path)
-                    self.exec(worker, "chown", "-R", "999:999", path)
+            for i in range(spec["cache_jobs"]):
+                worker = workers[i % len(workers)]
+                path = f"/state/cache-pools/cache-{i}"
+                self.exec(worker, "mkdir", "-p", path)
+                self.exec(worker, "chown", "-R", "999:999", path)
             redis_image.unlink()
         environment = {
             "CONSUL_HTTP_ADDR": "http://127.0.0.1:8500",
@@ -322,7 +323,7 @@ class Run:
             ),
             "CACHE_HOSTS": "" if recovery else ",".join(self.ip("cache-" + str(i)) for i in range(4)),
             "CACHE_SERVICE_PREFIX": "cache-" if recovery else "",
-            "CACHE_POOL_COUNT": "4",
+            "CACHE_POOL_COUNT": str(spec.get("cache_jobs", 4)),
             "QUEUE_HOST": self.ip("queue"),
             "ROUTE_SERVICES": ",".join(SERVICES),
             "ROUTING_TENANTS": str(spec.get("routing_tenants", spec["tenants"])),
@@ -331,7 +332,7 @@ class Run:
             "CATALOG_WRITERS": str(spec["placement_catalog_writers"]) if latent else "0",
         }
         jobs = {
-            f"cache-{i}": cache_job(f"cache-{i}", workers[i])
+            f"cache-{i}": cache_job(f"cache-{i}", workers[i % len(workers)])
             for i in range(spec.get("cache_jobs", 0))
         }
         jobs.update({name: job(name, count=spec["replicas"], environment=environment) for name in SERVICES})
@@ -773,7 +774,7 @@ read access to their own key. Changes to shared storage can affect secret access
             injected_at=time.time(),
             trigger={
                 "elections": elections, "nomad_jobs_changed": False,
-                **({"cache_bootstrap": "worker-1 persistent store unwritable"} if cache_fault else {}),
+                **({"cache_bootstrap": "worker-1 cache stores unwritable"} if cache_fault else {}),
             },
             fidelity="native Consul leader election over fragmented Raft log with equal bounded disk throughput",
         )
@@ -790,26 +791,32 @@ read access to their own key. Changes to shared storage can affect secret access
         return meta["trigger"]
 
     def inject_cache_bootstrap_fault(self):
-        """Leave one Nomad-ready worker unable to start its assigned cache pool.
+        """Leave one Nomad-ready worker unable to start its assigned cache pools.
 
         The defect lives in the worker's actual storage permissions. Nomad can
         still place the allocation, but Redis cannot open its append-only store.
         A normal allocation stop exercises the native replacement path.
         """
-        path = "/state/cache-pools/cache-0"
-        allocations = [
-            row for row in self.nomad("job/cache-0/allocations")
-            if row["DesiredStatus"] == "run" and row["ClientStatus"] == "running"
-        ]
-        if len(allocations) != 1:
-            raise RuntimeError("expected one healthy cache-0 allocation before fault")
-        self.exec("worker-1", "chmod", "-R", "a-w", path)
-        self.nomad("allocation/" + allocations[0]["ID"] + "/stop", "POST", {})
-        def failed_replacement():
-            if self.consul("health/service/cache-0?passing=true"):
+        spec = self.metadata()["spec"]
+        pools = [f"cache-{i}" for i in range(0, spec["cache_jobs"], spec["workers"])]
+        old_allocations = {}
+        for name in pools:
+            allocations = [
+                row for row in self.nomad("job/" + name + "/allocations")
+                if row["DesiredStatus"] == "run" and row["ClientStatus"] == "running"
+            ]
+            if len(allocations) != 1:
+                raise RuntimeError(f"expected one healthy {name} allocation before fault")
+            old_allocations[name] = allocations[0]["ID"]
+        for name in pools:
+            self.exec("worker-1", "chmod", "-R", "a-w", "/state/cache-pools/" + name)
+            self.nomad("allocation/" + old_allocations[name] + "/stop", "POST", {})
+
+        def pool_failed(name):
+            if self.consul("health/service/" + name + "?passing=true"):
                 return False
-            for row in self.nomad("job/cache-0/allocations"):
-                if row["ID"] == allocations[0]["ID"]:
+            for row in self.nomad("job/" + name + "/allocations"):
+                if row["ID"] == old_allocations[name]:
                     continue
                 task = self.nomad("allocation/" + row["ID"]).get("TaskStates", {}).get("redis", {})
                 if any(
@@ -819,7 +826,7 @@ read access to their own key. Changes to shared storage can affect secret access
                     return True
             return False
 
-        self.wait(failed_replacement, "cache bootstrap failure", attempts=60)
+        self.wait(lambda: all(pool_failed(name) for name in pools), "cache bootstrap failure", attempts=60)
 
     def prepare_storage(self, node, mib=256):
         """Offline real page-layout fixture, preserving native Raft buckets.
