@@ -96,8 +96,9 @@ after preparation. The cgroup bound is a scale normalization for this CloudLab
 disk, not a historical Roblox hardware claim.
 
 This result is a manually calibrated incident. The reusable `latent-leader`
-runner now encodes the same steps and requires two failed pre-agent grades, but
-a fresh automated lifecycle and repeated agent evaluations are still pending.
+runner now encodes the same steps and requires two failed pre-agent grades.
+The fresh automated lifecycle is validated below; repeated agent evaluation
+remains limited.
 The manually calibrated run used a task-labeled extra Bolt bucket; that gave
 the first agent an unnatural clue. The revised fixture uses temporary entries
 in the native Raft log bucket and deletes them before restart, so its own
@@ -117,8 +118,13 @@ with background player traffic. The automated injector then elected the
 prepared follower without changing a Nomad job, restored all 14 placement
 controllers and the common bound, and recorded two consecutive **0/240**
 pre-agent grades. Quorum, capacity and durable-data checks still passed.
-The preparation and fault are validated; the full fresh-run `up` path still
-needs retesting with the new 20 MiB/s default.
+The preparation and fault are validated. A subsequent fresh run,
+`native-latent-8`, completed the full automated `up` path with the new
+20 MiB/s default: two settled clean baselines passed 240/240, as did an
+additional 240/240 window with background traffic. The injector elected the
+prepared follower on its first native election without changing Nomad jobs.
+Two independent post-injection grades both failed **0/240**, while all
+non-workflow checks stayed green. The third Codex trial is in progress.
 
 ### First latent-incident Codex trial
 
