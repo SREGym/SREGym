@@ -267,7 +267,7 @@ class Run:
             # offline follower can catch up and be promoted back to a voter.
             peers = self.consul("operator/raft/configuration")["Servers"]
             clean = next(p["Node"] for p in peers if p["Leader"])
-            fragmented = [p["Node"] for p in peers if not p["Leader"]]
+            fragmented = [next(p["Node"] for p in peers if not p["Leader"])]
             for node in consul_names:
                 docker("cp", HERE / "bin" / "bbolt", self.cid(node) + ":/usr/local/bin/bbolt")
             for node in fragmented:
@@ -593,9 +593,10 @@ read access to their own key. Changes to shared storage can affect secret access
     def inject_latent(self, meta):
         """Expose pre-existing Raft file state through an ordinary election.
 
-        The workload and every Nomad job remain unchanged. Both followers were
-        prepared before the operator-visible incident, so either election result
-        is a fragmented leader. The clean node is restarted before agent entry.
+        The workload and every Nomad job remain unchanged. One follower was
+        prepared before the operator-visible incident. Repeated ordinary
+        elections expose its latent state; every stopped server is restarted
+        before agent entry.
         """
         clean = meta["clean_leader"]
         fragmented = set(meta["fragmented_followers"])
@@ -603,29 +604,44 @@ read access to their own key. Changes to shared storage can affect secret access
         if next(p["Node"] for p in peers if p["Leader"]) != clean or not all(p["Voter"] for p in peers):
             raise RuntimeError("latent trigger requires the original clean leader and three voters")
         (self.root / "pre-election.snap").write_bytes(self.consul("snapshot", raw=True))
-        self.exec(clean, "pkill", "-TERM", "-x", "consul")
+        elections = []
         elected = None
-        try:
-            def follower_elected():
-                nonlocal elected
-                leader = api(self.url(meta["fragmented_followers"][0], 8500) + "/v1/status/leader")
-                elected = next((name for name in fragmented if self.ip(name) + ":8300" == leader), None)
-                return elected is not None
+        for _ in range(8):
+            peers = self.consul("operator/raft/configuration")["Servers"]
+            current = next(p["Node"] for p in peers if p["Leader"])
+            if current in fragmented:
+                elected = current
+                break
+            self.exec(current, "pkill", "-TERM", "-x", "consul")
+            try:
+                def follower_elected():
+                    nonlocal elected
+                    leader = api(self.url(meta["fragmented_followers"][0], 8500) + "/v1/status/leader")
+                    elected = next(
+                        (name for name in ("consul-1", "consul-2", "consul-3")
+                         if name != current and self.ip(name) + ":8300" == leader), None
+                    )
+                    return elected is not None
 
-            self.wait(follower_elected, "fragmented follower election", attempts=30)
-        finally:
-            self.exec(
-                clean, "sh", "-c",
-                "nohup consul agent -config-file=/etc/platform/consul.json >> /var/log/platform/consul.log 2>&1 < /dev/null &",
+                self.wait(follower_elected, "follower election", attempts=30)
+            finally:
+                self.exec(
+                    current, "sh", "-c",
+                    "nohup consul agent -config-file=/etc/platform/consul.json >> /var/log/platform/consul.log 2>&1 < /dev/null &",
+                )
+            elections.append(current + " -> " + elected)
+            self.wait(
+                lambda: len(self.consul("operator/raft/configuration")["Servers"]) == 3
+                and all(p["Voter"] for p in self.consul("operator/raft/configuration")["Servers"]),
+                "three voting servers after election", attempts=120,
             )
-        self.wait(
-            lambda: len(self.consul("operator/raft/configuration")["Servers"]) == 3
-            and all(p["Voter"] for p in self.consul("operator/raft/configuration")["Servers"]),
-            "three voting servers after election", attempts=120,
-        )
+            if elected in fragmented:
+                break
+        if elected not in fragmented:
+            raise RuntimeError("prepared follower was not elected after eight attempts")
         meta.update(
             injected_at=time.time(),
-            trigger={"election": clean + " -> " + elected, "nomad_jobs_changed": False},
+            trigger={"elections": elections, "nomad_jobs_changed": False},
             fidelity="native Consul leader election over pre-existing fragmented Raft log stores",
         )
         (self.root / "run.json").write_text(json.dumps(meta, indent=2))
