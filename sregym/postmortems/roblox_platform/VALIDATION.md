@@ -214,9 +214,14 @@ duplicate catalog-update loops. With four routers at **128 tenants each** and
 the same 20 MiB/s common disk bound, a manually calibrated run passed three
 consecutive **240/240** background-traffic grades. Electing the prepared leader
 then failed two valid grades at **0/240**, with quorum, live placement shards,
-admission and durable-data checks intact. This control included live Nomad
+ admission and durable-data checks intact. This control included live Nomad
 rollouts during calibration; a fresh automated run using the final source and
-configuration is the next validation step.
+configuration followed. `native-shards-3` completed `up` with two settled clean
+baselines, then passed two more **240/240** grades under background traffic.
+Its injector elected the prepared follower on the first attempt without
+changing a job. Both valid pre-agent grades failed **0/240** while live
+reservation shards, quorum, admission and durable-data checks remained green.
+A source-blind Codex trial on that fresh incident is in progress.
 
 ## Expanded application
 
