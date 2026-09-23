@@ -26,6 +26,7 @@ CONSUL = os.environ.get("CONSUL_HTTP_ADDR", "http://127.0.0.1:8500")
 VAULT = os.environ["VAULT_ADDR"]
 DBS = os.environ["DATABASE_URLS"].split(",")
 CACHES = os.environ["CACHE_HOSTS"].split(",")
+PLACEMENT_SHARDS = int(os.environ.get("PLACEMENT_SHARDS", "0"))
 QUEUE = redis.Redis(host=os.environ["QUEUE_HOST"], decode_responses=True, socket_timeout=3)
 COUNTS = Counter()
 LOCK = threading.Lock()
@@ -78,6 +79,20 @@ def signing_key():
         value = http(VAULT + "/v1/kv/platform", headers={"X-Vault-Token": os.environ["VAULT_TOKEN"]})
         SECRET = (time.monotonic() + 10, value["data"]["signing_key"])
     return SECRET[1]
+
+
+def reserve_placement(player):
+    """Use the live owner of this player's placement partition."""
+    shard = player % PLACEMENT_SHARDS
+    response = requests.get(CONSUL + f"/v1/kv/platform/placement/{shard}?raw", timeout=3)
+    response.raise_for_status()
+    owner = response.json()
+    if time.time() - owner["updated_at"] > 20:
+        raise RuntimeError(f"placement shard {shard} has no current owner")
+    result = http("http://" + owner["address"] + "/reserve", "POST", {"player": player})
+    if result["shard"] != shard or result["allocation"] != owner["allocation"]:
+        raise RuntimeError(f"placement shard {shard} returned inconsistent ownership")
+    return result
 
 
 def profile(player):
@@ -152,6 +167,7 @@ def handle(path, data, query):
         existing = call("sessions", "/lookup", {**data, "lookup_only": True})
         if existing is not None:
             return existing
+        placement = reserve_placement(player) if PLACEMENT_SHARDS else None
         # Real distributed lease and placement metadata. Locks expire if the
         # service cannot renew; allocations are not rewritten by a repair API.
         session = http(CONSUL + "/v1/session/create", "PUT", {"TTL": "30s", "Behavior": "delete", "Name": request_id})[
@@ -161,7 +177,10 @@ def handle(path, data, query):
             key = f"games/{player % 32}/{request_id}"
             result = requests.put(
                 CONSUL + "/v1/kv/" + key + "?acquire=" + session,
-                data=json.dumps({"player": player, "node": os.environ.get("NOMAD_ALLOC_ID")}),
+                data=json.dumps({
+                    "player": player,
+                    "node": placement["allocation"] if placement else os.environ.get("NOMAD_ALLOC_ID"),
+                }),
                 timeout=3,
             )
             result.raise_for_status()
@@ -213,6 +232,11 @@ def handle(path, data, query):
             except Exception as exc:
                 observations[name] = {"error": str(exc)}
         return observations
+    if ROLE == "placement" and path == "/reserve" and PLACEMENT_SHARDS:
+        shard = int(os.environ["NOMAD_ALLOC_INDEX"])
+        if player % PLACEMENT_SHARDS != shard:
+            raise ValueError("wrong placement shard")
+        return {"shard": shard, "allocation": os.environ["NOMAD_ALLOC_ID"]}
     raise ValueError(f"unknown endpoint {path}")
 
 
@@ -303,6 +327,28 @@ def placement_inventory():
         time.sleep(float(os.environ.get("RECONCILE_SECONDS", "30")))
 
 
+def placement_ownership():
+    """Publish each allocation's real endpoint for its stable Nomad partition."""
+    shard = int(os.environ["NOMAD_ALLOC_INDEX"])
+    if shard >= PLACEMENT_SHARDS:
+        raise RuntimeError("placement allocation index exceeds configured shards")
+    address = os.environ["NOMAD_ADDR_http"]
+    allocation = os.environ["NOMAD_ALLOC_ID"]
+    while True:
+        try:
+            response = requests.put(
+                CONSUL + f"/v1/kv/platform/placement/{shard}",
+                data=json.dumps({"address": address, "allocation": allocation, "updated_at": time.time()}),
+                timeout=3,
+            )
+            response.raise_for_status()
+            if response.json() is not True:
+                raise RuntimeError("placement ownership write was rejected")
+        except Exception as exc:
+            log("placement_ownership_error", shard=shard, error=str(exc))
+        time.sleep(3)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -343,5 +389,7 @@ if __name__ == "__main__":
         threading.Thread(target=publish if ROLE == "outbox" else consume, daemon=True).start()
     if ROLE == "placement":
         threading.Thread(target=placement_inventory, daemon=True).start()
+        if PLACEMENT_SHARDS:
+            threading.Thread(target=placement_ownership, daemon=True).start()
     log("start", port=PORT)
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()

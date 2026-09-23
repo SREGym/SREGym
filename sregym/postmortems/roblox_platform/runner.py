@@ -306,6 +306,7 @@ class Run:
             "ROUTE_SERVICES": ",".join(SERVICES),
             "ROUTING_TENANTS": str(spec.get("routing_tenants", spec["tenants"])),
             "ROUTING_MODE": "stream",
+            "PLACEMENT_SHARDS": str(spec["placement_replicas"]) if scenario == "latent-leader" else "0",
         }
         jobs = {name: job(name, count=spec["replicas"], environment=environment) for name in SERVICES}
         jobs["routing"] = job(
@@ -865,7 +866,10 @@ read access to their own key. Changes to shared storage can affect secret access
         try:
             expected = {name: spec["replicas"] for name in SERVICES}
             expected["routing"] = spec.get("routing_replicas", spec["replicas"])
-            expected["placement"] = spec.get("placement_replicas", spec["replicas"])
+            # In the latent incident, placement is partitioned. Its outcome is
+            # checked through the live shard endpoints below, not job count.
+            if "placement_replicas" in spec:
+                expected.pop("placement")
             service_capacity = all(
                 self.nomad("job/" + name)["TaskGroups"][0]["Count"] >= count
                 and len(self.consul(f"health/service/{name}?passing=true")) >= count
@@ -882,6 +886,8 @@ read access to their own key. Changes to shared storage can affect secret access
             "workers_ready": workers_ready,
             "service_capacity": service_capacity,
         }
+        if "placement_replicas" in spec:
+            checks["placement_shards_live"] = self.placement_shards_live(spec["placement_replicas"])
         if "workflow_slo_seconds" in spec:
             checks["workflow_latency"] = sum(
                 row["ok"] and row["elapsed"] <= spec["workflow_slo_seconds"] for row in samples
@@ -898,6 +904,20 @@ read access to their own key. Changes to shared storage can affect secret access
         }
         (self.root / "grade-probes.json").write_text(json.dumps(samples, indent=2))
         return result
+
+    def placement_shards_live(self, count):
+        """Require every placement partition to accept work at its current owner."""
+        try:
+            for shard in range(count):
+                owner = json.loads(self.consul(f"kv/platform/placement/{shard}?raw", raw=True))
+                if time.time() - owner["updated_at"] > 20:
+                    return False
+                result = api("http://" + owner["address"] + "/reserve", "POST", {"player": shard})
+                if result["shard"] != shard or result["allocation"] != owner["allocation"]:
+                    return False
+            return True
+        except (OSError, urllib.error.URLError, ValueError, KeyError, TypeError):
+            return False
 
     def export(self):
         (self.root / "container-logs.txt").write_text(self.dc("logs", "--no-color", check=False).stdout)
