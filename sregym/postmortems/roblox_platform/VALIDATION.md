@@ -140,6 +140,24 @@ fixture; it is not a pass-rate estimate for the revised scenario. The trace,
 report, host logs, and independent `benchmark.json` are under
 `results/roblox-platform/native-latent-6/` on this node.
 
+### Second latent-incident Codex trial
+
+`native-latent-7` used the revised bucket-free Raft fixture and a fresh,
+validated incident. Codex CLI 0.155.1 with `gpt-6-astra` exited normally after
+**10m10s**. It diagnosed slow Consul writes, switched the routers to blocking
+queries, reduced placement from 14 controllers to 2 and reconciliation from
+0.05 to 30 seconds, and compacted the affected Raft file. Its own four-minute
+verification reported **1,200/1,200 workflows**, p95 216 ms, maximum 314 ms,
+and declared the incident resolved.
+
+The independent post-agent grade passed **240/240** player workflows, the
+one-second latency target, data integrity, backlog, quorum, full admission and
+worker readiness. The total grade **failed** because the placement fleet was
+still **2/14**. This again caught an incomplete control-plane restoration despite
+the agent's green player probes. The agent was given one hour and did not time
+out. Its trace, final report and evaluator result are preserved under
+`results/roblox-platform/native-latent-7/` on this node.
+
 ## Expanded application
 
 `native-expanded` ran 64 active Nomad allocations, representing 16 service types,
