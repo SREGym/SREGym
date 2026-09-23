@@ -97,7 +97,7 @@ class Run:
         if scenario == "latent-leader":
             if not (HERE / "bin" / "storage-fixture").exists() or not (HERE / "bin" / "bbolt").exists():
                 raise ValueError("build the storage fixture and bbolt CLI before starting latent-leader")
-            spec.update(routing_tenants=1024, routing_replicas=4, placement_replicas=14, placement_interval=0.05)
+            spec.update(routing_tenants=512, routing_replicas=4, placement_replicas=14, placement_interval=0.05)
         self.root.mkdir(parents=True, exist_ok=True)
         operations = self.root / "operations"
         operations.mkdir()
@@ -261,6 +261,23 @@ class Run:
             "auth"
         ]["client_token"]
         self.consul("kv/platform/admission", "PUT", b"100")
+        if scenario == "latent-leader":
+            # Prepare the log layout before the application opens long-lived
+            # watches. A busy cluster can produce snapshots faster than an
+            # offline follower can catch up and be promoted back to a voter.
+            peers = self.consul("operator/raft/configuration")["Servers"]
+            clean = next(p["Node"] for p in peers if p["Leader"])
+            fragmented = [p["Node"] for p in peers if not p["Leader"]]
+            for node in consul_names:
+                docker("cp", HERE / "bin" / "bbolt", self.cid(node) + ":/usr/local/bin/bbolt")
+            for node in fragmented:
+                print("Preparing historical Raft log layout on", node, flush=True)
+                self.prepare_storage(node, 4096)
+                self.wait(
+                    lambda: len(self.consul("operator/raft/configuration")["Servers"]) == 3
+                    and all(p["Voter"] for p in self.consul("operator/raft/configuration")["Servers"]),
+                    "Consul voter rejoin", attempts=120,
+                )
         image = self.root / "application-image.tar"
         docker("save", "-o", image, "sregym-platform:app")
         for worker in workers:
@@ -328,19 +345,6 @@ class Run:
         if not baseline["passed"] or (scenario == "latent-leader" and consecutive < 2):
             raise RuntimeError("sustained baseline verification failed; inspect baseline.json")
         if scenario == "latent-leader":
-            peers = self.consul("operator/raft/configuration")["Servers"]
-            clean = next(p["Node"] for p in peers if p["Leader"])
-            fragmented = [p["Node"] for p in peers if not p["Leader"]]
-            for node in consul_names:
-                docker("cp", HERE / "bin" / "bbolt", self.cid(node) + ":/usr/local/bin/bbolt")
-            for node in fragmented:
-                print("Preparing historical Raft log layout on", node, flush=True)
-                self.prepare_storage(node, 4096)
-                self.wait(
-                    lambda: len(self.consul("operator/raft/configuration")["Servers"]) == 3
-                    and all(p["Voter"] for p in self.consul("operator/raft/configuration")["Servers"]),
-                    "Consul voter rejoin", attempts=120,
-                )
             prepared = self.grade(30)
             (self.root / "prepared-baseline.json").write_text(json.dumps(prepared, indent=2))
             if not prepared["passed"]:
