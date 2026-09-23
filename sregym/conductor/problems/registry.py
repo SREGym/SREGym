@@ -38,6 +38,7 @@ from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.init_container_dependency_hang import InitContainerDependencyHang
+from sregym.conductor.problems.integer_overflow_primary_key_astronomy_shop import IntegerOverflowPrimaryKeyAstronomyShop
 from sregym.conductor.problems.internal_traffic_policy_local import InternalTrafficPolicyLocalAstronomyShop
 from sregym.conductor.problems.kafka_poison_pill_hol_block import KafkaPoisonPillHOLBlock
 from sregym.conductor.problems.kafka_producer_leak import KafkaProducerLeak
@@ -94,7 +95,9 @@ from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation imp
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
-from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop import StaleHostAliasesDNSPoisoningAstronomyShop
+from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop import (
+    StaleHostAliasesDNSPoisoningAstronomyShop,
+)
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.train_ticket_f22 import TrainTicketF22
@@ -115,11 +118,9 @@ class ProblemRegistry:
         self.PROBLEM_REGISTRY = {
             # ==================== APPLICATION FAULT INJECTOR ====================
             # --- CORRELATED PROBLEMS ---
-            # "faulty_image_correlated": FaultyImageCorrelated,  # Deprecated in 1.1 (100% overall pass@3).
             "update_incompatible_correlated": UpdateIncompatibleCorrelated,
             # --- REGULAR APPLICATION PROBLEMS ---
             "incorrect_image": IncorrectImage,
-            # "incorrect_port_assignment": IncorrectPortAssignment,  # Deprecated in 1.1 (100% overall pass@3).
             "kafka_producer_leak": KafkaProducerLeak,
             "unschedulable_incorrect_port_assignment": lambda: IncorrectPortAssignment(unschedulable=True),
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
@@ -141,47 +142,32 @@ class ProblemRegistry:
             "load_spike_rpc_retry_storm": LoadSpikeRPCRetryStorm,
             "search_rate_retry_collapse_hotel_reservation": SearchRateRetryCollapse,
             # --- REGULAR VIRTUALIZATION PROBLEMS ---
-            # "assign_to_non_existent_node": AssignNonExistentNode,  # Deprecated in 1.1 (100% overall pass@3).
             "auth_miss_mongodb": MongoDBAuthMissing,
             "configmap_drift_hotel_reservation": lambda: ConfigMapDrift(faulty_service="geo"),
             "cfs_cpu_throttling_hotel_reservation": lambda: CpuThrottling(faulty_service="geo"),
             "feature_flag_latent_bug_hotel_reservation": lambda: FeatureFlagLatentBugHotelReservation(),
             "finalizer_deadlock_controller_hotel_reservation": FinalizerDeadlockController,
-            # "duplicate_pvc_mounts_astronomy_shop": lambda: DuplicatePVCMounts(app_name="astronomy_shop", faulty_service="frontend"),  # Deprecated in 1.1 (100% overall pass@3).
             "duplicate_pvc_mounts_hotel_reservation": lambda: DuplicatePVCMounts(app_name="hotel_reservation", faulty_service="frontend"),
             "duplicate_pvc_mounts_social_network": lambda: DuplicatePVCMounts(app_name="social_network", faulty_service="jaeger"),
             "env_variable_shadowing_astronomy_shop": lambda: EnvVariableShadowing(),
             "file_descriptor_exhaustion": lambda: FileDescriptorExhaustion(),
-            # "k8s_target_port-misconfig": lambda: K8STargetPortMisconfig(faulty_service="user-service"),  # Deprecated in 1.1 (100% overall pass@3).
-            # "liveness_probe_misconfiguration_astronomy_shop": lambda: LivenessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),  # Deprecated in 1.1 (100% overall pass@3).
-            # "liveness_probe_misconfiguration_hotel_reservation": lambda: LivenessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="recommendation"),  # Deprecated in 1.1 (100% overall pass@3).
-            # "liveness_probe_misconfiguration_social_network": lambda: LivenessProbeMisconfiguration(app_name="social_network", faulty_service="user-service"),  # Deprecated in 1.1 (100% overall pass@3).
             "liveness_probe_too_aggressive_astronomy_shop": lambda: LivenessProbeTooAggressive(app_name="astronomy_shop"),
             "liveness_probe_too_aggressive_hotel_reservation": lambda: LivenessProbeTooAggressive(app_name="hotel_reservation"),
             "liveness_probe_too_aggressive_social_network": lambda: LivenessProbeTooAggressive(app_name="social_network"),
             "init_container_dependency_hang_hotel_reservation": lambda: InitContainerDependencyHang(app_name="hotel_reservation", faulty_service="frontend"),
             "init_container_dependency_hang_social_network": lambda: InitContainerDependencyHang(app_name="social_network", faulty_service="user-service"),
-            # "init_container_dependency_hang_astronomy_shop": lambda: InitContainerDependencyHang(app_name="astronomy_shop", faulty_service="frontend"),  # Deprecated in 1.1 (100% overall pass@3).
+            "integer_overflow_primary_key_astronomy_shop": IntegerOverflowPrimaryKeyAstronomyShop,
             "missing_configmap_hotel_reservation": lambda: MissingConfigMap(app_name="hotel_reservation", faulty_service="mongodb-geo"),
-            # "missing_configmap_social_network": lambda: MissingConfigMap(app_name="social_network", faulty_service="media-mongodb"),  # Deprecated in 1.1 (100% overall pass@3).
-            # "missing_service_astronomy_shop": lambda: MissingService(app_name="astronomy_shop", faulty_service="ad"),  # Deprecated in 1.1 (100% overall pass@3).
             "missing_service_hotel_reservation": lambda: MissingService(app_name="hotel_reservation", faulty_service="mongodb-rate"),
-            # "missing_service_social_network": lambda: MissingService(app_name="social_network", faulty_service="user-service"),  # Deprecated in 1.1 (100% overall pass@3).
             "namespace_memory_limit": NamespaceMemoryLimit,
             "nightly_rebalance_oom_hotel_reservation": lambda: NightlyRebalanceOOM(faulty_service="recommendation"),
             "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
-            # "pod_anti_affinity_deadlock": PodAntiAffinityDeadlock,  # Deprecated in 1.1 (100% overall pass@3).
             "postgres_lock_contention_product_catalog": PostgresLockContentionProductCatalog,
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
             "priority_preemption_cascade_hotel_reservation": PriorityPreemptionCascadeHotelReservation,
-            # "pvc_claim_mismatch": PVCClaimMismatch,  # Deprecated in 1.1 (100% overall pass@3).
-            # "rbac_misconfiguration": RBACMisconfiguration,  # Deprecated in 1.1 (100% overall pass@3).
-            # "readiness_probe_misconfiguration_astronomy_shop": lambda: ReadinessProbeMisconfiguration(app_name="astronomy_shop", faulty_service="frontend"),  # Deprecated in 1.1 (100% overall pass@3).
             "readiness_probe_misconfiguration_hotel_reservation": lambda: ReadinessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="frontend"),
             "readiness_probe_misconfiguration_social_network": lambda: ReadinessProbeMisconfiguration(app_name="social_network", faulty_service="user-service"),
-            # "resource_request_too_large": lambda: ResourceRequestTooLarge(app_name="hotel_reservation", faulty_service="mongodb-rate"),  # Deprecated in 1.1 (100% overall pass@3).
             "resource_request_too_small": lambda: ResourceRequestTooSmall(app_name="hotel_reservation", faulty_service="mongodb-rate"),
-            # "hpa_missing_effective_cpu_request_hotel_reservation": lambda: HPAMissingEffectiveCPURequest(),  # Deprecated in 1.1 (100% overall pass@3).
             "rolling_update_misconfigured_hotel_reservation": lambda: RollingUpdateMisconfigured(app_name="hotel_reservation"),
             "rolling_update_misconfigured_social_network": lambda: RollingUpdateMisconfigured(app_name="social_network"),
             "scale_pod_zero_social_net": ScalePodSocialNet,
@@ -214,7 +200,6 @@ class ProblemRegistry:
             "astronomy_shop_cart_service_failure": CartServiceFailure,
             "astronomy_shop_failed_readiness_probe": FailedReadinessProbe,
             "astronomy_shop_payment_service_failure": PaymentServiceFailure,
-            # "astronomy_shop_payment_service_unreachable": PaymentServiceUnreachable,  # Deprecated in 1.1 (100% overall pass@3).
             "astronomy_shop_product_catalog_service_failure": ProductCatalogServiceFailure,
             "kafka_queue_problems": KafkaQueueProblems,
             "kafka_poison_pill_hol_block": KafkaPoisonPillHOLBlock,
@@ -289,7 +274,6 @@ class ProblemRegistry:
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
             "node_conntrack_exhaustion_hotel_reservation": NodeConntrackExhaustionHotelReservation,
-            # "dev_shm_exhaustion_hotel_reservation": DevShmExhaustionHotelReservation,  # Deprecated in 1.1 (100% overall pass@3).
             "internal_traffic_policy_local_astronomy_shop": InternalTrafficPolicyLocalAstronomyShop,
             "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
             "pod_cidr_exhaustion_hotel_reservation": lambda: PodCIDRExhaustionHotelReservation(),

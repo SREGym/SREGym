@@ -8,7 +8,7 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.routing import Mount
 
-from mcp_server.configs.load_all_cfg import mcp_server_cfg
+from mcp_server.configs.load_all_cfg import mcp_server_cfg, str_to_bool
 from mcp_server.jaeger_server import mcp as observability_mcp
 from mcp_server.kubectl_mcp_tools import kubectl_mcp
 from mcp_server.loki_server import mcp as loki_mcp
@@ -45,7 +45,12 @@ if __name__ == "__main__":
     # filtered out.  The proxy picks up in-cluster ServiceAccount credentials
     # automatically and listens on a local port.
     proxy_port = 16443
-    proxy = KubernetesAPIProxy(listen_port=proxy_port)
+    proxy = KubernetesAPIProxy(
+        listen_port=proxy_port,
+        restrict_network_access=str_to_bool(
+            os.environ.get("RESTRICT_NETWORK_ACCESS", os.environ.get("BLOCK_WORKLOAD_CREATION", "false"))
+        ),
+    )
     proxy.start()
     kubeconfig_path = proxy.generate_agent_kubeconfig()
     os.environ["KUBECONFIG"] = kubeconfig_path

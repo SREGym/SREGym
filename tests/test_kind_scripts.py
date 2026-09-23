@@ -31,10 +31,10 @@ def shell_environment(tmp_path):
         "KIND_TEST_CALL_LOG": str(log),
     }
 
-    def run(script, *args):
+    def run(script, *args, extra_env=None):
         result = subprocess.run(
             ["/bin/bash", str(scripts / script), *args],
-            env=env,
+            env={**env, **(extra_env or {})},
             capture_output=True,
             text=True,
         )
@@ -57,3 +57,19 @@ def test_unknown_argument_fails_before_creating_cluster(shell_environment):
     result, calls = shell_environment("setup_kind_cluster.sh", "unknown")
     assert result.returncode != 0
     assert not calls
+
+
+def test_kind_setup_accepts_dind_config_and_node_image(shell_environment, tmp_path):
+    config = tmp_path / "dind-kind.yaml"
+    config.touch()
+    result, calls = shell_environment(
+        "setup_kind_cluster.sh",
+        "arm",
+        extra_env={
+            "KIND_CONFIG": str(config),
+            "KIND_NODE_IMAGE": "sregym-kind:local",
+            "KIND_RETAIN_ON_FAILURE": "true",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    assert calls[0] == f"kind create cluster --config {config} --image sregym-kind:local --retain"
