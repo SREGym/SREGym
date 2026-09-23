@@ -178,6 +178,9 @@ def _configure_model_environment(args) -> tuple[str, str]:
         os.environ["AGENT_REASONING_EFFORT"] = reasoning_effort
     else:
         os.environ.pop("AGENT_REASONING_EFFORT", None)
+    # The judge's effort is independent of the agent's; the flag wins over an inherited env value.
+    if judge_effort := getattr(args, "judge_reasoning_effort", None):
+        os.environ["JUDGE_REASONING_EFFORT"] = judge_effort
 
     if os.environ.get("SREGYM_JUDGE_BRIDGE_URL"):
         return agent_model, judge_model
@@ -829,6 +832,9 @@ def _run_driver_and_shutdown(
 def main(args):
     init_logger()
     load_env_file()
+    if judge_effort := getattr(args, "judge_reasoning_effort", None):
+        # Exported before the judge bridge starts so a CLI judge receives it too.
+        os.environ["JUDGE_REASONING_EFFORT"] = judge_effort
     backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
     with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
         return _run_benchmark(args, judge_backend=backend, agent_image=agent_image)
@@ -862,6 +868,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         f"🔧 Config — agent: {args.agent}, agent_model: {agent_model}, "
         f"judge_backend: {judge_backend}, judge_model: {judge_model}, "
         f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
+        f"judge_reasoning_effort: {os.environ.get('JUDGE_REASONING_EFFORT') or 'provider default'}, "
         f"deployment_profile: {get_profile()}, "
         f"internet_access: {internet_policy.mode.value}, "
         f"container_hardening: {args.container_hardening}, "
@@ -1069,6 +1076,15 @@ if __name__ == "__main__":
         choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
         default=None,
         help="Reasoning effort for Codex, Copilot, OpenCode, and Claude Code (uses the agent default when omitted)",
+    )
+    parser.add_argument(
+        "--judge-reasoning-effort",
+        choices=("none", "minimal", "low", "medium", "high", "xhigh", "max"),
+        default=None,
+        help=(
+            "Reasoning effort for the judge model, e.g. 'medium' with --judge-model anthropic/claude-sonnet-5 "
+            "(default: JUDGE_REASONING_EFFORT env, else the provider default)"
+        ),
     )
     parser.add_argument(
         "--use-external-harness", action="store_true", help="For use in external harnesses, deploy the fault and exit."

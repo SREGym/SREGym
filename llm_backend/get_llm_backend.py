@@ -33,6 +33,7 @@ class LiteLLMBackend:
         provider: str | None = None,
         usage_available: bool = True,
         retry: bool = True,
+        reasoning_effort: str | None = None,
     ):
         self.model_name = model_name
         self.api_key = api_key
@@ -43,6 +44,10 @@ class LiteLLMBackend:
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
+        # OpenAI-style effort level. LiteLLM maps it per provider: on Anthropic
+        # 4.6+ models it becomes adaptive thinking plus output_config.effort, and
+        # sampling params the model no longer accepts are dropped (drop_params).
+        self.reasoning_effort = reasoning_effort
         litellm.drop_params = True
         litellm.modify_params = True
 
@@ -129,6 +134,10 @@ class LiteLLMBackend:
                     {"location": "message", "index": -1},
                 ]
             }
+
+        if self.reasoning_effort and self.reasoning_effort != "none":
+            # ChatLiteLLM has no first-class field for it; model_kwargs are passed to litellm.completion.
+            model_config.setdefault("model_kwargs", {})["reasoning_effort"] = self.reasoning_effort
 
         if not self.retry:
             model_config["max_retries"] = 0

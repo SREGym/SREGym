@@ -102,6 +102,8 @@ def managed_judge_backend(backend: str = "api", *, force_build: bool = False) ->
         )
     )
     driver = f"python /logs/judge_bridge.py --backend {backend} --host 0.0.0.0 --port {BRIDGE_PORT}"
+    if effort := os.environ.get("JUDGE_REASONING_EFFORT"):
+        driver += f" --effort {effort}"
     command = runner.build_composite_command(registration.install_script, registration.agent_version, driver)
     request = ExecInput(command=command, label=f"judge-{backend}")
     previous_url = os.environ.get("SREGYM_JUDGE_BRIDGE_URL")

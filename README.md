@@ -110,10 +110,14 @@ Or start with SREGym-Lite:
 uv run main.py --suite sregym-lite --agent stratus --model gpt-5
 ```
 
-Use `--judge-model` to override the judge model separately (defaults to `--model`):
+Use `--judge-model` to override the judge model separately (defaults to `--model`), and
+`--judge-reasoning-effort` to set the judge's effort level on models that support one:
 ```bash
-uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627
+uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-5 --judge-reasoning-effort medium
 ```
+On Claude 4.6+ models the effort maps to adaptive thinking plus `output_config.effort`; the judge's
+`max_tokens` is raised to 16000 so thinking tokens cannot truncate the checklist. `JUDGE_MAX_TOKENS`
+overrides that.
 
 #### Stage Selection
 
@@ -288,7 +292,8 @@ uv run main.py --agent cursor --model auto --judge-backend codex --judge-model g
 | `copilot` | `COPILOT_GITHUB_TOKEN` |
 | `cursor` | `CURSOR_API_KEY` |
 
-Set `--judge-model` to a model supported by the selected CLI.
+Set `--judge-model` to a model supported by the selected CLI. `--judge-reasoning-effort` is forwarded
+to Claude Code (`--effort`) and Codex (`model_reasoning_effort`); the other CLIs ignore it.
 
 For Copilot, use `export COPILOT_GITHUB_TOKEN="$(gh auth token)"` to reuse an existing GitHub CLI OAuth login.
 

@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "auto"
 CLI_TIMEOUT_SECONDS = 300
+# Effort levels the CLIs accept. Claude Code: `--effort`; Codex: `model_reasoning_effort`.
+CLAUDECODE_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+CODEX_EFFORTS = ("minimal", "low", "medium", "high", "xhigh")
 
 
 def _flatten_messages(messages: list[dict]) -> str:
@@ -66,7 +69,7 @@ def _result_text(output: str) -> str:
     return result
 
 
-def _run_cursor(prompt: str, model: str, cwd: Path, env: dict[str, str]) -> str:
+def _run_cursor(prompt: str, model: str, cwd: Path, env: dict[str, str], effort: str | None = None) -> str:
     config = cwd / ".cursor"
     config.mkdir()
     permissions = {
@@ -112,16 +115,18 @@ def _run_cursor(prompt: str, model: str, cwd: Path, env: dict[str, str]) -> str:
     )
 
 
-def _run_codex(prompt: str, model: str, cwd: Path, env: dict[str, str]) -> str:
+def _run_codex(prompt: str, model: str, cwd: Path, env: dict[str, str], effort: str | None = None) -> str:
     for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"):
         env.pop(key, None)
     response = cwd / "response.txt"
+    effort_args = ["-c", f"model_reasoning_effort={effort}"] if effort in CODEX_EFFORTS else []
     output = _execute(
         [
             "codex",
             "exec",
             "--model",
             model,
+            *effort_args,
             "--skip-git-repo-check",
             "--ephemeral",
             "--ignore-user-config",
@@ -152,9 +157,11 @@ def _run_codex(prompt: str, model: str, cwd: Path, env: dict[str, str]) -> str:
     return response.read_text()
 
 
-def _run_claudecode(prompt: str, model: str, cwd: Path, env: dict[str, str]) -> str:
+def _run_claudecode(prompt: str, model: str, cwd: Path, env: dict[str, str], effort: str | None = None) -> str:
     env.pop("ANTHROPIC_API_KEY", None)
     env["CLAUDE_CONFIG_DIR"] = str(cwd / ".claude")
+    # Settings files are disabled below, so the effort has to travel on the command line.
+    effort_args = ["--effort", effort] if effort in CLAUDECODE_EFFORTS else []
     # --bare disables subscription authentication, so use an empty configuration
     # and explicit tool controls with ordinary print mode instead.
     return _result_text(
@@ -164,6 +171,7 @@ def _run_claudecode(prompt: str, model: str, cwd: Path, env: dict[str, str]) -> 
                 "-p",
                 "--model",
                 model,
+                *effort_args,
                 "--output-format",
                 "json",
                 "--tools",
@@ -182,7 +190,7 @@ def _run_claudecode(prompt: str, model: str, cwd: Path, env: dict[str, str]) -> 
     )
 
 
-def _run_copilot(prompt: str, model: str, cwd: Path, env: dict[str, str]) -> str:
+def _run_copilot(prompt: str, model: str, cwd: Path, env: dict[str, str], effort: str | None = None) -> str:
     for key in ("COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_TYPE", "COPILOT_ALLOW_ALL"):
         env.pop(key, None)
     env["COPILOT_HOME"] = str(cwd / ".copilot")
@@ -209,15 +217,15 @@ def _run_copilot(prompt: str, model: str, cwd: Path, env: dict[str, str]) -> str
 CLI_RUNNERS = {"cursor": _run_cursor, "codex": _run_codex, "claudecode": _run_claudecode, "copilot": _run_copilot}
 
 
-def _run_agent(prompt: str, model: str, backend: str = "cursor") -> str:
+def _run_agent(prompt: str, model: str, backend: str = "cursor", effort: str | None = None) -> str:
     with tempfile.TemporaryDirectory(prefix="sregym-judge-") as directory:
-        result = CLI_RUNNERS[backend](prompt, model, Path(directory), os.environ.copy())
+        result = CLI_RUNNERS[backend](prompt, model, Path(directory), os.environ.copy(), effort=effort)
         if not result.strip():
             raise RuntimeError(f"{backend} returned an empty judgment")
         return result
 
 
-def make_handler(default_model: str, backend: str = "cursor"):
+def make_handler(default_model: str, backend: str = "cursor", default_effort: str | None = None):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):  # noqa: A002 - matches base signature
             logger.info("%s - %s", self.address_string(), format % args)
@@ -257,9 +265,13 @@ def make_handler(default_model: str, backend: str = "cursor"):
                 model = model.rsplit("/", 1)[-1]
 
             prompt = _flatten_messages(messages)
+            # Chat Completions carries the OpenAI-style field; the bridge's own default applies otherwise.
+            effort = request.get("reasoning_effort") or default_effort
+            if effort == "none":
+                effort = None
 
             try:
-                text = _run_agent(prompt, model, backend)
+                text = _run_agent(prompt, model, backend, effort)
             except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as e:
                 logger.error("%s judge bridge request failed: %s", backend, e)
                 self._send_json(502, {"error": {"message": str(e), "code": f"{backend}_cli_error"}})
@@ -291,9 +303,13 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Fallback model if the request omits one")
+    parser.add_argument(
+        "--effort", default=None, help="Effort level passed to CLIs that accept one (Claude Code, Codex)"
+    )
     args = parser.parse_args()
 
-    with ThreadingHTTPServer((args.host, args.port), make_handler(args.model, args.backend)) as server:
+    handler = make_handler(args.model, args.backend, args.effort)
+    with ThreadingHTTPServer((args.host, args.port), handler) as server:
         logger.info("%s judge bridge listening on http://%s:%s", args.backend, args.host, args.port)
         server.serve_forever()
 
