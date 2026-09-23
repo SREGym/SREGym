@@ -51,7 +51,7 @@ RUN python3 -m pip install --break-system-packages -r /tmp/requirements-containe
 COPY clients/        /opt/sregym/clients/
 COPY logger/         /opt/sregym/logger/
 COPY llm_backend/    /opt/sregym/llm_backend/
-COPY sregym/__init__.py sregym/paths.py sregym/env_file.py /opt/sregym/sregym/
+COPY sregym/__init__.py sregym/paths.py /opt/sregym/sregym/
 COPY sregym/service/__init__.py sregym/service/kubectl.py sregym/service/helm.py /opt/sregym/sregym/service/
 COPY sregym/service/apps/base.py sregym/service/apps/helpers.py /opt/sregym/sregym/service/apps/
 COPY docker/agents/install-scripts/ /opt/sregym/install-scripts/

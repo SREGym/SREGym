@@ -30,7 +30,6 @@ from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
 from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
-from sregym.env_file import load_env_file
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
 from sregym.profile import PROFILES, get_profile, set_profile
@@ -832,7 +831,6 @@ def _run_driver_and_shutdown(
 
 def main(args):
     init_logger()
-    load_env_file()
     if judge_effort := getattr(args, "judge_reasoning_effort", None):
         # Exported before the judge bridge starts so a CLI judge receives it too.
         os.environ["JUDGE_REASONING_EFFORT"] = judge_effort

@@ -24,7 +24,6 @@ if str(sregym_root) not in sys.path:
 from clients.jev_diag.classifier import JevDiagnoser  # noqa: E402
 from clients.jev_diag.collector import ClusterSnapshot  # noqa: E402
 from clients.jev_diag.derive import post_process  # noqa: E402
-from sregym.env_file import load_env_file  # noqa: E402
 
 
 def load_snapshot(path: str) -> ClusterSnapshot:
@@ -48,7 +47,6 @@ def main() -> None:
     parser.add_argument("--out", help="write per-problem diagnoses (JSON) here")
     parser.add_argument("--no-characterize", action="store_true")
     args = parser.parse_args()
-    load_env_file()
     expected = {}
     if args.expected:
         with open(args.expected) as handle:

@@ -83,8 +83,7 @@ bash kind/setup_kind_cluster.sh
 
 To get started with the included Stratus agent:
 
-1. Set your LLM API keys, either by exporting them or by copying `.env.example` to `.env` at the
-   repository root and filling it in (`.env` is git-ignored; exported values take precedence):
+1. Set your LLM API keys in the environment (required for your chosen model provider):
 ```bash
 # OpenAI
 export OPENAI_API_KEY="sk-proj-..."
@@ -167,7 +166,9 @@ uv run main.py --agent jev_diag --problem missing_env_variable --stages diagnosi
   --judge-model anthropic/claude-sonnet-5 --judge-reasoning-effort medium
 ```
 
-`--model` is ignored by this agent; set `TYPESAFE_DEFAULT_MODEL` to pin a Jev version.
+`--model` is ignored by this agent, which uses the TypeSafe SDK's default model (`jev-latest`).
+To pin a Jev version, set `TYPESAFE_DEFAULT_MODEL` in the `kickoff_env` of the `jev_diag` entry
+in `agents.yaml`.
 Only the judge needs a LiteLLM model, so pass `--judge-model` (or `--model`) for it.
 Standalone inspection of a namespace without the conductor:
 

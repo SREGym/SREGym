@@ -51,7 +51,6 @@ from clients.jev_diag.collector import (  # noqa: E402
 from clients.jev_diag.investigate import collect_component_detail  # noqa: E402
 from clients.jev_diag.trace import DecisionTrace  # noqa: E402
 from clients.jev_diag.tree import DEFAULT_MAX_STEPS, IterativeDiagnoser  # noqa: E402
-from sregym.env_file import load_env_file  # noqa: E402
 
 logger = logging.getLogger("all.jev_diag.driver")
 
@@ -60,7 +59,6 @@ SUBMIT_TIMEOUT = 310  # the conductor may hold a submission for up to 300s
 
 def run_preflight() -> None:
     """Fail fast when the TypeSafe key is missing or the API is unreachable."""
-    load_env_file()
     if not os.environ.get("TYPESAFE_API_KEY", "").strip():
         print("missing TYPESAFE_API_KEY")
         sys.exit(1)
@@ -173,7 +171,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    load_env_file()
     args = parse_args()
     logs_dir = Path(args.logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
