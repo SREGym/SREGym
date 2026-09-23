@@ -370,6 +370,13 @@ the expanded tier's one-second latency target passed. Only one window met that
 target; the latest 98th-percentile latency was 1.32 seconds. The runner correctly
 rejected this stack before injection. The fleet target is now 1.5 seconds to
 account for its longer healthy path, and a fresh clean baseline is required.
+On a second fresh stack, two **600/600** unbounded warmups passed at the new
+target, but the 20 MiB/s write bound caused the prepared clean-leader baseline
+to miss latency (98th percentile 1.63 seconds). A separate 40 MiB/s clean-leader
+calibration on that same stack passed **600/600** and every check, with a
+1.10-second 98th percentile. The fleet now uses a 40 MiB/s bound; a fresh stack
+must pass both baselines and a valid injected fault before any agent result is
+reported.
 
 ## Expanded application
 

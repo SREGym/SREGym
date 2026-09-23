@@ -139,8 +139,11 @@ larger tier needs a clean capacity baseline and causal calibration before it
 can be used as a benchmark result. Its workflow latency target is 1.5 seconds,
 versus one second for `expanded`: an initial 20-workflow/s fleet run completed
 all 600 requests in each healthy window but missed the expanded target in five
-of six windows (the latest 98th percentile was 1.32 seconds). The fleet target
-and the fault both still require validation on a fresh run.
+of six windows (the latest 98th percentile was 1.32 seconds). Its shared Consul
+write bound is 40 MiB/s versus 20 MiB/s for `expanded`: at 20 MiB/s a clean
+leader missed the fleet latency target, while a 40 MiB/s calibration passed
+600/600 with a 1.10-second 98th percentile. The fleet target and injected fault
+still require validation on a fresh run.
 
 Every run has independent Docker networks and volumes. `down` stops its workload
 process and exports logs before removing that run. Artifacts and private workload
