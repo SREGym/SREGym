@@ -58,6 +58,7 @@ def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platf
         problems=Mock(get_problem_ids=Mock(return_value=["problem"])),
         results={},
         bind_phase_ledger=Mock(),
+        clear_cluster_egress_boundary=Mock(),
         start_problem=AsyncMock(side_effect=error_type("image could not start")),
         finish_problem_in_background=Mock(),
         wait_for_submission_work=AsyncMock(),

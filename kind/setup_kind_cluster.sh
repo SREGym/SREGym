@@ -11,7 +11,8 @@
 
 set -euo pipefail
 
-CALICO_VERSION="v3.27.0"
+# Filtered agent runs require Calico policy tiers (available since 3.29).
+CALICO_VERSION="v3.29.3"
 case "${1:-auto}" in
     auto|arm|x86) ;; # Legacy aliases; the Docker daemon selects the native platform.
     *)
@@ -19,7 +20,6 @@ case "${1:-auto}" in
         exit 1
         ;;
 esac
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KIND_CONFIG="${SCRIPT_DIR}/kind-config.yaml"
 

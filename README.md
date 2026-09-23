@@ -75,6 +75,8 @@ SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/)
 bash kind/setup_kind_cluster.sh
 ```
 
+For existing clusters, see the [upgrade and baseline instructions](./docs/network-access.md#cluster-maintenance).
+
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
 ### Running an Agent
@@ -228,8 +230,20 @@ Use `--force-build` to rebuild the container image after updating dependencies o
 uv run main.py --agent codex --model gpt-5 --force-build
 ```
 
-Containerized agents can use the public internet by default, but direct access to the benchmark's GitHub source is
-blocked. Use `--internet-access open` only when you intentionally need the previous unrestricted network behavior.
+#### Network access
+
+Filtered access is the default. Agents can reach the selected model provider and internal services, but not other internet destinations.
+Application pods also have outbound restrictions.
+
+Use `--internet-access open` for unrestricted internet access.
+To allow an extra destination in filtered mode, add `--allow-agent-endpoint`:
+
+```bash
+uv run main.py --agent codex --model gpt-5.6-sol \
+  --allow-agent-endpoint https://telemetry.example.com/v1
+```
+
+Repeat the option for more destinations.
 
 Agent containers are hardened by default: every Linux capability is dropped except `DAC_OVERRIDE`, which container
 root needs to write to the host-owned `/logs` and `/workspace` bind mounts, and `no-new-privileges` is set. This
@@ -239,6 +253,17 @@ during a run, turn it off:
 ```bash
 uv run main.py --agent codex --model gpt-5 --container-hardening off
 ```
+
+#### Optional Jev decision support
+
+Jev is disabled by default. To enable it for Codex, set `TYPESAFE_API_KEY` and run:
+
+```bash
+uv run main.py --agent codex --model gpt-5.6-luna --reasoning-effort medium \
+  --problem <problem-id> --jev-model jev-latest --force-build
+```
+
+Jev reviews diagnostic tests and submissions using evidence sent to TypeSafe.
 
 ### Deployment Profiles
 

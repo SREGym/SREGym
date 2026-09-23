@@ -143,12 +143,12 @@ def test_launcher_passes_k8s_port_to_egress_proxy(monkeypatch, tmp_path, port):
     assert runner.config.k8s_proxy_port == port
 
     commands = []
-    monkeypatch.setattr(runner, "_ensure_proxy_image_exists", lambda: None)
-    monkeypatch.setattr(runner, "_prepare_egress_state", lambda: None)
-    monkeypatch.setattr(runner, "_copy_proxy_certificate", lambda: None)
-    monkeypatch.setattr(runner, "_run_docker_checked", lambda command, action: commands.append(command))
-    runner._egress_tmp_dir = tmp_path
-    runner._ensure_filtered_egress()
+    monkeypatch.setattr(runner._egress, "_ensure_proxy_image_exists", lambda: None)
+    monkeypatch.setattr(runner._egress, "_prepare_state", lambda: None)
+    monkeypatch.setattr(runner._egress, "_copy_proxy_certificate", lambda: None)
+    monkeypatch.setattr(runner._egress, "_run_docker_checked", lambda command, action: commands.append(command))
+    runner._egress._tmp_dir = tmp_path
+    runner._ensure_filtered_egress({})
 
     proxy_command = next(command for command in commands if "mitmdump" in command)
     rule = next(arg.removeprefix("ignore_hosts=") for arg in proxy_command if arg.startswith("ignore_hosts="))
