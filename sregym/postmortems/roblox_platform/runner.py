@@ -725,6 +725,8 @@ read access to their own key. Changes to shared storage can affect secret access
         if traffic_was_running:
             self.stop_traffic()
         try:
+            if meta.get("scenario") == "recovery-tail":
+                meta["stale_placement_pools"] = self.prepare_cache_placements(meta["spec"])
             self.set_consul_io_cap(None)
             paused = self.pause_placement()
 
@@ -812,6 +814,48 @@ read access to their own key. Changes to shared storage can affect secret access
         if not meta["fault_validated"]:
             raise RuntimeError("latent incident did not fail two settled grades")
         return meta["trigger"]
+
+    def prepare_cache_placements(self, spec):
+        """Leave obsolete Consul KV placement records after native cache replacements.
+
+        The cache jobs remain healthy. A later bootstrap must compare these
+        records with Nomad's live allocations before making placement changes.
+        """
+        stale = list(range(3, spec["cache_jobs"], spec["workers"]))
+        old = {}
+        for index in range(spec["cache_jobs"]):
+            name = f"cache-{index}"
+            current = [
+                row for row in self.nomad("job/" + name + "/allocations")
+                if row["DesiredStatus"] == "run" and row["ClientStatus"] == "running"
+            ]
+            if len(current) != 1 or not current[0].get("NodeID"):
+                raise RuntimeError(f"expected one placed {name} allocation")
+            old[index] = current[0]["ID"]
+            self.consul(
+                f"kv/platform/cache/placements/{name}", "PUT",
+                json.dumps({
+                    "allocation_id": current[0]["ID"], "node_id": current[0]["NodeID"],
+                }).encode(),
+            )
+        for index in stale:
+            name = f"cache-{index}"
+            self.nomad("allocation/" + old[index] + "/stop", "POST", {})
+
+            def replaced():
+                rows = [
+                    row for row in self.nomad("job/" + name + "/allocations")
+                    if row["ID"] != old[index]
+                    and row["DesiredStatus"] == "run" and row["ClientStatus"] == "running"
+                ]
+                passing = self.consul(f"health/service/{name}?passing=true")
+                return any(
+                    row["ID"] in service["Service"]["ID"]
+                    for row in rows for service in passing
+                )
+
+            self.wait(replaced, f"{name} healthy replacement", attempts=60)
+        return stale
 
     def arm_cache_rebootstrap(self, spec):
         """Prepare a latent worker defect and request an ordinary fleet rollout.
@@ -1047,6 +1091,24 @@ read access to their own key. Changes to shared storage can affect secret access
                 )
             except (OSError, urllib.error.URLError, KeyError, ValueError):
                 checks["cache_redeployment_complete"] = False
+            try:
+                placements_match = True
+                for index in range(spec["cache_jobs"]):
+                    name = f"cache-{index}"
+                    current = [
+                        row for row in self.nomad(f"job/{name}/allocations")
+                        if row["DesiredStatus"] == "run" and row["ClientStatus"] == "running"
+                    ]
+                    raw = self.consul(f"kv/platform/cache/placements/{name}?raw", raw=True)
+                    placement = json.loads(raw)
+                    if len(current) != 1 or placement != {
+                        "allocation_id": current[0]["ID"], "node_id": current[0]["NodeID"],
+                    }:
+                        placements_match = False
+                        break
+                checks["cache_placements_consistent"] = placements_match
+            except (OSError, urllib.error.URLError, KeyError, ValueError, TypeError):
+                checks["cache_placements_consistent"] = False
         result = {
             "passed": all(checks.values()),
             "checks": checks,

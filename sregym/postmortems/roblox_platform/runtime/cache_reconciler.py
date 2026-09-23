@@ -21,6 +21,7 @@ WRITE_SLO = float(os.environ.get("CACHE_RECONCILE_WRITE_SLO_MS", "300")) / 1000
 EPOCH_KEY = "platform/cache/redeploy_epoch"
 PROGRESS_KEY = "platform/cache/redeploy_progress"
 COMPLETE_KEY = "platform/cache/redeploy_complete"
+PLACEMENT_PREFIX = "platform/cache/placements/cache-"
 STATE = {
     "stable_probes": 0, "write_ms": None, "seen_epoch": None,
     "epoch": None, "next_pool": None, "last_error": None,
@@ -61,6 +62,17 @@ def passing(name, allocation_id):
     return any(allocation_id in row["Service"]["ID"] for row in rows)
 
 
+def placement_key(index):
+    return PLACEMENT_PREFIX + str(index)
+
+
+def placement_matches(record, allocation):
+    return bool(allocation.get("NodeID")) and isinstance(record, dict) and (
+        record.get("allocation_id") == allocation["ID"]
+        and record.get("node_id") == allocation["NodeID"]
+    )
+
+
 def reconcile(epoch):
     raw = kv_get(PROGRESS_KEY)
     progress = json.loads(raw) if raw else None
@@ -82,6 +94,10 @@ def reconcile(epoch):
         ]
         if len(current) != 1:
             raise RuntimeError(f"{name}: expected one running allocation before replacement")
+        raw_placement = kv_get(placement_key(index))
+        placement = json.loads(raw_placement) if raw_placement else None
+        if not placement_matches(placement, current[0]):
+            raise RuntimeError(f"{name}: placement record conflicts with live allocation")
         old_id = current[0]["ID"]
         progress["inflight"] = old_id
         kv_put(PROGRESS_KEY, json.dumps(progress))
@@ -94,11 +110,15 @@ def reconcile(epoch):
         and row["DesiredStatus"] == "run"
         and row["ClientStatus"] == "running"
     ]
-    if any(passing(name, row["ID"]) for row in replacements):
+    ready = next((row for row in replacements if passing(name, row["ID"])), None)
+    if ready is not None:
+        kv_put(placement_key(index), json.dumps({
+            "allocation_id": ready["ID"], "node_id": ready["NodeID"],
+        }))
         progress["next"] += 1
         progress["inflight"] = None
         kv_put(PROGRESS_KEY, json.dumps(progress))
-        record(ready_pool=name, new_allocation=replacements[0]["ID"], next_pool=progress["next"])
+        record(ready_pool=name, new_allocation=ready["ID"], next_pool=progress["next"])
 
 
 def loop():
