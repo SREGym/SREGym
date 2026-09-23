@@ -40,11 +40,11 @@ class NativeProtocolChecks(unittest.TestCase):
         update(event, table)
         self.assertEqual(table, {})
 
-    def test_snapshot_reset_discards_old_routes(self):
+    def test_snapshot_marker_keeps_serving_routes(self):
         table = {}
         update(self.register(), table)
         update(Event(NewSnapshotToFollow=True), table)
-        self.assertEqual(table, {})
+        self.assertEqual(list(table.values()), ["http://10.0.0.1:20000"])
 
 
 if __name__ == "__main__":
