@@ -127,6 +127,11 @@ tier. This is an executable cache bootstrap failure, not yet a reproduction of
 the postmortem's stale Consul KV scheduling data, incremental deployment tool,
 or staged DNS return. It remains under agent validation.
 
+The same scenario also accepts the experimental `fleet` tier: 12 workers, eight
+routers, 28 placement partitions, 96 cache pools, and 50,000 players. This
+larger tier needs a clean capacity baseline and causal calibration before it
+can be used as a benchmark result.
+
 Every run has independent Docker networks and volumes. `down` stops its workload
 process and exports logs before removing that run. Artifacts and private workload
 acknowledgments live in `results/roblox-platform/<run>/`. Application and host
@@ -140,6 +145,8 @@ configuration are visible to operators; the runner and evaluator are not mounted
 | expanded | 6 | 64 | 10,000 | 64 | 8 |
 | fleet | 12 | 128 | 50,000 | 256 | 20 |
 
+These are the base tier values; latent and recovery-tail scenarios add routing,
+placement, and cache allocations as described above.
 Each router maintains one native subscription per tenant and downstream service.
 Replica groups use distinct workers. Scale changes actual scheduling, routing
 state, registrations, request volume, and persistent state. The service graph is

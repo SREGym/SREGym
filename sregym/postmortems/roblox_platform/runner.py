@@ -93,19 +93,23 @@ class Run:
             raise ValueError("unknown incident scenario")
         latent = scenario != "rollout"
         recovery = scenario == "recovery-tail"
-        if latent and tier != "expanded":
-            raise ValueError("the latent incident scenarios are calibrated only for the expanded tier")
+        if latent and tier not in ("expanded", "fleet"):
+            raise ValueError("the latent incident scenarios require expanded or fleet tier")
         spec = dict(TIERS[tier])
         if latent:
             if not (HERE / "bin" / "storage-fixture").exists() or not (HERE / "bin" / "bbolt").exists():
                 raise ValueError("build the storage fixture and bbolt CLI before starting latent-leader")
             spec.update(
-                routing_tenants=128, routing_replicas=4, placement_replicas=14,
-                placement_catalog_writers=7, placement_interval=0.05, workflow_slo_seconds=1.0,
+                routing_tenants=128 if tier == "expanded" else 256,
+                routing_replicas=4 if tier == "expanded" else 8,
+                placement_replicas=14 if tier == "expanded" else 28,
+                placement_catalog_writers=7 if tier == "expanded" else 14,
+                placement_interval=0.05 if tier == "expanded" else 0.1,
+                workflow_slo_seconds=1.0,
                 consul_write_bps=20 * 1024 * 1024,
             )
             if recovery:
-                spec["cache_jobs"] = 24
+                spec["cache_jobs"] = 24 if tier == "expanded" else 96
         self.root.mkdir(parents=True, exist_ok=True)
         operations = self.root / "operations"
         operations.mkdir()
