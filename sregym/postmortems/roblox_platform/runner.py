@@ -99,7 +99,7 @@ class Run:
                 raise ValueError("build the storage fixture and bbolt CLI before starting latent-leader")
             spec.update(
                 routing_tenants=512, routing_replicas=4, placement_replicas=14,
-                placement_interval=0.05, workflow_slo_seconds=1.0,
+                placement_catalog_writers=7, placement_interval=0.05, workflow_slo_seconds=1.0,
                 consul_write_bps=20 * 1024 * 1024,
             )
         self.root.mkdir(parents=True, exist_ok=True)
@@ -307,6 +307,7 @@ class Run:
             "ROUTING_TENANTS": str(spec.get("routing_tenants", spec["tenants"])),
             "ROUTING_MODE": "stream",
             "PLACEMENT_SHARDS": str(spec["placement_replicas"]) if scenario == "latent-leader" else "0",
+            "CATALOG_WRITERS": str(spec["placement_catalog_writers"]) if scenario == "latent-leader" else "0",
         }
         jobs = {name: job(name, count=spec["replicas"], environment=environment) for name in SERVICES}
         jobs["routing"] = job(

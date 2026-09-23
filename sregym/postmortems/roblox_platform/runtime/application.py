@@ -31,6 +31,8 @@ QUEUE = redis.Redis(host=os.environ["QUEUE_HOST"], decode_responses=True, socket
 COUNTS = Counter()
 LOCK = threading.Lock()
 SECRET = (0, "")
+PLACEMENT_OWNERS = {}
+PLACEMENT_LOCK = threading.Lock()
 CONTEXT = threading.local()
 
 
@@ -84,15 +86,29 @@ def signing_key():
 def reserve_placement(player):
     """Use the live owner of this player's placement partition."""
     shard = player % PLACEMENT_SHARDS
-    response = requests.get(CONSUL + f"/v1/kv/platform/placement/{shard}?raw", timeout=3)
-    response.raise_for_status()
-    owner = response.json()
-    if time.time() - owner["updated_at"] > 20:
-        raise RuntimeError(f"placement shard {shard} has no current owner")
-    result = http("http://" + owner["address"] + "/reserve", "POST", {"player": player})
-    if result["shard"] != shard or result["allocation"] != owner["allocation"]:
-        raise RuntimeError(f"placement shard {shard} returned inconsistent ownership")
-    return result
+    for attempt in range(2):
+        with PLACEMENT_LOCK:
+            cached = PLACEMENT_OWNERS.get(shard)
+        if cached and time.monotonic() < cached[1]:
+            owner = cached[0]
+        else:
+            response = requests.get(CONSUL + f"/v1/kv/platform/placement/{shard}?raw", timeout=3)
+            response.raise_for_status()
+            owner = response.json()
+            with PLACEMENT_LOCK:
+                PLACEMENT_OWNERS[shard] = (owner, time.monotonic() + 10)
+        if time.time() - owner["updated_at"] > 20:
+            raise RuntimeError(f"placement shard {shard} has no current owner")
+        try:
+            result = http("http://" + owner["address"] + "/reserve", "POST", {"player": player})
+            if result["shard"] != shard or result["allocation"] != owner["allocation"]:
+                raise RuntimeError(f"placement shard {shard} returned inconsistent ownership")
+            return result
+        except Exception:
+            with PLACEMENT_LOCK:
+                PLACEMENT_OWNERS.pop(shard, None)
+            if attempt:
+                raise
 
 
 def profile(player):
@@ -388,7 +404,9 @@ if __name__ == "__main__":
     if ROLE in ("outbox", "analytics"):
         threading.Thread(target=publish if ROLE == "outbox" else consume, daemon=True).start()
     if ROLE == "placement":
-        threading.Thread(target=placement_inventory, daemon=True).start()
+        writers = int(os.environ.get("CATALOG_WRITERS", str(PLACEMENT_SHARDS))) if PLACEMENT_SHARDS else None
+        if writers is None or int(os.environ["NOMAD_ALLOC_INDEX"]) < writers:
+            threading.Thread(target=placement_inventory, daemon=True).start()
         if PLACEMENT_SHARDS:
             threading.Thread(target=placement_ownership, daemon=True).start()
     log("start", port=PORT)
