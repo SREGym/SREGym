@@ -86,10 +86,18 @@ class Run:
             f"database-{shard}", "psql", "-U", "postgres", "-d", "platform", "-At", "-v", "ON_ERROR_STOP=1", "-c", sql
         ).stdout.strip()
 
-    def up(self, tier="development", build=True):
+    def up(self, tier="development", build=True, scenario="rollout"):
         if self.compose.exists():
             raise ValueError("run already exists; use a fresh identifier")
-        spec = TIERS[tier]
+        if scenario not in ("rollout", "latent-leader"):
+            raise ValueError("unknown incident scenario")
+        if scenario == "latent-leader" and tier != "expanded":
+            raise ValueError("the latent-leader scenario is calibrated only for the expanded tier")
+        spec = dict(TIERS[tier])
+        if scenario == "latent-leader":
+            if not (HERE / "bin" / "storage-fixture").exists() or not (HERE / "bin" / "bbolt").exists():
+                raise ValueError("build the storage fixture and bbolt CLI before starting latent-leader")
+            spec.update(routing_tenants=1024, routing_replicas=4, placement_replicas=14, placement_interval=0.05)
         self.root.mkdir(parents=True, exist_ok=True)
         operations = self.root / "operations"
         operations.mkdir()
@@ -169,7 +177,8 @@ class Run:
                 "hostname": name,
                 "networks": ["ops"],
                 "volumes": mounts,
-                "mem_limit": "8g" if role in ("worker", "consul") else "2g",
+                "mem_limit": "16g" if scenario == "latent-leader" and role == "consul"
+                else "8g" if role in ("worker", "consul") else "2g",
             }
             services[name]["ulimits"] = {"nofile": {"soft": 65536, "hard": 65536}}
             if role == "worker":
@@ -210,6 +219,7 @@ class Run:
         )
         meta = {
             "tier": tier,
+            "scenario": scenario,
             "spec": spec,
             "created_at": time.time(),
             "project": self.project,
@@ -270,13 +280,18 @@ class Run:
             "CACHE_HOSTS": ",".join(self.ip("cache-" + str(i)) for i in range(4)),
             "QUEUE_HOST": self.ip("queue"),
             "ROUTE_SERVICES": ",".join(SERVICES),
-            "ROUTING_TENANTS": str(spec["tenants"]),
+            "ROUTING_TENANTS": str(spec.get("routing_tenants", spec["tenants"])),
             "ROUTING_MODE": "stream",
         }
         jobs = {name: job(name, count=spec["replicas"], environment=environment) for name in SERVICES}
         jobs["routing"] = job(
-            "routing", count=spec["replicas"], environment=environment, command="routing.py", cpu=500, memory=512
+            "routing", count=spec.get("routing_replicas", spec["replicas"]), environment=environment,
+            command="routing.py", cpu=500, memory=1536 if scenario == "latent-leader" else 512
         )
+        if scenario == "latent-leader":
+            jobs["placement"]["TaskGroups"][0]["Count"] = spec["placement_replicas"]
+            jobs["placement"]["TaskGroups"][0]["Constraints"] = []
+            jobs["placement"]["TaskGroups"][0]["Tasks"][0]["Env"]["RECONCILE_SECONDS"] = str(spec["placement_interval"])
         (operations / "jobs").mkdir()
         for name, definition in jobs.items():
             (operations / "jobs" / (name + ".json")).write_text(json.dumps({"Job": definition}, indent=2))
@@ -288,15 +303,50 @@ class Run:
         self.configure_toolbox(key)
         print("Waiting for scheduled application services", flush=True)
         self.wait(
-            lambda: all(len(self.consul(f"health/service/{name}?passing=true")) >= spec["replicas"] for name in jobs),
+            lambda: all(
+                len(self.consul(f"health/service/{name}?passing=true")) >= definition["TaskGroups"][0]["Count"]
+                for name, definition in jobs.items()
+            ),
             "application health",
             attempts=180,
         )
         self.wait(lambda: self.workflow(0, "baseline-" + uuid.uuid4().hex)["ok"], "end-to-end workflow", attempts=60)
-        baseline = self.grade(15)
+        if scenario == "latent-leader":
+            # Initial subscription snapshots create a real but short bootstrap
+            # surge. The pre-incident state must be sustained after that surge,
+            # rather than treating the rollout itself as the incident.
+            consecutive = 0
+            for attempt in range(6):
+                baseline = self.grade(30)
+                (self.root / f"warmup-{attempt}.json").write_text(json.dumps(baseline, indent=2))
+                consecutive = consecutive + 1 if baseline["passed"] else 0
+                if consecutive == 2:
+                    break
+        else:
+            baseline = self.grade(15)
         (self.root / "baseline.json").write_text(json.dumps(baseline, indent=2))
-        if not baseline["passed"]:
+        if not baseline["passed"] or (scenario == "latent-leader" and consecutive < 2):
             raise RuntimeError("sustained baseline verification failed; inspect baseline.json")
+        if scenario == "latent-leader":
+            peers = self.consul("operator/raft/configuration")["Servers"]
+            clean = next(p["Node"] for p in peers if p["Leader"])
+            fragmented = [p["Node"] for p in peers if not p["Leader"]]
+            for node in consul_names:
+                docker("cp", HERE / "bin" / "bbolt", self.cid(node) + ":/usr/local/bin/bbolt")
+            for node in fragmented:
+                print("Preparing historical Raft log layout on", node, flush=True)
+                self.prepare_storage(node, 4096)
+                self.wait(
+                    lambda: len(self.consul("operator/raft/configuration")["Servers"]) == 3
+                    and all(p["Voter"] for p in self.consul("operator/raft/configuration")["Servers"]),
+                    "Consul voter rejoin", attempts=120,
+                )
+            prepared = self.grade(30)
+            (self.root / "prepared-baseline.json").write_text(json.dumps(prepared, indent=2))
+            if not prepared["passed"]:
+                raise RuntimeError("latent-leader preparation damaged the baseline; inspect prepared-baseline.json")
+            meta["clean_leader"] = clean
+            meta["fragmented_followers"] = fragmented
         meta["ready_at"] = time.time()
         (self.root / "run.json").write_text(json.dumps(meta, indent=2))
         print(
@@ -514,6 +564,8 @@ read access to their own key. Changes to shared storage can affect secret access
         meta = self.metadata()
         if "injected_at" in meta:
             raise ValueError("already injected")
+        if meta.get("scenario") == "latent-leader":
+            return self.inject_latent(meta)
         snapshot = self.consul("snapshot", raw=True)
         (self.root / "pre-rollout.snap").write_bytes(snapshot)
         for name, changes in (
@@ -530,6 +582,47 @@ read access to their own key. Changes to shared storage can affect secret access
             injected_at=time.time(),
             trigger={"tenants_per_router": tenants, "placement_interval": placement_interval},
             fidelity="native streaming workload; BoltDB pathology not yet established",
+        )
+        (self.root / "run.json").write_text(json.dumps(meta, indent=2))
+        return meta["trigger"]
+
+    def inject_latent(self, meta):
+        """Expose pre-existing Raft file state through an ordinary election.
+
+        The workload and every Nomad job remain unchanged. Both followers were
+        prepared before the operator-visible incident, so either election result
+        is a fragmented leader. The clean node is restarted before agent entry.
+        """
+        clean = meta["clean_leader"]
+        fragmented = set(meta["fragmented_followers"])
+        peers = self.consul("operator/raft/configuration")["Servers"]
+        if next(p["Node"] for p in peers if p["Leader"]) != clean or not all(p["Voter"] for p in peers):
+            raise RuntimeError("latent trigger requires the original clean leader and three voters")
+        (self.root / "pre-election.snap").write_bytes(self.consul("snapshot", raw=True))
+        self.exec(clean, "pkill", "-TERM", "-x", "consul")
+        elected = None
+        try:
+            def follower_elected():
+                nonlocal elected
+                leader = api(self.url(meta["fragmented_followers"][0], 8500) + "/v1/status/leader")
+                elected = next((name for name in fragmented if self.ip(name) + ":8300" == leader), None)
+                return elected is not None
+
+            self.wait(follower_elected, "fragmented follower election", attempts=30)
+        finally:
+            self.exec(
+                clean, "sh", "-c",
+                "nohup consul agent -config-file=/etc/platform/consul.json >> /var/log/platform/consul.log 2>&1 < /dev/null &",
+            )
+        self.wait(
+            lambda: len(self.consul("operator/raft/configuration")["Servers"]) == 3
+            and all(p["Voter"] for p in self.consul("operator/raft/configuration")["Servers"]),
+            "three voting servers after election", attempts=120,
+        )
+        meta.update(
+            injected_at=time.time(),
+            trigger={"election": clean + " -> " + elected, "nomad_jobs_changed": False},
+            fidelity="native Consul leader election over pre-existing fragmented Raft log stores",
         )
         (self.root / "run.json").write_text(json.dumps(meta, indent=2))
         return meta["trigger"]
@@ -693,6 +786,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     up = sub.add_parser("up")
     up.add_argument("--tier", choices=TIERS, default="development")
+    up.add_argument("--scenario", choices=("rollout", "latent-leader"), default="rollout")
     up.add_argument("--no-build", action="store_true")
     traffic = sub.add_parser("traffic")
     traffic.add_argument("--duration", type=int, default=0)
@@ -708,7 +802,7 @@ def main():
     args = parser.parse_args()
     run = Run(args.run)
     if args.command == "up":
-        run.up(args.tier, not args.no_build)
+        run.up(args.tier, not args.no_build, args.scenario)
     elif args.command == "traffic":
         run.traffic(args.duration)
     elif args.command == "inject":
