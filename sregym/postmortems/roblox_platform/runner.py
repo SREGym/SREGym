@@ -97,13 +97,19 @@ class Run:
         if scenario == "latent-leader":
             if not (HERE / "bin" / "storage-fixture").exists() or not (HERE / "bin" / "bbolt").exists():
                 raise ValueError("build the storage fixture and bbolt CLI before starting latent-leader")
-            spec.update(routing_tenants=512, routing_replicas=4, placement_replicas=14, placement_interval=0.05)
+            spec.update(
+                routing_tenants=512, routing_replicas=4, placement_replicas=14,
+                placement_interval=0.05, workflow_slo_seconds=1.0,
+            )
         self.root.mkdir(parents=True, exist_ok=True)
         operations = self.root / "operations"
         operations.mkdir()
         key = self.root / "operator-key"
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
-        shutil.copyfile(HERE / "briefing.md", self.root / "briefing.md")
+        briefing = (HERE / "briefing.md").read_text()
+        if scenario == "latent-leader":
+            briefing += "\nPlayer workflows have a one-second latency target.\n"
+        (self.root / "briefing.md").write_text(briefing)
         services, volumes = {}, {}
         consul_names = [f"consul-{i}" for i in range(1, 4)]
         workers = [f"worker-{i}" for i in range(1, spec["workers"] + 1)]
@@ -773,6 +779,10 @@ read access to their own key. Changes to shared storage can affect secret access
             "workers_ready": workers_ready,
             "service_capacity": service_capacity,
         }
+        if "workflow_slo_seconds" in spec:
+            checks["workflow_latency"] = sum(
+                row["ok"] and row["elapsed"] <= spec["workflow_slo_seconds"] for row in samples
+            ) >= 0.98 * len(samples)
         result = {
             "passed": all(checks.values()),
             "checks": checks,

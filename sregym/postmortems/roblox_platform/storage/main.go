@@ -16,6 +16,7 @@ import (
 func main() {
 	path := flag.String("path", "", "offline Bolt database")
 	mib := flag.Int("mib", 256, "value MiB to allocate before deleting alternate records")
+	statsOnly := flag.Bool("stats-only", false, "report page statistics without changing the database")
 	flag.Parse()
 	if *path == "" || *mib < 16 || *mib > 4096 {
 		panic("path required; mib must be 16..4096")
@@ -24,6 +25,14 @@ func main() {
 	must(err)
 	defer db.Close()
 	start := time.Now()
+	if *statsOnly {
+		info, err := os.Stat(*path)
+		must(err)
+		must(json.NewEncoder(os.Stdout).Encode(map[string]interface{}{
+			"file_bytes": info.Size(), "stats": db.Stats(),
+		}))
+		return
+	}
 	name := []byte("placement-history")
 	must(db.Update(func(tx *bolt.Tx) error { _, e := tx.CreateBucket(name); return e }))
 	count := *mib * 256
