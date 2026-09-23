@@ -1,5 +1,6 @@
 import importlib.util
 import sys
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -47,6 +48,54 @@ def test_driver_wrapper_preserves_partial_results_and_failure(monkeypatch):
     assert shutdown_called == [True]
 
 
+def test_result_csv_publication_with_results_on_another_filesystem(tmp_path, monkeypatch):
+    benchmark_main = _load_main_module()
+    shared_memory = Path("/dev/shm")
+    if not shared_memory.is_dir() or shared_memory.stat().st_dev == tmp_path.stat().st_dev:
+        pytest.skip("requires a second writable filesystem")
+    monkeypatch.chdir(tmp_path)
+    with tempfile.TemporaryDirectory(dir=shared_memory) as directory:
+        partial, final = benchmark_main._problem_result_paths(Path(directory), "autosubmit", "problem")
+        partial.write_text("run_status,Mitigation.success\ncomplete,False\n")
+        benchmark_main.os.replace(partial, final)
+        assert final.read_text() == "run_status,Mitigation.success\ncomplete,False\n"
+        assert not partial.exists()
+
+
+@pytest.mark.parametrize(
+    ("stages", "external", "expected_calls"),
+    [(None, False, 1), (["diagnosis"], False, 1), (["mitigation"], False, 0), (None, True, 0)],
+)
+def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, external, expected_calls):
+    benchmark_main = _load_main_module()
+    monkeypatch.setattr(benchmark_main.os, "environ", benchmark_main.os.environ.copy())
+    calls = []
+    monkeypatch.setattr(benchmark_main, "init_logger", lambda: None)
+    monkeypatch.setattr(benchmark_main, "_configure_model_environment", lambda args: ("unused", "unused"))
+    monkeypatch.setattr(benchmark_main, "set_profile", lambda profile: None)
+    monkeypatch.setattr(benchmark_main, "run_judge_preflight_check", lambda: calls.append(True))
+
+    class ReachedConductor(Exception):
+        pass
+
+    def stop_before_deployment(**kwargs):
+        raise ReachedConductor
+
+    monkeypatch.setattr(benchmark_main, "ConductorConfig", stop_before_deployment)
+    args = SimpleNamespace(
+        agent=None,
+        internet_access="open",
+        container_hardening="on",
+        profile="full",
+        noise=False,
+        use_external_harness=external,
+        stages=stages,
+    )
+    with pytest.raises(ReachedConductor):
+        benchmark_main._run_benchmark(args)
+    assert len(calls) == expected_calls
+
+
 @pytest.mark.parametrize("platform_failure, expected_attempts", [(True, 1), (False, 3)])
 def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platform_failure, expected_attempts):
     benchmark_main = _load_main_module()
@@ -58,6 +107,7 @@ def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platf
         problems=Mock(get_problem_ids=Mock(return_value=["problem"])),
         results={},
         bind_phase_ledger=Mock(),
+        clear_cluster_egress_boundary=Mock(),
         start_problem=AsyncMock(side_effect=error_type("image could not start")),
         finish_problem_in_background=Mock(),
         wait_for_submission_work=AsyncMock(),

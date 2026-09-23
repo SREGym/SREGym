@@ -54,6 +54,14 @@ def custom_provider_args(env: Mapping[str, str] | None = None) -> list[str]:
     ]
 
 
+def filtered_runtime_args(env: Mapping[str, str] | None = None) -> list[str]:
+    """Disable provider-hosted network tools during filtered runs."""
+    source = os.environ if env is None else env
+    if source.get("AGENT_INTERNET_ACCESS") != "filtered":
+        return []
+    return ["-c", 'web_search="disabled"', "--disable", "apps", "--disable", "plugins"]
+
+
 class CodexAgent:
     """
     The Codex agent uses OpenAI's Codex CLI tool to solve tasks.
@@ -335,10 +343,8 @@ class CodexAgent:
             "unified_exec",
         ]
         command.extend(custom_provider_args())
+        command.extend(filtered_runtime_args())
         command.extend(jev_codex_args(self.logs_dir))
-        if os.environ.get("AGENT_INTERNET_ACCESS") == "filtered":
-            command.extend(["-c", 'web_search="disabled"'])
-            command.extend(["--disable", "apps", "--disable", "plugins"])
         reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
         if reasoning_effort:
             command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])

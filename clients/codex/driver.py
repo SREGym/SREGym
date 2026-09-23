@@ -22,7 +22,7 @@ from logger import init_logger  # noqa: E402
 
 init_logger()
 
-from clients.codex.codex_agent import CodexAgent, custom_provider_args  # noqa: E402
+from clients.codex.codex_agent import CodexAgent, custom_provider_args, filtered_runtime_args  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 from clients.jev.config import INSTRUCTION as JEV_INSTRUCTION  # noqa: E402
 from clients.jev.config import MODEL_ENV as JEV_MODEL_ENV
@@ -61,6 +61,7 @@ def run_preflight() -> None:
         "--skip-git-repo-check",
     ]
     command.extend(provider_args)
+    command.extend(filtered_runtime_args(env))
     if os.environ.get(JEV_MODEL_ENV):
         from clients.jev.config import codex_args
         from clients.jev.server import run_preflight as jev_preflight
