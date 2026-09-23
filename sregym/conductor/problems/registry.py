@@ -370,3 +370,27 @@ class ProblemRegistry:
         if task_type:
             return len([k for k in self.PROBLEM_REGISTRY if task_type in k])
         return len(self.PROBLEM_REGISTRY)
+
+
+# Deprecated Problems (100% overall pass@3 across evaluated models).
+# Implementations remain, but these problem IDs are no longer registered:
+#   assign_to_non_existent_node
+#   astronomy_shop_payment_service_unreachable
+#   dev_shm_exhaustion_hotel_reservation
+#   duplicate_pvc_mounts_astronomy_shop
+#   faulty_image_correlated
+#   hpa_missing_effective_cpu_request_hotel_reservation
+#   incorrect_port_assignment
+#   init_container_dependency_hang_astronomy_shop
+#   k8s_target_port-misconfig
+#   liveness_probe_misconfiguration_astronomy_shop
+#   liveness_probe_misconfiguration_hotel_reservation
+#   liveness_probe_misconfiguration_social_network
+#   missing_configmap_social_network
+#   missing_service_astronomy_shop
+#   missing_service_social_network
+#   pod_anti_affinity_deadlock
+#   pvc_claim_mismatch
+#   rbac_misconfiguration
+#   readiness_probe_misconfiguration_astronomy_shop
+#   resource_request_too_large
