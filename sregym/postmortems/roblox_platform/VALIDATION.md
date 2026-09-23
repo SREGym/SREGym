@@ -242,8 +242,31 @@ placement shards, and checked 1,024 player workflows plus retries across all
 cohorts. Its report recorded a 315 ms maximum latency and zero errors during
 187 seconds of full-admission observation. The independent post-agent grade
 also **passed 240/240** workflows, all live shards and every latency, safety,
-quorum, admission and backlog check. The corrected task stands at **2/2 passes**;
-a third fresh run is underway.
+quorum, admission and backlog check. This brought the corrected task to
+**2/2 passes** before the third fresh run.
+
+The third corrected run, `native-shards-5`, passed two clean 240/240 grades
+under background traffic. The prepared follower won after three ordinary
+elections; two valid pre-agent grades then failed **0/240**, with the other
+checks green. Codex exited normally after **11m41s**. It reduced streaming and
+catalog-update load, compacted the affected Raft file, and retained every
+placement shard. Its five-minute verification reported 3,046 live requests
+without errors and 768 successful workflow checks, with a 260 ms maximum.
+The independent post-agent grade **passed 240/240** workflows and every
+latency, placement, integrity, backlog, quorum, admission and capacity check.
+
+Across the **three fresh corrected-task runs**, Codex passed **3/3** independent
+grades in 14m34s, 13m50s and 11m41s, with no timeouts. Each run had two
+valid pre-agent 0/240 grades and a 240/240 post-agent grade. This small sample
+shows the benchmark is reproducible and solvable; it does **not** show
+ultra-long-horizon difficulty. The agents all found the high Consul load,
+reduced streaming/catalog pressure, compacted the bloated Raft file, and
+verified user and data outcomes within fifteen minutes. The next fidelity step
+is to make cache redeployment, stale scheduler state and staged player return
+executable, then repeat the agent evaluation. The public postmortem describes
+those as consequential recovery phases, not just the initial Consul diagnosis.
+The sanitized machine-readable grades, usage and source hashes are preserved in
+[benchmarks/corrected-trials.json](benchmarks/corrected-trials.json).
 
 ## Expanded application
 

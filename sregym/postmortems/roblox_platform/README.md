@@ -181,8 +181,11 @@ sudo docker run --rm -e PYTHONPATH=/srv/platform \
 
 The live validation checks idempotent retries, missing background consumers,
 backlog recovery, and balance corruption. See [VALIDATION.md](VALIDATION.md) for
-measured results and limitations. The first expanded-tier Codex trial is also
-recorded there; it succeeded quickly and does not establish long-horizon difficulty.
+measured results and limitations. Sanitized outcomes from three source-blind
+Codex runs on the corrected latent task are in
+[benchmarks/corrected-trials.json](benchmarks/corrected-trials.json). All three
+succeeded within fifteen minutes, so these runs do not establish long-horizon
+difficulty.
 Historical-reconstruction scenarios, larger recovery fanout, deeper tier-specific
 graphs, and multi-hour agent evaluations remain necessary before calling this an
 ultra-long-horizon task.
