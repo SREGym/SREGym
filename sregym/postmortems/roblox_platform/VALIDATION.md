@@ -221,7 +221,19 @@ baselines, then passed two more **240/240** grades under background traffic.
 Its injector elected the prepared follower on the first attempt without
 changing a job. Both valid pre-agent grades failed **0/240** while live
 reservation shards, quorum, admission and durable-data checks remained green.
-A source-blind Codex trial on that fresh incident is in progress.
+A source-blind Codex trial on that fresh incident followed.
+
+### First corrected-task Codex trial
+
+Codex CLI 0.155.1 with `gpt-6-astra` ran on `native-shards-3` for **14m34s**
+and exited normally. It reduced streaming subscription and catalog-write load,
+compacted the prepared Raft database, and retained all 14 placement partitions.
+Its five-minute check reported **652 successful workflows**, a maximum latency
+of 279 ms, and no new edge errors. The independent post-agent grade **passed**:
+**240/240** workflows under the one-second target, all 14 live reservation
+shards, data integrity, acknowledged work, backlog, quorum, admission, worker
+readiness and service capacity. This is **1/1** on the corrected task so far;
+two further fresh trials are underway before estimating repeatability.
 
 ## Expanded application
 
