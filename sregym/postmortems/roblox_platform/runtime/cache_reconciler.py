@@ -21,7 +21,10 @@ WRITE_SLO = float(os.environ.get("CACHE_RECONCILE_WRITE_SLO_MS", "300")) / 1000
 EPOCH_KEY = "platform/cache/redeploy_epoch"
 PROGRESS_KEY = "platform/cache/redeploy_progress"
 COMPLETE_KEY = "platform/cache/redeploy_complete"
-STATE = {"stable_probes": 0, "write_ms": None, "epoch": None, "next_pool": None, "last_error": None}
+STATE = {
+    "stable_probes": 0, "write_ms": None, "seen_epoch": None,
+    "epoch": None, "next_pool": None, "last_error": None,
+}
 LOCK = threading.Lock()
 
 
@@ -108,7 +111,11 @@ def loop():
                 stable = STATE["stable_probes"] + 1 if elapsed <= WRITE_SLO else 0
             record(write_ms=round(1000 * elapsed, 1), stable_probes=stable, last_error=None)
             epoch = kv_get(EPOCH_KEY)
-            if epoch and stable >= 6:
+            with LOCK:
+                seen_epoch = STATE["seen_epoch"]
+            if epoch != seen_epoch:
+                record(seen_epoch=epoch, stable_probes=0)
+            elif epoch and stable >= 6:
                 reconcile(epoch)
         except Exception as exc:
             record(stable_probes=0, last_error=str(exc))

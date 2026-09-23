@@ -831,6 +831,16 @@ read access to their own key. Changes to shared storage can affect secret access
             initial[name] = current[0]["ID"]
         for index in range(0, spec["cache_jobs"], spec["workers"]):
             self.exec("worker-1", "chmod", "-R", "a-w", f"/state/cache-pools/cache-{index}")
+        def controller_saw_degradation():
+            rows = self.consul("health/service/cache-reconciler?passing=true")
+            if len(rows) != 1:
+                return False
+            service = rows[0]["Service"]
+            address = service["Address"] or rows[0]["Node"]["Address"]
+            metrics = api(f"http://{address}:{service['Port']}/metrics")
+            return metrics["stable_probes"] == 0 and metrics["write_ms"] > 300
+
+        self.wait(controller_saw_degradation, "cache controller observed slow Consul writes", attempts=60)
         epoch = uuid.uuid4().hex
         self.wait(
             lambda: self.consul("kv/platform/cache/redeploy_epoch", "PUT", epoch.encode()) is True,
