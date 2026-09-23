@@ -26,6 +26,8 @@ CONSUL = os.environ.get("CONSUL_HTTP_ADDR", "http://127.0.0.1:8500")
 VAULT = os.environ["VAULT_ADDR"]
 DBS = os.environ["DATABASE_URLS"].split(",")
 CACHES = os.environ["CACHE_HOSTS"].split(",")
+CACHE_SERVICE_PREFIX = os.environ.get("CACHE_SERVICE_PREFIX", "")
+CACHE_POOL_COUNT = int(os.environ.get("CACHE_POOL_COUNT", "4"))
 PLACEMENT_SHARDS = int(os.environ.get("PLACEMENT_SHARDS", "0"))
 QUEUE = redis.Redis(host=os.environ["QUEUE_HOST"], decode_responses=True, socket_timeout=3)
 COUNTS = Counter()
@@ -33,6 +35,8 @@ LOCK = threading.Lock()
 SECRET = (0, "")
 PLACEMENT_OWNERS = {}
 PLACEMENT_LOCK = threading.Lock()
+CACHE_ENDPOINTS = {}
+CACHE_ENDPOINT_LOCK = threading.Lock()
 CONTEXT = threading.local()
 
 
@@ -72,6 +76,22 @@ def db(player):
 
 
 def cache(player):
+    if CACHE_SERVICE_PREFIX:
+        pool = player % CACHE_POOL_COUNT
+        with CACHE_ENDPOINT_LOCK:
+            cached = CACHE_ENDPOINTS.get(pool)
+        if cached and time.monotonic() < cached[1]:
+            address, port = cached[0]
+        else:
+            rows = http(f"{CONSUL}/v1/health/service/{CACHE_SERVICE_PREFIX}{pool}?passing=true&cached=true")
+            if not rows:
+                raise RuntimeError(f"no passing cache pool {pool}")
+            service = rows[0]["Service"]
+            address = service["Address"] or rows[0]["Node"]["Address"]
+            port = service["Port"]
+            with CACHE_ENDPOINT_LOCK:
+                CACHE_ENDPOINTS[pool] = ((address, port), time.monotonic() + 10)
+        return redis.Redis(host=address, port=port, decode_responses=True, socket_timeout=2)
     return redis.Redis(host=CACHES[player % len(CACHES)], decode_responses=True, socket_timeout=2)
 
 

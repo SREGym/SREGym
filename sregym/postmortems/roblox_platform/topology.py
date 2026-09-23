@@ -71,3 +71,51 @@ def job(name, *, count, environment, command="application.py", cpu=200, memory=1
             }
         ],
     }
+
+
+def cache_job(name, worker):
+    """Schedule a transient Redis pool through Nomad on its assigned worker."""
+    return {
+        "ID": name,
+        "Name": name,
+        "Type": "service",
+        "Datacenters": ["dc1"],
+        "TaskGroups": [
+            {
+                "Name": name,
+                "Count": 1,
+                "Constraints": [{"LTarget": "${node.unique.name}", "Operand": "=", "RTarget": worker}],
+                "RestartPolicy": {"Attempts": 3, "Interval": 60000000000, "Delay": 1000000000, "Mode": "delay"},
+                "Networks": [{"Mode": "host", "DynamicPorts": [{"Label": "cache"}]}],
+                "Tasks": [
+                    {
+                        "Name": "redis",
+                        "Driver": "docker",
+                        "Config": {
+                            "image": "redis:7.2.10-bookworm",
+                            "network_mode": "host",
+                            "command": "sh",
+                            "args": ["-c", 'exec redis-server --port "$NOMAD_PORT_cache" --save "" --appendonly no'],
+                        },
+                        "Resources": {"CPU": 200, "MemoryMB": 512},
+                        "Services": [
+                            {
+                                "Name": name,
+                                "PortLabel": "cache",
+                                "Provider": "consul",
+                                "Checks": [
+                                    {
+                                        "Name": "redis-ready",
+                                        "Type": "tcp",
+                                        "Interval": 10000000000,
+                                        "Timeout": 2000000000,
+                                    }
+                                ],
+                            }
+                        ],
+                        "LogConfig": {"MaxFiles": 5, "MaxFileSizeMB": 10},
+                    }
+                ],
+            }
+        ],
+    }

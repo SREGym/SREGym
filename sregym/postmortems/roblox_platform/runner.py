@@ -22,7 +22,7 @@ import uuid
 from pathlib import Path
 
 from .grading import data_checks
-from .topology import SERVICES, TIERS, job
+from .topology import SERVICES, TIERS, cache_job, job
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
@@ -89,12 +89,14 @@ class Run:
     def up(self, tier="development", build=True, scenario="rollout"):
         if self.compose.exists():
             raise ValueError("run already exists; use a fresh identifier")
-        if scenario not in ("rollout", "latent-leader"):
+        if scenario not in ("rollout", "latent-leader", "recovery-tail"):
             raise ValueError("unknown incident scenario")
-        if scenario == "latent-leader" and tier != "expanded":
-            raise ValueError("the latent-leader scenario is calibrated only for the expanded tier")
+        latent = scenario != "rollout"
+        recovery = scenario == "recovery-tail"
+        if latent and tier != "expanded":
+            raise ValueError("the latent incident scenarios are calibrated only for the expanded tier")
         spec = dict(TIERS[tier])
-        if scenario == "latent-leader":
+        if latent:
             if not (HERE / "bin" / "storage-fixture").exists() or not (HERE / "bin" / "bbolt").exists():
                 raise ValueError("build the storage fixture and bbolt CLI before starting latent-leader")
             spec.update(
@@ -102,13 +104,15 @@ class Run:
                 placement_catalog_writers=7, placement_interval=0.05, workflow_slo_seconds=1.0,
                 consul_write_bps=20 * 1024 * 1024,
             )
+            if recovery:
+                spec["cache_jobs"] = 4
         self.root.mkdir(parents=True, exist_ok=True)
         operations = self.root / "operations"
         operations.mkdir()
         key = self.root / "operator-key"
         subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(key)], check=True)
         briefing = (HERE / "briefing.md").read_text()
-        if scenario == "latent-leader":
+        if latent:
             briefing += "\nPlayer workflows have a one-second latency target.\n"
         (self.root / "briefing.md").write_text(briefing)
         services, volumes = {}, {}
@@ -184,7 +188,7 @@ class Run:
                 "hostname": name,
                 "networks": ["ops"],
                 "volumes": mounts,
-                "mem_limit": "16g" if scenario == "latent-leader" and role == "consul"
+                "mem_limit": "16g" if latent and role == "consul"
                 else "8g" if role in ("worker", "consul") else "2g",
             }
             services[name]["ulimits"] = {"nofile": {"soft": 65536, "hard": 65536}}
@@ -201,7 +205,7 @@ class Run:
                 "environment": {"POSTGRES_PASSWORD": "lab-only", "POSTGRES_DB": "platform"},
                 "volumes": [f"{name}:/var/lib/postgresql/data"],
             }
-        for name in [f"cache-{i}" for i in range(4)] + ["queue"]:
+        for name in ([] if recovery else [f"cache-{i}" for i in range(4)]) + ["queue"]:
             volumes[name] = {}
             services[name] = {
                 "image": "redis:7.2.10-bookworm",
@@ -268,7 +272,7 @@ class Run:
             "auth"
         ]["client_token"]
         self.consul("kv/platform/admission", "PUT", b"100")
-        if scenario == "latent-leader":
+        if latent:
             # Prepare the log layout before the application opens long-lived
             # watches. A busy cluster can produce snapshots faster than an
             # offline follower can catch up and be promoted back to a voter.
@@ -293,6 +297,14 @@ class Run:
             self.exec(worker, "docker", "load", "-i", "/tmp/application-image.tar")
             self.exec(worker, "rm", "/tmp/application-image.tar")
         image.unlink()
+        if recovery:
+            redis_image = self.root / "redis-image.tar"
+            docker("save", "-o", redis_image, "redis:7.2.10-bookworm")
+            for worker in workers:
+                docker("cp", redis_image, self.cid(worker) + ":/tmp/redis-image.tar")
+                self.exec(worker, "docker", "load", "-i", "/tmp/redis-image.tar")
+                self.exec(worker, "rm", "/tmp/redis-image.tar")
+            redis_image.unlink()
         environment = {
             "CONSUL_HTTP_ADDR": "http://127.0.0.1:8500",
             "CONSUL_SERVERS": ",".join(self.ip(n) for n in consul_names),
@@ -301,20 +313,26 @@ class Run:
             "DATABASE_URLS": ",".join(
                 f"postgresql://postgres:lab-only@{self.ip('database-' + str(i))}/platform" for i in range(2)
             ),
-            "CACHE_HOSTS": ",".join(self.ip("cache-" + str(i)) for i in range(4)),
+            "CACHE_HOSTS": "" if recovery else ",".join(self.ip("cache-" + str(i)) for i in range(4)),
+            "CACHE_SERVICE_PREFIX": "cache-" if recovery else "",
+            "CACHE_POOL_COUNT": "4",
             "QUEUE_HOST": self.ip("queue"),
             "ROUTE_SERVICES": ",".join(SERVICES),
             "ROUTING_TENANTS": str(spec.get("routing_tenants", spec["tenants"])),
             "ROUTING_MODE": "stream",
-            "PLACEMENT_SHARDS": str(spec["placement_replicas"]) if scenario == "latent-leader" else "0",
-            "CATALOG_WRITERS": str(spec["placement_catalog_writers"]) if scenario == "latent-leader" else "0",
+            "PLACEMENT_SHARDS": str(spec["placement_replicas"]) if latent else "0",
+            "CATALOG_WRITERS": str(spec["placement_catalog_writers"]) if latent else "0",
         }
-        jobs = {name: job(name, count=spec["replicas"], environment=environment) for name in SERVICES}
+        jobs = {
+            f"cache-{i}": cache_job(f"cache-{i}", workers[i])
+            for i in range(spec.get("cache_jobs", 0))
+        }
+        jobs.update({name: job(name, count=spec["replicas"], environment=environment) for name in SERVICES})
         jobs["routing"] = job(
             "routing", count=spec.get("routing_replicas", spec["replicas"]), environment=environment,
-            command="routing.py", cpu=500, memory=1536 if scenario == "latent-leader" else 512
+            command="routing.py", cpu=500, memory=1536 if latent else 512
         )
-        if scenario == "latent-leader":
+        if latent:
             jobs["placement"]["TaskGroups"][0]["Count"] = spec["placement_replicas"]
             jobs["placement"]["TaskGroups"][0]["Constraints"] = []
             jobs["placement"]["TaskGroups"][0]["Tasks"][0]["Env"]["RECONCILE_SECONDS"] = str(spec["placement_interval"])
@@ -337,7 +355,7 @@ class Run:
             attempts=180,
         )
         self.wait(lambda: self.workflow(0, "baseline-" + uuid.uuid4().hex)["ok"], "end-to-end workflow", attempts=60)
-        if scenario == "latent-leader":
+        if latent:
             # Initial subscription snapshots create a real but short bootstrap
             # surge. The pre-incident state must be sustained after that surge,
             # rather than treating the rollout itself as the incident.
@@ -351,9 +369,9 @@ class Run:
         else:
             baseline = self.grade(15)
         (self.root / "baseline.json").write_text(json.dumps(baseline, indent=2))
-        if not baseline["passed"] or (scenario == "latent-leader" and consecutive < 2):
+        if not baseline["passed"] or (latent and consecutive < 2):
             raise RuntimeError("sustained baseline verification failed; inspect baseline.json")
-        if scenario == "latent-leader":
+        if latent:
             # The laboratory disk is faster than the production storage path
             # exposed in the postmortem. Bound real block writes equally on all
             # servers; only a fragmented Raft log should amplify small appends.
@@ -642,7 +660,7 @@ read access to their own key. Changes to shared storage can affect secret access
         meta = self.metadata()
         if "injected_at" in meta:
             raise ValueError("already injected")
-        if meta.get("scenario") == "latent-leader":
+        if meta.get("scenario") in ("latent-leader", "recovery-tail"):
             return self.inject_latent(meta)
         snapshot = self.consul("snapshot", raw=True)
         (self.root / "pre-rollout.snap").write_bytes(snapshot)
@@ -867,6 +885,7 @@ read access to their own key. Changes to shared storage can affect secret access
         try:
             expected = {name: spec["replicas"] for name in SERVICES}
             expected["routing"] = spec.get("routing_replicas", spec["replicas"])
+            expected.update({f"cache-{i}": 1 for i in range(spec.get("cache_jobs", 0))})
             # In the latent incident, placement is partitioned. Its outcome is
             # checked through the live shard endpoints below, not job count.
             if "placement_replicas" in spec:
@@ -952,7 +971,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
     up = sub.add_parser("up")
     up.add_argument("--tier", choices=TIERS, default="development")
-    up.add_argument("--scenario", choices=("rollout", "latent-leader"), default="rollout")
+    up.add_argument("--scenario", choices=("rollout", "latent-leader", "recovery-tail"), default="rollout")
     up.add_argument("--no-build", action="store_true")
     traffic = sub.add_parser("traffic")
     traffic.add_argument("--duration", type=int, default=0)
