@@ -84,11 +84,32 @@ Stop it with the `down` command when finished. The benchmark's outbound network
 is separate from the operational network; no host Docker socket, runner, grader,
 or private traffic journal is mounted in the agent container.
 
-`inject` performs native Nomad rollouts that increase route subscriptions and
-catalog-write frequency. It is an experimental workload trigger, **not a
-guarantee of the historical failure at every scale**. Measure the resulting
-latency, errors, process profiles, memory pressure, and recovery. No sleeps or
-fault-state booleans create dependency latency.
+The default `inject` performs native Nomad rollouts that increase route
+subscriptions and catalog-write frequency. It is an experimental workload
+trigger, **not a guarantee of the historical failure at every scale**. Measure
+the resulting latency, errors, process profiles, memory pressure, and recovery.
+No sleeps or fault-state booleans create dependency latency.
+
+The expanded tier also has an experimental latent-leader scenario. Build the
+storage fixture below, then run:
+
+```bash
+python3 -m sregym.postmortems.roblox_platform --run latent-a up --tier expanded --scenario latent-leader
+python3 -m sregym.postmortems.roblox_platform --run latent-a start-traffic
+python3 -m sregym.postmortems.roblox_platform --run latent-a grade
+python3 -m sregym.postmortems.roblox_platform --run latent-a inject
+python3 -m sregym.postmortems.roblox_platform.benchmark --run latent-a --model gpt-6-astra --timeout 3600
+```
+
+Preparation creates a real fragmented Raft BoltDB file on one follower before
+the application starts. All three Consul nodes then receive the same cgroup-v2
+write-throughput bound. A clean-leader baseline must pass. During injection,
+the host briefly quiesces placement writers and releases the bound so the
+prepared follower can catch up and win a native election; the writers and
+original bound are restored before the operator enters. Nomad job definitions
+do not change. Two independent post-injection grades must fail for the runner
+to accept the incident. The bound normalizes this fast laboratory disk; it is
+not a claim about Roblox's exact disk throughput.
 
 Every run has independent Docker networks and volumes. `down` stops its workload
 process and exports logs before removing that run. Artifacts and private workload
@@ -127,8 +148,9 @@ storage churn using an extra bucket; it does **not** reproduce the historical
 write history. Preparation and recovery take the time required by actual I/O.
 The experiment has demonstrated persistent fragmentation and subsequent normal
 Raft operation. A larger layout produced measurable leader-sensitive write
-latency under stress; historical-equivalent slow-leader behavior and a seeded
-incident remain unvalidated.
+latency under stress. The bounded-disk latent scenario has a measured
+clean-versus-fragmented outcome, but the automated lifecycle and agent
+pass rate still require fresh-run validation.
 
 ## Validation and remaining work
 

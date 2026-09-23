@@ -43,6 +43,8 @@ def trace_metadata(root):
 def benchmark(run, *, codex_binary, auth_file, model="gpt-6-astra", timeout=3600):
     if "injected_at" not in run.metadata():
         raise ValueError("inject the incident before starting Codex")
+    if run.metadata().get("scenario") == "latent-leader" and not run.metadata().get("fault_validated"):
+        raise ValueError("latent incident must fail two valid pre-agent grades")
     binary = Path(codex_binary).expanduser().resolve(strict=True)
     auth = Path(auth_file).expanduser().resolve(strict=True)
     name = run.project + "-agent"

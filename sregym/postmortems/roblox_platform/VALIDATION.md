@@ -66,13 +66,41 @@ passed **240/240**; write latency fell to 45 ms median and 53 ms p90. The
 blocking-query client now shares one watch per service across tenant tables so
 the fallback can populate every table without exhausting its own thread pool.
 
-These measurements show a sustained native read/write interaction and a
-leader-sensitive storage effect, but do not yet isolate their individual
-contributions at a clean leader under the same steady-state pressure. The
-trigger still needs to arise from persistent application workload without a
-fresh configuration diff, and recovery needs the cache, scheduler, and gradual
-admission tail described in the postmortem. The current `inject` command and
-first Codex trial are therefore **not** a validated long-horizon task.
+These measurements show a native read/write interaction and a leader-sensitive
+storage effect, but a later dedicated run with ample memory passed even at
+eight routers. The earlier failure was not reproducible in isolation and must
+not be used as a seeded benchmark result. The default rollout `inject` command
+and first Codex trial are therefore **not** a validated long-horizon task.
+
+## Bounded-storage latent-leader calibration
+
+`native-latent-6` used one prepared follower, four routers with 512 tenant
+tables each, fourteen placement controllers, and background player traffic.
+The clean leader passed three 240/240 baseline windows, including one with
+background traffic and a one-second player-workflow target. Under an unbounded
+laboratory disk, moving leadership to the prepared follower also passed two
+240/240 windows. The native free-page layout alone was not a sufficient fault.
+
+The lab then applied an identical **10 MiB/s block-write bound** to all three
+Consul cgroups. On the prepared leader the next grade failed **0/240** while
+quorum, all application allocations, full admission, and durable-data checks
+still passed. Electing an unprepared leader under the same bound recovered
+**240/240**, including the latency target. This isolates a leader-sensitive
+storage cost rather than a generic throughput-cap failure. After briefly
+lifting the bound and quiescing placement writers to let the prepared follower
+catch up and win a native election, the original bound and workload were
+restored. Two settled grades again failed **0/240** with all safety and
+capacity checks intact. The prepared file still held **844,846 free pages**
+after the earlier high-volume calibration, compared with **847,681** directly
+after preparation. The cgroup bound is a scale normalization for this CloudLab
+disk, not a historical Roblox hardware claim.
+
+This result is a manually calibrated incident. The reusable `latent-leader`
+runner now encodes the same steps and requires two failed pre-agent grades, but
+a fresh automated lifecycle and repeated agent evaluations are still pending.
+The current native platform also lacks the historical cache-redeployment,
+stale-scheduler, and gradual player-admission recovery phases. The postmortem
+task should not yet be called a 73-hour or ultra-long-horizon replica.
 
 ## Expanded application
 

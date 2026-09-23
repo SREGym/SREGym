@@ -100,6 +100,7 @@ class Run:
             spec.update(
                 routing_tenants=512, routing_replicas=4, placement_replicas=14,
                 placement_interval=0.05, workflow_slo_seconds=1.0,
+                consul_write_bps=10 * 1024 * 1024,
             )
         self.root.mkdir(parents=True, exist_ok=True)
         operations = self.root / "operations"
@@ -351,6 +352,10 @@ class Run:
         if not baseline["passed"] or (scenario == "latent-leader" and consecutive < 2):
             raise RuntimeError("sustained baseline verification failed; inspect baseline.json")
         if scenario == "latent-leader":
+            # The laboratory disk is faster than the production storage path
+            # exposed in the postmortem. Bound real block writes equally on all
+            # servers; only a fragmented Raft log should amplify small appends.
+            self.set_consul_io_cap(spec["consul_write_bps"])
             prepared = self.grade(30)
             (self.root / "prepared-baseline.json").write_text(json.dumps(prepared, indent=2))
             if not prepared["passed"]:
@@ -382,6 +387,52 @@ class Run:
                 last = exc
             time.sleep(2)
         raise RuntimeError(f"{label} not ready: {last}")
+
+    def set_consul_io_cap(self, bytes_per_second):
+        """Bound actual block writes on every Consul server through cgroup v2."""
+        rate = "max" if bytes_per_second is None else str(bytes_per_second)
+        for node in ("consul-1", "consul-2", "consul-3"):
+            info = json.loads(docker("inspect", self.cid(node)).stdout)[0]
+            pid = info["State"]["Pid"]
+            cgroup = next(
+                line.split("::", 1)[1] for line in Path(f"/proc/{pid}/cgroup").read_text().splitlines()
+                if line.startswith("0::")
+            )
+            path = Path("/sys/fs/cgroup") / cgroup.lstrip("/")
+            devices = []
+            for line in (path / "io.stat").read_text().splitlines():
+                fields = dict(item.split("=", 1) for item in line.split()[1:] if "=" in item)
+                devices.append((int(fields.get("wbytes", 0)), line.split()[0]))
+            if not devices:
+                raise RuntimeError(f"no cgroup block device found for {node}")
+            device = max(devices)[1]
+            subprocess.run(
+                (["sudo", "-n"] if os.geteuid() else []) + ["tee", str(path / "io.max")],
+                input=f"{device} wbps={rate}\n", text=True, capture_output=True, check=True,
+            )
+
+    def raft_last_index(self, node):
+        with urllib.request.urlopen(self.url(node, 8500) + "/v1/agent/metrics?format=prometheus", timeout=5) as response:
+            metrics = response.read().decode()
+        match = re.search(r"^consul_raft_last_index (\d+)$", metrics, re.MULTILINE)
+        if not match:
+            raise RuntimeError(f"raft last index unavailable on {node}")
+        return int(match.group(1))
+
+    def pause_placement(self):
+        paused = []
+        for worker in range(1, self.metadata()["spec"]["workers"] + 1):
+            node = f"worker-{worker}"
+            rows = self.exec(node, "docker", "ps", "--format", "{{.ID}} {{.Names}}").stdout.splitlines()
+            ids = [row.split()[0] for row in rows if len(row.split()) == 2 and row.split()[1].startswith("placement-")]
+            if ids:
+                self.exec(node, "docker", "pause", *ids)
+                paused.append((node, ids))
+        if sum(len(ids) for _, ids in paused) != self.metadata()["spec"]["placement_replicas"]:
+            for node, ids in paused:
+                self.exec(node, "docker", "unpause", *ids, check=False)
+            raise RuntimeError("cannot quiesce all placement writers")
+        return paused
 
     def initialize_data(self, players):
         schema = """
@@ -599,58 +650,89 @@ read access to their own key. Changes to shared storage can affect secret access
     def inject_latent(self, meta):
         """Expose pre-existing Raft file state through an ordinary election.
 
-        The workload and every Nomad job remain unchanged. One follower was
-        prepared before the operator-visible incident. Repeated ordinary
-        elections expose its latent state; every stopped server is restarted
-        before agent entry.
+        The Nomad jobs and final I/O limits remain unchanged. Quiescing the
+        placement writers and briefly lifting the common I/O limit lets the
+        prepared follower catch up and participate in a native election. Both
+        are restored before the operator sees the incident.
         """
-        clean = meta["clean_leader"]
         fragmented = set(meta["fragmented_followers"])
+        target = meta["fragmented_followers"][0]
         peers = self.consul("operator/raft/configuration")["Servers"]
-        if next(p["Node"] for p in peers if p["Leader"]) != clean or not all(p["Voter"] for p in peers):
-            raise RuntimeError("latent trigger requires the original clean leader and three voters")
-        (self.root / "pre-election.snap").write_bytes(self.consul("snapshot", raw=True))
+        clean = next(p["Node"] for p in peers if p["Leader"])
+        if clean in fragmented or not all(p["Voter"] for p in peers):
+            raise RuntimeError("latent trigger requires a clean leader and three voters")
+        meta["clean_leader"] = clean
+        paused = []
         elections = []
         elected = None
-        for _ in range(8):
-            peers = self.consul("operator/raft/configuration")["Servers"]
-            current = next(p["Node"] for p in peers if p["Leader"])
-            if current in fragmented:
-                elected = current
-                break
-            self.exec(current, "pkill", "-TERM", "-x", "consul")
-            try:
-                def follower_elected():
-                    nonlocal elected
-                    leader = api(self.url(meta["fragmented_followers"][0], 8500) + "/v1/status/leader")
-                    elected = next(
-                        (name for name in ("consul-1", "consul-2", "consul-3")
-                         if name != current and self.ip(name) + ":8300" == leader), None
-                    )
-                    return elected is not None
+        try:
+            self.set_consul_io_cap(None)
+            paused = self.pause_placement()
 
-                self.wait(follower_elected, "follower election", attempts=30)
-            finally:
-                self.exec(
-                    current, "sh", "-c",
-                    "nohup consul agent -config-file=/etc/platform/consul.json >> /var/log/platform/consul.log 2>&1 < /dev/null &",
+            def caught_up():
+                leader = next(p["Node"] for p in self.consul("operator/raft/configuration")["Servers"] if p["Leader"])
+                return self.raft_last_index(leader) - self.raft_last_index(target) < 100
+
+            self.wait(caught_up, "prepared follower catch-up", attempts=90)
+            (self.root / "pre-election.snap").write_bytes(self.consul("snapshot", raw=True))
+            for _ in range(8):
+                peers = self.consul("operator/raft/configuration")["Servers"]
+                current = next(p["Node"] for p in peers if p["Leader"])
+                if current in fragmented:
+                    elected = current
+                    break
+                self.exec(current, "pkill", "-TERM", "-x", "consul")
+                try:
+                    def follower_elected():
+                        nonlocal elected
+                        leader = api(self.url(target, 8500) + "/v1/status/leader")
+                        elected = next(
+                            (name for name in ("consul-1", "consul-2", "consul-3")
+                             if name != current and self.ip(name) + ":8300" == leader), None
+                        )
+                        return elected is not None
+
+                    self.wait(follower_elected, "follower election", attempts=30)
+                finally:
+                    self.exec(
+                        current, "sh", "-c",
+                        "nohup consul agent -config-file=/etc/platform/consul.json >> /var/log/platform/consul.log 2>&1 < /dev/null &",
+                    )
+                elections.append(current + " -> " + elected)
+                self.wait(
+                    lambda: len(self.consul("operator/raft/configuration")["Servers"]) == 3
+                    and all(p["Voter"] for p in self.consul("operator/raft/configuration")["Servers"]),
+                    "three voting servers after election", attempts=120,
                 )
-            elections.append(current + " -> " + elected)
-            self.wait(
-                lambda: len(self.consul("operator/raft/configuration")["Servers"]) == 3
-                and all(p["Voter"] for p in self.consul("operator/raft/configuration")["Servers"]),
-                "three voting servers after election", attempts=120,
-            )
-            if elected in fragmented:
-                break
+                if elected in fragmented:
+                    break
+        finally:
+            try:
+                self.set_consul_io_cap(meta["spec"]["consul_write_bps"])
+            finally:
+                for node, ids in paused:
+                    self.exec(node, "docker", "unpause", *ids, check=False)
         if elected not in fragmented:
             raise RuntimeError("prepared follower was not elected after eight attempts")
+        self.wait(
+            lambda: len(self.consul("health/service/placement?passing=true")) >= meta["spec"]["placement_replicas"],
+            "placement writers after election", attempts=120,
+        )
         meta.update(
             injected_at=time.time(),
             trigger={"elections": elections, "nomad_jobs_changed": False},
-            fidelity="native Consul leader election over pre-existing fragmented Raft log stores",
+            fidelity="native Consul leader election over fragmented Raft log with equal bounded disk throughput",
         )
         (self.root / "run.json").write_text(json.dumps(meta, indent=2))
+        grades = []
+        for index in range(2):
+            result = self.grade(30)
+            (self.root / f"fault-grade-{index}.json").write_text(json.dumps(result, indent=2))
+            grades.append(result)
+        meta["fault_validated"] = all(g["valid"] and not g["passed"] for g in grades)
+        (self.root / "run.json").write_text(json.dumps(meta, indent=2))
+        if not meta["fault_validated"]:
+            raise RuntimeError("latent incident did not fail two settled grades")
         return meta["trigger"]
 
     def prepare_storage(self, node, mib=256):
