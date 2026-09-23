@@ -23,9 +23,12 @@ The old `roblox_consul` package remains the frozen three-trial baseline.
   holds the durable processing stream. Purchases are transactional and retries
   are idempotent. Consumers reclaim pending messages after restarts.
 - The routing layer builds actual endpoint tables from native streaming events.
-  A placement inventory controller makes real catalog updates. Both continue
-  working independently of external traffic admission. Aggregate telemetry must
-  discover and reach services through the affected routing path.
+  Placement allocations make real catalog updates and, in the latent-leader
+  scenario, own separate player-reservation shards. A player session must reach
+  its live shard owner, so reducing placement capacity has a direct user impact.
+  These systems continue working independently of external traffic admission.
+  Aggregate telemetry must discover and reach services through the affected
+  routing path.
 - Optional storage preparation writes and deletes real Bolt pages in an offline
   follower's Raft file. Existing Raft buckets are retained. The native `bbolt`
   tool can inspect/rewrite files; no latency counter is cleared by an operation.
@@ -161,6 +164,8 @@ requires full admission, successful correct workflows, immutable identities,
 coin conservation, unique consistent transactions, preserved acknowledged work,
 processed recovery work, three voting Consul servers, and ready workers.
 Committed purchases whose response timed out still require processing.
+For the latent-leader scenario, it also calls every placement reservation shard
+and checks its current owner, rather than requiring a specific job replica count.
 
 On a dedicated healthy run, with background traffic stopped:
 

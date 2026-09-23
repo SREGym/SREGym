@@ -124,7 +124,7 @@ The preparation and fault are validated. A subsequent fresh run,
 additional 240/240 window with background traffic. The injector elected the
 prepared follower on its first native election without changing Nomad jobs.
 Two independent post-injection grades both failed **0/240**, while all
-non-workflow checks stayed green. The third Codex trial is in progress.
+non-workflow checks stayed green. A third Codex trial then ran on this incident.
 
 ### First latent-incident Codex trial
 
@@ -140,8 +140,8 @@ The independent post-agent grade passed **240/240** player workflows and all
 latency, data-integrity, backlog, quorum, and full-admission checks. The total
 grade **failed** because the agent left the placement job at **2/14 required
 replicas** after reducing Consul write pressure. Its incident report declared
-recovery, so the capacity check exposed an incomplete restoration that the
-agent's verification missed. This is one trial on the older, task-labeled Bolt
+recovery, but the fixed capacity check detected a changed deployment the
+agent's verification did not address. This is one trial on the older, task-labeled Bolt
 fixture; it is not a pass-rate estimate for the revised scenario. The trace,
 report, host logs, and independent `benchmark.json` are under
 `results/roblox-platform/native-latent-6/` on this node.
@@ -159,10 +159,50 @@ and declared the incident resolved.
 The independent post-agent grade passed **240/240** player workflows, the
 one-second latency target, data integrity, backlog, quorum, full admission and
 worker readiness. The total grade **failed** because the placement fleet was
-still **2/14**. This again caught an incomplete control-plane restoration despite
+still **2/14**. This again detected a reduced deployment despite
 the agent's green player probes. The agent was given one hour and did not time
 out. Its trace, final report and evaluator result are preserved under
 `results/roblox-platform/native-latent-7/` on this node.
+
+### Third latent-incident Codex trial
+
+`native-latent-8` used the same revised fixture but completed the entire
+automated clean-start and injection path. Codex CLI 0.155.1 with `gpt-6-astra`
+exited normally after **9m54s**. It switched the routers to shared blocking
+queries, reduced placement to **1/14**, compacted the affected Raft file, and
+verified a three-minute sample across routing cohorts. The independent grade
+passed **240/240** player workflows and all integrity, backlog, quorum,
+admission, worker-readiness and latency checks; it failed the total grade on
+the then-current placement replica-count check.
+
+The three trials therefore provide **0/3 full passes and 3/3 player-workflow
+recoveries**, under a one-hour limit. They do not establish ultra-long-horizon
+difficulty: diagnosis and mitigation still took roughly ten to fifteen minutes.
+Moreover, the original placement workers duplicated catalog updates, so the
+fixed 14-replica requirement was too prescriptive to justify these failures as
+real service outages. The next revision makes each placement worker responsible
+for a distinct player-reservation shard and grades live shard behavior. The
+three results above are preliminary results for the earlier task version.
+
+### Outcome-based placement validation
+
+The revised application assigns each of the 14 placement allocations a stable
+Nomad index and a distinct player-reservation shard. Allocations publish their
+live endpoint through Consul; the allocator verifies ownership and calls the
+responsible allocation before creating a player session. The grader probes all
+shard endpoints, so it can accept any repair that restores the service behavior
+without prescribing a Nomad job count.
+
+In `native-shards-1`, the fresh sharded stack passed **240/240** under the
+20 MiB/s bound. A placement scale-down initially also disturbed the streaming
+routers; switching those routers to their supported blocking-query mode
+restored a **240/240** control grade. With routing held fixed, reducing
+placement from 14 to one made **32/240** workflows succeed and the live-shard
+check fail, while Consul quorum and the other service-capacity checks remained
+green. Restoring all 14 allocations and live shard endpoints brought the same
+grade back to **240/240**. This clean/fault/clean control establishes a player
+outcome for incomplete placement restoration. A fresh source-blind Codex trial
+on this revised task is still pending.
 
 ## Expanded application
 
