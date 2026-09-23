@@ -385,7 +385,28 @@ every check green. Injection elected the prepared follower without changing
 Nomad jobs. Two valid pre-agent grades failed at **94/600** and **132/600**;
 cache generation, workflows, and latency failed, while capacity, all 28
 placement partitions, Consul quorum, worker readiness, and acknowledged work
-remained green. The source-blind agent run is still being measured.
+remained green.
+
+Codex CLI 0.155.1 (`gpt-6-astra`) recovered this fleet in **20m28s** under a
+75-minute limit. It reduced routing and catalog pressure, compacted the 6 GB
+Raft file on the elected leader under quorum, and restored cache storage
+permissions before redeployment reached the affected worker. After the native
+reconciler replaced the first three pools, Codex paused it, wrote an operational
+script to replace the remaining 93 pools in batches of four, verified each
+replacement's Nomad allocation and Consul health, and restored the native
+reconciler to publish completion. Its manual batch phase took **4m35s**; the
+first native stop to completion took **7m00s**. Codex then observed five minutes
+of full admission. The independent post-agent grade passed **600/600** and every
+integrity, capacity, placement, quorum, latency, backlog, and cache-generation
+check, examining 22,855 acknowledged requests. The sanitized evidence is in
+[benchmarks/recovery-fleet-trial.json](benchmarks/recovery-fleet-trial.json).
+
+This is a successful scale and outcome validation, **not** an ultra-long-horizon
+result. Increasing caches fourfold from 24 to 96 raised agent time from 18m11s
+to only 20m28s. The permission fault was discoverable before it manifested,
+and unrestricted native Nomad access let the agent replace pools in parallel
+without the historical cache tool's incremental-only constraint. Neither stale
+Consul KV scheduling state nor staged player admission is yet reproduced.
 
 ## Expanded application
 
@@ -489,6 +510,7 @@ allocations and six ready workers. Its final check passed 120/120 workflows with
 no unpublished outbox work. Temporary development and clean-start stacks were
 exported and removed; the pre-existing Tier 0 demonstration was preserved.
 The new operator surface contains no Tier 0 diagnosis profiles or one-call repair
-operations. However, service-graph depth is still fixed across tiers, the fleet
-tier has not been capacity-tested, historical-reconstruction mode is not yet
-implemented, and no multi-hour agent evaluation has established task difficulty.
+operations. However, service-graph depth is still fixed across tiers,
+historical-reconstruction mode is not yet implemented, and the successful fleet
+agent run still lasted only 20m28s. No multi-hour evaluation has established
+the intended task difficulty.

@@ -55,8 +55,7 @@ flowchart LR
 
 Linux/amd64, Docker Engine with Compose v2, cgroup v2, Python 3.10+, and passwordless
 Docker access (`sudo -n docker` supported). The supplied node has sufficient RAM
-for the validated expanded configuration. The fleet tier is a configuration,
-not yet a capacity-validated result. Workers require privileged DinD; this is a
+for the validated expanded and fleet configurations. Workers require privileged DinD; this is a
 trusted laboratory environment, not a VM-strength boundary against hostile agents.
 There is no host Docker socket or evaluator directory mounted into agent hosts.
 
@@ -135,15 +134,12 @@ in 18m11s; see [VALIDATION.md](VALIDATION.md).
 
 The same scenario also accepts the experimental `fleet` tier: 12 workers, eight
 routers, 28 placement partitions, 96 cache pools, and 50,000 players. This
-larger tier needs a clean capacity baseline and causal calibration before it
-can be used as a benchmark result. Its workflow latency target is 1.5 seconds,
-versus one second for `expanded`: an initial 20-workflow/s fleet run completed
-all 600 requests in each healthy window but missed the expanded target in five
-of six windows (the latest 98th percentile was 1.32 seconds). Its shared Consul
-write bound is 40 MiB/s versus 20 MiB/s for `expanded`: at 20 MiB/s a clean
-leader missed the fleet latency target, while a 40 MiB/s calibration passed
-600/600 with a 1.10-second 98th percentile. The fleet target and injected fault
-still require validation on a fresh run.
+larger tier passed two clean warmups, a bounded clean-leader baseline, two valid
+failing incident grades, and a source-blind Codex recovery: **600/600** final
+workflows in **20m28s**. Its workflow latency target is 1.5 seconds and shared
+Consul write bound is 40 MiB/s, versus one second and 20 MiB/s for `expanded`.
+The measured recovery is still short because the agent could repair the cache
+worker early and replace pools in parallel; see [VALIDATION.md](VALIDATION.md).
 
 Every run has independent Docker networks and volumes. `down` stops its workload
 process and exports logs before removing that run. Artifacts and private workload
