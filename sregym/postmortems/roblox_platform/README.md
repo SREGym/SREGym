@@ -4,6 +4,8 @@ This replaces the Tier 0 operational model with a running application and native
 control-plane services. It is **under validation**, not a claim that Roblox's
 73-hour incident or an ultra-long-horizon benchmark has been reproduced.
 The old `roblox_consul` package remains the frozen three-trial baseline.
+The remaining causal and long-horizon acceptance gates are in
+[NEXT_FIDELITY_GATES.md](NEXT_FIDELITY_GATES.md).
 
 ## What changed
 
