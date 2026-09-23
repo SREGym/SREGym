@@ -204,6 +204,20 @@ grade back to **240/240**. This clean/fault/clean control establishes a player
 outcome for incomplete placement restoration. A fresh source-blind Codex trial
 on this revised task is still pending.
 
+The first sharded traffic run exposed another native client bug: after a
+streaming reconnect, a router discarded its previous endpoint table before a
+replacement snapshot was complete, creating intermittent 503s on an otherwise
+healthy leader. The streaming client now swaps tables only at Consul's
+`EndOfSnapshot` event. Placement is also split into 14 reservation shards and
+seven catalog writers, so functional placement capacity does not require 14
+duplicate catalog-update loops. With four routers at **128 tenants each** and
+the same 20 MiB/s common disk bound, a manually calibrated run passed three
+consecutive **240/240** background-traffic grades. Electing the prepared leader
+then failed two valid grades at **0/240**, with quorum, live placement shards,
+admission and durable-data checks intact. This control included live Nomad
+rollouts during calibration; a fresh automated run using the final source and
+configuration is the next validation step.
+
 ## Expanded application
 
 `native-expanded` ran 64 active Nomad allocations, representing 16 service types,

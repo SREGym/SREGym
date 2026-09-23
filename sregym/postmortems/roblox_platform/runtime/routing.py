@@ -58,11 +58,13 @@ async def bridge(reader, writer):
             remote.close()
 
 
-def update(event, table):
-    if event.NewSnapshotToFollow:
-        table.clear()
+def flatten(event):
+    yield event
     for child in event.EventBatch.Events:
-        update(child, table)
+        yield from flatten(child)
+
+
+def update(event, table):
     if event.HasField("ServiceHealth"):
         row = event.ServiceHealth.CheckServiceNode
         # Native deregistration events carry the node name but omit its IP.
@@ -79,13 +81,20 @@ async def watch(channel, tenant, service):
         request_serializer=SubscribeRequest.SerializeToString,
         response_deserializer=Event.FromString,
     )
+    table = TABLES.setdefault((tenant, service), {})
     while True:
-        table = {}
-        TABLES[tenant, service] = table
+        snapshot = None
         try:
             async for event in rpc(SubscribeRequest(Topic=1, Key=service)):
-                update(event, table)
-                COUNTERS["events"] += 1
+                for item in flatten(event):
+                    if item.NewSnapshotToFollow:
+                        snapshot = {}
+                    update(item, snapshot if snapshot is not None else table)
+                    if item.EndOfSnapshot and snapshot is not None:
+                        table = snapshot
+                        TABLES[tenant, service] = table
+                        snapshot = None
+                    COUNTERS["events"] += 1
         except grpc.RpcError as exc:
             COUNTERS["stream_errors"] += 1
             if COUNTERS["stream_errors"] % 100 == 1:

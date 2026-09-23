@@ -105,7 +105,9 @@ python3 -m sregym.postmortems.roblox_platform.benchmark --run latent-a --model g
 ```
 
 Preparation creates a real fragmented Raft BoltDB file on one follower before
-the application starts. All three Consul nodes then receive the same cgroup-v2
+the application starts. The calibrated latent tier has four streaming routers
+with 128 tenant tables each, 14 reservation shards, and seven catalog writers.
+All three Consul nodes then receive the same cgroup-v2
 write-throughput bound. A clean-leader baseline must pass. During injection,
 the host briefly quiesces placement writers and releases the bound so the
 prepared follower can catch up and win a native election; the writers and
