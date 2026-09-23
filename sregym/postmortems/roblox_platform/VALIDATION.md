@@ -378,6 +378,15 @@ calibration on that same stack passed **600/600** and every check, with a
 must pass both baselines and a valid injected fault before any agent result is
 reported.
 
+The committed calibration was then exercised on a fresh `native-fleet-3`
+stack. All 245 allocations ran on 12 ready workers. Two consecutive warmups
+and the 40 MiB/s prepared clean-leader baseline each passed **600/600** with
+every check green. Injection elected the prepared follower without changing
+Nomad jobs. Two valid pre-agent grades failed at **94/600** and **132/600**;
+cache generation, workflows, and latency failed, while capacity, all 28
+placement partitions, Consul quorum, worker readiness, and acknowledged work
+remained green. The source-blind agent run is still being measured.
+
 ## Expanded application
 
 `native-expanded` ran 64 active Nomad allocations, representing 16 service types,
