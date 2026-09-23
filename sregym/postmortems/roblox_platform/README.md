@@ -31,8 +31,9 @@ The old `roblox_consul` package remains the frozen three-trial baseline.
   Aggregate telemetry must discover and reach services through the affected
   routing path.
 - Optional storage preparation writes and deletes real Bolt pages in an offline
-  follower's Raft file. Existing Raft buckets are retained. The native `bbolt`
-  tool can inspect/rewrite files; no latency counter is cleared by an operation.
+  follower's Raft file. Existing Raft buckets are retained. The preparation
+  utility stays runner-side; no compaction CLI or one-call repair is installed
+  on incident hosts, and no latency counter is cleared by an operation.
 
 ```mermaid
 flowchart LR
@@ -169,14 +170,14 @@ currently the same across tiers; varying its depth is still outstanding.
 
 ## Storage-path experiment
 
-Build the runner-only page-layout preparation utility and upstream bbolt CLI:
+Build the runner-only page-layout preparation utility:
 
 ```bash
 sudo docker run --rm \
   -v "$PWD/sregym/postmortems/roblox_platform/storage:/src" \
   -v "$PWD/sregym/postmortems/roblox_platform/bin:/out" -w /src \
   golang:1.23.12-bookworm sh -c \
-  'go mod download && CGO_ENABLED=0 go build -o /out/storage-fixture . && GOBIN=/out go install go.etcd.io/bbolt/cmd/bbolt@v1.3.5'
+  'go mod download && CGO_ENABLED=0 go build -o /out/storage-fixture .'
 python3 -m sregym.postmortems.roblox_platform --run platform-a prepare-storage --node consul-3 --mib 512
 ```
 

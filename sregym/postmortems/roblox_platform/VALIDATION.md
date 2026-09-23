@@ -429,6 +429,15 @@ fleet, worker readiness, Consul quorum, and durable-data checks intact. This
 models the stale-state consequence, not the historical snapshot-reset path.
 The source-blind Codex recovery is being measured.
 
+The next source revision also stops provisioning the upstream `bbolt` CLI on
+incident hosts. Earlier agents used that preinstalled tool to compact the
+slow leader directly, although the [Roblox postmortem](https://about.roblox.com/newsroom/2022/01/roblox-return-to-service-10-28-10-31-2021)
+says the BoltDB freelist root cause was established after return to service;
+during the outage, responders kept slow leaders from staying elected. The
+runner still uses a private storage fixture to create real free pages. This
+tool-availability change needs a fresh agent validation and should not be
+attributed to the `native-stale-1` result.
+
 ## Expanded application
 
 `native-expanded` ran 64 active Nomad allocations, representing 16 service types,

@@ -97,8 +97,8 @@ class Run:
             raise ValueError("the latent incident scenarios require expanded or fleet tier")
         spec = dict(TIERS[tier])
         if latent:
-            if not (HERE / "bin" / "storage-fixture").exists() or not (HERE / "bin" / "bbolt").exists():
-                raise ValueError("build the storage fixture and bbolt CLI before starting latent-leader")
+            if not (HERE / "bin" / "storage-fixture").exists():
+                raise ValueError("build the storage fixture before starting latent-leader")
             spec.update(
                 routing_tenants=128 if tier == "expanded" else 256,
                 routing_replicas=4 if tier == "expanded" else 8,
@@ -287,8 +287,6 @@ class Run:
             peers = self.consul("operator/raft/configuration")["Servers"]
             clean = next(p["Node"] for p in peers if p["Leader"])
             fragmented = [next(p["Node"] for p in peers if not p["Leader"])]
-            for node in consul_names:
-                docker("cp", HERE / "bin" / "bbolt", self.cid(node) + ":/usr/local/bin/bbolt")
             for node in fragmented:
                 print("Preparing historical Raft log layout on", node, flush=True)
                 self.prepare_storage(node, 4096)
@@ -950,7 +948,6 @@ read access to their own key. Changes to shared storage can affect secret access
             raise ValueError("build the storage fixture first; see README")
         cid = self.cid(node)
         docker("cp", binary, cid + ":/tmp/storage-fixture")
-        docker("cp", HERE / "bin" / "bbolt", cid + ":/usr/local/bin/bbolt")
         self.exec(node, "pkill", "-TERM", "-x", "consul", check=False)
         try:
             self.wait(
