@@ -408,6 +408,27 @@ and unrestricted native Nomad access let the agent replace pools in parallel
 without the historical cache tool's incremental-only constraint. Neither stale
 Consul KV scheduling state nor staged player admission is yet reproduced.
 
+### Stale cache placement experiment
+
+The next revision persists a cache-placement record in Consul KV for every pool.
+The controller compares each record with Nomad's live allocation before stopping
+that allocation, updates the record only after a healthy replacement appears,
+and refuses to advance on a conflict. During injection, selected cache jobs are
+actually replaced while Consul is healthy, leaving their old KV allocation IDs
+behind. All caches remain serving; the mismatch becomes an operational obstacle
+only after the Consul incident is mitigated and redeployment reaches those pools.
+The independent grader now requires every placement record to match the serving
+allocation as well as completion of the requested generation.
+
+On fresh `native-stale-1`, both healthy warmups passed (**238/240** and
+**240/240**) and the prepared bounded-disk baseline passed **240/240**. Four
+placement records were verified to reference retired allocation IDs while
+their replacement cache services were passing. The prepared follower won a
+native election, and two valid pre-agent grades failed **0/240** with the cache
+fleet, worker readiness, Consul quorum, and durable-data checks intact. This
+models the stale-state consequence, not the historical snapshot-reset path.
+The source-blind Codex recovery is being measured.
+
 ## Expanded application
 
 `native-expanded` ran 64 active Nomad allocations, representing 16 service types,

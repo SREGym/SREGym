@@ -128,9 +128,14 @@ through Consul, so each failed pool breaks its player cohort. The grader require
 the requested generation to finish with all pools serving. Use
 `--scenario recovery-tail` with the expanded
 tier. This is an executable recovery tail, not yet a reproduction of the
-postmortem's stale Consul KV scheduling data, incremental-only deployment tool,
-or staged DNS return. One clean cold-cache agent trial passed the outcome grade
-in 18m11s; see [VALIDATION.md](VALIDATION.md).
+postmortem's full cache bootstrap. The current revision also persists each
+pool's placement in Consul KV. Injection replaces selected healthy allocations
+without updating those records, leaving the controller to detect and stop at
+stale placement state during the later rollout. The grader requires all records
+to match serving Nomad allocations. This models the resulting state conflict,
+but not the historical snapshot reset that produced it, the incremental-only
+deployment tool, or staged DNS return. Earlier source versions passed a clean
+cold-cache agent trial in 18m11s; the new placement state is under validation.
 
 The same scenario also accepts the experimental `fleet` tier: 12 workers, eight
 routers, 28 placement partitions, 96 cache pools, and 50,000 players. This
@@ -138,8 +143,9 @@ larger tier passed two clean warmups, a bounded clean-leader baseline, two valid
 failing incident grades, and a source-blind Codex recovery: **600/600** final
 workflows in **20m28s**. Its workflow latency target is 1.5 seconds and shared
 Consul write bound is 40 MiB/s, versus one second and 20 MiB/s for `expanded`.
-The measured recovery is still short because the agent could repair the cache
-worker early and replace pools in parallel; see [VALIDATION.md](VALIDATION.md).
+That result predates the KV placement-state revision. Its measured recovery was
+short because the agent could repair the cache worker early and replace pools
+in parallel; see [VALIDATION.md](VALIDATION.md).
 
 Every run has independent Docker networks and volumes. `down` stops its workload
 process and exports logs before removing that run. Artifacts and private workload
