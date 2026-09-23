@@ -232,6 +232,10 @@ class ContainerRunner:
         "COPILOT_PROVIDER_BASE_URL",
         "COPILOT_PROVIDER_API_KEY",
         "COPILOT_PROVIDER_TYPE",
+        # TypeSafe (Jev diagnosis agent)
+        "TYPESAFE_API_KEY",
+        "TYPESAFE_BASE_URL",
+        "TYPESAFE_DEFAULT_MODEL",
         # SREGym internal
         "AGENT_MODEL_ID",
         "AGENT_REASONING_EFFORT",

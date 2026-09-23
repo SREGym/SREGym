@@ -67,3 +67,9 @@ agents:
     install_script: null
     agent_version: null
     container_isolation: false
+  - name: jev_diag
+    kickoff_command: python -m clients.jev_diag.driver
+    kickoff_workdir: .
+    kickoff_env: null
+    install_script: null
+    agent_version: null

@@ -81,6 +81,7 @@ def run_preflight_check(
         "opencode": "clients.opencode.driver",
         "gemini": "clients.geminicli.driver",
         "cursor": "clients.cursor.driver",
+        "jev_diag": "clients.jev_diag.driver",
     }
 
     module_path = agent_driver_modules.get(agent_name)

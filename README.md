@@ -119,6 +119,74 @@ On Claude 4.6+ models the effort maps to adaptive thinking plus `output_config.e
 `max_tokens` is raised to 16000 so thinking tokens cannot truncate the checklist. `JUDGE_MAX_TOKENS`
 overrides that.
 
+#### Jev Diagnosis Agent
+
+`jev_diag` is a diagnosis-only agent built on TypeSafe's Jev model. It does not run an
+LLM loop: the driver reads the cluster deterministically (workloads including CronJobs and
+Jobs, pods, events, services and endpoints, NetworkPolicies, HPAs, PVCs, quotas and limit
+ranges, admission webhooks, Secret/ConfigMap metadata, cluster DNS, node conditions,
+error-like log lines, firing Prometheus alerts), derives per-component signals in code
+(what changed after deploy, configuration anomalies, which component other components'
+errors point at, semantic log classes such as auth or RBAC failures), and asks Jev typed
+questions over that state: which component is the origin, what kind of object carries the
+change, and whether a fault is visible. A second small request classifies the cause
+category and the most telling evidence line; the submitted text is assembled in code from
+those typed answers. See `clients/jev_diag/`. Replay saved snapshots through the questions
+without a cluster with `python -m clients.jev_diag.replay <results-dir>`.
+
+The default mode (`--mode tree`, or `JEV_DIAG_MODE=tree`) turns that one-shot ranking into
+an iterative investigation. Code owns the loop: the triage answer becomes a queue of
+hypotheses (application components before telemetry ones); for each hypothesis the driver
+fetches deep evidence for that component only (`clients/jev_diag/investigate.py`: full spec
+with env values and probes, pod events, recent logs split around the latest application
+change, ConfigMap content, code-side spec checks such as probe port versus container port
+and env address versus Service port, RBAC bindings, and the own state of the components it
+calls) and asks Jev one request with four questions: origin/victim/unrelated/undetermined,
+which component to look at next, the cause category, and the key evidence item. A verdict
+of `origin` at or above 0.6 ends the search, unless triage ranked a still-unexamined
+component higher: that one is examined first and the confirmed candidate stays the
+fallback (an origin at or above 0.9 ends the search regardless). A `victim` verdict moves
+the named dependency (plus the dependencies its error lines refer to) to the front of the
+queue; a step budget (`--max-steps`, default 18) caps cost and the best origin probability
+seen is the fallback. Every code-found mismatch in the confirmed component's spec is
+reported in the submitted text, since a fault can have more than one mechanism. Roles and
+ClusterRoles bound to the workloads' ServiceAccounts are collected too: a role written after
+deploy, or one whose bound workload logs authorization denials, becomes a cluster finding
+and can be named as the fault object (the denied verb is checked against the role's rules
+in code). Because some faults only surface once traffic exercises them, the driver waits
+`--start-delay` seconds (default 120, env `JEV_DIAG_START_DELAY`) after the conductor hands
+over the application before reading the cluster.
+Cluster-level objects (quotas, webhooks, CoreDNS) go through a separate node. `--mode oneshot`
+keeps the single-request behaviour. Every step is recorded in the decision trace and in the
+`investigation` field of the results JSON.
+
+```bash
+export TYPESAFE_API_KEY="..."
+export ANTHROPIC_API_KEY="..."
+uv run main.py --agent jev_diag --problem missing_env_variable --stages diagnosis \
+  --judge-model anthropic/claude-sonnet-5 --judge-reasoning-effort medium
+```
+
+`--model` is ignored by this agent; set `TYPESAFE_DEFAULT_MODEL` to pin a Jev version.
+Only the judge needs a LiteLLM model, so pass `--judge-model` (or `--model`) for it.
+Standalone inspection of a namespace without the conductor:
+
+```bash
+uv run python -m clients.jev_diag.driver --namespace astronomy-shop --dry-run --logs-dir /tmp/jev
+```
+
+Every run writes a decision trace, `jev_diag_<problem>_<ts>_trace.jsonl`, with one record
+per event: each kubectl call and its timing, the per-component signals computed in code,
+budget trims, the exact state and questions sent to Jev, every answer with its full
+probability distribution, the derived ranking, the evidence list, the assembled text, and
+the submission result. The same run is also rendered as `trajectory/*_jev_diag_agent_trajectory.jsonl`
+in the Stratus format, so it appears in `visualizer/` and converts with `atif_converter`.
+Summarize a trace with:
+
+```bash
+uv run python -m clients.jev_diag.trace logs/jev_diag_<problem>_<ts>_trace.jsonl
+```
+
 #### Stage Selection
 
 Each problem runs up to two agent stages, `diagnosis` then `mitigation`. By default a
