@@ -1,0 +1,65 @@
+{
+  "status": "exploratory, not a cleanly seeded trial",
+  "run": "native-recovery-2",
+  "cache_pools": 4,
+  "fault_adjustment": "The first storage permission change did not stop Redis; it was corrected during injection by making the AOF subdirectory and files unwritable, then stopping the replacement allocation.",
+  "pre_agent_grades": [
+    {
+      "valid": true,
+      "passed": false,
+      "successful": 0,
+      "attempted": 240,
+      "failed_checks": [
+        "workflows",
+        "service_capacity",
+        "workflow_latency"
+      ]
+    },
+    {
+      "valid": true,
+      "passed": false,
+      "successful": 0,
+      "attempted": 240,
+      "failed_checks": [
+        "workflows",
+        "service_capacity",
+        "workflow_latency"
+      ]
+    }
+  ],
+  "agent": "Codex CLI 0.155.1",
+  "model": "gpt-6-astra",
+  "elapsed_seconds": 582.059,
+  "timed_out": false,
+  "exit_code": 0,
+  "post_agent_grade": {
+    "valid": true,
+    "passed": true,
+    "successful": 240,
+    "attempted": 240,
+    "checks": {
+      "full_admission": true,
+      "workflows": true,
+      "correct_responses": true,
+      "identities_preserved": true,
+      "balances_conserved": true,
+      "unique_transactions": true,
+      "consistent_transactions": true,
+      "acknowledged_work_preserved": true,
+      "recovery_tail_processed": true,
+      "consul_quorum": true,
+      "workers_ready": true,
+      "service_capacity": true,
+      "placement_shards_live": true,
+      "workflow_latency": true
+    },
+    "acknowledgments_checked": 3543
+  },
+  "usage": {
+    "input_tokens": 2738973,
+    "cached_input_tokens": 2585344,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 12555,
+    "reasoning_output_tokens": 2174
+  }
+}

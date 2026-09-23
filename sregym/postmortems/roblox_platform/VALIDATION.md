@@ -268,6 +268,28 @@ those as consequential recovery phases, not just the initial Consul diagnosis.
 The sanitized machine-readable grades, usage and source hashes are preserved in
 [benchmarks/corrected-trials.json](benchmarks/corrected-trials.json).
 
+### First cache recovery experiment
+
+`native-recovery-2` scheduled four Redis pools as Nomad allocations backed by
+worker storage. The fresh stack passed two 240/240 warmup grades and a 240/240
+grade under the common Consul disk bound. The first cache fault did not persist:
+Redis kept its append-only files in a writable child directory. During injection
+the fault was corrected to remove write access from that directory and its files,
+and the replacement allocation then exited with a native Redis error. Two valid
+pre-agent grades failed 0/240 while data integrity remained intact. This is an
+**exploratory run**, not a cleanly seeded evaluation.
+
+Codex CLI 0.155.1 (`gpt-6-astra`) restored the cache, reduced Consul streaming
+and catalog pressure, compacted the affected Raft file, and passed the independent
+final grade: **240/240** workflows plus every latency, integrity, placement,
+capacity, quorum, admission, and backlog check. The wrapper took **9m42s**. The
+cache layer made the environment more faithful but did not increase difficulty.
+The sanitized result is in
+[benchmarks/recovery-exploratory.json](benchmarks/recovery-exploratory.json).
+A subsequent revision distributes 24 pools across six workers and faults all
+four pools on one still-ready worker; that revision needs a fresh baseline and
+source-blind agent evaluation before any difficulty claim.
+
 ## Expanded application
 
 `native-expanded` ran 64 active Nomad allocations, representing 16 service types,
