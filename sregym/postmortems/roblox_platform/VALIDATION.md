@@ -233,7 +233,17 @@ of 279 ms, and no new edge errors. The independent post-agent grade **passed**:
 **240/240** workflows under the one-second target, all 14 live reservation
 shards, data integrity, acknowledged work, backlog, quorum, admission, worker
 readiness and service capacity. This is **1/1** on the corrected task so far;
-two further fresh trials are underway before estimating repeatability.
+further fresh trials are needed to estimate repeatability.
+
+The second corrected run, `native-shards-4`, used the same one-hour limit and
+fresh clean/fault controls. Codex exited normally after **13m50s**. It reduced
+streaming and catalog churn, compacted the affected Raft file, kept all 14
+placement shards, and checked 1,024 player workflows plus retries across all
+cohorts. Its report recorded a 315 ms maximum latency and zero errors during
+187 seconds of full-admission observation. The independent post-agent grade
+also **passed 240/240** workflows, all live shards and every latency, safety,
+quorum, admission and backlog check. The corrected task stands at **2/2 passes**;
+a third fresh run is underway.
 
 ## Expanded application
 
