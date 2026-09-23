@@ -23,6 +23,7 @@ from typing import Any, Protocol
 from typesafe_sdk import Choice, Noul, RetryPolicy, TypeSafeClient
 
 from clients.jev_diag.collector import ClusterSnapshot, estimate_tokens, fit_state_to_budget
+from clients.jev_diag.config import jev_model
 from clients.jev_diag.trace import DecisionTrace
 
 logger = logging.getLogger("all.jev_diag.classifier")
@@ -387,7 +388,7 @@ def build_characterization_questions(evidence: list[dict]) -> dict[str, Choice]:
 def make_client(model: str | None = None) -> TypeSafeClient:
     """A TypeSafe client tuned for large states: longer HTTP timeout, a few retries."""
     return TypeSafeClient(
-        model=model or os.getenv("TYPESAFE_DEFAULT_MODEL") or None,
+        model=model or jev_model(),
         timeout=float(os.getenv("JEV_DIAG_HTTP_TIMEOUT", "90")),
         retry=RetryPolicy(max_retries=3, backoff_max=10.0, timeout=240.0),
     )

@@ -237,8 +237,6 @@ class ContainerRunner:
         "COPILOT_PROVIDER_BASE_URL",
         "COPILOT_PROVIDER_API_KEY",
         "COPILOT_PROVIDER_TYPE",
-        # TypeSafe (Jev diagnosis agent)
-        "TYPESAFE_API_KEY",
         # SREGym internal
         "AGENT_MODEL_ID",
         "AGENT_REASONING_EFFORT",
@@ -462,6 +460,7 @@ class ContainerRunner:
         for name in ("JUDGE_MODEL_ID", "JUDGE_API_BASE", "JUDGE_API_KEY"):
             env_vars.pop(name, None)
 
+        # Only Jev runs (--agent jev_diag, or Codex decision support) receive the TypeSafe key.
         if self.config.forward_host_credentials and os.environ.get("AGENT_JEV_MODEL"):
             env_vars.setdefault("AGENT_JEV_MODEL", os.environ["AGENT_JEV_MODEL"])
             env_vars.setdefault("TYPESAFE_API_KEY", os.environ.get("TYPESAFE_API_KEY", ""))

@@ -24,6 +24,7 @@ from rich.progress import (
 
 from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
 from clients.jev.config import configure as configure_jev
+from clients.jev_diag.config import configure as configure_jev_diag
 from logger import console, init_logger
 from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
@@ -50,6 +51,7 @@ _driver_base_dir: Path | None = None
 _driver_error: BaseException | None = None
 EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
 CLEANUP_DRAIN_TIMEOUT_SECONDS = 300
+DEFAULT_AGENT_MODEL = "gpt-5"  # --model default; --agent jev_diag defaults to jev-latest instead
 
 
 def _http_endpoint(value: str) -> str:
@@ -152,8 +154,8 @@ def _normalize_opencode_local_model_for_litellm(model: str) -> str:
 
 
 def _configure_model_environment(args) -> tuple[str, str]:
-    agent_model = args.model
-    raw_judge_model = args.judge_model or args.model
+    agent_model = args.model or DEFAULT_AGENT_MODEL
+    raw_judge_model = args.judge_model or agent_model
     reasoning_effort = getattr(args, "reasoning_effort", None)
     normalizes_opencode_local_judge = _is_opencode_local_model(args.agent, raw_judge_model)
     judge_model = (
@@ -834,6 +836,7 @@ def _run_driver_and_shutdown(
 
 def main(args):
     configure_jev(args)
+    configure_jev_diag(args)  # after configure_jev, which clears AGENT_JEV_MODEL unless --jev-model is set
     init_logger()
     if judge_effort := getattr(args, "judge_reasoning_effort", None):
         # Exported before the judge bridge starts so a CLI judge receives it too.
@@ -877,7 +880,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         f"judge_backend: {judge_backend}, judge_model: {judge_model}, "
         f"reasoning_effort: {getattr(args, 'reasoning_effort', None) or 'agent default'}, "
         f"judge_reasoning_effort: {os.environ.get('JUDGE_REASONING_EFFORT') or 'provider default'}, "
-        f"jev_model: {getattr(args, 'jev_model', None) or 'disabled'}, "
+        f"jev_model: {os.environ.get('AGENT_JEV_MODEL') or 'disabled'}, "
         f"deployment_profile: {get_profile()}, "
         f"internet_access: {internet_policy.mode.value}, "
         f"container_hardening: {args.container_hardening}, "
@@ -1067,14 +1070,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model",
         type=str,
-        default="gpt-5",
-        help="LiteLLM model string (e.g. anthropic/claude-sonnet-4-6-20250627, gpt-5, gemini/gemini-2.5-pro)",
+        default=None,
+        help=(
+            f"LiteLLM model string (e.g. anthropic/claude-sonnet-4-6-20250627, gpt-5, gemini/gemini-2.5-pro; "
+            f"default {DEFAULT_AGENT_MODEL}). For --agent jev_diag, the Jev model (default jev-latest)"
+        ),
     )
     parser.add_argument(
         "--judge-model",
         type=str,
         default=None,
-        help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set)",
+        help="Model for the LLM-as-a-judge evaluator (defaults to --model if not set; required for --agent jev_diag)",
     )
     parser.add_argument(
         "--judge-backend",

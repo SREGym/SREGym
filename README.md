@@ -164,14 +164,12 @@ keeps the single-request behaviour. Every step is recorded in the decision trace
 ```bash
 export TYPESAFE_API_KEY="..."
 export ANTHROPIC_API_KEY="..."
-uv run main.py --agent jev_diag --problem missing_env_variable --stages diagnosis \
+uv run main.py --agent jev_diag --model jev-latest --problem missing_env_variable --stages diagnosis \
   --judge-model anthropic/claude-sonnet-5 --judge-reasoning-effort medium
 ```
 
-`--model` is ignored by this agent, which uses the TypeSafe SDK's default model (`jev-latest`).
-To pin a Jev version, set `TYPESAFE_DEFAULT_MODEL` in the `kickoff_env` of the `jev_diag` entry
-in `agents.yaml`.
-Only the judge needs a LiteLLM model, so pass `--judge-model` (or `--model`) for it.
+For this agent `--model` names the Jev model (default `jev-latest`), so the judge's model must be
+given with `--judge-model`. `TYPESAFE_API_KEY` is forwarded into the agent container only for Jev runs.
 Standalone inspection of a namespace without the conductor:
 
 ```bash
@@ -309,8 +307,8 @@ SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings dire
 
 | CLI Flag | Default | Purpose |
 |----------|---------|---------|
-| `--model` | `gpt-5` | Sets both agent and judge model |
-| `--judge-model` | (same as `--model`) | Override just the judge evaluator model |
+| `--model` | `gpt-5` | Sets both agent and judge model; for `jev_diag`, the Jev model (default `jev-latest`) |
+| `--judge-model` | (same as `--model`) | Override just the judge evaluator model; required for `jev_diag` |
 | `--judge-backend` | `api` | Judge access through the existing API endpoint, or `codex`, `claudecode`, `copilot`, or `cursor` |
 
 Set the required environment variable for your provider before running:

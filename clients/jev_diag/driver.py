@@ -48,6 +48,7 @@ from clients.jev_diag.collector import (  # noqa: E402
     fetch_alerts_via_mcp,
     set_kubectl_observer,
 )
+from clients.jev_diag.config import jev_model  # noqa: E402
 from clients.jev_diag.investigate import collect_component_detail  # noqa: E402
 from clients.jev_diag.trace import DecisionTrace  # noqa: E402
 from clients.jev_diag.tree import DEFAULT_MAX_STEPS, IterativeDiagnoser  # noqa: E402
@@ -68,7 +69,7 @@ def run_preflight() -> None:
     except Exception as exc:  # noqa: BLE001 - report and exit non-zero
         print(f"TypeSafe API check failed: {exc}")
         sys.exit(1)
-    print(f"TypeSafe models available: {', '.join(names) or 'none listed'}")
+    print(f"TypeSafe models available: {', '.join(names) or 'none listed'}; using {jev_model() or 'jev-latest'}")
 
 
 def api_base_url() -> str:
@@ -182,7 +183,7 @@ def main() -> None:
     trace = DecisionTrace(
         prefix.with_name(prefix.name + "_trace.jsonl"),
         problem_id=problem_id,
-        run_args={**vars(args), "typesafe_model": os.getenv("TYPESAFE_DEFAULT_MODEL", "jev-latest")},
+        run_args={**vars(args), "typesafe_model": jev_model() or "jev-latest"},
     )
     set_kubectl_observer(trace.kubectl_observer())
     status = "error"
