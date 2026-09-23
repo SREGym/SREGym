@@ -150,8 +150,9 @@ the time required by actual I/O.
 The experiment has demonstrated persistent fragmentation and subsequent normal
 Raft operation. A larger layout produced measurable leader-sensitive write
 latency under stress. The bounded-disk latent scenario has a measured
-clean-versus-fragmented outcome, but the automated lifecycle and agent
-pass rate still require fresh-run validation.
+clean-versus-fragmented outcome. The revised fixture and automated election
+injection passed a fresh fault validation; full clean-start automation and
+repeated agent evaluations are still in progress.
 
 ## Validation and remaining work
 

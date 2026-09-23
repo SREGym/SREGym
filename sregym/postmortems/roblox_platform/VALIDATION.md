@@ -106,6 +106,20 @@ The current native platform also lacks the historical cache-redeployment,
 stale-scheduler, and gradual player-admission recovery phases. The postmortem
 task should not yet be called a 73-hour or ultra-long-horizon replica.
 
+`native-latent-7` is a fresh run of the revised fixture. It allocates and
+deletes temporary entries inside the existing Raft `logs` bucket; the resulting
+file is **6.47 GB**, with **1,571,480 free pages** and a **12.6 MB freelist**.
+No task-named bucket remains. This fixture required a **20 MiB/s** common
+block-write bound for a stable clean-leader baseline on this node: under the
+earlier 10 MiB/s bound all 240 workflows returned successfully, but too many
+exceeded the one-second target. At 20 MiB/s, the clean leader passed **240/240**
+with background player traffic. The automated injector then elected the
+prepared follower without changing a Nomad job, restored all 14 placement
+controllers and the common bound, and recorded two consecutive **0/240**
+pre-agent grades. Quorum, capacity and durable-data checks still passed.
+The preparation and fault are validated; the full fresh-run `up` path still
+needs retesting with the new 20 MiB/s default.
+
 ### First latent-incident Codex trial
 
 Codex CLI 0.155.1 with `gpt-6-astra` ran on the manually calibrated
