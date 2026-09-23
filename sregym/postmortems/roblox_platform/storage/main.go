@@ -1,5 +1,6 @@
-// Runner-only offline storage preparation. Bolt's live buckets are retained.
-// This creates actual fragmented pages through transactions, not a latency flag.
+// Runner-only offline storage preparation. Bolt's native Raft buckets are
+// retained; temporary log keys are deleted before Consul restarts. This creates
+// real free pages through transactions, not a latency flag or a visible bucket.
 package main
 
 import (
@@ -7,6 +8,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"time"
 
@@ -15,7 +17,7 @@ import (
 
 func main() {
 	path := flag.String("path", "", "offline Bolt database")
-	mib := flag.Int("mib", 256, "value MiB to allocate before deleting alternate records")
+	mib := flag.Int("mib", 256, "temporary Raft log MiB to allocate and then delete")
 	statsOnly := flag.Bool("stats-only", false, "report page statistics without changing the database")
 	flag.Parse()
 	if *path == "" || *mib < 16 || *mib > 4096 {
@@ -33,8 +35,13 @@ func main() {
 		}))
 		return
 	}
-	name := []byte("placement-history")
-	must(db.Update(func(tx *bolt.Tx) error { _, e := tx.CreateBucket(name); return e }))
+	name := []byte("logs")
+	must(db.View(func(tx *bolt.Tx) error {
+		if tx.Bucket(name) == nil {
+			return fmt.Errorf("native Raft logs bucket is missing")
+		}
+		return nil
+	}))
 	count := *mib * 256
 	value := make([]byte, 4096)
 	for offset := 0; offset < count; offset += 1024 {
@@ -42,7 +49,7 @@ func main() {
 			b := tx.Bucket(name)
 			for i := offset; i < offset+1024 && i < count; i++ {
 				key := make([]byte, 8)
-				binary.BigEndian.PutUint64(key, uint64(i))
+				binary.BigEndian.PutUint64(key, math.MaxUint64-uint64(count)+uint64(i))
 				if err := b.Put(key, value); err != nil {
 					return err
 				}
@@ -50,14 +57,14 @@ func main() {
 			return nil
 		}))
 	}
-	// Leave interleaved live records: coalescing contiguous free extents alone
-	// cannot undo the layout. A real rewrite/rebuild changes the file layout.
+	// Delete every temporary key. The database file and its persisted freelist
+	// remain large, while the native Raft log contents stay exactly as they were.
 	for offset := 0; offset < count; offset += 1024 {
 		must(db.Update(func(tx *bolt.Tx) error {
 			b := tx.Bucket(name)
-			for i := offset; i < offset+1024 && i < count; i += 2 {
+			for i := offset; i < offset+1024 && i < count; i++ {
 				key := make([]byte, 8)
-				binary.BigEndian.PutUint64(key, uint64(i))
+				binary.BigEndian.PutUint64(key, math.MaxUint64-uint64(count)+uint64(i))
 				if err := b.Delete(key); err != nil {
 					return err
 				}

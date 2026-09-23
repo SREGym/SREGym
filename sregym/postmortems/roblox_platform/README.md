@@ -142,10 +142,11 @@ sudo docker run --rm \
 python3 -m sregym.postmortems.roblox_platform --run platform-a prepare-storage --node consul-3 --mib 512
 ```
 
-Choose a follower. Preparation stops it, creates actual interleaved live/free
-pages, records native Bolt statistics, and restarts it. This accelerates prior
-storage churn using an extra bucket; it does **not** reproduce the historical
-write history. Preparation and recovery take the time required by actual I/O.
+Choose a follower. Preparation stops it, writes and deletes temporary entries
+inside the native Raft `logs` bucket, records Bolt statistics, and restarts it.
+This leaves real free pages without adding a task-labeled bucket; it does
+**not** reproduce the historical write history. Preparation and recovery take
+the time required by actual I/O.
 The experiment has demonstrated persistent fragmentation and subsequent normal
 Raft operation. A larger layout produced measurable leader-sensitive write
 latency under stress. The bounded-disk latent scenario has a measured

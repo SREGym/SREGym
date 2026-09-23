@@ -98,9 +98,33 @@ disk, not a historical Roblox hardware claim.
 This result is a manually calibrated incident. The reusable `latent-leader`
 runner now encodes the same steps and requires two failed pre-agent grades, but
 a fresh automated lifecycle and repeated agent evaluations are still pending.
+The manually calibrated run used a task-labeled extra Bolt bucket; that gave
+the first agent an unnatural clue. The revised fixture uses temporary entries
+in the native Raft log bucket and deletes them before restart, so its own
+storage statistics and outcome need fresh validation.
 The current native platform also lacks the historical cache-redeployment,
 stale-scheduler, and gradual player-admission recovery phases. The postmortem
 task should not yet be called a 73-hour or ultra-long-horizon replica.
+
+### First latent-incident Codex trial
+
+Codex CLI 0.155.1 with `gpt-6-astra` ran on the manually calibrated
+`native-latent-6` incident. The disposable benchmark took **14m42s** and exited
+normally. The agent diagnosed streaming pressure and the large Raft store,
+switched routing to shared blocking queries, archived the bloated replica's
+Raft directory and rebuilt it from the healthy quorum. It verified 664 of its
+own player workflows across all 512 tenants over five minutes, with no errors
+and a reported maximum latency of 446 ms.
+
+The independent post-agent grade passed **240/240** player workflows and all
+latency, data-integrity, backlog, quorum, and full-admission checks. The total
+grade **failed** because the agent left the placement job at **2/14 required
+replicas** after reducing Consul write pressure. Its incident report declared
+recovery, so the capacity check exposed an incomplete restoration that the
+agent's verification missed. This is one trial on the older, task-labeled Bolt
+fixture; it is not a pass-rate estimate for the revised scenario. The trace,
+report, host logs, and independent `benchmark.json` are under
+`results/roblox-platform/native-latent-6/` on this node.
 
 ## Expanded application
 
