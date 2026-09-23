@@ -309,8 +309,37 @@ The 18-minute repair still falls far short of the intended multi-hour task.
 The next revision arms the cache worker defect while existing pools continue
 serving, then uses a Nomad-scheduled cache reconciler to begin rolling pools
 only after sustained healthy Consul KV writes. This should expose cache
-bootstrap work *after* the first Consul mitigation. It is implemented but needs
-a fresh native and agent validation before any difficulty claim.
+bootstrap work *after* the first Consul mitigation. The first source-blind
+outcome grade below validates that sequence.
+
+### Deferred cache rebootstrap trial
+
+`native-recovery-4` is a fresh staged run. Its first warmup had a transient
+220/240 bootstrap result, then two consecutive 240/240 windows passed; the
+prepared baseline under the shared Consul write bound also passed 240/240.
+After the prepared follower became leader, the cache reconciler measured a
+1.9-second real KV write and held its rollout idle. Both valid pre-agent grades
+failed 0/240 with all 24 cache services still passing. The private redeployment
+request was pending, so the agent encountered the Consul outage first.
+
+During the source-blind Codex run, reducing routing and catalog pressure alone
+left Consul writes slow. The agent compacted the affected native Raft file;
+the reconciler then observed healthy KV writes, stopped `cache-0`, and its
+replacement Redis allocation exited with code 1 on the still-ready worker.
+Codex diagnosed the worker storage permissions and restored them. The normal
+controller resumed and completed all 24 replacements in **7m21s** from its
+first stop to completion. Codex then observed 3.5 minutes of clean full
+admission, checked 228/228 further workflows, and audited all 7,706 purchases
+and matching receipts. It exited normally after **17m56s**. The independent
+post-agent grade passed **240/240** workflows and every integrity, latency,
+placement, capacity, quorum, admission, backlog, and cache-generation check.
+The sanitized result and rollout timing are in
+[benchmarks/recovery-staged-trial.json](benchmarks/recovery-staged-trial.json).
+
+This first staged run predates a small controller epoch guard and a cold-cache
+preparation change. Those changes are pushed but require a fresh validation.
+The staged failure is causally closer to the postmortem, yet a sub-18-minute
+agent repair still does not establish an ultra-long-horizon task.
 
 ## Expanded application
 
