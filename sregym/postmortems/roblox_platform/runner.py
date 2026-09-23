@@ -516,7 +516,7 @@ These hosts use a minimal init system: launch a daemon with its configuration
 file after stopping its old process when a restart is necessary. Keep SSH alive.
 
 The application has two database shards, sharded cache pools, and a durable queue.
-The cache-reconciler manages requested pool redeployments through Nomad; inspect
+When deployed, cache-reconciler manages requested pool redeployments through Nomad; inspect
 its allocation logs and metrics when cache rollout stalls.
 Player identities are immutable. Each purchase costs one coin and creates one
 inventory item and one asynchronous receipt. Request IDs make retries idempotent.
@@ -804,7 +804,10 @@ read access to their own key. Changes to shared storage can affect secret access
             for i in range(meta["spec"]["cache_jobs"])
         ):
             raise RuntimeError("cache rebootstrap began before operator entry")
-        meta["fault_validated"] = all(g["valid"] and not g["passed"] for g in grades)
+        meta["fault_validated"] = all(
+            g["valid"] and not g["passed"] and not g["checks"]["workflows"]
+            for g in grades
+        )
         (self.root / "run.json").write_text(json.dumps(meta, indent=2))
         if not meta["fault_validated"]:
             raise RuntimeError("latent incident did not fail two settled grades")
