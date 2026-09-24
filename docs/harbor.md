@@ -186,8 +186,8 @@ runtime was validated on cgroup v2 hosts in the
 
 ## Limitations
 
-- **Mitigation only.** SREGym's diagnosis stage uses an LLM judge. Diagnosis
-  results are not part of the Harbor reward yet.
+- **Mitigation only, by design.** The Harbor reward is the deterministic
+  mitigation oracle. SREGym's LLM-judged diagnosis stage is not part of the port.
 - **KIND-compatible problems only.** Problems that need Khaos or real nodes are
   skipped. Some problems that are hard to run reliably on KIND, such as
   TrainTicket, are generated but may fail setup on small hosts. Validate
