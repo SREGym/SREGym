@@ -370,3 +370,15 @@ https://github.com/user-attachments/assets/e7b2ee27-e7a9-436a-858d-ee58e8bbd61d
 
 ## License
 Licensed under the [MIT](LICENSE.txt) license.
+
+## Experimental SREGym 2.0 incident families
+
+The [native Roblox-family platform](sregym/postmortems/roblox_platform/README.md)
+runs independent gaming services on real Nomad workers with Consul, Vault,
+PostgreSQL, and Redis. Operators investigate native evidence and repair actual
+deployments and persistent state. It is under validation; long-horizon difficulty
+and historical fidelity have not yet been established.
+
+The earlier [Tier 0 prototype](sregym/postmortems/roblox_consul/README.md) remains
+available as the recorded three-run Codex baseline. Both are separate from the
+existing benchmark problem sets.
