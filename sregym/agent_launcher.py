@@ -1,12 +1,18 @@
+import contextlib
+import importlib
 import logging
 import os
+import signal
 import subprocess
 import sys
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
+from clients.harness.problem_id import HARNESS_ARTIFACT_ID_ENV, HARNESS_PROBLEM_ID_ENV
 from sregym.service.container_runner import ContainerConfig, ContainerRunner, ExecInput
+from sregym.service.internet_policy import InternetPolicy
 
 from .agent_registry import AgentRegistration
 
@@ -14,11 +20,13 @@ logger = logging.getLogger(__name__)
 
 
 class AgentProcess:
-    def __init__(self, name: str, proc: subprocess.Popen):
+    def __init__(self, name: str, proc: subprocess.Popen, pgid: int | None = None):
         self.name = name
         self.proc = proc
         self.started_at = datetime.now(UTC)
         self.container_name: str | None = None  # set when running in container mode
+        self.pgid = pgid  # process group of shell-launched agents, for tree cleanup
+        self.egress_blocked_start = 0
 
 
 class AgentLauncher:
@@ -27,9 +35,19 @@ class AgentLauncher:
         self._agent_kubeconfig_path: str | None = None
         self._use_containers: bool = True
         self._container_runner: ContainerRunner | None = None
-        # Per-problem source workspace bind-mounted into the agent at /workspace.
-        # None for problems that don't ship editable source (config-only faults).
         self._problem_workspace: Path | None = None
+        self._internet_policy = InternetPolicy()
+        self._harden_container = True
+
+    def set_internet_policy(self, policy: InternetPolicy) -> None:
+        if self._container_runner is not None:
+            raise RuntimeError("Internet policy cannot change after the container runner is initialized")
+        self._internet_policy = policy
+
+    def set_container_hardening(self, enabled: bool) -> None:
+        if self._container_runner is not None:
+            raise RuntimeError("Container hardening cannot change after the container runner is initialized")
+        self._harden_container = enabled
 
     def set_agent_kubeconfig(self, kubeconfig_path: str | None):
         """
@@ -39,14 +57,11 @@ class AgentLauncher:
         self._agent_kubeconfig_path = kubeconfig_path
 
     def set_problem_workspace(self, path: Path | None):
-        """Set (or clear) the host directory to bind-mount at /workspace.
-
-        Called by the driver after `problem.provision_workspace()` returns,
-        so the next agent the launcher starts sees the source tree.
-        """
         self._problem_workspace = path
 
-    def enable_container_isolation(self, force_build: bool = False):
+    def enable_container_isolation(
+        self, force_build: bool = False, *, k8s_proxy_port: int = 16443, image: str | None = None
+    ):
         """Initialize the container runner and build/check the image."""
         if not self._container_runner:
             config = ContainerConfig(
@@ -54,12 +69,74 @@ class AgentLauncher:
                 logs_path=Path("./logs"),
                 sregym_apps_path=Path("./SREGym-applications"),
                 sregym_app_subdirs=["socialNetwork/wrk2", "hotelReservation/wrk2"],
+                internet_policy=self._internet_policy,
+                harden_container=self._harden_container,
+                k8s_proxy_port=k8s_proxy_port,
             )
+            if image is not None:
+                config.image = image
             self._container_runner = ContainerRunner(config)
             if force_build:
                 self._container_runner.build_image()
             else:
                 self._container_runner.ensure_image_exists()
+
+    @property
+    def container_image(self) -> str:
+        return self._container_runner.config.image if self._container_runner else ContainerConfig().image
+
+    def prepare_agent(self, reg: AgentRegistration | None, *, force_build: bool = False) -> None:
+        """Prepare isolated tools and validate credentials before a run."""
+        try:
+            if reg is None or reg.container_isolation:
+                self.enable_container_isolation(force_build=force_build)
+            if reg is not None and self._container_runner is not None:
+                self._container_runner.prepare_agent_tools(reg.install_script, reg.agent_version)
+                self._run_preflight(reg)
+        except BaseException:
+            self.cleanup_all()
+            raise
+
+    def _run_preflight(self, reg: AgentRegistration) -> None:
+        # Agents that need pre-flight check
+        agent_driver_modules: dict[str, str] = {
+            "stratus": "clients.stratus.stratus_agent.driver.driver",
+            "claudecode": "clients.claudecode.driver",
+            "codex": "clients.codex.driver",
+            "copilot": "clients.copilot.driver",
+            "opencode": "clients.opencode.driver",
+            "gemini": "clients.geminicli.driver",
+        }
+
+        module_path = agent_driver_modules.get(reg.name)
+        if not module_path:
+            return
+
+        driver_mod = importlib.import_module(module_path)
+        if not hasattr(driver_mod, "run_preflight"):
+            return
+
+        check_cmd = f"python3 -c 'from {module_path} import run_preflight; run_preflight()'"
+        check_cmd = self._container_runner.build_composite_command(
+            install_script=reg.install_script,
+            agent_version=reg.agent_version,
+            driver_command=check_cmd,
+            capture_logs=False,
+        )
+
+        logger.info(f"🔍 Running pre-flight check for '{reg.name}'...")
+        result = self._container_runner.run_sync(
+            ExecInput(command=check_cmd, env=dict(reg.kickoff_env or {}), label="preflight", timeout=180)
+        )
+        if result.returncode != 0:
+            if result.stdout:
+                print(result.stdout.strip())
+            if result.stderr:
+                print(result.stderr.strip())
+            logger.error(f"❌ Pre-flight check failed for '{reg.name}'")
+            sys.exit(1)
+
+        logger.info(f"✅ Pre-flight check passed for '{reg.name}'")
 
     async def ensure_started(self, reg: AgentRegistration) -> AgentProcess | None:
         if not reg or not reg.kickoff_command:
@@ -74,9 +151,19 @@ class AgentLauncher:
         if self._use_containers and reg.container_isolation:
             return await self._start_containerized(reg)
 
+        if self._internet_policy.is_filtered:
+            raise RuntimeError(
+                f"Agent '{reg.name}' does not use container isolation. "
+                "Run it with --internet-access open or enable container isolation."
+            )
+
         env = os.environ.copy()
         if reg.kickoff_env:
             env.update(reg.kickoff_env)
+        env.pop(HARNESS_PROBLEM_ID_ENV, None)
+        env.pop(HARNESS_ARTIFACT_ID_ENV, None)
+        if harness_artifact_id := os.environ.get(HARNESS_ARTIFACT_ID_ENV):
+            env[HARNESS_ARTIFACT_ID_ENV] = harness_artifact_id
 
         # Use filtered kubeconfig if set (hides chaos engineering namespaces)
         if self._agent_kubeconfig_path:
@@ -92,8 +179,11 @@ class AgentLauncher:
             text=True,
             bufsize=1,
             universal_newlines=True,
+            # New session => wrapper leads its own group (pgid == pid), so cleanup
+            # can kill the whole tree instead of orphaning the agent's children.
+            start_new_session=True,
         )
-        ap = AgentProcess(reg.name, proc)
+        ap = AgentProcess(reg.name, proc, pgid=proc.pid)
         self._procs[reg.name] = ap
         t = threading.Thread(target=self._pipe_logs, args=(reg.name, proc), daemon=True)
         t.start()
@@ -122,6 +212,9 @@ class AgentLauncher:
         if self._agent_kubeconfig_path:
             self._container_runner.config.kubeconfig_path = Path(self._agent_kubeconfig_path)
 
+        self._container_runner.config.env_vars.pop(HARNESS_PROBLEM_ID_ENV, None)
+        self._container_runner.config.env_vars.pop(HARNESS_ARTIFACT_ID_ENV, None)
+
         # Set per-agent logs path — also used as the container working directory.
         # If AGENT_LOGS_DIR is set by the orchestrator (e.g. run_1/), mount that
         # host directory to /logs so the agent writes into the right run folder.
@@ -141,14 +234,21 @@ class AgentLauncher:
 
         exec_input = ExecInput(
             command=composite_cmd,
-            env=reg.kickoff_env or {},
+            env=dict(reg.kickoff_env or {}),
             label=f"{reg.name}-run",
         )
+        exec_input.env.pop(HARNESS_PROBLEM_ID_ENV, None)
+        exec_input.env.pop(HARNESS_ARTIFACT_ID_ENV, None)
         exec_input.env.setdefault("AGENT_LOGS_DIR", "/logs")
+        harness_artifact_id = os.environ.get(HARNESS_ARTIFACT_ID_ENV)
+        if harness_artifact_id:
+            exec_input.env[HARNESS_ARTIFACT_ID_ENV] = harness_artifact_id
 
+        blocked_start = self._container_runner.blocked_request_count()
         proc = self._container_runner.run_async(exec_input)
         ap = AgentProcess(reg.name, proc)
         ap.container_name = exec_input.container_name  # track for cleanup
+        ap.egress_blocked_start = blocked_start
         self._procs[reg.name] = ap
         t = threading.Thread(target=self._pipe_logs, args=(reg.name, proc), daemon=True)
         t.start()
@@ -158,6 +258,25 @@ class AgentLauncher:
         """Terminate and cleanup all tracked agent processes/containers."""
         for name in list(self._procs):
             self.cleanup_agent(name, timeout=timeout)
+        if self._container_runner:
+            try:
+                self._container_runner.close()
+            finally:
+                self._container_runner = None
+
+    def internet_policy_result(self, process: AgentProcess | None = None) -> dict[str, object]:
+        """Snapshot the audit after stopping the agent, before proxy cleanup."""
+        result: dict[str, object] = {"internet_access": self._internet_policy.mode.value}
+        try:
+            records = []
+            if process is not None and self._container_runner is not None:
+                records = self._container_runner.blocked_request_records(process.egress_blocked_start)
+            result.update(blocked_requests=len(records), blocked_request_details=records)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            # Do not report zero denials when the audit could not be read.
+            logger.exception("Could not read the agent's network audit")
+            result["internet_audit_error"] = f"{type(exc).__name__}: could not read blocked-request records"
+        return result
 
     def cleanup_agent(self, agent_name: str, timeout: int = 5) -> None:
         """
@@ -175,22 +294,88 @@ class AgentLauncher:
         existing.proc.poll()
         if existing.proc.returncode is not None:
             del self._procs[agent_name]
+            self._cleanup_container_runner_tmps()
             return
 
-        if self._use_containers and self._container_runner:
-            container_name = getattr(existing, "container_name", None)
-            if container_name:
-                ContainerRunner.stop_container(container_name, timeout=timeout)
+        # Branch on the per-process container_name (not the global runner): a
+        # shell-launched agent has none and must be killed as a process group.
+        container_name = getattr(existing, "container_name", None)
+        if container_name:
+            ContainerRunner.stop_container(container_name, timeout=timeout)
+            self._wait_for_process_exit(existing.proc, timeout)
         else:
-            try:
-                existing.proc.terminate()
-                try:
-                    existing.proc.wait(timeout=timeout)
-                except subprocess.TimeoutExpired:
-                    existing.proc.kill()
-                    existing.proc.wait()
-            except Exception:
-                pass
+            self._terminate_process_group(existing, timeout)
 
         if agent_name in self._procs:
             del self._procs[agent_name]
+        self._cleanup_container_runner_tmps()
+
+    @staticmethod
+    def _wait_for_process_exit(proc: subprocess.Popen, timeout: int) -> None:
+        try:
+            proc.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=timeout)
+
+    def _cleanup_container_runner_tmps(self) -> None:
+        if self._container_runner:
+            self._container_runner.cleanup_credential_tmps()
+
+    def _terminate_process_group(self, ap: AgentProcess, timeout: int) -> None:
+        """Kill a shell-launched agent's whole process group, falling back to the
+        wrapper alone if no pgid was captured."""
+        proc = ap.proc
+
+        if ap.pgid is None:
+            self._terminate_single(proc, timeout)
+            return
+
+        try:
+            os.killpg(ap.pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            # Group already gone; still reap the wrapper to avoid a zombie.
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=timeout)
+            return
+
+        # Wait on the whole group, not just the wrapper: the wrapper often exits
+        # on SIGTERM while a stubborn child lives on, so we'd skip the SIGKILL.
+        if not self._wait_for_group_exit(ap.pgid, proc, timeout):
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(ap.pgid, signal.SIGKILL)
+            self._wait_for_group_exit(ap.pgid, proc, timeout)
+
+        # Reap the wrapper so it doesn't linger as a zombie.
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=timeout)
+
+    @staticmethod
+    def _wait_for_group_exit(pgid: int, proc: subprocess.Popen, timeout: int, interval: float = 0.05) -> bool:
+        """Poll until the group has no live members (or timeout). Returns True if drained.
+
+        Reaps the leader via poll() each loop; an unreaped zombie leader would
+        otherwise keep killpg(pgid, 0) succeeding and mask that children are gone.
+        """
+        deadline = time.monotonic() + timeout
+        while True:
+            proc.poll()  # reap the leader if it exited, so it stops counting
+            try:
+                os.killpg(pgid, 0)  # signal 0 == group existence check
+            except ProcessLookupError:
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(interval)
+
+    def _terminate_single(self, proc: subprocess.Popen, timeout: int) -> None:
+        """Terminate a single process (fallback when no pgid is available)."""
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        except Exception:
+            pass

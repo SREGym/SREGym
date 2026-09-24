@@ -84,7 +84,7 @@ def generate_run_summary(last_state: StateSnapshot, summary_system_prompt) -> st
         SystemMessage(summary_system_prompt),
         HumanMessage(f"Here are the list of messages happened in the last conversation. \n\n {last_run_msgs}"),
     ]
-    res = llm.inference(summary_input_messages)
+    res = llm.inference(summary_input_messages, usage_type="summary")
     return res.content
 
 

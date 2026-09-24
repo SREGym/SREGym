@@ -1,0 +1,6 @@
+# Pod failure swaps a container's image at runtime; the chart's old pause image
+# is AMD64-only even though its controller and daemon images are multiarch.
+controllerManager:
+  podChaos:
+    podFailure:
+      pauseImage: registry.k8s.io/pause:3.9@sha256:7031c1b283388d2c2e09b57badb803c05ebed362dc88d84b480cc47f72a21097

@@ -1,5 +1,5 @@
 """
-generate_trajectories.py 
+generate_trajectories.py
 
 Walks a results directory and converts any agent output files
 (claude-code.txt, codex.txt) that do not yet have a corresponding
@@ -77,11 +77,16 @@ def process_results(root: Path, dry_run: bool = False) -> None:
             if re.match(r"^\d{4}_\d{4}$", part):
                 ts = part
                 break
-        run_label = next((p for p in run_dir.parts if _RUN_LABEL_RE.match(p)), "run_1")
-        out_name = f"{ts}_{problem_id}_{agent}_agent_trajectory.jsonl" if ts else f"{problem_id}_{agent}_agent_trajectory.jsonl"
+        out_name = (
+            f"{ts}_{problem_id}_{agent}_agent_trajectory.jsonl"
+            if ts
+            else f"{problem_id}_{agent}_agent_trajectory.jsonl"
+        )
         out_path = traj_dir / out_name
 
-        print(f"{'[dry-run] ' if dry_run else ''}Converting {output_file.relative_to(root)} → {out_path.relative_to(root)}")
+        print(
+            f"{'[dry-run] ' if dry_run else ''}Converting {output_file.relative_to(root)} → {out_path.relative_to(root)}"
+        )
 
         if not dry_run:
             try:
@@ -95,7 +100,9 @@ def process_results(root: Path, dry_run: bool = False) -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Generate trajectory JSONL files from agent output in a results directory.")
+    ap = argparse.ArgumentParser(
+        description="Generate trajectory JSONL files from agent output in a results directory."
+    )
     ap.add_argument("root", help="Root results directory to walk (e.g. results/)")
     ap.add_argument("--dry-run", action="store_true", help="Print what would be converted without writing files")
     args = ap.parse_args()

@@ -1,9 +1,13 @@
 """Interface to K8S controller service."""
 
+import contextlib
 import logging
+import os
 import re
 import shlex
-import subprocess  # nosec B404
+import signal
+import subprocess
+import time
 from enum import Enum
 
 import bashlex
@@ -40,18 +44,42 @@ class KubeCtl:
         # self.apps_v1_api = client.AppsV1Api()
 
     @staticmethod
-    def exec_command(command: str, input_data=None):
-        """Execute an arbitrary kubectl command."""
+    def exec_command(command: str, input_data=None, timeout: float | None = None):
+        """Execute an arbitrary kubectl command with timeout protection."""
         if input_data is not None:
             input_data = input_data.encode("utf-8")
+        timeout = timeout if timeout is not None else _kubectl_timeout_seconds()
+        started = time.monotonic()
         try:
-            out = subprocess.run(command, shell=True, check=True, capture_output=True, input=input_data)  # nosec B602
-            out.stdout = out.stdout.decode("utf-8")
-            out.stderr = out.stderr.decode("utf-8")
+            logger.info("kubectl exec start timeout=%ss command=%r", timeout, command)
+            out = _run_in_process_group(
+                command,
+                check=True,
+                capture_output=True,
+                input=input_data,
+                timeout=timeout,
+            )
+            out.stdout = _decode_output(out.stdout)
+            out.stderr = _decode_output(out.stderr)
+            logger.info("kubectl exec done elapsed=%.2fs command=%r", time.monotonic() - started, command)
             return out
         except subprocess.CalledProcessError as e:
-            e.stderr = e.stderr.decode("utf-8")
+            e.stdout = _decode_output(e.stdout)
+            e.stderr = _decode_output(e.stderr)
+            logger.warning(
+                "kubectl exec failed returncode=%s elapsed=%.2fs command=%r stderr=%s",
+                e.returncode,
+                time.monotonic() - started,
+                command,
+                e.stderr,
+            )
             return e
+        except subprocess.TimeoutExpired as e:
+            stdout = _decode_output(e.stdout)
+            stderr = _decode_output(e.stderr)
+            message = f"kubectl command timed out after {timeout:.0f}s: {command}"
+            logger.warning("%s elapsed=%.2fs", message, time.monotonic() - started)
+            return subprocess.CompletedProcess(command, 124, stdout=stdout, stderr=(stderr + "\n" + message).strip())
 
     @staticmethod
     def exec_command_result(command: str, input_data=None) -> str:
@@ -64,7 +92,7 @@ class KubeCtl:
             return f"Error executing kubectl command:\n{result.stderr}"
 
     @staticmethod
-    def extract_namespace_from_command(command: str) -> str:
+    def extract_namespace_from_command(command: str) -> str | None:
         """
         Returns the namespace.
         """
@@ -81,7 +109,7 @@ class KubeCtl:
         return namespace
 
     @staticmethod
-    def insert_flags(command: str, flags=str | list[str]) -> str:
+    def insert_flags(command: str, flags: str | list[str]) -> str:
         """
         Insert flags into a kubectl command.
         Args:
@@ -134,7 +162,20 @@ class KubeCtl:
             dry_run_arguments.extend(["-o", keylist])
 
         dry_run_command = KubeCtl.insert_flags(command, dry_run_arguments)
-        dry_run_result = subprocess.run(dry_run_command, shell=True, capture_output=True, text=True)  # nosec B602
+        timeout = _kubectl_dry_run_timeout_seconds()
+        try:
+            dry_run_result = _run_in_process_group(
+                dry_run_command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return DryRunResult(
+                status=DryRunStatus.ERROR,
+                description=f"Dry-run timed out after {timeout:.0f}s.",
+                result=[],
+            )
 
         if dry_run_result.returncode == 0:
             if len(dry_run_result.stdout.strip()) == 0:
@@ -183,3 +224,73 @@ class KubeCtl:
                     description=f"Dry-run failed. Potentially it's an invalid command. stderr: {parse_text(dry_run_result.stderr, 200)}",
                     result=[],
                 )
+
+
+def _kubectl_timeout_seconds() -> float:
+    return float(os.getenv("SREGYM_KUBECTL_CMD_TIMEOUT_SECONDS", "300"))
+
+
+def _kubectl_dry_run_timeout_seconds() -> float:
+    return float(os.getenv("SREGYM_KUBECTL_DRY_RUN_TIMEOUT_SECONDS", "30"))
+
+
+def _decode_output(value: bytes | str | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value
+
+
+def _run_in_process_group(command, *, timeout, input=None, check=False, **kwargs) -> subprocess.CompletedProcess:
+    """Run a shell command in a new session so timeout kills the whole tree, not just /bin/sh.
+
+    Mirrors ``subprocess.run``: raises ``TimeoutExpired`` on timeout and ``CalledProcessError``
+    when ``check`` is set and the command fails.
+    """
+    if input is not None:
+        kwargs.setdefault("stdin", subprocess.PIPE)
+    if kwargs.pop("capture_output", False):
+        kwargs.setdefault("stdout", subprocess.PIPE)
+        kwargs.setdefault("stderr", subprocess.PIPE)
+    with subprocess.Popen(
+        command,
+        shell=True,
+        start_new_session=True,
+        **kwargs,
+    ) as proc:
+        try:
+            stdout, stderr = proc.communicate(input=input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_process_group(proc)
+            stdout, stderr = _reap_after_kill(proc)
+            raise subprocess.TimeoutExpired(command, timeout, output=stdout, stderr=stderr) from None
+        except BaseException:
+            _kill_process_group(proc)
+            _reap_after_kill(proc)
+            raise
+        retcode = proc.wait()
+        if check and retcode:
+            raise subprocess.CalledProcessError(retcode, command, output=stdout, stderr=stderr)
+        return subprocess.CompletedProcess(command, retcode, stdout, stderr)
+
+
+def _reap_after_kill(proc: subprocess.Popen, timeout: float = 10.0) -> tuple:
+    """Bounded drain/reap so a process that escaped the group can't re-hang the cleanup."""
+    try:
+        return proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        logger.warning("kubectl reap timed out after %.0fs; abandoning pipe drain", timeout)
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=timeout)
+        return None, None
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """SIGKILL the whole process group led by ``proc``."""
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        # Can't signal the group; fall back to the child alone.
+        with contextlib.suppress(ProcessLookupError):
+            proc.kill()

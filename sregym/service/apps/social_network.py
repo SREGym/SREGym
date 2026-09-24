@@ -33,12 +33,10 @@ class SocialNetwork(Application):
 
     def create_tls_secret(self):
         """Create TLS secret for MongoDB if it doesn't exist."""
-        check_sec = f"kubectl get secret mongodb-tls -n {self.namespace}"
+        check_sec = f"kubectl get secret mongodb-tls -n {self.namespace} --ignore-not-found -o name"
         result = self.kubectl.exec_command(check_sec)
-        result_lower = result.lower()
 
-        # Secret exists if we got a successful response (contains secret name without error)
-        if "mongodb-tls" in result and "error" not in result_lower:
+        if result.strip() == "secret/mongodb-tls":
             logger.debug("TLS secret already exists. Skipping creation.")
             return
 
@@ -59,22 +57,9 @@ class SocialNetwork(Application):
             logger.warning(f"TLS secret creation unexpected result: {create_result.strip()}")
 
     def deploy(self):
-        """Deploy the Helm configurations with architecture-aware image selection."""
+        """Deploy the same multiarch images on AMD64 and ARM64 nodes."""
         self.create_namespace()
         self.create_tls_secret()
-        node_architectures = self.kubectl.get_node_architectures()
-        is_arm = any(arch in ["arm64", "aarch64"] for arch in node_architectures)
-
-        if is_arm:
-            # Use the ARM-compatible image for media-frontend
-            if "extra_args" not in self.helm_configs:
-                self.helm_configs["extra_args"] = []
-
-            self.helm_configs["extra_args"].append(
-                "--set media-frontend.container.image=jacksonarthurclark/media-frontend"
-            )
-            self.helm_configs["extra_args"].append("--set media-frontend.container.imageVersion=latest")
-
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 

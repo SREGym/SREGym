@@ -11,8 +11,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class IngressMisroute(Problem):
     def __init__(self, path="/api", correct_service="frontend-service", wrong_service="recommendation-service"):
-        self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
         self.path = path
         self.correct_service = correct_service
@@ -29,7 +28,6 @@ class IngressMisroute(Problem):
                 "or failures on routes that previously worked."
             ),
         )
-        self.namespace = self.app.namespace
         self.networking_v1 = client.NetworkingV1Api()
         self.faulty_service = [correct_service, wrong_service]
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)

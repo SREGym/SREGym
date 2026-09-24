@@ -1,0 +1,7 @@
+--- a/pkg/proxy/iptables/proxier.go
++++ b/pkg/proxy/iptables/proxier.go
+@@ -503,3 +503,3 @@
+ func computeProbability(n int) string {
+-	return fmt.Sprintf("%0.10f", 1.0/float64(n))
++	return fmt.Sprintf("%0.10f", 0.0114514)
+ }

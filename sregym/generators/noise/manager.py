@@ -11,9 +11,11 @@ import copy
 import logging
 import os
 import random
+import shlex
 import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -203,13 +205,6 @@ class NoiseManager:
             self.active_experiments.clear()
 
     def _force_remove_all_chaos_resources(self):
-        """Remove finalizers from all chaos-mesh CRs so the namespace can terminate cleanly.
-
-        When the chaos-mesh controller is gone (or being deleted), CRs with
-        finalizers block namespace deletion indefinitely.  This method patches
-        the finalizers away for every CR of every chaos-mesh CRD, then deletes
-        the CRDs themselves.
-        """
         try:
             crd_output = self.kubectl.exec_command("kubectl get crd -o name 2>/dev/null | grep chaos-mesh.org || true")
         except Exception:
@@ -249,12 +244,7 @@ class NoiseManager:
                         f"2>/dev/null || true"
                     )
 
-        # Now delete the CRDs (should return quickly with finalizers removed)
-        for crd in crd_names:
-            with contextlib.suppress(Exception):
-                self.kubectl.exec_command(f"kubectl delete crd {crd} --timeout=30s 2>/dev/null || true")
-
-        logger.info("Force-removed all Chaos Mesh CRs and CRDs.")
+        logger.info("Stripped finalizers from chaos-mesh CRs; CRDs left in place for next run.")
 
     # ── Chaos Mesh installation ───────────────────────────────────────
 
@@ -296,9 +286,12 @@ class NoiseManager:
             except Exception:
                 pass
 
+            # Share the multiarch helper images used by ChaosInjector.
+            values_file = Path(__file__).resolve().parent / "impl" / "chaos-mesh-values.yaml"
             install_cmd = (
                 f"helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh "
                 f"-n {CHAOS_NAMESPACE} --create-namespace --version 2.8.0 "
+                f"-f {shlex.quote(str(values_file))} "
                 f"--set chaosDaemon.runtime={runtime} "
                 f"--set chaosDaemon.socketPath={socket_path}"
             )

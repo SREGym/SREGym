@@ -6,6 +6,7 @@ This version talks directly to the in-process Conductor for both environment
 setup and grading, but still gives you the PromptToolkit+Rich UI.
 """
 
+import ast
 import asyncio
 import json
 import sys
@@ -67,6 +68,8 @@ class HumanAgent:
         while True:
             inp = await self._prompt()
             cmd = inp.strip().split(maxsplit=1)
+            if not cmd:
+                continue
             if cmd[0].lower() == "exit":
                 sys.exit(0)
             if cmd[0].lower() == "options":
@@ -102,9 +105,18 @@ class HumanAgent:
                 env = out
                 continue
 
-            wrapped = f"```\n{text}\n```"
             try:
-                resp = await self.conductor.submit(wrapped)
+                call = ast.parse(text, mode="eval").body
+                if not (isinstance(call, ast.Call) and getattr(call.func, "id", None) == "submit"):
+                    raise ValueError("expected submit(...)")
+                sol = ast.literal_eval(call.args[0]) if call.args else None
+            except Exception as e:
+                env = f"[❌] Invalid submit syntax: {e}"
+                continue
+            try:
+                resp = await self.conductor.submit(sol)
+                # Wait for grading and any chained cleanup before re-prompting.
+                await self.conductor.wait_for_submission_work(timeout=None)
             except Exception as e:
                 env = f"[❌] Grading error: {e}"
             else:

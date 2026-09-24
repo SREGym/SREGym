@@ -66,12 +66,20 @@ status:
 
 
 class Problem(ABC):
-    def __init__(self, app, namespace: str):
+    run_default_workload = True
+
+    def __init__(self, app, namespace: str | None = None):
         self.app = app
-        self.namespace = namespace
+        self.namespace = app.namespace if namespace is None else namespace
         self.fault_injected = False
         self.results = {}
         self.root_cause = None  # root cause of the problem in natural language
+
+        # Seconds of steady-state traffic to run before fault injection. Override in subclass.
+        self.baseline_duration_s: int = 0
+
+        # Seconds to wait after fault injection for it to reach telemetry. Override in subclass.
+        self.propagation_duration_s: int = 0
 
         # Optional: attach oracles in subclass
         self.diagnosis_oracle = None
@@ -132,20 +140,14 @@ class Problem(ABC):
         # generally won't touch this and `ls` won't show it by default.
         deploy_dir = host_workspace / ".deploy"
         deploy_dir.mkdir()
-        (deploy_dir / "manifest.yaml").write_text(
-            yaml.safe_dump(self.build_workspace_manifest(), sort_keys=False)
-        )
+        (deploy_dir / "manifest.yaml").write_text(yaml.safe_dump(self.build_workspace_manifest(), sort_keys=False))
         shutil.copy2(_DEPLOY_CLI, deploy_dir / "deploy.py")
         (deploy_dir / "deploy.py").chmod(0o755)
 
         # Top-level Makefile + README make the deploy story discoverable.
-        service_label = ", ".join(
-            sorted({f.deployment for f in self.editable_files})
-        ) or "service"
+        service_label = ", ".join(sorted({f.deployment for f in self.editable_files})) or "service"
         (host_workspace / "Makefile").write_text(_MAKEFILE_TEMPLATE)
-        (host_workspace / "README.md").write_text(
-            _README_TEMPLATE.format(service_label=service_label)
-        )
+        (host_workspace / "README.md").write_text(_README_TEMPLATE.format(service_label=service_label))
         return host_workspace
 
     def workspace_hint(self) -> str:

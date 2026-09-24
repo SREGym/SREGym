@@ -9,11 +9,9 @@ Usage :
 
 import argparse
 import json
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-
 
 # ---------------------------------------------------------------------------
 # Content-block helpers
@@ -31,9 +29,7 @@ def _text_from_content(content: Any) -> str:
                 parts.append(block)
             elif isinstance(block, dict):
                 btype = block.get("type", "")
-                if btype == "text":
-                    parts.append(block.get("text", ""))
-                elif btype == "output_text":
+                if btype == "text" or btype == "output_text":
                     parts.append(block.get("text", ""))
                 elif btype in ("image", "file"):
                     parts.append(f"[{btype}]")
@@ -227,9 +223,7 @@ def _parse_codex_json(input_path: Path) -> tuple[list[dict[str, Any]], bool]:
         if messages and messages[-1].get("role") == "assistant":
             messages[-1].setdefault("tool_calls", []).append(pending_function_call)
         else:
-            messages.append(
-                {"role": "assistant", "content": "", "tool_calls": [pending_function_call]}
-            )
+            messages.append({"role": "assistant", "content": "", "tool_calls": [pending_function_call]})
 
     return messages, submitted
 
@@ -373,9 +367,7 @@ def convert(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="Convert Codex JSON output to stratus JSONL trajectory."
-    )
+    ap = argparse.ArgumentParser(description="Convert Codex JSON output to stratus JSONL trajectory.")
     ap.add_argument("input", help="Path to codex.txt")
     ap.add_argument("-o", "--output", required=True, help="Output .jsonl path")
     ap.add_argument("--problem-id", default="unknown", help="SREGym problem ID")

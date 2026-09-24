@@ -12,27 +12,28 @@ spec:
     command: ["python", "-u", "-c"]
     args:
       - |
-        import json, os, time, urllib.request
-        url = os.environ["LOCUST_URL"]
-        interval = int(os.environ.get("INTERVAL_SECONDS", "10"))
-        round_no = 0
+        import json
+        import os
+        import sys
+        import time
+        from urllib.request import urlopen
+
+        url = os.environ["LOCUST_URL"].rstrip("/")
+        interval = float(os.environ["INTERVAL_SECONDS"])
+        round_number = 0
         while True:
-            print(f"Running Locust on round #{round_no}", flush=True)
-            round_no += 1
+            # Start every round so errors cannot attach to the previous sample.
+            print(f"Running Locust on round #{round_number}")
             try:
-                with urllib.request.urlopen(f"{url}/stats/requests", timeout=5) as r:
-                    body = r.read().decode()
-                try:
-                    body = json.dumps(json.loads(body), separators=(",", ":"))
-                except Exception:
-                    pass
-                print(body, flush=True)
-                try:
-                    urllib.request.urlopen(f"{url}/stats/reset", timeout=5).read()
-                except Exception:
-                    pass
-            except Exception as e:
-                print(json.dumps({"error": repr(e)}), flush=True)
+                with urlopen(url + "/stats/requests", timeout=5) as response:
+                    stats = json.load(response)
+                with urlopen(url + "/stats/reset", timeout=5) as response:
+                    response.read()
+                # Keep the two-line record expected by the workload parser.
+                print(json.dumps(stats, ensure_ascii=True))
+            except Exception as error:
+                print(f"Locust collection failed: {type(error).__name__}: {error}", file=sys.stderr)
+            round_number += 1
             time.sleep(interval)
     env:
     - name: LOCUST_URL

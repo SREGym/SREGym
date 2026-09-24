@@ -12,10 +12,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 class GCCapacityDegradation(Problem):
     def __init__(self):
-        self.app = BlueprintHotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=BlueprintHotelReservation())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = "garbage collection"
         self.root_cause = self.build_structured_root_cause(
             component="deployments/all",
@@ -28,7 +26,7 @@ class GCCapacityDegradation(Problem):
         )
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self, exclude_alerts=["HighRequestRate"])
 
     def _apply_memory_limit(self):
         config.load_kube_config()

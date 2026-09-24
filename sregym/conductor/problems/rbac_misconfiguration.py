@@ -8,15 +8,9 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class RBACMisconfiguration(Problem):
-    def __init__(self, app_name: str = "astronomy_shop", faulty_service: str = "frontend"):
-        if app_name == "astronomy_shop":
-            self.app = AstronomyShop()
-        else:
-            raise ValueError(f"Unsupported app name: {app_name}")
-
-        super().__init__(app=self.app, namespace=self.app.namespace)
+    def __init__(self, faulty_service: str = "frontend"):
+        super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = faulty_service
 
         self.root_cause = self.build_structured_root_cause(

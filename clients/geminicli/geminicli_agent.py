@@ -9,8 +9,11 @@ import os
 import shlex
 import shutil
 import subprocess
+import tempfile
 from datetime import datetime
 from pathlib import Path
+
+from clients.harness.token_usage import aggregate_usage, read_jsonl, sum_counts, token_count, usage_metrics
 
 logger = logging.getLogger("all.geminicli.agent")
 
@@ -111,16 +114,19 @@ class GeminiCliAgent:
         return self.logs_dir / "sessions"
 
     def _find_session_file(self) -> Path | None:
-        """Find the most recent Gemini session file."""
+        """Find the most recent Gemini session file.
+
+        Gemini CLI writes sessions under ``~/.gemini/tmp/<hash>/chats/`` as
+        ``session-*.json`` (older) or ``session-*.jsonl`` (v0.40+). Search both
+        extensions and fall back to a recursive scan, matching Harbor's copy
+        step — the narrow ``*/chats/*.json`` glob alone misses newer JSONL
+        sessions and any layout change.
+        """
         tmp_dir = self.gemini_home / "tmp"
         if not tmp_dir.exists():
             return None
 
-        # Gemini stores sessions in: ~/.gemini/tmp/*/chats/session-*.json
-        session_files = list(tmp_dir.glob("*/chats/session-*.json"))
-        if not session_files:
-            # Fallback to old location
-            session_files = list(tmp_dir.glob("session-*.json"))
+        session_files = [p for pat in ("session-*.json", "session-*.jsonl") for p in tmp_dir.rglob(pat)]
         if not session_files:
             return None
 
@@ -142,7 +148,9 @@ class GeminiCliAgent:
 
             # Extract session ID from filename (session-2026-02-04T16-12-e580aecd.json -> e580aecd)
             session_id = session_file.stem.split("-")[-1] if "-" in session_file.stem else session_file.stem
-            archived_path = session_subdir / f"session-{session_id}.json"
+            # Preserve the real extension (.json or .jsonl); the ATIF adapter
+            # handles both shapes.
+            archived_path = session_subdir / f"session-{session_id}{session_file.suffix}"
             shutil.copy(session_file, archived_path)
             logger.info(f"Archived session to {archived_path}")
 
@@ -151,49 +159,92 @@ class GeminiCliAgent:
             logger.warning(f"Could not copy session file: {e}")
             return None
 
-    def get_usage_metrics(self) -> dict[str, int]:
-        """
-        Extract usage metrics from Gemini CLI session file.
-
-        Returns:
-            Dictionary with keys: input_tokens, cached_input_tokens, output_tokens
-        """
-        metrics = {
-            "input_tokens": 0,
-            "cached_input_tokens": 0,
-            "output_tokens": 0,
-        }
-
-        # Read directly from the session file
+    def get_usage_metrics(self) -> dict[str, int | None]:
+        """Read inclusive totals from the native JSON or JSONL session."""
         session_file = self._find_session_file()
         if not session_file or not session_file.exists():
-            logger.debug("No session file found for metrics")
-            return metrics
+            return usage_metrics()
 
         try:
             trajectory = json.loads(session_file.read_text())
-        except Exception as e:
-            logger.warning(f"Error loading session: {e}")
-            return metrics
+            messages = trajectory.get("messages", []) if isinstance(trajectory, dict) else []
+        except json.JSONDecodeError:
+            messages = self._usage_messages(session_file)
+        except OSError as error:
+            logger.warning("Could not read Gemini usage: %s", error)
+            return usage_metrics()
 
-        total_input = 0
-        total_output = 0
-        total_cached = 0
+        records = []
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            tokens = message.get("tokens")
+            if message.get("type") != "gemini" or not isinstance(tokens, dict):
+                continue
+            reasoning = token_count(tokens.get("thoughts"))
+            # `tool` is toolUsePromptTokenCount: tool results sent as input.
+            records.append(
+                usage_metrics(
+                    input_tokens=sum_counts([token_count(tokens.get("input")), token_count(tokens.get("tool"))]),
+                    output_tokens=sum_counts([token_count(tokens.get("output")), reasoning]),
+                    cached_input_tokens=token_count(tokens.get("cached")),
+                    reasoning_output_tokens=reasoning,
+                )
+            )
+        return aggregate_usage(records)
 
-        for message in trajectory.get("messages", []):
-            if message.get("type") == "gemini":
-                tokens = message.get("tokens", {})
-                total_input += tokens.get("input", 0)
-                # output includes: output + thoughts + tool tokens
-                total_output += tokens.get("output", 0) + tokens.get("thoughts", 0) + tokens.get("tool", 0)
-                total_cached += tokens.get("cached", 0)
+    @staticmethod
+    def _usage_messages(session_file: Path) -> list[dict]:
+        """Replay usage updates by message ID without importing the converter."""
+        messages = {}
+        pending = {}
+        for record in read_jsonl(session_file):
+            if "$rewindTo" in record:
+                ids = list(messages)
+                target = record["$rewindTo"]
+                removed = ids[ids.index(target) :] if target in messages else ids
+                for message_id in removed:
+                    messages.pop(message_id, None)
+                    pending.pop(message_id, None)
+                continue
+            message_id = record.get("id")
+            if not isinstance(message_id, str):
+                continue
+            if record.get("type") in {"gemini", "user"}:
+                message = messages.setdefault(message_id, {})
+                message.update(record)
+                if message_id in pending:
+                    message.setdefault("tokens", {}).update(pending.pop(message_id))
+            elif record.get("type") == "message_update" and isinstance(record.get("tokens"), dict):
+                if message_id in messages:
+                    messages[message_id].setdefault("tokens", {}).update(record["tokens"])
+                else:
+                    pending.setdefault(message_id, {}).update(record["tokens"])
+        return list(messages.values())
 
-        metrics["input_tokens"] = total_input
-        metrics["output_tokens"] = total_output
-        metrics["cached_input_tokens"] = total_cached
+    def _build_command(self, instruction: str) -> str:
+        model = self.model_name.split("/")[-1]
+        escaped_instruction = shlex.quote(instruction)
+        return f"gemini -p {escaped_instruction} -y -m {model}"
 
-        logger.info(f"Extracted usage metrics: {metrics}")
-        return metrics
+    def _prepare_filtered_settings(self) -> Path | None:
+        """Create a per-run Gemini settings file for provider-side tool blocking."""
+        if os.environ.get("AGENT_INTERNET_ACCESS") != "filtered":
+            return None
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix="gemini-system-settings-",
+            suffix=".json",
+            dir=self.logs_dir,
+            delete=False,
+        ) as settings_file:
+            json.dump(
+                {"tools": {"exclude": ["google_web_search", "web_fetch", "browser_agent"]}},
+                settings_file,
+            )
+            return Path(settings_file.name)
 
     def run(self, instruction: str) -> int:
         """
@@ -213,6 +264,11 @@ class GeminiCliAgent:
 
         # Build environment variables
         env = os.environ.copy()
+
+        # Headless/automated runs: the working dir isn't interactively "trusted",
+        # which otherwise downgrades approval mode and blocks tool calls. This is
+        # the documented env var for headless environments.
+        env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
 
         # Auth environment variables
         auth_vars = [
@@ -240,9 +296,10 @@ class GeminiCliAgent:
             logger.error("=" * 80)
             return 1
 
-        # Build command
-        escaped_instruction = shlex.quote(instruction)
-        command = f"gemini -p {escaped_instruction} -y -m {model}"
+        command = self._build_command(instruction)
+        filtered_settings = self._prepare_filtered_settings()
+        if filtered_settings is not None:
+            env["GEMINI_CLI_SYSTEM_SETTINGS_PATH"] = str(filtered_settings)
 
         logger.info(f"Executing command: {command}")
 
@@ -277,3 +334,6 @@ class GeminiCliAgent:
         except Exception as e:
             logger.error(f"Error running Gemini CLI: {e}")
             raise
+        finally:
+            if filtered_settings is not None:
+                filtered_settings.unlink(missing_ok=True)

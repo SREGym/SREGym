@@ -12,10 +12,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 class CapacityDecreaseRPCRetryStorm(Problem):
     def __init__(self):
-        self.app = BlueprintHotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=BlueprintHotelReservation())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = "rpc"
         self.root_cause = self.build_structured_root_cause(
             component=f"configmap/{self.faulty_service}",
@@ -29,7 +27,7 @@ class CapacityDecreaseRPCRetryStorm(Problem):
         # === Attach evaluation oracles ===
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
-        self.mitigation_oracle = AlertOracle(problem=self)
+        self.mitigation_oracle = AlertOracle(problem=self, exclude_alerts=["HighRequestRate"])
 
     @mark_fault_injected
     def inject_fault(self):

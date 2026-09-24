@@ -45,6 +45,9 @@ all:
     load_spike_rpc_retry_storm:
     - diagnosis
     - mitigation
+    search_rate_retry_collapse_hotel_reservation:
+    - diagnosis
+    - mitigation
     assign_to_non_existent_node:
     - diagnosis
     - mitigation
@@ -52,6 +55,9 @@ all:
     - diagnosis
     - mitigation
     configmap_drift_hotel_reservation:
+    - diagnosis
+    - mitigation
+    feature_flag_latent_bug_hotel_reservation:
     - diagnosis
     - mitigation
     duplicate_pvc_mounts_astronomy_shop:
@@ -177,6 +183,9 @@ all:
     wrong_dns_policy_social_network:
     - diagnosis
     - mitigation
+    service_wrong_pod_selection_hotel_reservation:
+    - diagnosis
+    - mitigation
     wrong_service_selector_astronomy_shop:
     - diagnosis
     - mitigation
@@ -216,6 +225,9 @@ all:
     kafka_queue_problems_hotel_reservation:
     - diagnosis
     - mitigation
+    kafka_producer_leak:
+    - diagnosis
+    - mitigation
     loadgenerator_flood_homepage:
     - diagnosis
     - mitigation
@@ -232,6 +244,12 @@ all:
     - diagnosis
     - mitigation
     network_policy_block:
+    - diagnosis
+    - mitigation
+    node_conntrack_exhaustion_hotel_reservation:
+    - diagnosis
+    - mitigation
+    dev_shm_exhaustion_hotel_reservation:
     - diagnosis
     - mitigation
     social_net_hotel_res_astro_shop_concurrent_failures:

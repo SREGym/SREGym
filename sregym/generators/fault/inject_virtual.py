@@ -1,16 +1,22 @@
 """Inject faults at the virtualization layer: K8S, Docker, etc."""
 
+import contextlib
 import copy
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
+from kubernetes.client.rest import ApiException
 
 from sregym.generators.fault.base import FaultInjector
-from sregym.paths import TARGET_MICROSERVICES
+from sregym.paths import CACHE_DIR, TARGET_MICROSERVICES
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
+
+DAEMON_SET_RECOVERY_STATE_DIR = CACHE_DIR / "daemon_set_recovery"
 
 
 class VirtualizationFaultInjector(FaultInjector):
@@ -343,6 +349,454 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from resource request fault for service: {service}")
 
+    # V.8a - Set a tight CPU limit to trigger CFS throttling without crashing the pod
+    def inject_cpu_throttle(
+        self,
+        microservices: list[str],
+        cpu_limit: str | None = None,
+        all_services: bool = False,
+        additional_services: list[str] | None = None,
+        loose_headroom_factor: float = 2.0,
+    ) -> dict[str, str]:
+        if all_services and additional_services:
+            raise ValueError("Use either all_services or additional_services, not both")
+
+        if all_services:
+            all_deps = self._get_all_deployments()
+            limits = self.calibrate_all_limits(
+                services=all_deps,
+                faulty_services=microservices,
+                loose_headroom=loose_headroom_factor,
+            )
+            services_to_patch = all_deps
+        elif additional_services:
+            services_to_patch = list(dict.fromkeys([*microservices, *additional_services]))
+            limits = self.calibrate_all_limits(
+                services=services_to_patch,
+                faulty_services=microservices,
+                loose_headroom=loose_headroom_factor,
+            )
+        else:
+            services_to_patch = microservices
+            limits = {}
+
+        injected = {}
+        patched_services = []
+        try:
+            for service in services_to_patch:
+                if cpu_limit is not None and service in microservices:
+                    limit = cpu_limit
+                else:
+                    limit = limits.get(service) or self.calibrate_cpu_limit(service)
+
+                original_deployment_yaml = self._get_deployment_yaml(service)
+                self._save_cpu_resource_snapshot(service, original_deployment_yaml)
+
+                containers = copy.deepcopy(original_deployment_yaml["spec"]["template"]["spec"]["containers"])
+                for container in containers:
+                    resources = container.setdefault("resources", {})
+                    # Give the target and decoys the same request/limit shape.
+                    # The CPU limit still controls CFS throttling; a unique
+                    # request-to-limit mismatch would reveal the target.
+                    resources.setdefault("requests", {})["cpu"] = limit
+                    resources.setdefault("limits", {})["cpu"] = limit
+
+                self._patch_cpu_resources(service, containers)
+                patched_services.append(service)
+                print(f"Injected CPU limit ({limit}) for service: {service}")
+                injected[service] = limit
+        except Exception:
+            print("[cpu-throttle] injection failed; restoring every Deployment already patched")
+            for service in reversed(patched_services):
+                with contextlib.suppress(Exception):
+                    self._restore_cpu_resources(service)
+            raise
+
+        return injected
+
+    def _cpu_resource_snapshot_path(self, service: str) -> Path:
+        return Path("/tmp") / f"{service}_cpu_resources.yaml"
+
+    def _save_cpu_resource_snapshot(self, service: str, deployment_yaml: dict) -> None:
+        """Save the original resources once per Deployment UID.
+
+        Keeping the first snapshot makes repeated injection idempotent while
+        allowing a newly created namespace (and therefore a new Deployment UID)
+        to replace stale host-side state from an earlier run.
+        """
+        path = self._cpu_resource_snapshot_path(service)
+        deployment_uid = str(deployment_yaml.get("metadata", {}).get("uid") or "")
+
+        if path.exists():
+            with contextlib.suppress(OSError, yaml.YAMLError):
+                existing = yaml.safe_load(path.read_text()) or {}
+                if deployment_uid and existing.get("deployment_uid") == deployment_uid:
+                    return
+
+        containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+        snapshot = {
+            "deployment_uid": deployment_uid,
+            "containers": [
+                {
+                    "name": container["name"],
+                    "resources": copy.deepcopy(container.get("resources", {})),
+                }
+                for container in containers
+            ],
+        }
+        path.write_text(yaml.safe_dump(snapshot))
+
+    def _load_cpu_resource_snapshot(self, service: str) -> list[dict]:
+        path = self._cpu_resource_snapshot_path(service)
+        if not path.exists():
+            raise FileNotFoundError(f"CPU resource snapshot for Deployment '{service}' is missing")
+        snapshot = yaml.safe_load(path.read_text()) or {}
+        containers = snapshot.get("containers")
+        if not isinstance(containers, list) or not containers:
+            raise ValueError(f"CPU resource snapshot for Deployment '{service}' is invalid")
+        return containers
+
+    @staticmethod
+    def _cpu_resource_patch(containers: list[dict]) -> dict:
+        """Replace each named container's resources without replacing the pod template."""
+        return {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": container["name"],
+                                "resources": {
+                                    "$patch": "replace",
+                                    **copy.deepcopy(container.get("resources", {})),
+                                },
+                            }
+                            for container in containers
+                        ]
+                    }
+                }
+            }
+        }
+
+    def _patch_cpu_resources(self, service: str, containers: list[dict], rollout_timeout: int = 180) -> None:
+        self.kubectl.patch_deployment(
+            service,
+            self.namespace,
+            self._cpu_resource_patch(containers),
+        )
+        self._wait_for_deployment_rollout(service, timeout=rollout_timeout)
+
+    def _restore_cpu_resources(self, service: str) -> None:
+        containers = self._load_cpu_resource_snapshot(service)
+        self._patch_cpu_resources(service, containers)
+        print(f"Recovered CPU resources for service: {service}")
+
+    def calibrate_all_limits(
+        self,
+        services: list[str],
+        faulty_services: list[str],
+        warmup_seconds: int = 30,
+        n_samples: int = 5,
+        sample_window_seconds: int = 7,
+        tight_headroom: float = 1.15,
+        loose_headroom: float = 2.0,
+    ) -> dict[str, str]:
+        limits = {}
+        active = self._get_ready_pods(services)
+        missing = sorted(set(services) - set(active))
+        if missing:
+            raise RuntimeError(f"[calibration] no Ready pod for: {', '.join(missing)}")
+
+        print(f"[calibration] sampling {len(active)} services, warmup {warmup_seconds}s...")
+        time.sleep(warmup_seconds)
+
+        readings = [self._read_cpu_stats(active)]
+        for _ in range(n_samples):
+            time.sleep(sample_window_seconds)
+            readings.append(self._read_cpu_stats(active))
+
+        for service in active:
+            samples = [
+                m
+                for r1, r2 in zip(readings, readings[1:], strict=False)
+                if (m := self._compute_millicores(r1[service], r2[service])) is not None
+            ]
+            if not samples:
+                raise RuntimeError(f"[calibration] could not calculate CPU use for {service}")
+
+            baseline = max(samples)
+            headroom = tight_headroom if service in faulty_services else loose_headroom
+            limit_m = ((int(baseline * headroom) + 4) // 5) * 5
+            limit = f"{limit_m}m"
+            print(f"[calibration] {service}: baseline={baseline}m headroom={headroom} limit={limit}")
+            limits[service] = limit
+
+        return limits
+
+    def calibrate_cpu_limit(
+        self,
+        service: str,
+        warmup_seconds: int = 30,
+        n_samples: int = 5,
+        sample_window_seconds: int = 5,
+        headroom_factor: float = 1.15,
+    ) -> str:
+        pod = self._get_ready_pod(service)
+        if not pod:
+            raise RuntimeError(f"[calibration] no Ready pod for {service}")
+
+        print(f"[calibration] sampling CPU for {service}, warmup {warmup_seconds}s...")
+        time.sleep(warmup_seconds)
+
+        readings = [self._read_cpu_stat(pod)]
+        for _ in range(n_samples):
+            time.sleep(sample_window_seconds)
+            readings.append(self._read_cpu_stat(pod))
+
+        samples = [
+            m
+            for s1, s2 in zip(readings, readings[1:], strict=False)
+            if (m := self._compute_millicores(s1, s2)) is not None
+        ]
+
+        if not samples:
+            raise RuntimeError(f"[calibration] could not calculate CPU use for {service}")
+
+        baseline = max(samples)
+        limit_m = ((int(baseline * headroom_factor) + 4) // 5) * 5
+        limit = f"{limit_m}m"
+
+        print(f"[calibration] {service}: baseline={baseline}m limit={limit}")
+        return limit
+
+    def _get_all_deployments(self) -> list[str]:
+        out = self.kubectl.exec_command(
+            f"kubectl get deployments -n {self.namespace} -o jsonpath='{{.items[*].metadata.name}}'"
+        )
+        return out.strip().split() if out.strip() else []
+
+    def _get_ready_pods(self, services: list[str]) -> dict[str, str]:
+        wanted = set(services)
+        ready = {}
+        for pod in self.kubectl.list_pods(self.namespace, timeout=60).items:
+            labels = pod.metadata.labels or {}
+            service = labels.get("io.kompose.service")
+            statuses = pod.status.container_statuses or []
+            if (
+                service in wanted
+                and pod.metadata.deletion_timestamp is None
+                and pod.status.phase == "Running"
+                and statuses
+                and all(status.ready for status in statuses)
+            ):
+                ready.setdefault(service, pod.metadata.name)
+        return ready
+
+    def _get_ready_pod(self, service: str) -> str | None:
+        return self._get_ready_pods([service]).get(service)
+
+    def _read_cpu_stat(
+        self,
+        pod: str,
+        *,
+        max_attempts: int = 3,
+        request_timeout: int = 55,
+    ) -> dict:
+        last_error = None
+        for attempt in range(1, max_attempts + 1):
+            try:
+                # GNU timeout bounds the kubectl child process itself; the outer
+                # subprocess timeout is a final guard around the shell wrapper.
+                out = self.kubectl.exec_command_checked(
+                    f"timeout --kill-after=5s {request_timeout + 5}s "
+                    f"kubectl --request-timeout={request_timeout}s exec {pod} "
+                    f"-n {self.namespace} -- cat /sys/fs/cgroup/cpu.stat",
+                    timeout=request_timeout + 10,
+                )
+                result = {}
+                for line in (out or "").strip().splitlines():
+                    parts = line.split()
+                    if len(parts) == 2:
+                        with contextlib.suppress(ValueError):
+                            result[parts[0]] = int(parts[1])
+                required = {"usage_usec", "nr_periods", "nr_throttled"}
+                if not required.issubset(result):
+                    raise RuntimeError(f"Could not read complete cpu.stat data from pod '{pod}'")
+                return result
+            except RuntimeError as exc:
+                last_error = exc
+                if attempt == max_attempts:
+                    break
+                backoff = attempt * 2
+                print(f"[cpu-stat] read failed for {pod} (attempt {attempt}/{max_attempts}); retrying in {backoff}s")
+                time.sleep(backoff)
+        raise RuntimeError(f"Could not read cpu.stat from pod '{pod}' after {max_attempts} attempts") from last_error
+
+    def _read_cpu_stats(self, pods: dict[str, str]) -> dict[str, dict]:
+        if not pods:
+            return {}
+        with ThreadPoolExecutor(max_workers=min(8, len(pods))) as pool:
+            futures = {service: pool.submit(self._read_cpu_stat, pod) for service, pod in pods.items()}
+            return {service: future.result() for service, future in futures.items()}
+
+    def _compute_millicores(self, s1: dict, s2: dict) -> int | None:
+        delta_usage = s2.get("usage_usec", 0) - s1.get("usage_usec", 0)
+        delta_periods = s2.get("nr_periods", 0) - s1.get("nr_periods", 0)
+        if delta_periods == 0:
+            return None
+        # usage_usec / (periods * 100ms) → millicores
+        return int(delta_usage / (delta_periods * 100))
+
+    @staticmethod
+    def _deployment_rollout_complete(deployment) -> bool:
+        return deployment_rollout_complete(deployment)
+
+    def _wait_for_services_ready(
+        self,
+        services: list[str],
+        timeout: int = 180,
+        poll_interval: int = 2,
+        stability_seconds: int = 0,
+    ) -> None:
+        expected = set(services)
+        deadline = time.monotonic() + timeout
+        last_unready = []
+        stable_since = None
+        while True:
+            deployments = {
+                deployment.metadata.name: deployment
+                for deployment in self.kubectl.list_deployments(self.namespace, timeout=60).items
+            }
+            missing = sorted(expected - set(deployments))
+            if missing:
+                last_unready = [f"{service}:missing" for service in missing]
+                stable_since = None
+            else:
+                last_unready = [
+                    service for service in services if not self._deployment_rollout_complete(deployments[service])
+                ]
+                if not last_unready:
+                    if stable_since is None:
+                        stable_since = time.monotonic()
+                    if time.monotonic() - stable_since >= stability_seconds:
+                        return
+                else:
+                    stable_since = None
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "Deployments did not become fully updated, Ready, and Available: " + ", ".join(last_unready)
+                )
+            time.sleep(poll_interval)
+
+    def _measure_throttle_rates(self, pods: dict[str, str], sample_seconds: int) -> dict[str, float]:
+        first = self._read_cpu_stats(pods)
+        time.sleep(sample_seconds)
+        second = self._read_cpu_stats(pods)
+        rates = {}
+        for service in pods:
+            delta_throttled = second[service]["nr_throttled"] - first[service]["nr_throttled"]
+            delta_periods = second[service]["nr_periods"] - first[service]["nr_periods"]
+            if delta_periods <= 0:
+                raise RuntimeError(f"No CPU scheduling periods observed for service '{service}'")
+            rates[service] = delta_throttled / delta_periods
+        return rates
+
+    def _set_cpu_limit(self, service: str, limit: str) -> None:
+        deployment_yaml = self._get_deployment_yaml(service)
+        containers = copy.deepcopy(deployment_yaml["spec"]["template"]["spec"]["containers"])
+        for container in containers:
+            resources = container.setdefault("resources", {})
+            resources.setdefault("requests", {})["cpu"] = limit
+            resources.setdefault("limits", {})["cpu"] = limit
+        self._patch_cpu_resources(service, containers)
+
+    def verify_injection(
+        self,
+        injected: dict[str, str],
+        faulty_services: list[str],
+        settle_seconds: int = 30,
+        sample_seconds: int = 30,
+        min_faulty_throttle: float = 0.05,
+        max_clean_throttle: float = 0.10,
+        headroom_bump: float = 1.5,
+        max_attempts: int = 3,
+    ) -> dict[str, str]:
+        """Verify a stable target signal and bounded collateral throttling."""
+        services = list(injected)
+        self._wait_for_services_ready(services, stability_seconds=10)
+        last_rates = {}
+
+        for attempt in range(1, max_attempts + 1):
+            print(
+                f"[verify] attempt {attempt}/{max_attempts}: settling {settle_seconds}s, "
+                f"then sampling {sample_seconds}s..."
+            )
+            time.sleep(settle_seconds)
+            self._wait_for_services_ready(services, stability_seconds=10)
+
+            pods = self._get_ready_pods(services)
+            missing = sorted(set(services) - set(pods))
+            if missing:
+                raise RuntimeError(f"[verify] no Ready pod for: {', '.join(missing)}")
+
+            last_rates = self._measure_throttle_rates(pods, sample_seconds)
+            faulty_below_minimum = []
+            noisy_services = []
+            for service in services:
+                throttle_rate = last_rates[service]
+                if service in faulty_services:
+                    if throttle_rate < min_faulty_throttle:
+                        faulty_below_minimum.append(service)
+                        print(
+                            f"[verify] {service}: throttle_rate={throttle_rate:.1%} "
+                            f"< {min_faulty_throttle:.0%} (fault not visible yet)"
+                        )
+                    else:
+                        print(f"[verify] {service}: throttle_rate={throttle_rate:.1%} (faulty, expected)")
+                elif throttle_rate > max_clean_throttle:
+                    noisy_services.append(service)
+                    print(f"[verify] {service}: throttle_rate={throttle_rate:.1%} too high (limit={injected[service]})")
+                else:
+                    print(f"[verify] {service}: throttle_rate={throttle_rate:.1%} (clean)")
+
+            if not faulty_below_minimum and not noisy_services:
+                print("[verify] target and non-target services are within their expected throttle bands")
+                return injected
+
+            if attempt == max_attempts:
+                break
+
+            for service in noisy_services:
+                old_mc = int(injected[service][:-1])
+                new_mc = ((int(old_mc * headroom_bump) + 4) // 5) * 5
+                new_limit = f"{new_mc}m"
+                print(f"[verify] {service}: {injected[service]} -> {new_limit}")
+                self._set_cpu_limit(service, new_limit)
+                injected[service] = new_limit
+
+            self._wait_for_services_ready(services, stability_seconds=10)
+
+        failures = []
+        for service in faulty_services:
+            rate = last_rates.get(service)
+            if rate is None or rate < min_faulty_throttle:
+                failures.append(f"{service} target throttle={rate!r}")
+        for service, rate in last_rates.items():
+            if service not in faulty_services and rate > max_clean_throttle:
+                failures.append(f"{service} collateral throttle={rate:.1%}")
+        raise RuntimeError("[verify] injection did not reach a safe steady state: " + ", ".join(failures))
+
+    def recover_cpu_throttle(self, microservices: list[str]):
+        errors = []
+        for service in microservices:
+            try:
+                self._restore_cpu_resources(service)
+            except Exception as exc:
+                errors.append(f"{service}: {exc}")
+        if errors:
+            raise RuntimeError("Failed to recover CPU resources: " + "; ".join(errors))
+
     # V.9 - Manually patch a service's selector to include an additional label
     def inject_wrong_service_selector(self, microservices: list[str]):
         for service in microservices:
@@ -372,13 +826,87 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from wrong service selector fault for service: {service}")
 
+    def inject_service_wrong_pod_selection(self, microservices: list[str]):
+        if len(microservices) != 2:
+            raise ValueError("service_wrong_pod_selection requires [target_service, wrong_deployment]")
+
+        target_service = microservices[0]
+        wrong_deployment = microservices[1]
+        route_label_key = "service-route"
+        route_label_value = target_service
+
+        print(
+            f"Injecting wrong pod selection for service: {target_service} | "
+            f"wrong deployment: {wrong_deployment} | namespace: {self.namespace}"
+        )
+
+        for deployment in [target_service, wrong_deployment]:
+            self.kubectl.patch_deployment(
+                deployment,
+                self.namespace,
+                {
+                    "spec": {
+                        "template": {
+                            "metadata": {
+                                "labels": {
+                                    route_label_key: route_label_value,
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment/{deployment} -n {self.namespace} --timeout=120s"
+            )
+
+        selector = {route_label_key: route_label_value}
+        patch = json.dumps([{"op": "replace", "path": "/spec/selector", "value": selector}])
+        self.kubectl.exec_command(f"kubectl patch svc {target_service} -n {self.namespace} --type=json -p='{patch}'")
+
+        print(f"Patched service {target_service} with selector {selector}")
+
+    def recover_service_wrong_pod_selection(self, microservices: list[str]):
+        if len(microservices) != 2:
+            raise ValueError("service_wrong_pod_selection requires [target_service, wrong_deployment]")
+
+        target_service = microservices[0]
+        wrong_deployment = microservices[1]
+        route_label_key = "service-route"
+        original_selector = {"io.kompose.service": target_service}
+
+        patch = json.dumps([{"op": "replace", "path": "/spec/selector", "value": original_selector}])
+        self.kubectl.exec_command(f"kubectl patch svc {target_service} -n {self.namespace} --type=json -p='{patch}'")
+
+        for deployment in [target_service, wrong_deployment]:
+            self.kubectl.patch_deployment(
+                deployment,
+                self.namespace,
+                {
+                    "spec": {
+                        "template": {
+                            "metadata": {
+                                "labels": {
+                                    route_label_key: None,
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+            self.kubectl.exec_command(
+                f"kubectl rollout status deployment/{deployment} -n {self.namespace} --timeout=120s"
+            )
+
+        print(f"Recovered from wrong pod selection fault for service: {target_service}")
+
     # V.10 - Inject service DNS resolution failure by patching CoreDNS ConfigMap
     def inject_service_dns_resolution_failure(self, microservices: list[str]):
         for service in microservices:
             fqdn = f"{service}.{self.namespace}.svc.cluster.local"
 
             # Get configmap as structured data
-            cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+            cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
             cm_data = yaml.safe_load(cm_yaml)
             corefile = cm_data["data"]["Corefile"]
 
@@ -388,7 +916,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 self.recover_service_dns_resolution_failure([service])
 
                 # Re-fetch after recovery
-                cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+                cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
                 cm_data = yaml.safe_load(cm_yaml)
                 corefile = cm_data["data"]["Corefile"]
 
@@ -404,8 +932,7 @@ class VirtualizationFaultInjector(FaultInjector):
             # Find the position of "kubernetes" word
             kubernetes_pos = corefile.find("kubernetes")
             if kubernetes_pos == -1:
-                print("Could not locate 'kubernetes' plugin in Corefile")
-                return
+                raise RuntimeError("Could not locate 'kubernetes' plugin in CoreDNS Corefile")
 
             # Find the start of the line containing "kubernetes"
             line_start = corefile.rfind("\n", 0, kubernetes_pos)
@@ -422,11 +949,17 @@ class VirtualizationFaultInjector(FaultInjector):
             # Apply using temporary file
             tmp_file_path = self._write_yaml_to_file("coredns", cm_data)
 
-            self.kubectl.exec_command(f"kubectl apply -f {tmp_file_path}")
+            self.kubectl.exec_command_checked(f"kubectl apply -f {tmp_file_path}")
 
             # Restart CoreDNS
-            self.kubectl.exec_command("kubectl -n kube-system rollout restart deployment coredns")
-            self.kubectl.exec_command("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout restart deployment coredns")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+
+            corefile_after = yaml.safe_load(
+                self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
+            )["data"]["Corefile"]
+            if start_line_id not in corefile_after:
+                raise RuntimeError(f"CoreDNS did not retain the NXDOMAIN rule for {fqdn}")
 
             print(f"Injected Service DNS Resolution Failure fault for service: {service}")
 
@@ -435,7 +968,7 @@ class VirtualizationFaultInjector(FaultInjector):
             fqdn = f"{service}.{self.namespace}.svc.cluster.local"
 
             # Get configmap as structured data
-            cm_yaml = self.kubectl.exec_command("kubectl -n kube-system get cm coredns -o yaml")
+            cm_yaml = self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
             cm_data = yaml.safe_load(cm_yaml)
             corefile = cm_data["data"]["Corefile"]
 
@@ -467,25 +1000,29 @@ class VirtualizationFaultInjector(FaultInjector):
                 new_lines.append(line)
 
             if skip_block:
-                print("WARNING: Template block was not properly closed")
-                return
+                raise RuntimeError("CoreDNS NXDOMAIN template block was not properly closed")
 
             new_corefile = "\n".join(new_lines)
 
             # Verify if the removal worked
             if start_line_id in new_corefile:
-                print("ERROR: Template was not successfully removed!")
-                return
+                raise RuntimeError("CoreDNS NXDOMAIN template was not successfully removed")
 
             cm_data["data"]["Corefile"] = new_corefile
 
             # Apply using temporary file
             tmp_file_path = self._write_yaml_to_file("coredns", cm_data)
-            self.kubectl.exec_command(f"kubectl apply -f {tmp_file_path}")
+            self.kubectl.exec_command_checked(f"kubectl apply -f {tmp_file_path}")
 
             # Restart CoreDNS
-            self.kubectl.exec_command("kubectl -n kube-system rollout restart deployment coredns")
-            self.kubectl.exec_command("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout restart deployment coredns")
+            self.kubectl.exec_command_checked("kubectl -n kube-system rollout status deployment coredns --timeout=30s")
+
+            corefile_after = yaml.safe_load(
+                self.kubectl.exec_command_checked("kubectl -n kube-system get cm coredns -o yaml")
+            )["data"]["Corefile"]
+            if start_line_id in corefile_after:
+                raise RuntimeError(f"CoreDNS still contains the NXDOMAIN rule for {fqdn}")
 
             print(f"Recovered Service DNS Resolution Failure fault for service: {service}")
 
@@ -1021,7 +1558,7 @@ class VirtualizationFaultInjector(FaultInjector):
         for service in microservices:
             original_yaml_path = f"/tmp/{service}_modified.yaml"
 
-            delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
+            delete_command = f"kubectl delete deployment {service} -n {self.namespace} --ignore-not-found=true"
             apply_command = f"kubectl apply -f {original_yaml_path} -n {self.namespace}"
 
             delete_result = self.kubectl.exec_command(delete_command)
@@ -1088,13 +1625,87 @@ class VirtualizationFaultInjector(FaultInjector):
             print(f"Recovered from liveness probe misconfiguration fault for service: {service}")
 
     # Duplicate PVC mounts multiple replicas share ReadWriteOnce PVC causing mount conflict
+    def _storage_baseline_path(self, service: str) -> Path:
+        return Path("/tmp") / f"deployment-state-{self.namespace}-{service}.yaml"
+
+    @staticmethod
+    def _reapplicable_deployment_manifest(deployment_yaml: dict) -> dict:
+        manifest = copy.deepcopy(deployment_yaml)
+        manifest.pop("status", None)
+
+        metadata = manifest.setdefault("metadata", {})
+        for field in (
+            "creationTimestamp",
+            "generation",
+            "managedFields",
+            "resourceVersion",
+            "selfLink",
+            "uid",
+        ):
+            metadata.pop(field, None)
+
+        annotations = metadata.get("annotations") or {}
+        annotations.pop("deployment.kubernetes.io/revision", None)
+        annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+        if annotations:
+            metadata["annotations"] = annotations
+        else:
+            metadata.pop("annotations", None)
+        return manifest
+
+    def _save_storage_baseline(self, service: str, deployment_yaml: dict) -> Path:
+        path = self._storage_baseline_path(service)
+        path.write_text(yaml.safe_dump(self._reapplicable_deployment_manifest(deployment_yaml)))
+        return path
+
+    def _legacy_statefulset_claims(self, service: str) -> list[str]:
+        try:
+            statefulset = self.kubectl.apps_v1_api.read_namespaced_stateful_set(
+                name=service,
+                namespace=self.namespace,
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                return []
+            raise
+
+        prefixes = [
+            f"{template.metadata.name}-{service}-" for template in statefulset.spec.volume_claim_templates or []
+        ]
+        if not prefixes:
+            return []
+
+        claims = self.kubectl.core_v1_api.list_namespaced_persistent_volume_claim(self.namespace)
+        return [
+            claim.metadata.name
+            for claim in claims.items
+            if any(claim.metadata.name.startswith(prefix) for prefix in prefixes)
+        ]
+
     def inject_duplicate_pvc_mounts(self, microservices: list[str]):
         for service in microservices:
-            deployment_yaml = self._get_deployment_yaml(service)
-            # original_yaml = copy.deepcopy(deployment_yaml)
+            original_deployment_yaml = self._get_deployment_yaml(service)
+            deployment_yaml = copy.deepcopy(original_deployment_yaml)
 
             # Create a single PVC that every replica will try to use
             pvc_name = f"{service}-pvc"
+            try:
+                self.kubectl.core_v1_api.read_namespaced_persistent_volume_claim(
+                    name=pvc_name,
+                    namespace=self.namespace,
+                )
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+            else:
+                raise RuntimeError(
+                    f"Refusing to replace pre-existing PersistentVolumeClaim '{pvc_name}' "
+                    f"in namespace '{self.namespace}'"
+                )
+
+            baseline_path = self._save_storage_baseline(service, original_deployment_yaml)
+            print(f"Saved the current Deployment configuration to {baseline_path}")
+
             pvc_manifest = {
                 "apiVersion": "v1",
                 "kind": "PersistentVolumeClaim",
@@ -1163,65 +1774,47 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_duplicate_pvc_mounts(self, microservices: list[str]):
         for service in microservices:
-            deployment_yaml = self._get_deployment_yaml(service)
+            baseline_path = self._storage_baseline_path(service)
+            if not baseline_path.exists():
+                raise RuntimeError(f"Saved Deployment configuration is missing: {baseline_path}")
 
-            delete_result = self.kubectl.exec_command(f"kubectl delete deployment {service} -n {self.namespace}")
-            print(f"Delete result for {service}: {delete_result}")
-
-            template = deployment_yaml["spec"]["template"]
-            replicas = max(deployment_yaml["spec"].get("replicas", 1), 2)
-            selector = deployment_yaml["spec"]["selector"]
-
-            pod_spec = template["spec"]
-
-            existing_volumes = pod_spec.get("volumes", [])
-            config_volumes = [vol for vol in existing_volumes if "configMap" in vol]
-            pod_spec["volumes"] = config_volumes
-
-            if pod_spec.get("containers"):
-                containers = pod_spec["containers"]
-                if containers:
-                    existing_mounts = containers[0].get("volumeMounts", [])
-                    config_mounts = [mount for mount in existing_mounts if mount.get("name") != f"{service}-volume"]
-
-                    config_mounts.append({"name": "data-volume", "mountPath": f"/{service}-data"})
-                    containers[0]["volumeMounts"] = config_mounts
-
-            # Convert Deployment to StatefulSet
-            statefulset_yaml = {
-                "apiVersion": "apps/v1",
-                "kind": "StatefulSet",
-                "metadata": {
-                    "name": service,
-                    "namespace": self.namespace,
-                    "labels": deployment_yaml.get("metadata", {}).get("labels", {}),
-                },
-                "spec": {
-                    "serviceName": service,
-                    "replicas": replicas,
-                    "selector": selector,
-                    "template": template,
-                    "volumeClaimTemplates": [
-                        {
-                            "metadata": {"name": "data-volume", "namespace": self.namespace},
-                            "spec": {
-                                "accessModes": ["ReadWriteOnce"],
-                                "resources": {"requests": {"storage": "1Gi"}},
-                            },
-                        }
-                    ],
-                },
-            }
-
-            ss_path = self._write_yaml_to_file(service, statefulset_yaml)
-            apply_result = self.kubectl.exec_command(f"kubectl apply -f {ss_path} -n {self.namespace}")
-            print(f"Apply result for {service}: {apply_result}")
-
+            legacy_claims = self._legacy_statefulset_claims(service)
             self.kubectl.exec_command(
-                f"kubectl rollout status statefulset/{service} -n {self.namespace} --timeout=120s"
+                f"kubectl delete statefulset {service} -n {self.namespace} "
+                "--ignore-not-found=true --wait=true --timeout=120s"
+            )
+            self.kubectl.exec_command(
+                f"kubectl delete deployment {service} -n {self.namespace} "
+                "--ignore-not-found=true --wait=true --timeout=120s"
             )
 
-            print(f"Converted {service} to StatefulSet with unique PVC per replica and scaled to {replicas}")
+            injected_claims = [f"{service}-pvc", *legacy_claims]
+            for claim_name in dict.fromkeys(injected_claims):
+                self.kubectl.exec_command(
+                    f"kubectl delete pvc {claim_name} -n {self.namespace} "
+                    "--ignore-not-found=true --wait=true --timeout=120s"
+                )
+
+            remaining_claims = {
+                claim.metadata.name
+                for claim in self.kubectl.core_v1_api.list_namespaced_persistent_volume_claim(self.namespace).items
+            }
+            not_deleted = remaining_claims.intersection(injected_claims)
+            if not_deleted:
+                raise RuntimeError(f"Could not remove injected storage claims: {sorted(not_deleted)}")
+
+            apply_result = self.kubectl.exec_command(f"kubectl apply -f {baseline_path} -n {self.namespace}")
+            print(f"Restore result for {service}: {apply_result}")
+            self.kubectl.get_deployment(service, self.namespace)
+            self.kubectl.exec_command(f"kubectl rollout status deployment/{service} -n {self.namespace} --timeout=120s")
+            self.kubectl.wait_for_ready(
+                self.namespace,
+                service_names=service,
+                max_wait=180,
+            )
+            baseline_path.unlink()
+
+            print(f"Restored the original Deployment and removed injected storage for {service}")
 
     # Inject environment variable shadowing fault
     def inject_env_variable_shadowing(self, microservices: list[str]):
@@ -1294,6 +1887,17 @@ class VirtualizationFaultInjector(FaultInjector):
 
             print(f"Recovered from environment variable shadowing fault for service: {service}")
 
+    def _wait_for_deployment_rollout(self, service: str, timeout: int = 120, sleep: int = 2) -> None:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            deployment = self.kubectl.apps_v1_api.read_namespaced_deployment(service, self.namespace)
+            if deployment_rollout_complete(deployment):
+                return
+
+            time.sleep(sleep)
+
+        raise TimeoutError(f"Deployment '{service}' did not complete its healthy baseline rollout within {timeout}s")
+
     # Inject Rolling Update Misconfiguration
     def inject_rolling_update_misconfigured(self, microservices: list[str]):
         import tempfile
@@ -1330,6 +1934,8 @@ class VirtualizationFaultInjector(FaultInjector):
                 yaml.safe_dump(base_dep, tmp)
                 path0 = tmp.name
             self.kubectl.exec_command(f"kubectl apply -f {path0} -n {self.namespace}")
+            self._wait_for_deployment_rollout(service)
+            print(f"Healthy baseline rollout completed for `{service}`")
 
             orig_path = f"/tmp/{service}-orig.yaml"
             with open(orig_path, "w") as f:
@@ -1342,7 +1948,8 @@ class VirtualizationFaultInjector(FaultInjector):
             }
             init = {
                 "name": "hang-init",
-                "image": "busybox",
+                "image": "busybox:1.36",
+                "imagePullPolicy": "IfNotPresent",
                 "command": ["/bin/sh", "-c", "sleep infinity"],
             }
             dep.setdefault("spec", {}).setdefault("template", {}).setdefault("spec", {}).setdefault(
@@ -1359,7 +1966,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_rolling_update_misconfigured(self, microservices: list[str]):
         for service in microservices:
-            original_yaml_path = f"/tmp/{service}_modified.yaml"
+            original_yaml_path = f"/tmp/{service}-orig.yaml"
 
             delete_command = f"kubectl delete deployment {service} -n {self.namespace}"
             delete_result = self.kubectl.exec_command(delete_command)
@@ -1369,32 +1976,7 @@ class VirtualizationFaultInjector(FaultInjector):
             apply_result = self.kubectl.exec_command(apply_command)
             print(f"Restored original deployment {service}: {apply_result}")
 
-    def inject_namespace_memory_limit(self, deployment_name: str, namespace: str, memory_limit: str):
-        # Delete associated ReplicaSet
-        rs_list = self.kubectl.get_matching_replicasets(namespace, deployment_name)
-        if not rs_list:
-            raise RuntimeError(f"No ReplicaSet found for deployment {deployment_name} in {namespace}")
-        rs_name = rs_list[0].metadata.name
-        self.kubectl.delete_replicaset(name=rs_name, namespace=namespace)
-
-        # Create memory resource quota
-        quota_body = {
-            "apiVersion": "v1",
-            "kind": "ResourceQuota",
-            "metadata": {"name": "memory-limit-quota", "namespace": namespace},
-            "spec": {"hard": {"memory": memory_limit}},
-        }
-        self.kubectl.apply_resource(quota_body)
-
-    def recover_namespace_memory_limit(self, deployment_name: str, namespace: str):
-        # Remove all memory-based quotas
-        quotas = self.kubectl.get_resource_quotas(namespace)
-        for quota in quotas:
-            if "memory" in quota.spec.hard:
-                self.kubectl.delete_resource_quota(name=quota.metadata.name, namespace=namespace)
-
-        # Scale deployment to 1 replica (if needed)
-        self.kubectl.scale_deployment(name=deployment_name, namespace=namespace, replicas=1)
+            self.kubectl.exec_command(f"kubectl rollout status deployment/{service} -n {self.namespace} --timeout=120s")
 
     def deploy_custom_service(self, service_name: str, script_path: str):
         print(f"Deploying {service_name} Service...................................")
@@ -1753,42 +2335,151 @@ class VirtualizationFaultInjector(FaultInjector):
         self.kubectl.exec_command(deployment_rollout_command)
         self.kubectl.wait_for_ready(self.namespace)
 
+    def _cluster_uid(self) -> str:
+        namespace = self.kubectl.core_v1_api.read_namespace("kube-system")
+        cluster_uid = str(namespace.metadata.uid or "")
+        if not cluster_uid:
+            raise RuntimeError("The kube-system namespace does not have a UID")
+        return cluster_uid
+
+    def _daemon_set_recovery_path(self, daemon_set_name: str, cluster_uid: str) -> Path:
+        filename = f"{cluster_uid}__{self.namespace}__{daemon_set_name}.json"
+        return DAEMON_SET_RECOVERY_STATE_DIR / filename
+
+    @staticmethod
+    def _daemon_set_images(daemon_set) -> dict[str, str]:
+        containers = daemon_set.spec.template.spec.containers or []
+        images = {container.name: container.image for container in containers if container.name and container.image}
+        if not images:
+            raise RuntimeError("The DaemonSet does not contain any named container images")
+        return images
+
+    def _write_daemon_set_recovery_state(self, path: Path, state: dict) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.parent.chmod(0o700)
+        temporary_path = path.with_name(f".{path.name}.tmp")
+        temporary_path.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
+        temporary_path.chmod(0o600)
+        temporary_path.replace(path)
+
+    def _capture_daemon_set_images(self, daemon_set_name: str, daemon_set, cluster_uid: str) -> dict:
+        path = self._daemon_set_recovery_path(daemon_set_name, cluster_uid)
+        daemon_set_uid = str(daemon_set.metadata.uid or "")
+        if not daemon_set_uid:
+            raise RuntimeError(f"DaemonSet '{self.namespace}/{daemon_set_name}' does not have a UID")
+
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError) as exc:
+                raise RuntimeError(f"Invalid DaemonSet recovery state: {path}") from exc
+            if existing.get("daemon_set_uid") == daemon_set_uid:
+                expected = {
+                    "version": 1,
+                    "cluster_uid": cluster_uid,
+                    "namespace": self.namespace,
+                    "daemon_set": daemon_set_name,
+                }
+                if any(existing.get(key) != value for key, value in expected.items()):
+                    raise RuntimeError(f"DaemonSet recovery state does not match the current cluster resource: {path}")
+                if not isinstance(existing.get("images"), dict) or not existing["images"]:
+                    raise RuntimeError(f"DaemonSet recovery state does not contain images: {path}")
+                return existing
+
+        state = {
+            "version": 1,
+            "cluster_uid": cluster_uid,
+            "namespace": self.namespace,
+            "daemon_set": daemon_set_name,
+            "daemon_set_uid": daemon_set_uid,
+            "images": self._daemon_set_images(daemon_set),
+        }
+        self._write_daemon_set_recovery_state(path, state)
+        return state
+
+    def _load_daemon_set_recovery_state(self, daemon_set_name: str, cluster_uid: str) -> tuple[Path, dict] | None:
+        path = self._daemon_set_recovery_path(daemon_set_name, cluster_uid)
+        if not path.exists():
+            return None
+
+        try:
+            state = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"Invalid DaemonSet recovery state: {path}") from exc
+
+        expected = {
+            "version": 1,
+            "cluster_uid": cluster_uid,
+            "namespace": self.namespace,
+            "daemon_set": daemon_set_name,
+        }
+        if any(state.get(key) != value for key, value in expected.items()):
+            raise RuntimeError(f"DaemonSet recovery state does not match the current cluster resource: {path}")
+        if not isinstance(state.get("images"), dict) or not state["images"]:
+            raise RuntimeError(f"DaemonSet recovery state does not contain images: {path}")
+        return path, state
+
+    def _patch_daemon_set_images(self, daemon_set_name: str, images: dict[str, str]) -> None:
+        body = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [
+                            {"name": container_name, "image": image} for container_name, image in images.items()
+                        ]
+                    }
+                }
+            }
+        }
+        self.kubectl.apps_v1_api.patch_namespaced_daemon_set(
+            name=daemon_set_name,
+            namespace=self.namespace,
+            body=body,
+        )
+
+    def _wait_for_daemon_set_rollout(self, daemon_set_name: str) -> None:
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status ds {daemon_set_name} -n {self.namespace} --timeout=120s",
+            timeout=130,
+        )
+
     def inject_daemon_set_image_replacement(self, daemon_set_name: str, new_image: str):
-        daemon_set_yaml = self._get_daemon_set_yaml(daemon_set_name)
-        if daemon_set_yaml is None:
-            raise RuntimeError(f"Failed to get daemonset '{daemon_set_name}'")
+        cluster_uid = self._cluster_uid()
+        daemon_set = self.kubectl.apps_v1_api.read_namespaced_daemon_set(daemon_set_name, self.namespace)
+        current_images = self._daemon_set_images(daemon_set)
+        self._capture_daemon_set_images(daemon_set_name, daemon_set, cluster_uid)
 
-        # Replace the image in all containers
-        if "spec" in daemon_set_yaml and "template" in daemon_set_yaml["spec"]:
-            template_spec = daemon_set_yaml["spec"]["template"]["spec"]
-            if "containers" in template_spec:
-                for container in template_spec["containers"]:
-                    if "image" in container:
-                        container["image"] = new_image
+        replacement_images = {container_name: new_image for container_name in current_images}
+        if current_images != replacement_images:
+            self._patch_daemon_set_images(daemon_set_name, replacement_images)
+        self._wait_for_daemon_set_rollout(daemon_set_name)
 
-        modified_yaml_path = self._write_yaml_to_file(daemon_set_name, daemon_set_yaml)  # backup the yaml
+    def recover_daemon_set_image_replacement(self, daemon_set_name: str) -> bool:
+        cluster_uid = self._cluster_uid()
+        saved = self._load_daemon_set_recovery_state(daemon_set_name, cluster_uid)
+        if saved is None:
+            return False
 
-        self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path}")
-        self.kubectl.exec_command(f"kubectl rollout restart ds {daemon_set_name} -n {self.namespace}")
-        self.kubectl.exec_command(f"kubectl rollout status ds {daemon_set_name} -n {self.namespace} --timeout=60s")
+        path, state = saved
+        daemon_set = self.kubectl.apps_v1_api.read_namespaced_daemon_set(daemon_set_name, self.namespace)
+        daemon_set_uid = str(daemon_set.metadata.uid or "")
+        if daemon_set_uid != state.get("daemon_set_uid"):
+            raise RuntimeError(
+                f"DaemonSet '{self.namespace}/{daemon_set_name}' was recreated after the recovery state was saved"
+            )
 
-    def recover_daemon_set_image_replacement(self, daemon_set_name: str, original_image: str):
-        daemon_set_yaml = self._get_daemon_set_yaml(daemon_set_name)
-        if daemon_set_yaml is None:
-            return
-        if "spec" in daemon_set_yaml and "template" in daemon_set_yaml["spec"]:
-            template_spec = daemon_set_yaml["spec"]["template"]["spec"]
-            if "containers" in template_spec:
-                for container in template_spec["containers"]:
-                    if "image" in container and container["image"] != original_image:
-                        container["image"] = original_image
-                        modified_yaml_path = self._write_yaml_to_file(daemon_set_name, daemon_set_yaml)
-                        self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path}")
-                        self.kubectl.exec_command(f"kubectl rollout restart ds {daemon_set_name} -n {self.namespace}")
-                        self.kubectl.exec_command(
-                            f"kubectl rollout status ds {daemon_set_name} -n {self.namespace} --timeout=60s"
-                        )
-                        return
+        current_images = self._daemon_set_images(daemon_set)
+        original_images = state["images"]
+        if set(current_images) != set(original_images):
+            raise RuntimeError(
+                f"DaemonSet '{self.namespace}/{daemon_set_name}' containers do not match the recovery state"
+            )
+        if current_images != original_images:
+            self._patch_daemon_set_images(daemon_set_name, original_images)
+        self._wait_for_daemon_set_rollout(daemon_set_name)
+
+        path.unlink()
+        return True
 
     def inject_rbac_misconfiguration(self, microservices: list[str]):
         for service in microservices:
@@ -2113,12 +2804,12 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def inject_tor_network_partition(self, microservices: list[str]):
         """Inject a network partition using NetworkChaos."""
-        chaos_resource_name = "tor-router-partition"  # Name of the NetworkChaos object
-        tor_node_label_key = "sregym.io/tor-node"  # Node label used to fix pods to faulty vs healthy groups
-        tor_pod_group_label_key = "sregym.io/tor-group"  # Pod label used by NetworkChaos selectors
+        chaos_resource_name = "network-segment-policy"
+        tor_node_label_key = "network-segment"
+        tor_pod_group_label_key = "network-segment"
 
-        faulty_group = "faulty"
-        healthy_group = "healthy"
+        faulty_group = "segment-a"
+        healthy_group = "segment-b"
 
         if not microservices:
             raise ValueError("inject_tor_network_partition requires a non-empty `microservices` list (faulty group).")
@@ -2228,9 +2919,9 @@ class VirtualizationFaultInjector(FaultInjector):
 
     def recover_tor_network_partition(self, microservices: list[str]):
         """Recover form network partition created by inject_tor_network_partition() above."""
-        chaos_resource_name = "tor-router-partition"  # Name of the NetworkChaos object
-        tor_node_label_key = "sregym.io/tor-node"  # Node label used to fix pods to faulty vs healthy groups
-        tor_pod_group_label_key = "sregym.io/tor-group"  # Pod label used by NetworkChaos selectors
+        chaos_resource_name = "network-segment-policy"
+        tor_node_label_key = "network-segment"
+        tor_pod_group_label_key = "network-segment"
 
         # Delete NetworkChaos first to restore network
         self.kubectl.exec_command(
@@ -2301,7 +2992,214 @@ class VirtualizationFaultInjector(FaultInjector):
 
         print(f"Recovered network partition and cleaned node labels ({tor_node_label_key}-).")
 
+    # V.N - init_container_dependency_hang: Pod stuck in Init because an injected
+    # init container loops forever waiting on a non-existent dependency (the
+    # classic wait-for-it / `until nslookup dep; do sleep; done` pattern, with a
+    # typoed / removed service name).  Distinct from `rolling_update_misconfigured`
+    # (where an init `sleep infinity` is incidental and the diagnosed root cause
+    # is the rolling-update strategy on a synthetic deployment) and from
+    # `rbac_misconfiguration` (where an init container fails on PERMISSIONS, not
+    # a hang).  See: kubernetes.io init-container docs (recommended dep-wait pattern).
+    INIT_DEP_HANG_CONTAINER_NAME = "wait-for-legacy-config"
+    INIT_DEP_HANG_TARGET_SVC = "legacy-config-service"
+
+    def inject_init_container_dependency_hang(self, microservices: list[str]):
+        """Patch each target deployment to add a busybox init container that loops
+        on `nslookup` against a non-existent service, so the pod never leaves
+        `Init:0/1`.  Saves the pre-injection deployment manifest for recovery
+        and forces a rollout restart so the fault takes effect on the next
+        ReplicaSet."""
+        for service in microservices:
+            get_cmd = f"kubectl get deployment {service} -n {self.namespace} -o yaml"
+            original_yaml_str = self.kubectl.exec_command(get_cmd)
+            try:
+                original = yaml.safe_load(original_yaml_str)
+            except yaml.YAMLError as exc:
+                raise RuntimeError(
+                    f"[init_container_dependency_hang] failed to parse current deployment "
+                    f"`{service}` in `{self.namespace}`: {exc}\nRaw kubectl output:\n{original_yaml_str}"
+                ) from exc
+            if not original or original.get("kind") != "Deployment":
+                raise RuntimeError(
+                    f"[init_container_dependency_hang] deployment `{service}` not found in "
+                    f"`{self.namespace}` (kubectl said: {original_yaml_str[:200]})"
+                )
+
+            # Strip runtime/status fields that would make re-apply ugly but keep
+            # the spec/metadata/labels intact so recovery is a clean round-trip.
+            for noisy in ("status",):
+                original.pop(noisy, None)
+            meta = original.setdefault("metadata", {})
+            for noisy in ("creationTimestamp", "resourceVersion", "uid", "generation", "managedFields"):
+                meta.pop(noisy, None)
+            # Annotations are kept because Helm releases use them; only drop
+            # last-applied so kubectl apply does not warn.
+            annotations = meta.get("annotations") or {}
+            annotations.pop("kubectl.kubernetes.io/last-applied-configuration", None)
+            if not annotations:
+                meta.pop("annotations", None)
+
+            snapshot_path = f"/tmp/{service}_init_dep_hang_original.yaml"
+            with open(snapshot_path, "w") as fh:
+                yaml.safe_dump(original, fh)
+            print(f"Saved pre-injection deployment to {snapshot_path}")
+
+            # Build the dep-wait init container.  We pin `busybox:1.28` because
+            # its nslookup exits non-zero on NXDOMAIN; newer busybox releases
+            # regressed this (kubernetes/website#12050) and would silently
+            # break the fault.  We rely on the exit code alone — an earlier
+            # `grep '^Address'` guard matched the resolver's own self-id line
+            # in busybox 1.28 output and let the loop terminate immediately
+            # even when the target name did not resolve.
+            init_cmd = (
+                f"echo 'waiting for {self.INIT_DEP_HANG_TARGET_SVC} to become ready...'; "
+                f"until nslookup {self.INIT_DEP_HANG_TARGET_SVC}.{self.namespace}.svc.cluster.local "
+                f">/dev/null 2>&1; do "
+                f"echo 'still waiting on {self.INIT_DEP_HANG_TARGET_SVC}'; sleep 5; done"
+            )
+            init_container = {
+                "name": self.INIT_DEP_HANG_CONTAINER_NAME,
+                "image": "busybox:1.28",
+                "command": ["/bin/sh", "-c", init_cmd],
+            }
+
+            tmpl_spec = original["spec"]["template"]["spec"]
+            existing_inits = tmpl_spec.get("initContainers") or []
+            # Drop any prior copy of our injected container (defensive: makes
+            # inject idempotent if invoked twice on the same cluster).
+            existing_inits = [c for c in existing_inits if c.get("name") != self.INIT_DEP_HANG_CONTAINER_NAME]
+            existing_inits.append(init_container)
+            tmpl_spec["initContainers"] = existing_inits
+
+            faulty_path = f"/tmp/{service}_init_dep_hang_faulty.yaml"
+            with open(faulty_path, "w") as fh:
+                yaml.safe_dump(original, fh)
+
+            apply_out = self.kubectl.exec_command(f"kubectl apply -f {faulty_path} -n {self.namespace}")
+            print(f"Applied init-container hang patch to {service}: {apply_out.strip()}")
+
+            # Force the new ReplicaSet so the fault is visible immediately rather
+            # than only on the next legitimate update.
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
+            print(f"⚠️  Injected init-container dependency hang into `{service}`")
+
+    def recover_init_container_dependency_hang(self, microservices: list[str]):
+        """Reapply the saved pre-injection manifest and force a rollout so the
+        cluster returns to its healthy steady state.  Safe to call even if the
+        injected init container has already been removed by the agent — the
+        round-trip apply is idempotent."""
+        for service in microservices:
+            snapshot_path = f"/tmp/{service}_init_dep_hang_original.yaml"
+            if not Path(snapshot_path).exists():
+                # Fall back to stripping our marker init container from whatever
+                # is currently deployed.
+                get_cmd = f"kubectl get deployment {service} -n {self.namespace} -o yaml"
+                current = yaml.safe_load(self.kubectl.exec_command(get_cmd))
+                tmpl_spec = current["spec"]["template"]["spec"]
+                inits = tmpl_spec.get("initContainers") or []
+                tmpl_spec["initContainers"] = [
+                    c for c in inits if c.get("name") != self.INIT_DEP_HANG_CONTAINER_NAME
+                ] or None
+                if tmpl_spec["initContainers"] is None:
+                    tmpl_spec.pop("initContainers")
+                with open(snapshot_path, "w") as fh:
+                    yaml.safe_dump(current, fh)
+                print(f"[recover] no snapshot found, reconstructed from live state at {snapshot_path}")
+
+            apply_out = self.kubectl.exec_command(f"kubectl apply -f {snapshot_path} -n {self.namespace}")
+            print(f"Restored deployment {service}: {apply_out.strip()}")
+
+            self.kubectl.exec_command(f"kubectl rollout restart deployment {service} -n {self.namespace}")
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
+            print(f"✅ Recovered init-container dependency hang for `{service}`")
+
+    def inject_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str, limit: int = 1024):
+        """Injects a file descriptor exhaustion fault by restricting the ulimit."""
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            containers[0]["command"] = ["/bin/sh", "-c"]
+            containers[0]["args"] = [f"ulimit -n {limit} && exec {entrypoint_cmd}"]
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+            apply_result = self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
+            print(f"Apply result for {service}: {apply_result}")
+
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
+            print(f"Injected FD exhaustion (limit: {limit}) for service: {service}")
+
+    def recover_fd_exhaustion(self, microservices: list[str], entrypoint_cmd: str):
+        """Recover from FD exhaustion by pushing the soft limit to the kernel hard limit."""
+        for service in microservices:
+            deployment_yaml = self._get_deployment_yaml(service)
+
+            containers = deployment_yaml["spec"]["template"]["spec"]["containers"]
+            containers[0]["command"] = [entrypoint_cmd]
+            containers[0]["args"] = []
+
+            modified_yaml_path = self._write_yaml_to_file(service, deployment_yaml)
+
+            apply_result = self.kubectl.exec_command(f"kubectl apply -f {modified_yaml_path} -n {self.namespace}")
+            print(f"Recover apply result for {service}: {apply_result}")
+
+            self.kubectl.exec_command(f"kubectl rollout status deployment {service} -n {self.namespace} --timeout=120s")
+            print(f"Recovered FD exhaustion for service: {service}")
+
+    # V.14 - stale_hostaliases: pin a backend hostname to a dead address in the pod's own /etc/hosts
+    def inject_stale_hostaliases(
+        self,
+        microservices: list[str],
+        target_host: str,
+        blackhole_ip: str,
+        rollout_timeout: int = 180,
+    ):
+        """Add a `hostAliases` entry so the pod resolves `target_host` locally.
+
+        The kubelet writes `hostAliases` into the container's /etc/hosts, and
+        the libc resolver reads /etc/hosts before it ever queries CoreDNS, so
+        the entry shadows in-cluster DNS for this pod only.
+        """
+        for service in microservices:
+            patch = [
+                {
+                    "op": "add",
+                    "path": "/spec/template/spec/hostAliases",
+                    "value": [{"ip": blackhole_ip, "hostnames": [target_host]}],
+                }
+            ]
+            self.kubectl.apps_v1_api.patch_namespaced_deployment(
+                name=service,
+                namespace=self.namespace,
+                body=patch,
+            )
+            print(f"Pinned {target_host} to {blackhole_ip} in the hosts file of {service}")
+            self._wait_for_rollout(service, rollout_timeout)
+
+    def recover_stale_hostaliases(self, microservices: list[str], rollout_timeout: int = 180):
+        """Drop the `hostAliases` block so the pod falls back to CoreDNS."""
+        for service in microservices:
+            deployment = self.kubectl.get_deployment(service, self.namespace)
+            if not deployment.spec.template.spec.host_aliases:
+                print(f"No hosts override present on {service}; nothing to recover")
+                continue
+
+            patch = [{"op": "remove", "path": "/spec/template/spec/hostAliases"}]
+            self.kubectl.apps_v1_api.patch_namespaced_deployment(
+                name=service,
+                namespace=self.namespace,
+                body=patch,
+            )
+            print(f"Removed the hosts override from {service}")
+            self._wait_for_rollout(service, rollout_timeout)
+
     ############# HELPER FUNCTIONS ################
+    def _wait_for_rollout(self, service: str, timeout: int = 180):
+        """Block until the Deployment's new ReplicaSet is fully rolled out."""
+        result = self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment {service} -n {self.namespace} --timeout={timeout}s"
+        )
+        print(f"Rollout status for {service}: {result}")
+        return result
     def _wait_for_pods_ready(self, microservices: list[str], timeout: int = 30):
         for service in microservices:
             command = (
@@ -2353,14 +3251,6 @@ class VirtualizationFaultInjector(FaultInjector):
         deployment_yaml = self.kubectl.exec_command(f"kubectl get service {service_name} -n {self.namespace} -o yaml")
         return yaml.safe_load(deployment_yaml)
 
-    def _get_daemon_set_yaml(self, daemon_set_name: str) -> dict | None:
-        daemon_set_yaml = self.kubectl.exec_command(f"kubectl get ds {daemon_set_name} -n {self.namespace} -o yaml")
-        parsed = yaml.safe_load(daemon_set_yaml)
-        if not isinstance(parsed, dict):
-            print(f"[inject_virtual] Failed to get daemonset '{daemon_set_name}': {daemon_set_yaml[:200]}")
-            return None
-        return parsed
-
     def _change_node_selector(self, deployment_yaml: dict, node_name: str):
         if "spec" in deployment_yaml and "template" in deployment_yaml["spec"]:
             deployment_yaml["spec"]["template"]["spec"]["nodeSelector"] = {"kubernetes.io/hostname": node_name}
@@ -2395,7 +3285,7 @@ class VirtualizationFaultInjector(FaultInjector):
 
             pods = self.kubectl.core_v1_api.list_namespaced_pod(self.namespace, label_selector=label_selector)
 
-            target_pods = [pod.metadata.name for pod in pods.items if (label_selector or service in pod.metadata.name)]
+            target_pods = [pod for pod in pods.items if (label_selector or service in pod.metadata.name)]
 
             if not target_pods:
                 time.sleep(sleep)
@@ -2405,14 +3295,9 @@ class VirtualizationFaultInjector(FaultInjector):
             state_ok = True
 
             for pod in target_pods:
-                try:
-                    resolv = self.kubectl.exec_command(
-                        f"kubectl exec {pod} -n {self.namespace} -- cat /etc/resolv.conf"
-                    )
-                except Exception:
-                    state_ok = False
-                    break
-                has_external = external_ns in resolv
+                dns_config = pod.spec.dns_config
+                nameservers = dns_config.nameservers if dns_config and dns_config.nameservers else []
+                has_external = external_ns in nameservers
 
                 if expect_external != has_external:
                     state_ok = False

@@ -11,9 +11,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class K8STargetPortMisconfig(Problem):
     def __init__(self, faulty_service="user-service"):
-        self.app = SocialNetwork()
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=SocialNetwork())
         self.faulty_service = faulty_service
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(

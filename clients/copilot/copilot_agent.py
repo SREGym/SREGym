@@ -1,0 +1,320 @@
+"""
+GitHub Copilot CLI agent implementation for SREGym.
+"""
+
+import logging
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+from clients.harness.token_usage import TOKEN_FIELDS, aggregate_usage, read_jsonl, token_count, usage_metrics
+
+logger = logging.getLogger("all.copilot.agent")
+
+
+class CopilotCliAgent:
+    """
+    The Copilot CLI agent uses GitHub's Copilot CLI tool to solve tasks.
+    """
+
+    _OUTPUT_FILENAME = "copilot-cli.txt"
+    _JSONL_FILENAME = "copilot-cli.jsonl"
+
+    @staticmethod
+    def check_installation() -> bool:
+        """Check if Copilot CLI is installed."""
+        return shutil.which("copilot") is not None
+
+    @staticmethod
+    def ensure_installed(auto_install: bool = True) -> None:
+        """
+        Ensure Copilot CLI is installed, optionally attempting installation.
+
+        Raises:
+            RuntimeError: If copilot is not installed and auto_install fails
+        """
+        if CopilotCliAgent.check_installation():
+            logger.info("Copilot CLI is already installed")
+            return
+
+        logger.warning("Copilot CLI not found in PATH")
+
+        if not auto_install:
+            raise RuntimeError(
+                "Copilot CLI is not installed. Please install it using:\n"
+                "  npm install -g @github/copilot\n"
+                "Or visit: https://docs.github.com/en/copilot/how-tos/copilot-cli"
+            )
+
+        logger.info("Attempting to install Copilot CLI via npm...")
+        try:
+            subprocess.check_call(
+                ["npm", "install", "-g", "@github/copilot"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            logger.info("Successfully installed Copilot CLI")
+
+            if not CopilotCliAgent.check_installation():
+                raise RuntimeError("Copilot CLI installation appeared to succeed but command is still not available")
+
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            error_msg = f"Failed to auto-install Copilot CLI: {e}\n"
+            if isinstance(e, FileNotFoundError):
+                error_msg += "npm is not installed. Please install Node.js and npm first.\n"
+            error_msg += (
+                "Please install Copilot CLI manually using:\n"
+                "  npm install -g @github/copilot\n"
+                "Or visit: https://docs.github.com/en/copilot/how-tos/copilot-cli"
+            )
+            raise RuntimeError(error_msg) from None
+
+    def __init__(
+        self,
+        logs_dir: Path,
+        model_name: str,
+        copilot_home: Path | None = None,
+    ):
+        """
+        Initialize the Copilot CLI agent.
+
+        Args:
+            logs_dir: Directory to store logs and output
+            model_name: Model name to use (e.g., "gpt-4.1")
+            copilot_home: Directory for Copilot configuration (defaults to ~/.copilot)
+        """
+        self.logs_dir = Path(logs_dir)
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+
+        self.model_name = model_name
+        self.copilot_home = Path(copilot_home) if copilot_home else Path.home() / ".copilot"
+
+        logger.info(f"Initialized Copilot CLI agent with model={model_name}")
+        logger.info(f"Logs dir: {self.logs_dir}")
+        logger.info(f"Copilot home: {self.copilot_home}")
+
+    @property
+    def output_path(self) -> Path:
+        """Path to Copilot CLI plain-text debug output file."""
+        return self.logs_dir / self._OUTPUT_FILENAME
+
+    @property
+    def jsonl_path(self) -> Path:
+        """Path to Copilot CLI JSONL output (structured, for ATIF conversion)."""
+        return self.logs_dir / self._JSONL_FILENAME
+
+    @property
+    def otel_dir(self) -> Path:
+        """Path to OTel JSONL directory."""
+        return self.logs_dir / "otel"
+
+    @property
+    def transcript_path(self) -> Path:
+        """Path to session transcript markdown."""
+        return self.logs_dir / "copilot-session.md"
+
+    def get_usage_metrics(self) -> dict[str, int | None]:
+        """Count chat spans, not both chat spans and their parent totals."""
+        records = []
+        seen = set()
+        for path in sorted(self.otel_dir.glob("*.jsonl")):
+            for event in read_jsonl(path):
+                attrs = event.get("attributes") or {}
+                if not isinstance(attrs, dict):
+                    continue
+                # Older files lack the operation attribute. Their usage rows
+                # already describe individual requests.
+                if attrs.get("gen_ai.operation.name") not in {None, "chat"}:
+                    continue
+                span_id = event.get("span_id") or event.get("spanId")
+                if span_id and span_id in seen:
+                    continue
+                if span_id:
+                    seen.add(span_id)
+                if not any(key in attrs for key in ("gen_ai.usage.input_tokens", "gen_ai.usage.output_tokens")):
+                    continue
+                records.append(
+                    usage_metrics(
+                        input_tokens=token_count(attrs.get("gen_ai.usage.input_tokens")),
+                        output_tokens=token_count(attrs.get("gen_ai.usage.output_tokens")),
+                        cached_input_tokens=token_count(
+                            attrs.get(
+                                "gen_ai.usage.cache_read.input_tokens",
+                                attrs.get("gen_ai.usage.cache_read_input_tokens"),
+                            )
+                        ),
+                        cache_creation_input_tokens=token_count(attrs.get("gen_ai.usage.cache_creation.input_tokens")),
+                        reasoning_output_tokens=token_count(
+                            attrs.get(
+                                "gen_ai.usage.reasoning.output_tokens", attrs.get("gen_ai.usage.reasoning_tokens")
+                            )
+                        ),
+                    )
+                )
+        telemetry_usage = aggregate_usage(records)
+
+        # Keep CLI fields that telemetry does not report. These are two views
+        # of the same calls, so never add their totals together.
+        calls = {}
+        messages = []
+        if self.jsonl_path.exists():
+            for index, event in enumerate(read_jsonl(self.jsonl_path)):
+                data = event.get("data") or {}
+                if not isinstance(data, dict):
+                    continue
+                if event.get("type") == "assistant.usage":
+                    key = data.get("apiCallId") or event.get("id") or index
+                    calls[key] = usage_metrics(
+                        input_tokens=token_count(data.get("inputTokens")),
+                        output_tokens=token_count(data.get("outputTokens")),
+                        cached_input_tokens=token_count(data.get("cacheReadTokens")),
+                        cache_creation_input_tokens=token_count(data.get("cacheWriteTokens")),
+                        reasoning_output_tokens=token_count(data.get("reasoningTokens")),
+                    )
+                elif event.get("type") == "usage":
+                    calls[index] = usage_metrics(
+                        input_tokens=token_count(event.get("input_tokens")),
+                        output_tokens=token_count(event.get("output_tokens")),
+                        cached_input_tokens=token_count(event.get("cached_input_tokens")),
+                    )
+                elif event.get("type") == "assistant.message":
+                    messages.append(usage_metrics(output_tokens=token_count(data.get("outputTokens"))))
+        stream_usage = aggregate_usage(calls.values() if calls else messages)
+        return usage_metrics(
+            **{
+                field: telemetry_usage[field] if telemetry_usage[field] is not None else stream_usage[field]
+                for field in TOKEN_FIELDS
+            }
+        )
+
+    def _build_command(self, instruction: str) -> list[str]:
+        """Build the Copilot command, preserving the CLI's default effort when unset."""
+        model = self.model_name.split("/")[-1]
+        command = [
+            "copilot",
+            "-p",
+            instruction,
+            "--allow-all",
+            "--no-ask-user",
+            "--model",
+            model,
+            "--output-format",
+            "json",
+            f"--share={self.transcript_path}",
+        ]
+        reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+        if reasoning_effort:
+            command.extend(["--reasoning-effort", reasoning_effort])
+        if os.environ.get("AGENT_INTERNET_ACCESS") == "filtered":
+            # Shell network calls still pass through the egress proxy. Remove
+            # web tools and the built-in GitHub MCP, which can perform
+            # provider-side requests outside the container.
+            command.extend(["--excluded-tools", "web_fetch,web_search"])
+            command.extend(["--disable-mcp-server", "github-mcp-server"])
+        return command
+
+    def run(self, instruction: str) -> int:
+        """
+        Run the Copilot CLI agent with the given instruction.
+
+        Args:
+            instruction: The task instruction to pass to Copilot CLI
+
+        Returns:
+            Return code from Copilot CLI execution (0 for success)
+        """
+        model = self.model_name.split("/")[-1]
+
+        logger.info(f"Running Copilot CLI with model: {model}")
+
+        # Setup OTel directory for metrics capture
+        self.otel_dir.mkdir(parents=True, exist_ok=True)
+        otel_path = self.otel_dir / "copilot-otel.jsonl"
+
+        # Build environment variables
+        env = os.environ.copy()
+        env["COPILOT_HOME"] = str(self.copilot_home)
+        env["COPILOT_MODEL"] = model
+
+        # Enable OTel file export for token metrics
+        env["COPILOT_OTEL_ENABLED"] = "true"
+        env["COPILOT_OTEL_EXPORTER_TYPE"] = "file"
+        env["COPILOT_OTEL_FILE_EXPORTER_PATH"] = str(otel_path)
+
+        # Auth: BYOK mode (COPILOT_PROVIDER_BASE_URL) or GitHub-hosted
+        # (COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN)
+        byok_vars = ["COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_TYPE"]
+        has_byok = bool(os.environ.get("COPILOT_PROVIDER_BASE_URL"))
+
+        token_vars = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
+        has_github_auth = any(os.environ.get(v) for v in token_vars)
+
+        if not has_byok and not has_github_auth:
+            logger.error("=" * 80)
+            logger.error("ERROR: No authentication found for Copilot CLI")
+            logger.error("Option 1 - GitHub-hosted (set one of):")
+            logger.error("  - COPILOT_GITHUB_TOKEN (fine-grained PAT with Copilot Requests permission)")
+            logger.error("  - GH_TOKEN (GitHub CLI OAuth token)")
+            logger.error("  - GITHUB_TOKEN")
+            logger.error("Option 2 - BYOK (set all relevant):")
+            logger.error("  - COPILOT_PROVIDER_BASE_URL (required)")
+            logger.error("  - COPILOT_PROVIDER_API_KEY (required for remote providers)")
+            logger.error("  - COPILOT_PROVIDER_TYPE (openai|azure|anthropic, default: openai)")
+            logger.error("=" * 80)
+            return 1
+
+        # Pass through BYOK env vars if set
+        for var in byok_vars:
+            if os.environ.get(var):
+                env[var] = os.environ[var]
+
+        # Build command.
+        # `--output-format json` makes Copilot emit JSONL (one JSON object per
+        # line) so the trace can be converted to ATIF via a clean port of
+        # Harbor's converter. The structured stream is captured to
+        # ``copilot-cli.jsonl``; a plain-text copy is kept in ``copilot-cli.txt``
+        # for human debugging (Harbor keeps both the same way).
+        command = self._build_command(instruction)
+        reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+
+        logger.info(
+            f"Executing command: copilot -p <instruction> --allow-all --no-ask-user "
+            f"--model {model} --output-format json"
+            + (f" --reasoning-effort {reasoning_effort}" if reasoning_effort else "")
+        )
+
+        try:
+            # stderr is merged into stdout (matches Harbor's ``2>&1``); the
+            # converter skips any non-JSON lines that result.
+            with open(self.jsonl_path, "w") as out_file:
+                process = subprocess.Popen(
+                    command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL,
+                    env=env,
+                    text=True,
+                    bufsize=1,
+                )
+
+                if process.stdout:
+                    for line in process.stdout:
+                        out_file.write(line)
+                        out_file.flush()
+                        print(line, end="", flush=True)
+
+                process.wait()
+
+            # Keep a plain-text debug copy alongside the JSONL.
+            try:
+                self.output_path.write_text(self.jsonl_path.read_text())
+            except OSError as copy_err:
+                logger.debug(f"Could not write plain-text debug copy: {copy_err}")
+
+            logger.info(f"Copilot CLI finished with return code: {process.returncode}")
+            return process.returncode
+
+        except Exception as e:
+            logger.error(f"Error running Copilot CLI: {e}")
+            raise

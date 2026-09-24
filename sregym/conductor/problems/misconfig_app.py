@@ -1,9 +1,10 @@
-"""MongoDB storage user unregistered problem in the HotelReservation application."""
+"""Roll out a Geo image configured with an incorrect MongoDB port."""
 
 from sregym.conductor.oracles.incorrect_image_mitigation import IncorrectImageMitigationOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
+from sregym.generators.images import HOTEL_GEO_MISCONFIG_IMAGE
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -11,17 +12,16 @@ from sregym.utils.decorators import mark_fault_injected
 
 class MisconfigAppHotelRes(Problem):
     def __init__(self):
-        self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = ["geo"]
         self.root_cause = self.build_structured_root_cause(
             component="deployment/geo",
             namespace=self.namespace,
             description=(
-                "The geo deployment is rolled to a buggy image tag (yinfangchen/geo:app3), which crashes at runtime and "
-                "drives repeated restart loops, leaving the service unhealthy and breaking geo-dependent request paths."
+                f"The geo deployment uses {HOTEL_GEO_MISCONFIG_IMAGE}, whose configuration connects to "
+                "mongodb-geo:27777 instead of port 27017. Geo panics when the database connection fails, "
+                "causing repeated restarts and breaking geo-dependent request paths."
             ),
         )
         # === Attach evaluation oracles ===
@@ -29,7 +29,7 @@ class MisconfigAppHotelRes(Problem):
 
         self.app.create_workload()
         self.mitigation_oracle = IncorrectImageMitigationOracle(
-            problem=self, actual_images={"geo": "yinfangchen/geo:app3"}
+            problem=self, actual_images={"geo": HOTEL_GEO_MISCONFIG_IMAGE}
         )
 
     @mark_fault_injected

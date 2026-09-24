@@ -1,13 +1,23 @@
 """Inject faults at the application layer: Code, MongoDB, Redis, etc."""
 
 import base64
+import datetime
+import shlex
 import textwrap
 import time
 
 from kubernetes import client
 
 from sregym.generators.fault.base import FaultInjector
+from sregym.generators.images import HOTEL_GEO_MISCONFIG_IMAGE
+from sregym.service.apps.hotel_reservation import HOTEL_RESERVATION_APPLICATION_IMAGE
+from sregym.service.kafka_health import KafkaHealthCheck, broker_memory_failure
 from sregym.service.kubectl import KubeCtl
+from sregym.service.runtime_images import KAFKA_CLIENT_IMAGE, REDIS_CLIENT_IMAGE
+
+FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE = HOTEL_RESERVATION_APPLICATION_IMAGE
+KAFKA_OOM_TIMEOUT_SECONDS = 600
+KAFKA_OOM_POLL_SECONDS = 5
 
 
 class ApplicationFaultInjector(FaultInjector):
@@ -32,7 +42,6 @@ class ApplicationFaultInjector(FaultInjector):
         for service in target_services:
             if service in microservices:
                 pods = self.kubectl.list_pods(self.namespace)
-                # print(pods)
                 target_mongo_pods = [pod.metadata.name for pod in pods.items if service in pod.metadata.name]
                 print(f"Target MongoDB Pods: {target_mongo_pods}")
 
@@ -44,12 +53,11 @@ class ApplicationFaultInjector(FaultInjector):
                 ]
                 print(f"Target Service Pods: {target_service_pods}")
 
+                script = self._read_fault_script(
+                    "revoke-admin-rate-mongo.sh" if service == "mongodb-rate" else "revoke-admin-geo-mongo.sh"
+                )
                 for pod in target_mongo_pods:
-                    if service == "mongodb-rate":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-admin-rate-mongo.sh"
-                    elif service == "mongodb-geo":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-admin-geo-mongo.sh"
-                    result = self.kubectl.exec_command(revoke_command)
+                    result = self._exec_script_in_pod(pod, script)
                     print(f"Injection result for {service}: {result}")
 
                 self.delete_service_pods(target_service_pods)
@@ -68,19 +76,21 @@ class ApplicationFaultInjector(FaultInjector):
                 target_service_pods = [
                     pod.metadata.name for pod in pods.items if self.mongo_service_pod_map[service] in pod.metadata.name
                 ]
+
+                script = self._read_fault_script(
+                    "revoke-mitigate-admin-rate-mongo.sh"
+                    if service == "mongodb-rate"
+                    else "revoke-mitigate-admin-geo-mongo.sh"
+                )
                 for pod in target_mongo_pods:
-                    if service == "mongodb-rate":
-                        recover_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-mitigate-admin-rate-mongo.sh"
-                    elif service == "mongodb-geo":
-                        recover_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/revoke-mitigate-admin-geo-mongo.sh"
-                    result = self.kubectl.exec_command(recover_command)
+                    result = self._exec_script_in_pod(pod, script)
                     print(f"Recovery result for {service}: {result}")
 
                 self.delete_service_pods(target_service_pods)
 
     # A.2 - storage_user_unregistered: User not registered in MongoDB - Storage/Net
     def inject_storage_user_unregistered(self, microservices: list[str]):
-        """Inject a fault to create an unregistered user in MongoDB."""
+        """Inject a fault to remove the admin user from MongoDB."""
         target_services = ["mongodb-rate", "mongodb-geo"]
         for service in target_services:
             if service in microservices:
@@ -93,11 +103,10 @@ class ApplicationFaultInjector(FaultInjector):
                     for pod in pods.items
                     if pod.metadata.name.startswith(self.mongo_service_pod_map[service])
                 ]
+
+                script = self._read_fault_script("remove-admin-mongo.sh")
                 for pod in target_mongo_pods:
-                    revoke_command = (
-                        f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/remove-admin-mongo.sh"
-                    )
-                    result = self.kubectl.exec_command(revoke_command)
+                    result = self._exec_script_in_pod(pod, script)
                     print(f"Injection result for {service}: {result}")
 
                 self.delete_service_pods(target_service_pods)
@@ -115,15 +124,30 @@ class ApplicationFaultInjector(FaultInjector):
                     for pod in pods.items
                     if pod.metadata.name.startswith(self.mongo_service_pod_map[service])
                 ]
+
+                script = self._read_fault_script(
+                    "remove-mitigate-admin-rate-mongo.sh"
+                    if service == "mongodb-rate"
+                    else "remove-mitigate-admin-geo-mongo.sh"
+                )
                 for pod in target_mongo_pods:
-                    if service == "mongodb-rate":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/remove-mitigate-admin-rate-mongo.sh"
-                    elif service == "mongodb-geo":
-                        revoke_command = f"kubectl exec -it {pod} -n {self.namespace} -- /bin/bash /scripts/remove-mitigate-admin-geo-mongo.sh"
-                    result = self.kubectl.exec_command(revoke_command)
+                    result = self._exec_script_in_pod(pod, script)
                     print(f"Recovery result for {service}: {result}")
 
                 self.delete_service_pods(target_service_pods)
+
+    def _read_fault_script(self, filename: str) -> str:
+        """Read a fault script from the scripts directory."""
+        from sregym.paths import FAULT_SCRIPTS
+
+        script_path = FAULT_SCRIPTS / filename
+        with open(script_path) as f:
+            return f.read()
+
+    def _exec_script_in_pod(self, pod: str, script: str) -> str:
+        """Execute a script inside a pod by piping it via stdin."""
+        command = f"kubectl exec -i {pod} -n {self.namespace} -- /bin/bash"
+        return self.kubectl.exec_command(command, input_data=script)
 
     # A.3 - misconfig_app: pull the buggy config of the application image - Misconfig
     def inject_misconfig_app(self, microservices: list[str]):
@@ -138,7 +162,7 @@ class ApplicationFaultInjector(FaultInjector):
                 # Modify the image to use the buggy image
                 for container in deployment.spec.template.spec.containers:
                     if container.name == f"hotel-reserv-{service}":
-                        container.image = "yinfangchen/geo:app3"
+                        container.image = HOTEL_GEO_MISCONFIG_IMAGE
                 self.kubectl.update_deployment(service, self.namespace, deployment)
                 time.sleep(10)
 
@@ -148,7 +172,7 @@ class ApplicationFaultInjector(FaultInjector):
             if deployment:
                 for container in deployment.spec.template.spec.containers:
                     if container.name == f"hotel-reserv-{service}":
-                        container.image = "yinfangchen/hotelreservation:latest"
+                        container.image = HOTEL_RESERVATION_APPLICATION_IMAGE
                 self.kubectl.update_deployment(service, self.namespace, deployment)
 
     # A.4 valkey_auth_disruption: Invalidate the password in valkey so dependent services cannot work
@@ -178,7 +202,10 @@ class ApplicationFaultInjector(FaultInjector):
 
         valkey_pod = valkey_pods[0]
         print(f"[🔓] Found Valkey pod: {valkey_pod}")
-        command = f"kubectl exec -n {self.namespace} {valkey_pod} -- valkey-cli CONFIG SET requirepass ''"
+        command = (
+            f"kubectl exec -n {self.namespace} {valkey_pod} -- "
+            "env VALKEYCLI_AUTH=invalid_pass valkey-cli CONFIG SET requirepass ''"
+        )
         result = self.kubectl.exec_command(command)
         print(f"[✅] Recovery result: {result}")
 
@@ -233,11 +260,11 @@ class ApplicationFaultInjector(FaultInjector):
                         "containers": [
                             {
                                 "name": "flooder",
-                                "image": "python:3.10-slim",
+                                "image": REDIS_CLIENT_IMAGE,
                                 "command": [
-                                    "sh",
+                                    "python3",
                                     "-c",
-                                    f"pip install redis && python3 -c \"import base64; exec(base64.b64decode('{encoded_script}'))\"",
+                                    f"import base64; exec(base64.b64decode('{encoded_script}'))",
                                 ],
                             }
                         ],
@@ -478,9 +505,7 @@ class ApplicationFaultInjector(FaultInjector):
                 updated_env.append(e)
 
         if not found:
-            raise ValueError(
-                f"Environment variable '{env_var}' not found in deployment '{deployment_name}'"
-            )
+            raise ValueError(f"Environment variable '{env_var}' not found in deployment '{deployment_name}'")
 
         patch_body = {
             "spec": {
@@ -498,18 +523,14 @@ class ApplicationFaultInjector(FaultInjector):
         }
         self.kubectl.patch_deployment(deployment_name, self.namespace, patch_body)
         print(
-            f"Overrode environment variable '{env_var}' in deployment '{deployment_name}' "
-            f"with value '{wrong_value}'."
+            f"Overrode environment variable '{env_var}' in deployment '{deployment_name}' with value '{wrong_value}'."
         )
 
     def recover_env_value_override(self, deployment_name: str, env_var: str, correct_value: str):
         """Restore an overridden env var to its correct value."""
         # Same shape as inject_env_value_override, but with the correct value.
         self.inject_env_value_override(deployment_name, env_var, correct_value)
-        print(
-            f"Restored environment variable '{env_var}' in deployment '{deployment_name}' "
-            f"to '{correct_value}'."
-        )
+        print(f"Restored environment variable '{env_var}' in deployment '{deployment_name}' to '{correct_value}'.")
 
     def inject_source_file_override(
         self,
@@ -572,13 +593,8 @@ class ApplicationFaultInjector(FaultInjector):
         # ConfigMap subPath mounts snapshot the value at pod-start time and do
         # *not* hot-reload when the ConfigMap changes, so force a rollout even
         # when the Deployment spec itself wasn't modified on this call.
-        self.kubectl.exec_command(
-            f"kubectl rollout restart deployment/{deployment_name} -n {self.namespace}"
-        )
-        print(
-            f"Mounted ConfigMap '{cm_name}' key '{basename}' over '{source_path}' "
-            f"in deployment '{deployment_name}'."
-        )
+        self.kubectl.exec_command(f"kubectl rollout restart deployment/{deployment_name} -n {self.namespace}")
+        print(f"Mounted ConfigMap '{cm_name}' key '{basename}' over '{source_path}' in deployment '{deployment_name}'.")
         return cm_name
 
     def recover_source_file_override(
@@ -595,25 +611,16 @@ class ApplicationFaultInjector(FaultInjector):
         pod_spec = deployment.spec.template.spec
         container = pod_spec.containers[0]
 
-        pod_spec.volumes = [
-            v for v in (pod_spec.volumes or []) if v.name != volume_name
-        ]
-        container.volume_mounts = [
-            m for m in (container.volume_mounts or []) if m.name != volume_name
-        ]
+        pod_spec.volumes = [v for v in (pod_spec.volumes or []) if v.name != volume_name]
+        container.volume_mounts = [m for m in (container.volume_mounts or []) if m.name != volume_name]
         self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
 
         # Best-effort delete of the ConfigMap.
         try:
-            self.kubectl.exec_command(
-                f"kubectl delete configmap {cm_name} -n {self.namespace}"
-            )
+            self.kubectl.exec_command(f"kubectl delete configmap {cm_name} -n {self.namespace}")
         except Exception as e:
             print(f"Warning: failed to delete ConfigMap {cm_name}: {e}")
-        print(
-            f"Removed source override for '{source_path}' from deployment "
-            f"'{deployment_name}'."
-        )
+        print(f"Removed source override for '{source_path}' from deployment '{deployment_name}'.")
 
     def set_sequence_value(
         self,
@@ -630,17 +637,14 @@ class ApplicationFaultInjector(FaultInjector):
         value is readable back via pg_sequences to catch silent failures.
         """
         set_sql = f"SELECT setval('{sequence}', {int(value)});"
-        set_cmd = (
-            f"kubectl exec -n {self.namespace} {pg_pod} -- "
-            f"psql -U {pg_superuser} -d {pg_db} -At -c \"{set_sql}\""
-        )
+        set_cmd = f'kubectl exec -n {self.namespace} {pg_pod} -- psql -U {pg_superuser} -d {pg_db} -At -c "{set_sql}"'
         set_out = self.kubectl.exec_command(set_cmd).strip()
         print(f"setval({sequence!r}, {value}) -> {set_out}")
 
         verify_cmd = (
             f"kubectl exec -n {self.namespace} {pg_pod} -- "
             f"psql -U {pg_superuser} -d {pg_db} -At "
-            f"-c \"SELECT last_value FROM {sequence};\""
+            f'-c "SELECT last_value FROM {sequence};"'
         )
         verify_out = self.kubectl.exec_command(verify_cmd).strip()
         try:
@@ -650,9 +654,7 @@ class ApplicationFaultInjector(FaultInjector):
                 f"Could not read last_value for sequence {sequence}; psql returned: {verify_out!r}"
             ) from e
         if live != int(value):
-            raise RuntimeError(
-                f"setval did not take effect: {sequence} last_value is {live}, expected {value}."
-            )
+            raise RuntimeError(f"setval did not take effect: {sequence} last_value is {live}, expected {value}.")
 
     def inject_role_connection_limit(
         self,
@@ -672,30 +674,273 @@ class ApplicationFaultInjector(FaultInjector):
         notice a bad pod reference or auth failure.
         """
         alter_sql = f"ALTER ROLE {role} CONNECTION LIMIT {int(limit)};"
-        alter_cmd = (
-            f"kubectl exec -n {self.namespace} {pg_pod} -- "
-            f"psql -U {pg_superuser} -d {pg_db} -c \"{alter_sql}\""
-        )
+        alter_cmd = f'kubectl exec -n {self.namespace} {pg_pod} -- psql -U {pg_superuser} -d {pg_db} -c "{alter_sql}"'
         alter_out = self.kubectl.exec_command(alter_cmd)
         print(f"ALTER ROLE {role} CONNECTION LIMIT {limit} -> {alter_out.strip()}")
 
         verify_sql = f"SELECT rolconnlimit FROM pg_roles WHERE rolname='{role}';"
         verify_cmd = (
-            f"kubectl exec -n {self.namespace} {pg_pod} -- "
-            f"psql -U {pg_superuser} -d {pg_db} -At -c \"{verify_sql}\""
+            f'kubectl exec -n {self.namespace} {pg_pod} -- psql -U {pg_superuser} -d {pg_db} -At -c "{verify_sql}"'
         )
         verify_out = self.kubectl.exec_command(verify_cmd).strip()
         try:
             live = int(verify_out.splitlines()[-1])
         except (ValueError, IndexError) as e:
-            raise RuntimeError(
-                f"Could not read rolconnlimit for {role}; psql returned: {verify_out!r}"
-            ) from e
+            raise RuntimeError(f"Could not read rolconnlimit for {role}; psql returned: {verify_out!r}") from e
         if live != int(limit):
             raise RuntimeError(
                 f"ALTER ROLE did not take effect: {role} rolconnlimit is {live}, expected {limit}. "
                 f"Full output: {verify_out!r}"
             )
+
+    @staticmethod
+    def _kafka_oom_events(pods) -> set[tuple]:
+        events = set()
+        for pod in pods:
+            for container in pod.status.container_statuses or []:
+                if container.name != "kafka":
+                    continue
+                for state in (container.state, container.last_state):
+                    terminated = state.terminated if state else None
+                    if terminated and terminated.reason == "OOMKilled":
+                        events.add((pod.metadata.uid, terminated.container_id, terminated.finished_at))
+        return events
+
+    def inject_kafka_producer_leak(self, deployment_name: str = "checkout") -> list:
+        with KafkaHealthCheck(self.kubectl, self.namespace) as probe:
+            if not probe.wait_until_available():
+                raise RuntimeError("Kafka cannot publish and read a record before injection")
+            return self._inject_kafka_producers(deployment_name, probe)
+
+    def _inject_kafka_producers(self, deployment_name: str, probe: KafkaHealthCheck) -> list:
+        limits = [None, None]
+        started = datetime.datetime.now(datetime.UTC)
+
+        kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
+        previous_ooms = self._kafka_oom_events(self.kubectl.get_deployment_pods(kafka_dep, self.namespace))
+        for c in kafka_dep.spec.template.spec.containers:
+            if "kafka" in c.name:
+                c.env.append(client.V1EnvVar(name="KAFKA_MESSAGE_MAX_BYTES", value="20971520"))
+
+                for e in c.env:
+                    if e.name == "KAFKA_HEAP_OPTS":
+                        limits[0] = e.value
+                        break
+
+                limits[1] = c.resources.limits.get("memory") if c.resources and c.resources.limits else None
+                break
+
+        self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+
+        script = textwrap.dedent(
+            """
+            from confluent_kafka import Producer
+            import threading
+            import os
+
+            def task(thread_id: int):
+                payload_size = int(os.environ.get('PAYLOAD_SIZE_BYTES', '15728640'))
+                payload = os.urandom(payload_size)
+
+                conf = {
+                    'bootstrap.servers': 'kafka:9092',
+                    'message.max.bytes': payload_size + 1000,
+                    'queue.buffering.max.kbytes': (payload_size * 2) // 1024,
+                    'enable.idempotence': 'true',
+                }
+
+                while True:
+                    try:
+                        producer = Producer(conf)
+                        # This binary stream must not reach the application's
+                        # protobuf consumers on the real orders topic.
+                        producer.produce('order-events', payload)
+                        # Keep the producer alive until delivery finishes. poll(0)
+                        # destroys it with most messages still queued locally.
+                        producer.flush(10)
+                    except BufferError:
+                        producer.poll(0.1)
+
+            threads = []
+            for i in range(20):
+                t = threading.Thread(target=task, args=(i,))
+                t.start()
+                threads.append(t)
+
+            for t in threads:
+                t.join()
+            """
+        ).strip()
+
+        encoded = base64.b64encode(script.encode()).decode()
+
+        producer = client.V1Container(
+            name="order-creator",
+            image=KAFKA_CLIENT_IMAGE,
+            command=[
+                "python3",
+                "-u",
+                "-c",
+                f"import base64; exec(base64.b64decode('{encoded}'))",
+            ],
+        )
+
+        deployment.spec.template.spec.containers.append(producer)
+
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+
+        # Require fresh memory failure evidence and failed Kafka delivery.
+        deadline = time.monotonic() + KAFKA_OOM_TIMEOUT_SECONDS
+        while True:
+            pods = self.kubectl.get_deployment_pods(kafka_dep, self.namespace)
+            memory_failure = bool(self._kafka_oom_events(pods) - previous_ooms) or broker_memory_failure(
+                self.kubectl, self.namespace, started
+            )
+            if memory_failure and not probe.check():
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"Kafka did not develop a new memory-related serving failure within {KAFKA_OOM_TIMEOUT_SECONDS} seconds"
+                )
+            time.sleep(min(KAFKA_OOM_POLL_SECONDS, remaining))
+
+        print(f"Injected sidecar container 'order-creator' in '{deployment_name}'")
+
+        return limits
+
+    def recover_kafka_producer_leak(self, deployment_name: str = "checkout"):
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        replicas = deployment.spec.replicas
+        deployment.spec.replicas = 0
+        deployment.spec.template.spec.containers = [
+            c for c in deployment.spec.template.spec.containers if c.name != "order-creator"
+        ]
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        try:
+            # Scaling down prevents the old ReplicaSet from replacing producers
+            # while checkout's replacement is waiting for the broken broker.
+            selector = deployment.spec.selector.match_labels
+            deadline = time.monotonic() + 120
+            while any(
+                all((pod.metadata.labels or {}).get(key) == value for key, value in selector.items())
+                and any(c.name == "order-creator" for c in pod.spec.containers)
+                for pod in self.kubectl.list_pods(self.namespace).items
+            ):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Producer containers did not terminate within 120 seconds")
+                time.sleep(2)
+
+            kafka_dep = self.kubectl.get_deployment("kafka", self.namespace)
+            for container in kafka_dep.spec.template.spec.containers:
+                if container.name == "kafka":
+                    container.env = [e for e in container.env or [] if e.name != "KAFKA_MESSAGE_MAX_BYTES"]
+            # Combine config restoration and restart into one rollout. A second
+            # rollout can replace a broker that just became Ready again.
+            metadata = kafka_dep.spec.template.metadata
+            metadata.annotations = dict(metadata.annotations or {})
+            metadata.annotations["kubectl.kubernetes.io/restartedAt"] = datetime.datetime.now(datetime.UTC).isoformat()
+            self.kubectl.update_deployment("kafka", self.namespace, kafka_dep)
+            self.kubectl.exec_command_checked(
+                shlex.join(
+                    ["kubectl", "rollout", "status", "deployment/kafka", "-n", self.namespace, "--timeout=120s"]
+                ),
+                timeout=125,
+            )
+        finally:
+            # Also restore the requested count after an API or startup error.
+            deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+            deployment.spec.replicas = replicas
+            self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+
+        print(f"Removed sidecar container 'order-creator' from '{deployment_name}'")
+
+    # A.7 feature_flag_experimental_routing: set a flag to activate a dormant error path
+    def inject_feature_flag_experimental_routing(
+        self,
+        deployment_name: str = "frontend",
+        configmap_name: str = "frontend-runtime-config",
+        flag_key: str = "SEARCH_BACKEND_VERSION",
+        experimental_image: str = FEATURE_FLAG_EXPERIMENTAL_ROUTING_IMAGE,
+    ):
+        """Set the feature flag and ensure the frontend uses the build containing
+        the dormant path. When active, the path returns HTTP 500 on every hotel
+        search request while the pod remains Running."""
+
+        self.kubectl.create_or_update_configmap(
+            name=configmap_name,
+            namespace=self.namespace,
+            data={flag_key: "true"},
+        )
+        print(f"ConfigMap {configmap_name} set: {flag_key}=true")
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        for container in deployment.spec.template.spec.containers:
+            if container.name == f"hotel-reserv-{deployment_name}":
+                container.image = experimental_image
+                if not container.env:
+                    container.env = []
+                container.env = [e for e in container.env if e.name != flag_key]
+                container.env.append(
+                    client.V1EnvVar(
+                        name=flag_key,
+                        value_from=client.V1EnvVarSource(
+                            config_map_key_ref=client.V1ConfigMapKeySelector(
+                                name=configmap_name,
+                                key=flag_key,
+                            )
+                        ),
+                    )
+                )
+        deployment.spec.strategy = client.V1DeploymentStrategy(type="Recreate")
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        print(f"Set {deployment_name} image to {experimental_image} and set {flag_key}=true env")
+        # Wait for rollout to complete so fault is deterministically live before returning
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout=120s"
+        )
+        time.sleep(5)
+
+    def recover_feature_flag_experimental_routing(
+        self,
+        deployment_name: str = "frontend",
+        configmap_name: str = "frontend-runtime-config",
+        flag_key: str = "SEARCH_BACKEND_VERSION",
+        original_image: str | None = None,
+    ):
+        """Revert the flag, remove its pod environment reference, and restore the image."""
+
+        self.kubectl.create_or_update_configmap(
+            name=configmap_name,
+            namespace=self.namespace,
+            data={flag_key: "false"},
+        )
+        print(f"ConfigMap {configmap_name} reverted: {flag_key}=false")
+
+        if original_image is None:
+            raise ValueError("original_image must be provided")
+
+        deployment = self.kubectl.get_deployment(deployment_name, self.namespace)
+        for container in deployment.spec.template.spec.containers:
+            if container.name == f"hotel-reserv-{deployment_name}":
+                container.image = original_image
+                container.env = [env for env in (container.env or []) if env.name != flag_key]
+
+        deployment.spec.strategy = client.V1DeploymentStrategy(
+            type="RollingUpdate",
+            rolling_update=client.V1RollingUpdateDeployment(
+                max_unavailable="25%",
+                max_surge="25%",
+            ),
+        )
+        self.kubectl.update_deployment(deployment_name, self.namespace, deployment)
+        print(f"Restored {deployment_name} image to {original_image} and removed the {flag_key} env reference")
+        self.kubectl.exec_command(
+            f"kubectl rollout status deployment/{deployment_name} -n {self.namespace} --timeout=120s"
+        )
+        time.sleep(5)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ update_incompatible_correlated
 incorrect_image
 incorrect_port_assignment
 misconfig_app_hotel_res
+ephemeral_port_range_hotel_reservation
 missing_env_variable_astronomy_shop
 revoke_auth_mongodb-1
 revoke_auth_mongodb-2
@@ -10,9 +11,11 @@ storage_user_unregistered-1
 storage_user_unregistered-2
 valkey_auth_disruption
 valkey_memory_disruption
+edge_request_filter_cpu_saturation
 capacity_decrease_rpc_retry_storm
 gc_capacity_degradation
 load_spike_rpc_retry_storm
+search_rate_retry_collapse_hotel_reservation
 assign_to_non_existent_node
 auth_miss_mongodb
 configmap_drift_hotel_reservation
@@ -84,3 +87,5 @@ operator_non_existent_storage
 operator_invalid_affinity_toleration
 operator_security_context_fault
 operator_wrong_update_strategy_fault
+kubelet_eviction_threshold_misconfig
+psa_restricted_blocks_recreation_hotel_reservation

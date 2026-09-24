@@ -2,22 +2,36 @@
 
 <h1>SREGym: A Benchmarking Platform for SRE Agents</h1>
 
-[🔍Overview](#🤖overview) |
-[📦Installation](#📦installation) |
-[🚀Quick Start](#🚀quickstart) |
-[⚙️Usage](#⚙️usage) |
-[🤝Contributing](./CONTRIBUTING.md) |
-[📖Docs](https://sregym.com/docs) |
+[![Overview](https://img.shields.io/badge/%F0%9F%94%8D-Overview-blue?style=flat-square)](#overview)
+[![Installation](https://img.shields.io/badge/%F0%9F%93%A6-Installation-blue?style=flat-square)](#📦installation)
+[![Quick Start](https://img.shields.io/badge/%F0%9F%9A%80-Quick%20Start-blue?style=flat-square)](#🚀quickstart)
+[![Usage](https://img.shields.io/badge/%E2%9A%99%EF%B8%8F-Usage-blue?style=flat-square)](#⚙️usage)
+[![Contributing](https://img.shields.io/badge/%F0%9F%A4%9D-Contributing-blue?style=flat-square)](./CONTRIBUTING.md)
+[![Docs](https://img.shields.io/badge/%F0%9F%93%96-Docs-blue?style=flat-square)](https://sregym.com/docs)
+[![Leaderboard](https://img.shields.io/badge/%F0%9F%8F%86-Leaderboard-blue?style=flat-square)](https://sregym.com)
 [![Slack](https://img.shields.io/badge/-Slack-4A154B?style=flat-square&logo=slack&logoColor=white)](https://join.slack.com/t/SREGym/shared_invite/zt-3gvqxpkpc-RvCUcyBEMvzvXaQS9KtS_w)
+[![arXiv](https://img.shields.io/badge/arXiv-2605.07161-b31b1b?style=flat-square&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2605.07161)
 </div>
 
 <h2 id="overview">🔍 Overview</h2>
 SREGym is an AI-native platform to enable the design, development, and evaluation of AI agents for Site Reliability Engineering (SRE). The core idea is to create live system environments for SRE agents to solve real-world SRE problems. SREGym provides a comprehensive SRE benchmark suite with a wide variety of problems for evaluating SRE agents and also for training next-generation AI agents.
 <br><br>
 
-![SREGym Overview](/assets/SREGymFigure.png)
+![SREGym Overview](/assets/overview.png)
 
-SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architectured with AI-native usability and extensibility as first-class principles. The SREGym benchmark suites contain 86 different SRE problems. It supports all the problems from AIOpsLab and ITBench, and includes new problems such as OS-level faults, metastable failures, and concurrent failures. See our [problem set](https://sregym.com/problems) for a complete list of problems.
+SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architectured with AI-native usability and extensibility as first-class principles. The SREGym benchmark suites contain 90 different SRE problems. It supports all the problems from AIOpsLab and ITBench, and includes new problems such as OS-level faults, metastable failures, and concurrent failures. See our [problem set](https://sregym.com/problems) for a complete list of problems.
+
+SREGym has been used to simulate real-world cloud failures, such as:
+- Cloudflare WAF regex rules exhausted CPU ([postmortem](https://blog.cloudflare.com/details-of-the-cloudflare-outage-on-july-2-2019), [simulation](https://github.com/SREGym/SREGym/pull/773))
+- Admission webhook TLS mismatch ([postmortem](https://github.com/cert-manager/cert-manager/issues/6350), [simulation](https://github.com/SREGym/SREGym/pull/777))
+- Exhausting conntrack table space crippled a production cluster ([postmortem](https://www.markbetz.net/2023/12/12/exhausting-conntrack-table-space-crippled-our-k8s-cluster), [simulation](https://github.com/SREGym/SREGym/pull/768))
+- GKE ran out of IP addresses ([postmortem](https://deploy.live/blog/when-gke-ran-out-of-ip-addresses), [simulation](https://github.com/SREGym/SREGym/pull/774))
+- Kafka poison pill ([postmortem](https://www.lydtechconsulting.com/blog/kafka-poison-pill), [simulation](https://github.com/SREGym/SREGym/pull/790))
+- The Reddit Pi-Day Outage ([postmortem](https://www.reddit.com/r/RedditEng/comments/11xx5o0/you_broke_reddit_the_piday_outage/), [simulation](https://github.com/SREGym/SREGym/pull/828))
+
+<h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
+
+[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 21 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
 
 
 <h2 id="📦installation">📦 Installation</h2>
@@ -26,7 +40,6 @@ SREGym is inspired by our prior work on AIOpsLab and ITBench. It is architecture
 - Python >= 3.12
 - [Docker](https://docs.docker.com/get-docker/)
 - [Helm](https://helm.sh/docs/intro/install/) >= 4.0
-- [brew](https://brew.sh/)
 - [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [uv](https://github.com/astral-sh/uv)
 - [kind](https://kind.sigs.k8s.io/) (if running locally)
@@ -48,22 +61,24 @@ uv run prek install
 Choose either a) or b) to set up your cluster and then proceed to the next steps.
 
 ### a) Kubernetes Cluster (Recommended)
-SREGym supports any kubernetes cluster that your `kubectl` context is set to, whether it's a cluster from a cloud provider or one you build yourself.
+SREGym runs on a self-managed Kubernetes cluster that you provision on Linux hosts you have SSH and root access to (e.g. [CloudLab](https://www.cloudlab.us/), bare-metal machines, or cloud VMs/VPS instances). We provide an Ansible playbook that builds the cluster for you. Follow this [README](./scripts/ansible/README.md) to set it up.
 
-We have an Ansible playbook to setup clusters on providers like [CloudLab](https://www.cloudlab.us/) and our own machines. Follow this [README](./scripts/ansible/README.md) to set up your own cluster.
+> [!NOTE]
+> A managed Kubernetes service won't work out of the box, since SREGym's setup needs SSH and root access to the nodes for OS-level cluster configuration. Instead, spin up a few plain VMs/VPS instances and add them to `inventory.yml`.
 
 ### b) Emulated cluster
 SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/) on your local machine. However, not all problems are supported.
 
+For an experimental Docker-in-Docker environment with a private cluster per run,
+including parallel problem execution, see the [DinD guide](./docker/dind/README.md).
+
 **Note:** If you run into pod crashes or "too many open files" errors, see the [kind README](./kind/README.md) for required host kernel settings and troubleshooting.
 
 ```bash
-# For x86 machines
-kind create cluster --config kind/kind-config-x86.yaml
-
-# For ARM machines
-kind create cluster --config kind/kind-config-arm.yaml
+bash kind/setup_kind_cluster.sh
 ```
+
+For existing clusters, see the [upgrade and baseline instructions](./docs/network-access.md#cluster-maintenance).
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
@@ -89,15 +104,50 @@ export AWS_PROFILE="bedrock"
 export AWS_DEFAULT_REGION="us-east-2"
 ```
 
-2. Run the benchmark:
+2. Run the full benchmark:
 ```bash
-python main.py --agent stratus --model gpt-5
+uv run main.py --agent stratus --model gpt-5
+```
+
+Or start with SREGym-Lite:
+```bash
+uv run main.py --suite sregym-lite --agent stratus --model gpt-5
 ```
 
 Use `--judge-model` to override the judge model separately (defaults to `--model`):
 ```bash
-python main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627
+uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627
 ```
+
+#### Stage Selection
+
+Each problem runs up to two agent stages, `diagnosis` then `mitigation`. By default a
+run attempts every stage the problem supports. `--stages` narrows that:
+
+```bash
+# Diagnose only; never enter the mitigation stage
+uv run main.py --problem network_policy_block --stages diagnosis
+
+# Both, stated explicitly (the default)
+uv run main.py --suite sregym-lite --stages diagnosis mitigation
+```
+
+`--stages` is independent of `--problem` and `--suite`: the stages decide what an
+attempt does, the problem selection decides which problems it does it to. Stages must
+be given in the order above.
+
+Useful mainly when iterating on a problem's diagnosis oracle, where a mitigation
+attempt is wasted time — note that `--agent-timeout` is a budget for the whole agent
+phase, so a slow diagnosis otherwise eats into mitigation's share.
+
+> [!NOTE]
+> A single-stage run is reported as `complete`, since completeness is measured against
+> the stages that were configured. It is not, however, useful input to
+> `sregym/results/report.py`'s difficulty tables, which treat a missing mitigation
+> result as inconclusive.
+
+Naming a stage the problem has no oracle for is an error rather than a silent skip, so
+a typo cannot produce a run that reports success having measured nothing.
 
 #### Container Isolation
 
@@ -106,17 +156,91 @@ Agents always run in isolated Docker containers, preventing access to SREGym int
 Use `--force-build` to rebuild the container image after updating dependencies or agent code:
 
 ```bash
-python main.py --agent codex --model gpt-5 --force-build
+uv run main.py --agent codex --model gpt-5 --force-build
 ```
+
+#### Network access
+
+Filtered access is the default. Agents can reach the selected model provider and internal services, but not other internet destinations.
+Application pods also have outbound restrictions.
+
+Use `--internet-access open` for unrestricted internet access.
+To allow an extra destination in filtered mode, add `--allow-agent-endpoint`:
+
+```bash
+uv run main.py --agent codex --model gpt-5.6-sol \
+  --allow-agent-endpoint https://telemetry.example.com/v1
+```
+
+Repeat the option for more destinations.
+
+Agent containers are hardened by default: every Linux capability is dropped except `DAC_OVERRIDE`, which container
+root needs to write to the host-owned `/logs` and `/workspace` bind mounts, and `no-new-privileges` is set. This
+blocks `apt-get`, which cannot drop to the `_apt` user without `setuid`/`setgid`. If your agent installs tooling
+during a run, turn it off:
+
+```bash
+uv run main.py --agent codex --model gpt-5 --container-hardening off
+```
+
+#### Optional Jev decision support
+
+Jev is disabled by default. To enable it for Codex, set `TYPESAFE_API_KEY` and run:
+
+```bash
+uv run main.py --agent codex --model gpt-5.6-luna --reasoning-effort medium \
+  --problem <problem-id> --jev-model jev-latest --force-build
+```
+
+Jev reviews diagnostic tests and submissions using evidence sent to TypeSafe.
+
+### Deployment Profiles
+
+`--profile` controls how much infrastructure SREGym stands up. It is independent of
+`--suite` — the profile selects *what gets deployed*, the suite selects *which problems run*.
+
+| Profile | Behaviour |
+|---------|-----------|
+| `full` (default) | The standard stack. Use this for results you intend to compare against the leaderboard. |
+| `svelte` | Additionally drops components that nothing in SREGym reads, and shortens metric retention. |
+
+```bash
+uv run main.py --suite sregym-lite --agent stratus --model gpt-5 --profile svelte
+```
+
+`svelte` removes:
+
+- astronomy-shop's bundled **OpenSearch**, **Grafana** and **Jaeger**. Nothing in `sregym/`,
+  `mcp_server/` or `clients/` queries OpenSearch or Grafana; the bundled Jaeger is deleted
+  moments after deployment anyway, by `Jaeger.create_external_name_service()`.
+- Prometheus **Alertmanager** and **Pushgateway** (no alert rules are configured and nothing
+  pushes), and TSDB retention cut from 15d to 2h.
+- The OpenEBS **node-disk-manager** stack, which backs the `openebs-device` StorageClass.
+  SREGym only provisions through `openebs-hostpath`.
+
+Measured on one astronomy-shop problem (peak RSS / peak CPU, sampled over the run):
+
+| | `full` | `svelte` |
+|---|---|---|
+| OpenSearch | 1096 MiB / 1709m | — |
+| Grafana | 475 MiB / 303m | — |
+| OpenEBS NDM (7 pods) | ~190 MiB / 582m | — |
+
+> [!WARNING]
+> `svelte` changes what an agent can observe in the cluster, so its scores are **not**
+> comparable with `full`. It is intended for local iteration on memory-constrained hosts,
+> not for leaderboard submissions. Note that `--profile svelte` and `--suite sregym-lite`
+> are unrelated: you can run either without the other.
 
 ### Model Selection
 
-SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings directly -- no config file needed. Just pass any supported model string via `--model`:
+SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings directly (no config file needed). Just pass any supported model string via `--model`:
 
 | CLI Flag | Default | Purpose |
 |----------|---------|---------|
 | `--model` | `gpt-5` | Sets both agent and judge model |
 | `--judge-model` | (same as `--model`) | Override just the judge evaluator model |
+| `--judge-backend` | `api` | Judge access through the existing API endpoint, or `codex`, `claudecode`, `copilot`, or `cursor` |
 
 Set the required environment variable for your provider before running:
 
@@ -128,27 +252,94 @@ Set the required environment variable for your provider before running:
 | AWS Bedrock | `bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0` | `AWS_PROFILE`, `AWS_DEFAULT_REGION` |
 | Azure | `azure/gpt-4o` | `AZURE_API_KEY`, `AZURE_API_BASE`, `AZURE_API_VERSION` |
 
+#### Local LLMs
+
+SREGym supports local models through Ollama and OpenAI-compatible servers such as vLLM and LM Studio. The examples below use Ollama.
+
+Set `AGENT_API_KEY` as well if the endpoint requires authentication.
+
+> [!CAUTION]
+> When you use `--internet-access filtered`, the agent runs on an isolated Docker network. It cannot reach a local model server that listens only on `127.0.0.1` or `localhost`. Configure the server to listen on a host-reachable interface, such as `0.0.0.0`, and use `http://host.docker.internal:<port>` as the API base. Protect the exposed port with authentication or a firewall. This requirement is the same for Kind and external Kubernetes clusters because the connection is between the agent container and the machine running SREGym.
+
+**Stratus with Ollama:**
+
+```bash
+ollama pull qwen3-coder:30b
+
+export AGENT_API_BASE="http://127.0.0.1:11434"
+uv run main.py --agent stratus --model ollama_chat/qwen3-coder:30b
+```
+
+**OpenCode with Ollama:**
+
+OpenCode uses the endpoint's OpenAI-compatible `/v1` API.
+
+```bash
+export AGENT_API_BASE="http://127.0.0.1:11434/v1"
+uv run main.py --agent opencode --model local/qwen3-coder:30b
+```
+
+When `--judge-model` is not set, SREGym reuses the agent model and endpoint for the judge. This works directly for Stratus because its model identifier is LiteLLM-compatible. For OpenCode, SREGym normalizes `local/<served-model>` to `openai/<served-model>` for the judge, because OpenCode's `local/` provider uses an OpenAI-compatible endpoint.
+
+For vLLM, LM Studio, or another OpenAI-compatible server, point `AGENT_API_BASE` to its `/v1` endpoint and use `openai/<served-model>` with Stratus or `local/<served-model>` with OpenCode.
+
+To use a different LiteLLM judge provider, pass `--judge-model` explicitly:
+
+```bash
+export JUDGE_API_BASE="http://127.0.0.1:11434"
+uv run main.py --agent opencode --model local/qwen3-coder:30b --judge-model ollama_chat/qwen3-coder:30b
+```
+
+**Separate judge endpoint:**
+
+Set `JUDGE_API_BASE` and `JUDGE_API_KEY` when the judge uses a different endpoint or credential:
+
+```bash
+export JUDGE_API_BASE="https://example.test/v1"
+export JUDGE_API_KEY="..."
+uv run main.py --agent stratus --model ollama_chat/qwen3-coder:30b --judge-model gpt-5
+```
+
+### Subscription-backed judges
+
+Choose a subscription judge independently of the agent with `--judge-backend` (default `api`).
+
+```bash
+uv run main.py --agent cursor --model auto --judge-backend codex --judge-model gpt-5.5
+```
+
+| Judge backend | Credentials |
+| --- | --- |
+| `codex` | Subscription login in `$CODEX_HOME/auth.json`, default `~/.codex/auth.json` |
+| `claudecode` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `copilot` | `COPILOT_GITHUB_TOKEN` |
+| `cursor` | `CURSOR_API_KEY` |
+
+Set `--judge-model` to a model supported by the selected CLI.
+
+For Copilot, use `export COPILOT_GITHUB_TOKEN="$(gh auth token)"` to reuse an existing GitHub CLI OAuth login.
+
 <details>
 <summary><strong>Provider Examples</strong></summary>
 
 **OpenAI:**
 ```bash
-python main.py --agent stratus --model gpt-5
+uv run main.py --agent stratus --model gpt-5
 ```
 
 **Anthropic:**
 ```bash
-python main.py --agent stratus --model anthropic/claude-sonnet-4-6
+uv run main.py --agent stratus --model anthropic/claude-sonnet-4-6
 ```
 
 **Google:**
 ```bash
-python main.py --agent stratus --model gemini/gemini-2.5-pro
+uv run main.py --agent stratus --model gemini/gemini-2.5-pro
 ```
 
 **AWS Bedrock:**
 ```bash
-python main.py --agent stratus --model bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+uv run main.py --agent stratus --model bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
 ```
 
 **Note:** For AWS Bedrock, ensure your AWS credentials are configured via `~/.aws/credentials` and your profile has permissions to access Bedrock.
@@ -157,8 +348,23 @@ See the full list of supported providers and model strings in the [LiteLLM docs]
 
 </details>
 
+## Cite This
+If our work is useful for you, please cite it:
+
+```bibtex
+@article{sregym:26,
+  author  = {Jackson Clark and Yiming Su and Saad Mohammad Rafid Pial and Yifang Tian and Lily Gniedziejko and Hans-Arno Jacobsen and Yinfang Chen and Tianyin Xu},
+  title   = {{SREGym: A Live Benchmark for AI SRE Agents with High-Fidelity Failure Scenarios}},
+  journal = {arXiv:2605.07161},
+  year    = {2026},
+  month   = may,
+  eprint  = {2605.07161},
+  archivePrefix = {arXiv}
+}
+```
+
 ## Acknowledgements
-This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org/).
+This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org).
 
 https://github.com/user-attachments/assets/e7b2ee27-e7a9-436a-858d-ee58e8bbd61d
 

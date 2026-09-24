@@ -22,9 +22,56 @@ from logger import init_logger  # noqa: E402
 
 init_logger()
 
+from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 from clients.opencode.opencode_agent import OpenCodeAgent  # noqa: E402
 
 logger = logging.getLogger("all.opencode.driver")
+
+
+def run_preflight() -> None:
+    """Validate model + credentials by making a minimal OpenCode CLI call."""
+    import shutil
+    import subprocess
+    import tempfile
+
+    from clients.opencode.opencode_agent import write_local_provider_config
+
+    m = os.environ["AGENT_MODEL_ID"]
+    env = os.environ.copy()
+    env["OPENCODE_FAKE_VCS"] = "git"
+
+    config_dir = None
+    if m.startswith("local/"):
+        config_dir = tempfile.mkdtemp(prefix="opencode-preflight-")
+        env["OPENCODE_CONFIG"] = str(write_local_provider_config(m, Path(config_dir) / "opencode.json", env))
+
+    command = [
+        "opencode",
+        f"--model={m}",
+        "run",
+        "--format=json",
+        "--thinking",
+    ]
+    reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+    if reasoning_effort:
+        command.extend(["--variant", reasoning_effort])
+    command.append("say ok")
+
+    try:
+        r = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+    finally:
+        if config_dir:
+            shutil.rmtree(config_dir, ignore_errors=True)
+    if r.returncode:
+        print(r.stdout or r.stderr)
+    sys.exit(r.returncode)
 
 
 def get_api_base_url() -> str:
@@ -47,23 +94,6 @@ def get_app_info() -> dict:
         return app_info
     except Exception as e:
         logger.error(f"Failed to get app info: {e}")
-        raise
-
-
-def get_problem_id() -> str:
-    """Get current problem ID from conductor API."""
-    api_url = f"{get_api_base_url()}/get_problem"
-    logger.info(f"Fetching problem ID from {api_url}")
-
-    try:
-        response = requests.get(api_url)
-        response.raise_for_status()
-        problem_data = response.json()
-        problem_id = problem_data.get("problem_id")
-        logger.info(f"Problem ID: {problem_id}")
-        return problem_id
-    except Exception as e:
-        logger.error(f"Failed to get problem ID: {e}")
         raise
 
 
@@ -211,6 +241,12 @@ def main():
         help="Directory to store logs (default: ./logs/opencode)",
     )
     parser.add_argument(
+        "--problem-id",
+        type=str,
+        default=None,
+        help="Problem ID for artifact naming (default: SREGYM_ARTIFACT_ID in benchmark runs)",
+    )
+    parser.add_argument(
         "--no-auto-install",
         action="store_true",
         help="Disable auto-installation of OpenCode CLI if not found",
@@ -239,13 +275,14 @@ def main():
         logger.error(f"Timeout waiting for conductor: {e}")
         sys.exit(1)
 
-    # Get problem information
     try:
         app_info = get_app_info()
-        problem_id = get_problem_id()
     except Exception as e:
-        logger.error(f"Failed to get problem information: {e}")
+        logger.error(f"Failed to get app info: {e}")
         sys.exit(1)
+
+    problem_id = resolve_problem_id(cli_problem_id=args.problem_id)
+    logger.info(f"Problem ID (harness): {problem_id}")
 
     # Build instruction
     instruction = build_instruction(app_info)

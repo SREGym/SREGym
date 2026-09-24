@@ -18,17 +18,16 @@ class ResourceRequest(Problem):
         self.faulty_service = faulty_service
 
         if self.app_name == "hotel_reservation":
-            self.app = HotelReservation()
+            app = HotelReservation()
         elif self.app_name == "social_network":
-            self.app = SocialNetwork()
+            app = SocialNetwork()
         elif self.app_name == "astronomy_shop":
-            self.app = AstronomyShop()
+            app = AstronomyShop()
         else:
             raise ValueError(f"Unsupported app_name: {app_name}")
 
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=app)
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         # Note: root_cause will be set in subclasses (ResourceRequestTooLarge/ResourceRequestTooSmall)
         # diagnosis_oracle will be set in subclasses after root_cause is set
         self.app.create_workload()

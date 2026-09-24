@@ -12,9 +12,7 @@ from sregym.utils.decorators import mark_fault_injected
 
 class IncorrectPortAssignment(Problem):
     def __init__(self, **kwargs):
-        self.app = AstronomyShop()
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
         self.faulty_service = "checkout"
         self.env_var = "PRODUCT_CATALOG_ADDR"
@@ -54,8 +52,7 @@ class IncorrectPortAssignment(Problem):
 
         if unscheduable := kwargs.get("unschedulable", False):
             mitigation_oracles = [
-                IncorrectPortAssignmentMitigationOracle(problem=self),
-                # for duplicated pvc mount, its just standard pod-status mitigation oracle.
+                IncorrectPortAssignmentMitigationOracle(problem=self, require_source_ready=False),
                 AssignNonExistentNodeMitigationOracle(problem=self),
             ]
             self.mitigation_oracle = CompoundedOracle(self, *mitigation_oracles)
@@ -71,9 +68,7 @@ class IncorrectPortAssignment(Problem):
                 fault_type="assign_to_non_existent_node",
                 microservices=[self.faulty_service],
             )
-            print(
-                f"Injected additional fault: duplicate PVC mounts for service {self.faulty_service} in namespace {self.namespace}\n"
-            )
+            print(f"Pinned service {self.faulty_service} to a nonexistent node in namespace {self.namespace}\n")
 
             self.injectors["incorrect_port_assignment"].inject_incorrect_port_assignment(
                 deployment_name=self.faulty_service,
@@ -99,7 +94,8 @@ class IncorrectPortAssignment(Problem):
                 microservices=[self.faulty_service],
             )
             print(
-                f"Recovered additional fault: duplicate PVC mounts for service {self.faulty_service} in namespace {self.namespace}\n"
+                f"Removed the nonexistent-node assignment from service {self.faulty_service} "
+                f"in namespace {self.namespace}\n"
             )
             self.injectors["incorrect_port_assignment"].recover_incorrect_port_assignment(
                 deployment_name="checkout", env_var=self.env_var, correct_port="8080"

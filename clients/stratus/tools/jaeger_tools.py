@@ -88,7 +88,7 @@ def _summarize_traces(traces):
         HumanMessage(content=traces),
     ]
 
-    traces_summary = llm.inference(messages=messages)
+    traces_summary = llm.inference(messages=messages, usage_type="tool")
     logger.info(f"Traces summary: {traces_summary}")
     return traces_summary
 
@@ -115,7 +115,7 @@ def _summarize_operations(operations):
         HumanMessage(content=operations),
     ]
 
-    operations_summary = llm.inference(messages=messages)
+    operations_summary = llm.inference(messages=messages, usage_type="tool")
     logger.info(f"Operations summary: {operations_summary}")
     return operations_summary
 

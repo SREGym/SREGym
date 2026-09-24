@@ -14,6 +14,7 @@ from pathlib import Path
 import requests
 
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
+from clients.harness.problem_id import resolve_problem_id
 from logger import init_logger
 
 # Add SREGym root to path
@@ -32,12 +33,36 @@ def run_preflight() -> None:
     import subprocess
 
     m = os.environ["AGENT_MODEL_ID"].split("/")[-1]
-    r = subprocess.run(
-        ["claude", "-p", "say ok", "--model", m, "--max-turns", "1"],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
+
+    # Mirror the agent's auth precedence: when CLAUDE_CODE_OAUTH_TOKEN is set,
+    # drop ANTHROPIC_API_KEY for this subprocess so the Claude CLI authenticates
+    # via OAuth (and the preflight tests the same path the actual run uses).
+    env = os.environ.copy()
+    if env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        env.pop("ANTHROPIC_API_KEY", None)
+
+    command = ["claude", "-p", "say ok", "--model", m]
+    reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+    if reasoning_effort:
+        command.extend(["--effort", reasoning_effort])
+
+    timeout_seconds = 150
+    try:
+        r = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if exc.stdout:
+            print(exc.stdout)
+        if exc.stderr:
+            print(exc.stderr)
+        print(f"Claude Code preflight timed out after {timeout_seconds} seconds")
+        sys.exit(1)
     if r.returncode:
         print(r.stdout or r.stderr)
     sys.exit(r.returncode)
@@ -63,23 +88,6 @@ def get_app_info() -> dict:
         return app_info
     except Exception as e:
         logger.error(f"Failed to get app info: {e}")
-        raise
-
-
-def get_problem_id() -> str:
-    """Get current problem ID from conductor API."""
-    api_url = f"{get_api_base_url()}/get_problem"
-    logger.info(f"Fetching problem ID from {api_url}")
-
-    try:
-        response = requests.get(api_url)
-        response.raise_for_status()
-        problem_data = response.json()
-        problem_id = problem_data.get("problem_id")
-        logger.info(f"Problem ID: {problem_id}")
-        return problem_id
-    except Exception as e:
-        logger.error(f"Failed to get problem ID: {e}")
         raise
 
 
@@ -137,13 +145,21 @@ def build_instruction(app_info: dict) -> str:
     """
     app_name = app_info.get("app_name", "unknown")
     namespace = app_info.get("namespace", "default")
+    namespaces = app_info.get("namespaces") or [namespace]
     descriptions = app_info.get("descriptions", "")
+
+    if len(namespaces) > 1:
+        namespace_block = (
+            f"Namespaces: {', '.join(namespaces)}\n(This scenario spans multiple namespaces; investigate all of them.)"
+        )
+    else:
+        namespace_block = f"Namespace: {namespaces[0]}"
 
     # Build instruction similar to how it would be done in Harbor
     instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
 
 Application: {app_name}
-Namespace: {namespace}
+{namespace_block}
 
 {descriptions}
 
@@ -177,7 +193,7 @@ For MITIGATION stage:
 - POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
 
 Important:
-- You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'
+- You have access to kubectl commands to inspect and modify resources in namespace(s): {", ".join(namespaces)}
 - You can query metrics and traces through the available observability tools
 - The conductor API is available at {get_api_base_url()}
 """
@@ -234,6 +250,12 @@ def main():
         help="Directory to store logs (default: ./logs/claudecode)",
     )
     parser.add_argument(
+        "--problem-id",
+        type=str,
+        default=None,
+        help="Problem ID for artifact naming (default: SREGYM_ARTIFACT_ID in benchmark runs)",
+    )
+    parser.add_argument(
         "--sessions-dir",
         type=str,
         default=None,
@@ -268,13 +290,15 @@ def main():
         logger.error(f"Timeout waiting for conductor: {e}")
         sys.exit(1)
 
-    # Get problem information
+    # Get app info for the agent prompt; problem_id is for harness artifacts only
     try:
         app_info = get_app_info()
-        problem_id = get_problem_id()
     except Exception as e:
-        logger.error(f"Failed to get problem information: {e}")
+        logger.error(f"Failed to get app info: {e}")
         sys.exit(1)
+
+    problem_id = resolve_problem_id(cli_problem_id=args.problem_id)
+    logger.info(f"Problem ID (harness): {problem_id}")
 
     # Build instruction
     instruction = build_instruction(app_info)

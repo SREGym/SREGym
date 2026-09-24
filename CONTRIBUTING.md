@@ -3,6 +3,7 @@
 
 - [Contributing to SREGym](#contributing-to-sregym)
   - [Table of Contents](#table-of-contents)
+  - [Rules and Guidelines on AI Usage](#rules-and-guidelines-on-ai-usage)
   - [Getting Started](#getting-started)
   - [Development Setup](#development-setup)
     - [Prerequisites](#prerequisites)
@@ -27,6 +28,32 @@
     - [Getting Help](#getting-help)
     - [Staying Updated](#staying-updated)
   - [License](#license)
+
+## Rules and Guidelines on AI Usage
+
+LLMs and coding agents are significant productivity boost if used correctly,
+   but a big headache if not.
+In SREGym, we welcome contributors who leverage LLMs and coding agents in
+   building new features, but blatant abuse of LLMs and coding agents in
+   generating code and communicating on GitHub is not welcomed.
+
+More specifically, it is ok to use AI to:
+- generate code for features or bug fixes, but
+   **any AI generated code MUST be checked and tested by a human**
+
+It is **NOT** ok to use AI to:
+- generate complete responses to other humans, e.g., in PRs, comments, etc,
+   with no human intervention
+- "one-shot" an open issue by using coding agents
+   to generate commits, PR description,
+   and PR comments, with no human intervention
+- Other use cases where blatant abuse is obvious.
+
+For PRs and communications that violate the rules above,
+   if its owner (i.e., the GitHub user that opens them) is a first-time violator,
+   they receive a warning on the behavior.
+If they violate the rules again, they are unfortunately
+   banned from contributing to SREGym.
 
 ## Getting Started
 
@@ -251,6 +278,53 @@ To add a new problem:
    ```
 
 4. **Document the problem** with clear description and expected behavior
+
+5. **Validate the problem in your PR.** Add a line to your pull request
+   description in this form (anywhere in the body):
+
+   ```
+   /validate-problem <problem_id>
+   ```
+
+   where `<problem_id>` is your problem's registry key. This opts the PR into the
+   [Problem Validation](.github/workflows/problem-validation.yml) workflow, which
+   deploys the app, injects the fault, and verifies that the mitigation oracle
+   fails while the fault is live and passes again after recovery. The check must
+   be green before merge. You can add the line after opening the PR, or post it
+   as a **PR comment** — handy when a reviewer wants to run validation that the
+   contributor forgot. Comment triggers require write access to the repo.
+
+   Any PR that changes files under `sregym/conductor/problems/` **must** include
+   a `/validate-problem` line; a gate check fails the PR otherwise. If validation
+   genuinely does not apply — a refactor, a `registry.py`/`base.py` change, or a
+   Khaos-only problem that cannot run on the CI kind cluster — opt out explicitly
+   with:
+
+   ```
+   /validate-problem skip
+   ```
+
+   To run the validation locally:
+
+   ```bash
+   uv run python tests/integration/validate_problem.py --problem <problem_id>
+   ```
+
+   Automated validation does not replace human review.
+
+6. **Screen validated problems for difficulty (core team).** Run **Problem
+   Difficulty Evaluation** from the Actions tab, or have an owner, member, or
+   collaborator post this PR comment:
+
+   ```text
+   /evaluate-problem <problem_id> [3|5] [glm-5.3-flash]
+   ```
+
+   The optional values default to five attempts and `glm-5.3-flash`. The workflow
+   runs the Codex harness against the Z.ai Coding Plan and publishes diagnosis,
+   mitigation, and overall pass rates in the run summary and PR conversation.
+   A problem is marked saturated only when every requested attempt completes
+   and passes.
 
 ### Adding New Oracles
 

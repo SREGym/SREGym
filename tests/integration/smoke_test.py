@@ -23,6 +23,8 @@ async def _run_smoke_test():
 
     # 2. Select the problem
     conductor.problem_id = PROBLEM_ID
+    # Keep this smoke test independent from a developer's local tasklist.yml.
+    conductor.get_problem_stages = lambda: setattr(conductor, "tasklist", ["mitigation"])
 
     # 3. Deploy app and inject fault
     result = await conductor.start_problem()
@@ -32,8 +34,8 @@ async def _run_smoke_test():
     )
 
     # 4. Submit a placeholder solution (we expect mitigation to fail)
-    response = await conductor.submit('```\nsubmit("placeholder")\n```')
-    assert response.get("status") == "ok", f"submit response: {response}"
+    response = await conductor.submit("placeholder")
+    assert response.get("status") == "accepted", f"submit response: {response}"
 
     # 5. Poll until evaluation completes
     elapsed = 0

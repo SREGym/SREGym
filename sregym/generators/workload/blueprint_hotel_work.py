@@ -4,8 +4,9 @@ from datetime import datetime
 
 import yaml
 from kubernetes import client, config
-from rich.console import Console
 
+from logger import console
+from sregym.generators.images import STRESS_IMAGE
 from sregym.generators.noise.impl.stress_injector import ChaosInjector
 from sregym.generators.workload.base import WorkloadEntry
 from sregym.generators.workload.stream import StreamWorkloadManager
@@ -147,7 +148,6 @@ class BHotelWrk:
     def wait_for_job_deletion(self, job_name, namespace, sleep=2, max_wait=60):
         """Wait for a Kubernetes Job to be deleted before proceeding."""
         api_instance = client.BatchV1Api()
-        console = Console()
         waited = 0
 
         while waited < max_wait:
@@ -380,7 +380,7 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
                         "containers": [
                             {
                                 "name": "stress",
-                                "image": "polinux/stress",
+                                "image": STRESS_IMAGE,
                                 "command": ["/bin/sh", "-c"],
                                 "args": ["stress --cpu $(nproc)"],
                             }

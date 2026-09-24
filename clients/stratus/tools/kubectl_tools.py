@@ -2,11 +2,13 @@ import logging
 from contextlib import AsyncExitStack
 from typing import Annotated, Any
 
+import anyio
 from fastmcp import Client
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import InjectedToolCallId
 from langchain_core.tools.base import ArgsSchema, BaseTool
 from langgraph.types import Command
+from mcp import McpError
 from pydantic import BaseModel, Field, PrivateAttr
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -54,7 +56,14 @@ async def _call_mcp_with_retry(
             kwargs = {"arguments": arguments} if arguments else {}
             result = await client.call_tool(mcp_tool_name, **kwargs)
             return "\n".join([part.text for part in result])
-        except (RuntimeError, ConnectionError, OSError) as e:
+        except (
+            RuntimeError,
+            ConnectionError,
+            OSError,
+            anyio.BrokenResourceError,
+            anyio.ClosedResourceError,
+            McpError,
+        ) as e:
             last_error = e
             logger.warning(
                 "MCP connection failed for %s (attempt %d/%d): %s",
@@ -69,7 +78,8 @@ async def _call_mcp_with_retry(
         finally:
             await _close_mcp_client(exit_stack, tool.name)
 
-    raise last_error
+    logger.error("MCP tool %s failed after %d retries: %s", tool.name, max_retries, last_error)
+    return f"Error: MCP tool call failed after {max_retries} retries: {last_error}"
 
 
 class ExecKubectlCmdSafelyInput(BaseModel):

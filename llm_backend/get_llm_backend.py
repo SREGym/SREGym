@@ -12,6 +12,7 @@ from langchain_litellm import ChatLiteLLM
 from requests.exceptions import HTTPError
 
 from llm_backend.trim_util import trim_messages_conservative
+from llm_backend.usage_log import record_usage
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -29,21 +30,58 @@ class LiteLLMBackend:
         top_p: float = 0.95,
         temperature: float = 0.0,
         max_tokens: int | None = None,
+        provider: str | None = None,
+        usage_available: bool = True,
+        retry: bool = True,
     ):
         self.model_name = model_name
         self.api_key = api_key
         self.api_base = api_base
+        self.provider = provider
+        self.usage_available = usage_available
+        self.retry = retry
         self.temperature = temperature
         self.top_p = top_p
         self.max_tokens = max_tokens
         litellm.drop_params = True
         litellm.modify_params = True
 
+    def _uses_anthropic_cache_control(self) -> bool:
+        """Whether to inject ``cache_control`` breakpoints (Anthropic-only).
+
+        Matches Claude/Anthropic/Bedrock-Claude model ids, plus any model routed
+        through an Anthropic-compatible endpoint (e.g. Moonshot's ``/anthropic``).
+        Providers with automatic prefix caching (OpenAI, Gemini, DeepSeek, etc.)
+        need nothing and are excluded.
+        """
+        m = (self.model_name or "").lower()
+        if "anthropic" in m or "claude" in m:
+            return True
+        base = (self.api_base or "").lower()
+        return "anthropic" in base or base.endswith("/anthropic") or "/anthropic/" in base
+
+    def _invoke(self, llm, prompt_messages, usage_type: str) -> AIMessage:
+        request_start = time.perf_counter()
+        completion = llm.invoke(input=prompt_messages)
+        if self.usage_available:
+            record_usage(
+                completion,
+                model=self.model_name,
+                usage_type=usage_type,
+                duration_seconds=time.perf_counter() - request_start,
+            )
+        else:
+            # LiteLLM fills omitted usage with zeros; keep unmeasured usage absent.
+            completion.usage_metadata = None
+            completion.response_metadata.pop("token_usage", None)
+        return completion
+
     def inference(
         self,
         messages: str | list[SystemMessage | HumanMessage | AIMessage],
         system_prompt: str | None = None,
         tools: list[any] | None = None,
+        usage_type: str = "trace",
     ):
         if isinstance(messages, str):
             if system_prompt is None:
@@ -77,13 +115,31 @@ class LiteLLMBackend:
             model_config["api_key"] = self.api_key
         if self.api_base is not None:
             model_config["api_base"] = self.api_base
+        if self.provider is not None:
+            model_config["custom_llm_provider"] = self.provider
         if self.max_tokens is not None:
             model_config["max_tokens"] = self.max_tokens
 
+        # Anthropic prompt caching (rolling: system prefix + last message).
+        # Nested under model_kwargs; ignored for non-Anthropic via drop_params.
+        if self._uses_anthropic_cache_control():
+            model_config["model_kwargs"] = {
+                "cache_control_injection_points": [
+                    {"location": "message", "role": "system"},
+                    {"location": "message", "index": -1},
+                ]
+            }
+
+        if not self.retry:
+            model_config["max_retries"] = 0
+            model_config.setdefault("model_kwargs", {})["num_retries"] = 0
         llm = ChatLiteLLM(**model_config)
 
         if tools:
             llm = llm.bind_tools(tools, tool_choice="auto")
+
+        if not self.retry:
+            return self._invoke(llm, prompt_messages, usage_type)
 
         retry_delay = LLM_QUERY_INIT_RETRY_DELAY
         trim_message = False
@@ -94,11 +150,10 @@ class LiteLLMBackend:
                     new_prompt_messages, trim_sum = trim_messages_conservative(prompt_messages)
                     logger.info(f"Trimming the {trim_sum}/{len(prompt_messages)} messages")
                     prompt_messages = new_prompt_messages
-                completion = llm.invoke(input=prompt_messages)
-                return completion
+                return self._invoke(llm, prompt_messages, usage_type)
             except openai.BadRequestError as e:
                 logger.error(f"Bad request error - request is malformed: {e}")
-                logger.error(f"Error details: {e.response.json() if hasattr(e, 'response') else 'No response details'}")
+                logger.error(f"Error details: {_safe_response_details(e)}")
                 logger.error("This often happens when tool_calls don't have matching tool response messages.")
                 logger.error(
                     f"Last few messages: {prompt_messages[-3:] if len(prompt_messages) >= 3 else prompt_messages}"
@@ -152,6 +207,23 @@ class LiteLLMBackend:
                 raise
 
         raise RuntimeError("Max retries exceeded. Unable to complete the request.")
+
+
+def _safe_response_details(exc: BaseException) -> str:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return "No response details"
+    try:
+        return str(response.json())
+    except Exception:
+        pass
+    try:
+        text = getattr(response, "text", None)
+        if text:
+            return str(text)
+    except Exception:
+        pass
+    return "No response details"
 
 
 def _parse_duration_to_seconds(duration: Any) -> float | None:

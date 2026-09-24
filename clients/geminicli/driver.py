@@ -23,8 +23,37 @@ from logger import init_logger  # noqa: E402
 init_logger()
 
 from clients.geminicli.geminicli_agent import GeminiCliAgent  # noqa: E402
+from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 
 logger = logging.getLogger("all.geminicli.driver")
+
+
+def run_preflight() -> None:
+    """Validate model + credentials by making a minimal Gemini CLI call.
+
+    Gemini CLI reads credentials (GEMINI_API_KEY / GOOGLE_API_KEY /
+    GOOGLE_APPLICATION_CREDENTIALS / Vertex vars) from the environment, which the
+    subprocess inherits; a missing/invalid key surfaces as a non-zero exit here.
+    """
+    import subprocess
+
+    m = os.environ.get("AGENT_MODEL_ID", "gemini-2.5-pro").split("/")[-1]
+
+    # Trust the workspace for this headless call (matches GeminiCliAgent.run);
+    # otherwise Gemini CLI downgrades approval mode and the call is blocked.
+    env = os.environ.copy()
+    env["GEMINI_CLI_TRUST_WORKSPACE"] = "true"
+
+    r = subprocess.run(
+        ["gemini", "-p", "say ok", "-y", "-m", m],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    if r.returncode:
+        print(r.stdout or r.stderr)
+    sys.exit(r.returncode)
 
 
 def get_api_base_url() -> str:
@@ -47,23 +76,6 @@ def get_app_info() -> dict:
         return app_info
     except Exception as e:
         logger.error(f"Failed to get app info: {e}")
-        raise
-
-
-def get_problem_id() -> str:
-    """Get current problem ID from conductor API."""
-    api_url = f"{get_api_base_url()}/get_problem"
-    logger.info(f"Fetching problem ID from {api_url}")
-
-    try:
-        response = requests.get(api_url)
-        response.raise_for_status()
-        problem_data = response.json()
-        problem_id = problem_data.get("problem_id")
-        logger.info(f"Problem ID: {problem_id}")
-        return problem_id
-    except Exception as e:
-        logger.error(f"Failed to get problem ID: {e}")
         raise
 
 
@@ -211,6 +223,12 @@ def main():
         help="Directory to store logs (default: ./logs/geminicli)",
     )
     parser.add_argument(
+        "--problem-id",
+        type=str,
+        default=None,
+        help="Problem ID for artifact naming (default: SREGYM_ARTIFACT_ID in benchmark runs)",
+    )
+    parser.add_argument(
         "--gemini-home",
         type=str,
         default=None,
@@ -245,13 +263,14 @@ def main():
         logger.error(f"Timeout waiting for conductor: {e}")
         sys.exit(1)
 
-    # Get problem information
     try:
         app_info = get_app_info()
-        problem_id = get_problem_id()
     except Exception as e:
-        logger.error(f"Failed to get problem information: {e}")
+        logger.error(f"Failed to get app info: {e}")
         sys.exit(1)
+
+    problem_id = resolve_problem_id(cli_problem_id=args.problem_id)
+    logger.info(f"Problem ID (harness): {problem_id}")
 
     # Build instruction
     instruction = build_instruction(app_info)

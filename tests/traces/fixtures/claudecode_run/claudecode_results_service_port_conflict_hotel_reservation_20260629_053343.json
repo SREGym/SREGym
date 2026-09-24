@@ -1,0 +1,11 @@
+{
+  "problem_id": "service_port_conflict_hotel_reservation",
+  "timestamp": "20260629_053343",
+  "return_code": 0,
+  "success": true,
+  "usage_metrics": {
+    "input_tokens": 35,
+    "cached_input_tokens": 876121,
+    "output_tokens": 7824
+  }
+}

@@ -9,10 +9,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 class TaintNoToleration(Problem):
     def __init__(self):
-        self.app = SocialNetwork()
-        self.namespace = self.app.namespace
         self.kubectl = KubeCtl()
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=SocialNetwork())
 
         # ── pick all nodes so the control-plane cannot be used as fallback ──
         self.faulty_nodes = self._pick_all_nodes()

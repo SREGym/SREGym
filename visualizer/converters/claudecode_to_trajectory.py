@@ -7,7 +7,6 @@ Usage:
 
 import argparse
 import json
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -94,9 +93,7 @@ def _parse_stream_json(input_path: Path) -> tuple[list[dict[str, Any]], bool]:
                     for tr in tool_results:
                         tr_content = tr.get("content", "")
                         if isinstance(tr_content, list):
-                            tr_content = "\n".join(
-                                b.get("text", "") for b in tr_content if isinstance(b, dict)
-                            )
+                            tr_content = "\n".join(b.get("text", "") for b in tr_content if isinstance(b, dict))
                         messages.append(
                             {
                                 "role": "tool",
@@ -256,9 +253,7 @@ def convert(
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(
-        description="Convert Claude Code stream-json output to stratus JSONL trajectory."
-    )
+    ap = argparse.ArgumentParser(description="Convert Claude Code stream-json output to stratus JSONL trajectory.")
     ap.add_argument("input", help="Path to claude-code.txt")
     ap.add_argument("-o", "--output", required=True, help="Output .jsonl path")
     ap.add_argument("--problem-id", default="unknown", help="SREGym problem ID")

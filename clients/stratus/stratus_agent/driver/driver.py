@@ -8,6 +8,7 @@ if str(sregym_core_path) not in sys.path:
     sys.path.insert(0, str(sregym_core_path))
 
 import asyncio  # noqa: E402
+import contextlib  # noqa: E402
 import json  # noqa: E402
 import time  # noqa: E402
 
@@ -21,12 +22,15 @@ import requests  # noqa: E402
 import yaml  # noqa: E402
 from langchain_core.messages import HumanMessage, SystemMessage  # noqa: E402
 
+from llm_backend.usage_log import USAGE_LOG_PATH_ENV, summarize_usage  # noqa: E402
 from logger import init_logger  # noqa: E402
 
 init_logger()
 
 import logging  # noqa: E402
 
+from clients.harness.problem_id import resolve_problem_id  # noqa: E402
+from clients.harness.token_usage import TOKEN_METRICS_VERSION  # noqa: E402
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig  # noqa: E402
 from clients.stratus.stratus_agent.diagnosis_agent import (  # noqa: E402
     single_run_with_predefined_prompts as diagnosis_single_run,
@@ -52,19 +56,11 @@ logger.setLevel(logging.DEBUG)
 
 
 def run_preflight() -> None:
-    """Validate model + credentials by making a minimal litellm call."""
-    import litellm
+    """Validate model, endpoint, credentials, and tool calling."""
+    from clients.stratus.stratus_agent.driver.preflight import run_stratus_preflight
 
-    litellm.drop_params = True
-    litellm.modify_params = True
-    litellm.suppress_debug_info = True  # ty:ignore[invalid-assignment]
     try:
-        litellm.completion(
-            model=os.environ["AGENT_MODEL_ID"],
-            messages=[{"role": "user", "content": "say ok"}],
-            max_tokens=3,
-            num_retries=0,
-        )
+        run_stratus_preflight()
         print("ok")
     except Exception as e:
         print(f"preflight failed: {e}")
@@ -105,6 +101,15 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
             "type": message.__class__.__name__,
             "content": message.content,
         }
+        # Preserve the tool-call id (and name) on ToolMessages so tool results can
+        # be correlated back to the issuing tool call by id during ATIF conversion.
+        # LangChain drops these from the default dict, and the call<->result link is
+        # otherwise only positional (fragile for parallel calls).
+        if message.__class__.__name__ == "ToolMessage":
+            if getattr(message, "tool_call_id", None):
+                msg_dict["tool_call_id"] = message.tool_call_id
+            if getattr(message, "name", None):
+                msg_dict["name"] = message.name
         # Properly serialize tool calls
         if hasattr(message, "tool_calls") and message.tool_calls:
             serialized_tool_calls = []
@@ -121,6 +126,19 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
                         }
                     )
             msg_dict["tool_calls"] = serialized_tool_calls
+
+        # Preserve per-message token usage + model/cost so ATIF conversion can
+        # populate Metrics. AIMessages produced by ChatLiteLLM.invoke() carry
+        # usage_metadata ({input_tokens, output_tokens, total_tokens, ...}) and
+        # response_metadata ({model_name, ...}); both are JSON-serializable dicts.
+        usage_metadata = getattr(message, "usage_metadata", None)
+        if usage_metadata:
+            with contextlib.suppress(Exception):
+                msg_dict["usage_metadata"] = json.loads(json.dumps(usage_metadata, default=str))
+        response_metadata = getattr(message, "response_metadata", None)
+        if response_metadata:
+            with contextlib.suppress(Exception):
+                msg_dict["response_metadata"] = json.loads(json.dumps(response_metadata, default=str))
 
         # Properly serialize additional_kwargs
         if hasattr(message, "additional_kwargs") and message.additional_kwargs:
@@ -226,22 +244,6 @@ def get_app_info():
         return app_info
     except Exception as e:
         logger.error(f"[get_app_info] HTTP submission failed: {e}")
-        return "error"
-
-
-def get_curr_problem():
-    ltc = LanggraphToolConfig()
-    url = ltc.benchmark_current_problem
-    try:
-        response = requests.get(url)
-        logger.info(f"Response status: {response.status_code}, text: {response.text}")
-        problem_str = str(response.text)
-        logger.info(f"problem as str: {problem_str}")
-        problem = literal_eval(problem_str)
-        logger.info(f"problem info: {problem}")
-        return problem["problem_id"]
-    except Exception as e:
-        logger.error(f"[get_curr_problem] HTTP submission failed: {e}")
         return "error"
 
 
@@ -560,14 +562,14 @@ async def mitigation_task_main(diagnosis_summary):
 
             if has_succeeded:
                 logger.info("Oracles succeeded; making real submission.")
-                await manual_submit_tool("")
+                await manual_submit_tool("", stage="mitigation")
                 break
 
             # Oracles failed — decide whether to retry or submit
             is_last_attempt = (curr_attempt + 1) >= mitigation_agent_max_retry_attempts
             if is_last_attempt:
                 logger.info("Last attempt reached; making real submission regardless of oracle results.")
-                await manual_submit_tool("")
+                await manual_submit_tool("", stage="mitigation")
                 break
 
             if mitigation_submission_requested(last_state):
@@ -670,7 +672,7 @@ async def mitigation_task_main(diagnosis_summary):
 
             if has_succeeded:
                 logger.info("Oracles succeeded; making real submission.")
-                await manual_submit_tool("")
+                await manual_submit_tool("", stage="mitigation")
                 break
 
             # Oracles failed — decide whether to retry (with rollback) or submit
@@ -706,7 +708,7 @@ async def mitigation_task_main(diagnosis_summary):
                 curr_attempt += 1
             else:
                 logger.info("Last attempt reached; making real submission regardless of oracle results.")
-                await manual_submit_tool("")
+                await manual_submit_tool("", stage="mitigation")
                 break
 
         agent_exec_stats["agent_name"] = agent_names_lst
@@ -725,7 +727,16 @@ async def main():
     # run diagnosis agent 2 times
     # here, running the file's main function should suffice.
     # 1 for noop diagnosis
-    current_problem = get_curr_problem()
+    current_problem = resolve_problem_id()
+    logger.info(f"Problem ID (harness): {current_problem}")
+
+    agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
+    if agent_logs_dir:
+        problem_dir = Path(agent_logs_dir)
+    else:
+        project_root = Path(__file__).resolve().parents[4]
+        problem_dir = project_root / "results" / timestamp / current_problem
+    os.environ[USAGE_LOG_PATH_ENV] = str(problem_dir / "stratus_usage.jsonl")
 
     # logger.info("*" * 25 + f" Testing {current_problem} ! " + "*" * 25)
     # logger.info("*" * 25 + f" Testing {current_problem} ! " + "*" * 25)
@@ -771,53 +782,55 @@ async def main():
 
     # Collect all trajectories from this run
     all_trajectories = []
-
-    # run diagnosis agent 1 time for diagnosis (formerly called localization)
-    # here, running the file's main function should suffice
-    logger.info("*" * 25 + " Starting [diagnosis agent] for [diagnosis] " + "*" * 25)
-    (
-        diagnosis_agent_exec_stats,
-        diagnosis_agent_last_state,
-        diagnosis_graph_events,
-    ) = await diagnosis_with_localization_task_main()
-    all_trajectories.append({"stage": "diagnosis", "events": diagnosis_graph_events})
-    agent_names.append("diagnosis_agent")
-    agent_in_tokens.append(diagnosis_agent_exec_stats["input_tokens"])
-    agent_out_tokens.append(diagnosis_agent_exec_stats["output_tokens"])
-    agent_total_tokens.append(diagnosis_agent_exec_stats["total_tokens"])
-    agent_times.append(diagnosis_agent_exec_stats["time"])
-    agent_steps.append(diagnosis_agent_exec_stats["steps"])
-    agent_retry_attempts.append(diagnosis_agent_exec_stats["num_retry_attempts"])
-    agent_rollback_stack.append(diagnosis_agent_exec_stats["rollback_stack"])
-    agent_oracle_results.append(diagnosis_agent_exec_stats["oracle_results"])
-    logger.info("*" * 25 + " Finished [diagnosis agent] " + "*" * 25)
-
-    file_parent_dir = Path(__file__).resolve().parent.parent
-    diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
-    diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(diagnosis_agent_prompt_path.read_text())
-
-    # Check if diagnosis prompts have the summary prompt, otherwise use a default key
-    summary_prompt_key = (
-        "diagnosis_summary_prompt"
-        if "diagnosis_summary_prompt" in diagnosis_agent_prompts
-        else "localization_summary_prompt"
+    benchmark_status = await wait_for_stage_switch(
+        current_stage="setup",
+        target_stages={"diagnosis", "mitigation", "done"},
     )
-    diagnosis_fault_summary = generate_run_summary(
-        diagnosis_agent_last_state, diagnosis_agent_prompts[summary_prompt_key]
-    )
+    diagnosis_fault_summary = "No diagnosis summary is available because this benchmark starts at mitigation."
 
-    # Diagnosis submission is graded asynchronously, so poll for the next stage
-    # instead of sampling status once and racing the stage transition.
-    try:
-        benchmark_status = await wait_for_stage_switch(
-            current_stage="diagnosis",
-            target_stages={"mitigation", "done"},
+    if benchmark_status == "diagnosis":
+        logger.info("*" * 25 + " Starting [diagnosis agent] for [diagnosis] " + "*" * 25)
+        (
+            diagnosis_agent_exec_stats,
+            diagnosis_agent_last_state,
+            diagnosis_graph_events,
+        ) = await diagnosis_with_localization_task_main()
+        all_trajectories.append({"stage": "diagnosis", "events": diagnosis_graph_events})
+        agent_names.append("diagnosis_agent")
+        agent_in_tokens.append(diagnosis_agent_exec_stats["input_tokens"])
+        agent_out_tokens.append(diagnosis_agent_exec_stats["output_tokens"])
+        agent_total_tokens.append(diagnosis_agent_exec_stats["total_tokens"])
+        agent_times.append(diagnosis_agent_exec_stats["time"])
+        agent_steps.append(diagnosis_agent_exec_stats["steps"])
+        agent_retry_attempts.append(diagnosis_agent_exec_stats["num_retry_attempts"])
+        agent_rollback_stack.append(diagnosis_agent_exec_stats["rollback_stack"])
+        agent_oracle_results.append(diagnosis_agent_exec_stats["oracle_results"])
+        logger.info("*" * 25 + " Finished [diagnosis agent] " + "*" * 25)
+
+        file_parent_dir = Path(__file__).resolve().parent.parent
+        diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
+        diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
+        diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
+        diagnosis_agent_prompts = yaml.safe_load(diagnosis_agent_prompt_path.read_text())
+        summary_prompt_key = (
+            "diagnosis_summary_prompt"
+            if "diagnosis_summary_prompt" in diagnosis_agent_prompts
+            else "localization_summary_prompt"
         )
-    except TimeoutError as e:
-        logger.warning("Timed out waiting for post-diagnosis stage switch: %s", e)
-        benchmark_status = get_benchmark_status()
+        diagnosis_fault_summary = generate_run_summary(
+            diagnosis_agent_last_state, diagnosis_agent_prompts[summary_prompt_key]
+        )
+
+        try:
+            benchmark_status = await wait_for_stage_switch(
+                current_stage="diagnosis",
+                target_stages={"mitigation", "done"},
+            )
+        except TimeoutError as e:
+            logger.warning("Timed out waiting for post-diagnosis stage switch: %s", e)
+            benchmark_status = get_benchmark_status()
+    elif benchmark_status == "mitigation":
+        logger.info("Benchmark starts at mitigation; skipping diagnosis agent")
     logger.info(f"Benchmark status after diagnosis polling: {benchmark_status}")
 
     mitigation_last_state = None
@@ -851,6 +864,7 @@ async def main():
         )
 
     agent_output_df["agent_name"] = agent_names
+    # LangChain usage totals already include cache hits and reasoning.
     agent_output_df["input_tokens"] = agent_in_tokens
     agent_output_df["output_tokens"] = agent_out_tokens
     agent_output_df["total_tokens"] = agent_total_tokens
@@ -860,16 +874,31 @@ async def main():
     agent_output_df["rollback_stack"] = agent_rollback_stack
     agent_output_df["oracle_results"] = agent_oracle_results
 
-    agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
-    if agent_logs_dir:
-        problem_dir = Path(agent_logs_dir)
-    else:
-        project_root = Path(__file__).resolve().parents[4]
-        problem_dir = project_root / "results" / timestamp / current_problem
-
     problem_dir.mkdir(parents=True, exist_ok=True)
 
+    # The callback-backed rows already include trace and nested tool calls. Only
+    # detached summary calls must be added to avoid counting other calls twice.
+    summary_usage = summarize_usage(Path(os.environ[USAGE_LOG_PATH_ENV]), usage_type="summary")
+    if summary_usage["requests"]:
+        summary_row = pd.DataFrame(
+            [
+                {
+                    "agent_name": "run_summary",
+                    "input_tokens": summary_usage["input_tokens"],
+                    "output_tokens": summary_usage["output_tokens"],
+                    "total_tokens": summary_usage["total_tokens"],
+                    "time": str(summary_usage["duration_seconds"]),
+                    "steps": summary_usage["requests"],
+                    "num_retry_attempts": "N/A",
+                    "rollback_stack": "N/A",
+                    "oracle_results": "N/A",
+                }
+            ]
+        )
+        agent_output_df = pd.concat([agent_output_df, summary_row], ignore_index=True)
+
     csv_path = problem_dir / f"{current_problem}_stratus_output.csv"
+    agent_output_df["token_metrics_version"] = TOKEN_METRICS_VERSION
     agent_output_df.to_csv(csv_path, index=False, header=True)
     save_combined_trajectory(all_trajectories, current_problem, output_dir=problem_dir)
 

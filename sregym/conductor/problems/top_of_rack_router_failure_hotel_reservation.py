@@ -8,15 +8,9 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class TopOfRackRouterPartitionHotelReservation(Problem):
-    def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "network-connectivity"):
-        if app_name == "hotel_reservation":
-            self.app = HotelReservation()
-        else:
-            raise ValueError(f"Unsupported app_name: {app_name}")
-        self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+    def __init__(self, faulty_service: str = "network-connectivity"):
+        super().__init__(app=HotelReservation())
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = faulty_service
         self.fault_type = "tor_network_partition"
         self.root_cause = self.build_structured_root_cause(

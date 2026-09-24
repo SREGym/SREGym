@@ -15,16 +15,15 @@ class LivenessProbeTooAggressive(Problem):
         self.faulty_service = "aux-service"
 
         if app_name == "social_network":
-            self.app = SocialNetwork()
+            app = SocialNetwork()
         elif app_name == "hotel_reservation":
-            self.app = HotelReservation()
+            app = HotelReservation()
         elif app_name == "astronomy_shop":
-            self.app = AstronomyShop()
+            app = AstronomyShop()
         else:
             raise ValueError(f"Unsupported app name: {app_name}")
 
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=app)
 
         self.kubectl = KubeCtl()
         self.injector = VirtualizationFaultInjector(namespace=self.app.namespace)

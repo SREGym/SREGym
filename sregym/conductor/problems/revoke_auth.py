@@ -11,11 +11,11 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class MongoDBRevokeAuth(Problem):
+    """Revoke admin privileges in MongoDB — the agent must diagnose auth failure without seeing the scripts."""
+
     def __init__(self, faulty_service: str = "mongodb-geo"):
-        self.app = HotelReservation()
-        super().__init__(app=self.app, namespace=self.app.namespace)
+        super().__init__(app=HotelReservation(mount_failure_scripts=False))
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
         self.faulty_service = faulty_service
         self.root_cause = self.build_structured_root_cause(
             component=f"service/{self.faulty_service}-db",

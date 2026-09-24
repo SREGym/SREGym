@@ -20,9 +20,20 @@ import os  # noqa: E402
 from kubernetes import dynamic  # noqa: E402
 from kubernetes.client import api_client  # noqa: E402
 from kubernetes.client.rest import ApiException  # noqa: E402
-from rich.console import Console  # noqa: E402
+
+from logger import console  # noqa: E402
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
+PLATFORM_ERROR_MARKERS = (
+    "exec format error",
+    "no matching manifest for",
+    "no match for platform in manifest",
+    "running an x86 program on an arm64 os",
+)
+
+
+class ContainerPlatformError(RuntimeError):
+    """A container image or executable cannot run on the selected node."""
 
 
 class KubeCtl:
@@ -40,9 +51,10 @@ class KubeCtl:
         """Return a list of all namespaces in the cluster."""
         return self.core_v1_api.list_namespace()
 
-    def list_pods(self, namespace):
+    def list_pods(self, namespace, timeout: float | None = None):
         """Return a list of all pods within a specified namespace."""
-        return self.core_v1_api.list_namespaced_pod(namespace)
+        kwargs = {"_request_timeout": timeout} if timeout is not None else {}
+        return self.core_v1_api.list_namespaced_pod(namespace, **kwargs)
 
     def list_services(self, namespace):
         """Return a list of all services within a specified namespace."""
@@ -51,6 +63,12 @@ class KubeCtl:
     def list_nodes(self):
         """Return a list of all running nodes."""
         return self.core_v1_api.list_node()
+
+    def get_node_free_pct(self, node_name: str) -> int:
+        """Return the nodefs free-space percentage as reported by kubelet stats summary."""
+        raw = self.exec_command(f"kubectl get --raw '/api/v1/nodes/{node_name}/proxy/stats/summary'")
+        fs = json.loads(raw)["node"]["fs"]
+        return round(fs["availableBytes"] / fs["capacityBytes"] * 100)
 
     def get_concise_deployments_info(self, namespace=None):
         """Return a concise info of a deployment."""
@@ -64,9 +82,10 @@ class KubeCtl:
         result = self.exec_command(cmd)
         return result
 
-    def list_deployments(self, namespace):
+    def list_deployments(self, namespace, timeout: float | None = None):
         """Return a list of all deployments within a specified namespace."""
-        return self.apps_v1_api.list_namespaced_deployment(namespace)
+        kwargs = {"_request_timeout": timeout} if timeout is not None else {}
+        return self.apps_v1_api.list_namespaced_deployment(namespace, **kwargs)
 
     def get_cluster_ip(self, service_name, namespace):
         """Retrieve the cluster IP address of a specified service within a namespace."""
@@ -130,6 +149,19 @@ class KubeCtl:
         """Fetch the service configuration."""
         return client.CoreV1Api().read_namespaced_service(name=name, namespace=namespace)
 
+    @staticmethod
+    def _is_completed_job_pod(pod) -> bool:
+        """True if the pod is a successfully-completed Job pod.
+
+        Such pods (e.g. k3s's helm-install-* pods in kube-system) sit in phase
+        "Succeeded" with terminated containers forever, so a readiness wait must
+        not block on them. Restricted to Job-owned pods so unrelated Succeeded
+        pods aren't silently excused.
+        """
+        if pod.status.phase != "Succeeded":
+            return False
+        return any(owner.kind == "Job" for owner in (pod.metadata.owner_references or []))
+
     def wait_for_ready(
         self,
         namespace: str,
@@ -146,7 +178,6 @@ class KubeCtl:
             sleep: Seconds between checks
             max_wait: Maximum seconds to wait
         """
-        console = Console()
 
         # Normalize to list
         if service_names is None:
@@ -172,47 +203,141 @@ class KubeCtl:
 
         console.log(f"[bold yellow]Waiting for all pods in {display_name} to be ready...")
 
-        with console.status("[bold green]Waiting for pods to be ready..."):
-            wait = 0
+        deadline = time.monotonic() + max_wait
+        platform_log_retry_at = {}
 
-            while wait < max_wait:
-                try:
-                    if label_selectors:
-                        # Collect pods from all services
-                        all_pods = []
-                        for selector in label_selectors:
-                            pod_list = self.core_v1_api.list_namespaced_pod(
-                                namespace=namespace, label_selector=selector
-                            )
-                            all_pods.extend(pod_list.items)
-                    else:
-                        all_pods = self.list_pods(namespace).items or []
+        while time.monotonic() < deadline:
+            try:
+                if label_selectors:
+                    # Collect pods from all services
+                    all_pods = []
+                    for selector in label_selectors:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("Pod readiness deadline reached")
+                        pod_list = self.core_v1_api.list_namespaced_pod(
+                            namespace=namespace, label_selector=selector, _request_timeout=remaining
+                        )
+                        all_pods.extend(pod_list.items)
+                else:
+                    all_pods = self.list_pods(namespace, timeout=max(0.001, deadline - time.monotonic())).items or []
 
-                    if all_pods:
-                        ready_pods = [
-                            pod
-                            for pod in all_pods
-                            if pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses)
-                        ]
+                if all_pods:
+                    for pod in all_pods:
+                        self._check_container_platform(pod, namespace)
+                    for pod in all_pods:
+                        self._check_container_platform_logs(pod, namespace, platform_log_retry_at, deadline=deadline)
+                    if time.monotonic() >= deadline:
+                        break
+                    ready_pods = [
+                        pod
+                        for pod in all_pods
+                        # Completed Job pods (e.g. k3s's helm-install-* pods in
+                        # kube-system) finish "Succeeded" with terminated, never-ready
+                        # containers — they're done, not pending — so don't block on
+                        # them. Scoped to Job-owned pods so a stray Succeeded pod (or
+                        # any Failed pod) still has to be accounted for.
+                        if self._is_completed_job_pod(pod)
+                        or (pod.status.container_statuses and all(cs.ready for cs in pod.status.container_statuses))
+                    ]
 
-                        if len(ready_pods) == len(all_pods):
-                            console.log(f"[bold green]All pods in {display_name} are ready.")
-                            return
+                    if len(ready_pods) == len(all_pods):
+                        console.log(f"[bold green]All pods in {display_name} are ready.")
+                        return
 
-                except Exception as e:
-                    console.log(f"[red]Error checking pod statuses: {e}")
+            except ContainerPlatformError:
+                raise
+            except Exception as e:
+                console.log(f"[red]Error checking pod statuses: {e}")
 
-                time.sleep(sleep)
-                wait += sleep
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(sleep, remaining))
 
-            raise Exception(
-                f"[red]Timeout: Not all pods in {display_name} reached the Ready state within {max_wait} seconds."
-            )
+        raise Exception(
+            f"[red]Timeout: Not all pods in {display_name} reached the Ready state within {max_wait} seconds."
+        )
+
+    @staticmethod
+    def _check_container_platform(pod, namespace: str):
+        """Surface explicit runtime platform failures before the readiness timeout.
+
+        Inspect init containers too; an incompatible init image prevents the main
+        containers from ever starting. Ordinary pull failures and application
+        crashes remain eligible for the normal readiness retry.
+        """
+        statuses = [
+            *(pod.status.init_container_statuses or []),
+            *(pod.status.container_statuses or []),
+        ]
+        for status in statuses:
+            if status.ready:
+                continue
+            for state in (status.state, status.last_state):
+                if state is None:
+                    continue
+                for detail in (state.waiting, state.terminated):
+                    message = getattr(detail, "message", None) or ""
+                    if any(marker in message.lower() for marker in PLATFORM_ERROR_MARKERS):
+                        raise KubeCtl._container_platform_error(pod, namespace, status, message)
+
+    @staticmethod
+    def _container_platform_error(pod, namespace, status, message):
+        return ContainerPlatformError(
+            f"Container platform failure in {namespace}/{pod.metadata.name}, "
+            f"container '{status.name}', image '{status.image}', "
+            f"node '{pod.spec.node_name}': {message.rstrip('.')}. "
+            "Verify that the image and its executables support the node architecture."
+        )
+
+    def _check_container_platform_logs(self, pod, namespace: str, retry_at: dict, *, deadline: float):
+        """Some runtimes report exec/loader failures only in container stderr.
+
+        Cache successful reads per container instance. Retry unavailable logs
+        after five seconds, within the readiness deadline. Ordinary application
+        crashes and log-fetch failures are not platform errors.
+        """
+        statuses = [*(pod.status.init_container_statuses or []), *(pod.status.container_statuses or [])]
+        for status in statuses:
+            if status.ready:
+                continue
+            terminated = status.state.terminated if status.state else None
+            previous = False
+            if terminated is None and status.last_state is not None:
+                terminated = status.last_state.terminated
+                previous = bool(status.state and status.state.running)
+            if terminated is None or terminated.exit_code == 0:
+                continue
+            key = (pod.metadata.uid or pod.metadata.name, status.name, status.restart_count, status.container_id)
+            now = time.monotonic()
+            if now >= deadline:
+                return
+            if now < retry_at.get(key, 0):
+                continue
+            retry_at[key] = now + 5
+            try:
+                logs = self.core_v1_api.read_namespaced_pod_log(
+                    name=pod.metadata.name,
+                    namespace=namespace,
+                    container=status.name,
+                    previous=previous,
+                    tail_lines=20,
+                    limit_bytes=4096,
+                    _request_timeout=min(3, deadline - now),
+                )
+            except Exception:
+                # Log files may not yet be available immediately after exit.
+                continue
+            if not isinstance(logs, str) or not logs:
+                continue
+            retry_at[key] = float("inf")
+            for line in logs.splitlines():
+                if any(marker in line.lower() for marker in PLATFORM_ERROR_MARKERS):
+                    raise self._container_platform_error(pod, namespace, status, line[:512])
 
     def wait_for_namespace_deletion(self, namespace, sleep=2, max_wait=300):
         """Wait for a namespace to be fully deleted before proceeding."""
 
-        console = Console()
         console.log("[bold yellow]Waiting for namespace deletion...")
 
         wait = 0
@@ -255,31 +380,28 @@ class KubeCtl:
         return False
 
     def wait_for_stable(self, namespace: str, sleep: int = 2, max_wait: int = 300):
-        console = Console()
         console.log(f"[bold yellow]Waiting for namespace '{namespace}' to be stable...")
 
-        with console.status("[bold yellow]Waiting for pods to be stable..."):
-            wait = 0
+        wait = 0
 
-            while wait < max_wait:
-                try:
-                    pod_list = self.list_pods(namespace)
+        while wait < max_wait:
+            try:
+                pod_list = self.list_pods(namespace)
 
-                    if pod_list.items:
-                        if all(self.is_ready(pod) for pod in pod_list.items):
-                            console.log(f"[bold green]All pods in namespace '{namespace}' are stable.")
-                            return
-                except Exception as e:
-                    console.log(f"[red]Error checking pod statuses: {e}")
+                if pod_list.items:
+                    if all(self.is_ready(pod) for pod in pod_list.items):
+                        console.log(f"[bold green]All pods in namespace '{namespace}' are stable.")
+                        return
+            except Exception as e:
+                console.log(f"[red]Error checking pod statuses: {e}")
 
-                time.sleep(sleep)
-                wait += sleep
+            time.sleep(sleep)
+            wait += sleep
 
-            raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
+        raise Exception(f"[red]Timeout: Namespace '{namespace}' was not deleted within {max_wait} seconds.")
 
     def delete_job(self, job_name: str = None, label: str = None, namespace: str = "default"):
         """Delete a Kubernetes Job."""
-        console = Console()
         api_instance = client.BatchV1Api()
         try:
             if job_name:
@@ -299,11 +421,11 @@ class KubeCtl:
                         )
                         console.log(f"[bold green]Job with label '{label}' deleted successfully.")
                 else:
-                    console.log(f"[yellow]No jobs found with label '{label}' in namespace '{namespace}'.")
+                    logger.debug(f"No jobs found with label '{label}' in namespace '{namespace}'.")
             return True
         except client.exceptions.ApiException as e:
             if e.status == 404:
-                console.log(f"[yellow]Job '{job_name}' not found in namespace '{namespace}' (already deleted)")
+                logger.debug(f"Job '{job_name}' not found in namespace '{namespace}' (already deleted)")
                 return True
             else:
                 console.log(f"[red]Error deleting job '{job_name}': {e}")
@@ -330,53 +452,51 @@ class KubeCtl:
                 needs to access workload-generator jobs that are hidden from the agent.
         """
         api_instance = client.BatchV1Api(api_client=api_client) if api_client else client.BatchV1Api()
-        console = Console()
         start_time = time.time()
 
         console.log(f"[yellow]Waiting for job '{job_name}' to complete...")
-        with console.status("[bold green]Waiting for job to be done..."):
-            while time.time() - start_time < timeout:
-                try:
-                    job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
+        while time.time() - start_time < timeout:
+            try:
+                job = api_instance.read_namespaced_job(name=job_name, namespace=namespace)
 
-                    # Check job status conditions first (more reliable)
-                    if job.status.conditions:
-                        for condition in job.status.conditions:
-                            if condition.type == "Complete" and condition.status == "True":
-                                console.log(f"[bold green]Job '{job_name}' completed successfully!")
-                                return
-                            elif condition.type == "Failed" and condition.status == "True":
-                                error_msg = f"Job '{job_name}' failed."
-                                if condition.reason:
-                                    error_msg += f"\nReason: {condition.reason}"
-                                if condition.message:
-                                    error_msg += f"\nMessage: {condition.message}"
-                                console.log(f"[bold red]{error_msg}")
-                                raise Exception(error_msg)
+                # Check job status conditions first (more reliable)
+                if job.status.conditions:
+                    for condition in job.status.conditions:
+                        if condition.type == "Complete" and condition.status == "True":
+                            console.log(f"[bold green]Job '{job_name}' completed successfully!")
+                            return
+                        elif condition.type == "Failed" and condition.status == "True":
+                            error_msg = f"Job '{job_name}' failed."
+                            if condition.reason:
+                                error_msg += f"\nReason: {condition.reason}"
+                            if condition.message:
+                                error_msg += f"\nMessage: {condition.message}"
+                            console.log(f"[bold red]{error_msg}")
+                            raise Exception(error_msg)
 
-                    # Check numeric status as fallback
-                    succeeded = job.status.succeeded or 0
-                    failed = job.status.failed or 0
+                # Check numeric status as fallback
+                succeeded = job.status.succeeded or 0
+                failed = job.status.failed or 0
 
-                    if succeeded > 0:
-                        console.log(f"[bold green]Job '{job_name}' completed successfully! (succeeded: {succeeded})")
-                        return
-                    elif failed > 0:
-                        console.log(f"[bold red]Job '{job_name}' failed! (failed: {failed})")
-                        raise Exception(f"Job '{job_name}' failed.")
+                if succeeded > 0:
+                    console.log(f"[bold green]Job '{job_name}' completed successfully! (succeeded: {succeeded})")
+                    return
+                elif failed > 0:
+                    console.log(f"[bold red]Job '{job_name}' failed! (failed: {failed})")
+                    raise Exception(f"Job '{job_name}' failed.")
 
-                    time.sleep(2)
+                time.sleep(2)
 
-                except client.exceptions.ApiException as e:
-                    if e.status == 404:
-                        console.log(f"[red]Job '{job_name}' not found!")
-                        raise Exception(f"Job '{job_name}' not found in namespace '{namespace}'") from e
-                    else:
-                        console.log(f"[red]Error checking job status: {e}")
-                        raise
+            except client.exceptions.ApiException as e:
+                if e.status == 404:
+                    console.log(f"[red]Job '{job_name}' not found!")
+                    raise Exception(f"Job '{job_name}' not found in namespace '{namespace}'") from e
+                else:
+                    console.log(f"[red]Error checking job status: {e}")
+                    raise
 
-            console.log(f"[bold red]Timeout waiting for job '{job_name}' to complete!")
-            raise TimeoutError(f"Timeout: Job '{job_name}' did not complete within {timeout} seconds.")
+        console.log(f"[bold red]Timeout waiting for job '{job_name}' to complete!")
+        raise TimeoutError(f"Timeout: Job '{job_name}' did not complete within {timeout} seconds.")
 
     def update_deployment(self, name: str, namespace: str, deployment):
         """Update the deployment configuration."""
@@ -485,7 +605,7 @@ class KubeCtl:
             logger.info(f"Namespace '{namespace}' deleted successfully.")
         except ApiException as e:
             if e.status == 404:
-                logger.warning(f"Namespace '{namespace}' not found.")
+                logger.debug(f"Namespace '{namespace}' not found.")
             else:
                 logger.error(f"Error deleting namespace '{namespace}': {e}")
 
@@ -701,12 +821,33 @@ class KubeCtl:
             out = subprocess.run(command, shell=True, check=True, capture_output=True, input=input_data)
             return out.stdout.decode("utf-8")
         except subprocess.CalledProcessError as e:
-            return e.stderr.decode("utf-8")
+            stderr = e.stderr.decode("utf-8")
+            logger.error("Command failed (exit %d): %s\n  stderr: %s", e.returncode, command, stderr.strip())
+            return stderr
 
-        # if out.stderr:
-        #     return out.stderr.decode("utf-8")
-        # else:
-        #     return out.stdout.decode("utf-8")
+    def exec_command_checked(self, command: str, input_data=None, timeout: float | None = None):
+        """Execute kubectl and raise when the command exits unsuccessfully."""
+        if input_data is not None:
+            input_data = input_data.encode("utf-8")
+
+        try:
+            out = subprocess.run(
+                command,
+                shell=True,
+                check=True,
+                capture_output=True,
+                input=input_data,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            logger.error("Command timed out after %ss: %s", timeout, command)
+            raise RuntimeError(f"Command timed out after {timeout}s: {command}") from exc
+        except subprocess.CalledProcessError as exc:
+            stderr = exc.stderr.decode("utf-8", errors="replace").strip()
+            logger.error("Command failed (exit %d): %s\n  stderr: %s", exc.returncode, command, stderr)
+            raise RuntimeError(f"Command failed (exit {exc.returncode}): {command}: {stderr}") from exc
+
+        return out.stdout.decode("utf-8")
 
     def get_node_architectures(self):
         """Return a set of CPU architectures from all nodes in the cluster."""
@@ -807,6 +948,26 @@ class KubeCtl:
                         break
 
         return matching_rs
+
+    def get_deployment_pods(self, deployment: client.V1Deployment, namespace: str) -> list[client.V1Pod]:
+        """Return pods controlled by this Deployment, including rolling replacements."""
+        replica_sets = self.get_matching_replicasets(namespace, deployment.metadata.name)
+        owned_uids = {
+            rs.metadata.uid
+            for rs in replica_sets
+            if any(
+                owner.kind == "Deployment" and owner.uid == deployment.metadata.uid and owner.controller
+                for owner in (rs.metadata.owner_references or [])
+            )
+        }
+        return [
+            pod
+            for pod in self.list_pods(namespace).items
+            if any(
+                owner.kind == "ReplicaSet" and owner.uid in owned_uids and owner.controller
+                for owner in (pod.metadata.owner_references or [])
+            )
+        ]
 
     def delete_replicaset(self, name: str, namespace: str):
         body = client.V1DeleteOptions(propagation_policy="Foreground")

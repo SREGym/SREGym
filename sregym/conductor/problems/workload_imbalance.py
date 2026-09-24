@@ -4,6 +4,7 @@ from sregym.conductor.oracles.imbalance_mitigation import ImbalanceMitigationOra
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
+from sregym.generators.images import WORKLOAD_IMBALANCE_PROXY_IMAGE
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -11,10 +12,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 class WorkloadImbalance(Problem):
     def __init__(self):
-        self.app = AstronomyShop()
         self.kubectl = KubeCtl()
-        self.namespace = self.app.namespace
-        super().__init__(app=self.app, namespace=self.namespace)
+        super().__init__(app=AstronomyShop())
         self.faulty_service = ["frontend"]
         self.injector = VirtualizationFaultInjector(namespace="kube-system")
         self.injector_for_scale = VirtualizationFaultInjector(namespace=self.namespace)
@@ -38,7 +37,7 @@ class WorkloadImbalance(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         self.injector.inject_daemon_set_image_replacement(
-            daemon_set_name="kube-proxy", new_image="docker.io/jackcuii/kube-proxy:v1.31.12"
+            daemon_set_name="kube-proxy", new_image=WORKLOAD_IMBALANCE_PROXY_IMAGE
         )
         print(f"Service: {self.faulty_service[0]} | Namespace: {self.namespace}\n")
         self.injector_for_scale.scale_pods_to(replicas=5, microservices=self.faulty_service)
@@ -53,9 +52,8 @@ class WorkloadImbalance(Problem):
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        self.injector.inject_daemon_set_image_replacement(
-            daemon_set_name="kube-proxy", new_image="registry.k8s.io/kube-proxy:v1.31.13"
-        )
+        if not self.injector.recover_daemon_set_image_replacement(daemon_set_name="kube-proxy"):
+            raise RuntimeError("The saved kube-proxy image is missing")
         print(f"Service: {self.faulty_service[0]} | Namespace: {self.namespace}\n")
         self.injector_for_scale.scale_pods_to(replicas=1, microservices=self.faulty_service)
         self.kubectl.wait_for_ready(namespace=self.namespace)

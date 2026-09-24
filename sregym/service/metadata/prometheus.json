@@ -12,6 +12,5 @@
         "release_name": "prometheus",
         "chart_path": "observer/prometheus/prometheus/",
         "namespace": "observe"
-    },
-    "PersistentVolumeClaimConfig": "observer/prometheus/prometheus-pvc.yml"
+    }
 }

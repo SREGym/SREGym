@@ -22,7 +22,11 @@ from logger import init_logger  # noqa: E402
 
 init_logger()
 
-from clients.codex.codex_agent import CodexAgent  # noqa: E402
+from clients.codex.codex_agent import CodexAgent, custom_provider_args, filtered_runtime_args  # noqa: E402
+from clients.harness.problem_id import resolve_problem_id  # noqa: E402
+from clients.jev.config import INSTRUCTION as JEV_INSTRUCTION  # noqa: E402
+from clients.jev.config import MODEL_ENV as JEV_MODEL_ENV
+from clients.jev.config import SUBMISSION_INSTRUCTION as JEV_SUBMISSION_INSTRUCTION
 
 logger = logging.getLogger("all.codex.driver")
 
@@ -31,33 +35,47 @@ def run_preflight() -> None:
     """Validate model + credentials by making a minimal Codex CLI call."""
     import subprocess
 
-    home = Path("/root/.codex")
+    home = Path(os.environ.get("CODEX_HOME", "/root/.codex"))
     auth = home / "auth.json"
     key = os.environ.get("OPENAI_API_KEY", "")
+    provider_args = custom_provider_args()
 
-    if not auth.exists() and not key:
-        print("missing ~/.codex/auth.json and OPENAI_API_KEY")
+    if not provider_args and not auth.exists() and not key:
+        print(f"missing {auth} and OPENAI_API_KEY")
         sys.exit(1)
 
-    if not auth.exists():
-        home.mkdir(parents=True, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True)
+    if not provider_args and not auth.exists():
         auth.write_text(json.dumps({"OPENAI_API_KEY": key}))
 
     m = os.environ["AGENT_MODEL_ID"].split("/")[-1]
     env = dict(os.environ)
     env["CODEX_HOME"] = str(home)
 
+    command = [
+        "codex",
+        "exec",
+        "--model",
+        m,
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--skip-git-repo-check",
+    ]
+    command.extend(provider_args)
+    command.extend(filtered_runtime_args(env))
+    if os.environ.get(JEV_MODEL_ENV):
+        from clients.jev.config import codex_args
+        from clients.jev.server import run_preflight as jev_preflight
+
+        logs = Path(os.environ.get("AGENT_LOGS_DIR", "/logs"))
+        jev_preflight(logs / "jev_preflight.jsonl")
+        command.extend(codex_args(logs))
+    reasoning_effort = os.environ.get("AGENT_REASONING_EFFORT")
+    if reasoning_effort:
+        command.extend(["-c", f"model_reasoning_effort={reasoning_effort}"])
+    command.extend(["--", "say ok"])
+
     r = subprocess.run(
-        [
-            "codex",
-            "exec",
-            "--model",
-            m,
-            "--dangerously-bypass-approvals-and-sandbox",
-            "--skip-git-repo-check",
-            "--",
-            "say ok",
-        ],
+        command,
         capture_output=True,
         text=True,
         timeout=60,
@@ -89,23 +107,6 @@ def get_app_info() -> dict:
         return app_info
     except Exception as e:
         logger.error(f"Failed to get app info: {e}")
-        raise
-
-
-def get_problem_id() -> str:
-    """Get current problem ID from conductor API."""
-    api_url = f"{get_api_base_url()}/get_problem"
-    logger.info(f"Fetching problem ID from {api_url}")
-
-    try:
-        response = requests.get(api_url)
-        response.raise_for_status()
-        problem_data = response.json()
-        problem_id = problem_data.get("problem_id")
-        logger.info(f"Problem ID: {problem_id}")
-        return problem_id
-    except Exception as e:
-        logger.error(f"Failed to get problem ID: {e}")
         raise
 
 
@@ -164,6 +165,23 @@ def build_instruction(app_info: dict) -> str:
     app_name = app_info.get("app_name", "unknown")
     namespace = app_info.get("namespace", "default")
     descriptions = app_info.get("descriptions", "")
+    submission_instruction = (
+        JEV_SUBMISSION_INSTRUCTION
+        if os.environ.get(JEV_MODEL_ENV)
+        else f"""HOW TO SUBMIT:
+
+The submission endpoint is: {get_api_base_url()}/submit
+
+For DIAGNOSIS stage:
+- Submit with a natural language description of the issue
+- Example: POST {get_api_base_url()}/submit with JSON: {{"solution": "The frontend service is crashing due to missing environment variable"}}
+
+For MITIGATION stage:
+- After applying your fix, YOU MUST submit with an EMPTY STRING
+- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
+- This submission is MANDATORY - the conductor needs it to validate your fix
+"""
+    ).rstrip("\n")
 
     # Build instruction similar to how it would be done in Harbor
     instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
@@ -191,18 +209,7 @@ TASK 2: MITIGATION
 - Your mitigation is evaluated on whether the application is healthy after your changes
 - Your fix is also evaluated on whether it addresses the root cause, not just the symptoms
 
-HOW TO SUBMIT:
-
-The submission endpoint is: {get_api_base_url()}/submit
-
-For DIAGNOSIS stage:
-- Submit with a natural language description of the issue
-- Example: POST {get_api_base_url()}/submit with JSON: {{"solution": "The frontend service is crashing due to missing environment variable"}}
-
-For MITIGATION stage:
-- After applying your fix, YOU MUST submit with an EMPTY STRING
-- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
-- This submission is MANDATORY - the conductor needs it to validate your fix
+{submission_instruction}
 
 Important:
 - You have access to kubectl commands to inspect and modify resources in namespace '{namespace}'
@@ -210,6 +217,8 @@ Important:
 - The conductor API is available at {get_api_base_url()}
 """
 
+    if os.environ.get(JEV_MODEL_ENV):
+        instruction += JEV_INSTRUCTION
     logger.info(f"Built instruction:\n{instruction}")
     return instruction
 
@@ -262,6 +271,12 @@ def main():
         help="Directory to store logs (default: ./logs/codex)",
     )
     parser.add_argument(
+        "--problem-id",
+        type=str,
+        default=None,
+        help="Problem ID for artifact naming (default: SREGYM_ARTIFACT_ID in benchmark runs)",
+    )
+    parser.add_argument(
         "--codex-home",
         type=str,
         default=None,
@@ -296,13 +311,14 @@ def main():
         logger.error(f"Timeout waiting for conductor: {e}")
         sys.exit(1)
 
-    # Get problem information
     try:
         app_info = get_app_info()
-        problem_id = get_problem_id()
     except Exception as e:
-        logger.error(f"Failed to get problem information: {e}")
+        logger.error(f"Failed to get app info: {e}")
         sys.exit(1)
+
+    problem_id = resolve_problem_id(cli_problem_id=args.problem_id)
+    logger.info(f"Problem ID (harness): {problem_id}")
 
     # Build instruction
     instruction = build_instruction(app_info)

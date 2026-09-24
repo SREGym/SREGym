@@ -2,7 +2,16 @@ import logging
 import os
 from datetime import datetime
 
-from .handler import ColorFormatter, ExhaustInfoFormatter
+from rich.console import Console
+from rich.logging import RichHandler
+
+from .handler import ExhaustInfoFormatter
+
+# Shared Console used by both the logging stack and any rich.Live displays
+# (e.g. the benchmark Progress bar in main.py). Routing both through the same
+# Console lets Rich keep the bar anchored at the bottom while log lines stream
+# above it — separate Console instances would tear through the live region.
+console = Console()
 
 
 def get_current_datetime_formatted():
@@ -37,12 +46,17 @@ def init_logger():
         handler.setLevel(logging.DEBUG)
         root_logger.addHandler(handler)
 
-        std_handler = logging.StreamHandler()
-        std_handler.setFormatter(
-            ColorFormatter(fmt="%(levelname)s - %(name)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S", style="%")
+        rich_handler = RichHandler(
+            console=console,
+            show_time=True,
+            show_level=True,
+            show_path=False,
+            rich_tracebacks=True,
+            markup=False,
         )
-        std_handler.setLevel(logging.INFO)
-        root_logger.addHandler(std_handler)
+        rich_handler.setFormatter(logging.Formatter(fmt="%(name)s - %(message)s"))
+        rich_handler.setLevel(logging.INFO)
+        root_logger.addHandler(rich_handler)
 
     unify_third_party_loggers()
     silent_litellm_loggers()
@@ -75,17 +89,25 @@ def silent_httpx_loggers():
 
 
 def unify_third_party_loggers():
-    # make the info level third party loggers (e.g. paramiko) have the common formatter
-    logging.getLogger("")
-    # get the handler
-    handlers = logging.getLogger("").handlers
-    if handlers:
-        for handler in handlers:
-            handler.setFormatter(
-                ColorFormatter(fmt="%(levelname)s - %(name)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S", style="%")
-            )
-    else:
-        print("No handler found for root logger")
+    """Replace any handlers on the real root logger (used by uvicorn et al.)
+    with a RichHandler bound to the shared console, so third-party log output
+    flows through the same live-display-aware sink as our own logger."""
+    root = logging.getLogger("")
+    # Drop existing handlers — they hold references to sys.stderr captured
+    # before any rich.Live was active, and would tear through the progress bar.
+    root.handlers = []
+
+    rich_handler = RichHandler(
+        console=console,
+        show_time=True,
+        show_level=True,
+        show_path=False,
+        rich_tracebacks=True,
+        markup=False,
+    )
+    rich_handler.setFormatter(logging.Formatter(fmt="%(name)s - %(message)s"))
+    rich_handler.setLevel(logging.INFO)
+    root.addHandler(rich_handler)
 
 
 # silent uvicorn: main.py:96

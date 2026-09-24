@@ -1,0 +1,177 @@
+import contextlib
+import time
+
+from kubernetes import client
+from kubernetes.client.rest import ApiException
+
+from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
+
+
+class DuplicatePVCMountsMitigationOracle(Oracle):
+    """Verify that the target Deployment and its current Jaeger pod recovered."""
+
+    importance = 1.0
+    rollout_timeout_seconds = 120
+    probe_timeout_seconds = 60
+    poll_interval_seconds = 2
+    query_port = 16686
+
+    @staticmethod
+    def _desired_replicas(deployment) -> int:
+        replicas = deployment.spec.replicas
+        return 1 if replicas is None else replicas
+
+    @classmethod
+    def _rollout_complete(cls, deployment) -> bool:
+        return deployment_rollout_complete(deployment)
+
+    def _wait_for_current_rollout(self, deployment):
+        deadline = time.monotonic() + self.rollout_timeout_seconds
+        while True:
+            if self._rollout_complete(deployment):
+                return deployment
+            if time.monotonic() >= deadline:
+                return None
+
+            time.sleep(self.poll_interval_seconds)
+            deployment = self.problem.kubectl.get_deployment(
+                deployment.metadata.name,
+                self.problem.namespace,
+            )
+
+    @staticmethod
+    def _owned_by_active_replica_set(pod, active_replica_sets: set[str]) -> bool:
+        return any(
+            owner.kind == "ReplicaSet" and owner.name in active_replica_sets
+            for owner in pod.metadata.owner_references or []
+        )
+
+    @staticmethod
+    def _pod_ready(pod) -> bool:
+        container_statuses = pod.status.container_statuses or []
+        return (
+            pod.status.phase == "Running"
+            and bool(container_statuses)
+            and all(status.ready for status in container_statuses)
+        )
+
+    def _current_ready_pod_ip(self) -> str | None:
+        namespace = self.problem.namespace
+        service_name = self.problem.faulty_service
+        replica_sets = self.problem.kubectl.get_matching_replicasets(namespace, service_name)
+        active_replica_sets = {
+            replica_set.metadata.name for replica_set in replica_sets if (replica_set.spec.replicas or 0) > 0
+        }
+        if not active_replica_sets:
+            print(f"[FAIL] Deployment '{service_name}' has no active ReplicaSet")
+            return None
+
+        ready_pods = [
+            pod
+            for pod in self.problem.kubectl.list_pods(namespace).items
+            if pod.metadata.deletion_timestamp is None
+            and self._owned_by_active_replica_set(pod, active_replica_sets)
+            and self._pod_ready(pod)
+            and pod.status.pod_ip
+        ]
+        if not ready_pods:
+            print(f"[FAIL] Deployment '{service_name}' has no Ready pod from its active ReplicaSet")
+            return None
+
+        return ready_pods[0].status.pod_ip
+
+    def _run_query_check(self, target_ip: str) -> bool:
+        namespace = self.problem.namespace
+        core_v1 = self.problem.kubectl.core_v1_api
+
+        pod_name = f"service-content-check-{time.time_ns()}"[:63]
+        url = f"http://{target_ip}:{self.query_port}/api/services"
+        script = (
+            f"response=$(wget -q -T 10 -O - '{url}') && "
+            "printf '%s' \"$response\" | grep -q '\"data\"' && "
+            "echo SERVICE_OK"
+        )
+        pod = client.V1Pod(
+            metadata=client.V1ObjectMeta(
+                name=pod_name,
+                namespace=namespace,
+                labels={"app": "service-content-check"},
+            ),
+            spec=client.V1PodSpec(
+                restart_policy="Never",
+                automount_service_account_token=False,
+                containers=[
+                    client.V1Container(
+                        name="check",
+                        image="busybox:1.36",
+                        image_pull_policy="IfNotPresent",
+                        command=["sh", "-c", script],
+                    )
+                ],
+            ),
+        )
+
+        try:
+            core_v1.create_namespaced_pod(namespace=namespace, body=pod)
+            deadline = time.monotonic() + self.probe_timeout_seconds
+            phase = "Pending"
+            while time.monotonic() < deadline:
+                current = core_v1.read_namespaced_pod(name=pod_name, namespace=namespace)
+                phase = current.status.phase or "Pending"
+                if phase in ("Succeeded", "Failed"):
+                    break
+                time.sleep(self.poll_interval_seconds)
+
+            logs = core_v1.read_namespaced_pod_log(name=pod_name, namespace=namespace)
+            print(logs.strip())
+            return phase == "Succeeded" and "SERVICE_OK" in logs
+        except ApiException as exc:
+            print(f"[FAIL] Service content check failed: {exc}")
+            return False
+        finally:
+            with contextlib.suppress(ApiException):
+                core_v1.delete_namespaced_pod(
+                    name=pod_name,
+                    namespace=namespace,
+                    grace_period_seconds=0,
+                )
+
+    FAILURE_CLASSES = {
+        "query_check_failed": FailureClass.AMBIGUOUS,
+    }
+
+    def evaluate(self, *args, **kwargs) -> dict:
+        print("== Storage Recovery Evaluation ==")
+
+        namespace = self.problem.namespace
+        service_name = self.problem.faulty_service
+        try:
+            deployment = self.problem.kubectl.get_deployment(service_name, namespace)
+            desired = self._desired_replicas(deployment)
+            if desired < 1:
+                print(f"[FAIL] Deployment '{service_name}' is scaled to {desired}")
+                return self.fail("required_deployment_scaled_to_zero", deployment=service_name, desired=desired)
+
+            deployment = self._wait_for_current_rollout(deployment)
+            if deployment is None:
+                print(f"[FAIL] Deployment '{service_name}' did not complete its current rollout")
+                # Duplicate PVC mounts are exactly what stops this Deployment
+                # rolling out, so here a stalled rollout is the fault, not the
+                # cluster.
+                return self.fail("fault_still_present", deployment=service_name)
+
+            target_ip = self._current_ready_pod_ip()
+            if target_ip is None:
+                return self.fail("no_ready_endpoints", deployment=service_name)
+
+            if not self._run_query_check(target_ip):
+                print(f"[FAIL] Current Jaeger pod for Deployment '{service_name}' did not respond correctly")
+                return self.fail("query_check_failed", deployment=service_name, pod_ip=target_ip)
+        except Exception as exc:
+            print(f"[FAIL] Error checking storage recovery: {exc}")
+            return self.fail_from_exception(exc)
+
+        print(f"[PASS] Deployment '{service_name}' is fully ready and its current pod is serving Jaeger queries")
+        return {"success": True}
