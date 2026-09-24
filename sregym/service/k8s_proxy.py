@@ -438,6 +438,9 @@ class KubernetesAPIProxy:
     # Paths used when running inside a Kubernetes pod
     _INCLUSTER_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
     _INCLUSTER_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    # Name agents use to reach a non-loopback listener, such as a Compose
+    # service name. None uses Docker's host alias for SREGym's own agents.
+    advertise_host: str | None = None
 
     def __init__(
         self,
@@ -448,11 +451,13 @@ class KubernetesAPIProxy:
         block_workload_creation: bool = False,
         *,
         restrict_network_access: bool = False,
+        advertise_host: str | None = None,
     ):
         self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
         self.hidden_labels: dict[str, set[str]] = hidden_labels if hidden_labels is not None else HIDDEN_LABELS
         self.listen_port = listen_port
         self.listen_host = listen_host
+        self.advertise_host = advertise_host
         # Preserve the old keyword for callers outside the Conductor.
         self.restrict_network_access = restrict_network_access or block_workload_creation
         self.server: ThreadingHTTPServer | None = None
@@ -576,11 +581,13 @@ class KubernetesAPIProxy:
 
         dns_names = ["host.docker.internal", "localhost"]
         ip_names = [ip_address("127.0.0.1")]
-        if self.listen_host not in {"0.0.0.0", "::", ""}:
+        for host in (self.listen_host, self.advertise_host):
+            if not host or host in {"0.0.0.0", "::"}:
+                continue
             try:
-                ip_names.append(ip_address(self.listen_host))
+                ip_names.append(ip_address(host))
             except ValueError:
-                dns_names.append(self.listen_host.rstrip("."))
+                dns_names.append(host.rstrip("."))
 
         san_names: list[x509.GeneralName] = [x509.DNSName(name) for name in dict.fromkeys(dns_names)]
         san_names.extend(x509.IPAddress(address) for address in dict.fromkeys(ip_names))
@@ -1016,6 +1023,11 @@ class KubernetesAPIProxy:
                 os.unlink(self._agent_kubeconfig_path)
             self._agent_kubeconfig_path = None
 
+    def _agent_server_host(self) -> str:
+        if self.advertise_host:
+            return self.advertise_host
+        return self.listen_host if self.listen_host in {"127.0.0.1", "::1", "localhost"} else "host.docker.internal"
+
     def generate_agent_kubeconfig(self, output_path: str | None = None) -> str:
         """
         Generate a kubeconfig file for agents that points to this proxy.
@@ -1034,9 +1046,7 @@ class KubernetesAPIProxy:
         # A non-loopback bind address is used for Docker agents. Use Docker's
         # stable host alias in their kubeconfig so the egress proxy can tunnel
         # this local HTTPS connection without inspecting or rewriting it.
-        server_host = (
-            self.listen_host if self.listen_host in {"127.0.0.1", "::1", "localhost"} else "host.docker.internal"
-        )
+        server_host = self._agent_server_host()
 
         kubeconfig = {
             "apiVersion": "v1",
@@ -1084,9 +1094,7 @@ class KubernetesAPIProxy:
 
     def get_proxy_url(self) -> str:
         """Get the URL of the proxy server."""
-        server_host = (
-            self.listen_host if self.listen_host in {"127.0.0.1", "::1", "localhost"} else "host.docker.internal"
-        )
+        server_host = self._agent_server_host()
         return f"https://{server_host}:{self.listen_port}"
 
 
