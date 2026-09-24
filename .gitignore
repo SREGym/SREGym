@@ -244,7 +244,7 @@ python-database
 # Keep committed test fixtures (session logs the trace converter reads).
 !tests/**/fixtures/**/*.jsonl
 sregym/generators/noise/noise_config.yaml
-results/
+/results/
 logs/
 
 docker/agents/build-context/

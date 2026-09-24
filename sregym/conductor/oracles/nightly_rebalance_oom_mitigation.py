@@ -5,6 +5,7 @@ import time
 from kubernetes import client
 from kubernetes.client.rest import ApiException
 
+from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.mitigation import MitigationOracle
 
 # Used only when the target had no explicit memory limit originally.
@@ -22,6 +23,13 @@ def _parse_mem_to_bytes(value: str) -> int:
 class NightlyRebalanceOOMMitigationOracle(MitigationOracle):
     importance = 1.0
 
+    FAILURE_CLASSES = {
+        # Leaving the rebalancer free to re-apply the unsafe limit is the
+        # difference between a fix and a temporary patch, and it is the agent's
+        # to get right -- the CronJob is part of the injected scenario.
+        "fix_reverted_by_actor": FailureClass.AGENT_ERROR,
+    }
+
     def evaluate(self) -> dict:
         print("== Nightly Rebalance OOM Mitigation Evaluation ==")
         results = super().evaluate()
@@ -33,22 +41,21 @@ class NightlyRebalanceOOMMitigationOracle(MitigationOracle):
 
         if not self._memory_limit_sane(service, namespace):
             print(f"❌ Memory limit on deployment/{service} is still below the restored baseline")
-            results["success"] = False
-            return results
+            # Compared against a baseline captured before injection.
+            return self.fail("fault_still_present", deployment=service)
 
         if not self._target_pods_healthy(service, namespace):
             print(f"❌ Pods for {service} are not all running/ready without recent OOMKills")
-            results["success"] = False
-            return results
+            return self.fail("pods_not_ready", deployment=service, namespace=namespace)
 
         if self._rebalancer_active() and not self._survives_next_tick(service, namespace):
             print(f"❌ {self.problem.actor_name} CronJob still active and re-applies an unsafe limit")
-            results["success"] = False
-            return results
+            # The limit was restored but the CronJob puts it back: a fix that
+            # does not survive the next tick, which is the point of the problem.
+            return self.fail("fix_reverted_by_actor", actor=self.problem.actor_name, deployment=service)
 
         print("✅ Memory limit restored and target service durably healthy")
-        results["success"] = True
-        return results
+        return {"success": True}
 
     def _rebalancer_active(self) -> bool:
         try:

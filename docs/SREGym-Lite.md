@@ -33,11 +33,7 @@ sudo sysctl -w fs.inotify.max_user_watches=1048576
 Create the cluster from the repository root:
 
 ```bash
-# x86-64
-bash kind/setup_kind_cluster.sh x86
-
-# ARM64
-bash kind/setup_kind_cluster.sh arm
+bash kind/setup_kind_cluster.sh
 ```
 
 The setup creates one control-plane and three worker nodes. Confirm that all four nodes are ready:

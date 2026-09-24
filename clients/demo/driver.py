@@ -1,3 +1,4 @@
+import ast
 import asyncio
 import json
 import logging
@@ -54,7 +55,44 @@ def get_current_datetime_formatted():
     return formatted_datetime
 
 
-async def manual_submit_tool(ans: str) -> str:
+def parse_submit_command(command: str) -> tuple[str | None, str] | None:
+    """Parse preferred staged and legacy one-argument demo submissions."""
+    try:
+        expression = ast.parse(command, mode="eval").body
+    except SyntaxError:
+        return None
+    if not isinstance(expression, ast.Call):
+        return None
+    if not isinstance(expression.func, ast.Name) or expression.func.id != "submit":
+        return None
+    if expression.keywords:
+        return None
+    try:
+        arguments = [ast.literal_eval(argument) for argument in expression.args]
+    except (ValueError, TypeError):
+        return None
+    if len(arguments) == 1 and isinstance(arguments[0], str):
+        return None, arguments[0]
+    if (
+        len(arguments) == 2
+        and isinstance(arguments[0], str)
+        and arguments[0] in {"diagnosis", "mitigation"}
+        and isinstance(arguments[1], str)
+    ):
+        return arguments[0], arguments[1]
+    return None
+
+
+def resolve_demo_submission_stage(explicit_stage: str | None, previous_accepted_stage: str | None) -> str | None:
+    """Resolve legacy demo calls without racing diagnosis evaluation."""
+    if explicit_stage is not None:
+        return explicit_stage
+    if previous_accepted_stage == "diagnosis":
+        return "mitigation"
+    return None
+
+
+async def manual_submit_tool(ans: str, *, stage: str | None = None) -> str:
     ltc = LanggraphToolConfig()
     logging.info(f"_manually_ submitting to benchmark, answer: {ans}")
 
@@ -63,14 +101,16 @@ async def manual_submit_tool(ans: str) -> str:
         ClientSession(read_stream, write_stream) as session,
     ):
         await session.initialize()
-        await session.call_tool(
-            "submit",
-            arguments={
-                "ans": ans,
-            },
-        )
+        arguments = {"ans": ans}
+        if stage is not None:
+            arguments["stage"] = stage
+        result = await session.call_tool("submit", arguments=arguments)
+        result = ast.literal_eval(result.content[0].text)
+        if result.get("status") not in {"200", "done"}:
+            stage_label = stage or "current-stage"
+            raise RuntimeError(f"Benchmark rejected the {stage_label} submission: {result}")
         logger.info("Submission complete. No further action is needed.")
-        return "Submitted"
+        return result.get("stage") or stage or "done"
 
 
 def save_trajectory(events, problem_id, output_dir=None):
@@ -129,6 +169,10 @@ async def run_demo_agent():
     )
 
     events = []
+    # A legacy demo file uses submit("answer") twice. After the first call is
+    # accepted as diagnosis, explicitly target mitigation on the next call so
+    # it can wait safely while diagnosis grading is still running.
+    previous_accepted_stage: str | None = None
 
     # Ensure any stale trigger files are removed
     for f in [NEXT_FILE, SKIP_FILE, QUIT_FILE]:
@@ -158,18 +202,20 @@ async def run_demo_agent():
                 continue
 
             # Check if the command is a deterministic submission
-            # Matches: submit("text") or submit('text')
-            import re
+            # Prefer submit("diagnosis", "text") / submit("mitigation", ""),
+            # but keep the legacy submit("text") form for old demo scripts.
+            submission = parse_submit_command(cmd)
 
-            submit_match = re.match(r"^submit\([\"\'](.*)[\"\']\)$", cmd)
-
-            if submit_match:
-                ans = submit_match.group(1)
-                logger.info(f"[Turn {idx + 1}] Performing deterministic submission: {ans}")
+            if submission:
+                stage, ans = submission
+                requested_stage = resolve_demo_submission_stage(stage, previous_accepted_stage)
+                stage_label = requested_stage or "current-stage"
+                logger.info(f"[Turn {idx + 1}] Performing deterministic {stage_label} submission: {ans}")
                 start_time = time.perf_counter()
                 try:
-                    await manual_submit_tool(ans)
-                    text_result = f"Submitted answer: {ans}"
+                    accepted_stage = await manual_submit_tool(ans, stage=requested_stage)
+                    previous_accepted_stage = accepted_stage
+                    text_result = f"Submitted {stage_label} answer: {ans}"
                     status = "success"
                 except Exception as e:
                     logger.error(f"[Turn {idx + 1}] Submission failed: {e}")
@@ -218,13 +264,6 @@ async def run_demo_agent():
             events.append(event)
 
             await asyncio.sleep(0.5)
-
-    # Manual submission at the end
-    logger.info("All commands executed. Submitting results.")
-    try:
-        await manual_submit_tool("Demo agent execution completed.")
-    except Exception as e:
-        logger.error(f"Failed to submit: {e}")
 
     save_trajectory(events, problem_id)
     logger.info("Demo Agent run finished.")

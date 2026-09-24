@@ -1,11 +1,12 @@
 import json
 import logging
-import os
 import subprocess
+from pathlib import Path
 
 import yaml
 
 from sregym.paths import BASE_DIR, PROMETHEUS_METADATA
+from sregym.profile import is_svelte
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
@@ -16,7 +17,6 @@ class Prometheus:
         self.name = None
         self.namespace = None
         self.helm_configs = {}
-        self.pvc_config_file = None
 
         self.logger = logging.getLogger("all.infra.prometheus")
         self.logger.propagate = True
@@ -42,8 +42,6 @@ class Prometheus:
                 chart_path = self.helm_configs["chart_path"]
                 self.helm_configs["chart_path"] = str(BASE_DIR / chart_path)
 
-        self.pvc_config_file = os.path.join(BASE_DIR, metadata.get("PersistentVolumeClaimConfig"))
-
     def get_service_json(self) -> dict:
         """Get metric service metadata in JSON format."""
         with open(self.config_file) as file:
@@ -67,64 +65,61 @@ class Prometheus:
 
     def deploy(self):
         """Deploy the metric collector using Helm."""
-        if self._is_prometheus_running():
-            self.logger.warning("Prometheus is already running. Skipping redeployment.")
+        if self._is_prometheus_running() and self._matches_requested_profile():
+            self.logger.info("Prometheus already uses the requested profile. Skipping redeployment.")
             return
 
         # Wait for namespace to be fully terminated before attempting fresh install
         self._wait_for_namespace_termination()
 
-        self._delete_pvc()
         Helm.uninstall(**self.helm_configs)
 
-        if self.pvc_config_file:
-            pvc_name = self._get_pvc_name_from_file(self.pvc_config_file)
-            if not self._pvc_exists(pvc_name):
-                self._apply_pvc()
+        helm_configs = dict(self.helm_configs)
+        if is_svelte():
+            svelte_values = BASE_DIR / "observer" / "prometheus" / "values-svelte.yaml"
+            helm_configs["extra_args"] = [*helm_configs.get("extra_args", []), "-f", str(svelte_values)]
+            self.logger.info("[svelte] Dropping Alertmanager and Pushgateway; retention 15d -> 2h")
 
-        Helm.install(**self.helm_configs)
+        Helm.install(**helm_configs)
         Helm.assert_if_deployed(self.namespace)
+
+    def _matches_requested_profile(self) -> bool:
+        """Compare installed Helm values with the settings controlled by the profile."""
+        result = subprocess.run(
+            [
+                "helm",
+                "get",
+                "values",
+                self.helm_configs["release_name"],
+                "-n",
+                self.namespace,
+                "--all",
+                "-o",
+                "json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        installed = json.loads(result.stdout)
+        with open(Path(self.helm_configs["chart_path"]) / "values.yaml") as file:
+            expected = yaml.safe_load(file)
+        # Compare actual values rather than a new marker, so releases installed
+        # before profile tracking also work. Other Helm values remain unrelated.
+        with open(BASE_DIR / "observer" / "prometheus" / "values-svelte.yaml") as file:
+            svelte_values = yaml.safe_load(file)
+        for component, settings in svelte_values.items():
+            for setting, svelte_value in settings.items():
+                wanted = svelte_value if is_svelte() else expected[component][setting]
+                if installed.get(component, {}).get(setting) != wanted:
+                    self.logger.info("Prometheus profile differs at %s.%s; redeploying", component, setting)
+                    return False
+        return True
 
     def teardown(self):
         """Teardown the metric collector deployment."""
         Helm.uninstall(**self.helm_configs)
-
-        if self.pvc_config_file:
-            self._delete_pvc()
-
-    def _apply_pvc(self):
-        """Apply the PersistentVolumeClaim configuration."""
-        self.logger.info(f"Applying PersistentVolumeClaim from {self.pvc_config_file}")
-        KubeCtl().exec_command(f"kubectl apply -f {self.pvc_config_file} -n {self.namespace}")
-
-    def _delete_pvc(self):
-        """Delete the PersistentVolume and associated PersistentVolumeClaim."""
-        pvc_name = self._get_pvc_name_from_file(self.pvc_config_file)
-        result = KubeCtl().exec_command(f"kubectl get pvc {pvc_name} --ignore-not-found")
-
-        if result:
-            self.logger.info(f"Deleting PersistentVolumeClaim {pvc_name}")
-            KubeCtl().exec_command(f"kubectl delete pvc {pvc_name}")
-            self.logger.info(f"Successfully deleted PersistentVolumeClaim from {pvc_name}")
-        else:
-            self.logger.warning(f"PersistentVolumeClaim {pvc_name} not found. Skipping deletion.")
-
-    def _get_pvc_name_from_file(self, pv_config_file):
-        """Extract PVC name from the configuration file."""
-        with open(pv_config_file) as file:
-            pv_config = yaml.safe_load(file)
-            return pv_config["metadata"]["name"]
-
-    def _pvc_exists(self, pvc_name: str) -> bool:
-        """Check if the PersistentVolumeClaim exists."""
-        command = f"kubectl get pvc {pvc_name}"
-        try:
-            result = KubeCtl().exec_command(command)
-            if "No resources found" in result or "Error" in result:
-                return False
-        except subprocess.CalledProcessError:
-            return False
-        return True
 
     def _wait_for_namespace_termination(self):
         """Wait for namespace to be fully deleted if it's currently in Terminating state."""

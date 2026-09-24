@@ -13,6 +13,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 from sregym.utils.decorators import mark_fault_injected
 
 _CONTROLLER_NAME = "cleanup-controller"
@@ -434,7 +435,7 @@ class FinalizerDeadlockController(Problem):
                 self.namespace,
                 _request_timeout=10,
             )
-            if (dep.status.ready_replicas or 0) >= 1:
+            if deployment_rollout_complete(dep):
                 return
             time.sleep(2)
         raise TimeoutError(f"Timed out waiting for Deployment `{self.controller_name}` to become ready")

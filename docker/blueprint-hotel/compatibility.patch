@@ -1,0 +1,217 @@
+diff --git a/examples/dsb_hotel/cmplx_workload/workloadgen/workload.go b/examples/dsb_hotel/cmplx_workload/workloadgen/workload.go
+index 9f51671..b0f47bb 100644
+--- a/examples/dsb_hotel/cmplx_workload/workloadgen/workload.go
++++ b/examples/dsb_hotel/cmplx_workload/workloadgen/workload.go
+@@ -11,8 +11,12 @@ import (
+ 
+ // Workload specific flags
+ var outfile = flag.String("outfile", "stats.csv", "Outfile where individual request information will be stored")
+-var duration = flag.String("duration", "1m", "Duration for which the workload should be run")
+-var tput = flag.Int64("tput", 1000, "Desired throughput")
++var duration = flag.String("duration", "120s", "Duration for which the workload should be run")
++var tput = flag.Int64("tput", 3000, "Desired throughput")
++var multiplier = flag.Int64("multiplier", 6, "Multiplier for the throughput")
++var stabletime = flag.Int64("stabletime", 60, "Duration for which the initial stable throughput should be maintained (in seconds)")
++var triggertime = flag.Int64("triggertime", 30, "Duration for which the increased throughput should be maintained (in seconds)")
++var reverttime = flag.Int64("reverttime", 30, "Duration for which the throughput should be reverted (in seconds)")
+ 
+ type ComplexWorkload interface {
+ 	ImplementsComplexWorkload(ctx context.Context) error
+@@ -92,6 +96,10 @@ func (w *complexWldGen) Run(ctx context.Context) error {
+ 	if err != nil {
+ 		return err
+ 	}
++	engine.Multiplier = *multiplier
++	engine.StableTime = *stabletime
++	engine.TriggerTime = *triggertime
++	engine.RevertTime = *reverttime
+ 	// Run the workload
+ 	engine.RunOpenLoop(ctx)
+ 	// Print statistics from the workload
+diff --git a/plugins/grpc/grpccodegen/clientgen.go b/plugins/grpc/grpccodegen/clientgen.go
+index 681e33b..4c0a924 100644
+--- a/plugins/grpc/grpccodegen/clientgen.go
++++ b/plugins/grpc/grpccodegen/clientgen.go
+@@ -25,7 +25,7 @@ func GenerateClient(builder golang.ModuleBuilder, service *gocode.ServiceInterfa
+ 	}
+ 
+ 	client.Imports.AddPackages(
+-		"context", "time",
++		"context", "time", "os", "strconv",
+ 		"google.golang.org/grpc",
+ 		"google.golang.org/grpc/credentials/insecure",
+ 	)
+@@ -59,7 +59,11 @@ type {{.Name}} struct {
+ func New_{{.Name}}(ctx context.Context, serverAddress string) (*{{.Name}}, error) {
+ 	var opts []grpc.DialOption
+ 	opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+-	duration, err := time.ParseDuration("1s")
++	timeout := os.Getenv("GRPC_CLIENT_TIMEOUT")
++	if timeout == "" {
++		timeout = "1s"
++	}
++	duration, err := time.ParseDuration(timeout)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -83,14 +87,27 @@ func (client *{{$receiver}}) {{SignatureWithRetVars $f}} {
+ 	req := &{{$service}}_{{$f.Name}}_Request{}
+ 	req.marshall({{ArgVars $f}})
+ 
+-	// Configure the client-side request timeout
+-	ctx, cancel := context.WithTimeout(ctx, client.Timeout)
+-	defer cancel()
+-
+-	// Make the remote call
+-	rsp, err := client.Client.{{$f.Name}}(ctx, req)
+-	if err == nil {
+-		err = ctx.Err()
++	// The legacy benchmark counts total attempts, not additional retries.
++	attemptsValue := os.Getenv("GRPC_CLIENT_RETRIES_ON_ERROR")
++	if attemptsValue == "" {
++		attemptsValue = "1"
++	}
++	attempts, err := strconv.Atoi(attemptsValue)
++	if err != nil {
++		return
++	}
++	var rsp *{{$service}}_{{$f.Name}}_Response
++	for attempt := 0; attempt < attempts; attempt++ {
++		// Each attempt gets a fresh timeout derived from the caller's context.
++		ctx, cancel := context.WithTimeout(ctx, client.Timeout)
++		defer cancel()
++		rsp, err = client.Client.{{$f.Name}}(ctx, req)
++		if err == nil {
++			err = ctx.Err()
++		}
++		if err == nil {
++			break
++		}
+ 	}
+ 	if err != nil {
+ 		return
+diff --git a/runtime/core/workload/engine.go b/runtime/core/workload/engine.go
+index b660689..f599d6e 100644
+--- a/runtime/core/workload/engine.go
++++ b/runtime/core/workload/engine.go
+@@ -17,11 +17,16 @@ import (
+ 
+ // Engine for generating requests by executing a desired workload
+ type Engine struct {
+-	Stats      []Stat
+-	OutFile    string
+-	TargetTput int64
+-	Duration   time.Duration
+-	Wld        *Workload
++	Stats       []Stat
++	OutFile     string
++	TargetTput  int64
++	Multiplier  int64
++	StableTime  int64
++	TriggerTime int64
++	RevertTime  int64
++	Duration    time.Duration
++	Wld         *Workload
++	startTime   time.Time
+ }
+ 
+ // NewEngine creates a new Engine instance for executing the workload
+@@ -34,7 +39,16 @@ func NewEngine(outfile string, tput int64, duration string, w *Workload) (*Engin
+ 	if !isValid {
+ 		return nil, errors.New("Workload is not valid")
+ 	}
+-	return &Engine{OutFile: outfile, TargetTput: tput, Duration: dur, Wld: w}, nil
++	return &Engine{OutFile: outfile, TargetTput: tput, Multiplier: 1, Duration: dur, Wld: w}, nil
++}
++
++// ThroughputAt preserves the legacy base/spike/base schedule. RevertTime is
++// reporting metadata; Duration, not the sum of the phases, ends a run.
++func (e *Engine) ThroughputAt(elapsed time.Duration) int64 {
++	if elapsed >= time.Duration(e.StableTime)*time.Second && elapsed < time.Duration(e.StableTime+e.TriggerTime)*time.Second {
++		return e.TargetTput * e.Multiplier
++	}
++	return e.TargetTput
+ }
+ 
+ func (e *Engine) init_prop_map() map[int]RequestFunction {
+@@ -59,10 +73,15 @@ func (e *Engine) RunOpenLoop(ctx context.Context) {
+ 	stat_channel := make(chan Stat, e.TargetTput)
+ 	done := make(chan bool)
+ 	go func() {
++		expected := e.TargetTput * (int64(e.Duration/time.Second) + (e.Multiplier-1)*e.TriggerTime)
++		progressEvery := expected / 10
++		if progressEvery < 1 {
++			progressEvery = 1
++		}
+ 		count := 0
+ 		for stat := range stat_channel {
+ 			count += 1
+-			if count%1000 == 0 {
++			if int64(count)%progressEvery == 0 {
+ 				log.Println("Processed", count, "requests")
+ 			}
+ 			e.Stats = append(e.Stats, stat)
+@@ -70,10 +89,8 @@ func (e *Engine) RunOpenLoop(ctx context.Context) {
+ 		close(done)
+ 	}()
+ 
+-	// Launch the request maker goroutine that launches a request every tick_val
+-	tick_every := float64(1e9) / float64(e.TargetTput)
+-	tick_val := time.Duration(int64(1e9 / float64(e.TargetTput)))
+-	log.Println("Ticking after every", tick_val)
++	e.startTime = time.Now()
++	// Preserve the legacy open-loop Poisson scheduling, including its seed.
+ 	stop := make(chan bool)
+ 
+ 	var wg sync.WaitGroup
+@@ -83,6 +100,7 @@ func (e *Engine) RunOpenLoop(ctx context.Context) {
+ 		timer := time.NewTimer(0 * time.Second)
+ 		next := time.Now()
+ 		for {
++			tick_every := float64(1e9) / float64(e.ThroughputAt(time.Since(e.startTime)))
+ 			select {
+ 			case <-stop:
+ 				return
+@@ -133,10 +151,42 @@ func (e *Engine) PrintStats() error {
+ 		stat_strings = append(stat_strings, fmt.Sprintf("%d,%d,%t", stat.Start, stat.Duration, stat.IsError))
+ 	}
+ 
++	fmt.Printf("🚀 Workload starting at: %s\n", e.startTime.UTC().Format("2006-01-02T15:04:05.000Z"))
+ 	fmt.Println("Total Number of Requests:", num_reqs)
+ 	fmt.Println("Successful Requests:", num_reqs-num_errors)
+ 	fmt.Println("Error Responses:", num_errors)
+ 	fmt.Println("Average Latency:", float64(sum_durations)/float64(num_reqs))
++	fmt.Println("Below is the latency distribution:")
++	fmt.Println("Second,AverageLatency(ns),Load(RequestsPerSecond)")
++	perSecond := make(map[int64][]int64)
++	var firstSecond int64
++	if len(e.Stats) > 0 {
++		firstSecond = e.Stats[0].Start / int64(time.Second)
++	}
++	for _, stat := range e.Stats {
++		second := stat.Start/int64(time.Second) - firstSecond
++		perSecond[second] = append(perSecond[second], stat.Duration)
++	}
++	// Keep the historical file header and three-column rows for compatibility.
++	rows := []string{"Second,AverageLatency(ns)"}
++	for second := int64(0); second < int64(e.Duration/time.Second); second++ {
++		latencies := perSecond[second]
++		if len(latencies) == 0 {
++			continue
++		}
++		var sum int64
++		for _, latency := range latencies {
++			sum += latency
++		}
++		average := float64(sum) / float64(len(latencies))
++		row := fmt.Sprintf("%d,%.2f,%d", second, average, e.ThroughputAt(time.Duration(second)*time.Second))
++		fmt.Println(row)
++		rows = append(rows, row)
++	}
++	fmt.Println("End of latency distribution")
++	if err := os.WriteFile("second_latency.csv", []byte(strings.Join(rows, "\n")), 0644); err != nil {
++		log.Println("Error writing latency distribution:", err)
++	}
+ 	// Write to file
+ 	header := "Start,Duration,IsError\n"
+ 	data := header + strings.Join(stat_strings, "\n")

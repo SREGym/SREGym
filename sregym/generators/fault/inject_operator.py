@@ -1,9 +1,16 @@
+import copy
+import json
+import shlex
+import tempfile
 import time
+from pathlib import Path
 
 import yaml
 
 from sregym.generators.fault.base import FaultInjector
 from sregym.service.kubectl import KubeCtl
+
+RECOVERY_STATE_DIR = Path(tempfile.gettempdir()) / "sregym-operator-faults"
 
 
 class K8SOperatorFaultInjector(FaultInjector):
@@ -12,264 +19,140 @@ class K8SOperatorFaultInjector(FaultInjector):
         self.kubectl = KubeCtl()
         self.kubectl.create_namespace_if_not_exist(namespace)
 
-    def _apply_yaml(self, cr_name: str, cr_yaml: dict):
-        yaml_path = f"/tmp/{cr_name}.yaml"
-        with open(yaml_path, "w") as file:
-            yaml.dump(cr_yaml, file)
+    def _state_path(self, fault: str) -> Path:
+        # Namespace UIDs isolate clusters and fresh runs, including when recovery
+        # constructs a new injector instance after the original one has exited.
+        uid = str(self.kubectl.core_v1_api.read_namespace(self.namespace).metadata.uid or "")
+        if not uid:
+            raise RuntimeError("Cannot identify the namespace for TiDB recovery state")
+        return RECOVERY_STATE_DIR / f"{uid}__{fault}.json"
 
-        command = f"kubectl apply -f {yaml_path} -n {self.namespace}"
-        print(f"Namespace: {self.namespace}")
-        result = self.kubectl.exec_command(command)
-        print(f"Injected {cr_name}: {result}")
+    def _read_cluster(self, *, allow_missing: bool = False) -> dict | None:
+        optional = " --ignore-not-found" if allow_missing else ""
+        output = self.kubectl.exec_command_checked(
+            f"kubectl get tidbcluster basic -n {shlex.quote(self.namespace)} -o json{optional}"
+        )
+        if not output.strip() and allow_missing:
+            return None
+        return json.loads(output)
 
-    def _delete_yaml(self, cr_name: str):
-        yaml_path = f"/tmp/{cr_name}.yaml"
-        command = f"kubectl delete -f {yaml_path} -n {self.namespace}"
-        result = self.kubectl.exec_command(command)
-        print(f"Recovered from misconfiguration {cr_name}: {result}")
+    def _save_cluster(self, fault: str, cluster: dict) -> None:
+        path = self._state_path(fault)
+        uid = cluster["metadata"]["uid"]
+        if path.exists() and json.loads(path.read_text())["uid"] == uid:
+            return  # Repeated injection must not overwrite the clean snapshot.
+        metadata = {
+            key: copy.deepcopy(cluster["metadata"][key])
+            for key in ("name", "namespace", "labels", "annotations")
+            if key in cluster["metadata"]
+        }
+        metadata.get("annotations", {}).pop("kubectl.kubernetes.io/last-applied-configuration", None)
+        original = {
+            "apiVersion": cluster["apiVersion"],
+            "kind": cluster["kind"],
+            "metadata": metadata,
+            "spec": copy.deepcopy(cluster["spec"]),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        with tempfile.NamedTemporaryFile(mode="w", dir=path.parent, delete=False) as stream:
+            json.dump({"uid": uid, "cluster": original}, stream)
+            temporary_path = Path(stream.name)
+        temporary_path.replace(path)
+
+    def _load_cluster(self, fault: str) -> tuple[Path, dict]:
+        path = self._state_path(fault)
+        if not path.is_file():
+            raise RuntimeError(f"Original TiDB configuration is missing for {fault}; refusing a generic replacement")
+        return path, json.loads(path.read_text())
+
+    def _inject_spec(self, fault: str, changes: dict) -> None:
+        cluster = self._read_cluster()
+        self._save_cluster(fault, cluster)
+        patch = shlex.quote(json.dumps({"spec": changes}))
+        self.kubectl.exec_command_checked(
+            f"kubectl patch tidbcluster basic -n {shlex.quote(self.namespace)} --type=merge -p {patch}"
+        )
+
+    def recover_fault(self, fault: str) -> None:
+        path, saved = self._load_cluster(fault)
+        current = self._read_cluster()
+        if current["metadata"]["uid"] != saved["uid"]:
+            raise RuntimeError("TiDBCluster was recreated; refusing to restore stale recovery state")
+        # JSON Patch removes fields introduced by the fault while retaining the
+        # original images, versions, sizing and storage configuration exactly.
+        patch = shlex.quote(json.dumps([{"op": "replace", "path": "/spec", "value": saved["cluster"]["spec"]}]))
+        self.kubectl.exec_command_checked(
+            f"kubectl patch tidbcluster basic -n {shlex.quote(self.namespace)} --type=json -p {patch}"
+        )
+        path.unlink()
 
     def inject_overload_replicas(self):
-        """
-        Injects a TiDB misoperation custom resource.
-        The misconfiguration sets an unreasonably high number of TiDB replicas.
-        """
-        cr_name = "overload-tidbcluster"
-        cr_yaml = {
-            "apiVersion": "pingcap.com/v1alpha1",
-            "kind": "TidbCluster",
-            "metadata": {"name": "basic", "namespace": self.namespace},
-            "spec": {
-                "version": "v3.0.8",
-                "timezone": "UTC",
-                "pvReclaimPolicy": "Delete",
-                "pd": {
-                    "baseImage": "pingcap/pd",
-                    "replicas": 3,
-                    "requests": {"storage": "1Gi"},
-                    "config": {},
-                },
-                "tikv": {
-                    "baseImage": "pingcap/tikv",
-                    "replicas": 3,
-                    "requests": {"storage": "1Gi"},
-                    "config": {},
-                },
-                "tidb": {
-                    "baseImage": "pingcap/tidb",
-                    "replicas": 100000,  # Intentional misconfiguration
-                    "service": {"type": "ClusterIP"},
-                    "config": {},
-                },
-            },
-        }
-
-        self._apply_yaml(cr_name, cr_yaml)
+        self._inject_spec("overload-tidbcluster", {"tidb": {"replicas": 100000}})
 
     def recover_overload_replicas(self):
         self.recover_fault("overload-tidbcluster")
 
     def inject_invalid_affinity_toleration(self):
-        """
-        This misoperation specifies an invalid toleration effect.
-        """
-        cr_name = "affinity-toleration-fault"
-        cr_yaml = {
-            "apiVersion": "pingcap.com/v1alpha1",
-            "kind": "TidbCluster",
-            "metadata": {"name": "basic", "namespace": self.namespace},
-            "spec": {
-                "version": "v3.0.8",
-                "timezone": "UTC",
-                "pvReclaimPolicy": "Delete",
-                "pd": {
-                    "baseImage": "pingcap/pd",
-                    "replicas": 3,
-                    "requests": {"storage": "1Gi"},
-                    "config": {},
-                },
-                "tikv": {
-                    "baseImage": "pingcap/tikv",
-                    "replicas": 3,
-                    "requests": {"storage": "1Gi"},
-                    "config": {},
-                },
+        self._inject_spec(
+            "affinity-toleration-fault",
+            {
                 "tidb": {
-                    "baseImage": "pingcap/tidb",
-                    "replicas": 2,
-                    "service": {"type": "ClusterIP"},
-                    "config": {},
                     "tolerations": [
                         {
                             "key": "test-keys",
                             "operator": "Equal",
                             "value": "test-value",
-                            "effect": "TAKE_SOME_EFFECT",  # Buggy: invalid toleration effect
+                            "effect": "TAKE_SOME_EFFECT",
                             "tolerationSeconds": 0,
                         }
-                    ],
-                },
+                    ]
+                }
             },
-        }
-        self._apply_yaml(cr_name, cr_yaml)
+        )
 
     def recover_invalid_affinity_toleration(self):
         self.recover_fault("affinity-toleration-fault")
 
     def inject_security_context_fault(self):
-        """
-        The fault sets an invalid runAsUser value.
-        """
-        cr_name = "security-context-fault"
-        cr_yaml = {
-            "apiVersion": "pingcap.com/v1alpha1",
-            "kind": "TidbCluster",
-            "metadata": {"name": "basic", "namespace": self.namespace},
-            "spec": {
-                "version": "v3.0.8",
-                "timezone": "UTC",
-                "pvReclaimPolicy": "Delete",
-                "pd": {
-                    "baseImage": "pingcap/pd",
-                    "replicas": 3,
-                    "requests": {"storage": "1Gi"},
-                    "config": {},
-                },
-                "tikv": {
-                    "baseImage": "pingcap/tikv",
-                    "replicas": 3,
-                    "requests": {"storage": "1Gi"},
-                    "config": {},
-                },
-                "tidb": {
-                    "baseImage": "pingcap/tidb",
-                    "replicas": 2,
-                    "service": {"type": "ClusterIP"},
-                    "config": {},
-                    "podSecurityContext": {"runAsUser": -1},  # invalid runAsUser value
-                },
-            },
-        }
-        self._apply_yaml(cr_name, cr_yaml)
+        self._inject_spec("security-context-fault", {"tidb": {"podSecurityContext": {"runAsUser": -1}}})
 
     def recover_security_context_fault(self):
         self.recover_fault("security-context-fault")
 
     def inject_wrong_update_strategy(self):
-        """
-        This fault specifies an invalid update strategy.
-        """
-        cr_name = "deployment-update-strategy-fault"
-        cr_yaml = {
-            "apiVersion": "pingcap.com/v1alpha1",
-            "kind": "TidbCluster",
-            "metadata": {"name": "basic", "namespace": self.namespace},
-            "spec": {
-                "version": "v3.0.8",
-                "timezone": "UTC",
-                "pvReclaimPolicy": "Delete",
-                "pd": {
-                    "baseImage": "pingcap/pd",
-                    "replicas": 3,
-                    "requests": {"storage": "1Gi"},
-                    "config": {},
-                },
-                "tikv": {
-                    "baseImage": "pingcap/tikv",
-                    "replicas": 3,
-                    "requests": {"storage": "1Gi"},
-                    "config": {},
-                },
-                "tidb": {
-                    "baseImage": "pingcap/tidb",
-                    "replicas": 2,
-                    "service": {"type": "ClusterIP"},
-                    "config": {},
-                    "statefulSetUpdateStrategy": "SomeStrategyForUpdate",  # invalid update strategy
-                },
-            },
-        }
-        self._apply_yaml(cr_name, cr_yaml)
+        self._inject_spec(
+            "deployment-update-strategy-fault", {"tidb": {"statefulSetUpdateStrategy": "SomeStrategyForUpdate"}}
+        )
 
     def recover_wrong_update_strategy(self):
         self.recover_fault("deployment-update-strategy-fault")
 
     def inject_non_existent_storage(self):
-        """
-        This fault specifies a non-existent storage class for PD.
-
-        After updating the CR, deletes the PD StatefulSet and its PVCs so the
-        TiDB operator recreates them using the bogus storageClass from the CR.
-        New PVCs cannot be provisioned (StorageClass does not exist), so PD
-        pods remain stuck in Pending — making the fault observable.
-        """
-        cr_name = "non-existent-storage-fault"
-        cr_yaml = {
-            "apiVersion": "pingcap.com/v1alpha1",
-            "kind": "TidbCluster",
-            "metadata": {"name": "basic", "namespace": self.namespace},
-            "spec": {
-                "version": "v3.0.8",
-                "timezone": "UTC",
-                "pvReclaimPolicy": "Delete",
-                "pd": {
-                    "baseImage": "pingcap/pd",
-                    "replicas": 3,
-                    "requests": {"storage": "1Gi"},
-                    "config": {},
-                    "storageClassName": "nonexistent-storage-class",  # non-existent storage class (RFC 1123 valid so PVC creation passes validation and lands in Pending)
-                },
-                "tikv": {
-                    "baseImage": "pingcap/tikv",
-                    "replicas": 3,
-                    "requests": {"storage": "1Gi"},
-                    "config": {},
-                },
-                "tidb": {
-                    "baseImage": "pingcap/tidb",
-                    "replicas": 2,
-                    "service": {"type": "ClusterIP"},
-                    "config": {},
-                },
-            },
-        }
-        self._apply_yaml(cr_name, cr_yaml)
-
-        # StatefulSet volumeClaimTemplates are immutable, so the operator
-        # cannot propagate the updated storageClassName into the existing
-        # StatefulSet or its already-bound PVCs.  Delete the PD StatefulSet
-        # and its PVCs to force the operator to recreate them from the updated
-        # CR.  The new PVCs will reference nonexistent-storage-class, fail to
-        # provision, and leave PD pods stuck in Pending.
-        pd_labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
-        print("[FAULT] Deleting PD PVCs to force reprovisioning with the bogus storage class...")
-        self.kubectl.exec_command(f"kubectl delete pvc -n {self.namespace} -l {pd_labels} --wait=false")
-        print("[FAULT] Deleting PD StatefulSet so the operator rebuilds it from the updated CR...")
-        self.kubectl.exec_command(
-            f"kubectl delete statefulset basic-pd -n {self.namespace} --ignore-not-found=true --wait=false"
+        self._inject_spec("non-existent-storage-fault", {"pd": {"storageClassName": "nonexistent-storage-class"}})
+        # StatefulSet volumeClaimTemplates are immutable. Recreate PD storage so
+        # the invalid class actually leaves its replacement PVCs Pending.
+        labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
+        namespace = shlex.quote(self.namespace)
+        self.kubectl.exec_command_checked(f"kubectl delete pvc -n {namespace} -l {labels} --wait=false")
+        self.kubectl.exec_command_checked(
+            f"kubectl delete statefulset basic-pd -n {namespace} --ignore-not-found=true --wait=false"
         )
 
     def recover_non_existent_storage(self):
-        # Recovery has to be serialized: if the bogus PVCs are still around
-        # (or mid-deletion) when the clean CR is re-applied, the operator races
-        # the GC and the new basic-pd pod adopts a leftover PVC by name,
-        # pinning the bogus storageClass forever.  Tear down the bogus stack
-        # fully before applying the clean CR.
-        pd_labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
-        print("[RECOVER] Deleting bogus TidbCluster (foreground cascade)...")
-        result = self.kubectl.exec_command(
-            f"kubectl delete -f /tmp/non-existent-storage-fault.yaml -n {self.namespace} "
-            f"--ignore-not-found=true --cascade=foreground"
+        path, saved = self._load_cluster("non-existent-storage-fault")
+        current = self._read_cluster(allow_missing=True)
+        if current is not None and current["metadata"]["uid"] != saved["uid"]:
+            raise RuntimeError("TiDBCluster was recreated; refusing to delete a different cluster")
+        namespace = shlex.quote(self.namespace)
+        labels = "app.kubernetes.io/instance=basic,app.kubernetes.io/component=pd"
+        # Finish removal before restoring the CR, otherwise PD can adopt a
+        # leftover PVC carrying the invalid storage class.
+        self.kubectl.exec_command_checked(
+            f"kubectl delete tidbcluster basic -n {namespace} --ignore-not-found=true --cascade=foreground"
         )
-        print(f"[RECOVER] CR delete: {result}")
-        print("[RECOVER] Deleting bogus PD PVCs (no consumers now)...")
-        result = self.kubectl.exec_command(
-            f"kubectl delete pvc -n {self.namespace} -l {pd_labels} --ignore-not-found=true"
-        )
-        print(f"[RECOVER] PVC delete: {result}")
-        print("[RECOVER] Applying clean TidbCluster CR...")
-        clean_url = "https://raw.githubusercontent.com/pingcap/tidb-operator/v1.6.0/examples/basic/tidb-cluster.yaml"
-        result = self.kubectl.exec_command(f"kubectl apply -f {clean_url} -n {self.namespace}")
-        print(f"Restored clean TiDBCluster: {result}")
+        self.kubectl.exec_command_checked(f"kubectl delete pvc -n {namespace} -l {labels} --ignore-not-found=true")
+        self.kubectl.exec_command_checked(f"kubectl apply -f - -n {namespace}", input_data=json.dumps(saved["cluster"]))
+        path.unlink()
 
     def inject_wrong_operator_image(self):
         """
@@ -338,13 +221,6 @@ class K8SOperatorFaultInjector(FaultInjector):
         print(f"Namespace: {self.namespace}")
         result = self.kubectl.exec_command(command)
         print(f"Injected {cr_name}: {result}")
-
-    def recover_fault(self, cr_name: str):
-        self._delete_yaml(cr_name)
-        clean_url = "https://raw.githubusercontent.com/pingcap/tidb-operator/v1.6.0/examples/basic/tidb-cluster.yaml"
-        command = f"kubectl apply -f {clean_url} -n {self.namespace}"
-        result = self.kubectl.exec_command(command)
-        print(f"Restored clean TiDBCluster: {result}")
 
 
 if __name__ == "__main__":

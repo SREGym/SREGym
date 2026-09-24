@@ -1,8 +1,12 @@
 """Interface for helm operations"""
 
 import logging
+import shlex
 import subprocess
 import time
+from pathlib import Path
+
+import yaml
 
 from sregym.service.kubectl import KubeCtl
 
@@ -21,6 +25,7 @@ class Helm:
             chart_path (str): Path to the helm chart
             namespace (str): Namespace to install the chart
             version (str): Version of the chart
+            values_file (str): Optional values override file
             extra_args (List[str)]: Extra arguments for the helm install command
             remote_chart (bool): Whether the chart is remote (from a Helm repo)
         """
@@ -35,20 +40,15 @@ class Helm:
         logger.info(f"Helm Install: {release_name} in namespace {namespace}")
 
         if not remote_chart:
-            # Install dependencies for chart before installation
-            dependency_command = f"helm dependency update {chart_path}"
-            dependency_process = subprocess.Popen(
-                dependency_command,
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            dependency_output, dependency_error = dependency_process.communicate()
+            Helm.ensure_dependencies(chart_path)
 
         command = f"helm install {release_name} {chart_path} -n {namespace} --create-namespace"
 
         if version:
             command += f" --version {version}"
+
+        if values_file := args.get("values_file"):
+            command += f" -f {shlex.quote(str(values_file))}"
 
         if extra_args:
             command += " " + " ".join(extra_args)
@@ -72,6 +72,49 @@ class Helm:
             logger.debug(stdout)
 
     @staticmethod
+    def ensure_dependencies(chart_path: str):
+        """Vendor a local chart's subcharts, skipping the update when already satisfied.
+
+        `helm dependency update` re-fetches every repository index over the network
+        on each call. It runs once per problem per local chart, so across a suite it
+        is a meaningful share of wall clock (and the only reason a run needs network
+        access once images are cached).
+
+        `helm dependency list` answers the same question locally in ~0.1s: it reports
+        "ok" per dependency when the pinned version is present in charts/. Only fall
+        through to the update when something is missing or the wrong version.
+        """
+        chart_dir = Path(chart_path).expanduser()
+        with (chart_dir / "Chart.yaml").open() as file:
+            chart = yaml.safe_load(file) or {}
+        # Helm v1 charts can declare dependencies in requirements.yaml.
+        requirements = chart_dir / "requirements.yaml"
+        if chart.get("apiVersion") == "v1" and requirements.exists():
+            with requirements.open() as file:
+                chart = yaml.safe_load(file) or {}
+        dependencies = chart.get("dependencies", [])
+        if not dependencies:
+            return
+
+        listing = subprocess.run(["helm", "dependency", "list", str(chart_dir)], capture_output=True, text=True)
+        if listing.returncode == 0:
+            # Keep empty repository columns for local subcharts. Warnings are
+            # outside the tab-separated table, and must not count as dependencies.
+            rows = [[field.strip() for field in line.split("\t")] for line in listing.stdout.splitlines()[1:]]
+            statuses = [row[-1] for row in rows if len(row) in (3, 4)]
+            if len(statuses) == len(dependencies) and all(status in {"ok", "unpacked"} for status in statuses):
+                logger.debug(f"Chart dependencies already satisfied for {chart_path}; skipping update")
+                return
+            logger.info(f"Chart dependencies not satisfied for {chart_path} ({statuses or 'none listed'}); updating")
+
+        result = subprocess.run(["helm", "dependency", "update", str(chart_dir)], capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Helm dependency update failed for chart '{chart_path}'. "
+                f"Error output:\n{result.stderr.strip()}\nStdout:\n{result.stdout.strip()}"
+            )
+
+    @staticmethod
     def uninstall(**args):
         """Uninstall a helm chart
 
@@ -84,8 +127,11 @@ class Helm:
 
         logger.info(f"Helm Uninstall: {release_name} in namespace {namespace}")
 
-        if not Helm.exists_release(release_name, namespace):
-            logger.warning(f"Release {release_name} does not exist. Skipping uninstall.")
+        release_exists = Helm._release_status(release_name, namespace)
+        if release_exists is None:
+            return
+        if not release_exists:
+            logger.debug(f"Release {release_name} does not exist. Skipping uninstall.")
             return
 
         command = f"helm uninstall {release_name} -n {namespace}"
@@ -118,15 +164,21 @@ class Helm:
         Returns:
             bool: True if release exists
         """
+        return Helm._release_status(release_name, namespace) is True
+
+    @staticmethod
+    def _release_status(release_name: str, namespace: str) -> bool | None:
+        """Return whether a release exists, or None when Helm cannot check."""
         command = f"helm list -n {namespace}"
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE)
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         output, error = process.communicate()
 
-        if error:
-            logger.error(error.decode("utf-8"))
-            return False
-        else:
-            return release_name in output.decode("utf-8")
+        if process.returncode != 0:
+            stderr = error.decode("utf-8").strip() if error else "unknown error"
+            logger.error(f"Failed to list Helm releases in namespace '{namespace}': {stderr}")
+            return None
+
+        return release_name in output.decode("utf-8")
 
     @staticmethod
     def assert_if_deployed(namespace: str):

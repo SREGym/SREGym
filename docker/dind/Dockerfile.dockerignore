@@ -1,0 +1,16 @@
+.git
+.venv
+.runtime
+_running_*_results.csv
+**/.git
+**/__pycache__
+**/node_modules
+**/.venv
+**/.env*
+.env*
+results
+logs
+cache_dir
+docker/agents/build-context
+*.pem
+*.key
