@@ -7,7 +7,6 @@ import yaml
 from sregym.conductor.problems.ad_service_failure import AdServiceFailure
 from sregym.conductor.problems.ad_service_high_cpu import AdServiceHighCpu
 from sregym.conductor.problems.ad_service_manual_gc import AdServiceManualGc
-from sregym.conductor.problems.admission_webhook_outage import AdmissionWebhookOutage
 from sregym.conductor.problems.admission_webhook_tls_mismatch import AdmissionWebhookTLSMismatch
 from sregym.conductor.problems.auth_miss_mongodb import MongoDBAuthMissing
 from sregym.conductor.problems.calico_route_reflector_label_drift import (
@@ -166,7 +165,6 @@ class ProblemRegistry:
             "persistent_volume_affinity_violation": PersistentVolumeAffinityViolation,
             "priority_preemption_cascade_hotel_reservation": PriorityPreemptionCascadeHotelReservation,
             "readiness_probe_misconfiguration_hotel_reservation": lambda: ReadinessProbeMisconfiguration(app_name="hotel_reservation", faulty_service="frontend"),
-            "readiness_probe_misconfiguration_social_network": lambda: ReadinessProbeMisconfiguration(app_name="social_network", faulty_service="user-service"),
             "resource_request_too_small": lambda: ResourceRequestTooSmall(app_name="hotel_reservation", faulty_service="mongodb-rate"),
             "rolling_update_misconfigured_hotel_reservation": lambda: RollingUpdateMisconfigured(app_name="hotel_reservation"),
             "rolling_update_misconfigured_social_network": lambda: RollingUpdateMisconfigured(app_name="social_network"),
@@ -185,13 +183,11 @@ class ProblemRegistry:
             "taint_no_toleration_social_network": lambda: TaintNoToleration(),
             # "top_of_rack_router_failure_hotel_reservation": lambda: TopOfRackRouterPartitionHotelReservation(app_name="hotel_reservation", faulty_service="frontend"),
             "wrong_bin_usage": WrongBinUsage,
-            "wrong_dns_policy_astronomy_shop": lambda: WrongDNSPolicy(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_dns_policy_hotel_reservation": lambda: WrongDNSPolicy(app_name="hotel_reservation", faulty_service="profile"),
             "wrong_dns_policy_social_network": lambda: WrongDNSPolicy(app_name="social_network", faulty_service="user-service"),
             "service_wrong_pod_selection_hotel_reservation": ServiceWrongPodSelectionHotelReservation,
             "wrong_service_selector_astronomy_shop": lambda: WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_service_selector_hotel_reservation": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend"),
-            "wrong_service_selector_social_network": lambda: WrongServiceSelector(app_name="social_network", faulty_service="user-service"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,
@@ -275,7 +271,6 @@ class ProblemRegistry:
             "network_policy_block": lambda: NetworkPolicyBlock(faulty_service="recommendation"),
             "node_conntrack_exhaustion_hotel_reservation": NodeConntrackExhaustionHotelReservation,
             "internal_traffic_policy_local_astronomy_shop": InternalTrafficPolicyLocalAstronomyShop,
-            "admission_webhook_outage_hotel_reservation": lambda: AdmissionWebhookOutage(app_name="hotel_reservation", faulty_service="recommendation"),
             "pod_cidr_exhaustion_hotel_reservation": lambda: PodCIDRExhaustionHotelReservation(),
             "calico_route_reflector_label_drift_hotel_reservation": CalicoRouteReflectorLabelDriftHotelReservation,
 
@@ -372,8 +367,8 @@ class ProblemRegistry:
         return len(self.PROBLEM_REGISTRY)
 
 
-# Deprecated Problems (100% overall pass@3 across evaluated models).
-# Implementations remain, but these problem IDs are no longer registered:
+# Saturated problems. Implementations remain, but these IDs are no longer registered.
+# 100% overall pass@3 across evaluated models:
 #   assign_to_non_existent_node
 #   astronomy_shop_payment_service_unreachable
 #   dev_shm_exhaustion_hotel_reservation
@@ -394,3 +389,8 @@ class ProblemRegistry:
 #   rbac_misconfiguration
 #   readiness_probe_misconfiguration_astronomy_shop
 #   resource_request_too_large
+# 21/21 successes:
+#   admission_webhook_outage_hotel_reservation
+#   readiness_probe_misconfiguration_social_network
+#   wrong_dns_policy_astronomy_shop
+#   wrong_service_selector_social_network

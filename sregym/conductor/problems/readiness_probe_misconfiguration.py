@@ -13,7 +13,9 @@ class ReadinessProbeMisconfiguration(Problem):
     """Model readiness-probe misconfigurations across applications.
 
     The ``readiness_probe_misconfiguration_astronomy_shop`` configuration is
-    deprecated in SREGym 1.1 after reaching 100% overall pass@3.
+    deprecated in SREGym 1.1 after reaching 100% overall pass@3. The
+    ``readiness_probe_misconfiguration_social_network`` configuration is
+    deprecated in SREGym 1.1 after 21/21 successes.
     """
 
     def __init__(self, app_name="social_network", faulty_service="user-service"):

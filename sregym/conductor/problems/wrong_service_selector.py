@@ -10,6 +10,10 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class WrongServiceSelector(Problem):
+    """The ``wrong_service_selector_social_network`` configuration is
+    deprecated in SREGym 1.1 after 21/21 successes.
+    """
+
     def __init__(self, app_name="astronomy_shop", faulty_service="frontend"):
         self.app_name = app_name
         self.faulty_service = faulty_service
