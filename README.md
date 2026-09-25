@@ -127,8 +127,9 @@ LLM loop: the driver reads the cluster deterministically (workloads including Cr
 Jobs, pods, events, services and endpoints, NetworkPolicies, HPAs, PVCs, quotas and limit
 ranges, admission webhooks, Secret/ConfigMap metadata, cluster DNS, node conditions,
 error-like log lines, firing Prometheus alerts), derives per-component signals in code
-(what changed after deploy, configuration anomalies, which component other components'
-errors point at, semantic log classes such as auth or RBAC failures), and asks Jev typed
+(what changed, judged against each object's own history and ranked against the first active
+symptom; configuration anomalies; which component other components' still-occurring errors
+point at; semantic log classes such as auth or RBAC failures), and asks Jev typed
 questions over that state: which component is the origin, what kind of object carries the
 change, and whether a fault is visible. A second small request classifies the cause
 category and the most telling evidence line; the submitted text is assembled in code from
@@ -139,27 +140,36 @@ The default mode (`--mode tree`, or `JEV_DIAG_MODE=tree`) turns that one-shot ra
 an iterative investigation. Code owns the loop: the triage answer becomes a queue of
 hypotheses (application components before telemetry ones); for each hypothesis the driver
 fetches deep evidence for that component only (`clients/jev_diag/investigate.py`: full spec
-with env values and probes, pod events, recent logs split around the latest application
-change, ConfigMap content, code-side spec checks such as probe port versus container port
-and env address versus Service port, RBAC bindings, and the own state of the components it
-calls) and asks Jev one request with four questions: origin/victim/unrelated/undetermined,
-which component to look at next, the cause category, and the key evidence item. A verdict
-of `origin` at or above 0.6 ends the search, unless triage ranked a still-unexamined
-component higher: that one is examined first and the confirmed candidate stays the
-fallback (an origin at or above 0.9 ends the search regardless). A `victim` verdict moves
-the named dependency (plus the dependencies its error lines refer to) to the front of the
-queue; a step budget (`--max-steps`, default 18) caps cost and the best origin probability
-seen is the fallback. Every code-found mismatch in the confirmed component's spec is
-reported in the submitted text, since a fault can have more than one mechanism. Roles and
-ClusterRoles bound to the workloads' ServiceAccounts are collected too: a role written after
-deploy, or one whose bound workload logs authorization denials, becomes a cluster finding
-and can be named as the fault object (the denied verb is checked against the role's rules
-in code). Because some faults only surface once traffic exercises them, the driver waits
-`--start-delay` seconds (default 120, env `JEV_DIAG_START_DELAY`) after the conductor hands
-over the application before reading the cluster.
-Cluster-level objects (quotas, webhooks, CoreDNS) go through a separate node. `--mode oneshot`
-keeps the single-request behaviour. Every step is recorded in the decision trace and in the
-`investigation` field of the results JSON.
+with env values and probes, current pod events, recent logs with each error signature marked
+as still occurring or stopped, ConfigMap content, the pod template changes of the latest
+revision, and code-side checks such as probe target versus container port, env address versus
+Service port, a Local traffic policy versus where the Service's clients run, the running pod
+versus its template, and how each Secret or ConfigMap is read), plus RBAC bindings and the own
+state of the components it calls, and asks Jev one request: origin/victim/unrelated/undetermined,
+which linked component to look at next, the cause category, the key evidence item, and whether
+one input item blocks the component. A verdict of `origin` at or above 0.6 ends the search once
+the other side has been examined when the cause is authentication or the fault object belongs
+to another component (a pairwise question settles between two confirmed origins), and unless
+triage ranked a still-unexamined component higher (an origin at or above 0.9 ends the search
+regardless). A `victim` verdict moves the named dependency (plus the dependencies its error
+lines refer to) to the front of the queue; a step budget (`--max-steps`, default 18) caps cost.
+Without a confirmed origin the fallback prefers an `origin` verdict at or above 0.4, then the
+end of a strong victim chain, then triage (skipping telemetry components). The fault object is
+chosen from the investigation's cause category and must act on the concluded component. Every
+code-found mismatch in the confirmed component's spec is reported in the submitted text, since
+a fault can have more than one mechanism. Roles and ClusterRoles bound to the workloads'
+ServiceAccounts are collected too: a role whose bound workload logs authorization denials
+becomes a cluster finding and can be named as the fault object (the denied verb is checked
+against the role's rules in code). Because some faults only surface once traffic exercises
+them, the driver waits `--start-delay` seconds (default 120, env `JEV_DIAG_START_DELAY`) after
+the conductor hands over the application before reading the cluster; a light first sample of
+pods and events is taken `--trend-interval` seconds (default 45) before the delay ends, and
+growth between the two samples is reported. Cluster-level objects (quotas, webhooks, CoreDNS
+rules, roles, objects stuck on a finalizer) go through a separate node. `--exec-probes` (env
+`JEV_DIAG_EXEC_PROBES=1`, off by default) allows read-only commands inside pods: broker
+consumer progress, and a health command inside a healthy-looking backend that a client's
+errors name. `--mode oneshot` keeps the single-request behaviour. Every step is recorded in
+the decision trace and in the `investigation` field of the results JSON.
 
 ```bash
 export TYPESAFE_API_KEY="..."
@@ -186,6 +196,13 @@ Summarize a trace with:
 
 ```bash
 uv run python -m clients.jev_diag.trace logs/jev_diag_<problem>_<ts>_trace.jsonl
+```
+
+Each run also records every kubectl call with its output to `jev_diag_<problem>_<ts>_kubectl_raw.jsonl.gz`
+(disable with `--no-raw`), so collection can be re-run offline with the clock pinned to the recording:
+
+```bash
+uv run python -m clients.jev_diag.replay --raw logs/jev_diag_<problem>_<ts>_kubectl_raw.jsonl.gz
 ```
 
 #### Stage Selection

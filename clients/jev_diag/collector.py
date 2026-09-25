@@ -15,16 +15,24 @@ from __future__ import annotations
 
 import ast
 import copy
+import gzip
 import json
 import logging
 import re
+import statistics
 import subprocess
+import threading
 import time
 from collections import Counter
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
+
+from clients.jev_diag import changes as change_log
+from clients.jev_diag import checks
+from clients.jev_diag.checks import parse_cpu_millis, parse_memory_bytes  # noqa: F401 - re-exported
+from clients.jev_diag.timeutil import now, parse_time, set_now
 
 logger = logging.getLogger("all.jev_diag.collector")
 
@@ -39,6 +47,15 @@ MAX_EVENTS_PER_COMPONENT = 6
 # Error lines logged this soon after a pod started are warm-up noise (dependencies not up yet), not evidence.
 WARMUP_SECONDS = 120
 MAX_MESSAGE_CHARS = 240
+# An error signature is "stopped" when it has been silent longer than this floor and longer than CADENCE_FACTOR
+# times its own median gap; a signature seen once is stopped after SINGLE_OCCURRENCE_WINDOW seconds.
+ONGOING_FLOOR_SECONDS = 15
+CADENCE_FACTOR = 3
+SINGLE_OCCURRENCE_WINDOW = 60
+INIT_CONTAINER_STUCK_SECONDS = 60
+# Private fields hold raw data used during collection; they never reach the model's state, and the heavy or
+# sensitive ones are not written to the saved snapshot either.
+PRIVATE_NOT_SAVED = ("_meta", "_template", "_env_values", "_spec", "_labels", "_owner", "_started", "_config_modes")
 
 # Normal states that carry no signal on their own.
 _BENIGN_WAITING_REASONS = {"ContainerCreating", "PodInitializing"}
@@ -51,10 +68,25 @@ _ERROR_LINE_RE = re.compile(
     r"broken pipe|unreachable|no route to host|throttl)"
 )
 _BENIGN_LINE_RE = re.compile(r"(?i)\b(errors?[:=]\s*0|0 errors|failed[:=]\s*0|no errors?)\b")
-# Structured log lines that declare a non-error level are not evidence, whatever words they contain.
-_INFO_LEVEL_RE = re.compile(
-    r'(?i)(\blevel=(?:info|debug|trace)\b|"(?:level|severity)"\s*:\s*"(?:info|debug|trace)"|\b(?:INFO|DEBUG|TRACE)\b)'
+# The severity a line declares about itself, in common log formats: JSON or logfmt level fields, MongoDB's "s"
+# field, .NET console prefixes, klog/glog prefixes, bracketed levels (<error>, [warn]), and bare level tokens
+# (ERROR, WRN). The first declared level wins; lines declaring trace, debug, info, or notice are not evidence,
+# whatever words they contain.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_STRUCTURED_LEVEL_RE = re.compile(
+    r'(?i)"(?:level|severity|lvl|loglevel|log_level)"\s*:\s*"(?P<json>[a-z]+)"|\blevel=(?P<logfmt>[a-z]+)\b'
 )
+_MONGO_SEVERITY_RE = re.compile(r'"s"\s*:\s*"(?P<sev>[FEWID])\d?"')
+_DOTNET_LEVEL_RE = re.compile(r"^(?P<level>trce|dbug|info|warn|fail|crit):")
+_KLOG_LEVEL_RE = re.compile(r"^(?P<level>[IWEF])\d{4} \d{2}:\d{2}:\d{2}")
+_BRACKET_LEVEL_RE = re.compile(
+    r"(?i)[<\[](?P<level>trace|debug|info|notice|warn|warning|error|err|crit|critical|fatal|alert|emerg)[>\]]"
+)
+_TOKEN_LEVEL_RE = re.compile(
+    r"(?<![\w-])(?P<level>TRACE|DEBUG|INFO|NOTICE|WARN|WARNING|ERROR|ERR|FATAL|CRITICAL|PANIC|TRC|DBG|INF|WRN|FTL|CRT)"
+    r"(?![\w-])"
+)
+_QUIET_LEVELS = {"trace", "debug", "info", "notice", "trc", "dbg", "inf", "trce", "dbug", "i", "d"}
 _TIMESTAMP_RE = re.compile(r"^\[?\S*\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}[^\s\]]*\]?\s*")
 _RFC3339_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))")
 _PREFIX_RE = re.compile(r"^\[pod/[^/\]]+/([^\]]+)\]\s?")
@@ -73,17 +105,39 @@ class ClusterSnapshot:
     components: dict[str, dict]
     cluster: dict
     errors: list[str] = field(default_factory=list)
-    collected_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds"))
+    collected_at: str = field(default_factory=lambda: now().isoformat(timespec="seconds"))
 
-    def to_state(self) -> dict:
-        """The JSON object handed to Jev as `state` (before budget fitting)."""
-        return {"application": self.app, "cluster": self.cluster, "components": self.components}
+    def to_state(self, *, include_private: bool = False) -> dict:
+        """The JSON object handed to Jev as `state` (before budget fitting).
+
+        Keys starting with "_" hold raw data used during collection and are left out. With include_private
+        (used for the saved snapshot) the light private keys are kept so a replay can re-derive signals.
+        """
+        return {
+            "application": self.app,
+            "cluster": _public(self.cluster, include_private),
+            "components": {cid: _public(c, include_private) for cid, c in self.components.items()},
+        }
+
+
+def _public(obj, include_private: bool):
+    if isinstance(obj, dict):
+        return {
+            k: _public(v, include_private)
+            for k, v in obj.items()
+            if not k.startswith("_") or (include_private and k not in PRIVATE_NOT_SAVED)
+        }
+    if isinstance(obj, list):
+        return [_public(v, include_private) for v in obj]
+    return obj
 
 
 # --------------------------------------------------------------------------- kubectl
 
 
 _KUBECTL_OBSERVER: Callable[[dict], None] | None = None
+_RAW_RECORDER: RawRecorder | None = None
+_REPLAY: dict[str, list[dict]] | None = None
 
 
 def set_kubectl_observer(observer: Callable[[dict], None] | None) -> None:
@@ -92,32 +146,118 @@ def set_kubectl_observer(observer: Callable[[dict], None] | None) -> None:
     _KUBECTL_OBSERVER = observer
 
 
+class RawRecorder:
+    """Writes every kubectl call with its full output to a gzipped JSONL file, so collection can be replayed."""
+
+    def __init__(self, path) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+        self._handle = gzip.open(path, "at", encoding="utf-8")  # noqa: SIM115 - held open for the run, closed in close()
+
+    def write(self, record: dict) -> None:
+        with self._lock:
+            self._handle.write(json.dumps(record, default=str) + "\n")
+
+    def close(self) -> None:
+        with self._lock:
+            self._handle.close()
+
+
+def set_kubectl_recorder(recorder: RawRecorder | None) -> None:
+    global _RAW_RECORDER
+    _RAW_RECORDER = recorder
+
+
+def set_kubectl_replay(path) -> None:
+    """Serve kubectl calls from a recorded bundle instead of a cluster, with the clock pinned to the recording.
+
+    Calls are matched by their exact argument list, in recorded order. A call that was not recorded fails like
+    a kubectl error. Pass None to go back to the live cluster.
+    """
+    global _REPLAY
+    if path is None:
+        _REPLAY = None
+        set_now(None)
+        return
+    calls: dict[str, list[dict]] = {}
+    first_at = None
+    with gzip.open(path, "rt", encoding="utf-8") as handle:
+        for line in handle:
+            rec = json.loads(line)
+            calls.setdefault(rec["cmd"], []).append(rec)
+            first_at = first_at or rec.get("at")
+    _REPLAY = calls
+    set_now(parse_time(first_at) if first_at else None)
+
+
+def _execute(args: list[str], timeout: int) -> tuple[int | None, str, str]:
+    """(returncode, stdout, stderr); returncode None when the command timed out."""
+    cmd = "kubectl " + " ".join(args)
+    if _REPLAY is not None:
+        queue = _REPLAY.get(cmd) or []
+        if not queue:
+            return 1, "", f"not in the replay bundle: {cmd}"
+        rec = queue.pop(0) if len(queue) > 1 else queue[0]
+        return rec.get("returncode"), rec.get("stdout") or "", rec.get("stderr") or ""
+    at = now().isoformat()
+    try:
+        proc = subprocess.run(["kubectl", *args], capture_output=True, text=True, timeout=timeout)
+        result = (proc.returncode, proc.stdout, proc.stderr)
+    except subprocess.TimeoutExpired:
+        result = (None, "", f"timed out after {timeout}s")
+    if _RAW_RECORDER is not None:
+        _RAW_RECORDER.write({"cmd": cmd, "at": at, "returncode": result[0], "stdout": result[1], "stderr": result[2]})
+    return result
+
+
 def run_kubectl(args: list[str], *, timeout: int = KUBECTL_TIMEOUT) -> str:
     """Run kubectl and return stdout. Raises RuntimeError with stderr on failure."""
     started = time.monotonic()
     record = {"cmd": "kubectl " + " ".join(args), "returncode": None, "stdout_bytes": 0, "error": None}
     try:
-        proc = subprocess.run(["kubectl", *args], capture_output=True, text=True, timeout=timeout)
-        record["returncode"] = proc.returncode
-        record["stdout_bytes"] = len(proc.stdout)
-        if proc.returncode != 0:
-            record["error"] = proc.stderr.strip()[:400]
+        rc, out, err = _execute(args, timeout)
+        record["returncode"] = rc
+        record["stdout_bytes"] = len(out)
+        if rc is None:
+            record["error"] = err
+            raise subprocess.TimeoutExpired(["kubectl", *args], timeout)
+        if rc != 0:
+            record["error"] = err.strip()[:400]
             raise RuntimeError(f"kubectl {' '.join(args)} failed: {record['error']}")
-        return proc.stdout
-    except subprocess.TimeoutExpired:
-        record["error"] = f"timed out after {timeout}s"
-        raise
+        return out
     finally:
         record["duration_ms"] = int((time.monotonic() - started) * 1000)
         if _KUBECTL_OBSERVER is not None:
             _KUBECTL_OBSERVER(record)
 
 
+def run_kubectl_capture(args: list[str], *, timeout: int = KUBECTL_TIMEOUT) -> tuple[int | None, str, str]:
+    """Run kubectl and return (returncode, stdout, stderr) without raising (for exec probes)."""
+    started = time.monotonic()
+    rc, out, err = _execute(args, timeout)
+    if _KUBECTL_OBSERVER is not None:
+        _KUBECTL_OBSERVER(
+            {
+                "cmd": "kubectl " + " ".join(args),
+                "returncode": rc,
+                "stdout_bytes": len(out),
+                "error": err.strip()[:400] if rc else None,
+                "duration_ms": int((time.monotonic() - started) * 1000),
+            }
+        )
+    return rc, out, err
+
+
 def kubectl_items(
-    resource: str, namespace: str | None, errors: list[str], *, cluster_scoped: bool = False
+    resource: str,
+    namespace: str | None,
+    errors: list[str],
+    *,
+    cluster_scoped: bool = False,
+    managed_fields: bool = True,
 ) -> list[dict]:
     """`kubectl get <resource> -o json` items, or [] with the failure recorded."""
-    args = ["get", resource, "-o", "json", "--show-managed-fields"]
+    args = ["get", resource, "-o", "json"] + (["--show-managed-fields"] if managed_fields else [])
     if not cluster_scoped:
         args += ["-n", namespace] if namespace else ["-A"]
     try:
@@ -144,41 +284,6 @@ def selector_matches(selector: dict | None, labels: dict | None) -> bool:
     return all(labels.get(k) == v for k, v in selector.items())
 
 
-def parse_cpu_millis(quantity: str | None) -> float | None:
-    if not quantity:
-        return None
-    q = str(quantity)
-    try:
-        if q.endswith("m"):
-            return float(q[:-1])
-        if q.endswith("n"):
-            return float(q[:-1]) / 1_000_000
-        if q.endswith("u"):
-            return float(q[:-1]) / 1_000
-        return float(q) * 1000
-    except ValueError:
-        return None
-
-
-_MEM_UNITS = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4, "K": 1e3, "M": 1e6, "G": 1e9, "T": 1e12}
-
-
-def parse_memory_bytes(quantity: str | None) -> float | None:
-    if not quantity:
-        return None
-    q = str(quantity)
-    for suffix, mult in sorted(_MEM_UNITS.items(), key=lambda kv: -len(kv[0])):
-        if q.endswith(suffix):
-            try:
-                return float(q[: -len(suffix)]) * mult
-            except ValueError:
-                return None
-    try:
-        return float(q)
-    except ValueError:
-        return None
-
-
 def compact(obj):
     """Recursively drop None values and empty lists/dicts so the model only sees fields that carry information."""
     if isinstance(obj, dict):
@@ -194,39 +299,13 @@ def compact(obj):
     return obj
 
 
-def parse_time(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
 def last_update_time(meta: dict) -> str | None:
-    """Most recent spec write to an object, from managedFields (status-subresource writes excluded)."""
-    times = [
-        f.get("time") for f in meta.get("managedFields") or [] if f.get("time") and f.get("subresource") != "status"
-    ]
-    return max(times) if times else meta.get("creationTimestamp")
+    """Most recent spec write to an object, from managedFields (status and scale writes excluded)."""
+    return change_log.last_spec_write(meta)
 
 
-CHANGE_GRACE_SECONDS = 60  # writes this soon after the application deployed are still part of the rollout
-
-
-def deployment_time(components: dict[str, dict]) -> datetime | None:
-    """When the application was deployed: the median creation time of its workloads."""
-    times = sorted(t for t in (parse_time(c.get("created")) for c in components.values()) if t)
-    return times[len(times) // 2] if times else None
-
-
-def change_after_deploy(modified: str | None, deploy_time: datetime | None) -> int | None:
-    """Seconds between the application deploy and this object's last spec write, if beyond the grace period."""
-    mod = parse_time(modified)
-    if mod is None or deploy_time is None:
-        return None
-    delta = int((mod - deploy_time).total_seconds())
-    return delta if delta > CHANGE_GRACE_SECONDS else None
+def strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text) if "\x1b" in text else text
 
 
 def _probe_summary(probe: dict | None) -> dict | None:
@@ -255,6 +334,19 @@ def _probe_port(probe: dict | None):
 
 def component_id(kind: str, name: str) -> str:
     return f"{kind.lower()}/{name}"
+
+
+def _env_value_text(entry: dict) -> str:
+    if "value" in entry:
+        return repr(trim(str(entry.get("value")), 60))
+    vf = entry.get("valueFrom") or {}
+    for key, label in (("secretKeyRef", "Secret"), ("configMapKeyRef", "ConfigMap"), ("fieldRef", "field")):
+        if vf.get(key):
+            ref = vf[key]
+            return f"from {label} {ref.get('name') or ref.get('fieldPath')}" + (
+                f".{ref['key']}" if ref.get("key") else ""
+            )
+    return "from valueFrom"
 
 
 def _strip_hash_suffix(name: str, segments: int) -> str:
@@ -347,8 +439,11 @@ def summarize_workload(obj: dict) -> dict:
 
         mu, ms = _as_count(max_unavail, desired), _as_count(max_surge, desired)
         if mu is not None and desired and mu >= desired:
+            surge = f" and maxSurge={max_surge}" if max_surge is not None else ""
+            tail = "; no replacement pod is started before the old ones stop" if ms == 0 else ""
             signals.append(
-                f"rolling update allows maxUnavailable={max_unavail} for {desired} replicas: all pods may go down at once"
+                f"rolling update allows maxUnavailable={max_unavail}{surge} for {desired} replicas: all pods may go "
+                f"down at once{tail}"
             )
         if mu is not None and ms is not None and mu == 0 and ms == 0:
             signals.append("rolling update has maxUnavailable=0 and maxSurge=0: a rollout can never progress")
@@ -358,12 +453,22 @@ def summarize_workload(obj: dict) -> dict:
 
     config_refs: dict[str, set] = {"secrets": set(), "configmaps": set()}
     containers = []
+    env_hosts: set[str] = set()
+    env_values: list[str] = []
     for c in (pod_spec.get("initContainers") or []) + pod_spec.get("containers", []):
         resources = c.get("resources", {}) or {}
         env_names = [e.get("name") for e in c.get("env", []) if e.get("name")]
         dupes = sorted({n for n in env_names if env_names.count(n) > 1})
         for n in dupes:
-            signals.append(f"container {c.get('name')} defines env var {n} more than once (the last value wins)")
+            values = [_env_value_text(e) for e in c.get("env", []) if e.get("name") == n]
+            signals.append(
+                f"container {c.get('name')} defines env var {n} {len(values)} times: {', then '.join(values)}; the "
+                f"last value ({values[-1]}) is the one the container sees"
+            )
+        for e in c.get("env", []) or []:
+            if "value" in e and e.get("value") not in (None, ""):
+                env_values.append(str(e["value"]))
+                env_hosts |= checks.env_host_candidates(str(e["value"]))
         env_from = []
         for ref in c.get("envFrom", []) or []:
             if ref.get("configMapRef"):
@@ -451,6 +556,9 @@ def summarize_workload(obj: dict) -> dict:
     pvc_names = [v.get("pvc") for v in volumes if v.get("pvc")]
     for name in sorted({n for n in pvc_names if pvc_names.count(n) > 1}):
         signals.append(f"PVC {name} is mounted through more than one volume of this pod")
+    anti_affinity = ((pod_spec.get("affinity") or {}).get("podAntiAffinity") or {}).get(
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    )
 
     return {
         "kind": kind,
@@ -460,6 +568,12 @@ def summarize_workload(obj: dict) -> dict:
         "modified": last_update_time(meta),
         "service_account": pod_spec.get("serviceAccountName") or "default",
         "replicas": replicas,
+        "anti_affinity_required": bool(anti_affinity) or None,
+        "_meta": meta,
+        "_template": template if kind in ("CronJob", "Job") else None,
+        "_env_hosts": sorted(env_hosts),
+        "_env_values": env_values[:80],
+        "_config_modes": checks.config_ref_modes(pod_spec),
         **extra,
         "selector": (spec.get("selector") or {}).get("matchLabels") or {},
         "template_labels": template.get("metadata", {}).get("labels") or {},
@@ -515,7 +629,7 @@ def summarize_pod(pod: dict) -> dict:
     # Restarts whose last crash ended inside the warm-up window, on a pod whose containers are all
     # ready now and have been running for a while, are deploy-time churn rather than fault evidence.
     pod_start = parse_time(status.get("startTime"))
-    now = datetime.now(UTC)
+    current = now()
     settled = bool(pod_start) and phase == "Running" and bool(status.get("containerStatuses"))
     for s in status.get("containerStatuses") or []:
         last_fin = parse_time(((s.get("lastState") or {}).get("terminated") or {}).get("finishedAt"))
@@ -528,7 +642,7 @@ def summarize_pod(pod: dict) -> dict:
                 or pod_start is None
                 or last_fin > pod_start + timedelta(seconds=WARMUP_SECONDS)
                 or run_since is None
-                or (now - run_since).total_seconds() < 60
+                or (current - run_since).total_seconds() < 60
             ):
                 settled = False
     startup_notes: list[str] = []
@@ -560,6 +674,14 @@ def summarize_pod(pod: dict) -> dict:
             else:
                 signals.append(note)
 
+    for s in status.get("initContainerStatuses") or []:
+        started = parse_time(((s.get("state") or {}).get("running") or {}).get("startedAt"))
+        if phase == "Pending" and started and (current - started).total_seconds() >= INIT_CONTAINER_STUCK_SECONDS:
+            signals.append(
+                f"init container {s.get('name')} has been running for {int((current - started).total_seconds())}s; "
+                "the pod's main containers cannot start until it exits"
+            )
+
     finished = [s.get("name") for s in statuses if (s.get("state") or {}).get("terminated", {}).get("exitCode") == 0]
     still_running = [s.get("name") for s in statuses if "running" in (s.get("state") or {})]
     if phase == "Running" and finished and still_running and spec.get("restartPolicy") in ("Never", "OnFailure"):
@@ -576,6 +698,20 @@ def summarize_pod(pod: dict) -> dict:
         ),
         None,
     )
+    not_ready_since = next(
+        (
+            c.get("lastTransitionTime")
+            for c in status.get("conditions") or []
+            if c.get("type") == "Ready" and c.get("status") != "True"
+        ),
+        None,
+    )
+    crashes = [
+        ((s.get("lastState") or {}).get("terminated") or {}).get("finishedAt")
+        for s in status.get("containerStatuses") or []
+        if s.get("restartCount", 0) > 0
+    ]
+    last_crash_at = max((c for c in crashes if c), default=None) if not settled else None
     conditions = []
     for cond in status.get("conditions") or []:
         if cond.get("status") != "True" and cond.get("type") in ("Ready", "PodScheduled", "ContainersReady"):
@@ -593,14 +729,25 @@ def summarize_pod(pod: dict) -> dict:
         "phase": phase,
         "ready": f"{ready}/{total}",
         "restarts": restarts,
+        "created": meta.get("creationTimestamp"),
         "started": status.get("startTime"),
         "ready_since": ready_since,
+        "not_ready_since": not_ready_since,
+        "last_crash_at": last_crash_at,
         "node": spec.get("nodeName"),
+        "ip": status.get("podIP"),
         "container_states": container_states,
         "conditions": conditions,
         "startup_notes": startup_notes,
         "settled": settled,
         "signals": signals,
+        "_labels": meta.get("labels") or {},
+        "_owner": [(o.get("kind"), o.get("name")) for o in meta.get("ownerReferences") or []],
+        "_spec": checks.container_spec_summary(spec),
+        "_started": {
+            s.get("name"): ((s.get("state") or {}).get("running") or {}).get("startedAt")
+            for s in status.get("containerStatuses") or []
+        },
     }
 
 
@@ -677,6 +824,7 @@ def summarize_event(ev: dict) -> dict:
         "reason": ev.get("reason"),
         "count": count,
         "object": f"{(obj.get('kind') or '?').lower()}/{obj.get('name')}",
+        "first_seen": ev.get("firstTimestamp") or ev.get("eventTime"),
         "last_seen": _event_time(ev),
         "message": trim(ev.get("message")),
     }
@@ -730,16 +878,24 @@ def attach_services(
     services: list[dict],
     endpoints: list[dict],
     components: dict[str, dict],
-    deploy_time: datetime | None = None,
-    recent_changes: list[dict] | None = None,
+    changes: list[dict] | None = None,
 ) -> list[dict]:
-    """Map services to the workloads they select and flag empty endpoints, dangling selectors, late changes."""
+    """Map services to the workloads they select and flag empty endpoints, dangling selectors, and policies.
+
+    A Service that selects pods of several workloads keeps its selector and each workload's container ports, so
+    the fan-out can be checked in code. When `changes` is given, a Service modified after creation, or created
+    after the workloads it selects, is recorded there.
+    """
     ready_by_name: dict[tuple[str, str], tuple[int, int]] = {}
+    nodes_by_name: dict[tuple[str, str], list[str]] = {}
     for ep in endpoints:
         meta = ep.get("metadata", {})
         ready = sum(len(s.get("addresses") or []) for s in ep.get("subsets") or [])
         not_ready = sum(len(s.get("notReadyAddresses") or []) for s in ep.get("subsets") or [])
         ready_by_name[(meta.get("namespace"), meta.get("name"))] = (ready, not_ready)
+        nodes_by_name[(meta.get("namespace"), meta.get("name"))] = sorted(
+            {a.get("nodeName") for s in ep.get("subsets") or [] for a in s.get("addresses") or [] if a.get("nodeName")}
+        )
 
     dangling: list[dict] = []
     for svc in services:
@@ -759,17 +915,9 @@ def attach_services(
             "not_ready_endpoints": not_ready,
         }
         policies = []
-        modified = last_update_time(meta)
-        late = change_after_deploy(modified, deploy_time)
-        if late is not None:
-            record["modified"] = modified
-            policies.append(f"service {name} was modified {late}s after the application was deployed")
-            if recent_changes is not None:
-                recent_changes.append(
-                    {"object": f"service/{ns}/{name}", "modified": modified, "seconds_after_deploy": late}
-                )
         if spec.get("internalTrafficPolicy") and spec["internalTrafficPolicy"] != "Cluster":
             record["internal_traffic_policy"] = spec["internalTrafficPolicy"]
+            record["endpoint_nodes"] = nodes_by_name.get((ns, name), [])
             policies.append(
                 f"service {name} has internalTrafficPolicy={spec['internalTrafficPolicy']}: only endpoints on the "
                 "client's own node receive traffic"
@@ -785,6 +933,23 @@ def attach_services(
             for cid, comp in components.items()
             if comp["namespace"] == ns and selector_matches(spec["selector"], comp["template_labels"])
         ]
+        if len(owners) > 1:
+            record["selects_multiple_workloads"] = owners
+            record["workload_ports"] = {
+                cid: sorted({p for c in components[cid]["containers"] for p in c.get("ports") or []}) for cid in owners
+            }
+        if changes is not None:
+            change = change_log.object_change(
+                f"service/{ns}/{name}",
+                "Service",
+                name,
+                ns,
+                meta,
+                affects=owners,
+                targets_created=[components[c].get("created") for c in owners],
+            )
+            if change:
+                changes.append(change)
         for cid in owners:
             components[cid]["services"].append(record)
             if ready == 0:
@@ -830,28 +995,39 @@ def summarize_network_policy(policy: dict) -> dict:
 
 
 def attach_network_policies(
-    policies: list[dict], components: dict[str, dict], deploy_time: datetime | None = None
+    policies: list[dict], components: dict[str, dict], changes: list[dict] | None = None
 ) -> list[dict]:
     summaries = []
     for raw in policies:
         pol = summarize_network_policy(raw)
         pol["created"] = raw.get("metadata", {}).get("creationTimestamp")
-        late = change_after_deploy(pol["created"], deploy_time)
-        if late is not None:
-            pol["seconds_after_deploy"] = late
+        pol["_meta"] = raw.get("metadata", {})
         summaries.append(pol)
     for pol in summaries:
-        for comp in components.values():
+        selected = []
+        for cid, comp in components.items():
             if comp["namespace"] != pol["namespace"]:
                 continue
             if pol["selects_all_pods"] or selector_matches(pol["pod_selector"], comp["template_labels"]):
-                comp["network_policies"].append({k: v for k, v in pol.items() if k not in ("namespace",)})
-                late = (
-                    f", created {pol['seconds_after_deploy']}s after the application was deployed"
-                    if pol.get("seconds_after_deploy")
-                    else ""
-                )
-                comp["signals"].append(f"selected by NetworkPolicy {pol['name']} ({pol['effect']}{late})")
+                selected.append(cid)
+                comp["network_policies"].append({k: v for k, v in pol.items() if k not in ("namespace", "_meta")})
+                comp["signals"].append(f"selected by NetworkPolicy {pol['name']} ({pol['effect']})")
+        pol["components"] = selected
+        if changes is not None:
+            change = change_log.object_change(
+                f"networkpolicy/{pol['namespace']}/{pol['name']}",
+                "NetworkPolicy",
+                pol["name"],
+                pol["namespace"],
+                pol.pop("_meta"),
+                affects=selected,
+                targets_created=[components[c].get("created") for c in selected],
+            )
+            if change:
+                pol["changed"] = True
+                changes.append(change)
+        else:
+            pol.pop("_meta", None)
     return summaries
 
 
@@ -884,9 +1060,17 @@ def attach_hpas(hpas: list[dict], components: dict[str, dict]) -> None:
             components[cid]["signals"].append(f"HPA {meta.get('name')} is pinned at maxReplicas={spec['maxReplicas']}")
 
 
-def attach_pvcs(pvcs: list[dict], components: dict[str, dict]) -> None:
+def attach_pvcs(pvcs: list[dict], components: dict[str, dict]) -> dict[tuple[str, str], list[str]]:
+    """Mark claims that are not Bound; return each claim's access modes for the shared-claim check."""
     phase_by_name = {
         (p.get("metadata", {}).get("namespace"), p.get("metadata", {}).get("name")): p.get("status", {}).get("phase")
+        for p in pvcs
+    }
+    modes = {
+        (p.get("metadata", {}).get("namespace"), p.get("metadata", {}).get("name")): (p.get("spec") or {}).get(
+            "accessModes"
+        )
+        or []
         for p in pvcs
     }
     for comp in components.values():
@@ -896,8 +1080,11 @@ def attach_pvcs(pvcs: list[dict], components: dict[str, dict]) -> None:
                 continue
             phase = phase_by_name.get((comp["namespace"], name))
             vol["phase"] = phase
+            if modes.get((comp["namespace"], name)):
+                vol["access_modes"] = modes[(comp["namespace"], name)]
             if phase and phase != "Bound":
                 comp["signals"].append(f"PVC {name} is {phase}")
+    return modes
 
 
 def summarize_nodes(nodes: list[dict]) -> list[dict]:
@@ -932,7 +1119,7 @@ def log_line_time(line: str) -> datetime | None:
 
 def normalize_log_line(line: str) -> tuple[str, str]:
     """Return (dedupe_key, display_text) for a raw `kubectl logs --prefix` line."""
-    text = line.rstrip()
+    text = strip_ansi(line).rstrip()
     container = None
     m = _PREFIX_RE.match(text)
     if m:
@@ -948,36 +1135,95 @@ def normalize_log_line(line: str) -> tuple[str, str]:
     return (f"{container}|{key}" if container else key), display
 
 
+def declared_level(line: str) -> str | None:
+    """The severity a log line declares about itself, if it follows a common log format (lowercased)."""
+    text = _TIMESTAMP_RE.sub("", _PREFIX_RE.sub("", strip_ansi(line), count=1).lstrip(), count=1).lstrip()
+    m = _STRUCTURED_LEVEL_RE.search(text)
+    if m:
+        return (m.group("json") or m.group("logfmt")).lower()
+    m = _MONGO_SEVERITY_RE.search(text)
+    if m:
+        return m.group("sev").lower()
+    m = _DOTNET_LEVEL_RE.match(text) or _KLOG_LEVEL_RE.match(text)
+    if m:
+        return m.group("level").lower()
+    hits = [h for h in (_BRACKET_LEVEL_RE.search(text), _TOKEN_LEVEL_RE.search(text)) if h]
+    if hits:
+        return min(hits, key=lambda h: h.start()).group("level").lower()
+    return None
+
+
 def is_error_line(line: str) -> bool:
-    if not line.strip() or not _ERROR_LINE_RE.search(line) or _BENIGN_LINE_RE.search(line):
+    text = strip_ansi(line)
+    if not text.strip() or not _ERROR_LINE_RE.search(text) or _BENIGN_LINE_RE.search(text):
         return False
-    return not _INFO_LEVEL_RE.search(line)
+    return declared_level(text) not in _QUIET_LEVELS
+
+
+def signature_recency(times: list[datetime], at: datetime) -> dict:
+    """First and last sighting of an error signature, its median gap, and whether it is still occurring.
+
+    A signature is "stopped" once it has been silent longer than ONGOING_FLOOR_SECONDS and longer than
+    CADENCE_FACTOR times its own median gap (a signature seen once: longer than SINGLE_OCCURRENCE_WINDOW). The
+    judgment uses only the signature's own rhythm and the collection time.
+    """
+    if not times:
+        return {}
+    times = sorted(times)
+    silent = max(0, int((at - times[-1]).total_seconds()))
+    out: dict = {
+        "first_seen_seconds_ago": max(0, int((at - times[0]).total_seconds())),
+        "last_seen_seconds_ago": silent,
+    }
+    gaps = [(b - a).total_seconds() for a, b in zip(times, times[1:], strict=False) if b > a]
+    if gaps:
+        gap = statistics.median(gaps)
+        out["median_gap_seconds"] = round(gap, 1)
+        stopped = silent > max(ONGOING_FLOOR_SECONDS, CADENCE_FACTOR * gap)
+    else:
+        stopped = silent > SINGLE_OCCURRENCE_WINDOW
+    out["state"] = "stopped" if stopped else "ongoing"
+    return out
 
 
 def extract_log_signals(
-    raw_logs: Iterable[str], limit: int = MAX_LOG_SIGNALS, *, now: datetime | None = None
+    raw_logs: Iterable[str],
+    limit: int = MAX_LOG_SIGNALS,
+    *,
+    at: datetime | None = None,
+    ongoing_containers: set[str] | None = None,
 ) -> list[dict]:
-    """Error-looking lines, deduplicated with counts, most frequent first, with recency computed in code."""
+    """Error-looking lines, deduplicated with counts and recency; still-occurring signatures first.
+
+    Signatures from a container in `ongoing_containers` (a crash-looping container whose errors recur at every
+    restart) count as ongoing however long ago they were last seen.
+    """
     counts: Counter[str] = Counter()
     examples: dict[str, str] = {}
-    latest: dict[str, datetime] = {}
+    stamps: dict[str, list[datetime]] = {}
+    container_of: dict[str, str] = {}
     for line in raw_logs:
         if not is_error_line(line):
             continue
         key, display = normalize_log_line(line)
         counts[key] += 1
         examples.setdefault(key, display)
+        prefix = _PREFIX_RE.match(line)
+        if prefix:
+            container_of[key] = prefix.group(1)
         ts = log_line_time(line)
-        if ts and (key not in latest or ts > latest[key]):
-            latest[key] = ts
-    now = now or datetime.now(UTC)
+        if ts:
+            stamps.setdefault(key, []).append(ts)
+    at = at or now()
     out = []
-    for k, n in counts.most_common(limit):
-        item = {"count": n, "line": examples[k]}
-        if k in latest:
-            item["last_seen_seconds_ago"] = max(0, int((now - latest[k]).total_seconds()))
+    for key, n in counts.items():
+        item = {"count": n, "line": examples[key], **signature_recency(stamps.get(key, []), at)}
+        if ongoing_containers and container_of.get(key) in ongoing_containers and item.get("state") == "stopped":
+            item["state"] = "ongoing"
+            item["crash_loop"] = True
         out.append(item)
-    return out
+    out.sort(key=lambda i: (i.get("state") == "stopped", -i["count"]))
+    return out[:limit]
 
 
 def warmup_cutoff(pod: dict) -> datetime | None:
@@ -1017,7 +1263,7 @@ def _fetch_pod_logs(pod: str, namespace: str, tail: int) -> list[str]:
         ["logs", pod, "-n", namespace, "--all-containers=true", "--prefix=true", "--timestamps=true", f"--tail={tail}"],
         timeout=LOG_TIMEOUT,
     )
-    return out.splitlines()
+    return [strip_ansi(line) for line in out.splitlines()]
 
 
 def _fetch_previous_logs(pod: str, container: str, namespace: str) -> list[str]:
@@ -1025,15 +1271,25 @@ def _fetch_previous_logs(pod: str, container: str, namespace: str) -> list[str]:
         ["logs", pod, "-n", namespace, "-c", container, "--previous", f"--tail={MAX_PREVIOUS_LOG_LINES * 3}"],
         timeout=LOG_TIMEOUT,
     )
-    lines = [trim(_TIMESTAMP_RE.sub("", ln)) for ln in out.splitlines() if ln.strip()]
+    lines = [trim(_TIMESTAMP_RE.sub("", strip_ansi(ln))) for ln in out.splitlines() if ln.strip()]
     return lines[-MAX_PREVIOUS_LOG_LINES:]
 
 
 def attach_logs(
     components: dict[str, dict], pods_by_component: dict[str, list[dict]], errors: list[str], tail: int
 ) -> None:
-    """Fetch recent logs for up to two pods per component; keep error-looking lines logged after warm-up."""
+    """Fetch recent logs for up to two pods per component; keep error-looking lines logged after warm-up.
+
+    Each signature carries its recency (see signature_recency). `log_error_lines` counts only signatures that
+    are still occurring; stopped ones are counted in `stopped_error_lines`.
+    """
     jobs: list[tuple[str, Callable[[], object], str, datetime | None]] = []
+    crash_looping: dict[str, set[str]] = {}
+    for cid, pods in pods_by_component.items():
+        for pod in pods:
+            for state in pod.get("container_states") or []:
+                if "CrashLoopBackOff" in state or ("last terminated" in state and not pod.get("settled")):
+                    crash_looping.setdefault(cid, set()).add(state.split(":", 1)[0])
     for cid, pods in pods_by_component.items():
         ns = components[cid]["namespace"]
         loggable = [p for p in pods if p["phase"] == "Running"]
@@ -1041,7 +1297,8 @@ def attach_logs(
         for pod in loggable[:MAX_LOG_PODS_PER_COMPONENT]:
             jobs.append((cid, lambda p=pod["name"], n=ns: _fetch_pod_logs(p, n, tail), "current", warmup_cutoff(pod)))
             for state in pod["container_states"]:
-                if "last terminated" in state:
+                # a crash during warm-up followed by steady running is start-up history, not evidence
+                if "last terminated" in state and not pod.get("settled"):
                     cname = state.split(":", 1)[0]
                     jobs.append(
                         (
@@ -1070,12 +1327,16 @@ def attach_logs(
                 if lines:
                     components[cid]["previous_container_logs"][cname] = lines
     for cid, lines in raw_by_component.items():
-        signals = extract_log_signals(lines)
+        signals = extract_log_signals(lines, ongoing_containers=crash_looping.get(cid))
         components[cid]["log_signals"] = signals
-        if signals:
+        ongoing = sum(s["count"] for s in signals if s.get("state") != "stopped")
+        stopped = sum(s["count"] for s in signals if s.get("state") == "stopped")
+        if ongoing:
             # Kept apart from `signals`: error-like log lines are weak evidence, since most components of a
             # microservice application log errors whenever any dependency misbehaves.
-            components[cid]["log_error_lines"] = sum(s["count"] for s in signals)
+            components[cid]["log_error_lines"] = ongoing
+        if stopped:
+            components[cid]["stopped_error_lines"] = stopped
         if dropped_by_component[cid]:
             components[cid]["warmup_log_errors_ignored"] = dropped_by_component[cid]
 
@@ -1205,6 +1466,7 @@ def summarize_namespace_constraints(limit_ranges: list[dict], quotas: list[dict]
                 "namespace": meta.get("namespace"),
                 "name": meta.get("name"),
                 "created": meta.get("creationTimestamp"),
+                "_meta": meta,
                 "limits": (lr.get("spec") or {}).get("limits"),
                 "signals": [],
             }
@@ -1237,6 +1499,7 @@ def summarize_namespace_constraints(limit_ranges: list[dict], quotas: list[dict]
                 "namespace": meta.get("namespace"),
                 "name": meta.get("name"),
                 "created": meta.get("creationTimestamp"),
+                "_meta": meta,
                 "hard": hard,
                 "used": used,
                 "signals": signals,
@@ -1296,6 +1559,8 @@ def summarize_webhooks(configs: list[dict], errors: list[str]) -> list[dict]:
                 "kind": kind,
                 "configuration": cfg.get("metadata", {}).get("name"),
                 "created": cfg.get("metadata", {}).get("creationTimestamp"),
+                "_rules": wh.get("rules") or [],
+                "_meta": cfg.get("metadata", {}),
                 "webhook": wh.get("name"),
                 "failure_policy": wh.get("failurePolicy"),
                 "timeout_seconds": wh.get("timeoutSeconds"),
@@ -1339,7 +1604,26 @@ def attach_webhooks(webhooks: list[dict], components: dict[str, dict]) -> None:
 # --------------------------------------------------------------------------- cluster DNS
 
 
-def summarize_cluster_dns(errors: list[str], deploy_time: datetime | None) -> dict:
+def _corefile_rules(corefile: str) -> list[str]:
+    """template, rewrite, and hosts blocks of a Corefile, one string per block."""
+    lines = corefile.splitlines()
+    blocks, i = [], 0
+    while i < len(lines):
+        head = lines[i].strip()
+        if head.startswith(("template", "rewrite", "hosts")):
+            block, depth, j = [head], head.count("{") - head.count("}"), i + 1
+            while depth > 0 and j < len(lines):
+                block.append(lines[j].strip())
+                depth += lines[j].count("{") - lines[j].count("}")
+                j += 1
+            blocks.append(" ⏎ ".join(b for b in block if b))
+            i = j
+            continue
+        i += 1
+    return blocks
+
+
+def summarize_cluster_dns(errors: list[str]) -> dict:
     """Cluster DNS (CoreDNS) configuration: a classic single point of failure outside the app namespaces."""
     out: dict = {}
     try:
@@ -1362,16 +1646,9 @@ def summarize_cluster_dns(errors: list[str], deploy_time: datetime | None) -> di
                 if ln.strip() and not ln.strip().startswith(("}", ".", "#")) and "{" not in ln
             }
         ),
-        "template_or_rewrite_rules": [
-            trim(ln, 160) for ln in corefile.splitlines() if ln.strip().startswith(("template", "rewrite", "hosts"))
-        ],
+        "rules": [trim(block, 300) for block in _corefile_rules(corefile)][:6],
+        "_meta": meta,
     }
-    late = change_after_deploy(out["modified"], deploy_time)
-    if late is not None:
-        out["seconds_after_deploy"] = late
-        out["signals"] = [
-            f"CoreDNS ConfigMap was modified {late}s after the application was deployed; cluster name resolution may be altered"
-        ]
     try:
         pods = json.loads(
             run_kubectl(["get", "pods", "-n", "kube-system", "-l", "k8s-app=kube-dns", "-o", "json"])
@@ -1403,19 +1680,58 @@ def summarize_config_objects(secrets: list[dict], configmaps: list[dict]) -> dic
                 "keys": sorted((obj.get("data") or {}).keys()) + sorted((obj.get("stringData") or {}).keys()),
                 "created": meta.get("creationTimestamp"),
                 "last_update": last_update_time(meta),
+                "_meta": meta,
             }
     return out
 
 
+def _stale_readers(comp: dict, kind: str, name: str, obj: dict) -> str | None:
+    """What a rewrite of a ConfigMap or Secret means for this workload's running containers, by read mode."""
+    updated = parse_time(obj.get("last_update"))
+    if updated is None:
+        return None
+    starts = [
+        t
+        for pod in comp.get("pods") or []
+        for t in (parse_time(v) for v in ((pod.get("_started") or {}).values() or [pod.get("started")]))
+        if t
+    ]
+    older = [t for t in starts if t < updated]
+    if not older:
+        return None
+    modes = (comp.get("_config_modes") or {}).get(f"{kind}/{name}") or []
+    fixed = [m for m in modes if m.startswith(("env ", "envFrom", "subPath "))]
+    files = [m for m in modes if m.startswith("volume ")]
+    head = (
+        f"{kind} {name} was rewritten at {obj.get('last_update')}, after {len(older)} of {len(starts)} running "
+        "containers of this workload started"
+    )
+    if fixed:
+        return (
+            f"{head}; it is read through {', '.join(fixed)}, which are fixed when the container starts, so those "
+            "containers still use the previous values"
+        )
+    if files:
+        return (
+            f"{head}; it is mounted as files ({', '.join(files)}), which the kubelet updates in place, so the "
+            "running process sees the new content only if it re-reads the files"
+        )
+    return head
+
+
 def attach_config_objects(
-    objects: dict[tuple[str, str, str], dict], components: dict[str, dict], deploy_time: datetime | None = None
+    objects: dict[tuple[str, str, str], dict], components: dict[str, dict], changes: list[dict] | None = None
 ) -> None:
-    """Post-deploy changes, staleness (changed after the pod started) and env shadowing, computed in code."""
-    for comp in components.values():
+    """Missing references, staleness by read mode, env shadowing, and recent writes, computed in code.
+
+    How a workload reads an object decides what a rewrite means for its running pods: env values (valueFrom,
+    envFrom) and subPath mounts are fixed when the container starts, so a container started before the rewrite
+    still uses the previous values; a volume mount is updated in place, and the process sees the new content
+    only if it re-reads the files.
+    """
+    consumers: dict[tuple[str, str, str], list[str]] = {}
+    for cid, comp in components.items():
         ns = comp["namespace"]
-        pod_starts = [parse_time(p.get("started")) for p in comp.get("pods", [])]
-        pod_starts = [t for t in pod_starts if t]
-        earliest = min(pod_starts) if pod_starts else None
         refs = comp.get("config_refs") or {}
         details = {}
         for kind, key in (("Secret", "secrets"), ("ConfigMap", "configmaps")):
@@ -1424,19 +1740,11 @@ def attach_config_objects(
                 if obj is None:
                     comp["signals"].append(f"referenced {kind} {name} does not exist in namespace {ns}")
                     continue
+                consumers.setdefault((kind, ns, name), []).append(cid)
                 details[f"{kind.lower()}/{name}"] = {"keys": obj["keys"][:20], "last_update": obj["last_update"]}
-                updated = parse_time(obj["last_update"])
-                late = change_after_deploy(obj["last_update"], deploy_time)
-                if late is not None:
-                    comp["signals"].append(
-                        f"referenced {kind} {name} was modified {late}s after the application was deployed "
-                        f"(keys: {', '.join(obj['keys'][:8]) or 'none'})"
-                    )
-                if earliest and updated and updated > earliest:
-                    comp["signals"].append(
-                        f"{kind} {name} was modified at {obj['last_update']}, after this workload's pods started "
-                        f"at {earliest.isoformat()}; values read at startup are stale"
-                    )
+                stale = _stale_readers(comp, kind, name, obj)
+                if stale:
+                    comp["signals"].append(stale)
         if details:
             comp["config_objects"] = details
         for ct in comp.get("containers", []):
@@ -1453,6 +1761,19 @@ def attach_config_objects(
                         f"container {ct.get('name')}: env var {var} is set explicitly and also provided by "
                         f"{kind} {ref.get('configMap') or ref.get('secret')} via envFrom; the explicit value shadows it"
                     )
+    if changes is not None:
+        for (kind, ns, name), cids in consumers.items():
+            change = change_log.object_change(
+                f"{kind.lower()}/{ns}/{name}",
+                kind,
+                name,
+                ns,
+                objects[(kind, ns, name)].get("_meta") or {},
+                affects=cids,
+                targets_created=[components[c].get("created") for c in cids],
+            )
+            if change:
+                changes.append(change)
 
 
 # --------------------------------------------------------------------------- orchestration
@@ -1490,13 +1811,14 @@ def _grants(rules: list[dict], verb: str, resource: str) -> bool:
 
 
 def summarize_rbac(
-    namespaces: list[str], components: dict[str, dict], errors: list[str], deploy_time: datetime | None
+    namespaces: list[str], components: dict[str, dict], errors: list[str], changes: list[dict] | None = None
 ) -> list[dict]:
     """Roles and ClusterRoles reachable from the ServiceAccounts the application's workloads run as.
 
-    Only roles bound to a workload's ServiceAccount are fetched. A role gets a signal when it was written
-    after the application was deployed, or when a workload bound to it logs authorization denials; when the
-    denied verb and resource can be read from those logs, the role's rules are checked for them in code.
+    Only roles bound to a workload's ServiceAccount are fetched. A role gets a signal when a workload bound to
+    it logs authorization denials; when the denied verb and resource can be read from those logs, the role's
+    rules are checked for them in code. A role modified after creation, or created after the workloads bound to
+    it, is recorded in `changes`.
     """
     sa_to_components: dict[tuple[str, str], list[str]] = {}
     for cid, comp in components.items():
@@ -1532,7 +1854,6 @@ def summarize_rbac(
                 role = {}
                 errors.append(f"rbac {rkind}/{rname}: {str(exc)[:160]}")
             rmeta = role.get("metadata", {})
-            late = change_after_deploy(last_update_time(rmeta), deploy_time)
             entries[ekey] = {
                 "kind": rkind,
                 "name": rname,
@@ -1544,11 +1865,10 @@ def summarize_rbac(
                 "_rules": role.get("rules") or [],
                 "created": rmeta.get("creationTimestamp"),
                 "modified": last_update_time(rmeta),
-                "seconds_after_deploy": late,
+                "modified_after_creation_s": change_log.modified_after_creation(rmeta),
+                "_meta": rmeta,
                 "signals": [],
             }
-            if late is not None:
-                entries[ekey]["signals"].append(f"written {late}s after the application was deployed")
         entry = entries[ekey]
         entry["bindings"].append(f"{bkind}/{bmeta.get('name')}")
         for subj in b.get("subjects") or []:
@@ -1560,7 +1880,11 @@ def summarize_rbac(
     for entry in entries.values():
         for cid in entry["components"]:
             comp = components.get(cid) or {}
-            denied = [s for s in comp.get("log_signals") or [] if _RBAC_DENIED_RE.search(s.get("line") or "")]
+            denied = [
+                s
+                for s in comp.get("log_signals") or []
+                if s.get("state") != "stopped" and _RBAC_DENIED_RE.search(s.get("line") or "")
+            ]
             if not denied:
                 continue
             count = sum(int(s.get("count") or 1) for s in denied)
@@ -1587,11 +1911,48 @@ def summarize_rbac(
     out = []
     for entry in entries.values():
         entry.pop("_rules", None)
+        meta = entry.pop("_meta", {})
+        if changes is not None:
+            change = change_log.object_change(
+                f"{entry['kind'].lower()}/{entry['namespace'] + '/' if entry.get('namespace') else ''}{entry['name']}",
+                entry["kind"],
+                entry["name"],
+                entry.get("namespace"),
+                meta,
+                affects=entry["components"],
+                targets_created=[components[c].get("created") for c in entry["components"] if c in components],
+            )
+            if change:
+                entry["changed"] = True
+                changes.append(change)
         entry["signals"] = list(dict.fromkeys(entry["signals"]))
         entry["bindings"] = sorted(set(entry["bindings"]))
         entry["service_accounts"] = sorted(set(entry["service_accounts"]))
         out.append(entry)
     return out
+
+
+def coredns_service_overrides(cluster_dns: dict, components: dict[str, dict]) -> list[str]:
+    """CoreDNS rules (template, rewrite, hosts) that name one of the application's Services, by its cluster name."""
+    affected: list[str] = []
+    for cid, comp in components.items():
+        ns = comp["namespace"]
+        for svc in comp.get("services") or []:
+            names = (f"{svc['name']}.{ns}.svc.cluster.local", f"{svc['name']}.{ns}.svc", f"{svc['name']}.{ns}")
+            for rule in cluster_dns.get("rules") or []:
+                low = rule.lower()
+                if not any(re.search(rf"(?<![a-z0-9-]){re.escape(n)}(?![a-z0-9-])", low) for n in names):
+                    continue
+                comp["signals"].append(
+                    f"CoreDNS rule in kube-system/coredns overrides name resolution for this component's Service "
+                    f"{svc['name']}: {trim(rule, 200)}"
+                )
+                cluster_dns.setdefault("signals", []).append(
+                    f"rule overrides name resolution for Service {ns}/{svc['name']} ({cid}): {trim(rule, 160)}"
+                )
+                affected.append(cid)
+                break
+    return sorted(set(affected))
 
 
 def collect_snapshot(
@@ -1600,8 +1961,14 @@ def collect_snapshot(
     log_tail: int = DEFAULT_LOG_TAIL,
     alerts_fetcher: Callable[[], str] | None = fetch_alerts_via_mcp,
     include_logs: bool = True,
+    trend_baseline: dict | None = None,
 ) -> ClusterSnapshot:
-    """Read the cluster once and return the untrimmed snapshot. Never raises for a single failed read."""
+    """Read the cluster once and return the untrimmed snapshot. Never raises for a single failed read.
+
+    With `trend_baseline` (an earlier trend.collect_sample), growth since that sample is attached as signals.
+    """
+    from clients.jev_diag import trend
+
     errors: list[str] = []
     namespaces = list(app_info.get("namespaces") or [app_info.get("namespace")])
     namespaces = [ns for ns in namespaces if ns]
@@ -1613,6 +1980,12 @@ def collect_snapshot(
     unassigned_pods: list[dict] = []
     dangling_services: list[dict] = []
     all_policies: list[dict] = []
+    changes: list[dict] = []
+    raw_pods: dict[str, list[dict]] = {}
+    raw_events: dict[str, list[dict]] = {}
+    deletable: list[tuple[str, dict]] = []  # objects checked for a stuck finalizer
+    replicasets: list[dict] = []
+    controllerrevisions: list[dict] = []
 
     job_owner: dict[str, str] = {}  # "ns/job-name" -> CronJob component id
     for ns in namespaces:
@@ -1620,7 +1993,9 @@ def collect_snapshot(
             for obj in kubectl_items(resource, ns, errors):
                 comp = summarize_workload(obj)
                 components[component_id(comp["kind"], comp["name"])] = comp
+                deletable.append((comp["kind"], obj))
         for obj in kubectl_items("jobs", ns, errors):
+            deletable.append(("Job", obj))
             owners = [(o.get("kind"), o.get("name")) for o in obj.get("metadata", {}).get("ownerReferences") or []]
             cron = next((component_id("CronJob", n) for k, n in owners if k == "CronJob"), None)
             job_name = obj.get("metadata", {}).get("name")
@@ -1642,6 +2017,8 @@ def collect_snapshot(
                 continue
             comp = summarize_workload(obj)
             components[component_id("Job", job_name)] = comp
+        replicasets += kubectl_items("replicasets", ns, errors, managed_fields=False)
+        controllerrevisions += kubectl_items("controllerrevisions", ns, errors, managed_fields=False)
     for comp in components.values():
         if comp["kind"] == "CronJob":
             stuck = [j for j in comp["jobs"] if j.get("active") and not j.get("completion_time")]
@@ -1650,9 +2027,12 @@ def collect_snapshot(
                     f"{len(stuck)} jobs of this cronjob are active without completing (they pile up)"
                 )
             comp["jobs"] = sorted(comp["jobs"], key=lambda j: j.get("start_time") or "", reverse=True)[:5]
+    revisions = change_log.revision_templates(replicasets, controllerrevisions)
+    change_log.attach_template_changes(components, revisions)
 
     for ns in namespaces:
-        for pod in kubectl_items("pods", ns, errors):
+        raw_pods[ns] = kubectl_items("pods", ns, errors, managed_fields=False)
+        for pod in raw_pods[ns]:
             summary = summarize_pod(pod)
             summary["_namespace"] = ns
             cid = component_for_pod(summary, components, job_owner)
@@ -1667,19 +2047,11 @@ def collect_snapshot(
             pod_to_component[summary["name"]] = cid
             pod_index[summary["name"]] = summary
 
-    deploy_time = deployment_time(components)
-    now = datetime.now(UTC)
-    recent_changes: list[dict] = []
-    for cid, comp in components.items():
+    current = now()
+    for comp in components.values():
         mod = parse_time(comp.get("modified"))
         if mod:
-            comp["modified_seconds_ago"] = max(0, int((now - mod).total_seconds()))
-        late = change_after_deploy(comp.get("modified"), deploy_time)
-        if late is not None:
-            comp["signals"].append(
-                f"spec modified {comp.get('modified_seconds_ago')}s ago, {late}s after the application was deployed"
-            )
-            recent_changes.append({"object": cid, "modified": comp.get("modified"), "seconds_after_deploy": late})
+            comp["modified_seconds_ago"] = max(0, int((current - mod).total_seconds()))
     for cid, comp in components.items():
         comp["signals"].extend(replica_signals(comp))
         pods = pods_by_component.get(cid, [])
@@ -1693,89 +2065,112 @@ def collect_snapshot(
 
     constraints: list[dict] = []
     config_objects: dict = {}
+    claim_modes: dict[tuple[str, str], list[str]] = {}
     for ns in namespaces:
-        attach_warning_events(kubectl_items("events", ns, errors), components, unassigned_events, job_owner, pod_index)
+        raw_events[ns] = kubectl_items("events", ns, errors, managed_fields=False)
+        attach_warning_events(raw_events[ns], components, unassigned_events, job_owner, pod_index)
+        services = kubectl_items("services", ns, errors)
+        deletable += [("Service", svc) for svc in services]
         dangling_services += attach_services(
-            kubectl_items("services", ns, errors),
-            kubectl_items("endpoints", ns, errors),
-            components,
-            deploy_time,
-            recent_changes,
+            services, kubectl_items("endpoints", ns, errors, managed_fields=False), components, changes
         )
-        all_policies += attach_network_policies(kubectl_items("networkpolicies", ns, errors), components, deploy_time)
-        attach_hpas(kubectl_items("horizontalpodautoscalers", ns, errors), components)
-        attach_pvcs(kubectl_items("persistentvolumeclaims", ns, errors), components)
+        all_policies += attach_network_policies(kubectl_items("networkpolicies", ns, errors), components, changes)
+        attach_hpas(kubectl_items("horizontalpodautoscalers", ns, errors, managed_fields=False), components)
+        claims = kubectl_items("persistentvolumeclaims", ns, errors)
+        deletable += [("PersistentVolumeClaim", pvc) for pvc in claims]
+        claim_modes.update(attach_pvcs(claims, components))
         constraints += summarize_namespace_constraints(
             kubectl_items("limitranges", ns, errors), kubectl_items("resourcequotas", ns, errors)
         )
-        config_objects.update(
-            summarize_config_objects(kubectl_items("secrets", ns, errors), kubectl_items("configmaps", ns, errors))
-        )
+        secrets, configmaps = kubectl_items("secrets", ns, errors), kubectl_items("configmaps", ns, errors)
+        deletable += [("Secret", o) for o in secrets] + [("ConfigMap", o) for o in configmaps]
+        config_objects.update(summarize_config_objects(secrets, configmaps))
+    checks.resolve_env_hosts(components)
+    checks.local_traffic_policy_gaps(components)
+    checks.shared_rwo_claims(components, claim_modes)
     for comp in components.values():
         comp["healthy_hint"] = not comp["signals"]
     attach_namespace_constraints(constraints, components)
-    attach_config_objects(config_objects, components, deploy_time)
+    attach_config_objects(config_objects, components, changes)
+    for cid, comp in components.items():
+        change = change_log.object_change(
+            cid,
+            comp["kind"],
+            comp["name"],
+            comp["namespace"],
+            comp.get("_meta") or {},
+            affects=[cid],
+            targets_created=[components[o].get("created") for o in comp.get("_calls") or [] if o in components],
+            extra={"template_changes": comp["template_changes"]["changes"]} if comp.get("template_changes") else None,
+        )
+        if change:
+            changes.append(change)
+    for c in constraints:
+        in_namespace = [comp.get("created") for comp in components.values() if comp["namespace"] == c["namespace"]]
+        change = change_log.object_change(
+            f"{c['kind'].lower()}/{c['namespace']}/{c['name']}",
+            c["kind"],
+            c["name"],
+            c["namespace"],
+            c.pop("_meta", None) or {},
+            targets_created=in_namespace,
+        )
+        if change:
+            c["changed"] = True
+            changes.append(change)
+
+    namespace_labels: dict[str, dict] = {}
+    for ns_obj in kubectl_items("namespaces", None, errors, cluster_scoped=True, managed_fields=False):
+        meta = ns_obj.get("metadata") or {}
+        if meta.get("name") in namespaces:
+            namespace_labels[meta["name"]] = meta.get("labels") or {}
     webhooks = summarize_webhooks(
         kubectl_items("mutatingwebhookconfigurations", None, errors, cluster_scoped=True)
         + kubectl_items("validatingwebhookconfigurations", None, errors, cluster_scoped=True),
         errors,
     )
     attach_webhooks(webhooks, components)
-    cluster_dns = summarize_cluster_dns(errors, deploy_time)
-    if cluster_dns.get("seconds_after_deploy"):
-        recent_changes.append(
-            {
-                "object": "configmap/kube-system/coredns",
-                "modified": cluster_dns.get("modified"),
-                "seconds_after_deploy": cluster_dns["seconds_after_deploy"],
-            }
-        )
+    checks.admission_changes(components, revisions, webhooks, namespace_labels, constraints)
+    recorded: set[str] = set()
     for wh in webhooks:
-        late = change_after_deploy(wh.get("created"), deploy_time)
-        if late is not None:
-            wh["seconds_after_deploy"] = late
-            recent_changes.append(
-                {
-                    "object": f"{wh['kind']}/{wh['configuration']}",
-                    "modified": wh.get("created"),
-                    "seconds_after_deploy": late,
-                }
+        meta = wh.pop("_meta", None) or {}
+        name = wh["configuration"]
+        if name in recorded:
+            continue
+        recorded.add(name)
+        matched = [
+            ns
+            for ns in namespaces
+            if checks.label_selector_matches(
+                wh.get("namespace_selector"), namespace_labels.get(ns) or {"kubernetes.io/metadata.name": ns}
             )
-    for (kind, ns, name), obj in config_objects.items():
-        late = change_after_deploy(obj.get("last_update"), deploy_time)
-        if late is not None and any(
-            name in (c.get("config_refs") or {}).get("secrets" if kind == "Secret" else "configmaps", [])
-            for c in components.values()
-            if c["namespace"] == ns
-        ):
-            recent_changes.append(
-                {
-                    "object": f"{kind.lower()}/{ns}/{name}",
-                    "modified": obj.get("last_update"),
-                    "seconds_after_deploy": late,
-                }
-            )
-    for c in constraints:
-        late = change_after_deploy(c.get("created"), deploy_time)
-        if late is not None:
-            c["seconds_after_deploy"] = late
-            recent_changes.append(
-                {
-                    "object": f"{c['kind'].lower()}/{c['namespace']}/{c['name']}",
-                    "modified": c.get("created"),
-                    "seconds_after_deploy": late,
-                }
-            )
-    for pol in all_policies:
-        if pol.get("seconds_after_deploy"):
-            recent_changes.append(
-                {
-                    "object": f"networkpolicy/{pol['namespace']}/{pol['name']}",
-                    "modified": pol.get("created"),
-                    "seconds_after_deploy": pol["seconds_after_deploy"],
-                }
-            )
-    recent_changes.sort(key=lambda r: -(r.get("seconds_after_deploy") or 0))
+        ]
+        change = change_log.object_change(
+            f"{wh['kind'].lower()}/{name}",
+            wh["kind"],
+            name,
+            None,
+            meta,
+            affects=sorted({c for w in webhooks if w["configuration"] == name for c in w.get("components") or []}),
+            targets_created=[comp.get("created") for comp in components.values() if comp["namespace"] in matched],
+        )
+        if change:
+            changes.append(change)
+            for w in webhooks:
+                if w["configuration"] == name:
+                    w["changed"] = True
+    cluster_dns = summarize_cluster_dns(errors)
+    dns_affected = coredns_service_overrides(cluster_dns, components)
+    if dns_affected:
+        cluster_dns["components"] = dns_affected
+    dns_meta = cluster_dns.pop("_meta", None)
+    if dns_meta:
+        change = change_log.object_change(
+            "configmap/kube-system/coredns", "ConfigMap", "coredns", "kube-system", dns_meta, affects=dns_affected
+        )
+        if change:
+            cluster_dns["changed"] = True
+            changes.append(change)
     for ns in namespaces:
         try:
             top = run_kubectl(["top", "pods", "-n", ns, "--containers", "--no-headers"], timeout=KUBECTL_TIMEOUT)
@@ -1794,19 +2189,13 @@ def collect_snapshot(
             errors.append(f"alerts: {exc}")
         attach_alerts(alerts, components)
 
-    rbac = summarize_rbac(namespaces, components, errors, deploy_time)
-    for entry in rbac:
-        if entry.get("seconds_after_deploy") is not None:
-            recent_changes.append(
-                {
-                    "object": f"{entry['kind'].lower()}/{entry['namespace'] + '/' if entry.get('namespace') else ''}{entry['name']}",
-                    "modified": entry.get("modified"),
-                    "seconds_after_deploy": entry["seconds_after_deploy"],
-                }
-            )
-    recent_changes.sort(key=lambda r: -(r.get("seconds_after_deploy") or 0))
-
-    nodes = summarize_nodes(kubectl_items("nodes", None, errors))
+    rbac = summarize_rbac(namespaces, components, errors, changes)
+    stuck = checks.stuck_terminating(deletable)
+    checks.link_stuck_objects(stuck, components, rbac)
+    nodes = summarize_nodes(kubectl_items("nodes", None, errors, managed_fields=False))
+    trend_summary = None
+    if trend_baseline is not None:
+        trend_summary = trend.apply_trend(components, trend_baseline, trend.sample_from_objects(raw_pods, raw_events))
 
     for cid in list(components):
         comp = components[cid]
@@ -1815,11 +2204,10 @@ def collect_snapshot(
         for key in ("selector", "template_labels", "healthy_hint"):
             comp.pop(key, None)
         for pod in comp["pods"]:
-            pod.pop("signals", None)
-            pod.pop("startup_notes", None)
-            pod.pop("settled", None)
+            for key in ("signals", "startup_notes", "settled", "_spec", "_labels", "_owner", "_started"):
+                pod.pop(key, None)
         for svc in comp["services"]:
-            if not svc.get("matches_no_workload"):
+            if not svc.get("matches_no_workload") and not svc.get("selects_multiple_workloads"):
                 svc.pop("selector", None)
         components[cid] = compact(comp)
         components[cid]["healthy"] = comp["healthy"]
@@ -1832,30 +2220,37 @@ def collect_snapshot(
             {k: v for k, v in p.items() if k not in ("ingress_rules", "egress_rules")} for p in all_policies
         ],
         "services_matching_no_workload": dangling_services,
-        "application_deployed_at": deploy_time.isoformat() if deploy_time else None,
-        "cluster_dns": cluster_dns,
-        "recent_changes": recent_changes[:10],
+        "cluster_dns": compact(cluster_dns),
         "namespace_constraints": compact(constraints),
-        "admission_webhooks": compact(webhooks),
+        "admission_webhooks": compact([{k: v for k, v in wh.items() if k != "_rules"} for wh in webhooks]),
         "rbac": compact(rbac),
+        "stuck_terminating": stuck,
+        "trend": trend_summary,
         "warning_events_not_attributed": unassigned_events,
         "unhealthy_pods_not_attributed": unassigned_pods,
+        "_changes": changes,
     }
     app = {
         "name": app_info.get("app_name"),
         "description": trim(app_info.get("descriptions"), 600),
         "namespaces": namespaces,
     }
-    snapshot = ClusterSnapshot(app=app, components=components, cluster=cluster, errors=errors)
+    snapshot = ClusterSnapshot(app=app, components=components, cluster=compact(cluster), errors=errors)
+    snapshot.cluster.setdefault("_changes", [])
     from clients.jev_diag.derive import post_process
 
     post_process(snapshot)
+    for comp in components.values():
+        for key in ("_meta", "_template"):
+            comp.pop(key, None)
     logger.info(
-        "Collected %d components (%d with structural signals, %d with only log errors), %d alerts, %d collection errors",
+        "Collected %d components (%d with structural signals, %d with only log errors), %d alerts, %d changes, "
+        "%d collection errors",
         len(components),
         sum(1 for c in components.values() if c.get("signals")),
         sum(1 for c in components.values() if not c.get("signals") and c.get("log_error_lines")),
         len(alerts),
+        len(changes),
         len(errors),
     )
     return snapshot
@@ -1919,10 +2314,24 @@ def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
 
         return apply
 
+    def drop_stopped_logs(keep: int) -> Callable[[dict], None]:
+        def fn(comp: dict) -> None:
+            stopped = [s for s in comp.get("log_signals") or [] if s.get("state") == "stopped"]
+            if len(stopped) > keep:
+                drop = {id(s) for s in stopped[keep:]}
+                comp["log_signals"] = [s for s in comp["log_signals"] if id(s) not in drop]
+
+        return fn
+
     return [
+        ("all: stopped log signatures to 2", for_components(drop_stopped_logs(2))),
         (
             "healthy: drop container command/args/env_from",
             for_components(drop_container_keys("command", "args", "env_from"), healthy_only=True),
+        ),
+        (
+            "healthy: drop calls_services/clients/template_changes",
+            for_components(drop_keys("calls_services", "clients", "template_changes"), healthy_only=True),
         ),
         ("all: previous logs to 8 lines", for_components(cap_previous_logs(8))),
         ("all: log_signals to 4", for_components(lambda c: _cap(c, "log_signals", 4))),
@@ -1972,6 +2381,7 @@ def _trim_steps() -> list[tuple[str, Callable[[dict], None]]]:
                 lambda c: (_cap(c, "pods", 1), [p.pop("container_states", None) for p in c.get("pods", [])])
             ),
         ),
+        ("all: drop stopped log signatures", for_components(drop_stopped_logs(0))),
         ("all: drop log_signals", for_components(lambda c: c.pop("log_signals", None))),
     ]
 

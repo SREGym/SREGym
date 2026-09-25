@@ -509,6 +509,27 @@ fences, no preamble, no commentary.
         ]
 
     @staticmethod
+    def _scan_checklist_items(text: str) -> list[dict]:
+        """Every JSON object with a string "id" found in `text`, first occurrence per id, in order."""
+        decoder = json.JSONDecoder()
+        items: dict[str, dict] = {}
+        i = 0
+        while i < len(text):
+            if text[i] not in "[{":
+                i += 1
+                continue
+            try:
+                value, end = decoder.raw_decode(text, i)
+            except json.JSONDecodeError:
+                i += 1
+                continue
+            for item in value if isinstance(value, list) else [value]:
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    items.setdefault(item["id"], item)
+            i = end
+        return list(items.values())
+
+    @staticmethod
     def _parse_response(response_text: str, expected_question_ids: list[str]) -> list[dict]:
         """Parse the LLM JSON response into a list of question result dicts."""
         # Strip markdown fences
@@ -524,7 +545,11 @@ fences, no preamble, no commentary.
         try:
             data = json.loads(clean)
         except json.JSONDecodeError as exc:
-            raise ChecklistParseError(f"Invalid JSON: {exc}") from exc
+            # The answer is sometimes split across several JSON values (one array or object per line) or has
+            # text after the array; collect every well-formed checklist object instead of failing.
+            data = DiagnosisJudge._scan_checklist_items(response_text)
+            if not data:
+                raise ChecklistParseError(f"Invalid JSON: {exc}") from exc
 
         if not isinstance(data, list):
             raise ChecklistParseError("Response is not a JSON array")

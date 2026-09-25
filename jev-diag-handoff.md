@@ -1,102 +1,86 @@
 # jev_diag handoff
 
-Status as of 2026-09-22.
+Status as of 2026-09-25.
 
 ## Code map
 
 | File | Role |
 |---|---|
-| `driver.py` | Entry point: conductor handshake, start delay, collection, diagnosis, submission, artifacts |
+| `driver.py` | Entry point: conductor handshake, start delay, trend sample, collection, exec probes, diagnosis, submission, artifacts (including the raw kubectl bundle) |
 | `config.py` | `--model` handling for `main.py`, and the `jev_model()` lookup used inside the container |
-| `collector.py` | All kubectl reads and summaries: workloads, pods, events, Services, NetworkPolicies, quotas, webhooks, CoreDNS, RBAC roles, config objects, logs after warm-up, token budgets |
-| `derive.py` | Log classes, cross-component error pointers with backend role synonyms, telemetry-noise classification, change ranking, evidence kinds, cluster findings |
-| `classifier.py` | Triage questions, cause categories, object kinds, the one-shot diagnoser, fault-object selection, text assembly |
-| `tree.py` | The iterative decision tree: queue, investigate node, cluster node, stopping and fallback rules |
-| `investigate.py` | Per-component detail: full spec, events, logs split around the latest change, ConfigMap data, spec checks, RBAC, dependency state |
-| `trace.py` | Decision trace and Stratus trajectory output |
-| `replay.py` | Offline triage replay of saved snapshots |
+| `collector.py` | kubectl reads and summaries: workloads, pods, events, Services, NetworkPolicies, quotas, webhooks, CoreDNS rules, RBAC, config objects, logs with per-signature recency, token budgets; raw recording and replay |
+| `changes.py` | Change detection from each object's own history (managedFields, pod-template revisions), symptom-onset estimate, change ranking |
+| `checks.py` | Cross-object checks: pod vs template and matching webhooks, Local traffic policy vs client nodes, Secret/ConfigMap read modes, stuck finalizers and missing permissions, shared ReadWriteOnce claims |
+| `derive.py` | Log classes (severity parsing, gRPC and socket codes), error pointers from still-occurring errors, server login rejections and candidate clients, evidence kinds, cluster findings |
+| `investigate.py` | Per-component detail: spec, current events, logs, repeated failures, spec and Service checks, RBAC, dependency state, input candidates |
+| `tree.py` | Decision tree: queue, investigate node, cluster node, other-side check with pairwise question, fallback, fault-object choice, victim-chain characterization |
+| `classifier.py` | Triage questions, cause categories, one-shot diagnoser, fault-object selection with linkage, text assembly |
+| `probes.py` | Opt-in read-only exec probes (backend health command, broker consumer progress), gated on container memory headroom |
+| `trend.py` | Two light samples an interval apart; growth is reported |
+| `trace.py`, `replay.py` | Decision trace and trajectory; offline replay of snapshots or raw bundles |
 
-Integration outside the package:
+Integration outside the package: `agents.yaml` (the `jev_diag` entry), `main.py` (preflight map,
+`configure_jev_diag`), `sregym/service/container_runner.py` (forwards `TYPESAFE_API_KEY` only while
+`AGENT_JEV_MODEL` is set), `typesafe-sdk` in the requirements. `sregym/conductor/oracles/llm_as_a_judge/judge.py`
+also gained a tolerant checklist parser (see Results); drop it if it should not ship with this branch.
 
-- `agents.yaml`: the `jev_diag` entry.
-- `main.py`: the preflight map entry, `configure_jev_diag`, and `DEFAULT_AGENT_MODEL`.
-- `sregym/service/container_runner.py`: forwards `TYPESAFE_API_KEY` only while `AGENT_JEV_MODEL` is
-  set. This gate is shared with the Codex decision tool.
-- `pyproject.toml` and `docker/agents/requirements-container.txt`: `typesafe-sdk`.
-- `tests/clients/test_jev_diag.py`: 20 tests covering collector helpers, budget fitting, and the
-  one-shot classifier. Nothing covers `derive.py`'s newer rules, `investigate.py`, or `tree.py`.
+## Design (v4.2)
 
-## Design (tree v3)
-
-1. Collect the cluster state with kubectl and derive signals in code.
-2. Triage: one Jev request ranks every component plus `other`, which stands for cluster-level objects.
-3. Queue: every triage candidate with probability of at least 0.05, up to 6. Up to 4 more are admitted
-   on evidence alone, strongest first: configuration, pointed at by errors, own failure logs, change,
-   symptoms. Telemetry components without symptoms of their own go last.
-4. Investigate the front candidate: fetch its detail, then ask one Jev request with four questions.
-   These are the verdict (origin, victim, unrelated, undetermined), the next component, the cause
-   category, and the key evidence item.
-5. Transitions. Origin at 0.6 or above concludes, unless triage ranked an unexamined candidate higher.
-   Origin at 0.9 or above concludes regardless. Victim at 0.5 or above, with a next-component answer at
-   0.3 or above, moves that dependency to the front. The dependencies named in its error lines follow
-   right behind it.
-6. `other` goes to a cluster node that chooses among findings: quotas, webhooks with dead backends,
-   CoreDNS changes, NetworkPolicies, and Roles or ClusterRoles bound to the workloads.
-7. The budget is 18 steps. The fallback is the best origin probability of at least 0.4, then `other`
-   if triage chose it and findings exist, then the triage top choice.
-8. The text is assembled from the answers and collected facts. Every mismatch code found in the chosen
-   component's spec is listed, because a fault can have more than one mechanism.
-
-Moving from v1 (6/21) to v3 (14/21) changed the evidence far more than the questions:
-
-- error lines are split before and after the latest application change;
-- telemetry export errors are classified as noise;
-- code checks probe ports against container ports, and env addresses against Service ports;
-- dependencies are judged from their own pods, not from the candidate's complaints;
-- RBAC roles can be named as the fault object;
-- the agent waits for the fault to surface before reading the cluster.
+1. Collect with kubectl. A light pod/event sample is taken 45 s before the 120 s start delay ends, and
+   growth between the two samples is reported. Every kubectl call is recorded for offline replay.
+2. Changes are judged against each object's own history, never an assumed deploy time: a spec write after
+   creation, an object created after the workloads it acts on, or a pod-template diff between revisions.
+   They are ranked by time relative to the first still-active symptom.
+3. Error signatures are ongoing or stopped by their own rhythm; only ongoing errors link components.
+4. Code checks: live pod vs its template (admission rewrites; requests defaulted from limits are not
+   differences), Local traffic policy vs client nodes, how each Secret or ConfigMap is read (env values are
+   fixed at container start), CoreDNS rules naming an app Service, stuck finalizers, shared RWO claims,
+   duplicate env values, full probe targets.
+5. Triage ranks components plus `other`; the cluster node is queued early when triage leans to cluster
+   objects.
+6. Investigate asks verdict, linked next hop, category, key evidence, and whether one input item blocks
+   the component. With `--exec-probes`, a healthy-looking backend named by a victim gets a health command.
+7. Origin ≥ 0.6 concludes, but for auth or permission causes the other side (top two candidate clients) is
+   examined first, and a pairwise question settles two origins. Fallback: an `origin` verdict ≥ 0.4, then
+   the end of a strong victim chain (explained from the victim's failure), then triage without telemetry.
+8. The fault object comes from the cause category and must act on the concluded component; the text leads
+   with it when it carries the fault.
 
 ## Results
 
-| Design | Judged correct | Mean composite | Jev requests per problem |
-|---|---|---|---|
-| One-shot, local kind cluster | 6/21 | n/a | n/a |
-| One-shot, CloudLab | 9/21 | 0.47 | 1.9 |
-| Tree v1 | 6/21 | 0.36 | 3.8 |
-| Tree v2 | 11/21 | 0.57 | 3.5 |
-| Tree v3, current | 14/21 | 0.58 | 3.7 |
+All CloudLab runs share the harness; only the agent changed. Judge: Sonnet 5, medium, pass at 0.70.
 
-- The judge was Claude Sonnet 5 at medium effort, with a pass threshold of 0.70 on the composite of
-  localization, characterization, and scope.
-- Each problem had one attempt. All 21 problems were used during development, so these are
-  known-problem results, not a held-out evaluation.
-- In v3 the agent worked 18.4 s per problem on average, plus the 120 s wait. The snapshot took 11.6 s,
-  mostly log fetches. The tree took 6.7 s, of which 1.6 s was Jev latency.
-- A harness cycle takes about 10 minutes per problem. The full suite took 51 minutes sharded across
-  the five clusters.
+| Run | Passed | Mean | Loc / Expl / Scope | Jev req avg |
+|---|---|---|---|---|
+| One-shot | 9/21 | 0.47 | | 1.9 |
+| Tree v3 | 14/21 | 0.58 | 0.67 / 0.51 / 0.57 | 3.7 |
+| v4 | 18/21 | 0.84 | 0.95 / 0.83 / 0.75 | 2.6 |
+| v4.1 | 17/21 | 0.86 | 0.92 / 0.78 / 0.89 | 2.6 |
+| v4.2 (probes on) | 18/21 | 0.89 | 0.98 / 0.81 / 0.89 | 2.5 |
 
-Run directories are under `results/remote-tree/<orchestrator>/results/`, named by the remote clock,
-which runs about 12 minutes behind the local machine:
+- v4 had one judge parse failure (edge_request_filter, scored 0). The parser fix removed them in v4.1/v4.2.
+- v4's admission check falsely flagged pods whose requests were defaulted from limits (23 of 25
+  astronomy-shop components); it cost valkey_auth and two scope scores. Fixed in v4.1.
+- v4.2 solved valkey_auth through the probe (`valkey-cli ping` → NOAUTH) and secret_rotation through the
+  new credential ranking.
+- **v4.2's broker probe ran a JVM tool inside the memory-capped Kafka broker and OOM-killed it.** That
+  caused kafka_poison_pill's failure (0.33) and may have disturbed the other seven astronomy-shop runs after
+  their snapshot. Since then every probe requires memory headroom (8 MiB native, 768 MiB JVM/Node); on the
+  v4.2 data the Kafka tool would be skipped and `valkey-cli` still runs. Not yet evaluated.
+- Single runs; judge and triage variance moves individual problems by 0.1 or flips borderline ones. All 21
+  problems were used for development, so these are known-problem results.
 
-- v1: `0921_2035` to `0921_2109`
-- smoke tests: `0921_2116`
-- v2: `0921_2126` to `0921_2256`
-- v3: `0921_2257` onward
+Run directories under `results/remote-tree/<orchestrator>/results/` (remote clock ~12 min behind): v3
+`0921_2257`–`0921_2359`, v4 `0924_*` before 22:00, v4.1 `0924_22*`–`0924_23*`, v4.2 `0925_*`. Shard logs are
+in `jev-eval-v3/`, `jev-eval-v4/`, `jev-eval-v41/`, `jev-eval-v42/`; `results/remote-tree/compare_v3_v4.py`
+(`--v41`, `--v42`) prints the per-problem comparison. On the orchestrators, probes were enabled through the
+`jev_diag` entry's `kickoff_env` in `agents.yaml` (the repo default is off), and `judge.py` was patched in place.
 
-The one-shot CloudLab runs are under `results/remote/`, and the kind run is in `results/0917_2216/`.
-Shard logs sit beside the results in `jev-eval/`, `jev-eval-v2full/`, and `jev-eval-v3/`.
+## Open problems
 
-The per-problem comparison of every run is in `results/remote-tree/comparison_table.txt`, with
-totals in `results/remote-tree/comparison_summary.txt`.
-
-## v3 failures and next steps
-
-| Problem | Why it fails | Proposed fix |
+| Problem | Status in v4.2 | Next step |
 |---|---|---|
-| `valkey_auth_disruption` | The password changes inside the process. The server looks healthy, and the client log lacks the NOAUTH detail. | Add an active probe: when a victim's named dependency looks healthy, exec a connection test from the victim's pod. |
-| `internal_traffic_policy_local_astronomy_shop` | Passed in v2. With 18 steps, a late weak candidate at 0.45 won the fallback. | Weigh the fallback by triage probability. |
-| `service_dns_resolution_failure_social_network` | Same fallback problem. The CoreDNS finding is not linked to the service whose name fails. | Same fix, plus link DNS findings to the affected service. |
-| `mutating_webhook_resource_limits_social_network` | The webhook rewrote pod memory at admission. The Deployment spec is unchanged. | Compare live pod resources with the workload template. |
-| `secret_rotation_stale_env_credentials_astronomy_shop` | Picks the database with the auth failures. The judge wants the client holding stale credentials. The v3 judge output also failed to parse. | Rule: a consumer whose Secret changed after its pods started is the origin. |
-| `kafka_poison_pill_hol_block` | The ground truth is a Kafka record, not a Kubernetes object. | Describe an unprocessable record on the topic and name the producer. |
-| `search_rate_retry_collapse_hotel_reservation` | The retry storm shows in RPC latency, which is never collected. | Read latency metrics. |
+| `kafka_poison_pill_hol_block` | Broker crashed by the probe | Rerun with the headroom guard (v4.3) |
+| `edge_request_filter_cpu_saturation` | Right component; blames the CPU limit change instead of the regex filter added in the same revision | Ask which change explains the CPU use when several fields changed together |
+| `search_rate_retry_collapse_hotel_reservation` | Right component (rate); cites rate's QPS limit without search's retry settings | Examine the caller of a component whose clients time out, and describe both sides |
+| All | One run each, development suite | Repeat runs; evaluate on problems outside SREGym-Lite |

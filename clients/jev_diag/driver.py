@@ -10,6 +10,10 @@ a trace with ``python -m clients.jev_diag.trace <trace.jsonl>``.
 
 Standalone use (no conductor): pass --namespace and --dry-run to collect and
 build the Jev request without calling the API or submitting.
+
+Every kubectl call and its output is also recorded to
+``<prefix>_kubectl_raw.jsonl.gz`` (disable with --no-raw), so collection can be
+replayed offline with ``python -m clients.jev_diag.replay --raw <bundle>``.
 """
 
 import argparse
@@ -43,15 +47,19 @@ from clients.jev_diag.classifier import (  # noqa: E402
 )
 from clients.jev_diag.collector import (  # noqa: E402
     DEFAULT_LOG_TAIL,
+    RawRecorder,
     collect_snapshot,
     estimate_tokens,
     fetch_alerts_via_mcp,
     set_kubectl_observer,
+    set_kubectl_recorder,
 )
 from clients.jev_diag.config import jev_model  # noqa: E402
 from clients.jev_diag.investigate import collect_component_detail  # noqa: E402
 from clients.jev_diag.trace import DecisionTrace  # noqa: E402
 from clients.jev_diag.tree import DEFAULT_MAX_STEPS, IterativeDiagnoser  # noqa: E402
+
+DEFAULT_TREND_INTERVAL = 45.0
 
 logger = logging.getLogger("all.jev_diag.driver")
 
@@ -165,6 +173,22 @@ def parse_args() -> argparse.Namespace:
         help="seconds to wait after the conductor hands over the application before reading the cluster, so the "
         "fault has time to surface in pods and logs (default 120; 0 disables; not applied in standalone mode)",
     )
+    parser.add_argument(
+        "--trend-interval",
+        type=float,
+        default=float(os.environ["JEV_DIAG_TREND_INTERVAL"]) if os.environ.get("JEV_DIAG_TREND_INTERVAL") else None,
+        help="seconds between a light first sample (pods, events) and the full collection; growth between them "
+        f"is reported (default {DEFAULT_TREND_INTERVAL:.0f} with the conductor, where the first sample is taken "
+        "that long before the start delay ends; 0 in standalone mode)",
+    )
+    parser.add_argument(
+        "--exec-probes",
+        action="store_true",
+        default=os.environ.get("JEV_DIAG_EXEC_PROBES", "").strip().lower() in ("1", "true", "yes"),
+        help="allow read-only commands inside pods: broker consumer progress, and a health command inside a "
+        "healthy-looking backend that a client's errors name (default off; env JEV_DIAG_EXEC_PROBES=1)",
+    )
+    parser.add_argument("--no-raw", action="store_true", help="do not record raw kubectl output")
     parser.add_argument("--log-tail", type=int, default=DEFAULT_LOG_TAIL)
     parser.add_argument("--state-token-budget", type=int, default=DEFAULT_STATE_TOKEN_BUDGET)
     parser.add_argument("--wait-timeout", type=int, default=600, help="Seconds to wait for the diagnosis stage")
@@ -186,6 +210,10 @@ def main() -> None:
         run_args={**vars(args), "typesafe_model": jev_model() or "jev-latest"},
     )
     set_kubectl_observer(trace.kubectl_observer())
+    recorder = None
+    if not args.no_raw:
+        recorder = RawRecorder(prefix.with_name(prefix.name + "_kubectl_raw.jsonl.gz"))
+        set_kubectl_recorder(recorder)
     status = "error"
     results: dict = {"problem_id": problem_id, "timestamp": stamp, "success": False, "trace_path": str(trace.path)}
     try:
@@ -199,6 +227,9 @@ def main() -> None:
         raise
     finally:
         set_kubectl_observer(None)
+        set_kubectl_recorder(None)
+        if recorder is not None:
+            recorder.close()
         try:
             trajectory = trace.write_trajectory(logs_dir / "trajectory")
             results["trajectory_path"] = str(trajectory)
@@ -230,11 +261,26 @@ def run(args: argparse.Namespace, trace: DecisionTrace, prefix: Path, results: d
         with trace.timed("setup", "get_app"):
             app_info = get_app_info()
         trace.record("setup", "app_info", source="conductor", app_info=app_info)
-        if args.start_delay > 0:
-            logger.info("Waiting %.0fs before reading the cluster so the fault has time to surface", args.start_delay)
-            with trace.timed("setup", "start_delay", seconds=args.start_delay):
-                time.sleep(args.start_delay)
     logger.info("Diagnosing %s in namespaces %s", app_info.get("app_name"), app_info.get("namespaces"))
+
+    # The trend's first sample is taken `interval` seconds before the full collection. With a start delay it is
+    # taken that long before the delay ends, so it adds no time; its timing carries no meaning of its own.
+    delay = 0.0 if standalone else max(0.0, args.start_delay)
+    interval = (
+        args.trend_interval if args.trend_interval is not None else (0.0 if standalone else DEFAULT_TREND_INTERVAL)
+    )
+    interval = max(0.0, interval)
+    if delay - interval > 0:
+        logger.info("Waiting %.0fs before reading the cluster so the fault has time to surface", delay)
+        with trace.timed("setup", "start_delay", seconds=delay - interval):
+            time.sleep(delay - interval)
+    baseline = None
+    if interval > 0:
+        from clients.jev_diag import trend
+
+        with trace.timed("collect", "trend_baseline", interval=interval):
+            baseline = trend.collect_sample(list(app_info.get("namespaces") or [app_info.get("namespace")]))
+        time.sleep(interval)
 
     with trace.timed("collect", "snapshot", include_logs=not args.no_logs, log_tail=args.log_tail):
         snapshot = collect_snapshot(
@@ -242,11 +288,27 @@ def run(args: argparse.Namespace, trace: DecisionTrace, prefix: Path, results: d
             log_tail=args.log_tail,
             alerts_fetcher=None if (args.no_alerts or standalone) else fetch_alerts_via_mcp,
             include_logs=not args.no_logs,
+            trend_baseline=baseline,
         )
+    if args.exec_probes:
+        from clients.jev_diag import probes
+        from clients.jev_diag.derive import post_process
+
+        with trace.timed("collect", "broker_progress") as info:
+            skipped: dict = {}
+            stalled = probes.broker_progress(snapshot, None, skipped=skipped)
+            info["stalled"] = stalled
+            info["skipped"] = skipped
+        if stalled:
+            post_process(snapshot)
     trace.record("collect", "summary", **collection_summary(snapshot))
     write_json(
         prefix.with_name(prefix.name + "_snapshot.json"),
-        {**snapshot.to_state(), "collection_errors": snapshot.errors},
+        {
+            **snapshot.to_state(include_private=True),
+            "collection_errors": snapshot.errors,
+            "collected_at": snapshot.collected_at,
+        },
     )
 
     if args.dry_run:
@@ -273,9 +335,13 @@ def run(args: argparse.Namespace, trace: DecisionTrace, prefix: Path, results: d
         return "dry_run"
 
     if args.mode == "tree":
+        probe = None
+        if args.exec_probes:
+            from clients.jev_diag.probes import backend_probe as probe
         diagnoser = IterativeDiagnoser(
             fetch_detail=collect_component_detail,
             max_steps=args.max_steps,
+            probe=probe,
             state_token_budget=args.state_token_budget,
             trace=trace,
         )

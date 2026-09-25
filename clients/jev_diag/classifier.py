@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
@@ -66,9 +67,10 @@ CLUSTER_LEVEL_KINDS = {"namespace_policy", "admission_webhook", "rbac", "node_or
 FAULT_CATEGORIES: dict[str, dict[str, Any]] = {
     "config_value": {
         "what": "A wrong, missing, duplicated, or shadowed value in the component's own spec or configuration "
-        "files: environment variables, command arguments, ports, config file content, hostAliases, "
-        "dnsPolicy or dnsConfig.",
-        "not_for": "Credentials (credentials_or_auth), probes (health_probe_config), resources (resource_limits).",
+        "files: environment variables, command arguments, an address or port it uses to reach another component, "
+        "config file content, or a setting that makes it consume more CPU or memory than before.",
+        "not_for": "Credentials (credentials_or_auth), probes (health_probe_config), resources (resource_limits), "
+        "DNS settings (dns_resolution), a Service object's selector or ports (service_routing).",
     },
     "credentials_or_auth": {
         "what": "Authentication between components fails: rotated or wrong credentials in a Secret, a password "
@@ -81,9 +83,11 @@ FAULT_CATEGORIES: dict[str, dict[str, Any]] = {
         "not_for": "A crash caused by a config value or a failing dependency.",
     },
     "resource_limits": {
-        "what": "CPU or memory requests or limits too low for the workload: throttling, OOMKilled, eviction, "
-        "or a request too large to schedule.",
-        "not_for": "A namespace quota that rejects pods (admission_or_namespace_policy).",
+        "what": "CPU or memory requests or limits set too low for the workload's normal needs: throttling, "
+        "OOMKilled, eviction, or a request too large to schedule.",
+        "not_for": "A namespace quota that rejects pods, or values rewritten at admission "
+        "(admission_or_namespace_policy); a configuration change that makes the workload consume more "
+        "(config_value).",
     },
     "scheduling_constraint": {
         "what": "Pods cannot be placed: nodeSelector, affinity, anti-affinity, tolerations, or taints that no "
@@ -100,11 +104,24 @@ FAULT_CATEGORIES: dict[str, dict[str, Any]] = {
         "healthy containers are reported not ready or are restarted.",
         "not_for": "Probes that fail because the application really is broken.",
     },
-    "network_policy_or_routing": {
-        "what": "Traffic is blocked or misrouted by Kubernetes networking: a NetworkPolicy, a Service selector "
-        "that matches the wrong pods or none, wrong Service ports, a traffic policy, or in-cluster DNS "
-        "that cannot resolve a Service name.",
-        "not_for": "A backend that is reachable but rejects or fails requests.",
+    "service_routing": {
+        "what": "A Service sends traffic to the wrong place or nowhere: its selector matches the wrong pods or "
+        "none, or its port or targetPort does not match the pods' container ports.",
+        "not_for": "A client configured with the wrong address or port (config_value).",
+    },
+    "network_policy": {
+        "what": "A NetworkPolicy blocks traffic to or from the component.",
+        "not_for": "Traffic that reaches the component and is then rejected or fails.",
+    },
+    "traffic_policy": {
+        "what": "A Service traffic policy (internalTrafficPolicy or externalTrafficPolicy set to Local) or "
+        "session affinity restricts which endpoints receive traffic, so some clients reach no endpoint.",
+        "not_for": "A selector or port mismatch (service_routing).",
+    },
+    "dns_resolution": {
+        "what": "Name resolution fails or returns wrong answers: the pod's dnsPolicy, dnsConfig, or hostAliases, "
+        "or the cluster DNS (CoreDNS) configuration.",
+        "not_for": "A name that resolves but whose backend refuses connections.",
     },
     "storage_volume": {
         "what": "Persistent volume problems: PVC Pending or Lost, a volume mounted twice or at the wrong path, "
@@ -132,11 +149,6 @@ FAULT_CATEGORIES: dict[str, dict[str, Any]] = {
         "timeout feedback loop, a load pattern or a request filter that saturates it.",
         "not_for": "Failures explained by the component's own spec or a Kubernetes object.",
     },
-    "dependency_failure": {
-        "what": "This component's own spec and configuration are fine; a backend it calls is failing, so it "
-        "shows errors as a victim.",
-        "not_for": "Cases where this component itself is the origin.",
-    },
     "code_bug": {
         "what": "The component runs with correct configuration, resources, and inputs, and still fails "
         "because of its own logic.",
@@ -153,13 +165,15 @@ CATEGORY_GLOSS: dict[str, str] = {
     "scheduling_constraint": "no node satisfies the pod's placement constraints",
     "rollout_or_replica_config": "replica or rollout settings stop the workload from running",
     "health_probe_config": "a health probe is misconfigured, so healthy containers are reported unhealthy",
-    "network_policy_or_routing": "Kubernetes networking blocks or misroutes traffic to or from this component",
+    "service_routing": "a Service selector or port sends traffic to the wrong pods or to none",
+    "network_policy": "a NetworkPolicy blocks traffic to or from this component",
+    "traffic_policy": "a Service traffic policy leaves some clients without a reachable endpoint",
+    "dns_resolution": "name resolution fails or returns wrong answers",
     "storage_volume": "a persistent volume or mount problem",
     "job_lifecycle": "the job pod cannot complete or the job runs wrongly",
     "admission_or_namespace_policy": "an admission webhook or namespace policy rejects or rewrites its pods",
     "rbac_permission": "the component is denied Kubernetes API operations it needs",
     "data_or_traffic": "the component's inputs or traffic pattern overwhelm or break it",
-    "dependency_failure": "a backend this component depends on is failing",
     "code_bug": "the component's own logic is faulty",
     OTHER_OPTION: "an uncategorised fault",
 }
@@ -199,6 +213,7 @@ class Diagnosis:
     output_tokens: int | None
     fault_kind_result: ChoiceResult | None = None
     fault_object: dict | None = None
+    blocked_input: dict | None = None  # tree mode: a single input item that blocks the component, when found
     trims: dict[str, list[str]] = field(default_factory=dict)
     investigation: dict | None = None  # decision-tree mode: steps, conclusion, fallback
     text: str = ""
@@ -236,13 +251,18 @@ def build_component_questions(snapshot: ClusterSnapshot) -> dict[str, Choice | N
                     "Each entry in `components` has `signals`: abnormalities computed from the live cluster "
                     "about that component's own spec, configuration, policies, jobs, pods, and events. "
                     "`healthy: true` means no abnormality at all.",
-                    "`spec_changed_after_creation_s` and `cluster.recent_changes` say which objects were written "
-                    "after they were created; `most_recent_change: true` marks the latest one.",
+                    "`cluster.recent_changes` lists objects modified after they were created, or created after the "
+                    "workloads they act on, with `seconds_before_symptoms` relative to `cluster.symptom_onset` (the "
+                    "start of the earliest abnormality that is still active). `nearest_change_before_symptoms: true` "
+                    "marks the component of the change that most closely preceded it (`most_recent_change: true` "
+                    "when no onset is known).",
                     "A signal starting with `errors logged by ... other component(s) ... name this component` "
                     "means other components fail when calling this one; `errors_point_to` on a component lists "
                     "the components its own errors name.",
                     "`log_error_lines`, `log_signals`, and `log_findings` describe a component's own error "
-                    "logs, with warm-up lines already removed. `telemetry_error_lines` counts failures to export "
+                    "logs, with warm-up lines already removed. Each log signal has `state`: `ongoing` (still "
+                    "occurring) or `stopped` (silent for much longer than its usual gap); stopped errors are history "
+                    "and count toward nothing else. `telemetry_error_lines` counts failures to export "
                     "traces, metrics, or logs to the telemetry pipeline; they do not break application requests "
                     "and never identify the origin. `startup_history` and `startup_events` are settled deploy-time "
                     "churn.",
@@ -354,11 +374,9 @@ def build_characterization_questions(evidence: list[dict]) -> dict[str, Choice]:
                     "Pods Pending, not ready, restarting, or terminating are symptoms. Choose the category of "
                     "what made them so: a probe pointing at the wrong port is health_probe_config, a quota "
                     "rejection is admission_or_namespace_policy, a nodeSelector no node matches is "
-                    "scheduling_constraint, a NetworkPolicy is network_policy_or_routing.",
+                    "scheduling_constraint, a NetworkPolicy is network_policy.",
                     "Judge from `component.signals`, `component.spec_flags`, `component.warning_events`, "
                     "`component.log_findings`, `component.previous_container_logs`, and `component.containers`.",
-                    "When the evidence shows this component's dependency failing rather than this component's "
-                    "own configuration, choose dependency_failure.",
                 ],
             },
             criteria=FAULT_CATEGORIES,
@@ -597,35 +615,98 @@ class JevDiagnoser:
         return diagnosis
 
 
-def select_fault_object(snapshot: ClusterSnapshot, chosen: str, kind_result: ChoiceResult | None) -> dict | None:
-    """Name the non-workload object that carries the fault, from `cluster.findings`, when the kind says so."""
+# Fault-object kinds and the finding kinds that can carry them.
+FAULT_OBJECT_FINDING_KINDS: dict[str, tuple[str, ...]] = {
+    "admission_webhook": ("MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"),
+    "namespace_policy": ("ResourceQuota", "LimitRange"),
+    "admission_or_namespace": (
+        "MutatingWebhookConfiguration",
+        "ValidatingWebhookConfiguration",
+        "ResourceQuota",
+        "LimitRange",
+    ),
+    "network_policy": ("NetworkPolicy",),
+    "node_or_cluster": ("Node", "ConfigMap"),
+    "dns": ("ConfigMap",),
+    "service": ("Service",),
+    "config_object": ("Secret", "ConfigMap"),
+    "rbac": ("ClusterRole", "Role", "ClusterRoleBinding", "RoleBinding"),
+}
+# Objects that carry a fault for the workloads they act on; the diagnosis leads with them.
+CARRIER_KINDS = {
+    "MutatingWebhookConfiguration",
+    "ValidatingWebhookConfiguration",
+    "ResourceQuota",
+    "LimitRange",
+    "ClusterRole",
+    "Role",
+    "ClusterRoleBinding",
+    "RoleBinding",
+    "NetworkPolicy",
+}
+
+
+def finding_linked(snapshot: ClusterSnapshot, finding: dict, cid: str) -> bool:
+    """True when the finding's object acts on the component, or the component uses the object."""
+    if cid in (finding.get("components") or []):
+        return True
+    comp = snapshot.components.get(cid) or {}
+    kind, name = finding.get("kind") or "", finding.get("name")
+    refs = comp.get("config_refs") or {}
+    if kind.lower() == "secret" and name in (refs.get("secrets") or []):
+        return True
+    if kind.lower() == "configmap" and name in (refs.get("configmaps") or []):
+        return True
+    if kind == "Service" and any(s.get("name") == name for s in comp.get("services") or []):
+        return True
+    if kind == "NetworkPolicy" and any(p.get("name") == name for p in comp.get("network_policies") or []):
+        return True
+    return (
+        bool(comp.get("name"))
+        and re.search(rf"(?<![a-z0-9-]){re.escape(comp['name'])}(?![a-z0-9-])", finding.get("signal") or "") is not None
+    )
+
+
+def select_fault_object(
+    snapshot: ClusterSnapshot, chosen: str, kind_result: ChoiceResult | None, *, require_link: bool = False
+) -> dict | None:
+    """Name the non-workload object that carries the fault, from `cluster.findings`, when the kind says so.
+
+    For a component conclusion, objects linked to the component are preferred; with `require_link` an object
+    that does not act on the component (and is not used by it) is never named.
+    """
     findings = snapshot.cluster.get("findings") or []
     if not findings:
         return None
     kind = kind_result.choice if kind_result else None
-    wanted = {
-        "admission_webhook": ("MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"),
-        "namespace_policy": ("ResourceQuota", "LimitRange"),
-        "network_policy": ("NetworkPolicy",),
-        "node_or_cluster": ("Node", "ConfigMap"),
-        "service": ("Service",),
-        "config_object": ("secret", "configmap"),
-        "rbac": ("ClusterRole", "Role", "ClusterRoleBinding", "RoleBinding"),
-    }.get(kind or "", ())
+    wanted = FAULT_OBJECT_FINDING_KINDS.get(kind or "", ())
     candidates = [f for f in findings if f.get("kind") in wanted]
+    if kind == "dns":
+        candidates = [f for f in candidates if f.get("name") == "coredns"]
+    if chosen in snapshot.components:
+        linked = [f for f in candidates if finding_linked(snapshot, f, chosen)]
+        if linked or require_link:
+            candidates = linked
     if not candidates and chosen == OTHER_OPTION:
         candidates = findings  # anything the collector flagged is better than nothing
     if not candidates:
         return None
-    # Prefer objects whose signal names the chosen component, then those written after deploy.
-    comp_name = snapshot.components.get(chosen, {}).get("name", "")
 
     def score(f: dict) -> tuple:
         sig = f.get("signal") or ""
         return (
-            comp_name and comp_name in sig,
-            "not granted" in sig or "rejects" in sig or "0 ready endpoints" in sig,
-            "after" in sig,
+            chosen in snapshot.components and finding_linked(snapshot, f, chosen),
+            any(
+                m in sig
+                for m in (
+                    "not granted",
+                    "rejects",
+                    "rewrites pods of",
+                    "0 ready endpoints",
+                    "overrides name resolution",
+                )
+            ),
+            "modified" in sig or "created" in sig,
         )
 
     return max(candidates, key=score)
@@ -658,6 +739,72 @@ def _answer_to_dict(answer: Any) -> Any:
 # --------------------------------------------------------------------------- diagnosis text
 
 
+def _blocked_input_text(blocked: dict) -> str:
+    if blocked.get("source") == "broker":
+        return (
+            f"consumer group {blocked.get('group')} is stalled at offset {blocked.get('offset')} of topic "
+            f"{blocked.get('topic')} partition {blocked.get('partition')}: the record at that offset is not being "
+            "processed while newer records arrive"
+        )
+    text = f"one input item fails processing repeatedly and blocks later input: {blocked.get('evidence')}"
+    if blocked.get("input"):
+        text += f"; the input comes from {blocked['input']}"
+    return text
+
+
+def _affected_by_object(snapshot: ClusterSnapshot, fo: dict) -> list[str]:
+    """Workloads a cluster-level object acts on: those it is known to act on, and those whose signals or current
+    warning events name it (a FailedCreate event naming a webhook or quota, for example), with their shortfall."""
+    names = {fo.get("name")} | {
+        wh.get("webhook")
+        for wh in snapshot.cluster.get("admission_webhooks") or []
+        if wh.get("configuration") == fo.get("name")
+    }
+    names = {n for n in names if n}
+    linked = set(fo.get("components") or [])
+    out = []
+    for cid, c in snapshot.components.items():
+        if c.get("role") == "observability":
+            continue
+        mentions = [s for s in c.get("signals") or [] if any(n in s for n in names)]
+        events = [e for e in c.get("warning_events") or [] if any(n in (e.get("message") or "") for n in names)]
+        if cid not in linked and not mentions and not events:
+            continue
+        if mentions:
+            detail = mentions[0]
+        elif events:
+            detail = f"{events[0].get('reason')} x{events[0].get('count')} on {events[0].get('object')}: {events[0].get('message')}"
+        else:
+            detail = (c.get("signals") or ["acted on by this object"])[0]
+        shortfall = next((s for s in c.get("signals") or [] if "desired replicas are ready" in s), None)
+        out.append(
+            f"{c['kind'].lower()}/{c['name']}: {detail}"
+            + (f"; {shortfall}" if shortfall and shortfall != detail else "")
+        )
+    return out
+
+
+def _impact_lines(snapshot: ClusterSnapshot, cid: str) -> list[str]:
+    """How the root-cause component affects others: still-occurring errors that name it, clients left without an
+    endpoint, and objects stuck waiting on it."""
+    comp = snapshot.components.get(cid) or {}
+    lines = []
+    for src, classes in (comp.get("referenced_by_errors_from") or {}).items():
+        summary = ", ".join(f"{k} x{v}" for k, v in classes.items())
+        lines.append(f"{src} fails when calling this component ({summary}, still occurring)")
+    for svc in comp.get("services") or []:
+        for gap in svc.get("local_policy_gaps") or []:
+            lines.append(f"client {gap} gets no endpoint of Service {svc['name']}")
+    for obj in snapshot.cluster.get("stuck_terminating") or []:
+        if cid in (obj.get("components") or []):
+            lines.append(
+                f"{obj['kind']} {obj['name']} has been terminating for {obj.get('terminating_for_s')}s, held by "
+                f"finalizer {', '.join(obj.get('finalizers') or [])}"
+                + (f"; {obj['permission_gap']}" if obj.get("permission_gap") else "")
+            )
+    return lines[:6]
+
+
 def build_diagnosis_text(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
     """Assemble the submitted diagnosis from typed answers and collected evidence. No generation."""
     comp = snapshot.components.get(d.component)
@@ -676,39 +823,48 @@ def build_diagnosis_text(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
                 "Root cause: the fault does not originate in any listed workload of "
                 f"{snapshot.app.get('name')} (namespaces {', '.join(snapshot.app.get('namespaces', []))})."
             )
-        others = [f for f in (snapshot.cluster.get("findings") or []) if f is not fo][:4]
+        others = [
+            f
+            for f in (snapshot.cluster.get("findings") or [])
+            if f is not fo and not (fo and f.get("kind") == fo.get("kind") and f.get("name") == fo.get("name"))
+        ][:3]
         if others:
             lines.append("Other cluster-level findings:")
             lines += [f"- {f['kind']} {f['name']}: {f['signal']}" for f in others]
-        affected = [
-            f"{c['kind'].lower()}/{c['name']}: {c['signals'][0]}"
-            for c in snapshot.components.values()
-            if c.get("signals") and c.get("role") != "observability"
-        ][:4]
+        affected = _affected_by_object(snapshot, fo) if fo else []
         if affected:
-            lines.append("Affected workloads:")
-            lines += [f"- {a}" for a in affected]
+            lines.append("Impact on workloads:")
+            lines += [f"- {a}" for a in affected[:4]]
     else:
-        lines.append(f"Root cause component: {comp['kind']} `{comp['name']}` in namespace `{comp['namespace']}`.")
         key = None
         if d.evidence_result is not None:
             key = next((e["text"] for e in d.evidence if e["id"] == d.evidence_result.choice), None)
+        where = f"{comp['kind']} `{comp['name']}` in namespace `{comp['namespace']}`"
+        carrier = fo if fo and fo.get("kind") in CARRIER_KINDS else None
+        if carrier:
+            ns = f" in namespace `{carrier['namespace']}`" if carrier.get("namespace") else ""
+            lines.append(f"Root cause object: {carrier['kind']} `{carrier['name']}`{ns}, acting on {where}.")
+            lines.append(f"What the object does: {carrier['signal']}.")
+        elif d.blocked_input:
+            lines.append(f"Root cause: {_blocked_input_text(d.blocked_input)}. The blocked component is {where}.")
+        else:
+            lines.append(f"Root cause component: {where}.")
         if key:
             lines.append(f"Mechanism: {key}.")
-        if fo and fo.get("kind") in (
-            "Service",
-            "NetworkPolicy",
-            "ResourceQuota",
-            "LimitRange",
-            "secret",
-            "configmap",
-            "ClusterRole",
-            "Role",
-        ):
+        if fo and not carrier and fo.get("kind") in ("Service", "Secret", "ConfigMap", "secret", "configmap"):
             lines.append(f"Fault object: {fo['kind']} `{fo['name']}`: {fo['signal']}.")
         if d.category_result is not None:
             cat = d.category_result.choice
-            lines.append(f"Fault type: {cat.replace('_', ' ')} ({CATEGORY_GLOSS.get(cat, cat)}).")
+            if cat == "admission_or_namespace_policy" and fo and fo.get("kind") in ("ResourceQuota", "LimitRange"):
+                lines.append(
+                    f"Fault type: namespace policy ({fo['kind']} `{fo['name']}` rejects or alters this workload's pods)."
+                )
+            elif cat == "admission_or_namespace_policy" and fo and "WebhookConfiguration" in (fo.get("kind") or ""):
+                lines.append(
+                    f"Fault type: admission webhook ({fo['kind']} `{fo['name']}` rejects or rewrites this workload's pods)."
+                )
+            else:
+                lines.append(f"Fault type: {cat.replace('_', ' ')} ({CATEGORY_GLOSS.get(cat, cat)}).")
         # Deterministic mismatches code found in the component's own spec (tree mode). They are facts, not
         # model choices, so every one is reported: a fault can have more than one mechanism.
         confirmed_step = next(
@@ -723,13 +879,18 @@ def build_diagnosis_text(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
             x for x in (confirmed_step or {}).get("spec_checks") or [] if x != key and "no ready endpoints" not in x
         ]
         if checks:
-            lines.append("Configuration mismatches found in this component's spec:")
+            lines.append("Configuration mismatches found by code:")
             lines += [f"- {x}" for x in checks[:4]]
-        if comp.get("signals") or comp.get("log_error_lines"):
+        state = [s for s in comp.get("signals", []) if not s.startswith("errors logged by") and s != key]
+        if state or comp.get("log_error_lines"):
             lines.append("Abnormal state observed on this component:")
-            lines += [f"- {s}" for s in comp.get("signals", [])[:12]]
+            lines += [f"- {s}" for s in state[:12]]
             if comp.get("log_error_lines"):
-                lines.append(f"- {comp['log_error_lines']} error-like log lines in the recent pod logs")
+                lines.append(f"- {comp['log_error_lines']} error-like log lines still occurring in the recent pod logs")
+        impact = _impact_lines(snapshot, d.component)
+        if impact:
+            lines.append("Impact on other components:")
+            lines += [f"- {x}" for x in impact]
         if comp.get("spec_flags"):
             lines.append("Notable spec settings:")
             lines += [f"- {s}" for s in comp["spec_flags"][:6]]
@@ -743,9 +904,10 @@ def build_diagnosis_text(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
             lines += [
                 f"- {e['reason']} x{e['count']} on {e['object']}: {e['message']}" for e in comp["warning_events"][:4]
             ]
-        if comp.get("log_signals"):
-            lines.append("Error-like log lines:")
-            lines += [f"- x{s['count']}: {s['line']}" for s in comp["log_signals"][:4]]
+        current = [s for s in comp.get("log_signals") or [] if s.get("state") != "stopped"]
+        if current:
+            lines.append("Error-like log lines still occurring:")
+            lines += [f"- x{s['count']}: {s['line']}" for s in current[:4]]
         for cname, prev in (comp.get("previous_container_logs") or {}).items():
             lines.append(f"Last lines of the previous (crashed) run of container {cname}:")
             lines += [f"- {ln}" for ln in prev[-4:]]
@@ -766,10 +928,9 @@ def build_diagnosis_text(snapshot: ClusterSnapshot, d: Diagnosis) -> str:
             )
         elif confirmed:
             lines.append(
-                f"Classification: Jev ({d.model or 'jev'}) selected this origin as the best candidate after "
-                f"{len(steps)} investigation step(s): investigation verdict `{confirmed.get('verdict')}` with origin "
-                f"probability {confirmed['origin_p']:.2f}, triage probability "
-                f"{d.component_result.probabilities.get(d.component, 0):.2f}."
+                f"Classification: Jev ({d.model or 'jev'}) selected this origin as the most likely candidate after "
+                f"{len(steps)} investigation step(s) (origin probability {confirmed['origin_p']:.2f}, triage "
+                f"probability {d.component_result.probabilities.get(d.component, 0):.2f})."
             )
         else:
             lines.append(
