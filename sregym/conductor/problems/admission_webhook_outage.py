@@ -43,7 +43,11 @@ from sregym.utils.decorators import mark_fault_injected
 class AdmissionWebhookOutage(Problem):
     """Inject a broken ValidatingWebhookConfiguration that blocks pod CREATE
     in the target app namespace, then delete a pod so the ReplicaSet's
-    recreate attempt surfaces the admission failure."""
+    recreate attempt surfaces the admission failure.
+
+    The ``admission_webhook_outage_hotel_reservation`` configuration is
+    deprecated in SREGym 1.1 after 21/21 successes.
+    """
 
     APPS = {
         "hotel_reservation": HotelReservation,

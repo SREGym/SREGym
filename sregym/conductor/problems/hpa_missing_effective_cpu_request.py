@@ -21,7 +21,10 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class HPAMissingEffectiveCPURequest(Problem):
-    """Inject a broken CPU-utilization HPA on Hotel Reservation frontend."""
+    """Inject a broken CPU-utilization HPA on Hotel Reservation frontend.
+
+    Deprecated in SREGym 1.1 after reaching 100% overall pass@3.
+    """
 
     HPA_NAME = "frontend-capacity"
     HPA_CPU_TARGET_PERCENT = 60
