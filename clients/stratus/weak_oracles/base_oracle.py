@@ -2,14 +2,17 @@ from abc import ABC, abstractmethod
 
 
 class OracleResult:
-    success: bool
+    # None means the check could not be completed; it is not a mitigation verdict.
+    success: bool | None
     issues: list[str]
 
-    def __init__(self, success: bool, issues: list[str]):
+    def __init__(self, success: bool | None, issues: list[str]):
         self.success = success
         self.issues = issues
 
     def __repr__(self):
+        if self.success is None:
+            return f"Your last mitigation attempt could not be checked: {self.issues}"
         return f"Your last mitigation attempt [{'has succeeded' if self.success else 'has failed'}]. The potential issues are [{'no issues as you have succeeded' if self.success else self.issues}]"
 
     def __str__(self):
