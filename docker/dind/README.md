@@ -116,21 +116,13 @@ until their logs have been exported, then removed with the outer environment.
 If overlay2 is unavailable on the backing filesystem, try setting
 `SREGYM_DOCKER_STORAGE_DRIVER=vfs` via the env file (slower and larger).
 
-## Harbor integration boundary
+## Harbor
 
-[Harbor's Docker environment](https://www.harborframework.com/docs/tasks) supports
-Compose definitions in `environment/docker-compose.yaml`. A privileged service
-using this image can supply the SREGym backend for a task. Its entrypoint must be
-preserved, and callers must wait for `/run/sregym-ready` before starting evaluation.
-Providers must explicitly support privileged nested Docker; a generic sandbox
-that only accepts a Dockerfile is not sufficient.
-
-This adds the container runtime building block, **not a Harbor task adapter**.
-A complete adapter still needs task instructions, fault initialization, agent
-access through SREGym's proxies, and a verifier mapping SREGym's oracle results
-to Harbor rewards. Do not give a Harbor agent a root shell in this backend:
-it contains benchmark definitions and grading code. Keep the agent in a separate
-container, as the existing SREGym runner does.
+`python -m sregym.harbor.adapter` generates Harbor tasks that run this image as
+a privileged Compose sidecar next to an unprivileged agent container. The
+sidecar keeps this entrypoint, runs the SREGym backend (`sregym/harbor/backend.py`)
+and grades with the problem's mitigation oracle. The agent reaches the cluster
+only through SREGym's filtered API proxy. See [Running SREGym on Harbor](../../docs/harbor.md).
 
 Prior work inspected while implementing this runtime:
 
@@ -142,6 +134,26 @@ Prior work inspected while implementing this runtime:
 - [The terminal-bench k3d task](https://github.com/SREGym/terminal-bench/tree/main/tasks/k8s-target-port-misconfiguration)
   mounts the host Docker socket and reuses fixed cluster names. That startup and
   deletion behavior needs private daemons before it can safely run concurrently.
+
+## Image pulls, proxies and prebuilt node images
+
+Every run starts with an empty image cache. These optional env-file settings
+reduce the per-run cost or adapt to restricted networks:
+
+- `SREGYM_REGISTRY_MIRROR=https://mirror.gcr.io` configures a Docker Hub
+  pull-through mirror for the private daemon and for containerd on every KIND
+  node. Concurrent runs otherwise hit Docker Hub's anonymous pull limit quickly.
+- `SREGYM_KIND_NODE_IMAGE=<image>` uses a prebuilt node image instead of
+  building `kind/Dockerfile` in each run. Without the udev and socat additions,
+  problems that rely on OpenEBS device discovery may not work.
+- `SREGYM_EXTRA_CA_CERTS=/path/in/container.pem` trusts the extra CA bundle in
+  the outer container, the private daemon and every KIND node, for TLS-inspecting
+  egress proxies. Mount the file into the container.
+
+Some sandboxed hosts forbid lowering `oom_score_adj`, even for root. Every
+Kubernetes pod sandbox then fails in runc with `can't get final child's PID from
+pipe: EOF`. The entrypoint detects this and configures containerd on the nodes
+to clamp OOM scores (`restrict_oom_score_adj`), as KIND does for rootless clusters.
 
 ## Validation status
 
