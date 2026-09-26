@@ -460,6 +460,9 @@ async def mitigation_task_main(diagnosis_summary):
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
+    # workspace_hint is provided by the conductor for code-change problems
+    # where /workspace is bind-mounted; empty string otherwise.
+    workspace_hint = app_info.get("workspace_hint", "")
     logger.info("setting up oracles")
     oracles = [ClusterStateOracle(app_namespace)]
     # if app_name not in ["Social Network", "Hotel Reservation"]:
@@ -483,6 +486,7 @@ async def mitigation_task_main(diagnosis_summary):
                 app_name=app_name,
                 app_description=app_description,
                 app_namespace=app_namespace,
+                workspace_hint=workspace_hint,
             )
         ),
     ]
@@ -633,6 +637,7 @@ async def mitigation_task_main(diagnosis_summary):
                             app_name=app_name,
                             app_description=app_description,
                             app_namespace=app_namespace,
+                            workspace_hint=workspace_hint,
                         )
                         + "\n\n"
                         + mitigation_agent_prompts["retry_user"].format(

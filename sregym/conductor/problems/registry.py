@@ -15,8 +15,10 @@ from sregym.conductor.problems.calico_route_reflector_label_drift import (
     CalicoRouteReflectorLabelDriftHotelReservation,
 )
 from sregym.conductor.problems.capacity_decrease_rpc_retry_storm import CapacityDecreaseRPCRetryStorm
+from sregym.conductor.problems.catastrophic_regex_backtracking import CatastrophicRegexBacktracking
 from sregym.conductor.problems.cart_service_failure import CartServiceFailure
 from sregym.conductor.problems.configmap_drift import ConfigMapDrift
+from sregym.conductor.problems.db_connection_limit_exhausted import DBConnectionLimitExhausted
 from sregym.conductor.problems.cpu_throttling import CpuThrottling
 from sregym.conductor.problems.cronjob_sidecar_blocks_completion import (
     CronJobSidecarBlocksCompletionHotelReservation,
@@ -52,6 +54,9 @@ from sregym.conductor.problems.khaos_faults import (
     KhaosFaultProblem,
 )
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
+from sregym.conductor.problems.latent_recovery_triggered_cascading_failure import (
+    LatentRecoveryTriggeredCascadingFailure,
+)
 from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
 from sregym.conductor.problems.liveness_probe_too_aggressive import LivenessProbeTooAggressive
@@ -60,11 +65,14 @@ from sregym.conductor.problems.loadgenerator_flood_homepage import LoadGenerator
 from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
+from sregym.conductor.problems.missing_stale_cache_fallback import MissingStaleCacheFallback
 from sregym.conductor.problems.missing_service import MissingService
+from sregym.conductor.problems.operator_error_wrong_host import OperatorErrorWrongHost
 from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
 from sregym.conductor.problems.network_policy_block import NetworkPolicyBlock
+from sregym.conductor.problems.network_saturation_feedback_loop import NetworkSaturationFeedbackLoop
 from sregym.conductor.problems.nightly_rebalance_oom import NightlyRebalanceOOM
 from sregym.conductor.problems.node_clock_drift import NodeClockDriftHotelReservation
 from sregym.conductor.problems.node_conntrack_exhaustion import NodeConntrackExhaustionHotelReservation
@@ -104,12 +112,16 @@ from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation imp
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
 from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
-from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop import StaleHostAliasesDNSPoisoningAstronomyShop
+from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop import (
+    StaleHostAliasesDNSPoisoningAstronomyShop,
+)
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.target_port import K8STargetPortMisconfig
+from sregym.conductor.problems.thundering_herd_cascade import ThunderingHerdCascade
 from sregym.conductor.problems.train_ticket_f22 import TrainTicketF22
 from sregym.conductor.problems.trainticket_f17 import TrainTicketF17
+from sregym.conductor.problems.unit_mismatch_gomemlimit import UnitMismatchGomemlimit
 from sregym.conductor.problems.update_incompatible_correlated import UpdateIncompatibleCorrelated
 from sregym.conductor.problems.valkey_auth_disruption import ValkeyAuthDisruption
 from sregym.conductor.problems.valkey_memory_disruption import ValkeyMemoryDisruption
@@ -135,6 +147,26 @@ class ProblemRegistry:
             "unschedulable_incorrect_port_assignment": lambda: IncorrectPortAssignment(unschedulable=True),
             "misconfig_app_hotel_res": MisconfigAppHotelRes,
             "missing_env_variable_astronomy_shop": lambda: MissingEnvVariable(app_name="astronomy_shop", faulty_service="frontend" ),
+            "unit_mismatch_gomemlimit_astronomy_shop": lambda: UnitMismatchGomemlimit(app_name="astronomy_shop", faulty_service="checkout"),
+            "unit_mismatch_gomemlimit_product_catalog_astronomy_shop": lambda: UnitMismatchGomemlimit(app_name="astronomy_shop", faulty_service="product-catalog"),
+            "unit_mismatch_gomemlimit_flagd_astronomy_shop": lambda: UnitMismatchGomemlimit(app_name="astronomy_shop", faulty_service="flagd"),
+            "db_connection_limit_exhausted_astronomy_shop": lambda: DBConnectionLimitExhausted(app_name="astronomy_shop", role="otelu", wrong_limit=0),
+            "db_connection_limit_tight_astronomy_shop": lambda: DBConnectionLimitExhausted(app_name="astronomy_shop", role="otelu", wrong_limit=1),
+            "catastrophic_regex_backtracking_astronomy_shop": lambda: CatastrophicRegexBacktracking(app_name="astronomy_shop", faulty_service="product-reviews", target_file="database"),
+            "catastrophic_regex_backtracking_recommendation_astronomy_shop": lambda: CatastrophicRegexBacktracking(app_name="astronomy_shop", faulty_service="recommendation", target_file="server"),
+            "missing_stale_cache_fallback_astronomy_shop": lambda: MissingStaleCacheFallback(app_name="astronomy_shop", faulty_service="recommendation"),
+            "missing_stale_cache_fallback_product_reviews_astronomy_shop": lambda: MissingStaleCacheFallback(app_name="astronomy_shop", faulty_service="product-reviews"),
+            "operator_error_wrong_host_astronomy_shop": lambda: OperatorErrorWrongHost(app_name="astronomy_shop", faulty_service="accounting"),
+            "operator_error_wrong_host_product_reviews_astronomy_shop": lambda: OperatorErrorWrongHost(app_name="astronomy_shop", faulty_service="product-reviews"),
+            "operator_error_wrong_host_recommendation_astronomy_shop": lambda: OperatorErrorWrongHost(app_name="astronomy_shop", faulty_service="recommendation"),
+            "operator_error_wrong_host_frontend_astronomy_shop": lambda: OperatorErrorWrongHost(app_name="astronomy_shop", faulty_service="frontend"),
+            "operator_error_wrong_host_checkout_astronomy_shop": lambda: OperatorErrorWrongHost(app_name="astronomy_shop", faulty_service="checkout"),
+            "network_saturation_feedback_loop_astronomy_shop": lambda: NetworkSaturationFeedbackLoop(app_name="astronomy_shop", faulty_service="recommendation"),
+            "network_saturation_feedback_loop_product_reviews_astronomy_shop": lambda: NetworkSaturationFeedbackLoop(app_name="astronomy_shop", faulty_service="product-reviews"),
+            "thundering_herd_cascade_astronomy_shop": lambda: ThunderingHerdCascade(app_name="astronomy_shop", faulty_service="recommendation"),
+            "thundering_herd_cascade_product_reviews_astronomy_shop": lambda: ThunderingHerdCascade(app_name="astronomy_shop", faulty_service="product-reviews"),
+            "latent_recovery_triggered_cascading_failure_astronomy_shop": lambda: LatentRecoveryTriggeredCascadingFailure(app_name="astronomy_shop", faulty_service="recommendation"),
+            "latent_recovery_triggered_cascading_failure_product_reviews_astronomy_shop": lambda: LatentRecoveryTriggeredCascadingFailure(app_name="astronomy_shop", faulty_service="product-reviews"),
             "revoke_auth_mongodb-1": lambda: MongoDBRevokeAuth(faulty_service="mongodb-geo"),
             "revoke_auth_mongodb-2": lambda: MongoDBRevokeAuth(faulty_service="mongodb-rate"),
             "storage_user_unregistered-1": lambda: MongoDBUserUnregistered(faulty_service="mongodb-geo"),

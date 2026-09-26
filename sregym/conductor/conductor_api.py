@@ -247,13 +247,33 @@ async def get_app():
         raise HTTPException(status_code=400, detail="No problem has been started")
     app_inst = _conductor.app
     logger.debug(f"API returns App instance: {app_inst}")
-    namespaces = getattr(app_inst, "namespaces", None) or [app_inst.namespace]
+
+    # workspace_hint is non-empty for code-change problems where a source
+    # workspace is bind-mounted at /workspace. Drivers append it to the
+    # mitigation user-prompt so the agent knows the workspace exists.
+    workspace_hint = ""
+    if _conductor.problem is not None and hasattr(_conductor.problem, "workspace_hint"):
+        try:
+            workspace_hint = _conductor.problem.workspace_hint() or ""
+        except Exception as e:
+            logger.warning(f"workspace_hint() raised: {e}")
     return {
         "app_name": app_inst.app_name,
         "namespace": app_inst.namespace,
-        "namespaces": namespaces,
+        "namespaces": getattr(app_inst, "namespaces", None) or [app_inst.namespace],
         "descriptions": str(app_inst.description),
+        "workspace_hint": workspace_hint,
     }
+
+
+@app.get("/get_problem")
+async def get_problem():
+    if _conductor is None:
+        logger.error("No problem has been started")
+        raise HTTPException(status_code=400, detail="No problem has been started")
+    problem_id = _conductor.problem_id
+    logger.debug(f"API returns Problem ID: {problem_id}")
+    return {"problem_id": problem_id}
 
 
 def run_api(conductor):

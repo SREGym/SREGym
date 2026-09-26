@@ -35,6 +35,7 @@ class AgentLauncher:
         self._agent_kubeconfig_path: str | None = None
         self._use_containers: bool = True
         self._container_runner: ContainerRunner | None = None
+        self._problem_workspace: Path | None = None
         self._internet_policy = InternetPolicy()
         self._harden_container = True
 
@@ -54,6 +55,9 @@ class AgentLauncher:
         This is typically the filtered kubeconfig from the K8s proxy.
         """
         self._agent_kubeconfig_path = kubeconfig_path
+
+    def set_problem_workspace(self, path: Path | None):
+        self._problem_workspace = path
 
     def enable_container_isolation(
         self, force_build: bool = False, *, k8s_proxy_port: int = 16443, image: str | None = None
@@ -217,7 +221,10 @@ class AgentLauncher:
         # Otherwise fall back to the default per-agent logs directory.
         agent_logs_dir = os.environ.get("AGENT_LOGS_DIR")
         self._container_runner.config.logs_path = Path(agent_logs_dir) if agent_logs_dir else Path(f"./logs/{reg.name}")
-        self._container_runner.config.workspace_path = None
+        # Bind the per-problem source workspace at /workspace if the driver
+        # provisioned one (code-change problems only). Config-only problems
+        # leave this None and the agent sees no workspace.
+        self._container_runner.config.workspace_path = self._problem_workspace
 
         composite_cmd = self._container_runner.build_composite_command(
             install_script=reg.install_script,

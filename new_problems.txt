@@ -1,0 +1,31 @@
+# Postmortem-miner-derived problems (oracle validation targets).
+# Each line maps to a template in postmortem-miner/exports/templates.yaml.
+#
+# ── Original 10 problems (previously validated) ────────────────────────
+unit_mismatch_gomemlimit_astronomy_shop
+db_connection_limit_exhausted_astronomy_shop
+catastrophic_regex_backtracking_astronomy_shop
+catastrophic_regex_backtracking_recommendation_astronomy_shop
+missing_stale_cache_fallback_astronomy_shop
+integer_overflow_primary_key_astronomy_shop
+operator_error_wrong_host_astronomy_shop
+network_saturation_feedback_loop_astronomy_shop
+thundering_herd_cascade_astronomy_shop
+latent_recovery_triggered_cascading_failure_astronomy_shop
+#
+# ── New variants (round 2) ──────────────────────────────────────────────
+# GOMEMLIMIT unit mismatches on more Go services
+unit_mismatch_gomemlimit_product_catalog_astronomy_shop
+unit_mismatch_gomemlimit_flagd_astronomy_shop
+# Tighter DB connection cap
+db_connection_limit_tight_astronomy_shop
+# Source-file faults on the Python product-reviews service
+missing_stale_cache_fallback_product_reviews_astronomy_shop
+network_saturation_feedback_loop_product_reviews_astronomy_shop
+thundering_herd_cascade_product_reviews_astronomy_shop
+latent_recovery_triggered_cascading_failure_product_reviews_astronomy_shop
+# Wrong-host typo on various services
+operator_error_wrong_host_product_reviews_astronomy_shop
+operator_error_wrong_host_recommendation_astronomy_shop
+operator_error_wrong_host_frontend_astronomy_shop
+operator_error_wrong_host_checkout_astronomy_shop
