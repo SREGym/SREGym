@@ -9,8 +9,8 @@ schema migration / code change) or — as a short-term band-aid — to reset the
 sequence if there's slack in the used-id space.
 
 In astronomy-shop, `reviews.productreviews.id` is an INTEGER identity column.
-Seeded at 50 after init; we set the sequence to one below INT_MAX so the very
-next insert hits the overflow.
+Seeded at 50 after init; we set the sequence to INT_MAX so the next insert
+hits the overflow.
 """
 
 from sregym.conductor.oracles.behavioral_probes import ProductReviewsInsertOracle
@@ -45,8 +45,7 @@ class IntegerOverflowPrimaryKey(Problem):
         self.column_table = "productreviews"
         self.column_name = "id"
         self.sequence = "reviews.productreviews_id_seq"
-        self.wrong_value = _INT4_MAX - 1  # next insert will try _INT4_MAX, still fits;
-        # but setval sets "last_value" so nextval returns that+1 = overflow.
+        self.wrong_value = _INT4_MAX
         self.safe_value = 1000
         self.min_headroom = _INT4_MAX // 2  # mitigation succeeds if >= 1B headroom or bigint
 
