@@ -10,10 +10,6 @@ import random
 import re
 from concurrent import futures
 
-# ReDoS-vulnerable variant of recommendation_server.py injected by the
-# catastrophic_regex_backtracking_recommendation_astronomy_shop problem.
-# The _REQUEST_IDS_PATTERN validator below runs on every ListRecommendations
-# call and forces catastrophic backtracking on normal comma-separated inputs.
 _REQUEST_IDS_PATTERN = re.compile(r'^(([A-Z0-9]+,?)+[a-z])+$')
 
 

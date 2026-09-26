@@ -1,9 +1,4 @@
 #!/usr/bin/python
-# ReDoS-vulnerable variant of product-reviews /app/database.py injected by
-# the catastrophic_regex_backtracking_astronomy_shop problem.
-# The fault is the _PRODUCT_ID_PATTERN regex: nested quantifiers with a
-# mandatory trailing class that the input cannot satisfy, causing catastrophic
-# backtracking on every product_id checked before the DB lookup.
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
@@ -24,8 +19,6 @@ def must_map_env(key: str):
 # Retrieve Postgres environment variables
 db_connection_str = must_map_env('DB_CONNECTION_STRING')
 
-# Sanity-check that product IDs look like uppercase alphanumerics before we
-# hit the DB. Added to harden the path; see #INCIDENT for context.
 _PRODUCT_ID_PATTERN = re.compile(r'^(([A-Z0-9]+)+[a-z])*$')
 
 def _validate_product_id(request_product_id):

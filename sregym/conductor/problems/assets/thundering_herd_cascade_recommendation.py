@@ -92,9 +92,6 @@ def get_product_list(request_product_ids):
                 product_ids = cached_ids
         else:
             span.set_attribute("app.recommendation.cache_enabled", False)
-            # Defensive refetch: every request does 10 fresh product-catalog
-            # calls "to guard against stale data". No single-flight / coalescing
-            # — concurrent clients multiply the upstream load by 10× each.
             responses = []
             for _ in range(10):
                 responses.append(

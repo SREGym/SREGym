@@ -10,15 +10,6 @@ import simplejson as json
 # Postgres
 import psycopg2
 
-# Network-saturation-feedback-loop variant of database.py injected by the
-# network_saturation_feedback_loop_product_reviews problem. Every DB query is
-# wrapped in an unbounded `while True: try/except: continue` loop with a 50
-# ms statement timeout — under any backend slowness this spins at thousands
-# of connect attempts per second per caller, saturating postgres and the
-# pod-local network. The fix is a source-level edit: replace the unbounded
-# loop with a bounded retry budget, exponential backoff with jitter, and a
-# circuit breaker.
-
 def must_map_env(key: str):
     value = os.environ.get(key)
     if value is None:
@@ -28,7 +19,6 @@ def must_map_env(key: str):
 db_connection_str = must_map_env('DB_CONNECTION_STRING') + " connect_timeout=1 options='-c statement_timeout=50'"
 
 def _run_query(sql, params):
-    # Unbounded retry loop — the bug shape.
     while True:
         try:
             with psycopg2.connect(db_connection_str) as connection:
@@ -36,7 +26,6 @@ def _run_query(sql, params):
                     cursor.execute(sql, params)
                     return cursor.fetchall()
         except Exception:
-            # No backoff, no cap, no jitter.
             continue
 
 def fetch_product_reviews(product_id):

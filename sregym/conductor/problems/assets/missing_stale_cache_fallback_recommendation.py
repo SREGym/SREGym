@@ -92,9 +92,6 @@ def get_product_list(request_product_ids):
                 product_ids = cached_ids
         else:
             span.set_attribute("app.recommendation.cache_enabled", False)
-            # NOTE: tight upstream timeout added to "fail fast"; no fallback on error.
-            # If product-catalog is even momentarily slow this raises and the whole
-            # ListRecommendations call fails with an unhandled gRPC error.
             cat_response = product_catalog_stub.ListProducts(
                 demo_pb2.Empty(), timeout=0.001
             )

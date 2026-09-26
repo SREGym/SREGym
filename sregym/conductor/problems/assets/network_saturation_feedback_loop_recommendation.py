@@ -92,10 +92,6 @@ def get_product_list(request_product_ids):
                 product_ids = cached_ids
         else:
             span.set_attribute("app.recommendation.cache_enabled", False)
-            # "Be robust against transient product-catalog blips" — retries
-            # with no bound, no backoff, no jitter. Under upstream slowness
-            # this amplifies load dramatically: every stuck request retries
-            # in a tight loop, saturating the network path.
             while True:
                 try:
                     cat_response = product_catalog_stub.ListProducts(

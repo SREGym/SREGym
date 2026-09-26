@@ -3,17 +3,6 @@
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Latent-recovery variant of product_reviews_server.py injected by the
-# latent_recovery_triggered_cascading_failure_product_reviews_server problem.
-# Between creating the gRPC server and calling server.start() we fire 50
-# serial GetProduct calls to product-catalog as a "warm the channel" step.
-# Under steady-state this startup path is invisible; every pod restart now
-# blocks for seconds (or longer) before becoming Ready and produces a
-# concurrent load spike on product-catalog just when recovery is supposed
-# to begin. The correct fix is a source-level change: remove the serial
-# warm-up, defer it to lazy initialization on first request, or bound it
-# with backoff.
-
 # Python
 import os
 import json
@@ -107,9 +96,6 @@ if __name__ == "__main__":
     pc_channel = grpc.insecure_channel(catalog_addr)
     product_catalog_stub = demo_pb2_grpc.ProductCatalogServiceStub(pc_channel)
 
-    # "Warm up" the product-catalog dependency before announcing readiness —
-    # 50 serial ListProducts blocks the main startup thread. Under any
-    # upstream stress, this turns every restart into a cascading load spike.
     for _warm_i in range(50):
         try:
             product_catalog_stub.ListProducts(demo_pb2.Empty(), timeout=5.0)

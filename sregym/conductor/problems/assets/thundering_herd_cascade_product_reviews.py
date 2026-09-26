@@ -10,14 +10,6 @@ import simplejson as json
 # Postgres
 import psycopg2
 
-# Thundering-herd-cascade variant of database.py injected by the
-# thundering_herd_cascade_product_reviews problem. Each review request
-# performs 10 fresh postgres connections + queries back-to-back, with no
-# pooling, no cache, and no deduplication. Under concurrency the multiplier
-# is enough to saturate the DB connection pool and take product-reviews
-# down. The correct fix is a source-level edit: pool connections and
-# coalesce concurrent callers into a single upstream fetch (single-flight).
-
 def must_map_env(key: str):
     value = os.environ.get(key)
     if value is None:
@@ -49,7 +41,6 @@ def fetch_product_reviews(product_id):
         return json.dumps({"error": str(e)})
 
 def fetch_product_reviews_from_db(request_product_id):
-    # Fan out the same query N times with no coalescing.
     records = None
     for _ in range(_FANOUT):
         records = _one_query(

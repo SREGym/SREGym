@@ -165,10 +165,6 @@ if __name__ == "__main__":
     demo_pb2_grpc.add_RecommendationServiceServicer_to_server(service, server)
     health_pb2_grpc.add_HealthServicer_to_server(service, server)
 
-    # "Warm up" the product-catalog dependency before announcing readiness so
-    # that the first request sees a hot gRPC channel. This runs on every pod
-    # start, serially: 50 calls blocking the server thread. Under any
-    # upstream stress, this turns every restart into a cascading load spike.
     for _warm_i in range(50):
         try:
             product_catalog_stub.ListProducts(demo_pb2.Empty(), timeout=5.0)

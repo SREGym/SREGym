@@ -715,6 +715,8 @@ def driver_loop(
                     )
                 except ArtifactFinalizationError as exc:
                     snapshot["artifact_finalization_failed"] = True
+                    snapshot["run_status"] = "incomplete"
+                    snapshot["incomplete_reason"] = "artifact_finalization_failed"
                     snapshot["artifact_staging_path"] = str(run.active_dir)
                     if run.network_audit_path.exists():
                         snapshot["internet_audit_staging_path"] = str(run.network_audit_path)
