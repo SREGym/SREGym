@@ -11,8 +11,6 @@ cluster down just as recovery is supposed to begin.
 
 from pathlib import Path
 
-from kubernetes import client
-
 from sregym.conductor.oracles.behavioral_probes import RolloutLatencyOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import EditableFile, Problem
@@ -103,16 +101,29 @@ class LatentRecoveryTriggeredCascadingFailure(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         injector = ApplicationFaultInjector(namespace=self.namespace)
-        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
-        deployment.spec.template.spec.containers[0].readiness_probe = client.V1Probe(
-            tcp_socket=client.V1TCPSocketAction(port="service"), period_seconds=1
-        )
-        self.kubectl.update_deployment(self.faulty_service, self.namespace, deployment)
         injector.inject_source_file_override(
             deployment_name=self.faulty_service,
             source_path=self.source_path,
             replacement_content=self._replacement_content,
             configmap_name=self.configmap_name,
+        )
+        self.kubectl.patch_deployment(
+            self.faulty_service,
+            self.namespace,
+            {
+                "spec": {
+                    "template": {
+                        "spec": {
+                            "containers": [
+                                {
+                                    "name": self.faulty_service,
+                                    "readinessProbe": {"tcpSocket": {"port": "service"}, "periodSeconds": 1},
+                                }
+                            ]
+                        }
+                    }
+                }
+            },
         )
         print(f"Service: {self.faulty_service} | Namespace: {self.namespace}")
 
