@@ -12,20 +12,15 @@ from pathlib import Path
 
 from sregym.conductor.oracles.behavioral_probes import RecommendationLatencyOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
-from sregym.conductor.oracles.redos_behavioral import ReDoSBehavioralOracle
+from sregym.conductor.oracles.redos_behavioral import ProductReviewsFaultOracle
 from sregym.conductor.problems.base import EditableFile, Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
-
 _ASSETS_DIR = Path(__file__).parent / "assets"
-_VENDORED_ROOT = (
-    Path(__file__).resolve().parents[3]
-    / "SREGym-applications"
-    / "astronomy-shop-src"
-)
+_VENDORED_ROOT = Path(__file__).resolve().parents[3] / "SREGym-applications" / "astronomy-shop-src"
 
 
 # (pod_path, asset_filename, workspace_path) per supported variant.
@@ -53,9 +48,7 @@ class MissingStaleCacheFallback(Problem):
         self.faulty_service = faulty_service
 
         if self.app_name != "astronomy_shop":
-            raise ValueError(
-                f"MissingStaleCacheFallback only supports astronomy_shop, got {app_name}"
-            )
+            raise ValueError(f"MissingStaleCacheFallback only supports astronomy_shop, got {app_name}")
         if self.faulty_service not in _VARIANTS:
             raise ValueError(
                 f"MissingStaleCacheFallback has no variant for service '{faulty_service}'; "
@@ -101,7 +94,7 @@ class MissingStaleCacheFallback(Problem):
         self.app.create_workload()
         if self.faulty_service == "product-reviews":
             # Probe the DB-fetch path directly via a SELECT-style oracle.
-            self.mitigation_oracle = ReDoSBehavioralOracle(problem=self)
+            self.mitigation_oracle = ProductReviewsFaultOracle(self, "missing_fallback")
         else:
             self.mitigation_oracle = RecommendationLatencyOracle(problem=self)
 

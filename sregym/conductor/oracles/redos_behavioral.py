@@ -23,7 +23,6 @@ import time
 
 from sregym.conductor.oracles.base import Oracle
 
-
 _PROBE_PY = (
     "import sys; "
     "from database import fetch_product_reviews_from_db; "
@@ -53,10 +52,7 @@ class ReDoSBehavioralOracle(Oracle):
         results: dict = {"success": False}
 
         # Preflight: pods must be Running + Ready for any probe to be meaningful.
-        ready_cmd = (
-            f"kubectl get deployment {deployment} -n {namespace} "
-            "-o jsonpath={.status.readyReplicas}"
-        )
+        ready_cmd = f"kubectl get deployment {deployment} -n {namespace} -o jsonpath={{.status.readyReplicas}}"
         ready_out = (kubectl.exec_command(ready_cmd) or "").strip()
         ready_replicas = int(ready_out) if ready_out.isdigit() else 0
         if ready_replicas < 1:
@@ -94,32 +90,95 @@ class ReDoSBehavioralOracle(Oracle):
             return results
 
         if "exit code 91" in out_stripped:
-            print(
-                "❌ probe returned empty result set — fix appears to stub the "
-                "function instead of resolving the bug"
-            )
+            print("❌ probe returned empty result set — fix appears to stub the function instead of resolving the bug")
             results["elapsed_s"] = elapsed
             return results
 
-        failed = (
-            "exit code" in out_stripped
-            or "Traceback" in out_stripped
-            or "Error" in out_stripped
-        )
+        failed = "exit code" in out_stripped or "Traceback" in out_stripped or "Error" in out_stripped
         if failed:
             print(f"❌ probe exited non-zero: {out_stripped[:400]}")
             results["elapsed_s"] = elapsed
             return results
 
         if elapsed > _LATENCY_CEILING_S:
-            print(
-                f"❌ probe latency {elapsed:.2f}s exceeds ceiling "
-                f"{_LATENCY_CEILING_S}s — regression vs pristine"
-            )
+            print(f"❌ probe latency {elapsed:.2f}s exceeds ceiling {_LATENCY_CEILING_S}s — regression vs pristine")
             results["elapsed_s"] = elapsed
             return results
 
-        print(f"✅ DB path healthy: probe completed in {elapsed*1000:.0f} ms")
+        print(f"✅ DB path healthy: probe completed in {elapsed * 1000:.0f} ms")
         results["success"] = True
         results["elapsed_s"] = elapsed
         return results
+
+
+_PRODUCT_REVIEWS_PROBES = {
+    "missing_fallback": """
+import database as db, psycopg2, re, sys
+if not re.search(r'statement_timeout\\s*=\\s*1(?:\\D|$)', db.db_connection_str):
+    print('PROBE_OK'); sys.exit(0)
+def unavailable(*args, **kwargs):
+    raise psycopg2.OperationalError('probe outage')
+db.psycopg2.connect = unavailable
+try:
+    result = db.fetch_product_reviews_from_db('OLJCESPC7Z')
+except Exception:
+    sys.exit(91)
+if isinstance(result, list):
+    print('PROBE_OK')
+else:
+    sys.exit(91)
+""",
+    "bounded_retry": """
+import database as db, psycopg2
+def unavailable(*args, **kwargs):
+    raise psycopg2.OperationalError('probe outage')
+db.psycopg2.connect = unavailable
+try:
+    db.fetch_product_reviews_from_db('OLJCESPC7Z')
+except Exception:
+    pass
+print('PROBE_OK')
+""",
+    "bounded_fanout": """
+import database as db, sys
+connect = db.psycopg2.connect
+calls = [0]
+def counted(*args, **kwargs):
+    calls[0] += 1
+    if calls[0] > 2:
+        raise RuntimeError('excess database fanout')
+    return connect(*args, **kwargs)
+db.psycopg2.connect = counted
+rows = db.fetch_product_reviews_from_db('OLJCESPC7Z')
+if rows and calls[0] <= 2:
+    print('PROBE_OK')
+else:
+    sys.exit(91)
+""",
+}
+
+
+class ProductReviewsFaultOracle(ReDoSBehavioralOracle):
+    """Require a healthy DB read and exercise the variant's injected fault."""
+
+    def __init__(self, problem, mode: str):
+        super().__init__(problem)
+        self.mode = mode
+
+    def evaluate(self) -> dict:
+        result = super().evaluate()
+        if not result["success"]:
+            return result
+
+        probe = _PRODUCT_REVIEWS_PROBES[self.mode]
+        command = (
+            f"kubectl exec -n {self.problem.namespace} deploy/{self.problem.faulty_service} -- "
+            f"sh -c {shlex.quote('cd /app && timeout 8 /venv/bin/python -c ' + shlex.quote(probe))}"
+        )
+        started = time.perf_counter()
+        output = self.problem.kubectl.exec_command(command) or ""
+        elapsed = time.perf_counter() - started
+        result["fault_probe_elapsed_s"] = elapsed
+        result["success"] = "PROBE_OK" in output and elapsed < 8
+        print(f"{'✅' if result['success'] else '❌'} {self.mode} probe in {elapsed:.2f}s")
+        return result
