@@ -4,14 +4,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Python
+
+# Local
+import logging
 import os
-import json
+import time
 from concurrent import futures
-import random
+from contextlib import suppress
+
+import demo_pb2
+import demo_pb2_grpc
 
 # Pip
 import grpc
-from opentelemetry import trace, metrics
+from database import fetch_avg_product_review_score_from_db, fetch_product_reviews_from_db
+from grpc_health.v1 import health_pb2, health_pb2_grpc
+from metrics import init_metrics
+from openfeature import api
+from openfeature.contrib.provider.flagd import FlagdProvider
+from opentelemetry import metrics, trace
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
     OTLPLogExporter,
@@ -19,22 +30,6 @@ from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.trace import Status, StatusCode
-
-# Local
-import logging
-import demo_pb2
-import demo_pb2_grpc
-from grpc_health.v1 import health_pb2
-from grpc_health.v1 import health_pb2_grpc
-from database import fetch_product_reviews, fetch_product_reviews_from_db, fetch_avg_product_review_score_from_db
-
-from openfeature import api
-from openfeature.contrib.provider.flagd import FlagdProvider
-
-from metrics import init_metrics
-
-from google.protobuf.json_format import MessageToJson
 
 
 class ProductReviewService(demo_pb2_grpc.ProductReviewServiceServicer):
@@ -43,8 +38,7 @@ class ProductReviewService(demo_pb2_grpc.ProductReviewServiceServicer):
         product_reviews = demo_pb2.GetProductReviewsResponse()
         records = fetch_product_reviews_from_db(request.product_id)
         for row in records:
-            product_reviews.product_reviews.add(
-                username=row[0], description=row[1], score=str(row[2]))
+            product_reviews.product_reviews.add(username=row[0], description=row[1], score=str(row[2]))
         return product_reviews
 
     def GetAverageProductReviewScore(self, request, context):
@@ -67,24 +61,24 @@ class ProductReviewService(demo_pb2_grpc.ProductReviewServiceServicer):
 def must_map_env(key: str):
     value = os.environ.get(key)
     if value is None:
-        raise Exception(f'{key} environment variable must be set')
+        raise Exception(f"{key} environment variable must be set")
     return value
 
 
 if __name__ == "__main__":
-    service_name = must_map_env('OTEL_SERVICE_NAME')
-    api.set_provider(FlagdProvider(host=os.environ.get('FLAGD_HOST', 'flagd'), port=os.environ.get('FLAGD_PORT', 8013)))
+    service_name = must_map_env("OTEL_SERVICE_NAME")
+    api.set_provider(FlagdProvider(host=os.environ.get("FLAGD_HOST", "flagd"), port=os.environ.get("FLAGD_PORT", 8013)))
 
     tracer = trace.get_tracer_provider().get_tracer(service_name)
     meter = metrics.get_meter_provider().get_meter(service_name)
     init_metrics(meter)
 
-    logger_provider = LoggerProvider(resource=Resource.create({'service.name': service_name}))
+    logger_provider = LoggerProvider(resource=Resource.create({"service.name": service_name}))
     set_logger_provider(logger_provider)
     log_exporter = OTLPLogExporter(insecure=True)
     logger_provider.add_log_record_processor(BatchLogRecordProcessor(log_exporter))
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
-    logger = logging.getLogger('main')
+    logger = logging.getLogger("main")
     logger.addHandler(handler)
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
@@ -92,18 +86,17 @@ if __name__ == "__main__":
     demo_pb2_grpc.add_ProductReviewServiceServicer_to_server(service, server)
     health_pb2_grpc.add_HealthServicer_to_server(service, server)
 
-    catalog_addr = must_map_env('PRODUCT_CATALOG_ADDR')
+    catalog_addr = must_map_env("PRODUCT_CATALOG_ADDR")
     pc_channel = grpc.insecure_channel(catalog_addr)
     product_catalog_stub = demo_pb2_grpc.ProductCatalogServiceStub(pc_channel)
 
     for _warm_i in range(50):
-        try:
+        with suppress(Exception):
             product_catalog_stub.ListProducts(demo_pb2.Empty(), timeout=5.0)
-        except Exception:
-            pass
+        time.sleep(0.8)
 
-    port = must_map_env('PRODUCT_REVIEWS_PORT')
-    server.add_insecure_port(f'[::]:{port}')
+    port = must_map_env("PRODUCT_REVIEWS_PORT")
+    server.add_insecure_port(f"[::]:{port}")
     server.start()
-    logger.info(f'Product reviews service started, listening on port {port}')
+    logger.info(f"Product reviews service started, listening on port {port}")
     server.wait_for_termination()

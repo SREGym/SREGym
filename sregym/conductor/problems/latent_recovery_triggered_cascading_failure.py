@@ -11,6 +11,8 @@ cluster down just as recovery is supposed to begin.
 
 from pathlib import Path
 
+from kubernetes import client
+
 from sregym.conductor.oracles.behavioral_probes import RolloutLatencyOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.problems.base import EditableFile, Problem
@@ -19,13 +21,8 @@ from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
-
 _ASSETS_DIR = Path(__file__).parent / "assets"
-_VENDORED_ROOT = (
-    Path(__file__).resolve().parents[3]
-    / "SREGym-applications"
-    / "astronomy-shop-src"
-)
+_VENDORED_ROOT = Path(__file__).resolve().parents[3] / "SREGym-applications" / "astronomy-shop-src"
 
 
 _VARIANTS = {
@@ -51,9 +48,7 @@ class LatentRecoveryTriggeredCascadingFailure(Problem):
         self.app_name = app_name
         self.faulty_service = faulty_service
         if self.app_name != "astronomy_shop":
-            raise ValueError(
-                f"LatentRecoveryTriggeredCascadingFailure only supports astronomy_shop, got {app_name}"
-            )
+            raise ValueError(f"LatentRecoveryTriggeredCascadingFailure only supports astronomy_shop, got {app_name}")
         if self.faulty_service not in _VARIANTS:
             raise ValueError(
                 f"LatentRecoveryTriggeredCascadingFailure has no variant for service '{faulty_service}'; "
@@ -85,7 +80,8 @@ class LatentRecoveryTriggeredCascadingFailure(Problem):
             description=(
                 f"The {self.faulty_service} service's {self.source_path} has "
                 "been changed to run 50 serial product-catalog ListProducts "
-                "calls between creating the gRPC server and calling "
+                "calls with a 0.8-second pause after each call "
+                "between creating the gRPC server and calling "
                 "server.start(). Under steady-state this startup warm-up is "
                 "invisible, but every pod restart now blocks for seconds "
                 "before the pod becomes Ready, and produces a concurrent load "
@@ -107,6 +103,11 @@ class LatentRecoveryTriggeredCascadingFailure(Problem):
     def inject_fault(self):
         print("== Fault Injection ==")
         injector = ApplicationFaultInjector(namespace=self.namespace)
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        deployment.spec.template.spec.containers[0].readiness_probe = client.V1Probe(
+            tcp_socket=client.V1TCPSocketAction(port="service"), period_seconds=1
+        )
+        self.kubectl.update_deployment(self.faulty_service, self.namespace, deployment)
         injector.inject_source_file_override(
             deployment_name=self.faulty_service,
             source_path=self.source_path,
