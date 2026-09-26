@@ -89,20 +89,33 @@ class CatastrophicRegexBacktracking(Problem):
             ),
         ]
 
-        self.root_cause = self.build_structured_root_cause(
-            component=f"deployment/{self.faulty_service}",
-            namespace=self.namespace,
-            description=(
+        if variant_key == ("recommendation", "server"):
+            description = (
+                "A recent source override in /app/recommendation_server.py added "
+                "the nested-quantifier regex `^(([A-Z0-9]+,?)+[a-z])+$` to "
+                "validate ListRecommendations product IDs. The validator "
+                "appends 20 uppercase X characters, but the pattern requires "
+                "a trailing lowercase letter. Ordinary IDs therefore trigger "
+                "catastrophic backtracking before rejection, stalling "
+                "recommendation gRPC calls. Remove the ReDoS pattern or replace "
+                "it with a linear-time validator."
+            )
+        else:
+            description = (
                 "A recent patch to the product-reviews service added an input-"
                 "validation regex to /app/database.py that has nested quantifiers: "
-                "`^(([A-Z0-9]+)+[a-z])*$`. The validator also left-pads the input "
-                "with 16 'X' characters before matching, producing a long input that "
+                "`^(([A-Z0-9]+)+[a-z])*$`. The validator appends 16 'X' "
+                "characters to the input before matching, producing a long input that "
                 "never satisfies the required trailing `[a-z]`. Every review lookup "
                 "forces the regex engine into catastrophic backtracking, pinning the "
                 "product-reviews pod's CPU and causing request latency to spike into "
                 "the seconds. The fix is a source-code change: remove the ReDoS "
                 "pattern (or replace with a linear-time validator) in database.py."
-            ),
+            )
+        self.root_cause = self.build_structured_root_cause(
+            component=f"deployment/{self.faulty_service}",
+            namespace=self.namespace,
+            description=description,
         )
 
         self.kubectl = KubeCtl()
