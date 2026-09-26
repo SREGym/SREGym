@@ -114,7 +114,9 @@ class ReDoSBehavioralOracle(Oracle):
 _PRODUCT_REVIEWS_PROBES = {
     "missing_fallback": """
 import database as db, psycopg2, re, sys
-if not re.search(r'statement_timeout\\s*=\\s*1(?:\\D|$)', db.db_connection_str):
+match = re.search(r'statement_timeout\\s*=\\s*(\\d+)(ms|min|s)?', getattr(db, 'db_connection_str', ''), re.I)
+timeout_ms = int(match[1]) * {'ms': 1, 's': 1000, 'min': 60000}[(match[2] or 'ms').lower()] if match else 0
+if timeout_ms == 0 or timeout_ms >= 50:
     print('PROBE_OK'); sys.exit(0)
 def unavailable(*args, **kwargs):
     raise psycopg2.OperationalError('probe outage')
