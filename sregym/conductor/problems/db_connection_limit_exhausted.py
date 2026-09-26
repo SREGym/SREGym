@@ -30,9 +30,7 @@ class DBConnectionLimitExhausted(Problem):
     ):
         self.app_name = app_name
         if self.app_name != "astronomy_shop":
-            raise ValueError(
-                f"DBConnectionLimitExhausted only supports astronomy_shop, got {app_name}"
-            )
+            raise ValueError(f"DBConnectionLimitExhausted only supports astronomy_shop, got {app_name}")
 
         self.app = AstronomyShop()
         self.namespace = self.app.namespace
@@ -55,11 +53,10 @@ class DBConnectionLimitExhausted(Problem):
             namespace=self.namespace,
             description=(
                 f"The PostgreSQL role '{self.role}' has its CONNECTION LIMIT set to "
-                f"{self.wrong_limit}, so every service that logs in as this role "
-                "(accounting, product-catalog, product-reviews) is rejected by the DB "
-                f"with 'FATAL: too many connections for role \"{self.role}\"'. Symptoms "
-                "include product-catalog and product-reviews returning errors on every "
-                "request and accounting failing to consume its Kafka backlog. The fix "
+                f"{self.wrong_limit}, so concurrent connections from accounting, "
+                "product-catalog, and product-reviews exceed the cap and are rejected "
+                f"with 'FATAL: too many connections for role \"{self.role}\"'. "
+                "The fix "
                 f"is to restore the role's connection limit to the default unlimited "
                 f"(-1) via ALTER ROLE {self.role} CONNECTION LIMIT -1."
             ),

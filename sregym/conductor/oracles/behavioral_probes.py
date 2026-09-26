@@ -23,7 +23,6 @@ import time
 
 from sregym.conductor.oracles.base import Oracle
 
-
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
@@ -31,8 +30,7 @@ from sregym.conductor.oracles.base import Oracle
 
 def _ready_replicas(kubectl, namespace: str, deployment: str) -> int:
     out = kubectl.exec_command(
-        f"kubectl get deployment {deployment} -n {namespace} "
-        "-o jsonpath={.status.readyReplicas}"
+        f"kubectl get deployment {deployment} -n {namespace} -o jsonpath={{.status.readyReplicas}}"
     )
     out = (out or "").strip()
     return int(out) if out.isdigit() else 0
@@ -48,11 +46,7 @@ def _all_pods_ok(kubectl, namespace: str) -> tuple[bool, str | None]:
         for cs in pod.status.container_statuses or []:
             if cs.state.waiting and cs.state.waiting.reason:
                 return False, f"container {cs.name} waiting={cs.state.waiting.reason}"
-            if (
-                cs.state.terminated
-                and cs.state.terminated.reason
-                and cs.state.terminated.reason != "Completed"
-            ):
+            if cs.state.terminated and cs.state.terminated.reason and cs.state.terminated.reason != "Completed":
                 return False, f"container {cs.name} terminated={cs.state.terminated.reason}"
             if not cs.ready:
                 return False, f"container {cs.name} not ready"
@@ -69,10 +63,7 @@ def _kubectl_exec_with_timeout(
 ) -> tuple[float, str]:
     """Run `kubectl exec` with an inner GNU `timeout` wrapper. Returns
     (elapsed_seconds, raw_output_or_stderr_string)."""
-    full = (
-        f"kubectl exec -n {namespace} {pod_or_deploy} -- "
-        f"sh -c {shlex.quote(f'timeout {timeout_s} ' + inner_cmd)}"
-    )
+    full = f"kubectl exec -n {namespace} {pod_or_deploy} -- sh -c {shlex.quote(f'timeout {timeout_s} ' + inner_cmd)}"
     started = time.perf_counter()
     out = kubectl.exec_command(full) or ""
     elapsed = time.perf_counter() - started
@@ -148,7 +139,7 @@ class RecommendationLatencyOracle(Oracle):
             print(f"❌ latency {elapsed:.2f}s exceeded ceiling {ceiling:.2f}s")
             return results
 
-        print(f"✅ recommendation gRPC healthy in {elapsed*1000:.0f} ms")
+        print(f"✅ recommendation gRPC healthy in {elapsed * 1000:.0f} ms")
         results["success"] = True
         return results
 
@@ -159,10 +150,10 @@ class RecommendationLatencyOracle(Oracle):
 
 
 class PostgresConnectOracle(Oracle):
-    """Pass iff a fresh psql connection as a given role over TCP succeeds.
+    """Pass iff the role has its normal connection limit and TCP login succeeds.
 
     Required problem attrs: `kubectl`, `namespace`,
-    `pg_pod` (e.g. 'deploy/postgresql'),
+    `pg_pod` (e.g. 'deploy/postgresql'), `pg_superuser`,
     `pg_host` (the hostname services use, default 'postgresql'),
     `pg_db`, `pg_role`, `pg_password`. Optional `pg_port` (default 5432).
     """
@@ -177,6 +168,18 @@ class PostgresConnectOracle(Oracle):
         db = self.problem.pg_db
         role = self.problem.pg_role
         password = self.problem.pg_password
+
+        # A single login can succeed with CONNECTION LIMIT 1 while the other
+        # services still fail. Check the actual role limit before probing TCP.
+        limit_cmd = (
+            f"kubectl exec -n {namespace} {pod} -- "
+            f"psql -U {shlex.quote(self.problem.pg_superuser)} -d {shlex.quote(db)} "
+            f"-At -c {shlex.quote('SELECT rolconnlimit FROM pg_roles WHERE rolname = ' + repr(role))}"
+        )
+        limit_out = (kubectl.exec_command(limit_cmd) or "").strip()
+        if limit_out != "-1":
+            print(f"❌ role {role} connection limit is not restored")
+            return {"success": False}
 
         # Use TCP path explicitly with -h <host>; the unix-socket path would
         # bypass scram-sha-256 auth via pg_hba `local trust` and give a false
@@ -281,15 +284,19 @@ class AccountingHostResolvableOracle(Oracle):
 
         # Read the live env value off the deployment.
         out = (
-            kubectl.exec_command(
-                f"kubectl get deployment {self.problem.faulty_service} "
-                f"-n {namespace} "
-                "-o jsonpath="
-                "'{.spec.template.spec.containers[0].env"
-                "[?(@.name==\"" + self.problem.env_var + "\")].value}'"
+            (
+                kubectl.exec_command(
+                    f"kubectl get deployment {self.problem.faulty_service} "
+                    f"-n {namespace} "
+                    "-o jsonpath="
+                    "'{.spec.template.spec.containers[0].env"
+                    '[?(@.name=="' + self.problem.env_var + "\")].value}'"
+                )
+                or ""
             )
-            or ""
-        ).strip().strip("'")
+            .strip()
+            .strip("'")
+        )
 
         host = ""
         # Case 1: .NET-style "Host=foo;User=...;..."
@@ -356,29 +363,25 @@ class DeploymentStableOracle(Oracle):
             f"kubectl get pods -n {namespace} -l app.kubernetes.io/component={deployment} "
             "-o jsonpath="
             "'{range .items[*]}{range .status.containerStatuses[*]}"
-            "{.lastState.terminated.finishedAt}{\"\\n\"}{end}{end}'"
+            '{.lastState.terminated.finishedAt}{"\\n"}{end}{end}\''
         )
         out = (kubectl.exec_command(cmd) or "").strip().strip("'")
         ok = True
         if out:
             from datetime import UTC, datetime
+
             now = datetime.now(UTC)
             for ts in out.splitlines():
                 ts = ts.strip()
                 if not ts:
                     continue
                 try:
-                    when = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
-                        tzinfo=UTC
-                    )
+                    when = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
                 except ValueError:
                     continue
                 age = (now - when).total_seconds()
                 if age < max_age:
-                    print(
-                        f"❌ container restart {age:.0f}s ago (within {max_age}s "
-                        "instability window)"
-                    )
+                    print(f"❌ container restart {age:.0f}s ago (within {max_age}s instability window)")
                     ok = False
                     break
         if ok:
@@ -407,13 +410,10 @@ class RolloutLatencyOracle(Oracle):
         deployment = self.problem.faulty_service
         ceiling = int(getattr(self.problem, "cold_start_ceiling_s", 30))
 
-        kubectl.exec_command(
-            f"kubectl rollout restart deployment/{deployment} -n {namespace}"
-        )
+        kubectl.exec_command(f"kubectl rollout restart deployment/{deployment} -n {namespace}")
         started = time.perf_counter()
         out = kubectl.exec_command(
-            f"kubectl rollout status deployment/{deployment} -n {namespace} "
-            f"--timeout={ceiling + 30}s"
+            f"kubectl rollout status deployment/{deployment} -n {namespace} --timeout={ceiling + 30}s"
         )
         elapsed = time.perf_counter() - started
 

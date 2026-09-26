@@ -16,7 +16,6 @@ from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
-
 _CORRECT_VALUES = {
     "checkout": "16MiB",
     "product-catalog": "16MiB",
@@ -37,8 +36,7 @@ class UnitMismatchGomemlimit(Problem):
             raise ValueError(f"UnitMismatchGomemlimit only supports astronomy_shop, got {app_name}")
         if self.faulty_service not in _CORRECT_VALUES:
             raise ValueError(
-                f"UnitMismatchGomemlimit has no variant for '{faulty_service}'; "
-                f"known: {sorted(_CORRECT_VALUES)}"
+                f"UnitMismatchGomemlimit has no variant for '{faulty_service}'; known: {sorted(_CORRECT_VALUES)}"
             )
 
         self.app = AstronomyShop()
@@ -58,8 +56,8 @@ class UnitMismatchGomemlimit(Problem):
                 f"deployment is set to '{self.wrong_value}'. The Go runtime only accepts "
                 "binary-SI byte suffixes (B, KiB, MiB, GiB, TiB); the SI-style 'MB' suffix "
                 "is rejected at startup, so the pod crash-loops before it can serve traffic. "
-                "Observable symptoms: checkout pods in CrashLoopBackOff, 5xx errors on "
-                "frontend checkout attempts. The correct value is '16MiB' — a classic "
+                f"Observable symptoms: {self.faulty_service} pods in CrashLoopBackOff. "
+                f"The correct value is '{self.correct_value}' — a classic "
                 "binary-vs-decimal unit mismatch."
             ),
         )
