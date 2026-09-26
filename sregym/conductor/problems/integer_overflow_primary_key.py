@@ -14,7 +14,11 @@ hits the overflow.
 """
 
 from sregym.conductor.oracles.behavioral_probes import ProductReviewsInsertOracle
+from sregym.conductor.oracles.compound import CompoundedOracle
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
+from sregym.conductor.oracles.sequence_headroom_mitigation import (
+    SequenceHeadroomMitigationOracle,
+)
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -70,7 +74,11 @@ class IntegerOverflowPrimaryKey(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
 
         self.app.create_workload()
-        self.mitigation_oracle = ProductReviewsInsertOracle(problem=self)
+        self.mitigation_oracle = CompoundedOracle(
+            self,
+            insert=ProductReviewsInsertOracle(problem=self),
+            headroom=SequenceHeadroomMitigationOracle(problem=self),
+        )
 
     @mark_fault_injected
     def inject_fault(self):
