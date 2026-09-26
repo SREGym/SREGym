@@ -327,6 +327,18 @@ class AccountingHostResolvableOracle(Oracle):
         )
         probe_out = (kubectl.exec_command(cmd) or "").strip()
         ok = "ip:" in probe_out and "resolve-error" not in probe_out
+        # A resolvable but unrelated service is not a repair of the typo.
+        expected_host = self.problem.correct_value.split(";", 1)[0].split("=", 1)[-1].rsplit(":", 1)[0]
+        if ok and host != expected_host:
+            expected_cmd = (
+                f"kubectl exec -n {namespace} deploy/product-reviews -- "
+                f"env TARGET_HOST={shlex.quote(expected_host)} "
+                f"/venv/bin/python -c {shlex.quote(_DNS_PROBE_PY)}"
+            )
+            expected_out = (kubectl.exec_command(expected_cmd) or "").strip()
+            actual_ip = next((line[3:].strip() for line in probe_out.splitlines() if line.startswith("ip:")), None)
+            expected_ip = next((line[3:].strip() for line in expected_out.splitlines() if line.startswith("ip:")), None)
+            ok = actual_ip is not None and actual_ip == expected_ip
         if ok:
             print(f"✅ host {host!r} resolves: {probe_out.splitlines()[-1]}")
         else:
