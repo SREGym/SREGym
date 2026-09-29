@@ -23,10 +23,6 @@ class Problem(ABC):
         self.diagnosis_oracle = None
         self.mitigation_oracle = None
 
-    def requires_khaos(self) -> bool:
-        """Override this method to return True if the problem requires Khaos for fault injection."""
-        return False
-
     @classmethod
     def build_structured_root_cause(
         cls,

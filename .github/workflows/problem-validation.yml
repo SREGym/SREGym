@@ -87,8 +87,8 @@ jobs:
             /validate-problem <problem_id>   run end-to-end validation
             /validate-problem skip           explicitly skip — e.g. a refactor,
                                              a registry/base.py change, or a
-                                             Khaos-only problem that cannot run
-                                             on the CI kind cluster
+                                             problem that cannot run on the
+                                             CI kind cluster
 
           See CONTRIBUTING.md → "Adding New Problems".
           ────────────────────────────────────────────────────────────────────

@@ -42,7 +42,6 @@ from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.internet_policy import InternetPolicy
 from sregym.service.k8s_proxy import KubernetesAPIProxy
-from sregym.service.khaos import KhaosController, KhaosUnsupportedError
 from sregym.service.kubectl import KubeCtl
 from sregym.service.mcp_server import MCPServer
 from sregym.service.rollout import deployment_rollout_complete
@@ -93,7 +92,6 @@ class Conductor:
         self.apps = AppRegistry()
         self.agent_name = None
 
-        self.khaos = KhaosController(self.kubectl)
         self.cluster_state = ClusterStateManager(self.kubectl)
         self.cluster_egress = ClusterEgressBoundary(self.kubectl)
         self._baseline_captured = False
@@ -647,7 +645,7 @@ class Conductor:
         2) Initialize Act registry and execute initial GymActs and first AgentAct precondition
 
         Returns:
-            StartProblemResult: Result status indicating success or skip reason
+            StartProblemResult.SUCCESS once the problem is running; failures raise.
         """
         if self.problem_id is None:
             raise RuntimeError("Cannot start problem: problem_id is not set")
@@ -704,15 +702,8 @@ class Conductor:
             self.undeploy_app()  # Cleanup any leftovers
         self.logger.info("App leftovers undeployed.")
         self.logger.info("Deploying app...")
-        try:
-            with self._phase("deploy"):
-                self.deploy_app()
-        except KhaosUnsupportedError as exc:
-            self.logger.warning(
-                f"Problem '{self.problem_id}' requires host capabilities that are unavailable: {exc}. "
-                "Skipping this problem."
-            )
-            return StartProblemResult.SKIPPED_KHAOS_REQUIRED
+        with self._phase("deploy"):
+            self.deploy_app()
         self.logger.info("App deployed.")
 
         baseline = (
@@ -1429,11 +1420,6 @@ class Conductor:
         self.kubectl.wait_for_ready("kube-system")
         self._wait_for_infrastructure_ready("metrics-server", self._metrics_server_configured)
 
-        # Only deploy Khaos if the problem requires it
-        if problem.requires_khaos():
-            self.logger.info("[DEPLOY] Deploying Khaos DaemonSet...")
-            self.khaos.ensure_deployed()
-
         self.logger.info("[DEPLOY] Setting up OpenEBS…")
         svelte = is_svelte()
         # `openebs` is protected from reconciliation, so it persists across
@@ -1486,7 +1472,7 @@ class Conductor:
         self.logger.info("[DEPLOY] Deploying MCP server…")
         self.mcp_server.deploy()
 
-        self.logger.info("[ENV] Set up necessary components: metrics-server, Khaos, OpenEBS, Prometheus, Jaeger, Loki")
+        self.logger.info("[ENV] Set up necessary components: metrics-server, OpenEBS, Prometheus, Jaeger, Loki")
 
         # train-ticket pods need jaeger at startup; create ExternalName before deploy.
         # Other apps get it after deploy to avoid Helm ownership conflicts.

@@ -90,9 +90,6 @@ class NodeClockDriftHotelReservation(Problem):
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
         self.mitigation_oracle = NodeClockDriftMitigationOracle(self)
 
-    def requires_khaos(self) -> bool:
-        return False
-
     # ── Node helpers ────────────────────────────────────────────────────────────
     def _is_control_plane_node(self, node_name: str) -> bool:
         """Return True if the named node carries a control-plane role label."""
