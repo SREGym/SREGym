@@ -110,3 +110,73 @@ def test_capacity_is_observed_across_more_than_one_automation_interval():
 def test_capacity_automation_does_nothing_without_a_calibrated_policy():
     """Startup must not resize the service against an uncalibrated threshold."""
     assert DEFAULT_POLICY["enabled"] is False
+
+
+def capacity_oracle(monkeypatch, samples, *, floor=3, interval=15):
+    """An oracle with a scripted replica history and a fake clock.
+
+    The observation window is a minute of wall time in production; driving it
+    with a clock that only moves when the loop sleeps keeps these tests about the
+    state machine instead of about waiting.
+    """
+    from types import SimpleNamespace
+
+    from sregym.conductor.oracles import mattermost_cascade_recovery as module
+
+    now = [0.0]
+    monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(module.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+
+    readings = list(samples)
+    app = SimpleNamespace(
+        scaler_interval=interval,
+        capacity_floor=floor,
+        gateway_replicas=lambda: readings.pop(0) if len(readings) > 1 else readings[0],
+    )
+    oracle = MattermostCascadeOracle.__new__(MattermostCascadeOracle)
+    oracle.problem = SimpleNamespace(app=app)
+    return oracle
+
+
+def test_capacity_that_is_still_rolling_out_is_not_called_lost(monkeypatch):
+    """A correct scale-up graded seconds later is waiting, not failing.
+
+    Readiness lag was reported as `gateway_capacity_below_floor` by an earlier
+    version of this check, which would have failed an agent for being quick.
+    """
+    oracle = capacity_oracle(monkeypatch, [(3, 1), (3, 2), (3, 3)])
+
+    reason, samples = oracle.observe_capacity(3)
+
+    assert reason is None
+    assert samples[0] == {"desired": 3, "ready": 1}
+
+
+def test_capacity_taken_away_after_reaching_the_floor_is_the_automation(monkeypatch):
+    oracle = capacity_oracle(monkeypatch, [(3, 3), (3, 3), (2, 2), (2, 2)])
+
+    reason, samples = oracle.observe_capacity(3)
+
+    assert reason == "capacity_automation_still_shrinking"
+    assert samples[-1] == {"desired": 2, "ready": 2}
+
+
+def test_capacity_that_never_reaches_the_floor_is_reported_as_below_it(monkeypatch):
+    oracle = capacity_oracle(monkeypatch, [(1, 1)])
+
+    reason, _ = oracle.observe_capacity(3)
+
+    assert reason == "gateway_capacity_below_floor"
+
+
+def test_capacity_held_for_the_whole_window_passes(monkeypatch):
+    oracle = capacity_oracle(monkeypatch, [(4, 4)])
+
+    assert oracle.observe_capacity(3)[0] is None
+
+
+def test_desired_above_the_floor_with_too_few_ready_does_not_count_as_held(monkeypatch):
+    """`kubectl scale` alone is a promise; ready replicas are the capacity."""
+    oracle = capacity_oracle(monkeypatch, [(6, 1)])
+
+    assert oracle.observe_capacity(3)[0] == "gateway_capacity_below_floor"

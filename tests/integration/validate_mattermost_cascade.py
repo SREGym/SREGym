@@ -63,17 +63,14 @@ def validate(tier):
             "capacity_automation_still_shrinking",
         ), result["cascaded"]
 
-        # Negative control: the fix a responder reaches for first. It works for
-        # one automation interval and is then undone.
+        # Negative control: the fix a responder reaches for first. Wait for the
+        # rollout so the grade cannot be confused by readiness lag -- capacity
+        # genuinely reaches the floor here, and the automation then takes it away.
         stage = "manual_scale_up"
         app.command("scale", "deployment/chat-gateway", f"--replicas={app.capacity_floor}")
+        app.command("rollout", "status", "deployment/chat-gateway", "--timeout=300s", timeout=330)
         result["manual_scale_up"] = grade("manual_scale_up")
-        assert result["manual_scale_up"]["reason"] in (
-            "capacity_automation_still_shrinking",
-            "gateway_capacity_below_floor",
-            "gateway_shedding_requests",
-            "gateway_latency_unresolved",
-        ), result["manual_scale_up"]
+        assert result["manual_scale_up"]["reason"] == "capacity_automation_still_shrinking", result["manual_scale_up"]
         result["reverted_by_automation"] = app.scaler_decisions()[-3:]
 
         # Negative control: removing the trigger alone. Latency recovers, but the

@@ -76,8 +76,11 @@ The reason codes separate the shortfalls:
   customer-visible p50 latency against a budget calibrated from healthy latency
   measured before injection, not an absolute number that depends on host speed.
 - **`gateway_shedding_requests`** — customers are still being turned away.
-- **`gateway_capacity_below_floor`** — capacity is under the documented floor of
-  3 replicas, below which one rollout or node loss takes chat down.
+- **`gateway_capacity_below_floor`** — capacity never reached the documented floor
+  of 3 replicas, below which one rollout or node loss takes chat down. Capacity is
+  counted in *ready* replicas, but a scale-up is given a bounded grace period to
+  finish rolling out first, so being graded a few seconds after `kubectl scale` is
+  not itself a failure.
 - **`capacity_automation_still_shrinking`** — capacity was at the floor and then
   taken away again during the observation window. **This is the one that catches
   a manual scale-up while the trigger is still present.** Capacity is watched for

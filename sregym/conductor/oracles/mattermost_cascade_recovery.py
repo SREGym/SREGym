@@ -1,10 +1,11 @@
 """Require capacity that survives the automation, not just a manual scale-up.
 
-The recovery has two halves and neither alone is enough: remove the latency that
-saturates the gateway, and stop the capacity automation reading that saturation
-as spare capacity. A responder who only scales the Deployment up has its work
-reverted at the next decision, so capacity is observed over a window that spans
-several of them rather than sampled once.
+A responder who scales the Deployment up while the latency is still there has
+that work reverted at the next capacity decision, so capacity is observed over a
+window spanning several of them rather than sampled once. The window also has to
+tell three states apart -- capacity still coming up, capacity held, and capacity
+taken away again -- because a correct fix graded seconds after `kubectl scale` is
+still waiting for its new pod, and that is rollout lag, not lost capacity.
 """
 
 import time
@@ -40,6 +41,45 @@ class MattermostCascadeOracle(SaaSOracle):
         """Long enough for the automation to act at least twice."""
         return 2 * self.problem.app.scaler_interval + 10
 
+    @property
+    def readiness_grace_seconds(self):
+        """Bounded time for a legitimate scale-up's pods to become ready.
+
+        Without this, a correct fix graded a few seconds after `kubectl scale`
+        fails on `ready < floor` while its new pod is still starting -- which is
+        rollout lag, not lost capacity.
+        """
+        return 60
+
+    def observe_capacity(self, floor):
+        """Distinguish capacity coming up, held, and taken away again.
+
+        Returns ``(reason, samples)`` with ``reason`` None when capacity reached
+        the floor and stayed there for the whole stability window. Reaching the
+        floor and then dropping is the automation undoing the fix; never reaching
+        it is capacity that was not restored at all. Sampling once cannot tell
+        those apart, and neither can a single up-front readiness check.
+        """
+        app = self.problem.app
+        samples = []
+        reached = False
+        held_since = None
+        deadline = time.monotonic() + self.readiness_grace_seconds + self.stability_seconds
+        while time.monotonic() < deadline:
+            desired, ready = app.gateway_replicas()
+            samples.append({"desired": desired, "ready": ready})
+            if desired >= floor and ready >= floor:
+                reached = True
+                held_since = held_since or time.monotonic()
+                if time.monotonic() - held_since >= self.stability_seconds:
+                    return None, samples
+            elif reached:
+                return "capacity_automation_still_shrinking", samples
+            else:
+                held_since = None
+            time.sleep(5)
+        return ("capacity_automation_still_shrinking" if reached else "gateway_capacity_below_floor"), samples
+
     def capture_baseline(self):
         super().capture_baseline()
         # Healthy latency through the gateway, so the verdict is not tied to an
@@ -56,25 +96,16 @@ class MattermostCascadeOracle(SaaSOracle):
                 return self.fail("gateway_missing")
 
             floor = app.capacity_floor
-            desired, ready = app.gateway_replicas()
-            if desired < floor or ready < floor:
-                return self.fail("gateway_capacity_below_floor", desired=desired, ready=ready, floor=floor)
-
-            # Watch across the automation's decision interval. A manual scale-up
-            # that the policy undoes shows up here and nowhere else.
-            observed = []
-            deadline = time.monotonic() + self.stability_seconds
-            while time.monotonic() < deadline:
-                time.sleep(5)
-                desired, ready = app.gateway_replicas()
-                observed.append({"desired": desired, "ready": ready})
-                if desired < floor or ready < floor:
-                    return self.fail(
-                        "capacity_automation_still_shrinking",
-                        floor=floor,
-                        observed=observed,
-                        recent_decisions=app.scaler_decisions()[-5:],
-                    )
+            # Watch across more than one automation decision interval. A manual
+            # scale-up that the policy undoes shows up here and nowhere else.
+            shortfall, observed = self.observe_capacity(floor)
+            if shortfall:
+                return self.fail(
+                    shortfall,
+                    floor=floor,
+                    observed=observed,
+                    recent_decisions=app.scaler_decisions()[-5:],
+                )
 
             customer = app.probe_through_gateway()
             if customer["shed"]:
