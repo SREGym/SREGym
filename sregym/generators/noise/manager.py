@@ -248,22 +248,33 @@ class NoiseManager:
 
     # ── Chaos Mesh installation ───────────────────────────────────────
 
+    def _wait_for_chaos_mesh_ready(self):
+        """Require the controller and node daemon to complete their rollouts."""
+        timeout = 180
+        for workload in ("deployment/chaos-controller-manager", "daemonset/chaos-daemon"):
+            self.kubectl.exec_command_checked(
+                f"kubectl rollout status {workload} -n {CHAOS_NAMESPACE} --timeout={timeout}s",
+                timeout=timeout + 10,
+            )
+        self._chaos_mesh_ready = True
+
     def _ensure_chaos_mesh_installed(self):
         """Check if Chaos Mesh is installed; install if missing."""
+        self._chaos_mesh_ready = False
         try:
             ns_check = self.kubectl.exec_command(f"kubectl get ns {CHAOS_NAMESPACE}")
             if "Active" in ns_check:
-                pods = self.kubectl.exec_command(
-                    f"kubectl get pods -n {CHAOS_NAMESPACE} -l app.kubernetes.io/component=controller-manager"
+                controller = self.kubectl.exec_command(
+                    f"kubectl get deployment chaos-controller-manager -n {CHAOS_NAMESPACE} -o name"
                 )
-                if "Running" in pods:
-                    self._chaos_mesh_ready = True
-                    logger.info("Chaos Mesh is already installed and running.")
+                if "deployment.apps/chaos-controller-manager" in controller:
+                    self._wait_for_chaos_mesh_ready()
+                    logger.info("Chaos Mesh is already installed and ready.")
                     return
 
             logger.info("Chaos Mesh not found. Installing...")
             self.kubectl.exec_command("helm repo add chaos-mesh https://charts.chaos-mesh.org")
-            self.kubectl.exec_command("helm repo update")
+            self.kubectl.exec_command("helm repo update chaos-mesh")
             self.kubectl.exec_command(f"kubectl create ns {CHAOS_NAMESPACE}")
 
             # Clean up orphaned CRDs if needed (strip finalizers first to avoid hanging)
@@ -300,16 +311,8 @@ class NoiseManager:
                 logger.error(f"Failed to install Chaos Mesh: {result}")
                 return
 
-            # Wait for readiness
-            for _ in range(30):
-                pods_status = self.kubectl.exec_command(f"kubectl get pods -n {CHAOS_NAMESPACE}")
-                if "Running" in pods_status and "0/1" not in pods_status and "ContainerCreating" not in pods_status:
-                    self._chaos_mesh_ready = True
-                    logger.info("Chaos Mesh installed successfully.")
-                    return
-                time.sleep(2)
-
-            logger.warning("Chaos Mesh installation timed out.")
+            self._wait_for_chaos_mesh_ready()
+            logger.info("Chaos Mesh installed successfully.")
         except Exception as e:
             logger.error(f"Error ensuring Chaos Mesh installation: {e}")
 

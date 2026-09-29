@@ -53,13 +53,18 @@ from sregym.service.kubernetes_access_policy import (
     workload_network_settings,
 )
 from sregym.service.kubernetes_response import include_table_objects, json_accept_header, stream_response
+from sregym.service.visibility import (
+    CHAOS_API_GROUP,
+    CLUSTER_CONTROL_PLANE_RESOURCES,
+    HIDDEN_NAMESPACES,
+    is_chaos_event,
+    mentions_chaos_mesh,
+    sanitize_visible_resource,
+)
 
 logger = logging.getLogger("all.infra.k8s_proxy")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
-
-# Namespaces to hide from agents
-HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos"}
 
 # Labels to hide from agents - resources matching any of these label key/value pairs are hidden.
 # Load generators produce synthetic traffic and should not be visible to agents.
@@ -193,6 +198,8 @@ def _is_hidden_resource(
         metadata.get("namespace") in hidden_namespaces
         or _has_hidden_label(metadata, hidden_labels)
         or _is_helm_release_secret(resource)
+        or is_chaos_event(resource, hidden_namespaces)
+        or (not metadata.get("namespace") and mentions_chaos_mesh(str(metadata.get("name", ""))))
     )
 
 
@@ -220,7 +227,9 @@ def _filter_resource_list(
     """Remove hidden objects from standard and Table list responses."""
     if "items" in data:
         data["items"] = [
-            item for item in data["items"] if not _is_hidden_resource(item, hidden_namespaces, hidden_labels)
+            sanitize_visible_resource(item)
+            for item in data["items"]
+            if not _is_hidden_resource(item, hidden_namespaces, hidden_labels)
         ]
     if "rows" in data:
         data["rows"] = [
@@ -229,6 +238,15 @@ def _filter_resource_list(
             if isinstance(row.get("object"), dict)
             and not _is_hidden_resource(row["object"], hidden_namespaces, hidden_labels)
         ]
+        for row in data["rows"]:
+            sanitize_visible_resource(row["object"])
+    return data
+
+
+def _filter_api_groups(data: dict) -> dict:
+    """Hide the Chaos Mesh API group from Kubernetes discovery."""
+    if isinstance(data.get("groups"), list):
+        data["groups"] = [group for group in data["groups"] if group.get("name") != CHAOS_API_GROUP]
     return data
 
 
@@ -243,12 +261,48 @@ def _is_hidden_namespace_request(path: str, hidden_namespaces: set[str]) -> bool
 
 def _response_filter_type(path: str) -> str | None:
     """Return the list-response filter required for a Kubernetes API path."""
+    parts = _decode_path_parts(path)
+    if parts == ["apis"]:
+        return "discovery"
+    if parts == ["openapi", "v2"]:
+        return "openapi_v2"
+    if parts == ["openapi", "v3"]:
+        return "openapi_v3"
     resource, name = _resource_request(path)
     if resource == "namespaces" and name is None:
         return "namespaces"
     if resource is not None and name is None:
         return "resources"
     return None
+
+
+def _is_filtered_object_read(path: str) -> bool:
+    """Identify object responses that must be JSON for visibility filtering."""
+    _, name = _resource_request(path)
+    parts = _decode_path_parts(path)
+    return bool(name and parts and (parts[-1] == name or parts[-1] in {"status", "scale"}))
+
+
+def _is_hidden_control_plane_request(path: str) -> bool:
+    """Block direct reads and mutations of hidden cluster-scoped objects."""
+    parts = _decode_path_parts(path)
+    if len(parts) >= 2 and parts[:2] == ["apis", CHAOS_API_GROUP]:
+        return True
+    if len(parts) >= 4 and parts[:3] == ["openapi", "v3", "apis"] and parts[3] == CHAOS_API_GROUP:
+        return True
+    resource, name = _resource_request(path)
+    return resource in CLUSTER_CONTROL_PLANE_RESOURCES and bool(name and mentions_chaos_mesh(name))
+
+
+def _filter_openapi_document(data: dict, version: str) -> dict:
+    """Remove the Chaos API schemas without changing unrelated Kubernetes schemas."""
+    if version == "openapi_v2":
+        for field in ("definitions", "paths"):
+            if isinstance(data.get(field), dict):
+                data[field] = {key: value for key, value in data[field].items() if not mentions_chaos_mesh(key)}
+    elif version == "openapi_v3" and isinstance(data.get("paths"), dict):
+        data["paths"] = {key: value for key, value in data["paths"].items() if not mentions_chaos_mesh(key)}
+    return data
 
 
 def _is_helm_release_secret_request(path: str) -> bool:
@@ -733,6 +787,10 @@ class KubernetesAPIProxy:
                     self.send_error(401, "Unauthorized: valid agent token required")
                     return
 
+                if _is_hidden_control_plane_request(path):
+                    self.send_error(404, "Not Found")
+                    return
+
                 if restrict_network_access and _is_cluster_egress_control_mutation(path, method):
                     self.send_error(403, "Forbidden: cluster outbound policy changes are disabled in filtered mode")
                     return
@@ -750,7 +808,7 @@ class KubernetesAPIProxy:
 
                 # Block direct access to hidden namespaces
                 if _is_hidden_namespace_request(path, hidden_namespaces):
-                    self.send_error(403, "Forbidden: Access to this namespace is not allowed")
+                    self.send_error(404, "Not Found")
                     return
 
                 # A Helm release Secret is benchmark source data, not runtime
@@ -811,7 +869,7 @@ class KubernetesAPIProxy:
                     filter_type = _response_filter_type(path)
                     watch = method == "GET" and _is_watch_request(path)
                     requires_json = _requires_json_secret_response(path, method) or (
-                        method == "GET" and (filter_type is not None or watch)
+                        method == "GET" and (filter_type is not None or watch or _is_filtered_object_read(path))
                     )
                     # Forward headers (except Host and Accept-Encoding to avoid gzip).
                     # The per-run proxy credential must not be forwarded upstream.
@@ -886,17 +944,30 @@ class KubernetesAPIProxy:
                             conn.close()
                             return
 
-                        def event_visible(event):
+                        def transform_event(event):
                             obj = event["object"]
+                            if event.get("type") == "ERROR" and mentions_chaos_mesh(json.dumps(obj)):
+                                event["object"] = {
+                                    "apiVersion": "v1",
+                                    "kind": "Status",
+                                    "status": "Failure",
+                                    "message": "Kubernetes watch failed",
+                                    "reason": "Unknown",
+                                    "code": obj.get("code", 500),
+                                }
+                                return event
                             if (
                                 _resource_request(path)[0] == "namespaces"
                                 and (obj.get("metadata") or {}).get("name") in hidden_namespaces
                             ):
-                                return False
-                            return not _is_hidden_resource(obj, hidden_namespaces, hidden_labels)
+                                return None
+                            if _is_hidden_resource(obj, hidden_namespaces, hidden_labels):
+                                return None
+                            event["object"] = sanitize_visible_resource(obj)
+                            return event
 
                         try:
-                            stream_response(self, response, event_visible=event_visible if watch else None)
+                            stream_response(self, response, event_transform=transform_event if watch else None)
                         except OSError as exc:
                             logger.debug("Kubernetes stream closed: %s", exc)
                         except ValueError:
@@ -910,6 +981,9 @@ class KubernetesAPIProxy:
                     response_body = response.read()
                     content_type = response.getheader("Content-Type", "")
                     content_encoding = response.getheader("Content-Encoding", "")
+                    response_is_json = "application/json" in content_type or (
+                        filter_type == "openapi_v3" and "text/plain" in content_type
+                    )
 
                     # Decompress if gzip-encoded
                     if content_encoding == "gzip":
@@ -917,27 +991,55 @@ class KubernetesAPIProxy:
 
                         response_body = gzip.decompress(response_body)
 
+                    # Kubernetes error bodies can mention hidden API groups or
+                    # admission components even when the failed object is visible.
+                    concealed_error = response.status >= 400 and mentions_chaos_mesh(
+                        response_body.decode("utf-8", errors="replace")
+                    )
+                    if concealed_error:
+                        response_body = json.dumps(
+                            {
+                                "apiVersion": "v1",
+                                "kind": "Status",
+                                "status": "Failure",
+                                "message": "Kubernetes request failed",
+                                "reason": "Unknown",
+                                "code": response.status,
+                            }
+                        ).encode()
+
                     # Filter successful JSON responses. Secret reads and resource
                     # lists fail closed if the upstream does not return usable JSON.
-                    if response.status == 200 and requires_json and "application/json" not in content_type:
+                    if response.status == 200 and requires_json and not response_is_json:
                         self.send_error(502, "Bad Gateway: Kubernetes returned an unsupported response format")
                         conn.close()
                         return
 
-                    if response.status == 200 and "application/json" in content_type:
+                    if response.status == 200 and response_is_json:
                         try:
                             data = json.loads(response_body)
                             if filter_type == "namespaces":
                                 data = _filter_namespace_list(data, hidden_namespaces)
+                                response_body = json.dumps(data).encode()
+                            elif filter_type == "discovery":
+                                data = _filter_api_groups(data)
+                                response_body = json.dumps(data).encode()
+                            elif filter_type in {"openapi_v2", "openapi_v3"}:
+                                data = _filter_openapi_document(data, filter_type)
                                 response_body = json.dumps(data).encode()
                             elif filter_type == "resources":
                                 data = _filter_resource_list(data, hidden_namespaces, hidden_labels)
                                 response_body = json.dumps(data).encode()
                             elif filter_type is None and _is_hidden_resource(data, hidden_namespaces, hidden_labels):
                                 # Block direct access to individual hidden resources
-                                self.send_error(403, "Forbidden: Access to this resource is not allowed")
+                                if is_chaos_event(data, hidden_namespaces):
+                                    self.send_error(404, "Not Found")
+                                else:
+                                    self.send_error(403, "Forbidden: Access to this resource is not allowed")
                                 conn.close()
                                 return
+                            else:
+                                response_body = json.dumps(sanitize_visible_resource(data)).encode()
                         except json.JSONDecodeError:
                             if requires_json:
                                 self.send_error(502, "Bad Gateway: Kubernetes returned invalid JSON")
@@ -948,8 +1050,14 @@ class KubernetesAPIProxy:
                     self.send_response(response.status)
                     for header, value in response.getheaders():
                         # Skip headers we're modifying
-                        if header.lower() not in ("transfer-encoding", "content-length", "content-encoding"):
+                        if (
+                            header.lower() not in ("transfer-encoding", "content-length", "content-encoding")
+                            and not (concealed_error and header.lower() == "content-type")
+                            and not mentions_chaos_mesh(value)
+                        ):
                             self.send_header(header, value)
+                    if concealed_error:
+                        self.send_header("Content-Type", "application/json")
                     self.send_header("Content-Length", str(len(response_body)))
                     self.end_headers()
                     self.wfile.write(response_body)
