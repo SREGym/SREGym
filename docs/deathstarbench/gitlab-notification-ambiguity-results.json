@@ -1,0 +1,672 @@
+{
+  "problem": "gitlab_notification_ambiguity_replicated",
+  "candidate_revision": 2,
+  "status": "complete; all three valid attempts passed; difficulty target unmet",
+  "focused_tests_passed": 24,
+  "comprehensive_admission": {
+    "candidate_revision": 1,
+    "passed": true,
+    "elapsed_seconds": 2217.28,
+    "cleanup": "pass",
+    "fixture_evidence": {
+      "notifications": {
+        "expected": 30,
+        "delivered": 9,
+        "missing": 21,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "transport": {
+        "accepted_without_ack": 3,
+        "failed_without_acceptance": 4
+      },
+      "durable_audit_records": 335,
+      "retained_incident_jobs": 24,
+      "accepted_but_queued": [
+        {
+          "project": 3,
+          "title": "recent 7d7019d00e05c4e3/6",
+          "description": "Acknowledged customer change 7d7019d00e05c4e3/recent/6",
+          "confidential": false,
+          "iid": 14,
+          "recipient": "incident-user-2@sregym.local",
+          "recipient_id": 3,
+          "issue_id_at_acceptance": 83,
+          "job_id": "80c79e75-85cc-4210-8be4-fc34ac0c7dbf",
+          "provider_job_id": "1e34f344d2a9d25cf8a990f2",
+          "reason": "sregym-ack"
+        },
+        {
+          "project": 4,
+          "title": "recent 7d7019d00e05c4e3/7",
+          "description": "Acknowledged customer change 7d7019d00e05c4e3/recent/7",
+          "confidential": true,
+          "iid": 14,
+          "recipient": "incident-user-3@sregym.local",
+          "recipient_id": 4,
+          "issue_id_at_acceptance": 84,
+          "job_id": "ecf82696-3741-43f4-afdc-1d53914eec0d",
+          "provider_job_id": "fb21e60f407770b9e025d25a",
+          "reason": "sregym-ack"
+        },
+        {
+          "project": 5,
+          "title": "recent 7d7019d00e05c4e3/8",
+          "description": "Acknowledged customer change 7d7019d00e05c4e3/recent/8",
+          "confidential": false,
+          "iid": 14,
+          "recipient": "incident-user-4@sregym.local",
+          "recipient_id": 5,
+          "issue_id_at_acceptance": 85,
+          "job_id": "fbf713d8-95de-4326-8aa6-b156e3cafece",
+          "provider_job_id": "6aafbdbdd98318bdabbd801a",
+          "reason": "sregym-ack"
+        }
+      ],
+      "public_audit_matches_protected_ledger": true
+    },
+    "recovered": {
+      "success": true,
+      "application": "gitlab-ce",
+      "scale_tier": "replicated",
+      "database_members_verified": 3,
+      "original_volumes_verified": 8,
+      "business_data_verified": true,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 95,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 95,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 95,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0,
+      "notifications": {
+        "expected": 30,
+        "delivered": 30,
+        "missing": 0,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "fresh_notification_verified": true
+    },
+    "reconciled_again": {
+      "expected": 30,
+      "delivered": 30,
+      "missing": 0,
+      "duplicates": 0,
+      "wrong_deliveries": []
+    },
+    "restarted": {
+      "success": true,
+      "application": "gitlab-ce",
+      "scale_tier": "replicated",
+      "database_members_verified": 3,
+      "original_volumes_verified": 8,
+      "business_data_verified": true,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 95,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 95,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 95,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0,
+      "notifications": {
+        "expected": 30,
+        "delivered": 30,
+        "missing": 0,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "fresh_notification_verified": true
+    },
+    "irreversible_effects": {
+      "expected": 30,
+      "delivered": 30,
+      "missing": 0,
+      "duplicates": 1,
+      "wrong_deliveries": [
+        359
+      ]
+    },
+    "negative_grade": {
+      "success": false,
+      "reason": "notification_delivery_violation",
+      "failure_class": "agent_error",
+      "detail": {
+        "notifications": {
+          "expected": 30,
+          "delivered": 30,
+          "missing": 0,
+          "duplicates": 1,
+          "wrong_deliveries": [
+            359
+          ]
+        }
+      }
+    },
+    "source_manifest_sha256": "8a08e7d120e4e37f08f58c5e9d750b76ec9e51b057fc29536d3dd073235f6078"
+  },
+  "change_after_comprehensive_admission": "Only incident notifications consume the temporary SMTP failure budget; unrelated mail is accepted normally.",
+  "final_source_manifest_sha256": "63a2b6a6f02a6e10ab372d1aae0747668ed48c83d8955d8db42da19e0f80d708",
+  "final_lifecycle": {
+    "problem": "gitlab_notification_ambiguity_replicated",
+    "profile": "svelte",
+    "with_loki": false,
+    "passed": true,
+    "elapsed_seconds": 1850.04,
+    "stages": {
+      "resolve": {
+        "name": "Resolve problem in registry",
+        "status": "pass",
+        "detail": "GitLabNotificationAmbiguity \u00b7 app `GitLab CE prototype`"
+      },
+      "deploy": {
+        "name": "Deploy application",
+        "status": "pass",
+        "detail": "`GitLab CE prototype` deployed to namespace `gitlab-ce`"
+      },
+      "oracle_healthy": {
+        "name": "Oracle passes before fault injection",
+        "status": "pass",
+        "detail": "oracle reported success after 1 check(s)"
+      },
+      "inject": {
+        "name": "Inject fault",
+        "status": "pass",
+        "detail": "inject_fault() completed without error"
+      },
+      "oracle_fail": {
+        "name": "Oracle fails after fault injection",
+        "status": "pass",
+        "detail": "oracle reported failure after 1 check(s)"
+      },
+      "recover": {
+        "name": "Recover fault",
+        "status": "pass",
+        "detail": "recover_fault() completed without error"
+      },
+      "oracle_pass": {
+        "name": "Oracle passes after recovery",
+        "status": "pass",
+        "detail": "oracle reported success after 1 check(s)"
+      },
+      "cleanup": {
+        "name": "Clean up application and local port forwards",
+        "status": "pass",
+        "detail": "application namespace and local port forwards removed"
+      }
+    }
+  },
+  "model": "gpt-6-astra",
+  "cli_version": "0.157.1",
+  "reasoning_effort": "agent default",
+  "agent_timeout_seconds": 900,
+  "cleanup_timeout_seconds": 900,
+  "model_results": {
+    "validated": true,
+    "application": "gitlab_ce",
+    "tier": "replicated",
+    "agent_exit_code": 0,
+    "requested": 3,
+    "complete": 3,
+    "successes": 3,
+    "mitigation_pass_rate": 1.0,
+    "difficulty": 0.0,
+    "ambiguous_failures": 0,
+    "inconclusive": false,
+    "csvs": [
+      "results/0926_1131/codex/gitlab_notification_ambiguity_replicated/gitlab_notification_ambiguity_replicated_codex_results.csv"
+    ],
+    "failures": 0,
+    "median_agent_seconds": 464.991,
+    "attempts": [
+      {
+        "attempt": 1,
+        "run_status": "complete",
+        "success": true,
+        "reason": null,
+        "failure_class": null,
+        "model": "gpt-6-astra",
+        "cli_version": "0.157.1",
+        "agent_seconds": 500.384,
+        "grading_seconds": 131.726,
+        "deployment_seconds": 846.664,
+        "fault_injection_seconds": 336.406,
+        "recorded_phase_seconds": 2057.0889999999995,
+        "cleanup_seconds": 236.734,
+        "trajectory": "0926_1131/codex/gitlab_notification_ambiguity_replicated/run_1/trajectory.json",
+        "trajectory_sha256": "9caf6af56e81b46845fa6d623afa5468d4e8e7c69a2fda02bbfd09ab81292eb7",
+        "notifications": {
+          "expected": 30,
+          "delivered": 30,
+          "missing": 0,
+          "duplicates": 0,
+          "wrong_deliveries": []
+        },
+        "fresh_notification_verified": true,
+        "recovered_records": {
+          "gitlab-ce-db-1": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-2": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-3": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "original_volumes_verified": 8,
+        "database_members_verified": 3,
+        "journal_entries_verified": 30,
+        "acknowledged_data_loss": 0
+      },
+      {
+        "attempt": 2,
+        "run_status": "complete",
+        "success": true,
+        "reason": null,
+        "failure_class": null,
+        "model": "gpt-6-astra",
+        "cli_version": "0.157.1",
+        "agent_seconds": 464.991,
+        "grading_seconds": 132.521,
+        "deployment_seconds": 659.136,
+        "fault_injection_seconds": 339.039,
+        "recorded_phase_seconds": 1840.204,
+        "cleanup_seconds": 239.387,
+        "trajectory": "0926_1131/codex/gitlab_notification_ambiguity_replicated/run_2/trajectory.json",
+        "trajectory_sha256": "fba031e02ad3cd71128da1ce851217d6448342bbc4c7bd2b424d9abb79f727a3",
+        "notifications": {
+          "expected": 30,
+          "delivered": 30,
+          "missing": 0,
+          "duplicates": 0,
+          "wrong_deliveries": []
+        },
+        "fresh_notification_verified": true,
+        "recovered_records": {
+          "gitlab-ce-db-1": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-2": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-3": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "original_volumes_verified": 8,
+        "database_members_verified": 3,
+        "journal_entries_verified": 30,
+        "acknowledged_data_loss": 0
+      },
+      {
+        "attempt": 3,
+        "run_status": "complete",
+        "success": true,
+        "reason": null,
+        "failure_class": null,
+        "model": "gpt-6-astra",
+        "cli_version": "0.157.1",
+        "agent_seconds": 423.248,
+        "grading_seconds": 133.783,
+        "deployment_seconds": 656.555,
+        "fault_injection_seconds": 337.634,
+        "recorded_phase_seconds": 1797.9959999999999,
+        "cleanup_seconds": 241.612,
+        "trajectory": "0926_1131/codex/gitlab_notification_ambiguity_replicated/run_3/trajectory.json",
+        "trajectory_sha256": "5fafcc6b05b1692f0cfc274085269568d2ade92df2da001780a592c83ff4bd4c",
+        "notifications": {
+          "expected": 30,
+          "delivered": 30,
+          "missing": 0,
+          "duplicates": 0,
+          "wrong_deliveries": []
+        },
+        "fresh_notification_verified": true,
+        "recovered_records": {
+          "gitlab-ce-db-1": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-2": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-3": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "original_volumes_verified": 8,
+        "database_members_verified": 3,
+        "journal_entries_verified": 30,
+        "acknowledged_data_loss": 0
+      }
+    ]
+  },
+  "raw_artifact_root": "results/dind/sregym-difficulty-baseline",
+  "difficulty_target_met": false,
+  "final_source_audit": {
+    "checked_at_unix": 1790427913.4421217,
+    "phase": "all three agent grades passed; final cleanup running",
+    "files": 24,
+    "host_matches": true,
+    "container_matches": true,
+    "host_mismatches": [],
+    "container_mismatches": []
+  },
+  "provider_ledger_snapshots": [
+    "ambiguity-three/mailbox-attempt1-1790424004808667419.json",
+    "ambiguity-three/mailbox-attempt2-1790425842129943474.json",
+    "ambiguity-three/mailbox-attempt3-1790427634460538571.json"
+  ]
+}

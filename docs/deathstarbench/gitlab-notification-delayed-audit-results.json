@@ -1,0 +1,665 @@
+{
+  "problem": "gitlab_notification_delayed_audit_replicated",
+  "candidate_revision": 1,
+  "status": "complete: three valid passes; difficulty target unmet",
+  "focused_tests_passed": 37,
+  "subtests_passed": 5,
+  "source_manifest_sha256": "13a6235adffc071ef03289a591563aad1e1f7a64fdcc864b5833d21a1e67ed6e",
+  "image": {
+    "tag": "sregym-dind:notification-delayed-audit-candidate",
+    "image_id": "sha256:f5515956210cea8b74f620d0c79f42b3613c40ac13d50584a865c156d52f5297",
+    "base": "sregym-dind:notification-intermittent-candidate",
+    "base_image_id": "sha256:6339c97f51f8a3d28bd99fa0458dca2fa5ec5d71a357ab72c37e83755a51db45",
+    "candidate_revision": 1,
+    "source_manifest_sha256": "13a6235adffc071ef03289a591563aad1e1f7a64fdcc864b5833d21a1e67ed6e",
+    "source_files": 34,
+    "built_at_unix": 1790439503.0046086,
+    "lifecycle_status": "full admission passed"
+  },
+  "publication_delay_seconds": 30,
+  "reference_strategy": "batch reconciliation using public completeness watermarks",
+  "reference_command_timeout_seconds": 600,
+  "comprehensive_admission": {
+    "passed": true,
+    "elapsed_seconds": 2251.0,
+    "cleanup": "pass",
+    "raw_record": "results/dind/sregym-difficulty-baseline/notification-delayed-audit-admission.json",
+    "sha256": "9b38d322dc414dc57caef186d7b3da597e5d4f3c9af8979955bf4d7839b77404",
+    "stage_success": {
+      "healthy": true,
+      "deleted": false,
+      "backup_only": false,
+      "data_only": false,
+      "recovered": true,
+      "restarted": true,
+      "wrong_and_duplicate_delivery": false
+    },
+    "fixture_evidence": {
+      "notifications": {
+        "expected": 30,
+        "delivered": 9,
+        "missing": 21,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "transport": {
+        "accepted_without_ack": 3,
+        "failed_without_acceptance": 3
+      },
+      "durable_audit_records": 335,
+      "retained_incident_jobs": 24,
+      "accepted_but_queued": [
+        {
+          "project": 3,
+          "title": "recent 4bcda0bd4bd6c98d/6",
+          "description": "Acknowledged customer change 4bcda0bd4bd6c98d/recent/6",
+          "confidential": false,
+          "iid": 14,
+          "recipient": "incident-user-2@sregym.local",
+          "recipient_id": 3,
+          "issue_id_at_acceptance": 83,
+          "job_id": "53472293-3105-4c89-b95a-29ef2c42d11b",
+          "provider_job_id": "63dacfa35ee5b038e8d11645",
+          "reason": "sregym-ack"
+        },
+        {
+          "project": 4,
+          "title": "recent 4bcda0bd4bd6c98d/7",
+          "description": "Acknowledged customer change 4bcda0bd4bd6c98d/recent/7",
+          "confidential": true,
+          "iid": 14,
+          "recipient": "incident-user-3@sregym.local",
+          "recipient_id": 4,
+          "issue_id_at_acceptance": 84,
+          "job_id": "175113c4-9474-4660-b086-933dc8b270c6",
+          "provider_job_id": "ae35d109c3cdc159d4df465a",
+          "reason": "sregym-ack"
+        },
+        {
+          "project": 5,
+          "title": "recent 4bcda0bd4bd6c98d/8",
+          "description": "Acknowledged customer change 4bcda0bd4bd6c98d/recent/8",
+          "confidential": false,
+          "iid": 14,
+          "recipient": "incident-user-4@sregym.local",
+          "recipient_id": 5,
+          "issue_id_at_acceptance": 85,
+          "job_id": "ae913a6a-efcc-4b71-aa03-2d5cda12095f",
+          "provider_job_id": "af09d096331f06feed14c1c2",
+          "reason": "sregym-ack"
+        }
+      ],
+      "public_audit_matches_protected_ledger": true,
+      "ongoing_fault": {
+        "active": true,
+        "attempts": 0
+      },
+      "publication": {
+        "delayed_deliveries": 0,
+        "minimum_delay": null,
+        "maximum_delay": null,
+        "policy_delay": 30.0
+      }
+    },
+    "publication_after_restart": {
+      "delayed_deliveries": 21,
+      "minimum_delay": 30.0,
+      "maximum_delay": 30.0,
+      "policy_delay": 30.0
+    },
+    "ongoing_fault_after_restart": {
+      "active": true,
+      "attempts": 28
+    },
+    "transport_after_recovery": {
+      "accepted_without_ack": 10,
+      "failed_without_acceptance": 10
+    },
+    "reference_delivery_history": [
+      {
+        "removed": 24,
+        "sends": 28,
+        "delivery_errors": [
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          }
+        ],
+        "delayed_acceptances": 21,
+        "watermark_checks": [
+          {
+            "barrier": 1790441068.430011,
+            "complete_through": 1790441068.4529824,
+            "wait_seconds": 30.01524794381112
+          },
+          {
+            "barrier": 1790441112.0550008,
+            "complete_through": 1790441112.1289876,
+            "wait_seconds": 30.113829738926142
+          },
+          {
+            "barrier": 1790441145.6219883,
+            "complete_through": 1790441145.6239982,
+            "wait_seconds": 30.005586590152234
+          },
+          {
+            "barrier": 1790441176.6799972,
+            "complete_through": 1790441176.700997,
+            "wait_seconds": 30.03071939991787
+          }
+        ],
+        "batches": [
+          21,
+          5,
+          2
+        ],
+        "audit_wait_seconds": 120.16538367280737
+      },
+      {
+        "removed": 0,
+        "sends": 0,
+        "delivery_errors": [],
+        "delayed_acceptances": 0,
+        "watermark_checks": [
+          {
+            "barrier": 1790441449.1129994,
+            "complete_through": 1790441449.1920156,
+            "wait_seconds": 30.08894707914442
+          }
+        ],
+        "batches": [],
+        "audit_wait_seconds": 30.08894707914442
+      }
+    ],
+    "fault_disabled_only_for_final_negative_probes": true
+  },
+  "model": "gpt-6-astra",
+  "cli_version": "0.157.1",
+  "reasoning_effort": "agent default",
+  "agent_timeout_seconds": 900,
+  "cleanup_timeout_seconds": 900,
+  "model_results": [
+    {
+      "attempt": 1,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 556.479,
+      "grading_seconds": 129.113,
+      "deployment_seconds": 883.35,
+      "fault_injection_seconds": 331.066,
+      "recorded_phase_seconds": 2149.285,
+      "cleanup_seconds": 244.335,
+      "trajectory": "0926_1658/codex/gitlab_notification_delayed_audit_replicated/run_1/trajectory.json",
+      "trajectory_sha256": "4ce4556b2c87ef75a09484195006e714cbd99b9d35536b1458e2525d0869031a",
+      "notifications": {
+        "expected": 30,
+        "delivered": 30,
+        "missing": 0,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "fresh_notification_verified": true,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "original_volumes_verified": 8,
+      "database_members_verified": 3,
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0
+    },
+    {
+      "attempt": 2,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 450.626,
+      "grading_seconds": 128.189,
+      "deployment_seconds": 651.462,
+      "fault_injection_seconds": 331.376,
+      "recorded_phase_seconds": 1840.31,
+      "cleanup_seconds": 273.384,
+      "trajectory": "0926_1658/codex/gitlab_notification_delayed_audit_replicated/run_2/trajectory.json",
+      "trajectory_sha256": "ab03d52a1ffc3fd12d26b96120677b8a63e079d808628fd6ab5caa6b7e6ec0fc",
+      "notifications": {
+        "expected": 30,
+        "delivered": 30,
+        "missing": 0,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "fresh_notification_verified": true,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "original_volumes_verified": 8,
+      "database_members_verified": 3,
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0
+    },
+    {
+      "attempt": 3,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 510.729,
+      "grading_seconds": 128.635,
+      "deployment_seconds": 655.466,
+      "fault_injection_seconds": 331.458,
+      "recorded_phase_seconds": 1903.9830000000002,
+      "cleanup_seconds": 272.578,
+      "trajectory": "0926_1658/codex/gitlab_notification_delayed_audit_replicated/run_3/trajectory.json",
+      "trajectory_sha256": "936515773508bb9e28f703d4082fb2e3264718ff5b434a73658923d2ab1f98fb",
+      "notifications": {
+        "expected": 30,
+        "delivered": 30,
+        "missing": 0,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "fresh_notification_verified": true,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "original_volumes_verified": 8,
+      "database_members_verified": 3,
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0
+    }
+  ],
+  "difficulty_target_met": false,
+  "raw_artifact_root": "results/dind/sregym-difficulty-baseline",
+  "comparison": {
+    "problem": "gitlab_notification_delayed_audit_replicated",
+    "command": [
+      "python",
+      "main.py",
+      "--problem",
+      "gitlab_notification_delayed_audit_replicated",
+      "--agent",
+      "codex",
+      "--model",
+      "gpt-6-astra",
+      "--n-attempts",
+      "3",
+      "--profile",
+      "svelte",
+      "--stages",
+      "mitigation",
+      "--agent-timeout",
+      "900",
+      "--agent-image",
+      "sregym-codex-driver:474f427253d219b8"
+    ],
+    "model": "gpt-6-astra",
+    "requested_cli_version": "0.157.1",
+    "attempts": 3,
+    "agent_timeout_seconds": 900,
+    "cleanup_timeout_seconds": 900,
+    "profile": "svelte",
+    "reasoning_effort": "agent default",
+    "difficulty_target": "at least one genuine failure in three valid attempts",
+    "candidate_revision": 1,
+    "validated": true,
+    "validation_method": "tests/integration/validate_gitlab_notification_delayed_audit.py",
+    "admission_sha256": "9b38d322dc414dc57caef186d7b3da597e5d4f3c9af8979955bf4d7839b77404",
+    "source_manifest_sha256": "13a6235adffc071ef03289a591563aad1e1f7a64fdcc864b5833d21a1e67ed6e",
+    "agent_image": "sregym-codex-driver:474f427253d219b8",
+    "agent_registry": "/opt/sregym/results/delayed-audit-three/agent-registry.yaml",
+    "agent_image_id": "sha256:58e2a04bf825dd9e92beaeedef452d909385cf507653faf80a52612705a79c9c",
+    "started_at_unix": 1790441840.9685402,
+    "status": "complete",
+    "agent_exit_code": 0,
+    "requested": 3,
+    "complete": 3,
+    "successes": 3,
+    "mitigation_pass_rate": 1.0,
+    "difficulty": 0.0,
+    "ambiguous_failures": 0,
+    "inconclusive": false,
+    "csvs": [
+      "results/0926_1658/codex/gitlab_notification_delayed_audit_replicated/gitlab_notification_delayed_audit_replicated_codex_results.csv"
+    ],
+    "elapsed_seconds": 5939.740489244461
+  },
+  "median_agent_seconds": 510.729,
+  "final_source_audit": {
+    "checked_at_unix": 1790447832.1800942,
+    "phase": "all three model attempts and cleanup completed",
+    "files": 34,
+    "host_matches": true,
+    "container_matches": true,
+    "host_mismatches": [],
+    "container_mismatches": []
+  },
+  "protected_ledger_snapshots": [
+    {
+      "attempt": 1,
+      "captured_at_unix": 1790443664.9091067,
+      "exit_code": 0,
+      "ongoing_fault": {
+        "active": true,
+        "attempts": 28
+      },
+      "transport_faults": {
+        "accepted_without_ack": 10,
+        "failed_without_acceptance": 10
+      },
+      "publication": {
+        "delayed_deliveries": 21,
+        "minimum_delay": 30.0,
+        "maximum_delay": 30.0,
+        "still_unpublished": 0
+      },
+      "artifact": "delayed-audit-three/mailbox-attempt1-1790443664913283486.json",
+      "messages": 356
+    },
+    {
+      "attempt": 2,
+      "captured_at_unix": 1790445477.5420551,
+      "exit_code": 0,
+      "ongoing_fault": {
+        "active": true,
+        "attempts": 28
+      },
+      "transport_faults": {
+        "accepted_without_ack": 10,
+        "failed_without_acceptance": 11
+      },
+      "publication": {
+        "delayed_deliveries": 21,
+        "minimum_delay": 30.0,
+        "maximum_delay": 30.0,
+        "still_unpublished": 0
+      },
+      "artifact": "delayed-audit-three/mailbox-attempt2-1790445477546149589.json",
+      "messages": 356
+    },
+    {
+      "attempt": 3,
+      "captured_at_unix": 1790447380.1707363,
+      "exit_code": 0,
+      "ongoing_fault": {
+        "active": true,
+        "attempts": 28
+      },
+      "transport_faults": {
+        "accepted_without_ack": 10,
+        "failed_without_acceptance": 14
+      },
+      "publication": {
+        "delayed_deliveries": 21,
+        "minimum_delay": 30.0,
+        "maximum_delay": 30.0,
+        "still_unpublished": 0
+      },
+      "artifact": "delayed-audit-three/mailbox-attempt3-1790447380175629434.json",
+      "messages": 356
+    }
+  ]
+}

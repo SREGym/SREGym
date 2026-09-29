@@ -1,0 +1,292 @@
+{
+  "problem": "gitlab_database_deletion_replicated",
+  "status": "initial three attempts complete; harder problem still required",
+  "model": "gpt-6-astra",
+  "reasoning_effort": "agent default",
+  "agent_timeout_seconds": 900,
+  "profile": "svelte",
+  "requested_cli_version": "0.157.0",
+  "observed_cli_version": "0.157.1",
+  "cli_override_issue": "The frozen main.py ignored SREGYM_AGENT_REGISTRY. All three runs reused the same 0.157.1 installation. Fixed in the checkout after the initial runtime was frozen. Future comparison must pin 0.157.1.",
+  "successes": 3,
+  "complete_attempts": 3,
+  "observed_difficulty": 0.0,
+  "lifecycle_passed": true,
+  "lifecycle_seconds": 1522.47,
+  "median_agent_seconds": 420.733,
+  "attempts": [
+    {
+      "attempt": 1,
+      "run_status": "complete",
+      "success": true,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 437.547,
+      "grading_seconds": 21.246,
+      "deployment_seconds": 857.205,
+      "cleanup_seconds": 122.109,
+      "database_members_verified": 3,
+      "volumes_verified": 7,
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "trajectory": "results/dind/sregym-difficulty-baseline/0926_0435/codex/gitlab_database_deletion_replicated/run_1/trajectory.json",
+      "trajectory_sha256": "bc12ce3f564d64f6fedd3d818d20a111b2902370bf5af9aceb269ff1027be12f"
+    },
+    {
+      "attempt": 2,
+      "run_status": "complete",
+      "success": true,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 420.733,
+      "grading_seconds": 21.552,
+      "deployment_seconds": 646.246,
+      "cleanup_seconds": 144.957,
+      "database_members_verified": 3,
+      "volumes_verified": 7,
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "trajectory": "results/dind/sregym-difficulty-baseline/0926_0435/codex/gitlab_database_deletion_replicated/run_2/trajectory.json",
+      "trajectory_sha256": "7ea422dfa22f5d2bd13a0857f856138532ed7af13a80d3db004c3c824509eeba"
+    },
+    {
+      "attempt": 3,
+      "run_status": "complete",
+      "success": true,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 281.456,
+      "grading_seconds": 20.441,
+      "deployment_seconds": 641.258,
+      "cleanup_seconds": 142.183,
+      "database_members_verified": 3,
+      "volumes_verified": 7,
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "trajectory": "results/dind/sregym-difficulty-baseline/0926_0435/codex/gitlab_database_deletion_replicated/run_3/trajectory.json",
+      "trajectory_sha256": "47232001826a2296ae77d52d493fb26c0a8494528fcda12c4ce2900a163e9c9f"
+    }
+  ],
+  "source_manifest": "results/dind/sregym-difficulty-baseline/initial-campaign.json",
+  "source_archive": "results/dind/sregym-difficulty-baseline/evaluated-source.tar.gz",
+  "raw_comparison": "results/dind/sregym-difficulty-baseline/initial-three/comparison.json",
+  "runtime_audit": "results/dind/sregym-difficulty-baseline/cli-version-audit.json",
+  "notes": [
+    "The same fault and grader were used for all three fresh attempts.",
+    "Each grade verified the real application, retained data, original volumes and three PostgreSQL members with one required synchronous standby.",
+    "Three trials are an exploratory screen, not proof of a general success rate."
+  ]
+}

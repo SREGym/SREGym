@@ -1,0 +1,793 @@
+{
+  "problem": "gitlab_notification_delayed_audit_expanded",
+  "candidate_revision": 1,
+  "status": "two valid passes; third invocation invalid due to model access rejection; third valid trial pending",
+  "focused_tests_passed": 38,
+  "subtests_passed": 5,
+  "source_manifest_sha256": "1fa8bde5cb80c41f3a28c8bc0cd1878acccf573c9825f3e4385ad7f76935ea4b",
+  "source_files": 37,
+  "image": {
+    "tag": "sregym-dind:notification-expanded-candidate",
+    "image_id": "sha256:211b9a14cfbeec001b1a9b6e6d6422f89af7e0bd1eee7d235e7bb87ce98873ec",
+    "base": "sregym-dind:notification-delayed-audit-candidate",
+    "base_image_id": "sha256:f5515956210cea8b74f620d0c79f42b3613c40ac13d50584a865c156d52f5297",
+    "candidate_revision": 1,
+    "source_manifest_sha256": "1fa8bde5cb80c41f3a28c8bc0cd1878acccf573c9825f3e4385ad7f76935ea4b",
+    "source_files": 37,
+    "built_at_unix": 1790447981.7183976,
+    "lifecycle_status": "full admission pending"
+  },
+  "workload": {
+    "tenant_projects": 20,
+    "historical_issues": 300,
+    "acknowledged_issues": 120,
+    "notification_intents": 120,
+    "unrelated_audit_records": 1600,
+    "postgres_members": 3,
+    "persistent_volumes": 8
+  },
+  "publication_delay_seconds": 30,
+  "reference_command_timeout_seconds": 600,
+  "reference_batch_limit": 8,
+  "comprehensive_admission": {
+    "passed": true,
+    "elapsed_seconds": 2635.72,
+    "cleanup": "pass",
+    "raw_record": "notification-expanded-admission.json",
+    "sha256": "5811bb8ad5361f72d0990f204db1d38086bdda2804ecc908dbc5c9426cc4f21a",
+    "stage_success": {
+      "healthy": true,
+      "deleted": false,
+      "backup_only": false,
+      "data_only": false,
+      "recovered": true,
+      "restarted": true,
+      "wrong_and_duplicate_delivery": false
+    },
+    "fixture_evidence": {
+      "notifications": {
+        "expected": 120,
+        "delivered": 9,
+        "missing": 111,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "transport": {
+        "accepted_without_ack": 3,
+        "failed_without_acceptance": 8
+      },
+      "durable_audit_records": 1630,
+      "retained_incident_jobs": 114,
+      "accepted_but_queued": [
+        {
+          "project": 8,
+          "title": "recent acdf08712ea958cb/6",
+          "description": "Acknowledged customer change acdf08712ea958cb/recent/6",
+          "confidential": false,
+          "iid": 16,
+          "recipient": "incident-user-7@sregym.local",
+          "recipient_id": 8,
+          "issue_id_at_acceptance": 323,
+          "job_id": "15d15fcd-c577-48dc-abc8-7c3d56a7fdbf",
+          "provider_job_id": "bba58340ac2ba6bbe84632da",
+          "reason": "sregym-ack"
+        },
+        {
+          "project": 9,
+          "title": "recent acdf08712ea958cb/7",
+          "description": "Acknowledged customer change acdf08712ea958cb/recent/7",
+          "confidential": true,
+          "iid": 16,
+          "recipient": "incident-user-8@sregym.local",
+          "recipient_id": 9,
+          "issue_id_at_acceptance": 324,
+          "job_id": "baa95349-0d4e-48ed-9076-0906e64609be",
+          "provider_job_id": "d8f91c842808433db8317eeb",
+          "reason": "sregym-ack"
+        },
+        {
+          "project": 10,
+          "title": "recent acdf08712ea958cb/8",
+          "description": "Acknowledged customer change acdf08712ea958cb/recent/8",
+          "confidential": false,
+          "iid": 16,
+          "recipient": "incident-user-9@sregym.local",
+          "recipient_id": 10,
+          "issue_id_at_acceptance": 325,
+          "job_id": "cd44b882-310b-44f1-8a63-93d8cc0cbdd4",
+          "provider_job_id": "7fcbfc90c346d5ee3bc1235b",
+          "reason": "sregym-ack"
+        }
+      ],
+      "public_audit_matches_protected_ledger": true,
+      "ongoing_fault": {
+        "active": true,
+        "attempts": 0
+      },
+      "publication": {
+        "delayed_deliveries": 0,
+        "minimum_delay": null,
+        "maximum_delay": null,
+        "policy_delay": 30.0
+      },
+      "workload_counts": [
+        20,
+        300,
+        120
+      ]
+    },
+    "reference_delivery_history": [
+      {
+        "removed": 114,
+        "sends": 148,
+        "delivery_errors": [
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          }
+        ],
+        "delayed_acceptances": 73,
+        "watermark_checks": [
+          {
+            "barrier": 1790449735.890019,
+            "complete_through": 1790449736.1759944,
+            "wait_seconds": 30.27039054967463
+          },
+          {
+            "barrier": 1790449822.7700143,
+            "complete_through": 1790449823.1480029,
+            "wait_seconds": 30.41377774393186
+          },
+          {
+            "barrier": 1790449867.3710198,
+            "complete_through": 1790449867.7090166,
+            "wait_seconds": 30.321598536800593
+          },
+          {
+            "barrier": 1790449901.5269802,
+            "complete_through": 1790449901.8479986,
+            "wait_seconds": 30.355600321199745
+          },
+          {
+            "barrier": 1790449933.3019838,
+            "complete_through": 1790449933.647987,
+            "wait_seconds": 30.36657296307385
+          }
+        ],
+        "batches": [
+          111,
+          28,
+          7,
+          2
+        ],
+        "audit_wait_seconds": 151.72794011468068
+      },
+      {
+        "removed": 0,
+        "sends": 0,
+        "delivery_errors": [],
+        "delayed_acceptances": 0,
+        "watermark_checks": [
+          {
+            "barrier": 1790450227.718009,
+            "complete_through": 1790450228.0570116,
+            "wait_seconds": 30.255083909723908
+          }
+        ],
+        "batches": [],
+        "audit_wait_seconds": 30.255083909723908
+      }
+    ],
+    "publication_after_restart": {
+      "delayed_deliveries": 111,
+      "minimum_delay": 30.0,
+      "maximum_delay": 30.0,
+      "policy_delay": 30.0
+    },
+    "ongoing_fault_after_restart": {
+      "active": true,
+      "attempts": 148
+    },
+    "transport_after_recovery": {
+      "accepted_without_ack": 40,
+      "failed_without_acceptance": 45
+    },
+    "fault_disabled_only_for_final_negative_probes": true
+  },
+  "model": "gpt-6-astra",
+  "cli_version": "0.157.1",
+  "reasoning_effort": "agent default",
+  "agent_timeout_seconds": 900,
+  "cleanup_timeout_seconds": 900,
+  "model_results": [
+    {
+      "attempt": 1,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 637.514,
+      "grading_seconds": 145.894,
+      "deployment_seconds": 930.548,
+      "fault_injection_seconds": 461.524,
+      "recorded_phase_seconds": 2483.8230000000003,
+      "cleanup_seconds": 303.318,
+      "trajectory": "0926_1924/codex/gitlab_notification_delayed_audit_expanded/run_1/trajectory.json",
+      "trajectory_sha256": "2b1358adc56af3acbba0e1de7d43c2c21c62de64c07344708aa2cdac664499ec",
+      "notifications": {
+        "expected": 120,
+        "delivered": 120,
+        "missing": 0,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "fresh_notification_verified": true,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 41,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 423,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 41,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 423,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 41,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 423,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "original_volumes_verified": 8,
+      "database_members_verified": 3,
+      "journal_entries_verified": 120,
+      "acknowledged_data_loss": 0
+    },
+    {
+      "attempt": 2,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 686.947,
+      "grading_seconds": 140.438,
+      "deployment_seconds": 696.988,
+      "fault_injection_seconds": 461.191,
+      "recorded_phase_seconds": 2292.809,
+      "cleanup_seconds": 302.058,
+      "trajectory": "0926_1924/codex/gitlab_notification_delayed_audit_expanded/run_2/trajectory.json",
+      "trajectory_sha256": "cc1b189b968ee2bef29029e5dea88a976c6f3b902383553145dfcc1f4d93b806",
+      "notifications": {
+        "expected": 120,
+        "delivered": 120,
+        "missing": 0,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "fresh_notification_verified": true,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 41,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 423,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 41,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 423,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 21,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 41,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 423,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "original_volumes_verified": 8,
+      "database_members_verified": 3,
+      "journal_entries_verified": 120,
+      "acknowledged_data_loss": 0
+    }
+  ],
+  "difficulty_target_met": false,
+  "predecessor_result": "3/3 valid passes",
+  "raw_artifact_root": "results/dind/sregym-difficulty-baseline",
+  "model_access_interruption": {
+    "attempt": 3,
+    "started_at": "2026-09-26T21:03:37.645108Z",
+    "ended_at": "2026-09-26T21:03:42.755010Z",
+    "outcome": "no_submission",
+    "agent_actions": 0,
+    "message": "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.",
+    "minimal_retry": "same rejection",
+    "counts_as_genuine_failure": false,
+    "cleanup": "pass",
+    "raw_phase_file": "0926_1924/codex/gitlab_notification_delayed_audit_expanded/phases_attempt3.jsonl",
+    "retry_log": "expanded-three/model-recheck.log",
+    "cleanup_seconds": 672.791
+  },
+  "interrupted_source_audit": {
+    "checked_at_unix": 1790457357.8065147,
+    "phase": "two valid passes and one invalid invocation; cleanup complete; third valid trial pending",
+    "files": 37,
+    "host_matches": true,
+    "container_matches": true,
+    "host_mismatches": [],
+    "container_mismatches": [],
+    "invalid_invocation_cleanup": {
+      "phase": "cleanup",
+      "event": "end",
+      "wall": 1790457295.5745726,
+      "ts": "2026-09-26T21:14:55.574573Z",
+      "mono": 3345884.814586827,
+      "problem_id": "gitlab_notification_delayed_audit_expanded",
+      "attempt": 3,
+      "agent": "codex",
+      "model": "gpt-6-astra",
+      "judge_model": "gpt-6-astra",
+      "judge_backend": "api",
+      "duration_s": 672.791,
+      "wall_duration_s": 672.791,
+      "outcome": "ok"
+    },
+    "phase_sha256": "6928ca70fa44bbba9b6241f2d3dc9ecf1eaa0da0413817f6c7c63d133db15098",
+    "difficulty_target_met": false
+  },
+  "comparison": {
+    "problem": "gitlab_notification_delayed_audit_expanded",
+    "command": [
+      "python",
+      "main.py",
+      "--problem",
+      "gitlab_notification_delayed_audit_expanded",
+      "--agent",
+      "codex",
+      "--model",
+      "gpt-6-astra",
+      "--n-attempts",
+      "3",
+      "--profile",
+      "svelte",
+      "--stages",
+      "mitigation",
+      "--agent-timeout",
+      "900",
+      "--agent-image",
+      "sregym-codex-driver:474f427253d219b8"
+    ],
+    "model": "gpt-6-astra",
+    "requested_cli_version": "0.157.1",
+    "attempts": 3,
+    "agent_timeout_seconds": 900,
+    "cleanup_timeout_seconds": 900,
+    "profile": "svelte",
+    "reasoning_effort": "agent default",
+    "difficulty_target": "at least one genuine failure in three valid attempts",
+    "candidate_revision": 1,
+    "validated": true,
+    "validation_method": "tests/integration/validate_gitlab_notification_expanded.py",
+    "admission_sha256": "5811bb8ad5361f72d0990f204db1d38086bdda2804ecc908dbc5c9426cc4f21a",
+    "source_manifest_sha256": "1fa8bde5cb80c41f3a28c8bc0cd1878acccf573c9825f3e4385ad7f76935ea4b",
+    "agent_image": "sregym-codex-driver:474f427253d219b8",
+    "agent_registry": "/opt/sregym/results/expanded-three/agent-registry.yaml",
+    "agent_image_id": "sha256:58e2a04bf825dd9e92beaeedef452d909385cf507653faf80a52612705a79c9c",
+    "started_at_unix": 1790450651.5830684,
+    "status": "inconclusive",
+    "agent_exit_code": 0,
+    "requested": 3,
+    "complete": 2,
+    "successes": 2,
+    "mitigation_pass_rate": 1.0,
+    "difficulty": 0.0,
+    "ambiguous_failures": 0,
+    "inconclusive": true,
+    "csvs": [
+      "results/0926_1924/codex/gitlab_notification_delayed_audit_expanded/gitlab_notification_delayed_audit_expanded_codex_results.csv"
+    ],
+    "elapsed_seconds": 6646.287354469299
+  }
+}

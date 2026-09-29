@@ -1,0 +1,439 @@
+{
+  "problem": "gitlab_notification_recovery_replicated",
+  "status": "admitted; three-run Codex screen complete; difficulty target unmet",
+  "candidate_revision": 3,
+  "admission_passed": true,
+  "admission_seconds": 2236.24,
+  "unit_tests_passed": 48,
+  "healthy": true,
+  "deleted_reason": "database_schema_missing",
+  "backup_only_reason": "acknowledged_data_missing_or_changed",
+  "data_only_reason": "notification_backlog_incomplete",
+  "repeated_restore_succeeded": true,
+  "recovered": {
+    "success": true,
+    "application": "gitlab-ce",
+    "scale_tier": "replicated",
+    "database_members_verified": 3,
+    "original_volumes_verified": 8,
+    "business_data_verified": true,
+    "recovered_records": {
+      "gitlab-ce-db-1": {
+        "users": {
+          "expected": 6,
+          "missing": 0,
+          "changed": 0
+        },
+        "projects": {
+          "expected": 6,
+          "missing": 0,
+          "changed": 0
+        },
+        "members": {
+          "expected": 11,
+          "missing": 0,
+          "changed": 0
+        },
+        "issues": {
+          "expected": 95,
+          "missing": 0,
+          "changed": 0
+        },
+        "duplicate_issues": 0
+      },
+      "gitlab-ce-db-2": {
+        "users": {
+          "expected": 6,
+          "missing": 0,
+          "changed": 0
+        },
+        "projects": {
+          "expected": 6,
+          "missing": 0,
+          "changed": 0
+        },
+        "members": {
+          "expected": 11,
+          "missing": 0,
+          "changed": 0
+        },
+        "issues": {
+          "expected": 95,
+          "missing": 0,
+          "changed": 0
+        },
+        "duplicate_issues": 0
+      },
+      "gitlab-ce-db-3": {
+        "users": {
+          "expected": 6,
+          "missing": 0,
+          "changed": 0
+        },
+        "projects": {
+          "expected": 6,
+          "missing": 0,
+          "changed": 0
+        },
+        "members": {
+          "expected": 11,
+          "missing": 0,
+          "changed": 0
+        },
+        "issues": {
+          "expected": 95,
+          "missing": 0,
+          "changed": 0
+        },
+        "duplicate_issues": 0
+      }
+    },
+    "journal_entries_verified": 30,
+    "acknowledged_data_loss": 0,
+    "notifications": {
+      "expected": 30,
+      "delivered": 30,
+      "missing": 0,
+      "duplicates": 0,
+      "wrong_deliveries": []
+    },
+    "fresh_notification_verified": true
+  },
+  "restarted": true,
+  "repeat_reconciliation": {
+    "expected": 30,
+    "delivered": 30,
+    "missing": 0,
+    "duplicates": 0,
+    "wrong_deliveries": []
+  },
+  "negative_effects": {
+    "expected": 30,
+    "delivered": 30,
+    "missing": 0,
+    "duplicates": 1,
+    "wrong_deliveries": [
+      39
+    ]
+  },
+  "negative_reason": "notification_delivery_violation",
+  "cleanup": "pass",
+  "model": "gpt-6-astra",
+  "requested_cli_version": "0.157.1",
+  "reasoning_effort": "agent default",
+  "agent_budget_seconds": 900,
+  "cleanup_budget_seconds": 900,
+  "reference_queue_wait_seconds": 300,
+  "postgres_memory_limit": "2Gi",
+  "admission_sha256": "551e27f9f44e68ae4d359d6a9a721722eba061d4f6b55e2a0cbaed9d04825c0d",
+  "source_manifest_sha256": "0fcd136db40d40c2083b65d5e188eb53d29dc29a710fd3a29322854e4ba05c50",
+  "raw_artifact_root": "results/dind/sregym-difficulty-baseline",
+  "model_results": {
+    "complete_attempts": 3,
+    "successes": 3,
+    "failures": 0,
+    "ambiguous_failures": 0,
+    "observed_difficulty": 0.0,
+    "observed_cli_version": "0.157.1",
+    "median_agent_seconds": 469.446,
+    "campaign_seconds": 5296.265377044678,
+    "attempts": [
+      {
+        "attempt": 1,
+        "run_status": "complete",
+        "success": true,
+        "reason": null,
+        "failure_class": null,
+        "model": "gpt-6-astra",
+        "cli_version": "0.157.1",
+        "agent_seconds": 469.446,
+        "grading_seconds": 128.516,
+        "deployment_seconds": 845.051,
+        "cleanup_seconds": 238.875,
+        "trajectory": "results/dind/sregym-difficulty-baseline/0926_0802/codex/gitlab_notification_recovery_replicated/run_1/trajectory.json",
+        "trajectory_sha256": "8f777b8c243123488b805e221297946e86760d9828c5ecb6a9a01341d6e733e9",
+        "notifications": {
+          "expected": 30,
+          "delivered": 30,
+          "missing": 0,
+          "duplicates": 0,
+          "wrong_deliveries": []
+        },
+        "fresh_notification_verified": true,
+        "recovered_records": {
+          "gitlab-ce-db-1": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-2": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-3": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "original_volumes_verified": 8,
+        "database_members_verified": 3,
+        "journal_entries_verified": 30,
+        "acknowledged_data_loss": 0
+      },
+      {
+        "attempt": 2,
+        "run_status": "complete",
+        "success": true,
+        "reason": null,
+        "failure_class": null,
+        "model": "gpt-6-astra",
+        "cli_version": "0.157.1",
+        "agent_seconds": 500.331,
+        "grading_seconds": 128.506,
+        "deployment_seconds": 654.406,
+        "cleanup_seconds": 242.238,
+        "trajectory": "results/dind/sregym-difficulty-baseline/0926_0802/codex/gitlab_notification_recovery_replicated/run_2/trajectory.json",
+        "trajectory_sha256": "7e26551656cfc519dc9441dd066b3085997504ea3cb0fc4c471c470b5cbb7b45",
+        "notifications": {
+          "expected": 30,
+          "delivered": 30,
+          "missing": 0,
+          "duplicates": 0,
+          "wrong_deliveries": []
+        },
+        "fresh_notification_verified": true,
+        "recovered_records": {
+          "gitlab-ce-db-1": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-2": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-3": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "original_volumes_verified": 8,
+        "database_members_verified": 3,
+        "journal_entries_verified": 30,
+        "acknowledged_data_loss": 0
+      },
+      {
+        "attempt": 3,
+        "run_status": "complete",
+        "success": true,
+        "reason": null,
+        "failure_class": null,
+        "model": "gpt-6-astra",
+        "cli_version": "0.157.1",
+        "agent_seconds": 418.853,
+        "grading_seconds": 131.938,
+        "deployment_seconds": 644.611,
+        "cleanup_seconds": 241.818,
+        "trajectory": "results/dind/sregym-difficulty-baseline/0926_0802/codex/gitlab_notification_recovery_replicated/run_3/trajectory.json",
+        "trajectory_sha256": "dd349740fd0fa1786814354141b3a2e4ae79394de2cc9a60e2fd8acf74e26f1c",
+        "notifications": {
+          "expected": 30,
+          "delivered": 30,
+          "missing": 0,
+          "duplicates": 0,
+          "wrong_deliveries": []
+        },
+        "fresh_notification_verified": true,
+        "recovered_records": {
+          "gitlab-ce-db-1": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-2": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-3": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 93,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "original_volumes_verified": 8,
+        "database_members_verified": 3,
+        "journal_entries_verified": 30,
+        "acknowledged_data_loss": 0
+      }
+    ],
+    "raw_comparison": "results/dind/sregym-difficulty-baseline/notification-three/comparison.json"
+  },
+  "difficulty_target_met": false
+}

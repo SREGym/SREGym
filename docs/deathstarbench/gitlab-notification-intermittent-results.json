@@ -1,0 +1,543 @@
+{
+  "problem": "gitlab_notification_intermittent_replicated",
+  "candidate_revision": 2,
+  "status": "complete: 3 of 3 valid model attempts passed; difficulty target not met",
+  "focused_tests_passed": 29,
+  "source_manifest_sha256": "bcf4b8fda0c25d857e94269f461dd94708f80ecdc9b27f6126e94b1ff9a21e95",
+  "image": {
+    "tag": "sregym-dind:notification-intermittent-candidate",
+    "image_id": "sha256:6339c97f51f8a3d28bd99fa0458dca2fa5ec5d71a357ab72c37e83755a51db45",
+    "base": "sregym-dind:notification-ambiguity-candidate",
+    "base_image_id": "sha256:26a59566e58850a80729bade15dd87cd39a98b59c701fb07ba67f22093fc7d4b",
+    "candidate_revision": 2,
+    "source_manifest_sha256": "bcf4b8fda0c25d857e94269f461dd94708f80ecdc9b27f6126e94b1ff9a21e95",
+    "source_files": 29,
+    "built_at_unix": 1790430249.1285565,
+    "lifecycle_status": "full admission passed"
+  },
+  "comprehensive_admission": {
+    "passed": true,
+    "elapsed_seconds": 2091.69,
+    "cleanup": "pass",
+    "raw_record": "results/dind/sregym-difficulty-baseline/notification-intermittent-admission.json",
+    "sha256": "0d25cbdcc894158453f1aa52e5ca3f76fd41e2b50ebe5817963a558f7b5a7e97",
+    "stage_success": {
+      "healthy": true,
+      "deleted": false,
+      "backup_only": false,
+      "data_only": false,
+      "recovered": true,
+      "restarted": true,
+      "wrong_and_duplicate_delivery": false
+    },
+    "ongoing_fault_after_restart": {
+      "active": true,
+      "attempts": 28
+    },
+    "transport_after_recovery": {
+      "accepted_without_ack": 10,
+      "failed_without_acceptance": 18
+    },
+    "reference_delivery_history": [
+      {
+        "removed": 24,
+        "sends": 28,
+        "delivery_errors": [
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          },
+          {
+            "type": "ApplicationMailer::SMTPConnectionError",
+            "cause": "EOFError"
+          }
+        ]
+      },
+      {
+        "removed": 0,
+        "sends": 0,
+        "delivery_errors": []
+      }
+    ],
+    "fault_disabled_only_for_final_negative_probes": true
+  },
+  "model": "gpt-6-astra",
+  "cli_version": "0.157.1",
+  "reasoning_effort": "agent default",
+  "agent_timeout_seconds": 900,
+  "cleanup_timeout_seconds": 900,
+  "model_results": [
+    {
+      "attempt": 1,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 664.321,
+      "grading_seconds": 132.745,
+      "deployment_seconds": 896.662,
+      "fault_injection_seconds": 331.229,
+      "recorded_phase_seconds": 2293.9790000000003,
+      "cleanup_seconds": 263.92,
+      "trajectory": "0926_1419/codex/gitlab_notification_intermittent_replicated/run_1/trajectory.json",
+      "trajectory_sha256": "2ab8d5fd938fd3d8bc2e5dc2b8061daef18b6573902bfb517a8d30c13ae030c7",
+      "notifications": {
+        "expected": 30,
+        "delivered": 30,
+        "missing": 0,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "fresh_notification_verified": true,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "original_volumes_verified": 8,
+      "database_members_verified": 3,
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0
+    },
+    {
+      "attempt": 2,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 845.057,
+      "grading_seconds": 134.23,
+      "deployment_seconds": 649.875,
+      "fault_injection_seconds": 331.826,
+      "recorded_phase_seconds": 2205.547,
+      "cleanup_seconds": 239.454,
+      "trajectory": "0926_1419/codex/gitlab_notification_intermittent_replicated/run_2/trajectory.json",
+      "trajectory_sha256": "0c727e8d51621964f9864b90266786b84ed4c65391e2a7041945850506f6c2c9",
+      "notifications": {
+        "expected": 30,
+        "delivered": 30,
+        "missing": 0,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "fresh_notification_verified": true,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "original_volumes_verified": 8,
+      "database_members_verified": 3,
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0
+    },
+    {
+      "attempt": 3,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 580.621,
+      "grading_seconds": 134.703,
+      "deployment_seconds": 658.875,
+      "fault_injection_seconds": 329.375,
+      "recorded_phase_seconds": 1971.2069999999999,
+      "cleanup_seconds": 262.483,
+      "trajectory": "0926_1419/codex/gitlab_notification_intermittent_replicated/run_3/trajectory.json",
+      "trajectory_sha256": "8518461f796d3b1b5a7afa389a54eb7ab61ba72aa98d098cc62e7e7ed6562b79",
+      "notifications": {
+        "expected": 30,
+        "delivered": 30,
+        "missing": 0,
+        "duplicates": 0,
+        "wrong_deliveries": []
+      },
+      "fresh_notification_verified": true,
+      "recovered_records": {
+        "gitlab-ce-db-1": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-2": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        },
+        "gitlab-ce-db-3": {
+          "users": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "projects": {
+            "expected": 6,
+            "missing": 0,
+            "changed": 0
+          },
+          "members": {
+            "expected": 11,
+            "missing": 0,
+            "changed": 0
+          },
+          "issues": {
+            "expected": 93,
+            "missing": 0,
+            "changed": 0
+          },
+          "duplicate_issues": 0
+        }
+      },
+      "original_volumes_verified": 8,
+      "database_members_verified": 3,
+      "journal_entries_verified": 30,
+      "acknowledged_data_loss": 0
+    }
+  ],
+  "difficulty_target_met": false,
+  "raw_artifact_root": "results/dind/sregym-difficulty-baseline",
+  "development_admissions": [
+    {
+      "candidate_revision": 1,
+      "passed": false,
+      "elapsed_seconds": 1547.86,
+      "cleanup": "pass",
+      "error": "Command '['kubectl', '-n', 'gitlab-ce', 'exec', '-i', 'deployment/gitlab-ce', '--', 'gitlab-rails', 'runner', '-']' returned non-zero exit status 1.",
+      "reason": "Reference mail delivery aborted during a transport failure; the stored traceback was truncated. No model trials started.",
+      "raw_record": "notification-intermittent-v1-admission.json"
+    }
+  ],
+  "change_from_v1": "Consult provider audit after any mail-delivery exception, with bounded retries; preserve admission exception head and tail. Fault policy and grader unchanged.",
+  "model_summary": {
+    "problem": "gitlab_notification_intermittent_replicated",
+    "command": [
+      "python",
+      "main.py",
+      "--problem",
+      "gitlab_notification_intermittent_replicated",
+      "--agent",
+      "codex",
+      "--model",
+      "gpt-6-astra",
+      "--n-attempts",
+      "3",
+      "--profile",
+      "svelte",
+      "--stages",
+      "mitigation",
+      "--agent-timeout",
+      "900",
+      "--agent-image",
+      "sregym-codex-driver:474f427253d219b8"
+    ],
+    "model": "gpt-6-astra",
+    "requested_cli_version": "0.157.1",
+    "attempts": 3,
+    "agent_timeout_seconds": 900,
+    "cleanup_timeout_seconds": 900,
+    "profile": "svelte",
+    "reasoning_effort": "agent default",
+    "difficulty_target": "at least one genuine failure in three valid attempts",
+    "candidate_revision": 2,
+    "validated": true,
+    "validation_method": "tests/integration/validate_gitlab_notification_intermittent.py",
+    "admission_sha256": "0d25cbdcc894158453f1aa52e5ca3f76fd41e2b50ebe5817963a558f7b5a7e97",
+    "source_manifest_sha256": "bcf4b8fda0c25d857e94269f461dd94708f80ecdc9b27f6126e94b1ff9a21e95",
+    "agent_image": "sregym-codex-driver:474f427253d219b8",
+    "agent_registry": "/opt/sregym/results/intermittent-three/agent-registry.yaml",
+    "agent_image_id": "sha256:58e2a04bf825dd9e92beaeedef452d909385cf507653faf80a52612705a79c9c",
+    "started_at_unix": 1790432350.6028752,
+    "status": "complete",
+    "agent_exit_code": 0,
+    "requested": 3,
+    "complete": 3,
+    "successes": 3,
+    "mitigation_pass_rate": 1.0,
+    "difficulty": 0.0,
+    "ambiguous_failures": 0,
+    "inconclusive": false,
+    "csvs": [
+      "results/0926_1419/codex/gitlab_notification_intermittent_replicated/gitlab_notification_intermittent_replicated_codex_results.csv"
+    ],
+    "elapsed_seconds": 6516.846319437027
+  },
+  "median_agent_seconds": 664.321,
+  "grading_time_ledgers": [
+    {
+      "path": "intermittent-three/mailbox-attempt1-1790434294529720769.json",
+      "sha256": "a2f2b6826f188d215cff13ad7b5aad9c3a8b724a02a7b08eb91b1f43963c71a6",
+      "attempt": 1,
+      "incident_messages": 30,
+      "unique_intents": 30,
+      "ongoing_fault": {
+        "active": true,
+        "attempts": 28
+      },
+      "transport_faults": {
+        "accepted_without_ack": 10,
+        "failed_without_acceptance": 18
+      }
+    },
+    {
+      "path": "intermittent-three/mailbox-attempt2-1790436522610678721.json",
+      "sha256": "a7e659912e1ce3686cf1b9bdf93b46ecd3286f3a38660c3a74b5ef6d2df38697",
+      "attempt": 2,
+      "incident_messages": 30,
+      "unique_intents": 30,
+      "ongoing_fault": {
+        "active": true,
+        "attempts": 28
+      },
+      "transport_faults": {
+        "accepted_without_ack": 10,
+        "failed_without_acceptance": 18
+      }
+    },
+    {
+      "path": "intermittent-three/mailbox-attempt3-1790438470288206250.json",
+      "sha256": "6033a2cfe2042c795d8d71a960d3eb386933aafecc48714fe233a4dbb3c75ad2",
+      "attempt": 3,
+      "incident_messages": 30,
+      "unique_intents": 30,
+      "ongoing_fault": {
+        "active": true,
+        "attempts": 28
+      },
+      "transport_faults": {
+        "accepted_without_ack": 10,
+        "failed_without_acceptance": 21
+      }
+    }
+  ],
+  "source_audit": {
+    "checked_at_unix": 1790438532.928964,
+    "phase": "all three agent phases completed; third grade running",
+    "files": 29,
+    "host_matches": true,
+    "container_matches": true,
+    "host_mismatches": [],
+    "container_mismatches": []
+  }
+}
