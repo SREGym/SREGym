@@ -40,7 +40,6 @@ from sregym.profile import is_svelte
 from sregym.service.apps.app_registry import AppRegistry
 from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
-from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.internet_policy import InternetPolicy
 from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController, KhaosUnsupportedError
@@ -95,7 +94,6 @@ class Conductor:
         self.agent_name = None
 
         self.khaos = KhaosController(self.kubectl)
-        self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
         self.cluster_state = ClusterStateManager(self.kubectl)
         self.cluster_egress = ClusterEgressBoundary(self.kubectl)
         self._baseline_captured = False
@@ -1367,12 +1365,6 @@ class Conductor:
         except Exception as e:
             self.logger.error(f"Failed to recover CoreDNS NXDOMAIN templates: {e}")
 
-        self.logger.info("[FIX] Leftover dm-flakey infrastructure if any")
-        try:
-            self.dm_flakey_manager.teardown_openebs_dm_flakey_infrastructure()
-        except Exception as e:
-            self.logger.warning(f"Could not teardown dm-flakey (Khaos may not be deployed yet): {e}")
-
         self.logger.info("[FIX] NightlyRebalanceOOM kube-system actor leftover if any")
         try:
             from sregym.conductor.problems.nightly_rebalance_oom import NightlyRebalanceOOM
@@ -1441,7 +1433,7 @@ class Conductor:
         # Only deploy Khaos if the problem requires it
         if problem.requires_khaos():
             self.logger.info("[DEPLOY] Deploying Khaos DaemonSet...")
-            self.khaos.ensure_deployed(problem.khaos_capabilities())
+            self.khaos.ensure_deployed()
 
         self.logger.info("[DEPLOY] Setting up OpenEBS…")
         svelte = is_svelte()

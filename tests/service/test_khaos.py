@@ -4,10 +4,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
-from sregym.service.dm_flakey_manager import DmFlakeyManager, dm_flakey_device_name
 from sregym.service.khaos import KhaosController, KhaosUnsupportedError
-from sregym.service.khaos_capabilities import KhaosCapability
 
 
 class FakeKubectl:
@@ -30,8 +27,6 @@ class FakeKubectl:
                     "status": {"phase": "Running"},
                 },
             ]
-            if "profile=worker" in command:
-                pods = pods[1:]
             return json.dumps({"items": pods})
         if self.fail_ebpf_check and "/khaos/khaos --check" in command:
             raise RuntimeError("UNSUPPORTED: kernel helper unavailable")
@@ -42,13 +37,13 @@ class FakeKubectl:
         return ""
 
     def is_emulated_cluster(self):
-        raise AssertionError("Khaos support must be capability-based, not cluster-name-based")
+        raise AssertionError("Khaos support must be probed on the nodes, not inferred from the cluster name")
 
 
-def test_ebpf_capability_is_checked_on_kind_nodes():
+def test_ebpf_support_is_checked_on_kind_nodes():
     kubectl = FakeKubectl()
 
-    KhaosController(kubectl).ensure_deployed({KhaosCapability.EBPF_SYSCALL})
+    KhaosController(kubectl).ensure_deployed()
 
     checks = [command for command in kubectl.commands if "/khaos/khaos --check" in command]
     assert len(checks) == 2
@@ -56,24 +51,11 @@ def test_ebpf_capability_is_checked_on_kind_nodes():
     assert any("khaos-worker-abc" in command for command in checks)
 
 
-def test_failed_ebpf_preflight_reports_node_and_capability():
+def test_failed_ebpf_preflight_reports_node():
     kubectl = FakeKubectl(fail_ebpf_check=True)
 
-    with pytest.raises(KhaosUnsupportedError, match="kind-control-plane.*ebpf-syscall"):
-        KhaosController(kubectl).ensure_deployed({KhaosCapability.EBPF_SYSCALL})
-
-
-def test_dm_flakey_preflight_only_targets_worker_nodes():
-    kubectl = FakeKubectl()
-
-    KhaosController(kubectl).ensure_deployed({KhaosCapability.DM_FLAKEY})
-
-    checks = [command for command in kubectl.commands if "modprobe dm_flakey" in command]
-    assert len(checks) == 1
-    assert "khaos-worker-abc" in checks[0]
-    assert "dmsetup targets" in checks[0]
-    assert "timeout 30 dmsetup create" in checks[0]
-    assert "random_read_corrupt 1 random_write_corrupt 1" in checks[0]
+    with pytest.raises(KhaosUnsupportedError, match="kind-control-plane.*eBPF"):
+        KhaosController(kubectl).ensure_deployed()
 
 
 def test_daemonsets_bootstrap_bpffs_with_privileged_xlab_image():
@@ -89,11 +71,6 @@ def test_daemonsets_bootstrap_bpffs_with_privileged_xlab_image():
         assert container["image"] == "ghcr.io/xlab-uiuc/khaos:latest"
         assert container["imagePullPolicy"] == "Always"
         assert "mount -t bpf" in container["args"][0]
-        assert {"name": "DM_DISABLE_UDEV", "value": "1"} in container["env"]
-
-
-def test_silent_data_corruption_requests_dm_flakey_instead_of_ebpf():
-    assert SilentDataCorruption.khaos_capabilities(object()) == frozenset({KhaosCapability.DM_FLAKEY})
 
 
 def test_worker_daemonset_targets_unlabelled_worker_nodes():
@@ -104,9 +81,6 @@ def test_worker_daemonset_targets_unlabelled_worker_nodes():
     terms = pod_spec["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"]
 
     assert "nodeSelector" not in pod_spec
-    # Khaos deploys before OpenEBS, so a fresh node has no /var/openebs yet.
-    openebs = next(v for v in pod_spec["volumes"] if v["name"] == "openebs")
-    assert openebs["hostPath"]["type"] == "DirectoryOrCreate"
     assert terms == [
         {
             "matchExpressions": [
@@ -115,13 +89,3 @@ def test_worker_daemonset_targets_unlabelled_worker_nodes():
             ]
         }
     ]
-
-
-def test_dm_flakey_device_names_are_unique_per_node():
-    # kind nodes share one kernel, so a shared device name lets one node's setup tear down another's device.
-    manager = DmFlakeyManager(kubectl=None)
-
-    assert dm_flakey_device_name("kind-worker") != dm_flakey_device_name("kind-worker2")
-    assert "DM_NAME=openebs_flakey_kind-worker2\n" in manager._build_cleanup_script(
-        dm_flakey_device_name("kind-worker2")
-    )
