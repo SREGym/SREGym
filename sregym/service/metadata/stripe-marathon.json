@@ -1,0 +1,8 @@
+{
+  "Name": "SWE-Marathon Stripe prototype",
+  "Namespace": "stripe-marathon",
+  "Desc": "Pinned SWE-Marathon Stripe reference API with transactional PostgreSQL persistence, a separate billing/webhook worker and durable local webhook receipts. Test-mode payments only. Database state and pending deliveries survive application restarts.",
+  "frontend_service": "stripe-marathon",
+  "frontend_port": 8000,
+  "Supported Operations": ["Create customers, payments and refunds", "Inspect durable webhook backlog", "Inspect PostgreSQL primary and replicas", "Restart API and workers while retaining state"]
+}

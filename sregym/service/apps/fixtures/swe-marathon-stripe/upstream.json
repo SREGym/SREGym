@@ -1,0 +1,254 @@
+{
+  "repository": "https://github.com/abundant-ai/swe-marathon",
+  "revision": "5c468fae8656ef9f7bca36cc8c6ee6e7478aa0f6",
+  "artifact": "human-written reference solution and original contract tests, not an agent submission",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "path": "LICENSE",
+      "upstream_path": "LICENSE",
+      "git_blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+    },
+    {
+      "path": "instruction.md",
+      "upstream_path": "tasks/stripe-clone/instruction.md",
+      "git_blob": "6e3f3dfe605b2f957da7f048079f51d832a2ee32",
+      "sha256": "6c676d531d4864678511584d025aa00c2f751908d89102e9ad2a1f3ebeef7ce0"
+    },
+    {
+      "path": "solution/app/__init__.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/__init__.py",
+      "git_blob": "a18f4e2d1cada9442e7e960e1f657eb57991845d",
+      "sha256": "1a849c3aa4160077ff0f6424247953786963b2e4d3ced5108293c4b010d9439b"
+    },
+    {
+      "path": "solution/app/__main__.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/__main__.py",
+      "git_blob": "a1226bb930cd464572bb23d7bea3c18944d17b66",
+      "sha256": "0cb397d3746165ac8f7c1c57e74fc676ff2908735c63e44779f9099333008eb8"
+    },
+    {
+      "path": "solution/app/api.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/api.py",
+      "git_blob": "3c2bbf88e24f2bcc8276971980d1b7495a87af74",
+      "sha256": "ef6601c9a636462375c80e75d50a03630963126a17581011e18184ddb5a6cff8"
+    },
+    {
+      "path": "solution/app/auth.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/auth.py",
+      "git_blob": "0ddb2d2994e0bb9755aa9600c431025e7aa1fa3d",
+      "sha256": "d78f486ee189b460946dbca321cdc17c742cf9665e4b472bd154862f80261eab"
+    },
+    {
+      "path": "solution/app/customers.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/customers.py",
+      "git_blob": "66ea94794a91532988133d5d0b8d38a103574816",
+      "sha256": "a6a4168e8d49df56df0348edb1c03b1d30486b1c4bb6d6949e4e934718a8cea2"
+    },
+    {
+      "path": "solution/app/errors.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/errors.py",
+      "git_blob": "03faa3231e74e00e7669f4d5e19c71e9927364b9",
+      "sha256": "865840fab65b5d3030eb3f32e4d5e1a351ad2edebb01abb7a5f269b7d14724d6"
+    },
+    {
+      "path": "solution/app/events.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/events.py",
+      "git_blob": "7eb9887c79c26f2e0af974d059df3f56d9d381e7",
+      "sha256": "2d6ac5dac290f3e826c9b203b142405a147a2d32d5f8f4aed2613453516578f7"
+    },
+    {
+      "path": "solution/app/forms.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/forms.py",
+      "git_blob": "ebbe3bd0631fc045ad1c3936896966c4fcf2be45",
+      "sha256": "34d0c69696dcf3328ca553c46849f5509e252991c6abbad7b6a5b60fb445bd70"
+    },
+    {
+      "path": "solution/app/idempotency.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/idempotency.py",
+      "git_blob": "009cf9ca84fe2fe6ebae84ba7ba873c07d7e9f79",
+      "sha256": "bc36568043cab5688e819d6ca3131b4bb537f9990146f87746ac91a3ed3f84e9"
+    },
+    {
+      "path": "solution/app/ids.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/ids.py",
+      "git_blob": "e727ea4e4621d924fb894fcdfbe00431417689c3",
+      "sha256": "13ba2cef68ff7ab5e85e930dddf65e676e5b5fae4782c58ff61a9869cae5a9f0"
+    },
+    {
+      "path": "solution/app/pagination.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/pagination.py",
+      "git_blob": "6e65471bab8083419314b4d80e138bf1e8ee482e",
+      "sha256": "1b805fc48bac25eb1472f52acf71bff12ff89350e299832005d8fee4ae3fefc0"
+    },
+    {
+      "path": "solution/app/payment_intents.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/payment_intents.py",
+      "git_blob": "289d81053d3f900719a9612c2c3b0b7b4281f69a",
+      "sha256": "0af0136a89e2115c05201988b991202ee6617c14c466e3256a81a34d006f0f14"
+    },
+    {
+      "path": "solution/app/payment_methods.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/payment_methods.py",
+      "git_blob": "dc457ee5b160ba733f0c123c5bc9925f09f4bdc6",
+      "sha256": "ee3c8e56918cd4db90d039f66d20df94bf4b85c55dd1fa81ca7985b8883653a9"
+    },
+    {
+      "path": "solution/app/refunds.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/refunds.py",
+      "git_blob": "85947ad78012990754e4d0db7976385508696913",
+      "sha256": "35fbd4dda49f971a5b1d1c6aec6d40db453d32a483851dfbb55ab2a3ad020c6d"
+    },
+    {
+      "path": "solution/app/restricted_keys.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/restricted_keys.py",
+      "git_blob": "80b6857c92f61552114fa79bf81a7d6f7b003090",
+      "sha256": "7300842d635e4a96222a5022978c6492431655499abadcb25c8d851c18b6cff0"
+    },
+    {
+      "path": "solution/app/storage.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/storage.py",
+      "git_blob": "fbc980ce706769b733301530a66522e148c90231",
+      "sha256": "0ccc67573419a3a2f396652665b8e4cbb658c2ff8e0545bb5add3ff857eb71ee"
+    },
+    {
+      "path": "solution/app/subscriptions.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/subscriptions.py",
+      "git_blob": "0337a1d6ebca311e47e91ca44b9f60e656db5207",
+      "sha256": "060ae66cf325fe4f70c1e82ad6b122c6bd375b7b112d0a5655b406bcf5877e3b"
+    },
+    {
+      "path": "solution/app/test_cards.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/test_cards.py",
+      "git_blob": "41186dd6528fff98b58a3b24d5350e5254962e5a",
+      "sha256": "a08f7c741b286307a94976feda9af26cd7f93481ce37b81225095e71bff56254"
+    },
+    {
+      "path": "solution/app/webhooks.py",
+      "upstream_path": "tasks/stripe-clone/solution/app/webhooks.py",
+      "git_blob": "438475346d0f73bd57d351b37407e954d2734f19",
+      "sha256": "7be01c4a8711689b08808061a669011513f6f09635c18c000872d8741e0c6c08"
+    },
+    {
+      "path": "solution/requirements.txt",
+      "upstream_path": "tasks/stripe-clone/solution/requirements.txt",
+      "git_blob": "163507fa58c85525dd3a8fb50b5c548be4d3d4ed",
+      "sha256": "5e370c49f992ffe05a8686f4afad181b427206dfb03de23a06619e8a51b1a542"
+    },
+    {
+      "path": "solution/solve.sh",
+      "upstream_path": "tasks/stripe-clone/solution/solve.sh",
+      "git_blob": "1b2ad038a6f897925823744b5d7a523544c5ef55",
+      "sha256": "2b9f87ad5a7d0228c99bf2cf8b83ca560ae95ffa0b288a7213d9867dd7f5cc9e"
+    },
+    {
+      "path": "solution/start.sh",
+      "upstream_path": "tasks/stripe-clone/solution/start.sh",
+      "git_blob": "2e4367b4ffecaf752dad8a6108a8fd03ec2afe51",
+      "sha256": "b921b0de9cec8607bb7f2aeb6bc7bbe1b2a56a989ed16933eeadd6ddf2baf2d3"
+    },
+    {
+      "path": "task.toml",
+      "upstream_path": "tasks/stripe-clone/task.toml",
+      "git_blob": "d93bb7eefbfa52123135c00072a1f099578b672f",
+      "sha256": "49f39187f2d972116d10cdb85e418a5982f9227fb33425f0b86883d8ce8df7ee"
+    },
+    {
+      "path": "tests/anti_cheat.py",
+      "upstream_path": "tasks/stripe-clone/tests/anti_cheat.py",
+      "git_blob": "42ce0ebede15067d3bfe98c985c187684e63bdb7",
+      "sha256": "e68d0f1c4f1c6fd2065ce88ff57424c4c6a038b3645d26328ed08bceca948a0f"
+    },
+    {
+      "path": "tests/conftest.py",
+      "upstream_path": "tasks/stripe-clone/tests/conftest.py",
+      "git_blob": "4f973c37dfe4653f5e1dc8df5b96d3c6c0c2aa46",
+      "sha256": "fcd5088441bd5e443893e37edb64990535752af4ac9000ee4a001903c879e4b7"
+    },
+    {
+      "path": "tests/dump_artifacts.py",
+      "upstream_path": "tasks/stripe-clone/tests/dump_artifacts.py",
+      "git_blob": "d240ae16e2f61e7f41743f6f626266d4ec6b87c5",
+      "sha256": "2c8fcd12f71123694e0229fe8aba9e37eec29cfb9550952feb63250848679d44"
+    },
+    {
+      "path": "tests/test.sh",
+      "upstream_path": "tasks/stripe-clone/tests/test.sh",
+      "git_blob": "2b698938eb0fd4711a88e5a08fd97ea773b83f35",
+      "sha256": "23368bde136e4b7e41a26be78f7391f0991c1f5831d262e456f77e2a1e8cab71"
+    },
+    {
+      "path": "tests/test_anti_cheat.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_anti_cheat.py",
+      "git_blob": "495cc4d956800d6f87edadba6445b90301353928",
+      "sha256": "605be53685e647bd26cbdbcd08432e7fc2c882b29598afd3db43fcf317484480"
+    },
+    {
+      "path": "tests/test_auth.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_auth.py",
+      "git_blob": "aa7ee64cba100a706b4153e5022a4ea4fd818a34",
+      "sha256": "e60f78da8b0eb38c92aa793bc8d2322cc32e204ec4a1f41fe99599086e9c4e3c"
+    },
+    {
+      "path": "tests/test_concurrency.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_concurrency.py",
+      "git_blob": "782938e8ddc318db3926c585bc4047506047675c",
+      "sha256": "add63af6da6becd8e8f595327545785cc7bea146012c75facf82240d469bf7c5"
+    },
+    {
+      "path": "tests/test_customers.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_customers.py",
+      "git_blob": "f693ba6f75de06503b44031d5eef5fe023ded95d",
+      "sha256": "fa8b371ab34f246271e59ebfbd470073bbea2b9410128f15abdd59f8b0d781b0"
+    },
+    {
+      "path": "tests/test_errors.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_errors.py",
+      "git_blob": "97369aa70fac957201beff1eec4320866c2fca54",
+      "sha256": "1013fab3cdbbdaadc188c1df2315468fb11f1c3f5ac1afec9d67766792c2e60d"
+    },
+    {
+      "path": "tests/test_idempotency.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_idempotency.py",
+      "git_blob": "3cb6846841b745ea2576b55265f9f88d2d730fd3",
+      "sha256": "763d34cc5be9a73b0b9c2e5b99fb480aed89a9f19b4c52ddbfabce41e2d0e185"
+    },
+    {
+      "path": "tests/test_pagination.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_pagination.py",
+      "git_blob": "70d6109f7a042b3ec3365c1dd1f35adad1fe165e",
+      "sha256": "7501dbd257c324ca2286becfc83e5eca3b621c0d0f86fe2ee3299597c9a36ac9"
+    },
+    {
+      "path": "tests/test_payment_intents.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_payment_intents.py",
+      "git_blob": "e925da29bb8f9d85896d9c2d1d6689c4b7561284",
+      "sha256": "7f569dff089d944182ab5604b71ffb482a85338cdcf8a5f60e3de9a9dcf72d67"
+    },
+    {
+      "path": "tests/test_refunds.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_refunds.py",
+      "git_blob": "7e9a95e7fe64f3762aa604ee263882eee8dd78c2",
+      "sha256": "d99e8ad973cf2e9212cb51e43b22717fb6f7fd970f139a08e287deaef4b5fbae"
+    },
+    {
+      "path": "tests/test_restricted_keys.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_restricted_keys.py",
+      "git_blob": "664602a29d0da1718ce85fc670ca3f8b847fc84f",
+      "sha256": "adf53e7d4f2bf0af25607bda1f9b47bc8ef183a8d6d649df6aec749d4ef3b345"
+    },
+    {
+      "path": "tests/test_subscriptions.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_subscriptions.py",
+      "git_blob": "4198a5a1b67124c149618b462d1f0a3f4125723a",
+      "sha256": "05247a316a9abd4387a883bb68bc6576e899f52ddbdb1badd7759bc587dcbd73"
+    },
+    {
+      "path": "tests/test_webhooks.py",
+      "upstream_path": "tasks/stripe-clone/tests/test_webhooks.py",
+      "git_blob": "3d5bfd356ffcac8e3bb2d09fd75aa02e13d35aa4",
+      "sha256": "a83ff50e70b41479b96833824c63e09711f818c6154e0acb2b59cf5503d6af74"
+    }
+  ]
+}

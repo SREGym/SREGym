@@ -1,0 +1,12 @@
+SWE-Marathon Stripe reference application and contract tests
+Source: https://github.com/abundant-ai/swe-marathon
+Revision: 5c468fae8656ef9f7bca36cc8c6ee6e7478aa0f6
+License: Apache License, Version 2.0 (included as LICENSE)
+
+These are the upstream human-written reference solution and tests, not the
+source of a successful agent submission. All imported files are unchanged;
+upstream.json records original paths and cryptographic hashes.
+
+SREGym's separate docker/stripe-marathon/backend.py adds PostgreSQL durability,
+transactional API responses and a separate worker. receiver.py provides a local
+durable webhook sink. They are SREGym adaptations, not upstream functionality.

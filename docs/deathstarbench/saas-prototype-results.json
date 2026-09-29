@@ -1,0 +1,921 @@
+{
+  "recorded_at_utc": "2026-09-26T01:37:15.820700+00:00",
+  "purpose": "Prototype admission, not agent difficulty measurement",
+  "applications": 3,
+  "live_admissions_passed": 6,
+  "conditions": {
+    "host_count": 1,
+    "kind_nodes": 4,
+    "kubernetes": "1.32.11",
+    "outer_cpus": 8,
+    "outer_memory_gib": 34,
+    "docker_tmpfs_gib": 24,
+    "outer_tmp_tmpfs_gib": 3,
+    "new_launcher_tmp_tmpfs_gib": 4,
+    "execution": "Serial applications in one private DinD cluster"
+  },
+  "cases": [
+    {
+      "application": "gitlab_ce",
+      "tier": "single",
+      "passed": true,
+      "checks": {
+        "healthy": {
+          "success": true,
+          "application": "gitlab-ce",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "fault_detected": {
+          "success": false,
+          "reason": "no_ready_endpoints",
+          "failure_class": "ambiguous",
+          "detail": {
+            "service": "gitlab-ce"
+          }
+        },
+        "reference_recovery": {
+          "success": true,
+          "application": "gitlab-ce",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "record_loss_detected": {
+          "success": false,
+          "reason": "acknowledged_record_missing",
+          "failure_class": "agent_error",
+          "detail": {
+            "member": "gitlab-ce-db-1"
+          }
+        },
+        "record_restored": {
+          "success": true,
+          "application": "gitlab-ce",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "application_restart": {
+          "success": true,
+          "application": "gitlab-ce",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "cleanup": {
+          "passed": true
+        }
+      },
+      "duration_seconds": 749.1730379853398,
+      "retained_volume_count": 4,
+      "images": [
+        {
+          "image": "docker.io/gitlab/gitlab-ce:18.11.12-ce.0",
+          "image_id": "docker.io/gitlab/gitlab-ce@sha256:9dc94c49789d1ffec78e1998b088c83d7d1d9d5f2dc8b388cbb2bd2de328dd21"
+        },
+        {
+          "image": "docker.io/library/python:3.12.13-alpine3.23",
+          "image_id": "docker.io/library/python@sha256:601d3d3797e90e2534782e69c85fafb7971b43f24c7b1b079b7e48dd435e458d"
+        },
+        {
+          "image": "docker.io/library/redis:7.4.2-alpine",
+          "image_id": "docker.io/library/redis@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
+        },
+        {
+          "image": "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie",
+          "image_id": "ghcr.io/cloudnative-pg/postgresql@sha256:04f35778ca3b55b52a81dae969bef179ead315b9f02d2b4b21a3415de269b836"
+        }
+      ],
+      "evidence": "results/dind/sregym-saas-prototypes/gitlab-ce-single.json",
+      "evidence_sha256": "f93200ae8320915901bbe6843c3b68cc17acf47a52419ab1361af8c4e144454e"
+    },
+    {
+      "application": "gitlab_ce",
+      "tier": "replicated",
+      "passed": true,
+      "checks": {
+        "healthy": {
+          "success": true,
+          "application": "gitlab-ce",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 6,
+          "business_data_verified": true
+        },
+        "fault_detected": {
+          "success": false,
+          "reason": "no_ready_endpoints",
+          "failure_class": "ambiguous",
+          "detail": {
+            "service": "gitlab-ce"
+          }
+        },
+        "reference_recovery": {
+          "success": true,
+          "application": "gitlab-ce",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 6,
+          "business_data_verified": true
+        },
+        "record_loss_detected": {
+          "success": false,
+          "reason": "acknowledged_record_missing",
+          "failure_class": "agent_error",
+          "detail": {
+            "member": "gitlab-ce-db-1"
+          }
+        },
+        "record_restored": {
+          "success": true,
+          "application": "gitlab-ce",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 6,
+          "business_data_verified": true
+        },
+        "switchover": {
+          "from": "gitlab-ce-db-1",
+          "to": "gitlab-ce-db-2",
+          "success": true,
+          "application": "gitlab-ce",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 6,
+          "business_data_verified": true
+        },
+        "database_pod_replacement": {
+          "success": true,
+          "application": "gitlab-ce",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 6,
+          "business_data_verified": true
+        },
+        "application_restart": {
+          "success": true,
+          "application": "gitlab-ce",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 6,
+          "business_data_verified": true
+        },
+        "cleanup": {
+          "passed": true
+        }
+      },
+      "duration_seconds": 815.5476003792137,
+      "retained_volume_count": 6,
+      "images": [
+        {
+          "image": "docker.io/gitlab/gitlab-ce:18.11.12-ce.0",
+          "image_id": "docker.io/gitlab/gitlab-ce@sha256:9dc94c49789d1ffec78e1998b088c83d7d1d9d5f2dc8b388cbb2bd2de328dd21"
+        },
+        {
+          "image": "docker.io/library/python:3.12.13-alpine3.23",
+          "image_id": "docker.io/library/python@sha256:601d3d3797e90e2534782e69c85fafb7971b43f24c7b1b079b7e48dd435e458d"
+        },
+        {
+          "image": "docker.io/library/redis:7.4.2-alpine",
+          "image_id": "docker.io/library/redis@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
+        },
+        {
+          "image": "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie",
+          "image_id": "ghcr.io/cloudnative-pg/postgresql@sha256:04f35778ca3b55b52a81dae969bef179ead315b9f02d2b4b21a3415de269b836"
+        }
+      ],
+      "evidence": "results/dind/sregym-saas-prototypes/gitlab-ce-replicated.json",
+      "evidence_sha256": "b9f18f8bb65259b0c52401f152182cf6aa6ff3a719c2fff76211871d46c133c5"
+    },
+    {
+      "application": "mattermost",
+      "tier": "single",
+      "passed": true,
+      "checks": {
+        "healthy": {
+          "success": true,
+          "application": "mattermost",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 2,
+          "business_data_verified": true
+        },
+        "fault_detected": {
+          "success": false,
+          "reason": "no_ready_endpoints",
+          "failure_class": "ambiguous",
+          "detail": {
+            "service": "mattermost"
+          }
+        },
+        "reference_recovery": {
+          "success": true,
+          "application": "mattermost",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 2,
+          "business_data_verified": true
+        },
+        "record_loss_detected": {
+          "success": false,
+          "reason": "acknowledged_record_missing",
+          "failure_class": "agent_error",
+          "detail": {
+            "member": "mattermost-db-1"
+          }
+        },
+        "record_restored": {
+          "success": true,
+          "application": "mattermost",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 2,
+          "business_data_verified": true
+        },
+        "application_restart": {
+          "success": true,
+          "application": "mattermost",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 2,
+          "business_data_verified": true
+        },
+        "cleanup": {
+          "passed": true
+        }
+      },
+      "duration_seconds": 177.57068972242996,
+      "retained_volume_count": 2,
+      "images": [
+        {
+          "image": "docker.io/library/python:3.12.13-alpine3.23",
+          "image_id": "docker.io/library/python@sha256:601d3d3797e90e2534782e69c85fafb7971b43f24c7b1b079b7e48dd435e458d"
+        },
+        {
+          "image": "docker.io/mattermost/mattermost-team-edition:11.7.0",
+          "image_id": "docker.io/mattermost/mattermost-team-edition@sha256:a9f01466ea96b559688fd67b07e6a1d381530a7888c74b87c4358869e5f1f06b"
+        },
+        {
+          "image": "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie",
+          "image_id": "ghcr.io/cloudnative-pg/postgresql@sha256:04f35778ca3b55b52a81dae969bef179ead315b9f02d2b4b21a3415de269b836"
+        }
+      ],
+      "evidence": "results/dind/sregym-saas-prototypes/mattermost-single.json",
+      "evidence_sha256": "09a9d9fac9f4edd37d214428b283a7e6a6aac67d44549af3d0b447c5f5b183f3"
+    },
+    {
+      "application": "mattermost",
+      "tier": "replicated",
+      "passed": true,
+      "checks": {
+        "healthy": {
+          "success": true,
+          "application": "mattermost",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "fault_detected": {
+          "success": false,
+          "reason": "no_ready_endpoints",
+          "failure_class": "ambiguous",
+          "detail": {
+            "service": "mattermost"
+          }
+        },
+        "reference_recovery": {
+          "success": true,
+          "application": "mattermost",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "record_loss_detected": {
+          "success": false,
+          "reason": "acknowledged_record_missing",
+          "failure_class": "agent_error",
+          "detail": {
+            "member": "mattermost-db-1"
+          }
+        },
+        "record_restored": {
+          "success": true,
+          "application": "mattermost",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "switchover": {
+          "from": "mattermost-db-1",
+          "to": "mattermost-db-2",
+          "success": true,
+          "application": "mattermost",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "database_pod_replacement": {
+          "success": true,
+          "application": "mattermost",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "application_restart": {
+          "success": true,
+          "application": "mattermost",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "cleanup": {
+          "passed": true
+        }
+      },
+      "duration_seconds": 345.76807268941775,
+      "retained_volume_count": 4,
+      "images": [
+        {
+          "image": "docker.io/library/python:3.12.13-alpine3.23",
+          "image_id": "docker.io/library/python@sha256:601d3d3797e90e2534782e69c85fafb7971b43f24c7b1b079b7e48dd435e458d"
+        },
+        {
+          "image": "docker.io/mattermost/mattermost-team-edition:11.7.0",
+          "image_id": "docker.io/mattermost/mattermost-team-edition@sha256:a9f01466ea96b559688fd67b07e6a1d381530a7888c74b87c4358869e5f1f06b"
+        },
+        {
+          "image": "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie",
+          "image_id": "ghcr.io/cloudnative-pg/postgresql@sha256:04f35778ca3b55b52a81dae969bef179ead315b9f02d2b4b21a3415de269b836"
+        }
+      ],
+      "evidence": "results/dind/sregym-saas-prototypes/mattermost-replicated.json",
+      "evidence_sha256": "fad03c55b2a644b5171d85671bed22fb5aee3f1d197ca2074a3939a277a8cb85"
+    },
+    {
+      "application": "stripe_marathon",
+      "tier": "single",
+      "passed": true,
+      "checks": {
+        "healthy": {
+          "success": true,
+          "application": "stripe-marathon",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 2,
+          "business_data_verified": true
+        },
+        "fault_detected": {
+          "success": false,
+          "reason": "no_ready_endpoints",
+          "failure_class": "ambiguous",
+          "detail": {
+            "service": "stripe-marathon"
+          }
+        },
+        "reference_recovery": {
+          "success": true,
+          "application": "stripe-marathon",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 2,
+          "business_data_verified": true
+        },
+        "record_loss_detected": {
+          "success": false,
+          "reason": "acknowledged_record_missing",
+          "failure_class": "agent_error",
+          "detail": {
+            "member": "stripe-marathon-db-1"
+          }
+        },
+        "record_restored": {
+          "success": true,
+          "application": "stripe-marathon",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 2,
+          "business_data_verified": true
+        },
+        "worker_outage_detected": {
+          "success": false,
+          "reason": "required_application_topology_changed",
+          "failure_class": "agent_error",
+          "detail": {
+            "deployment": "stripe-worker"
+          }
+        },
+        "application_restart": {
+          "success": true,
+          "application": "stripe-marathon",
+          "scale_tier": "single",
+          "database_members_verified": 1,
+          "original_volumes_verified": 2,
+          "business_data_verified": true
+        },
+        "persisted_backlog_drained": {
+          "verified": true
+        },
+        "cleanup": {
+          "passed": true
+        }
+      },
+      "duration_seconds": 241.79439887404442,
+      "retained_volume_count": 2,
+      "images": [
+        {
+          "image": "docker.io/library/python:3.12.13-alpine3.23",
+          "image_id": "docker.io/library/python@sha256:601d3d3797e90e2534782e69c85fafb7971b43f24c7b1b079b7e48dd435e458d"
+        },
+        {
+          "image": "docker.io/library/sregym-stripe-marathon:b584170d733ece2d",
+          "image_id": "sha256:755601e6af5b1d1f2b8651da72d8a4cd97b928580d31726430cbd39f578b1cc0"
+        },
+        {
+          "image": "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie",
+          "image_id": "ghcr.io/cloudnative-pg/postgresql@sha256:04f35778ca3b55b52a81dae969bef179ead315b9f02d2b4b21a3415de269b836"
+        }
+      ],
+      "evidence": "results/dind/sregym-saas-prototypes/stripe-marathon-single.json",
+      "evidence_sha256": "98feff4a8b1c1fdd961dafb97918549acee93be0ac1e3505afdc324f712a41f4"
+    },
+    {
+      "application": "stripe_marathon",
+      "tier": "replicated",
+      "passed": true,
+      "checks": {
+        "healthy": {
+          "success": true,
+          "application": "stripe-marathon",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "fault_detected": {
+          "success": false,
+          "reason": "no_ready_endpoints",
+          "failure_class": "ambiguous",
+          "detail": {
+            "service": "stripe-marathon"
+          }
+        },
+        "reference_recovery": {
+          "success": true,
+          "application": "stripe-marathon",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "record_loss_detected": {
+          "success": false,
+          "reason": "acknowledged_record_missing",
+          "failure_class": "agent_error",
+          "detail": {
+            "member": "stripe-marathon-db-1"
+          }
+        },
+        "record_restored": {
+          "success": true,
+          "application": "stripe-marathon",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "switchover": {
+          "from": "stripe-marathon-db-1",
+          "to": "stripe-marathon-db-2",
+          "success": true,
+          "application": "stripe-marathon",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "database_pod_replacement": {
+          "success": true,
+          "application": "stripe-marathon",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "worker_outage_detected": {
+          "success": false,
+          "reason": "required_application_topology_changed",
+          "failure_class": "agent_error",
+          "detail": {
+            "deployment": "stripe-worker"
+          }
+        },
+        "application_restart": {
+          "success": true,
+          "application": "stripe-marathon",
+          "scale_tier": "replicated",
+          "database_members_verified": 3,
+          "original_volumes_verified": 4,
+          "business_data_verified": true
+        },
+        "persisted_backlog_drained": {
+          "verified": true
+        },
+        "cleanup": {
+          "passed": true
+        }
+      },
+      "duration_seconds": 375.0649208696559,
+      "retained_volume_count": 4,
+      "images": [
+        {
+          "image": "docker.io/library/python:3.12.13-alpine3.23",
+          "image_id": "docker.io/library/python@sha256:601d3d3797e90e2534782e69c85fafb7971b43f24c7b1b079b7e48dd435e458d"
+        },
+        {
+          "image": "docker.io/library/sregym-stripe-marathon:b584170d733ece2d",
+          "image_id": "sha256:755601e6af5b1d1f2b8651da72d8a4cd97b928580d31726430cbd39f578b1cc0"
+        },
+        {
+          "image": "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie",
+          "image_id": "ghcr.io/cloudnative-pg/postgresql@sha256:04f35778ca3b55b52a81dae969bef179ead315b9f02d2b4b21a3415de269b836"
+        }
+      ],
+      "evidence": "results/dind/sregym-saas-prototypes/stripe-marathon-replicated.json",
+      "evidence_sha256": "3502499971d4c90807a98e546570403471dd2589372d27832bd2acda6463d230"
+    }
+  ],
+  "unit_tests": {
+    "passed": 31,
+    "evidence": "results/dind/sregym-saas-prototypes/focused-tests-final.log"
+  },
+  "adapter_checks": {
+    "passed": 5,
+    "evidence": "results/dind/sregym-saas-prototypes/stripe-adapter-checks.log"
+  },
+  "stripe_contracts": {
+    "application_image": "sregym-stripe-marathon:70ffe3fbef509da2",
+    "passed": true,
+    "modes": {
+      "reference": {
+        "anti_cheat": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "auth": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "customers": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "payment_intents": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 14,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "refunds": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "idempotency": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "webhooks": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "pagination": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "errors": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "subscriptions": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "restricted_keys": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "concurrency": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      },
+      "adapter": {
+        "anti_cheat": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 3,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "auth": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 6,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "customers": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "payment_intents": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 14,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "refunds": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "idempotency": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "webhooks": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 10,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "pagination": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 5,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "errors": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "subscriptions": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 8,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "restricted_keys": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 7,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "concurrency": {
+          "passed": true,
+          "exit_code": 0,
+          "tests": 2,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      }
+    }
+  },
+  "stripe_artifact_equivalence": {
+    "contract_test_image": "sregym-stripe-marathon:70ffe3fbef509da2",
+    "packaged_image": "sregym-stripe-marathon:b584170d733ece2d",
+    "executable_sources_and_dependency_lock_equal": true,
+    "hashes": {
+      "/tmp/requirements.lock": "87fbf14541bcb126707a22154d074cbab9d90de746a4484d6f8811f4d2e3014c",
+      "app/__init__.py": "1a849c3aa4160077ff0f6424247953786963b2e4d3ced5108293c4b010d9439b",
+      "app/__main__.py": "0cb397d3746165ac8f7c1c57e74fc676ff2908735c63e44779f9099333008eb8",
+      "app/api.py": "ef6601c9a636462375c80e75d50a03630963126a17581011e18184ddb5a6cff8",
+      "app/auth.py": "d78f486ee189b460946dbca321cdc17c742cf9665e4b472bd154862f80261eab",
+      "app/customers.py": "a6a4168e8d49df56df0348edb1c03b1d30486b1c4bb6d6949e4e934718a8cea2",
+      "app/errors.py": "865840fab65b5d3030eb3f32e4d5e1a351ad2edebb01abb7a5f269b7d14724d6",
+      "app/events.py": "2d6ac5dac290f3e826c9b203b142405a147a2d32d5f8f4aed2613453516578f7",
+      "app/forms.py": "34d0c69696dcf3328ca553c46849f5509e252991c6abbad7b6a5b60fb445bd70",
+      "app/idempotency.py": "bc36568043cab5688e819d6ca3131b4bb537f9990146f87746ac91a3ed3f84e9",
+      "app/ids.py": "13ba2cef68ff7ab5e85e930dddf65e676e5b5fae4782c58ff61a9869cae5a9f0",
+      "app/pagination.py": "1b805fc48bac25eb1472f52acf71bff12ff89350e299832005d8fee4ae3fefc0",
+      "app/payment_intents.py": "0af0136a89e2115c05201988b991202ee6617c14c466e3256a81a34d006f0f14",
+      "app/payment_methods.py": "ee3c8e56918cd4db90d039f66d20df94bf4b85c55dd1fa81ca7985b8883653a9",
+      "app/refunds.py": "35fbd4dda49f971a5b1d1c6aec6d40db453d32a483851dfbb55ab2a3ad020c6d",
+      "app/restricted_keys.py": "7300842d635e4a96222a5022978c6492431655499abadcb25c8d851c18b6cff0",
+      "app/storage.py": "0ccc67573419a3a2f396652665b8e4cbb658c2ff8e0545bb5add3ff857eb71ee",
+      "app/subscriptions.py": "060ae66cf325fe4f70c1e82ad6b122c6bd375b7b112d0a5655b406bcf5877e3b",
+      "app/test_cards.py": "a08f7c741b286307a94976feda9af26cd7f93481ce37b81225095e71bff56254",
+      "app/webhooks.py": "7be01c4a8711689b08808061a669011513f6f09635c18c000872d8741e0c6c08",
+      "backend.py": "4f952c97935392bc6e4568f53cf5b81618bb14b25b979e22eb867ba33cc2d779",
+      "receiver.py": "b5eb49612724adbcc9372f5bb1fc455b10f4e15558c32711c233aa986e11b0f8"
+    },
+    "difference": "Final image adds the upstream license, notice and provenance manifest."
+  },
+  "ordinary_conductor_lifecycle": {
+    "problem": "wrong_service_selector_mattermost_single",
+    "profile": "svelte",
+    "with_loki": false,
+    "passed": true,
+    "elapsed_seconds": 374.31,
+    "stages": {
+      "resolve": {
+        "name": "Resolve problem in registry",
+        "status": "pass",
+        "detail": "WrongServiceSelector \u00b7 app `Mattermost prototype`"
+      },
+      "deploy": {
+        "name": "Deploy application",
+        "status": "pass",
+        "detail": "`Mattermost prototype` deployed to namespace `mattermost`"
+      },
+      "oracle_healthy": {
+        "name": "Oracle passes before fault injection",
+        "status": "pass",
+        "detail": "oracle reported success after 1 check(s)"
+      },
+      "inject": {
+        "name": "Inject fault",
+        "status": "pass",
+        "detail": "inject_fault() completed without error"
+      },
+      "oracle_fail": {
+        "name": "Oracle fails after fault injection",
+        "status": "pass",
+        "detail": "oracle reported failure after 1 check(s)"
+      },
+      "recover": {
+        "name": "Recover fault",
+        "status": "pass",
+        "detail": "recover_fault() completed without error"
+      },
+      "oracle_pass": {
+        "name": "Oracle passes after recovery",
+        "status": "pass",
+        "detail": "oracle reported success after 1 check(s)"
+      },
+      "cleanup": {
+        "name": "Clean up application and local port forwards",
+        "status": "pass",
+        "detail": "application namespace and local port forwards removed"
+      }
+    }
+  },
+  "registry_smoke": {
+    "wrong_service_selector_gitlab_ce_single": {
+      "application": "gitlab-ce",
+      "postgres_members": 1,
+      "rendered_objects": 9,
+      "oracle": "SaaSOracle"
+    },
+    "wrong_service_selector_gitlab_ce_replicated": {
+      "application": "gitlab-ce",
+      "postgres_members": 3,
+      "rendered_objects": 9,
+      "oracle": "SaaSOracle"
+    },
+    "wrong_service_selector_mattermost_single": {
+      "application": "mattermost",
+      "postgres_members": 1,
+      "rendered_objects": 5,
+      "oracle": "SaaSOracle"
+    },
+    "wrong_service_selector_mattermost_replicated": {
+      "application": "mattermost",
+      "postgres_members": 3,
+      "rendered_objects": 5,
+      "oracle": "SaaSOracle"
+    },
+    "wrong_service_selector_stripe_marathon_single": {
+      "application": "stripe-marathon",
+      "postgres_members": 1,
+      "rendered_objects": 8,
+      "oracle": "SaaSOracle"
+    },
+    "wrong_service_selector_stripe_marathon_replicated": {
+      "application": "stripe-marathon",
+      "postgres_members": 3,
+      "rendered_objects": 8,
+      "oracle": "SaaSOracle"
+    }
+  },
+  "model_evaluation_attempts": 0,
+  "source_manifest": "results/dind/sregym-saas-prototypes/final-runtime-source-manifest.json",
+  "qualifications": [
+    "GitLab replicated reused resources from setup debugging; its successful run seeded fresh business probes. It is not a cold-start timing measurement.",
+    "GitLab replicated and Mattermost replicated preceded the explicit 30/90-second PostgreSQL shutdown tuning. Later cases used those settings.",
+    "Initial Stripe contract tests exposed unsupported CardOutcome serialization. The corrected adapter passed all unchanged tests in one run per mode.",
+    "Initial Stripe Kubernetes admission failed an incorrect pre-refund amount expectation. The corrected probe follows the pinned reference refund semantics and verifies the original charge/refund.",
+    "The final Stripe image adds licensing/provenance files to the contract-tested image; executable sources and the dependency lock were hash-verified identical.",
+    "One application server per environment; no app-tier HA or historical postmortem recreation is claimed.",
+    "Stripe is a human-written reference with a serialized PostgreSQL JSONB state adapter, not recovered source from a passing agent submission.",
+    "Memory-backed storage establishes process/pod restart persistence, not host-power-loss durability or realistic storage latency."
+  ],
+  "environment_cleanup": {
+    "utc": "2026-09-26T01:38:25.813028+00:00",
+    "outer_container_removed": true,
+    "application_namespaces_remaining": 0,
+    "application_volumes_remaining": 0,
+    "host_settings": {
+      "max_user_instances": {
+        "before": 1024,
+        "original": 128,
+        "temporary": 1024,
+        "action": "restored",
+        "after": 128
+      },
+      "max_user_watches": {
+        "before": 1048576,
+        "original": 311737,
+        "temporary": 1048576,
+        "action": "restored",
+        "after": 311737
+      }
+    },
+    "note": "Docker automatic removal completed asynchronously after stop; absence was verified afterward."
+  }
+}
