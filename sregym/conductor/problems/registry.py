@@ -47,10 +47,6 @@ from sregym.conductor.problems.internal_traffic_policy_local import InternalTraf
 from sregym.conductor.problems.kafka_poison_pill_hol_block import KafkaPoisonPillHOLBlock
 from sregym.conductor.problems.kafka_producer_leak import KafkaProducerLeak
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
-from sregym.conductor.problems.khaos_faults import (
-    KhaosFaultName,
-    KhaosFaultProblem,
-)
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
@@ -61,6 +57,7 @@ from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
 from sregym.conductor.problems.missing_service import MissingService
+from sregym.conductor.problems.mongo_storage_faults import LatentSectorError, SilentDataCorruption
 from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
@@ -102,9 +99,10 @@ from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation imp
     ServiceWrongPodSelectionHotelReservation,
 )
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
-from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
-from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop import StaleHostAliasesDNSPoisoningAstronomyShop
+from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop import (
+    StaleHostAliasesDNSPoisoningAstronomyShop,
+)
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.target_port import K8STargetPortMisconfig
@@ -236,7 +234,7 @@ class ProblemRegistry:
             "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
             # ==================== HARDWARE FAULT INJECTOR ====================
             "silent_data_corruption": SilentDataCorruption,
-            "latent_sector_error": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error,inject_args=[30]),
+            "latent_sector_error": LatentSectorError,
             # ----- Hardware-failure compound problems (Tier A) -----
             # "nic_packet_corruption": lambda: KhaosCompoundFaultProblem(
             #     fault_specs=[
