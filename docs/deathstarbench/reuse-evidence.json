@@ -1,0 +1,54 @@
+{
+  "retrieved_utc": "2026-09-24",
+  "source": "https://www.swe-marathon.org/assets/index-Cnn3YyxR.js",
+  "source_sha256": "70b406d89fa4f7ac23627632f1eab29e027878e866447a09d675f3e7b33aa346",
+  "interpretation": "Publisher-reported binary reward 1; public trajectories fetched. Final source snapshots and local verifier reproduction have not been established. status=success alone is not a passing benchmark grade.",
+  "trials": [
+    {
+      "id": "mastodon-clone-1192",
+      "agent": "Codex",
+      "model": "GPT-5.6-sol",
+      "reasoningEffort": "xhigh",
+      "reward": 1.0,
+      "correctness": 1.0,
+      "ux": 1.0,
+      "gates": "19 / 19",
+      "startedAt": "2026-08-05 05:23 UTC",
+      "trajectoryUrl": "https://www.swe-marathon.org/trajectories/v1.1/mastodon-clone-1192.json",
+      "trajectory_sha256": "8e47a6e79b227fad3a7d2abb9df2cc60b1c262c3d55981d139829b8a7275df81"
+    },
+    {
+      "id": "stripe-clone-glm53-high-01",
+      "agent": "Claude Code",
+      "model": "GLM 5.3",
+      "reasoningEffort": "high",
+      "reward": 1.0,
+      "correctness": 1.0,
+      "ux": 0.0,
+      "gates": "12 / 12",
+      "startedAt": "2026-08-14 11:52 UTC",
+      "trajectoryUrl": "https://www.swe-marathon.org/trajectories/v1.1/stripe-clone-glm53-high-01.json",
+      "trajectory_sha256": "47d10636808c0184bbe8d772351628df7e24cb1d8e2763a0b52976b995a044af"
+    },
+    {
+      "id": "excel-clone-1625",
+      "agent": "Codex",
+      "model": "GPT-6 Astra",
+      "reasoningEffort": "max",
+      "reward": 1.0,
+      "correctness": 1.0,
+      "ux": 1.0,
+      "gates": "18 / 18",
+      "startedAt": "2026-09-04 08:05 UTC",
+      "trajectoryUrl": "https://www.swe-marathon.org/trajectories/v1.1/excel-clone-1625.json",
+      "trajectory_sha256": "d8b89bc64d9470b49a3b3d3ba95b4f213301574d6a85e4ebebbbe6df17a50c80"
+    }
+  ],
+  "source_revisions": {
+    "abundant-ai/swe-marathon": "5c468fae8656ef9f7bca36cc8c6ee6e7478aa0f6",
+    "bgrins/the_zoo": "862c02dd73f2101a4b24f168d0fb7fed387dc5f4",
+    "TheAgentCompany/TheAgentCompany": "98b68ef82a47690c316f42fddb05baafaab56851",
+    "UniPat-AI/SaaS-Bench": "48c22deb18b98c0ed78f81e7f3be82bc162de2c8",
+    "ShadeCloak/SaaSBench": "a1fcfbd4d9f2efbbbfe2b4f77e6f1c759ada517b"
+  }
+}

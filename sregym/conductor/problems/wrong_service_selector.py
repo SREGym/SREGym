@@ -10,11 +10,30 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class WrongServiceSelector(Problem):
-    def __init__(self, app_name="astronomy_shop", faulty_service="frontend"):
+    def __init__(self, app_name="astronomy_shop", faulty_service="frontend", scale_tier=None):
         self.app_name = app_name
         self.faulty_service = faulty_service
 
-        if app_name == "social_network":
+        if app_name in ("gitlab_ce", "mattermost", "stripe_marathon"):
+            from sregym.service.apps.gitlab_ce import GitLabCE
+            from sregym.service.apps.mattermost import Mattermost
+            from sregym.service.apps.stripe_marathon import StripeMarathon
+
+            app = {"gitlab_ce": GitLabCE, "mattermost": Mattermost, "stripe_marathon": StripeMarathon}[app_name](
+                tier=scale_tier or "replicated"
+            )
+        elif app_name == "gitea":
+            from sregym.service.apps.gitea import Gitea
+
+            app = Gitea(tier=scale_tier or "replicated")
+        elif scale_tier is not None:
+            from sregym.service.apps.deathstarbench import ScaledHotelReservation, ScaledSocialNetwork
+
+            scaled_apps = {"hotel_reservation": ScaledHotelReservation, "social_network": ScaledSocialNetwork}
+            if app_name not in scaled_apps:
+                raise ValueError(f"Scaling is not supported for {app_name}")
+            app = scaled_apps[app_name](tier=scale_tier)
+        elif app_name == "social_network":
             app = SocialNetwork()
         elif app_name == "hotel_reservation":
             app = HotelReservation()
@@ -40,6 +59,18 @@ class WrongServiceSelector(Problem):
 
         self.app.create_workload()
         self.mitigation_oracle = ServiceEndpointMitigationOracle(problem=self)
+        if app_name in ("gitlab_ce", "mattermost", "stripe_marathon"):
+            from sregym.conductor.oracles.saas import SaaSOracle
+
+            self.mitigation_oracle = SaaSOracle(problem=self)
+        elif app_name == "gitea":
+            from sregym.conductor.oracles.gitea import GiteaOracle
+
+            self.mitigation_oracle = GiteaOracle(problem=self)
+        elif scale_tier is not None:
+            from sregym.conductor.oracles.deathstarbench import ScaledServiceEndpointOracle
+
+            self.mitigation_oracle = ScaledServiceEndpointOracle(problem=self)
 
     @mark_fault_injected
     def inject_fault(self):

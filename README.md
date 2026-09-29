@@ -72,6 +72,12 @@ SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/)
 For an experimental Docker-in-Docker environment with a private cluster per run,
 including parallel problem execution, see the [DinD guide](./docker/dind/README.md).
 
+For persistent MongoDB replica sets and scale tiers of HotelReservation and
+SocialNetwork, see [DeathStarBench 2.0](./docs/deathstarbench/README.md), including
+oracle validation and matched Codex evaluation commands.
+The [SaaS prototype guide](./docs/deathstarbench/saas-prototypes.md) covers GitLab CE,
+Mattermost, and the SWE-Marathon Stripe reference with PostgreSQL-backed state.
+
 **Note:** If you run into pod crashes or "too many open files" errors, see the [kind README](./kind/README.md) for required host kernel settings and troubleshooting.
 
 ```bash

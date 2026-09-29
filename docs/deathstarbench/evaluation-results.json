@@ -1,0 +1,1441 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-25T02:52:16.581112+00:00",
+  "model": "gpt-6-astra",
+  "reasoning": "agent default",
+  "stage": "mitigation",
+  "profile": "svelte",
+  "agent_timeout_seconds": 900,
+  "fault": "wrong_service_selector",
+  "limitations": [
+    "Three attempts per variant are exploratory, not a reliable difficulty ranking.",
+    "These are application-foundation variants, not ten historical postmortem tasks.",
+    "Legacy and new DeathStarBench tiers differ in workload and grading; new Social tiers also add seeded business data.",
+    "Private Docker storage is an ext4 filesystem backed by tmpfs on one physical machine.",
+    "Lifecycle gates omit Loki; agent attempts include Loki.",
+    "Earlier Hotel pilot and Gitea preflight/harness failures are excluded; see results.md."
+  ],
+  "cases": [
+    {
+      "application": "hotel_reservation",
+      "tier": "legacy",
+      "lifecycle": {
+        "resolve": "pass",
+        "deploy": "pass",
+        "oracle_healthy": "pass",
+        "inject": "pass",
+        "oracle_fail": "pass",
+        "recover": "pass",
+        "oracle_pass": "pass",
+        "cleanup": "pass"
+      },
+      "requested_attempts": 3,
+      "complete_attempts": 3,
+      "passes": 3,
+      "observed_difficulty": 0.0,
+      "median_agent_seconds": 82.011,
+      "median_oracle_seconds": 4.43,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "76.123",
+          "phase.evaluate:mitigation.duration_s": "4.418",
+          "csv": "results/dind/sregym-dsb2/0924_2133/codex/wrong_service_selector_hotel_reservation/wrong_service_selector_hotel_reservation_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2133/codex/wrong_service_selector_hotel_reservation/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 314211,
+            "total_completion_tokens": 1510,
+            "total_cached_tokens": 275712,
+            "total_steps": 15,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 30,
+              "total_tokens": 315721,
+              "last_token_usage": {
+                "input_tokens": 40932,
+                "cached_input_tokens": 40576,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 35,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 40967
+              }
+            }
+          },
+          "tool_calls": 9
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "115.155",
+          "phase.evaluate:mitigation.duration_s": "4.43",
+          "csv": "results/dind/sregym-dsb2/0924_2133/codex/wrong_service_selector_hotel_reservation/wrong_service_selector_hotel_reservation_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2133/codex/wrong_service_selector_hotel_reservation/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 355844,
+            "total_completion_tokens": 2131,
+            "total_cached_tokens": 325248,
+            "total_steps": 17,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 55,
+              "total_tokens": 357975,
+              "last_token_usage": {
+                "input_tokens": 37279,
+                "cached_input_tokens": 36864,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 32,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 37311
+              }
+            }
+          },
+          "tool_calls": 11
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "82.011",
+          "phase.evaluate:mitigation.duration_s": "4.666",
+          "csv": "results/dind/sregym-dsb2/0924_2133/codex/wrong_service_selector_hotel_reservation/wrong_service_selector_hotel_reservation_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2133/codex/wrong_service_selector_hotel_reservation/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 298494,
+            "total_completion_tokens": 1621,
+            "total_cached_tokens": 265728,
+            "total_steps": 15,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 40,
+              "total_tokens": 300115,
+              "last_token_usage": {
+                "input_tokens": 39807,
+                "cached_input_tokens": 39424,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 42,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 39849
+              }
+            }
+          },
+          "tool_calls": 9
+        }
+      ]
+    },
+    {
+      "application": "hotel_reservation",
+      "tier": "single",
+      "lifecycle": {
+        "resolve": "pass",
+        "deploy": "pass",
+        "oracle_healthy": "pass",
+        "inject": "pass",
+        "oracle_fail": "pass",
+        "recover": "pass",
+        "oracle_pass": "pass",
+        "cleanup": "pass"
+      },
+      "requested_attempts": 3,
+      "complete_attempts": 3,
+      "passes": 3,
+      "observed_difficulty": 0.0,
+      "median_agent_seconds": 103.385,
+      "median_oracle_seconds": 13.727,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "75.914",
+          "phase.evaluate:mitigation.duration_s": "13.727",
+          "csv": "results/dind/sregym-dsb2/0924_2155/codex/wrong_service_selector_hotel_reservation_single/wrong_service_selector_hotel_reservation_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2155/codex/wrong_service_selector_hotel_reservation_single/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 284354,
+            "total_completion_tokens": 1307,
+            "total_cached_tokens": 247168,
+            "total_steps": 16,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 43,
+              "total_tokens": 285661,
+              "last_token_usage": {
+                "input_tokens": 34008,
+                "cached_input_tokens": 33664,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 39,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 34047
+              }
+            }
+          },
+          "tool_calls": 10
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "146.179",
+          "phase.evaluate:mitigation.duration_s": "13.723",
+          "csv": "results/dind/sregym-dsb2/0924_2155/codex/wrong_service_selector_hotel_reservation_single/wrong_service_selector_hotel_reservation_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2155/codex/wrong_service_selector_hotel_reservation_single/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 434788,
+            "total_completion_tokens": 2760,
+            "total_cached_tokens": 390144,
+            "total_steps": 19,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 119,
+              "total_tokens": 437548,
+              "last_token_usage": {
+                "input_tokens": 42112,
+                "cached_input_tokens": 41728,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 35,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 42147
+              }
+            }
+          },
+          "tool_calls": 13
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "103.385",
+          "phase.evaluate:mitigation.duration_s": "13.794",
+          "csv": "results/dind/sregym-dsb2/0924_2155/codex/wrong_service_selector_hotel_reservation_single/wrong_service_selector_hotel_reservation_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2155/codex/wrong_service_selector_hotel_reservation_single/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 379166,
+            "total_completion_tokens": 2413,
+            "total_cached_tokens": 340608,
+            "total_steps": 16,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 266,
+              "total_tokens": 381579,
+              "last_token_usage": {
+                "input_tokens": 45389,
+                "cached_input_tokens": 44928,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 46,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 45435
+              }
+            }
+          },
+          "tool_calls": 10
+        }
+      ]
+    },
+    {
+      "application": "hotel_reservation",
+      "tier": "replicated",
+      "lifecycle": {
+        "resolve": "pass",
+        "deploy": "pass",
+        "oracle_healthy": "pass",
+        "inject": "pass",
+        "oracle_fail": "pass",
+        "recover": "pass",
+        "oracle_pass": "pass",
+        "cleanup": "pass"
+      },
+      "requested_attempts": 3,
+      "complete_attempts": 3,
+      "passes": 3,
+      "observed_difficulty": 0.0,
+      "median_agent_seconds": 125.706,
+      "median_oracle_seconds": 20.619,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "125.706",
+          "phase.evaluate:mitigation.duration_s": "20.619",
+          "csv": "results/dind/sregym-dsb2/0924_2220/codex/wrong_service_selector_hotel_reservation_replicated/wrong_service_selector_hotel_reservation_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2220/codex/wrong_service_selector_hotel_reservation_replicated/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 437623,
+            "total_completion_tokens": 2756,
+            "total_cached_tokens": 392320,
+            "total_steps": 17,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 251,
+              "total_tokens": 440379,
+              "last_token_usage": {
+                "input_tokens": 52073,
+                "cached_input_tokens": 51712,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 34,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 52107
+              }
+            }
+          },
+          "tool_calls": 11
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "136.108",
+          "phase.evaluate:mitigation.duration_s": "20.294",
+          "csv": "results/dind/sregym-dsb2/0924_2220/codex/wrong_service_selector_hotel_reservation_replicated/wrong_service_selector_hotel_reservation_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2220/codex/wrong_service_selector_hotel_reservation_replicated/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 404557,
+            "total_completion_tokens": 2231,
+            "total_cached_tokens": 355200,
+            "total_steps": 18,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 94,
+              "total_tokens": 406788,
+              "last_token_usage": {
+                "input_tokens": 42009,
+                "cached_input_tokens": 41728,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 37,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 42046
+              }
+            }
+          },
+          "tool_calls": 12
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "93.932",
+          "phase.evaluate:mitigation.duration_s": "20.669",
+          "csv": "results/dind/sregym-dsb2/0924_2220/codex/wrong_service_selector_hotel_reservation_replicated/wrong_service_selector_hotel_reservation_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2220/codex/wrong_service_selector_hotel_reservation_replicated/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 338328,
+            "total_completion_tokens": 2096,
+            "total_cached_tokens": 265472,
+            "total_steps": 15,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 85,
+              "total_tokens": 340424,
+              "last_token_usage": {
+                "input_tokens": 46521,
+                "cached_input_tokens": 46080,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 38,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 46559
+              }
+            }
+          },
+          "tool_calls": 9
+        }
+      ]
+    },
+    {
+      "application": "hotel_reservation",
+      "tier": "expanded",
+      "lifecycle": {
+        "resolve": "pass",
+        "deploy": "pass",
+        "oracle_healthy": "pass",
+        "inject": "pass",
+        "oracle_fail": "pass",
+        "recover": "pass",
+        "oracle_pass": "pass",
+        "cleanup": "pass"
+      },
+      "requested_attempts": 3,
+      "complete_attempts": 3,
+      "passes": 3,
+      "observed_difficulty": 0.0,
+      "median_agent_seconds": 113.289,
+      "median_oracle_seconds": 28.162,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "110.686",
+          "phase.evaluate:mitigation.duration_s": "28.186",
+          "csv": "results/dind/sregym-dsb2/0924_2250/codex/wrong_service_selector_hotel_reservation_expanded/wrong_service_selector_hotel_reservation_expanded_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2250/codex/wrong_service_selector_hotel_reservation_expanded/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 398637,
+            "total_completion_tokens": 2210,
+            "total_cached_tokens": 351744,
+            "total_steps": 17,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 75,
+              "total_tokens": 400847,
+              "last_token_usage": {
+                "input_tokens": 45037,
+                "cached_input_tokens": 44672,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 38,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 45075
+              }
+            }
+          },
+          "tool_calls": 11
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "113.289",
+          "phase.evaluate:mitigation.duration_s": "27.588",
+          "csv": "results/dind/sregym-dsb2/0924_2250/codex/wrong_service_selector_hotel_reservation_expanded/wrong_service_selector_hotel_reservation_expanded_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2250/codex/wrong_service_selector_hotel_reservation_expanded/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 491270,
+            "total_completion_tokens": 2486,
+            "total_cached_tokens": 418944,
+            "total_steps": 18,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 73,
+              "total_tokens": 493756,
+              "last_token_usage": {
+                "input_tokens": 52812,
+                "cached_input_tokens": 52480,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 36,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 52848
+              }
+            }
+          },
+          "tool_calls": 12
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "115.529",
+          "phase.evaluate:mitigation.duration_s": "28.162",
+          "csv": "results/dind/sregym-dsb2/0924_2250/codex/wrong_service_selector_hotel_reservation_expanded/wrong_service_selector_hotel_reservation_expanded_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2250/codex/wrong_service_selector_hotel_reservation_expanded/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 464805,
+            "total_completion_tokens": 2076,
+            "total_cached_tokens": 422784,
+            "total_steps": 18,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 79,
+              "total_tokens": 466881,
+              "last_token_usage": {
+                "input_tokens": 48436,
+                "cached_input_tokens": 48000,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 47,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 48483
+              }
+            }
+          },
+          "tool_calls": 12
+        }
+      ]
+    },
+    {
+      "application": "social_network",
+      "tier": "legacy",
+      "lifecycle": {
+        "resolve": "pass",
+        "deploy": "pass",
+        "oracle_healthy": "pass",
+        "inject": "pass",
+        "oracle_fail": "pass",
+        "recover": "pass",
+        "oracle_pass": "pass",
+        "cleanup": "pass"
+      },
+      "requested_attempts": 3,
+      "complete_attempts": 3,
+      "passes": 3,
+      "observed_difficulty": 0.0,
+      "median_agent_seconds": 93.24,
+      "median_oracle_seconds": 4.549,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "124.671",
+          "phase.evaluate:mitigation.duration_s": "4.549",
+          "csv": "results/dind/sregym-dsb2/0924_2339/codex/wrong_service_selector_social_network/wrong_service_selector_social_network_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2339/codex/wrong_service_selector_social_network/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 272424,
+            "total_completion_tokens": 2320,
+            "total_cached_tokens": 235264,
+            "total_steps": 16,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 60,
+              "total_tokens": 274744,
+              "last_token_usage": {
+                "input_tokens": 31789,
+                "cached_input_tokens": 31360,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 44,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 31833
+              }
+            }
+          },
+          "tool_calls": 10
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "93.24",
+          "phase.evaluate:mitigation.duration_s": "4.543",
+          "csv": "results/dind/sregym-dsb2/0924_2339/codex/wrong_service_selector_social_network/wrong_service_selector_social_network_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2339/codex/wrong_service_selector_social_network/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 359435,
+            "total_completion_tokens": 1888,
+            "total_cached_tokens": 299136,
+            "total_steps": 18,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 86,
+              "total_tokens": 361323,
+              "last_token_usage": {
+                "input_tokens": 38173,
+                "cached_input_tokens": 37760,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 37,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 38210
+              }
+            }
+          },
+          "tool_calls": 12
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "75.751",
+          "phase.evaluate:mitigation.duration_s": "4.565",
+          "csv": "results/dind/sregym-dsb2/0924_2339/codex/wrong_service_selector_social_network/wrong_service_selector_social_network_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0924_2339/codex/wrong_service_selector_social_network/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 345942,
+            "total_completion_tokens": 1578,
+            "total_cached_tokens": 291584,
+            "total_steps": 16,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 105,
+              "total_tokens": 347520,
+              "last_token_usage": {
+                "input_tokens": 42238,
+                "cached_input_tokens": 41856,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 36,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 42274
+              }
+            }
+          },
+          "tool_calls": 10
+        }
+      ]
+    },
+    {
+      "application": "social_network",
+      "tier": "single",
+      "lifecycle": {
+        "resolve": "pass",
+        "deploy": "pass",
+        "oracle_healthy": "pass",
+        "inject": "pass",
+        "oracle_fail": "pass",
+        "recover": "pass",
+        "oracle_pass": "pass",
+        "cleanup": "pass"
+      },
+      "requested_attempts": 3,
+      "complete_attempts": 3,
+      "passes": 3,
+      "observed_difficulty": 0.0,
+      "median_agent_seconds": 90.116,
+      "median_oracle_seconds": 13.856,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "84.651",
+          "phase.evaluate:mitigation.duration_s": "13.906",
+          "csv": "results/dind/sregym-dsb2/0925_0000/codex/wrong_service_selector_social_network_single/wrong_service_selector_social_network_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0925_0000/codex/wrong_service_selector_social_network_single/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 297479,
+            "total_completion_tokens": 1741,
+            "total_cached_tokens": 266752,
+            "total_steps": 15,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 26,
+              "total_tokens": 299220,
+              "last_token_usage": {
+                "input_tokens": 37885,
+                "cached_input_tokens": 37504,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 41,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 37926
+              }
+            }
+          },
+          "tool_calls": 9
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "90.116",
+          "phase.evaluate:mitigation.duration_s": "13.849",
+          "csv": "results/dind/sregym-dsb2/0925_0000/codex/wrong_service_selector_social_network_single/wrong_service_selector_social_network_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0925_0000/codex/wrong_service_selector_social_network_single/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 303452,
+            "total_completion_tokens": 1931,
+            "total_cached_tokens": 270592,
+            "total_steps": 15,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 47,
+              "total_tokens": 305383,
+              "last_token_usage": {
+                "input_tokens": 40001,
+                "cached_input_tokens": 39552,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 47,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 40048
+              }
+            }
+          },
+          "tool_calls": 9
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "99.291",
+          "phase.evaluate:mitigation.duration_s": "13.856",
+          "csv": "results/dind/sregym-dsb2/0925_0000/codex/wrong_service_selector_social_network_single/wrong_service_selector_social_network_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0925_0000/codex/wrong_service_selector_social_network_single/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 305946,
+            "total_completion_tokens": 2163,
+            "total_cached_tokens": 266112,
+            "total_steps": 16,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 113,
+              "total_tokens": 308109,
+              "last_token_usage": {
+                "input_tokens": 36278,
+                "cached_input_tokens": 35840,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 35,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 36313
+              }
+            }
+          },
+          "tool_calls": 10
+        }
+      ]
+    },
+    {
+      "application": "social_network",
+      "tier": "replicated",
+      "lifecycle": {
+        "resolve": "pass",
+        "deploy": "pass",
+        "oracle_healthy": "pass",
+        "inject": "pass",
+        "oracle_fail": "pass",
+        "recover": "pass",
+        "oracle_pass": "pass",
+        "cleanup": "pass"
+      },
+      "requested_attempts": 3,
+      "complete_attempts": 3,
+      "passes": 3,
+      "observed_difficulty": 0.0,
+      "median_agent_seconds": 85.613,
+      "median_oracle_seconds": 20.046,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "85.613",
+          "phase.evaluate:mitigation.duration_s": "20.414",
+          "csv": "results/dind/sregym-dsb2/0925_0025/codex/wrong_service_selector_social_network_replicated/wrong_service_selector_social_network_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0925_0025/codex/wrong_service_selector_social_network_replicated/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 310613,
+            "total_completion_tokens": 1717,
+            "total_cached_tokens": 276864,
+            "total_steps": 15,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 35,
+              "total_tokens": 312330,
+              "last_token_usage": {
+                "input_tokens": 40779,
+                "cached_input_tokens": 40448,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 38,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 40817
+              }
+            }
+          },
+          "tool_calls": 9
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "81.264",
+          "phase.evaluate:mitigation.duration_s": "20.005",
+          "csv": "results/dind/sregym-dsb2/0925_0025/codex/wrong_service_selector_social_network_replicated/wrong_service_selector_social_network_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0925_0025/codex/wrong_service_selector_social_network_replicated/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 329571,
+            "total_completion_tokens": 1786,
+            "total_cached_tokens": 298496,
+            "total_steps": 16,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 29,
+              "total_tokens": 331357,
+              "last_token_usage": {
+                "input_tokens": 39738,
+                "cached_input_tokens": 39296,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 46,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 39784
+              }
+            }
+          },
+          "tool_calls": 10
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "91.024",
+          "phase.evaluate:mitigation.duration_s": "20.046",
+          "csv": "results/dind/sregym-dsb2/0925_0025/codex/wrong_service_selector_social_network_replicated/wrong_service_selector_social_network_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0925_0025/codex/wrong_service_selector_social_network_replicated/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 365427,
+            "total_completion_tokens": 1855,
+            "total_cached_tokens": 326016,
+            "total_steps": 16,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 36,
+              "total_tokens": 367282,
+              "last_token_usage": {
+                "input_tokens": 44543,
+                "cached_input_tokens": 44160,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 33,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 44576
+              }
+            }
+          },
+          "tool_calls": 10
+        }
+      ]
+    },
+    {
+      "application": "social_network",
+      "tier": "expanded",
+      "lifecycle": {
+        "resolve": "pass",
+        "deploy": "pass",
+        "oracle_healthy": "pass",
+        "inject": "pass",
+        "oracle_fail": "pass",
+        "recover": "pass",
+        "oracle_pass": "pass",
+        "cleanup": "pass"
+      },
+      "requested_attempts": 3,
+      "complete_attempts": 3,
+      "passes": 3,
+      "observed_difficulty": 0.0,
+      "median_agent_seconds": 101.283,
+      "median_oracle_seconds": 27.577,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "101.283",
+          "phase.evaluate:mitigation.duration_s": "27.577",
+          "csv": "results/dind/sregym-dsb2/0925_0057/codex/wrong_service_selector_social_network_expanded/wrong_service_selector_social_network_expanded_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0925_0057/codex/wrong_service_selector_social_network_expanded/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 445670,
+            "total_completion_tokens": 1738,
+            "total_cached_tokens": 406272,
+            "total_steps": 18,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 47,
+              "total_tokens": 447408,
+              "last_token_usage": {
+                "input_tokens": 45987,
+                "cached_input_tokens": 45696,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 45,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 46032
+              }
+            }
+          },
+          "tool_calls": 12
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "97.135",
+          "phase.evaluate:mitigation.duration_s": "27.732",
+          "csv": "results/dind/sregym-dsb2/0925_0057/codex/wrong_service_selector_social_network_expanded/wrong_service_selector_social_network_expanded_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0925_0057/codex/wrong_service_selector_social_network_expanded/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 388395,
+            "total_completion_tokens": 2001,
+            "total_cached_tokens": 353024,
+            "total_steps": 17,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 40,
+              "total_tokens": 390396,
+              "last_token_usage": {
+                "input_tokens": 42003,
+                "cached_input_tokens": 41728,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 53,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 42056
+              }
+            }
+          },
+          "tool_calls": 11
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "112.34",
+          "phase.evaluate:mitigation.duration_s": "27.112",
+          "csv": "results/dind/sregym-dsb2/0925_0057/codex/wrong_service_selector_social_network_expanded/wrong_service_selector_social_network_expanded_codex_results.csv",
+          "trajectory": "results/dind/sregym-dsb2/0925_0057/codex/wrong_service_selector_social_network_expanded/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 402395,
+            "total_completion_tokens": 2443,
+            "total_cached_tokens": 363776,
+            "total_steps": 16,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 56,
+              "total_tokens": 404838,
+              "last_token_usage": {
+                "input_tokens": 45598,
+                "cached_input_tokens": 45312,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 46,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 45644
+              }
+            }
+          },
+          "tool_calls": 10
+        }
+      ]
+    },
+    {
+      "application": "gitea",
+      "tier": "single",
+      "lifecycle": {
+        "resolve": "pass",
+        "deploy": "pass",
+        "oracle_healthy": "pass",
+        "inject": "pass",
+        "oracle_fail": "pass",
+        "recover": "pass",
+        "oracle_pass": "pass",
+        "cleanup": "pass"
+      },
+      "requested_attempts": 3,
+      "complete_attempts": 3,
+      "passes": 3,
+      "observed_difficulty": 0.0,
+      "median_agent_seconds": 59.421,
+      "median_oracle_seconds": 14.515,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "51.996",
+          "phase.evaluate:mitigation.duration_s": "14.754",
+          "csv": "results/dind/sregym-gitea/0925_0206/codex/wrong_service_selector_gitea_single/wrong_service_selector_gitea_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea/0925_0206/codex/wrong_service_selector_gitea_single/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 143948,
+            "total_completion_tokens": 999,
+            "total_cached_tokens": 124672,
+            "total_steps": 12,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 13,
+              "total_tokens": 144947,
+              "last_token_usage": {
+                "input_tokens": 25122,
+                "cached_input_tokens": 24704,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 45,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 25167
+              }
+            }
+          },
+          "tool_calls": 6
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "59.687",
+          "phase.evaluate:mitigation.duration_s": "13.429",
+          "csv": "results/dind/sregym-gitea/0925_0206/codex/wrong_service_selector_gitea_single/wrong_service_selector_gitea_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea/0925_0206/codex/wrong_service_selector_gitea_single/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 142497,
+            "total_completion_tokens": 1079,
+            "total_cached_tokens": 116224,
+            "total_steps": 12,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 8,
+              "total_tokens": 143576,
+              "last_token_usage": {
+                "input_tokens": 25097,
+                "cached_input_tokens": 24704,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 45,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 25142
+              }
+            }
+          },
+          "tool_calls": 6
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "59.421",
+          "phase.evaluate:mitigation.duration_s": "14.515",
+          "csv": "results/dind/sregym-gitea/0925_0206/codex/wrong_service_selector_gitea_single/wrong_service_selector_gitea_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea/0925_0206/codex/wrong_service_selector_gitea_single/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 156416,
+            "total_completion_tokens": 1159,
+            "total_cached_tokens": 135552,
+            "total_steps": 12,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 17,
+              "total_tokens": 157575,
+              "last_token_usage": {
+                "input_tokens": 28383,
+                "cached_input_tokens": 28032,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 43,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 28426
+              }
+            }
+          },
+          "tool_calls": 6
+        }
+      ]
+    },
+    {
+      "application": "gitea",
+      "tier": "replicated",
+      "lifecycle": {
+        "resolve": "pass",
+        "deploy": "pass",
+        "oracle_healthy": "pass",
+        "inject": "pass",
+        "oracle_fail": "pass",
+        "recover": "pass",
+        "oracle_pass": "pass",
+        "cleanup": "pass"
+      },
+      "requested_attempts": 3,
+      "complete_attempts": 3,
+      "passes": 3,
+      "observed_difficulty": 0.0,
+      "median_agent_seconds": 59.671,
+      "median_oracle_seconds": 17.677,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "105.413",
+          "phase.evaluate:mitigation.duration_s": "16.126",
+          "csv": "results/dind/sregym-gitea/0925_0230/codex/wrong_service_selector_gitea_replicated/wrong_service_selector_gitea_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea/0925_0230/codex/wrong_service_selector_gitea_replicated/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 339627,
+            "total_completion_tokens": 2026,
+            "total_cached_tokens": 312192,
+            "total_steps": 18,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 111,
+              "total_tokens": 341653,
+              "last_token_usage": {
+                "input_tokens": 33819,
+                "cached_input_tokens": 33408,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 51,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 33870
+              }
+            }
+          },
+          "tool_calls": 12
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "59.671",
+          "phase.evaluate:mitigation.duration_s": "18.496",
+          "csv": "results/dind/sregym-gitea/0925_0230/codex/wrong_service_selector_gitea_replicated/wrong_service_selector_gitea_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea/0925_0230/codex/wrong_service_selector_gitea_replicated/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 202321,
+            "total_completion_tokens": 1150,
+            "total_cached_tokens": 180224,
+            "total_steps": 13,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 15,
+              "total_tokens": 203471,
+              "last_token_usage": {
+                "input_tokens": 31059,
+                "cached_input_tokens": 30720,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 46,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 31105
+              }
+            }
+          },
+          "tool_calls": 7
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "phase.stage:mitigation.duration_s": "50.503",
+          "phase.evaluate:mitigation.duration_s": "17.677",
+          "csv": "results/dind/sregym-gitea/0925_0230/codex/wrong_service_selector_gitea_replicated/wrong_service_selector_gitea_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea/0925_0230/codex/wrong_service_selector_gitea_replicated/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.156.1",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 166364,
+            "total_completion_tokens": 966,
+            "total_cached_tokens": 144384,
+            "total_steps": 12,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 15,
+              "total_tokens": 167330,
+              "last_token_usage": {
+                "input_tokens": 29454,
+                "cached_input_tokens": 29056,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 49,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 29503
+              }
+            }
+          },
+          "tool_calls": 6
+        }
+      ]
+    }
+  ],
+  "storage_recovery": [
+    {
+      "application": "hotel-reservation",
+      "tier": "replicated",
+      "passed": true,
+      "original_primary": 0,
+      "new_primary_elected": true,
+      "volumes_preserved": true,
+      "data_survived_pod_replacement": true
+    },
+    {
+      "application": "social-network",
+      "tier": "replicated",
+      "passed": true,
+      "original_primary": 0,
+      "new_primary_elected": true,
+      "volumes_preserved": true,
+      "data_survived_pod_replacement": true
+    },
+    {
+      "application": "gitea",
+      "tier": "replicated",
+      "passed": true,
+      "original_primary": "gitea-db-1",
+      "new_primary": "gitea-db-2",
+      "switchover_passed": true,
+      "postgres_replacement_passed": true,
+      "gitea_restart_passed": true,
+      "volumes_preserved": true
+    }
+  ]
+}
