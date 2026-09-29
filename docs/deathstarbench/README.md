@@ -32,7 +32,12 @@ and undoing manual scale-ups.
 The [difficulty calibration report](difficulty-calibration.md) records the fixed
 three-attempt postmortem screens and the current candidate's validation status.
 
-Every one of the six applications below now has at least one incident family.
+All four new SaaS applications now have at least one postmortem incident family:
+Gitea (database deletion), GitLab CE (deletion, notification recovery and
+regional failover), Mattermost (capacity cascade) and Stripe (recurring bad
+configuration). The two DeathStarBench applications still carry only the generic
+service-selector fault at their scale tiers, which is a scale comparison rather
+than an incident family.
 
 This workstream now covers **six application families**: the two existing
 DeathStarBench applications above, plus **four new applications**—Gitea, GitLab CE,
