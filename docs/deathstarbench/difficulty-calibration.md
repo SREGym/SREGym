@@ -70,6 +70,12 @@ and doing nothing each fail with their own reason code, and only reconciling bot
 passes. It is implemented and unit-tested; it has **not** been screened against
 any agent, and live admission has not yet been run.
 
+The [Mattermost capacity cascade](mattermost-capacity-cascade.md) removes the
+restore-and-replay shape differently again: nothing is lost, and the agent has to
+distrust a correct CPU measurement and stop automation that undoes a manual
+scale-up. It is implemented and unit-tested; it has **not** been screened against
+any agent, and live admission has not yet been run.
+
 These are exploratory calibration screens with adaptive candidate development.
 They do not provide an independent held-out estimate of model reliability or
 establish that replicas alone caused a difficulty change. Earlier successes are

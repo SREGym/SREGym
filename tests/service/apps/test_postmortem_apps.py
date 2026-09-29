@@ -253,3 +253,100 @@ def test_reconciliation_completes_a_partially_recovered_tail():
 
     assert [r["title"] for r in app.recovery_client.call_args.kwargs["records"]] == ["u"]
     assert mapping == [{"original_iid": 10, **second, "iid": 32}]
+
+
+def test_cascade_gateway_runs_several_replicas_and_is_not_oracle_topology_checked():
+    """The shared SaaS oracle demands exactly one replica of its deployments.
+
+    The gateway is meant to run several, and deleting the scaler is a legitimate
+    repair, so neither may be an `auxiliary_deployment`.
+    """
+    from sregym.service.apps.mattermost_cascade import MattermostCascade
+
+    app = MattermostCascade()
+    docs = app.render()
+    assert set(app.cascade_deployments).isdisjoint(app.auxiliary_deployments)
+    gateway = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "chat-gateway")
+    assert gateway["spec"]["replicas"] == app.capacity_floor >= 2
+    # A recreate strategy would drop the whole gateway on every scale change.
+    assert gateway["spec"]["strategy"]["type"] == "RollingUpdate"
+
+
+def test_only_the_scaler_gets_an_api_token_and_only_over_the_gateway_scale():
+    from sregym.service.apps.mattermost_cascade import MattermostCascade
+
+    docs = MattermostCascade().render()
+    pods = [d for d in docs if d["kind"] == "Deployment"]
+    tokened = [d["metadata"]["name"] for d in pods if d["spec"]["template"]["spec"].get("automountServiceAccountToken")]
+    assert tokened == ["capacity-scaler"]
+    role = next(d for d in docs if d["kind"] == "Role")
+    scale_rule = next(r for r in role["rules"] if r["resources"] == ["deployments/scale"])
+    assert scale_rule["resourceNames"] == ["chat-gateway"]
+    assert sorted(scale_rule["verbs"]) == ["get", "patch", "update"]
+    # No write access to anything else, and no access to secrets at all.
+    assert not any("secrets" in r["resources"] for r in role["rules"])
+
+
+def test_cascade_control_state_is_persistent_so_a_restart_cannot_clear_it():
+    from sregym.service.apps.mattermost_cascade import CONTROL_VOLUME, MattermostCascade
+
+    app = MattermostCascade()
+    assert CONTROL_VOLUME in app.data_volumes
+    docs = app.render()
+    assert any(d["kind"] == "PersistentVolumeClaim" and d["metadata"]["name"] == CONTROL_VOLUME for d in docs)
+    for name in ("chat-gateway", "capacity-scaler"):
+        deployment = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == name)
+        volumes = deployment["spec"]["template"]["spec"]["volumes"]
+        assert any(v.get("persistentVolumeClaim", {}).get("claimName") == CONTROL_VOLUME for v in volumes), name
+
+
+def test_customer_traffic_is_concurrent_and_part_of_the_environment():
+    """A sequential probe can never saturate a worker pool, however slow it gets."""
+    from sregym.service.apps.mattermost_cascade import MattermostCascade
+
+    app = MattermostCascade()
+    docs = app.render()
+    traffic = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "chat-traffic")
+    source = traffic["spec"]["template"]["spec"]["containers"][0]["command"][-1]
+    assert "threading.Thread" in source
+    assert "chat-gateway:8080" in source
+    # More concurrent clients than the gateway has workers across the floor.
+    assert f"range({app.gateway_workers * app.capacity_floor})" in source
+    # The conductor's inherited sequential workload would only muddy the signal.
+    assert app.start_workload() is None
+
+
+def test_cascade_guide_points_at_the_evidence_that_survived():
+    from sregym.service.apps.mattermost_cascade import CASCADE_GUIDE
+
+    assert "chat-gateway:8080/metrics" in CASCADE_GUIDE
+    assert "scaler.json" in CASCADE_GUIDE
+    assert "upstream_delay_ms" in CASCADE_GUIDE
+    # The contract the oracle actually grades must be discoverable.
+    assert "Restoring capacity that is then taken away again is not recovery" in CASCADE_GUIDE
+
+
+def test_calibrated_policy_still_reads_a_saturated_gateway_as_idle():
+    """Thresholds come from measured healthy CPU, so they travel between hosts."""
+    from unittest.mock import Mock
+
+    from sregym.service.apps.incident_runtime.capacity_scaler import DEFAULT_POLICY, decide
+    from sregym.service.apps.mattermost_cascade import MattermostCascade
+
+    app = MattermostCascade()
+    app.healthy_cpu = Mock(return_value=44.0)
+    written = {}
+    app.write_control = Mock(side_effect=lambda name, content: written.__setitem__(name, content))
+
+    policy = app.calibrate_scaler()
+
+    assert policy["scale_in_below"] == 22
+    assert policy["calibrated_healthy_cpu_percent"] == 44.0
+    # Calibration is also what turns the automation on; before it, the scaler has
+    # no policy file and deliberately does nothing.
+    assert policy["enabled"] is True
+    # Healthy load sits inside the band; a blocked pool falls below it.
+    rules = {**DEFAULT_POLICY, **policy}
+    assert decide(3, 44.0, rules, "cpu")[0] == 3
+    assert decide(3, 2.0, rules, "cpu")[0] == 2
+    assert "healthy gateway CPU: 44.0%" in written["capacity-policy.txt"]

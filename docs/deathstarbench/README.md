@@ -25,8 +25,14 @@ duplicate, or wrong-recipient notifications after database restoration.
 The [regional failover family](gitlab-regional-failover.md) is the first where no
 single restore recovers the incident: an automated promotion leaves two histories
 that both contain acknowledged writes, under colliding public issue identities.
+The [Mattermost capacity cascade](mattermost-capacity-cascade.md) is the first
+family that is not a data-recovery task at all: a correct CPU measurement means the
+wrong thing, and the capacity automation that believes it keeps removing replicas
+and undoing manual scale-ups.
 The [difficulty calibration report](difficulty-calibration.md) records the fixed
 three-attempt postmortem screens and the current candidate's validation status.
+
+Every one of the six applications below now has at least one incident family.
 
 This workstream now covers **six application families**: the two existing
 DeathStarBench applications above, plus **four new applications**—Gitea, GitLab CE,
