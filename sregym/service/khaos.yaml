@@ -46,6 +46,11 @@ spec:
                 mount -t bpf bpf /sys/fs/bpf
               fi
               exec sleep infinity
+          env:
+            # dmsetup waits for udev on a SysV semaphore in its IPC namespace. On kind the
+            # node's namespace has no udev daemon, so that wait never ends; libdevmapper
+            # creates the /dev/mapper nodes itself instead.
+            - { name: DM_DISABLE_UDEV, value: "1" }
           securityContext:
             privileged: true
           volumeMounts:
@@ -108,6 +113,11 @@ spec:
                 mount -t bpf bpf /sys/fs/bpf
               fi
               exec sleep infinity
+          env:
+            # dmsetup waits for udev on a SysV semaphore in its IPC namespace. On kind the
+            # node's namespace has no udev daemon, so that wait never ends; libdevmapper
+            # creates the /dev/mapper nodes itself instead.
+            - { name: DM_DISABLE_UDEV, value: "1" }
           securityContext:
             privileged: true
           volumeMounts:

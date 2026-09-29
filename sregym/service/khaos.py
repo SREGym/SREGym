@@ -69,6 +69,17 @@ command -v losetup >/dev/null
 command -v mkfs.ext4 >/dev/null
 modprobe dm_flakey
 dmsetup targets | grep -qw flakey
+probe="khaos_probe_$(hostname)"
+cleanup() {
+    timeout 10 dmsetup remove "${probe}_flakey" >/dev/null 2>&1 || true
+    timeout 10 dmsetup remove "$probe" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+cleanup
+timeout 30 dmsetup create "$probe" --table "0 8 zero"
+# random_*_corrupt (used by SilentDataCorruption) is missing from older dm-flakey releases.
+timeout 30 dmsetup create "${probe}_flakey" \
+    --table "0 8 flakey /dev/mapper/$probe 0 0 1 4 random_read_corrupt 1 random_write_corrupt 1"
 """.strip()
             self.kubectl.exec_command_checked(
                 f"kubectl -n {KHAOS_NS} exec {pod} -- nsenter -t 1 -m -u -i -n -p sh -ec {shlex.quote(script)}"

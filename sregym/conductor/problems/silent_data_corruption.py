@@ -6,7 +6,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_kernel import KernelInjector
 from sregym.service.apps.hotel_reservation import HotelReservation
-from sregym.service.dm_flakey_manager import DM_FLAKEY_DEVICE_NAME, DmFlakeyManager
+from sregym.service.dm_flakey_manager import DmFlakeyManager, dm_flakey_device_name
 from sregym.service.khaos_capabilities import KhaosCapability
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
@@ -203,7 +203,7 @@ class SilentDataCorruption(Problem):
         print("[SDC] Configuring dm-flakey device for corruption...")
         self.injector.dm_flakey_reload(
             self.target_node,
-            DM_FLAKEY_DEVICE_NAME,
+            dm_flakey_device_name(self.target_node),
             up_interval=self.up_interval,
             down_interval=self.down_interval,
             features=features,
@@ -236,7 +236,7 @@ class SilentDataCorruption(Problem):
         if hasattr(self, "target_node") and self.target_node:
             print(f"[SDC] Restoring dm-flakey device to normal operation on {self.target_node}")
             self.injector.dm_flakey_reload(
-                self.target_node, DM_FLAKEY_DEVICE_NAME, up_interval=1, down_interval=0, features=""
+                self.target_node, dm_flakey_device_name(self.target_node), up_interval=1, down_interval=0, features=""
             )
             print("[SDC] ✅ dm-flakey device restored to normal operation")
 

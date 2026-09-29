@@ -15,6 +15,11 @@ DEFAULT_BLOCK_SIZE = 512
 SETUP_TIMEOUT_SECONDS = 120
 
 
+def dm_flakey_device_name(node: str) -> str:
+    """Per-node device name: device-mapper names are kernel-global, and kind nodes share one kernel."""
+    return f"{DM_FLAKEY_DEVICE_NAME}_{node}"
+
+
 class DmFlakeyManager:
     """
     Manages dm-flakey infrastructure setup for fault injection.
@@ -75,12 +80,13 @@ class DmFlakeyManager:
         print(f"[dm-flakey] Setting up dm-flakey on {node}...")
 
         # Build the complete setup script from logical sections
+        dm_name = dm_flakey_device_name(node)
         script_parts = [
             self._build_module_check_script(),
-            self._build_cleanup_script(),
+            self._build_cleanup_script(dm_name),
             self._build_backing_file_script(),
-            self._build_dm_flakey_create_script(),
-            self._build_mount_script(),
+            self._build_dm_flakey_create_script(dm_name),
+            self._build_mount_script(dm_name),
         ]
 
         full_script = "set -e\n" + "\n".join(script_parts)
@@ -130,11 +136,11 @@ echo 'Checking device-mapper targets...'
 dmsetup targets | grep flakey || { echo 'flakey target not available in dmsetup'; exit 1; }
 """
 
-    def _build_cleanup_script(self) -> str:
+    def _build_cleanup_script(self, dm_name: str) -> str:
         """Build script to clean up existing dm-flakey infrastructure."""
         openebs_path = OPENEBS_LOCAL_PATH
         return f"""
-DM_NAME={DM_FLAKEY_DEVICE_NAME}
+DM_NAME={shlex.quote(dm_name)}
 BACKING_FILE={shlex.quote(DM_FLAKEY_BACKING_FILE)}
 
 echo 'Cleaning up any existing dm-flakey infrastructure...'
@@ -190,10 +196,10 @@ LOOP_DEV=$(losetup -f --show $BACKING_FILE)
 echo "Loop device: $LOOP_DEV"
 """
 
-    def _build_dm_flakey_create_script(self) -> str:
+    def _build_dm_flakey_create_script(self, dm_name: str) -> str:
         """Build script to create and format dm-flakey device."""
         return f"""
-DM_NAME={DM_FLAKEY_DEVICE_NAME}
+DM_NAME={shlex.quote(dm_name)}
 SECTORS=$(blockdev --getsz $LOOP_DEV)
 echo "Sectors: $SECTORS"
 
@@ -214,11 +220,11 @@ echo 'Formatting dm-flakey device with ext4...'
 mkfs.ext4 -F /dev/mapper/$DM_NAME || {{ echo 'mkfs.ext4 failed'; exit 1; }}
 """
 
-    def _build_mount_script(self) -> str:
+    def _build_mount_script(self, dm_name: str) -> str:
         """Build script to mount dm-flakey device and set permissions."""
         openebs_path = OPENEBS_LOCAL_PATH
         return f"""
-DM_NAME={DM_FLAKEY_DEVICE_NAME}
+DM_NAME={shlex.quote(dm_name)}
 echo 'Mounting dm-flakey device at {openebs_path}...'
 mount /dev/mapper/$DM_NAME {shlex.quote(openebs_path)}
 
@@ -249,9 +255,10 @@ echo 'OpenEBS dm-flakey infrastructure ready - all PVs will use dm-flakey'
     def _teardown_dm_flakey_on_node(self, node: str) -> None:
         """Remove dm-flakey device and restore direct host storage on a single node."""
         openebs_path = OPENEBS_LOCAL_PATH
+        dm_name = shlex.quote(dm_flakey_device_name(node))
         script = f"""set -e
 # Check if dm-flakey is active
-if ! dmsetup info {DM_FLAKEY_DEVICE_NAME} >/dev/null 2>&1; then
+if ! dmsetup info {dm_name} >/dev/null 2>&1; then
     echo 'No dm-flakey device found, nothing to do'
     exit 0
 fi
@@ -264,7 +271,7 @@ if mountpoint -q {shlex.quote(openebs_path)} 2>/dev/null; then
 fi
 
 # Remove dm device
-dmsetup remove {DM_FLAKEY_DEVICE_NAME} 2>/dev/null || dmsetup remove --force {DM_FLAKEY_DEVICE_NAME} 2>/dev/null || true
+dmsetup remove {dm_name} 2>/dev/null || dmsetup remove --force {dm_name} 2>/dev/null || true
 
 # Detach loop device
 LOOP=$(losetup -j {shlex.quote(DM_FLAKEY_BACKING_FILE)} 2>/dev/null | cut -d: -f1)

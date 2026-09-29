@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
+from sregym.service.dm_flakey_manager import DmFlakeyManager, dm_flakey_device_name
 from sregym.service.khaos import KhaosController, KhaosUnsupportedError
 from sregym.service.khaos_capabilities import KhaosCapability
 
@@ -71,6 +72,8 @@ def test_dm_flakey_preflight_only_targets_worker_nodes():
     assert len(checks) == 1
     assert "khaos-worker-abc" in checks[0]
     assert "dmsetup targets" in checks[0]
+    assert "timeout 30 dmsetup create" in checks[0]
+    assert "random_read_corrupt 1 random_write_corrupt 1" in checks[0]
 
 
 def test_daemonsets_bootstrap_bpffs_with_privileged_xlab_image():
@@ -86,6 +89,7 @@ def test_daemonsets_bootstrap_bpffs_with_privileged_xlab_image():
         assert container["image"] == "ghcr.io/xlab-uiuc/khaos:latest"
         assert container["imagePullPolicy"] == "Always"
         assert "mount -t bpf" in container["args"][0]
+        assert {"name": "DM_DISABLE_UDEV", "value": "1"} in container["env"]
 
 
 def test_silent_data_corruption_requests_dm_flakey_instead_of_ebpf():
@@ -111,3 +115,13 @@ def test_worker_daemonset_targets_unlabelled_worker_nodes():
             ]
         }
     ]
+
+
+def test_dm_flakey_device_names_are_unique_per_node():
+    # kind nodes share one kernel, so a shared device name lets one node's setup tear down another's device.
+    manager = DmFlakeyManager(kubectl=None)
+
+    assert dm_flakey_device_name("kind-worker") != dm_flakey_device_name("kind-worker2")
+    assert "DM_NAME=openebs_flakey_kind-worker2\n" in manager._build_cleanup_script(
+        dm_flakey_device_name("kind-worker2")
+    )
