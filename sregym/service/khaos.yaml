@@ -130,5 +130,5 @@ spec:
         - { name: btf,         hostPath: { path: /sys/kernel/btf, type: DirectoryOrCreate } }
         - { name: run-dir,     hostPath: { path: /run, type: Directory } }
         - { name: var-run,     hostPath: { path: /var/run, type: Directory } }
-        - { name: openebs,     hostPath: { path: /var/openebs, type: Directory } }
+        - { name: openebs,     hostPath: { path: /var/openebs, type: DirectoryOrCreate } }
         - { name: host-dev,    hostPath: { path: /dev, type: Directory } }

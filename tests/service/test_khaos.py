@@ -100,6 +100,9 @@ def test_worker_daemonset_targets_unlabelled_worker_nodes():
     terms = pod_spec["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"]
 
     assert "nodeSelector" not in pod_spec
+    # Khaos deploys before OpenEBS, so a fresh node has no /var/openebs yet.
+    openebs = next(v for v in pod_spec["volumes"] if v["name"] == "openebs")
+    assert openebs["hostPath"]["type"] == "DirectoryOrCreate"
     assert terms == [
         {
             "matchExpressions": [
