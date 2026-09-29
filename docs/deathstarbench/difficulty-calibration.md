@@ -67,8 +67,10 @@ Every candidate above is recovered by restoring the right artifact and replaying
 tail. The [regional failover family](gitlab-regional-failover.md) deliberately
 removes that shape: two histories each hold acknowledged writes, so failing back
 and doing nothing each fail with their own reason code, and only reconciling both
-passes. It is implemented and unit-tested; it has **not** been screened against
-any agent, and live admission has not yet been run.
+passes. It is implemented, unit-tested, and has **passed full live admission** on
+its `single` tier in 1,963 seconds — both negative controls, a partial
+reconciliation, a duplicate, an application restart and unchanged evidence, with
+clean cleanup. It has **not** been screened against any agent.
 
 The [Mattermost capacity cascade](mattermost-capacity-cascade.md) removes the
 restore-and-replay shape differently again: nothing is lost, and the agent has to
