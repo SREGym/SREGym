@@ -2,6 +2,7 @@ from fastmcp import FastMCP
 
 from clients.stratus.stratus_utils.get_logger import get_logger
 from mcp_server.utils import ObservabilityClient
+from sregym.service.agent_visibility_policy import visible_log_value
 
 logger = get_logger()
 logger.info("Starting Loki MCP Server")
@@ -54,9 +55,13 @@ def get_logs(query: str, last_n_minutes: int = 15) -> str:
         log_lines = []
         for stream in results:
             labels = stream.get("stream", {})
+            if any(not visible_log_value(str(value)) for value in (*labels.keys(), *labels.values())):
+                continue
             label_str = ", ".join(f"{k}={v}" for k, v in labels.items())
             for entry in stream.get("values", []):
                 timestamp, log_line = entry
+                if not visible_log_value(log_line):
+                    continue
                 # Convert nanosecond timestamp to readable format
                 ts_seconds = int(timestamp) / 1e9
                 ts_readable = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts_seconds))
@@ -92,7 +97,7 @@ def get_labels() -> str:
         if data.get("status") != "success":
             return f"Query failed: {data.get('error', 'Unknown error')}"
 
-        labels = data.get("data", [])
+        labels = [label for label in data.get("data", []) if visible_log_value(label)]
         result = "Available labels:\n" + "\n".join(f"  - {label}" for label in labels)
 
         return result
@@ -126,7 +131,7 @@ def get_label_values(label: str) -> str:
         if data.get("status") != "success":
             return f"Query failed: {data.get('error', 'Unknown error')}"
 
-        values = data.get("data", [])
+        values = [value for value in data.get("data", []) if visible_log_value(value)]
         if not values:
             return f"No values found for label '{label}'."
 
