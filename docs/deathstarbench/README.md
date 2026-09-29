@@ -22,6 +22,9 @@ graders and two PostgreSQL tiers each.
 The [GitLab notification-recovery variant](gitlab-notification-recovery.md)
 adds a persistent Sidekiq queue, real SMTP delivery, and checks for lost,
 duplicate, or wrong-recipient notifications after database restoration.
+The [regional failover family](gitlab-regional-failover.md) is the first where no
+single restore recovers the incident: an automated promotion leaves two histories
+that both contain acknowledged writes, under colliding public issue identities.
 The [difficulty calibration report](difficulty-calibration.md) records the fixed
 three-attempt postmortem screens and the current candidate's validation status.
 

@@ -43,6 +43,7 @@ from sregym.conductor.problems.gitlab_notification_delayed_audit import GitLabNo
 from sregym.conductor.problems.gitlab_notification_expanded import GitLabNotificationExpanded
 from sregym.conductor.problems.gitlab_notification_intermittent import GitLabNotificationIntermittent
 from sregym.conductor.problems.gitlab_notification_recovery import GitLabNotificationRecovery
+from sregym.conductor.problems.gitlab_regional_failover import GitLabRegionalFailover
 from sregym.conductor.problems.stripe_feature_config import StripeFeatureConfig
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
@@ -245,6 +246,8 @@ class ProblemRegistry:
             "gitlab_notification_intermittent_replicated": lambda: GitLabNotificationIntermittent(scale_tier="replicated"),
             "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAudit(scale_tier="replicated"),
             "gitlab_notification_delayed_audit_expanded": GitLabNotificationExpanded,
+            "gitlab_regional_failover_single": lambda: GitLabRegionalFailover(scale_tier="single"),
+            "gitlab_regional_failover_replicated": lambda: GitLabRegionalFailover(scale_tier="replicated"),
             "stripe_feature_config_single": lambda: StripeFeatureConfig(scale_tier="single"),
             "stripe_feature_config_replicated": lambda: StripeFeatureConfig(scale_tier="replicated"),
             "wrong_service_selector_gitlab_ce_single": lambda: WrongServiceSelector(app_name="gitlab_ce", faulty_service="gitlab-ce", scale_tier="single"),

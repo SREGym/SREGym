@@ -61,6 +61,15 @@ acknowledged writes, notification backlog and audit volume while preserving the
 same fault mechanism, topology, grading contract and solving budget. Its
 remaining attempts will be run under Claude Code as a separate cohort.
 
+## Next candidate: regional failover divergence
+
+Every candidate above is recovered by restoring the right artifact and replaying a
+tail. The [regional failover family](gitlab-regional-failover.md) deliberately
+removes that shape: two histories each hold acknowledged writes, so failing back
+and doing nothing each fail with their own reason code, and only reconciling both
+passes. It is implemented and unit-tested; it has **not** been screened against
+any agent, and live admission has not yet been run.
+
 These are exploratory calibration screens with adaptive candidate development.
 They do not provide an independent held-out estimate of model reliability or
 establish that replicas alone caused a difficulty change. Earlier successes are

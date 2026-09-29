@@ -87,6 +87,10 @@ def problem_id(app, tier, incident="wrong_service_selector"):
             raise ValueError("Database deletion supports Gitea and GitLab CE single and replicated tiers")
         prefix = "gitlab" if app == "gitlab_ce" else "gitea"
         return f"{prefix}_database_deletion_{tier}"
+    if incident == "regional_failover":
+        if app != "gitlab_ce" or tier not in SUPPORTED_TIERS[app]:
+            raise ValueError("Regional failover supports GitLab CE single and replicated tiers")
+        return f"gitlab_regional_failover_{tier}"
     if incident == "feature_config":
         if app != "stripe_marathon" or tier not in SUPPORTED_TIERS[app]:
             raise ValueError("Feature configuration supports Stripe single and replicated tiers")
