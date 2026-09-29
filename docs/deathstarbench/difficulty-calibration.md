@@ -75,8 +75,11 @@ clean cleanup. It has **not** been screened against any agent.
 The [Mattermost capacity cascade](mattermost-capacity-cascade.md) removes the
 restore-and-replay shape differently again: nothing is lost, and the agent has to
 distrust a correct CPU measurement and stop automation that undoes a manual
-scale-up. It is implemented and unit-tested; it has **not** been screened against
-any agent, and live admission has not yet been run.
+scale-up. It is implemented, unit-tested, and has **passed full live admission**
+on its `single` tier in 758 seconds — including a cascade that developed on its
+own, a manual scale-up rejected because the automation undid it, both single-sided
+repairs rejected, a gateway restart and persistent control state. It has **not**
+been screened against any agent.
 
 These are exploratory calibration screens with adaptive candidate development.
 They do not provide an independent held-out estimate of model reliability or

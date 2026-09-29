@@ -153,3 +153,51 @@ python scripts/evaluate_deathstarbench.py \
 Admission is not a difficulty result. This family has **not** been screened
 against any agent; see the [calibration report](difficulty-calibration.md) for the
 cohort rules.
+
+## Completed live admission
+
+The `single` tier passed full admission in 758 seconds with no errors and clean
+cleanup. Calibration measured real healthy gateway CPU at **90.53%**, giving
+`scale_in_below: 45` and `scale_out_above: 163`.
+
+| Elapsed | Stage | Verdict |
+|---:|---|---|
+| 161 s | healthy | pass |
+| 282 s | cascade developed on its own | `gateway_capacity_below_floor` (automation reached 1/1) |
+| 300 s | manual scale-up, rollout complete | `capacity_automation_still_shrinking` (3/3 → 2/2) |
+| 404 s | latency removed, capacity left alone | `gateway_capacity_below_floor` (parked at 2/2) |
+| 486 s | automation stopped, latency restored | `gateway_latency_unresolved` (p50 2,512 ms vs a 500 ms budget) |
+| 541 s | latency removed and capacity restored | pass |
+| 607 s | after a gateway restart | pass |
+| 715 s | reference recovery | pass |
+
+The scaler's own decision log records the whole cascade, and it is the clearest
+statement of what this family tests:
+
+```text
+observed 89.76% → "3 -> 3: cpu 89.76% within band"
+observed 93.06% → "3 -> 3: cpu 93.06% within band"
+observed 90.97% → "3 -> 3: cpu 90.97% within band"
+observed 88.14% → "3 -> 3: cpu 88.14% within band"
+observed  2.47% → "3 -> 2: cpu 2.47% below 44%"     # the latency lands
+```
+
+The same policy that leaves a healthy service alone strips a failing one, because
+only the signal changed. After the manual scale-up it logged
+`"3 -> 2: cpu 2.96% below 45%"` — the responder's fix undone, with its reason
+stated.
+
+The `latency_only` control is sound by arithmetic rather than by luck. Healthy
+per-pod CPU is *H* at three replicas, so two replicas carry 1.5·*H* while
+scale-out sits at 1.8·*H*: the automation climbs from 1 to 2 and stops, and can
+never restore the floor by itself. The run observed 137% against a 163%
+threshold, as predicted.
+
+The recovery was accepted via `min: 3` rather than by disabling or re-keying the
+policy, confirming that the grader takes any repair that holds capacity. Capacity
+settled at 5/5 — above the floor, which passes — because CPU spiked past the
+scale-out threshold while the latency backlog drained.
+
+`control_state_persisted` confirms the injected condition lives on the persistent
+volume: the gateway was restarted and the control file still held the value the
+recovery left.
