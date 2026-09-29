@@ -9,7 +9,7 @@ injected via chaos tools or that traffic is synthetic.
 The proxy:
 1. Forwards all requests to the real Kubernetes API
 2. Filters namespace listings to exclude hidden namespaces
-3. Returns 403 Forbidden for direct access to hidden namespaces or hidden resources
+3. Returns 404 for hidden namespaces and Chaos resources
 4. Filters cluster-wide resource listings to exclude resources in hidden namespaces
 5. Filters resources with hidden labels (e.g. load generators) from list responses
 """
@@ -40,6 +40,21 @@ from jsonpatch import JsonPatchException
 from jsonpointer import JsonPointerException
 from kubernetes import config
 
+from sregym.service.agent_visibility_policy import (
+    HELM_RELEASE_SECRET_NAME_PREFIX,
+    HIDDEN_LABELS,
+    HIDDEN_NAMESPACES,
+    filter_api_groups,
+    filter_namespace_list,
+    filter_openapi_document,
+    filter_resource_list,
+    is_chaos_event,
+    is_hidden_api_group,
+    is_hidden_cluster_resource,
+    is_hidden_resource,
+    mentions_chaos_mesh,
+    sanitize_visible_resource,
+)
 from sregym.service.kubernetes_access_policy import (
     CALICO_POLICY_RESOURCES,
     EGRESS_POLICY_NAME,
@@ -53,31 +68,11 @@ from sregym.service.kubernetes_access_policy import (
     workload_network_settings,
 )
 from sregym.service.kubernetes_response import include_table_objects, json_accept_header, stream_response
-from sregym.service.visibility import (
-    CHAOS_API_GROUP,
-    CLUSTER_CONTROL_PLANE_RESOURCES,
-    HIDDEN_NAMESPACES,
-    is_chaos_event,
-    mentions_chaos_mesh,
-    sanitize_visible_resource,
-)
 
 logger = logging.getLogger("all.infra.k8s_proxy")
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
 
-# Labels to hide from agents - resources matching any of these label key/value pairs are hidden.
-# Load generators produce synthetic traffic and should not be visible to agents.
-HIDDEN_LABELS: dict[str, set[str]] = {
-    "app": {"load-generator", "locust-fetcher"},
-    "job": {"workload"},
-    "network-access": {"restricted"},
-    "opentelemetry.io/name": {"load-generator"},
-}
-# Helm stores each release revision in a Secret by default. These Secrets contain
-# the complete rendered chart, including the application's pre-fault manifests.
-HELM_RELEASE_SECRET_TYPE = "helm.sh/release.v1"
-HELM_RELEASE_SECRET_NAME_PREFIX = "sh.helm.release.v1."
 WORKLOAD_RESOURCES = {
     "cronjobs",
     "daemonsets",
@@ -174,82 +169,6 @@ def _is_log_follow_request(path: str) -> bool:
     )
 
 
-def _is_helm_release_secret(resource: dict) -> bool:
-    """Return whether a Kubernetes object is Helm's stored release record."""
-    metadata = resource.get("metadata") or {}
-    name = metadata.get("name") or ""
-    return resource.get("type") == HELM_RELEASE_SECRET_TYPE or name.startswith(HELM_RELEASE_SECRET_NAME_PREFIX)
-
-
-def _has_hidden_label(metadata: dict, hidden_labels: dict[str, set[str]]) -> bool:
-    """Return whether resource metadata contains a configured hidden label."""
-    labels = metadata.get("labels") or {}
-    return any(labels.get(key) in values for key, values in hidden_labels.items())
-
-
-def _is_hidden_resource(
-    resource: dict,
-    hidden_namespaces: set[str],
-    hidden_labels: dict[str, set[str]],
-) -> bool:
-    """Return whether a Kubernetes object must not be visible to an agent."""
-    metadata = resource.get("metadata") or {}
-    return (
-        metadata.get("namespace") in hidden_namespaces
-        or _has_hidden_label(metadata, hidden_labels)
-        or _is_helm_release_secret(resource)
-        or is_chaos_event(resource, hidden_namespaces)
-        or (not metadata.get("namespace") and mentions_chaos_mesh(str(metadata.get("name", ""))))
-    )
-
-
-def _filter_namespace_list(data: dict, hidden_namespaces: set[str]) -> dict:
-    """Remove hidden namespaces from standard and Table list responses."""
-    if "items" in data:
-        data["items"] = [
-            item for item in data["items"] if item.get("metadata", {}).get("name") not in hidden_namespaces
-        ]
-    if "rows" in data:
-        data["rows"] = [
-            row
-            for row in data["rows"]
-            if isinstance(row.get("object"), dict)
-            and row["object"].get("metadata", {}).get("name") not in hidden_namespaces
-        ]
-    return data
-
-
-def _filter_resource_list(
-    data: dict,
-    hidden_namespaces: set[str],
-    hidden_labels: dict[str, set[str]],
-) -> dict:
-    """Remove hidden objects from standard and Table list responses."""
-    if "items" in data:
-        data["items"] = [
-            sanitize_visible_resource(item)
-            for item in data["items"]
-            if not _is_hidden_resource(item, hidden_namespaces, hidden_labels)
-        ]
-    if "rows" in data:
-        data["rows"] = [
-            row
-            for row in data["rows"]
-            if isinstance(row.get("object"), dict)
-            and not _is_hidden_resource(row["object"], hidden_namespaces, hidden_labels)
-        ]
-        for row in data["rows"]:
-            sanitize_visible_resource(row["object"])
-    return data
-
-
-def _filter_api_groups(data: dict) -> dict:
-    """Hide the Chaos Mesh API group from Kubernetes discovery."""
-    if isinstance(data.get("groups"), list):
-        data["groups"] = [group for group in data["groups"] if group.get("name") != CHAOS_API_GROUP]
-    return data
-
-
 def _is_hidden_namespace_request(path: str, hidden_namespaces: set[str]) -> bool:
     """Return whether a decoded API path addresses a hidden namespace."""
     parts = _decode_path_parts(path)
@@ -286,23 +205,12 @@ def _is_filtered_object_read(path: str) -> bool:
 def _is_hidden_control_plane_request(path: str) -> bool:
     """Block direct reads and mutations of hidden cluster-scoped objects."""
     parts = _decode_path_parts(path)
-    if len(parts) >= 2 and parts[:2] == ["apis", CHAOS_API_GROUP]:
+    if len(parts) >= 2 and parts[0] == "apis" and is_hidden_api_group(parts[1]):
         return True
-    if len(parts) >= 4 and parts[:3] == ["openapi", "v3", "apis"] and parts[3] == CHAOS_API_GROUP:
+    if len(parts) >= 4 and parts[:3] == ["openapi", "v3", "apis"] and is_hidden_api_group(parts[3]):
         return True
     resource, name = _resource_request(path)
-    return resource in CLUSTER_CONTROL_PLANE_RESOURCES and bool(name and mentions_chaos_mesh(name))
-
-
-def _filter_openapi_document(data: dict, version: str) -> dict:
-    """Remove the Chaos API schemas without changing unrelated Kubernetes schemas."""
-    if version == "openapi_v2":
-        for field in ("definitions", "paths"):
-            if isinstance(data.get(field), dict):
-                data[field] = {key: value for key, value in data[field].items() if not mentions_chaos_mesh(key)}
-    elif version == "openapi_v3" and isinstance(data.get("paths"), dict):
-        data["paths"] = {key: value for key, value in data["paths"].items() if not mentions_chaos_mesh(key)}
-    return data
+    return is_hidden_cluster_resource(resource, name)
 
 
 def _is_helm_release_secret_request(path: str) -> bool:
@@ -503,7 +411,9 @@ class KubernetesAPIProxy:
         *,
         restrict_network_access: bool = False,
     ):
-        self.hidden_namespaces: set[str] = hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES
+        self.hidden_namespaces: set[str] = (
+            hidden_namespaces if hidden_namespaces is not None else HIDDEN_NAMESPACES.copy()
+        )
         self.hidden_labels: dict[str, set[str]] = hidden_labels if hidden_labels is not None else HIDDEN_LABELS
         self.listen_port = listen_port
         self.listen_host = listen_host
@@ -961,7 +871,7 @@ class KubernetesAPIProxy:
                                 and (obj.get("metadata") or {}).get("name") in hidden_namespaces
                             ):
                                 return None
-                            if _is_hidden_resource(obj, hidden_namespaces, hidden_labels):
+                            if is_hidden_resource(obj, hidden_namespaces, hidden_labels):
                                 return None
                             event["object"] = sanitize_visible_resource(obj)
                             return event
@@ -1019,18 +929,18 @@ class KubernetesAPIProxy:
                         try:
                             data = json.loads(response_body)
                             if filter_type == "namespaces":
-                                data = _filter_namespace_list(data, hidden_namespaces)
+                                data = filter_namespace_list(data, hidden_namespaces)
                                 response_body = json.dumps(data).encode()
                             elif filter_type == "discovery":
-                                data = _filter_api_groups(data)
+                                data = filter_api_groups(data)
                                 response_body = json.dumps(data).encode()
                             elif filter_type in {"openapi_v2", "openapi_v3"}:
-                                data = _filter_openapi_document(data, filter_type)
+                                data = filter_openapi_document(data, filter_type)
                                 response_body = json.dumps(data).encode()
                             elif filter_type == "resources":
-                                data = _filter_resource_list(data, hidden_namespaces, hidden_labels)
+                                data = filter_resource_list(data, hidden_namespaces, hidden_labels)
                                 response_body = json.dumps(data).encode()
-                            elif filter_type is None and _is_hidden_resource(data, hidden_namespaces, hidden_labels):
+                            elif filter_type is None and is_hidden_resource(data, hidden_namespaces, hidden_labels):
                                 # Block direct access to individual hidden resources
                                 if is_chaos_event(data, hidden_namespaces):
                                     self.send_error(404, "Not Found")

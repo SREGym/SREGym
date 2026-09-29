@@ -102,7 +102,6 @@ class Conductor:
 
         # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
         self.k8s_proxy = KubernetesAPIProxy(
-            hidden_namespaces={"chaos-mesh", "khaos"},
             listen_port=self.config.k8s_proxy_listen_port,
             listen_host=self.config.k8s_proxy_listen_host,
             restrict_network_access=self.config.restrict_network_access,

@@ -2,7 +2,7 @@ from fastmcp import FastMCP
 
 from clients.stratus.stratus_utils.get_logger import get_logger
 from mcp_server.utils import ObservabilityClient
-from sregym.service.visibility import visible_observability_record
+from sregym.service.agent_visibility_policy import visible_observability_record
 
 logger = get_logger()
 logger.info("Starting Prometheus MCP Server")

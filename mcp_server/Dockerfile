@@ -27,7 +27,7 @@ COPY sregym/service/__init__.py \
     sregym/service/k8s_proxy.py \
     sregym/service/kubernetes_access_policy.py \
     sregym/service/kubernetes_response.py \
-    sregym/service/visibility.py ./sregym/service/
+    sregym/service/agent_visibility_policy.py ./sregym/service/
 COPY clients/__init__.py ./clients/
 COPY clients/stratus/__init__.py ./clients/stratus/
 COPY clients/stratus/configs/langgraph_tool_configs.py ./clients/stratus/configs/

@@ -2,7 +2,7 @@ from fastmcp import FastMCP
 
 from clients.stratus.stratus_utils.get_logger import get_logger
 from mcp_server.utils import ObservabilityClient
-from sregym.service.visibility import visible_log_value
+from sregym.service.agent_visibility_policy import visible_log_value
 
 logger = get_logger()
 logger.info("Starting Loki MCP Server")
