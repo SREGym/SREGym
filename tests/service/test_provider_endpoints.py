@@ -190,3 +190,18 @@ def test_provider_definition_keeps_default_and_overrides_together(provider, defi
         assert provider_endpoint_rules(policy, {variable: "https://custom.test/v1"}) == (
             EndpointRule("custom.test", 443),
         )
+
+
+def test_claude_code_file_credentials_reach_the_oauth_refresh_host():
+    """File-based subscription auth needs the same refresh host as the env token.
+
+    Without it, a subscription-authenticated Claude Code run under a filtered
+    policy can start and then fail to refresh its token.
+    """
+    policy = InternetPolicy.from_mode("filtered", agent_name="claudecode", model_id="claude-opus-4-8")
+
+    assert provider_endpoint_rules(policy, {}, claude_subscription_auth=True) == (
+        EndpointRule("api.anthropic.com", 443),
+        EndpointRule("platform.claude.com", 443),
+    )
+    assert provider_endpoint_rules(policy, {}) == (EndpointRule("api.anthropic.com", 443),)

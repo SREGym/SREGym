@@ -151,9 +151,14 @@ Prior work inspected while implementing this runtime:
 
 The [DeathStarBench 2.0 guide](../../docs/deathstarbench/README.md) describes
 replicated HotelReservation and SocialNetwork tiers and the validation-gated
-Codex comparison campaign. For subscription-backed Codex evaluations, explicitly
-pass `run --codex-auth-file /path/to/auth.json`; only that file is mounted,
-read-only, rather than the whole login directory.
+comparison campaign. For subscription-backed evaluations, pass the one
+credential file explicitly rather than the whole login directory:
+
+- Codex: `run --codex-auth-file ~/.codex/auth.json`
+- Claude Code: `run --claude-auth-file ~/.claude/.credentials.json`
+
+Either file is mounted read-only. Inside the container, the harness gives each
+agent container its own copy, so a token refresh cannot rewrite the host file.
 
 Run real problem lifecycles without API keys using the existing validator:
 

@@ -47,6 +47,7 @@ def provider_endpoint_rules(
     environment: Mapping[str, str],
     *,
     codex_subscription_auth: bool = False,
+    claude_subscription_auth: bool = False,
 ) -> tuple[EndpointRule, ...]:
     """Return the fixed provider destinations for one evaluated agent."""
     if not policy.is_filtered or not policy.agent_name:
@@ -66,7 +67,7 @@ def provider_endpoint_rules(
         return _rules_from_urls((_provider_url("openai", environment),))
     if agent == "claudecode":
         urls = [_provider_url("anthropic", environment)]
-        if environment.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip():
+        if environment.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip() or claude_subscription_auth:
             urls.append("https://platform.claude.com")
         return _rules_from_urls(urls)
     if agent == "gemini":

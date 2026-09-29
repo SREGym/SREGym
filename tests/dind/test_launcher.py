@@ -44,6 +44,22 @@ class LauncherTests(unittest.TestCase):
             self.assertIn(f"type=bind,src={auth},dst=/root/.codex/auth.json,readonly", command)
             self.assertNotIn("dst=/root/.codex,", " ".join(command))
 
+    def test_explicit_claude_auth_mount_is_read_only_and_does_not_mount_home(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auth = Path(directory) / ".credentials.json"
+            auth.write_text("{}")
+            args = launcher.parser().parse_args(["run", "--output", directory, "--claude-auth-file", str(auth)])
+            command = launcher.run_command(args)
+            self.assertIn(f"type=bind,src={auth},dst=/root/.claude/.credentials.json,readonly", command)
+            self.assertNotIn("dst=/root/.claude,", " ".join(command))
+
+    def test_no_agent_credentials_are_mounted_unless_requested(self):
+        with tempfile.TemporaryDirectory() as directory:
+            args = launcher.parser().parse_args(["run", "--output", directory])
+            joined = " ".join(launcher.run_command(args))
+            self.assertNotIn("/root/.codex", joined)
+            self.assertNotIn("/root/.claude", joined)
+
     def test_optional_memory_backed_docker_data_keeps_results_on_host(self):
         with tempfile.TemporaryDirectory() as directory:
             args = launcher.parser().parse_args(

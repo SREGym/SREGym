@@ -142,31 +142,44 @@ python3 docker/dind/run.py run --name dsb2-storage --memory 32g -- \
 The storage test creates and cleans up its own application namespace. Run it
 separately from an active benchmark attempt.
 
-Run the matched campaign with an explicit model and three attempts per tier:
+Run the matched campaign with an explicit agent, model and three attempts per
+tier. `--agent` selects the client; `codex` and `claudecode` are supported:
 
 ```bash
+# Claude Code, subscription credentials
+python3 docker/dind/run.py run --name dsb2-comparison --memory 36g \
+  --claude-auth-file "$HOME/.claude/.credentials.json" -- \
+  python scripts/evaluate_deathstarbench.py --agent claudecode \
+    --model claude-opus-4-8 --attempts 3 --profile svelte
+
+# Codex, subscription credentials
 python3 docker/dind/run.py run --name dsb2-comparison --memory 36g \
   --codex-auth-file "$HOME/.codex/auth.json" -- \
-  python scripts/evaluate_deathstarbench.py --model gpt-6-astra \
-    --attempts 3 --profile svelte
+  python scripts/evaluate_deathstarbench.py --agent codex \
+    --model gpt-6-astra --attempts 3 --profile svelte
 ```
 
-Alternatively, supply `OPENAI_API_KEY` through the existing launcher environment
-forwarding. `--codex-auth-file` explicitly mounts only that file read-only;
-agent containers receive the existing harness's isolated credential copy. Change
-the model argument to the model being evaluated. The campaign uses mitigation
-only; add diagnosis evaluation separately when a diagnosis judge is required.
+Alternatively supply `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN` through the existing launcher environment forwarding.
+The `--*-auth-file` options mount only that one file read-only; agent containers
+receive the harness's own isolated copy, so a token refresh inside a container
+cannot rewrite host credentials. The campaign uses mitigation only; add diagnosis
+evaluation separately when a diagnosis judge is required.
+
+**Attempts from different agents are not one cohort.** Changing `--agent` or
+`--model` starts a new comparison and does not extend an existing one.
 
 The campaign builds a small local agent image from the pinned released runtime
-and this checkout's Codex client and helper modules. The driver reads the conductor's active stage
-so mitigation-only attempts receive repair instructions before submission.
-This avoids silently using an older driver baked into a released image. The
-report records the image ID and driver hash; `--agent-image` allows an explicit
-override. Direct `main.py` runs can select that image with the same option or
-rebuild the complete agent image using `--force-build`.
-Use `--agent-version VERSION` on the comparison script to pin the runtime-installed
-Codex CLI through a private registry copy. A pinned base image alone does not pin
-that installation; the original registry remains unchanged.
+and this checkout's client and helper modules for the selected agent. Both
+drivers read the conductor's active stage, so mitigation-only attempts receive
+repair instructions rather than a diagnosis-first prompt that would submit before
+any repair. This avoids silently using an older driver baked into a released
+image. The report records the agent, image ID and driver hash; `--agent-image`
+allows an explicit override. Direct `main.py` runs can select that image with the
+same option or rebuild the complete agent image using `--force-build`.
+Use `--agent-version VERSION` on the comparison script to pin the
+runtime-installed agent CLI through a private registry copy. A pinned base image
+alone does not pin that installation; the original registry remains unchanged.
 
 The campaign validates each problem before running its agent attempts. It writes
 validation logs, JSON verdicts, `comparison.json`, and `comparison.md` under

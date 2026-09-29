@@ -24,15 +24,20 @@ SUPPORTED_TIERS = {app: TIERS for app in DEFAULT_APPLICATIONS} | {
 }
 
 
-def prepare_agent_registry(root, output, version):
+#: Client packages each agent's driver imports. A missing helper package would
+#: only surface as an ImportError inside the agent container, mid-attempt.
+AGENT_CLIENT_SOURCES = {"codex": ("codex", "harness", "jev"), "claudecode": ("claudecode", "harness")}
+
+
+def prepare_agent_registry(root, output, version, agent):
     """Pin the runtime-installed CLI without changing the user's registry."""
     import yaml
 
     source = Path(os.environ.get("SREGYM_AGENT_REGISTRY", root / "agents.yaml"))
     registry = yaml.safe_load(source.read_text())
-    registration = next((entry for entry in registry["agents"] if entry["name"] == "codex"), None)
+    registration = next((entry for entry in registry["agents"] if entry["name"] == agent), None)
     if registration is None:
-        raise ValueError("The selected agent registry has no Codex registration")
+        raise ValueError(f"The selected agent registry has no {agent} registration")
     registration["agent_version"] = version
     destination = output / "agent-registry.yaml"
     # Registry entries may contain user configuration: publish atomically with
@@ -44,16 +49,17 @@ def prepare_agent_registry(root, output, version):
     return destination
 
 
-def prepare_agent_image(root):
-    """Use the checkout's Codex client and helper modules on the released runtime."""
+def prepare_agent_image(root, agent):
+    """Use the checkout's client and helper modules on the released runtime."""
     from sregym.service.container_runner import DEFAULT_AGENT_IMAGE
 
-    sources = sorted(p for name in ("codex", "harness", "jev") for p in (root / "clients" / name).rglob("*.py"))
+    names = AGENT_CLIENT_SOURCES[agent]
+    sources = sorted(p for name in names for p in (root / "clients" / name).rglob("*.py"))
     digest = hashlib.sha256(DEFAULT_AGENT_IMAGE.encode())
     for source in sources:
         digest.update(str(source.relative_to(root)).encode() + b"\0" + source.read_bytes())
-    tag = f"sregym-codex-driver:{digest.hexdigest()[:16]}"
-    with tempfile.TemporaryDirectory(prefix="sregym-codex-build-") as directory:
+    tag = f"sregym-{agent}-driver:{digest.hexdigest()[:16]}"
+    with tempfile.TemporaryDirectory(prefix=f"sregym-{agent}-build-") as directory:
         context = Path(directory)
         for source in sources:
             target = context / source.relative_to(root)
@@ -118,6 +124,12 @@ def summarize(rows, attempts):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--agent",
+        choices=sorted(AGENT_CLIENT_SOURCES),
+        default="codex",
+        help="Agent client to evaluate. Attempts from different agents are not one cohort",
+    )
     parser.add_argument("--model", required=True, help="Explicit model recorded in every comparison")
     parser.add_argument("--attempts", type=int, default=3)
     parser.add_argument(
@@ -140,10 +152,10 @@ def main():
     parser.add_argument("--profile", choices=("full", "svelte"), default="full")
     parser.add_argument("--agent-timeout", type=int, default=900)
     parser.add_argument(
-        "--agent-image", help="Override the automatically built image containing this checkout's Codex driver"
+        "--agent-image", help="Override the automatically built image containing this checkout's agent driver"
     )
     parser.add_argument(
-        "--agent-version", help="Pin the runtime-installed Codex CLI version using a private registry copy"
+        "--agent-version", help="Pin the runtime-installed agent CLI version using a private registry copy"
     )
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--output", type=Path, default=Path("results/deathstarbench"))
@@ -182,9 +194,9 @@ def main():
     agent_environment = os.environ.copy()
     registry_path = None
     if args.agent_version:
-        registry_path = prepare_agent_registry(root, output, args.agent_version)
+        registry_path = prepare_agent_registry(root, output, args.agent_version, args.agent)
         agent_environment["SREGYM_AGENT_REGISTRY"] = str(registry_path)
-    agent_image = None if args.validate_only else args.agent_image or prepare_agent_image(root)
+    agent_image = None if args.validate_only else args.agent_image or prepare_agent_image(root, args.agent)
     report = {
         "model": args.model,
         "attempts": args.attempts,
@@ -201,8 +213,9 @@ def main():
             if agent_image
             else None
         ),
-        "uses_checkout_codex_driver": not args.agent_image,
-        "codex_driver_sha256": hashlib.sha256((root / "clients/codex/driver.py").read_bytes()).hexdigest(),
+        "agent": args.agent,
+        "uses_checkout_driver": not args.agent_image,
+        "driver_sha256": hashlib.sha256((root / "clients" / args.agent / "driver.py").read_bytes()).hexdigest(),
         "results": {},
     }
     for app in args.applications:
@@ -233,7 +246,7 @@ def main():
                     "--problem",
                     pid,
                     "--agent",
-                    "codex",
+                    args.agent,
                     "--model",
                     args.model,
                     "--n-attempts",
@@ -253,7 +266,7 @@ def main():
                     ).returncode
                 csvs = [
                     p
-                    for p in (root / "results").glob(f"*/codex/{pid}/{pid}_codex_results.csv")
+                    for p in (root / "results").glob(f"*/{args.agent}/{pid}/{pid}_{args.agent}_results.csv")
                     if p.stat().st_mtime >= start
                 ]
                 rows = []
@@ -265,7 +278,7 @@ def main():
             (output / "comparison.json").write_text(json.dumps(report, indent=2) + "\n")
             print(pid, json.dumps(result), flush=True)
     lines = [
-        f"Codex `{args.model}`, {args.attempts} requested attempts per tier, `{args.profile}` profile.",
+        f"`{args.agent}` `{args.model}`, {args.attempts} requested attempts per tier, `{args.profile}` profile.",
         "",
         "| Application | Tier | Lifecycle | Complete | Mitigation passes | Difficulty (1 − pass rate) |",
         "|---|---|---|---|---|---|",

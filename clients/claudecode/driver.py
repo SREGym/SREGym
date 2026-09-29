@@ -133,12 +133,13 @@ def wait_for_ready_stage(timeout: int = 300) -> str:
     raise TimeoutError(f"Conductor did not reach ready stage within {timeout} seconds")
 
 
-def build_instruction(app_info: dict) -> str:
+def build_instruction(app_info: dict, stage: str = "diagnosis") -> str:
     """
     Build the instruction string for Claude Code.
 
     Args:
         app_info: Application information from conductor
+        stage: Submission-ready stage returned by the conductor
 
     Returns:
         Instruction string to pass to Claude Code
@@ -147,6 +148,8 @@ def build_instruction(app_info: dict) -> str:
     namespace = app_info.get("namespace", "default")
     namespaces = app_info.get("namespaces") or [namespace]
     descriptions = app_info.get("descriptions", "")
+    if stage not in {"diagnosis", "mitigation"}:
+        raise ValueError(f"Unsupported ready stage: {stage}")
 
     if len(namespaces) > 1:
         namespace_block = (
@@ -155,17 +158,22 @@ def build_instruction(app_info: dict) -> str:
     else:
         namespace_block = f"Namespace: {namespaces[0]}"
 
-    # Build instruction similar to how it would be done in Harbor
-    instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
+    if stage == "mitigation":
+        # The driver already waits for the actual stage. A diagnosis-first
+        # prompt can close a mitigation-only attempt before any repair.
+        workflow = """WORKFLOW: The current task is MITIGATION.
 
-Application: {app_name}
-{namespace_block}
+- Investigate the incident using metrics, logs, traces, and Kubernetes resources.
+- Apply a fix and verify that the application is healthy and its data is retained.
+- Submit only after implementing and checking the fix. Submission closes this attempt.
+- Your outcome is evaluated from the running system after your changes."""
+        submission_instruction = f"""HOW TO SUBMIT:
 
-{descriptions}
-
-CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
-
-WORKFLOW: You will perform TWO tasks in sequence:
+After applying and verifying your fix, POST {get_api_base_url()}/submit
+with JSON: {{"solution": ""}}.
+This submission is required to trigger validation. Submit once, then stop."""
+    else:
+        workflow = """WORKFLOW: You will perform TWO tasks in sequence:
 
 TASK 1: DIAGNOSIS
 - Investigate the application to detect any anomalies or issues
@@ -178,9 +186,8 @@ TASK 2: MITIGATION
 - Implement a fix to resolve the problem
 - When the fix is applied, submit to trigger validation
 - Your mitigation is evaluated on whether the application is healthy after your changes
-- Your fix is also evaluated on whether it addresses the root cause, not just the symptoms
-
-HOW TO SUBMIT:
+- Your fix is also evaluated on whether it addresses the root cause, not just the symptoms"""
+        submission_instruction = f"""HOW TO SUBMIT:
 
 The submission endpoint is: {get_api_base_url()}/submit
 
@@ -190,7 +197,21 @@ For DIAGNOSIS stage:
 
 For MITIGATION stage:
 - Submit with an EMPTY STRING after you have applied the fix
-- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}
+- POST {get_api_base_url()}/submit with JSON: {{"solution": ""}}"""
+
+    # Build instruction similar to how it would be done in Harbor
+    instruction = f"""You are an SRE agent tasked with diagnosing and fixing issues in a Kubernetes application.
+
+Application: {app_name}
+{namespace_block}
+
+{descriptions}
+
+CRITICAL: You are running in an AUTOMATED environment. Work autonomously and make all decisions yourself. DO NOT ask for user confirmation or approval. Proceed with the best solution based on your analysis.
+
+{workflow}
+
+{submission_instruction}
 
 Important:
 - You have access to kubectl commands to inspect and modify resources in namespace(s): {", ".join(namespaces)}
@@ -301,7 +322,7 @@ def main():
     logger.info(f"Problem ID (harness): {problem_id}")
 
     # Build instruction
-    instruction = build_instruction(app_info)
+    instruction = build_instruction(app_info, stage=stage)
 
     # Initialize Claude Code agent
     logs_dir = Path(args.logs_dir)

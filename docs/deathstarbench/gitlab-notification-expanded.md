@@ -7,8 +7,25 @@ invocation was rejected by the model service before Codex took any actions:
 `gpt-6-astra` was reported unsupported for the configured ChatGPT account. A
 minimal retry returned the same error. This is an invalid attempt, not evidence
 of benchmark difficulty. Cleanup passed in 672.791 seconds. The final audit found
-all 37 source hashes unchanged in both the host and DinD container. One valid
-trial is still needed; the target is unmet.
+all 37 source hashes unchanged in both the host and DinD container. The target
+is unmet.
+
+The Codex cohort is now closed at two valid passes: `gpt-6-astra` is not entitled
+for the configured ChatGPT account. Evaluation moves to Claude Code, which starts
+a **new** three-attempt cohort rather than completing this one — see the
+[calibration report](difficulty-calibration.md).
+
+Two source changes postdate that audit, so the hash set above no longer matches
+the current tree. Neither changes grading:
+
+- The four new SaaS oracles spelled `FAILURE_CLASSES` with a `**` spread of their
+  parent's table. `Oracle._failure_classes()` already merges every table in the
+  MRO, so the spread was redundant, and it hid the reason strings from the
+  snake_case check in `tests/oracles/test_failure_sweep.py`, which was failing.
+  The merged tables are unchanged (verified cumulative: 2 → 7 → 11 → 15 reasons).
+- The Claude Code driver became stage-aware, matching the Codex driver.
+
+A Claude Code cohort should be frozen and audited afresh from the current tree.
 
 `gitlab_notification_delayed_audit_expanded` scales the workload of the
 [delayed-audit incident](gitlab-notification-delayed-audit.md), whose fixed
@@ -60,7 +77,7 @@ The comparison command supports both workloads:
 ```sh
 python scripts/evaluate_deathstarbench.py \
   --applications gitlab_ce --incident notification_delayed_audit \
-  --tiers replicated expanded --model gpt-6-astra --agent-version 0.157.1 \
+  --tiers replicated expanded --agent claudecode --model claude-opus-4-8 \
   --attempts 3 --profile svelte --agent-timeout 900 \
   --output results/notification-workload-comparison
 ```
@@ -68,9 +85,9 @@ python scripts/evaluate_deathstarbench.py \
 The current calibration campaign uses comprehensive admission as its gate and
 then runs three fresh expanded attempts with frozen source. Its predecessor's
 three passes are retained in the [calibration report](difficulty-calibration.md).
-Infrastructure or admission failures cannot satisfy the difficulty target. The
-source stays frozen while model access is resolved. Any replacement model needs
-its own three-attempt comparison rather than mixing models in this cohort.
+Infrastructure or admission failures cannot satisfy the difficulty target. Any
+replacement agent or model needs its own three-attempt comparison rather than
+mixing clients or models in one cohort.
 
 [Structured evidence](gitlab-notification-expanded-results.json) records source
 and image provenance. Raw artifacts are under

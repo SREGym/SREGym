@@ -1,6 +1,13 @@
+import pathlib
+
 import pytest
 
-from scripts.evaluate_deathstarbench import prepare_agent_registry, problem_id, summarize
+from scripts.evaluate_deathstarbench import (
+    AGENT_CLIENT_SOURCES,
+    prepare_agent_registry,
+    problem_id,
+    summarize,
+)
 
 
 def test_cli_version_override_is_private_and_does_not_mutate_the_original_registry(tmp_path, monkeypatch):
@@ -12,7 +19,7 @@ def test_cli_version_override_is_private_and_does_not_mutate_the_original_regist
     monkeypatch.setenv("SREGYM_AGENT_REGISTRY", str(original))
     output = tmp_path / "results"
     output.mkdir()
-    pinned = prepare_agent_registry(tmp_path, output, "0.157.0")
+    pinned = prepare_agent_registry(tmp_path, output, "0.157.0", "codex")
     assert yaml.safe_load(original.read_text()) == content
     new = yaml.safe_load(pinned.read_text())["agents"][0]
     assert new["agent_version"] == "0.157.0"
@@ -67,3 +74,42 @@ def test_ambiguous_failures_cannot_establish_model_difficulty():
     )
     assert result["ambiguous_failures"] == 1
     assert result["inconclusive"]
+
+
+def test_registry_pins_the_selected_agent_not_always_codex(tmp_path, monkeypatch):
+    import yaml
+
+    original = tmp_path / "custom-agents.yaml"
+    original.write_text(
+        yaml.safe_dump(
+            {"agents": [{"name": "codex", "agent_version": None}, {"name": "claudecode", "agent_version": None}]}
+        )
+    )
+    monkeypatch.setenv("SREGYM_AGENT_REGISTRY", str(original))
+    output = tmp_path / "results"
+    output.mkdir()
+    pinned = yaml.safe_load(prepare_agent_registry(tmp_path, output, "2.1.0", "claudecode").read_text())
+    versions = {entry["name"]: entry["agent_version"] for entry in pinned["agents"]}
+    assert versions == {"claudecode": "2.1.0", "codex": None}
+
+
+def test_a_missing_agent_registration_is_rejected_by_name(tmp_path, monkeypatch):
+    import yaml
+
+    original = tmp_path / "custom-agents.yaml"
+    original.write_text(yaml.safe_dump({"agents": [{"name": "codex", "agent_version": None}]}))
+    monkeypatch.setenv("SREGYM_AGENT_REGISTRY", str(original))
+    output = tmp_path / "results"
+    output.mkdir()
+    with pytest.raises(ValueError, match="claudecode"):
+        prepare_agent_registry(tmp_path, output, "2.1.0", "claudecode")
+
+
+def test_every_selectable_agent_has_its_driver_and_helper_packages():
+    """A missing helper package only fails inside the container, mid-attempt."""
+    root = pathlib.Path(__file__).resolve().parent.parent
+    for agent, names in AGENT_CLIENT_SOURCES.items():
+        assert (root / "clients" / agent / "driver.py").is_file(), agent
+        assert agent in names, f"{agent} must ship its own client package"
+        for name in names:
+            assert (root / "clients" / name).is_dir(), (agent, name)

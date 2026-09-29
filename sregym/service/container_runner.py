@@ -72,6 +72,23 @@ def _codex_subscription_auth_available(auth_path: Path) -> bool:
     return auth.get("OPENAI_API_KEY") is None and isinstance(auth.get("tokens"), dict)
 
 
+def _claude_subscription_auth_available(auth_path: Path) -> bool:
+    """Whether Claude Code has usable subscription credentials on this host.
+
+    Claude Code accepts either ``CLAUDE_CODE_OAUTH_TOKEN`` or the OAuth
+    credentials file the CLI writes at login. Only the file needs mounting; the
+    env var already travels through ``API_KEY_VARS``.
+    """
+    if auth_path.is_symlink() or not auth_path.is_file() or not os.access(auth_path, os.R_OK):
+        return False
+    try:
+        auth = json.loads(auth_path.read_text())
+    except (OSError, ValueError):
+        return False
+    oauth = auth.get("claudeAiOauth") if isinstance(auth, dict) else None
+    return isinstance(oauth, dict) and bool(oauth.get("accessToken"))
+
+
 def get_container_host_bind_address() -> str:
     """Return a host bind address reachable from the agent container."""
     if platform.system() != "Linux":
@@ -121,6 +138,7 @@ class ContainerConfig:
     published_ports: list[str] = field(default_factory=list)
     forward_host_credentials: bool = True
     codex_auth: Literal["copy", "shared", "none"] = "copy"
+    claude_auth: Literal["copy", "shared", "none"] = "copy"
 
 
 class ContainerRunner:
@@ -325,6 +343,14 @@ class ContainerRunner:
                     and (self.config.internet_policy.agent_name or "").casefold() == "codex"
                     and _codex_subscription_auth_available(Path.home() / ".codex" / "auth.json")
                 ),
+                claude_subscription_auth=(
+                    self.config.internet_policy.is_filtered
+                    and (self.config.internet_policy.agent_name or "").casefold() == "claudecode"
+                    and self.config.claude_auth != "none"
+                    and _claude_subscription_auth_available(
+                        Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")) / ".credentials.json"
+                    )
+                ),
             )
         )
         rules.update(
@@ -413,6 +439,38 @@ class ContainerRunner:
         shutil.copy2(auth_src, auth_dst)
 
         args.extend(["-v", f"{auth_dst}:/root/.codex/auth.json:ro"])
+        self._credential_tmps.append(tmp)
+
+    def _mount_claude_credentials(self, args: list[str]) -> None:
+        """Copy Claude Code's OAuth credentials read-only for agent containers.
+
+        Without this, a subscription-authenticated host can start a Claude Code
+        attempt that has no credentials inside its isolated container.
+        """
+        if self.config.claude_auth == "none":
+            return
+        # Scope the token to runs that use it. A named agent that is not Claude
+        # Code has no use for these credentials; an unnamed runtime still gets
+        # them, since that is where the judge and preflight paths sit.
+        agent = (self.config.internet_policy.agent_name or "").casefold()
+        if agent and agent != "claudecode":
+            return
+        home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude"))
+        auth_src = home / ".credentials.json"
+        if not _claude_subscription_auth_available(auth_src):
+            return
+
+        if self.config.claude_auth == "shared":
+            # Shared lets the CLI write a refreshed token back to the host file.
+            args.extend(["-v", f"{auth_src.resolve()}:/root/.claude/.credentials.json:rw"])
+            return
+
+        tmp = tempfile.mkdtemp(prefix="sregym-claude-")
+        auth_dst = Path(tmp) / ".credentials.json"
+        shutil.copy2(auth_src, auth_dst)
+        os.chmod(auth_dst, 0o600)
+
+        args.extend(["-v", f"{auth_dst}:/root/.claude/.credentials.json:ro"])
         self._credential_tmps.append(tmp)
 
     def _run_uses_aws(self, extra_env: dict[str, str] | None = None) -> bool:
@@ -552,6 +610,7 @@ class ContainerRunner:
                 logger.debug("Skipping ~/.aws mount: no AWS credentials selected for this run")
 
         self._mount_codex_credentials(args)
+        self._mount_claude_credentials(args)
 
         for port in self.config.published_ports:
             args.extend(["-p", port])
