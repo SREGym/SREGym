@@ -14,6 +14,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -253,8 +254,8 @@ class NodeConntrackExhaustionHotelReservation(Problem):
     def _wait_for_deployment(self, name: str, replicas: int, timeout: int = 180):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            status = self.apps_v1.read_namespaced_deployment(name, self.namespace).status
-            if (status.available_replicas or 0) >= replicas:
+            deployment = self.apps_v1.read_namespaced_deployment(name, self.namespace)
+            if deployment.spec.replicas == replicas and deployment_rollout_complete(deployment, allow_zero=True):
                 return
             time.sleep(2)
         raise RuntimeError(f"Deployment {name} did not become ready")

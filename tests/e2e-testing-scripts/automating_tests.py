@@ -351,26 +351,15 @@ def install_python():
 
 
 def _resolve_kind_config() -> str | None:
-    kind_dir = SREGYM_ROOT / "kind"
-    prefs = [
-        kind_dir / "kind-config-x86.yaml",
-        kind_dir / "kind-config-arm.yaml",
-    ]
-    for p in prefs:
-        if p.is_file():
-            return str(p)
-    if kind_dir.is_dir():
-        for p in sorted(kind_dir.glob("*.yaml")):
-            if p.is_file():
-                return str(p)
-    return None
+    path = SREGYM_ROOT / "kind/kind-config.yaml"
+    return str(path) if path.is_file() else None
 
 
 def create_cluster(user):
     for node in _read_nodes("nodes.txt"):
         print(f"\n=== [Create Kind Cluster] {node} ===")
 
-        cmd = f'ssh -o StrictHostKeyChecking=no {node} "bash -ic \\"tmux new-session -d -s cluster_setup \'kind create cluster --config /users/{user}/SREGym/kind/kind-config-x86.yaml; sleep infinity\'\\""'
+        cmd = f'ssh -o StrictHostKeyChecking=no {node} "bash -ic \\"tmux new-session -d -s cluster_setup \'kind create cluster --config /users/{user}/SREGym/kind/kind-config.yaml; sleep infinity\'\\""'
 
         subprocess.run(
             cmd,

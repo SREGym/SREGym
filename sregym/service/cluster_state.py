@@ -20,7 +20,21 @@ logger.setLevel(logging.DEBUG)
 # is included so that noise injection survives the per-problem cleanup —
 # without it the conductor wipes the chaos-mesh helm release and CRDs after
 # every problem and the next noise injection silently fails.
-PROTECTED_NAMESPACES = frozenset({"kube-system", "kube-public", "kube-node-lease", "default", "sregym", "chaos-mesh"})
+#
+# `openebs` is included for the same reason plus one more. It is pure
+# infrastructure: it holds no problem state, so rebuilding it between problems
+# buys no trial independence, and it costs ~24s of redeploy each time. More
+# importantly, deleting the namespace kills openebs-localpv-provisioner before
+# it can run its cleanup helper pods, which is the leak that
+# `gc_orphan_localpv_dirs` exists to mop up (see step 4b below). Keeping the
+# provisioner alive lets it clean up properly.
+#
+# The `observe` namespace is deliberately NOT protected: Prometheus, Loki and
+# Jaeger accumulate telemetry, and carrying that from one problem into the next
+# would make results order-dependent.
+PROTECTED_NAMESPACES = frozenset(
+    {"kube-system", "kube-public", "kube-node-lease", "default", "sregym", "chaos-mesh", "openebs"}
+)
 
 
 def _is_chaos_mesh_resource(name: str) -> bool:
@@ -43,6 +57,28 @@ def _is_chaos_mesh_resource(name: str) -> bool:
     return (
         ("chaos-mesh" in name) or ("chaos-controller" in name) or ("chaos-daemon" in name) or name in {"validate-auth"}
     )
+
+
+# Exact cluster-scoped identities from openebs-operator.yaml and the
+# metrics-server components.yaml used by Conductor. Keep this list aligned with
+# those manifests when changing infrastructure versions. A matching substring
+# or a matching name on another resource kind does not establish ownership.
+_PRESERVED_INFRA_RESOURCES = {
+    "ClusterRole": frozenset({"openebs-maya-operator", "system:aggregated-metrics-reader", "system:metrics-server"}),
+    "ClusterRoleBinding": frozenset(
+        {
+            "openebs-maya-operator",
+            "metrics-server:system:auth-delegator",
+            "system:metrics-server",
+        }
+    ),
+    "CustomResourceDefinition": frozenset({"blockdevices.openebs.io", "blockdeviceclaims.openebs.io"}),
+    "StorageClass": frozenset({"openebs-hostpath", "openebs-device"}),
+}
+
+
+def _is_preserved_infra_resource(kind: str, name: str) -> bool:
+    return name in _PRESERVED_INFRA_RESOURCES.get(kind, ())
 
 
 @dataclass
@@ -135,17 +171,17 @@ class ClusterStateManager:
         logger.info("Capturing cluster baseline state...")
 
         self.baseline = ClusterBaseline(
-            namespaces=self._get_namespaces(),
-            cluster_roles=self._get_cluster_roles(),
-            cluster_role_bindings=self._get_cluster_role_bindings(),
-            persistent_volumes=self._get_persistent_volumes(),
-            storage_classes=self._get_storage_classes(),
-            crds=self._get_crds(),
-            validating_webhook_configs=self._get_validating_webhook_configs(),
-            mutating_webhook_configs=self._get_mutating_webhook_configs(),
-            node_labels=self._get_node_labels(),
-            node_taints=self._get_node_taints(),
-            coredns_configmap_data=self._get_coredns_configmap_data(),
+            namespaces=self._get_namespaces(raise_on_error=True),
+            cluster_roles=self._get_cluster_roles(raise_on_error=True),
+            cluster_role_bindings=self._get_cluster_role_bindings(raise_on_error=True),
+            persistent_volumes=self._get_persistent_volumes(raise_on_error=True),
+            storage_classes=self._get_storage_classes(raise_on_error=True),
+            crds=self._get_crds(raise_on_error=True),
+            validating_webhook_configs=self._get_validating_webhook_configs(raise_on_error=True),
+            mutating_webhook_configs=self._get_mutating_webhook_configs(raise_on_error=True),
+            node_labels=self._get_node_labels(raise_on_error=True),
+            node_taints=self._get_node_taints(raise_on_error=True),
+            coredns_configmap_data=self._get_coredns_configmap_data(raise_on_error=True),
         )
 
         return self.baseline
@@ -223,7 +259,7 @@ class ClusterStateManager:
             # Skip system roles that may have been auto-created
             if role.startswith("system:") or role.startswith("kubeadm:"):
                 continue
-            if _is_chaos_mesh_resource(role):
+            if _is_chaos_mesh_resource(role) or _is_preserved_infra_resource("ClusterRole", role):
                 continue
             logger.info(f"Deleting unexpected ClusterRole: {role}")
             try:
@@ -239,7 +275,7 @@ class ClusterStateManager:
         for binding in unexpected_bindings:
             if binding.startswith("system:") or binding.startswith("kubeadm:"):
                 continue
-            if _is_chaos_mesh_resource(binding):
+            if _is_chaos_mesh_resource(binding) or _is_preserved_infra_resource("ClusterRoleBinding", binding):
                 continue
             logger.info(f"Deleting unexpected ClusterRoleBinding: {binding}")
             try:
@@ -262,14 +298,14 @@ class ClusterStateManager:
                     logger.warning(f"Failed to delete PersistentVolume {pv}: {e}")
 
         # 4b. Garbage-collect orphaned OpenEBS LocalPV hostpath dirs.
-        # The openebs namespace is itself "unexpected" and gets deleted in step 1
-        # above, which kills the openebs-localpv-provisioner before it can run
-        # cleanup helper pods for any PVs it provisioned. Additionally, on
-        # control-plane nodes the dm-flakey path is intentionally skipped, so
-        # those nodes never get the rm -rf wipe that workers do at dm-flakey
-        # setup. Either path leaks /var/openebs/local/pvc-* dirs, eventually
-        # filling the disk and breaking subsequent deploys. Sweep them now that
-        # all unexpected PVs are gone from the API. Best-effort.
+        # `openebs` is now protected (see PROTECTED_NAMESPACES), so the
+        # provisioner survives step 1 and can run its own cleanup helper pods for
+        # PVs deleted in step 4 — the main source of leaks is gone. This sweep
+        # remains as a backstop: on control-plane nodes the dm-flakey path is
+        # intentionally skipped, so those nodes never get the rm -rf wipe that
+        # workers do at dm-flakey setup, and any /var/openebs/local/pvc-* dirs
+        # left behind eventually fill the disk and break subsequent deploys.
+        # Best-effort.
         try:
             gc_results = self.kubectl.gc_orphan_localpv_dirs()
             total = sum(c for c in gc_results.values() if c > 0)
@@ -283,6 +319,8 @@ class ClusterStateManager:
         current_scs = self._get_storage_classes()
         unexpected_scs = current_scs - self.baseline.storage_classes
         for sc in unexpected_scs:
+            if _is_preserved_infra_resource("StorageClass", sc):
+                continue
             logger.info(f"Deleting unexpected StorageClass: {sc}")
             try:
                 self.storage_v1.delete_storage_class(name=sc)
@@ -295,7 +333,7 @@ class ClusterStateManager:
         current_crds = self._get_crds()
         unexpected_crds = current_crds - self.baseline.crds
         for crd in unexpected_crds:
-            if _is_chaos_mesh_resource(crd):
+            if _is_chaos_mesh_resource(crd) or _is_preserved_infra_resource("CustomResourceDefinition", crd):
                 continue
             logger.info(f"Deleting unexpected CRD: {crd}")
             self._strip_cr_finalizers(crd)
@@ -310,7 +348,7 @@ class ClusterStateManager:
         current_vwc = self._get_validating_webhook_configs()
         unexpected_vwc = current_vwc - self.baseline.validating_webhook_configs
         for vwc in unexpected_vwc:
-            if _is_chaos_mesh_resource(vwc):
+            if _is_chaos_mesh_resource(vwc) or _is_preserved_infra_resource("ValidatingWebhookConfiguration", vwc):
                 continue
             logger.info(f"Deleting unexpected ValidatingWebhookConfiguration: {vwc}")
             try:
@@ -324,7 +362,7 @@ class ClusterStateManager:
         current_mwc = self._get_mutating_webhook_configs()
         unexpected_mwc = current_mwc - self.baseline.mutating_webhook_configs
         for mwc in unexpected_mwc:
-            if _is_chaos_mesh_resource(mwc):
+            if _is_chaos_mesh_resource(mwc) or _is_preserved_infra_resource("MutatingWebhookConfiguration", mwc):
                 continue
             logger.info(f"Deleting unexpected MutatingWebhookConfiguration: {mwc}")
             try:
@@ -349,49 +387,59 @@ class ClusterStateManager:
         logger.info(f"Reconciliation complete: {changes}")
         return changes
 
-    def _get_namespaces(self) -> set[str]:
+    def _get_namespaces(self, raise_on_error: bool = False) -> set[str]:
         """Get all namespace names in the cluster."""
         try:
             ns_list = self.core_v1.list_namespace()
             return {ns.metadata.name for ns in ns_list.items}
         except ApiException as e:
             logger.error(f"Failed to list namespaces: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_cluster_roles(self) -> set[str]:
+    def _get_cluster_roles(self, raise_on_error: bool = False) -> set[str]:
         """Get all ClusterRole names."""
         try:
             roles = self.rbac_v1.list_cluster_role()
             return {role.metadata.name for role in roles.items}
         except ApiException as e:
             logger.error(f"Failed to list ClusterRoles: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_cluster_role_bindings(self) -> set[str]:
+    def _get_cluster_role_bindings(self, raise_on_error: bool = False) -> set[str]:
         """Get all ClusterRoleBinding names."""
         try:
             bindings = self.rbac_v1.list_cluster_role_binding()
             return {binding.metadata.name for binding in bindings.items}
         except ApiException as e:
             logger.error(f"Failed to list ClusterRoleBindings: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_persistent_volumes(self) -> set[str]:
+    def _get_persistent_volumes(self, raise_on_error: bool = False) -> set[str]:
         """Get all PersistentVolume names."""
         try:
             pvs = self.core_v1.list_persistent_volume()
             return {pv.metadata.name for pv in pvs.items}
         except ApiException as e:
             logger.error(f"Failed to list PersistentVolumes: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_storage_classes(self) -> set[str]:
+    def _get_storage_classes(self, raise_on_error: bool = False) -> set[str]:
         """Get all StorageClass names."""
         try:
             scs = self.storage_v1.list_storage_class()
             return {sc.metadata.name for sc in scs.items}
         except ApiException as e:
             logger.error(f"Failed to list StorageClasses: {e}")
+            if raise_on_error:
+                raise
             return set()
 
     def _strip_cr_finalizers(self, crd_name: str):
@@ -448,43 +496,51 @@ class ClusterStateManager:
                 if e.status != 404:
                     logger.warning(f"Failed to strip finalizers from {crd_name} CR {ns}/{name}: {e}")
 
-    def _get_crds(self) -> set[str]:
+    def _get_crds(self, raise_on_error: bool = False) -> set[str]:
         """Get all CustomResourceDefinition names."""
         try:
             crds = self.apiextensions_v1.list_custom_resource_definition()
             return {crd.metadata.name for crd in crds.items}
         except ApiException as e:
             logger.error(f"Failed to list CRDs: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_validating_webhook_configs(self) -> set[str]:
+    def _get_validating_webhook_configs(self, raise_on_error: bool = False) -> set[str]:
         """Get all ValidatingWebhookConfiguration names."""
         try:
             configs = self.admission_v1.list_validating_webhook_configuration()
             return {cfg.metadata.name for cfg in configs.items}
         except ApiException as e:
             logger.error(f"Failed to list ValidatingWebhookConfigurations: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_mutating_webhook_configs(self) -> set[str]:
+    def _get_mutating_webhook_configs(self, raise_on_error: bool = False) -> set[str]:
         """Get all MutatingWebhookConfiguration names."""
         try:
             configs = self.admission_v1.list_mutating_webhook_configuration()
             return {cfg.metadata.name for cfg in configs.items}
         except ApiException as e:
             logger.error(f"Failed to list MutatingWebhookConfigurations: {e}")
+            if raise_on_error:
+                raise
             return set()
 
-    def _get_node_labels(self) -> dict[str, dict[str, str]]:
+    def _get_node_labels(self, raise_on_error: bool = False) -> dict[str, dict[str, str]]:
         """Get labels for all nodes."""
         try:
             nodes = self.core_v1.list_node()
             return {node.metadata.name: dict(node.metadata.labels or {}) for node in nodes.items}
         except ApiException as e:
             logger.error(f"Failed to get node labels: {e}")
+            if raise_on_error:
+                raise
             return {}
 
-    def _get_node_taints(self) -> dict[str, list]:
+    def _get_node_taints(self, raise_on_error: bool = False) -> dict[str, list]:
         """Get taints for all nodes."""
         try:
             nodes = self.core_v1.list_node()
@@ -496,9 +552,11 @@ class ClusterStateManager:
             return result
         except ApiException as e:
             logger.error(f"Failed to get node taints: {e}")
+            if raise_on_error:
+                raise
             return {}
 
-    def _get_coredns_configmap_data(self) -> dict[str, str]:
+    def _get_coredns_configmap_data(self, raise_on_error: bool = False) -> dict[str, str]:
         """Get CoreDNS ConfigMap data."""
         try:
             cm = self.core_v1.read_namespaced_config_map(name="coredns", namespace="kube-system")
@@ -508,6 +566,8 @@ class ClusterStateManager:
                 logger.warning("CoreDNS ConfigMap not found")
                 return {}
             logger.error(f"Failed to get CoreDNS ConfigMap: {e}")
+            if raise_on_error:
+                raise
             return {}
 
     def _is_coredns_modified(self) -> bool:

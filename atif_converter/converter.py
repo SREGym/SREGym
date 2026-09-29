@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Literal, cast
 
-from .adapters import claudecode, codex, copilot, gemini, opencode, stratus
+from .adapters import claudecode, cloudthinker, codex, copilot, gemini, opencode, stratus
 from .atif import Trajectory
 from .errors import (
     AtifConverterError,
@@ -15,9 +16,10 @@ from .errors import (
     UnsupportedFormatError,
 )
 
-AgentName = Literal["claudecode", "codex", "copilot", "gemini", "opencode", "stratus"]
+AgentName = Literal["claudecode", "cloudthinker", "codex", "copilot", "gemini", "opencode", "stratus"]
 SUPPORTED_AGENTS: tuple[AgentName, ...] = (
     "claudecode",
+    "cloudthinker",
     "codex",
     "copilot",
     "gemini",
@@ -27,6 +29,7 @@ SUPPORTED_AGENTS: tuple[AgentName, ...] = (
 
 _CONVERTERS = {
     "claudecode": claudecode.convert_file,
+    "cloudthinker": cloudthinker.convert_file,
     "codex": codex.convert_file,
     "copilot": copilot.convert_file,
     "gemini": gemini.convert_file,
@@ -146,6 +149,10 @@ def _looks_like_gemini(root: dict | None, records: list[dict]) -> bool:
     )
 
 
+def _looks_like_cloudthinker(root: dict | None) -> bool:
+    return isinstance(root, dict) and root.get("schema") == cloudthinker.SESSION_SCHEMA
+
+
 def _looks_like_stratus(records: list[dict]) -> bool:
     return any(
         record.get("type") == "event" and "stage" in record and isinstance(record.get("messages"), list)
@@ -204,6 +211,8 @@ def detect_agent(session_file: Path | str) -> AgentName:
     path = _require_file(session_file)
     root, records = _load_detection_records(path)
 
+    if _looks_like_cloudthinker(root):
+        return "cloudthinker"
     if _looks_like_opencode(root):
         return "opencode"
     if _looks_like_gemini(root, records):
@@ -219,11 +228,19 @@ def detect_agent(session_file: Path | str) -> AgentName:
     raise UnsupportedFormatError(f"could not detect an agent format for {path}")
 
 
-def convert(session_file: Path | str, *, agent: AgentName | str | None = None) -> Trajectory:
+def convert(
+    session_file: Path | str,
+    *,
+    agent: AgentName | str | None = None,
+    telemetry_files: Sequence[Path | str] | None = None,
+) -> Trajectory:
     """Convert one native agent session file into a validated ATIF trajectory.
 
     The agent is detected from file contents unless ``agent`` explicitly selects
     one of :data:`SUPPORTED_AGENTS`.
+    Copilot callers can also supply native OTel JSONL files from the same run
+    for token counts absent from the CLI stream. Other agents do not accept
+    this option. The converter does not discover telemetry files itself.
     """
     path = _require_file(session_file)
     if agent is None:
@@ -234,8 +251,16 @@ def convert(session_file: Path | str, *, agent: AgentName | str | None = None) -
     else:
         selected = cast(AgentName, agent)
 
+    if telemetry_files is not None and selected != "copilot":
+        raise ValueError("telemetry_files is only supported for Copilot sessions")
+    telemetry = [_require_file(file) for file in telemetry_files] if telemetry_files is not None else []
+
     try:
-        trajectory = _CONVERTERS[selected](path)
+        trajectory = (
+            copilot.convert_file(path, telemetry_files=telemetry)
+            if telemetry_files is not None
+            else _CONVERTERS[selected](path)
+        )
     except AtifConverterError:
         raise
     except Exception as exc:

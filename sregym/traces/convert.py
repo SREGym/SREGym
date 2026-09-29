@@ -13,13 +13,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from atif_converter import SUPPORTED_AGENTS, AtifConverterError, Trajectory
 from atif_converter import convert as convert_session
-from atif_converter.adapters import claudecode
+from atif_converter.adapters import claudecode, cloudthinker
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +55,14 @@ _SUBMISSION_RESPONSE_KEYS = ("message", "text")
 # content the adapter builds may wrap this with ``[stdout]`` / ``[metadata]``
 # sections, so we search for the object rather than parse the whole blob.
 _SUBMISSION_OBJ_RE = re.compile(r"\{[^{}]*\bSubmission received\b[^{}]*\}")
+
+# Run directories are named by the agent the suite launched, which is not always
+# the adapter's name. CloudThinker's lanes share one client: `cloudthinker` is the
+# chat lane and `cloudthinker_rca` opens a platform incident instead; both write
+# the same session format.
+_TOOL_ALIASES: dict[str, str] = {
+    "cloudthinker_rca": "cloudthinker",
+}
 
 
 def _find_claudecode_session_files(run_dir: Path) -> list[Path]:
@@ -126,6 +134,9 @@ def _find_session_file(run_dir: Path, tool: str) -> Path | None:
     """Resolve a canonical SREGym run directory to its native session file."""
     if tool == "codex":
         return _find_codex_session_file(run_dir)
+    if tool == "cloudthinker":
+        path = run_dir / cloudthinker.SESSION_FILENAME
+        return path if path.is_file() else None
     if tool == "copilot":
         path = run_dir / "copilot-cli.jsonl"
         return path if path.is_file() else None
@@ -155,6 +166,8 @@ def _convert_native_run(run_dir: Path, tool: str) -> Trajectory | None:
         session_file = _find_session_file(run_dir, tool)
         if session_file is None:
             return None
+        if tool == "copilot":
+            return convert_session(session_file, agent=tool, telemetry_files=sorted((run_dir / "otel").glob("*.jsonl")))
         return convert_session(session_file, agent=tool)
     except AtifConverterError as exc:
         logger.debug("Could not convert %s run %s: %s", tool, run_dir, exc)
@@ -308,6 +321,12 @@ def convert_run(run_dir: Path | str) -> Trajectory | None:
     run_dir = Path(run_dir)
     info = parse_run_path(run_dir)
 
+    # The run directory is named by the agent the suite launched, which for
+    # CloudThinker is the lane (`cloudthinker_rca`); the adapter is the client.
+    tool = _TOOL_ALIASES.get(info.tool, info.tool)
+    if tool != info.tool:
+        info = replace(info, tool=tool)
+
     if info.tool not in SUPPORTED_AGENTS:
         logger.debug("No ATIF adapter for tool %r (%s)", info.tool, run_dir)
         return None
@@ -338,6 +357,12 @@ def convert_run(run_dir: Path | str) -> Trajectory | None:
     stratus_meta = other_extra.pop("stratus", None)
     if isinstance(stratus_meta, dict):
         sregym_meta = {**stratus_meta, **sregym_meta}
+
+    # Same for CloudThinker: `stages`, `selection` and the diagnosis boundary
+    # belong to this run's SREGym metadata, not to a second namespace.
+    cloudthinker_meta = other_extra.pop("cloudthinker", None)
+    if isinstance(cloudthinker_meta, dict):
+        sregym_meta = {**cloudthinker_meta, **sregym_meta}
     merged = {**other_extra, "sregym": sregym_meta}
     trajectory.extra = merged or None
 

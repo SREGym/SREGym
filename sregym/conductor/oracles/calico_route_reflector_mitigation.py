@@ -10,6 +10,8 @@ from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 _ROLLOUT_SETTLE_SECONDS = 180
 _ROLLOUT_POLL_INTERVAL = 5
@@ -19,6 +21,33 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
     """Verify recovery came from fixing Calico route-reflector selection."""
 
     importance = 1.0
+
+    # Reason granularity here is one code per top-level check rather than one
+    # per print. The connectivity checks reach three helpers deep and their
+    # sub-branches share a class, so lifting each one would add a lot of
+    # plumbing to distinguish failures that are handled identically. The prints
+    # still name the specific probe that failed, which is what a human needs.
+    #
+    # The Calico config checks are the exception: they are how an agent games
+    # this problem, so each gets its own code.
+    FAILURE_CLASSES = {
+        # Configuration the agent must have changed. The fault injection only
+        # drifts a node label; it does not touch BGPConfiguration or delete
+        # peers, so these states are the agent's.
+        "bgp_configuration_missing": FailureClass.AGENT_ERROR,
+        "node_to_node_mesh_enabled": FailureClass.AGENT_ERROR,
+        "bgp_peers_missing": FailureClass.AGENT_ERROR,
+        "route_reflector_peer_unmatched": FailureClass.AGENT_ERROR,
+        "app_replicas_reduced": FailureClass.AGENT_ERROR,
+        # Undecidable, and deliberately so: this problem *invites* the agent to
+        # reconfigure Calico, so an unhealthy CNI or a failing cross-node probe
+        # could be the agent's work or the cluster's own. This is the one
+        # problem where CNI health cannot be read as environmental.
+        "calico_not_ready": FailureClass.AMBIGUOUS,
+        "cross_node_connectivity_failed": FailureClass.AMBIGUOUS,
+        "frontend_request_failed": FailureClass.AMBIGUOUS,
+        "app_not_spanning_nodes": FailureClass.AMBIGUOUS,
+    }
 
     def __init__(self, problem):
         super().__init__(problem)
@@ -52,13 +81,7 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
             deployments = self.apps_v1.list_namespaced_deployment(namespace)
             all_settled = True
             for dep in deployments.items:
-                desired = dep.spec.replicas or 0
-                status = dep.status
-                if (
-                    (status.updated_replicas or 0) < desired
-                    or (status.ready_replicas or 0) < desired
-                    or (status.unavailable_replicas or 0) > 0
-                ):
+                if not deployment_rollout_complete(dep, allow_zero=True):
                     all_settled = False
                     break
             if all_settled:
@@ -66,31 +89,41 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
             time.sleep(_ROLLOUT_POLL_INTERVAL)
         print(f"WARNING: Timed out waiting for deployments in namespace '{namespace}' to settle")
 
-    def _deployments_ready(self, namespace):
+    def _deployments_unready(self, namespace):
         try:
             deployments = self.apps_v1.list_namespaced_deployment(namespace).items
         except ApiException as e:
             if e.status == 404:
                 print(f"FAIL: Namespace '{namespace}' not found")
-                return False
+                return self.fail("namespace_missing", namespace=namespace)
             raise
 
         if not deployments:
             print(f"FAIL: No deployments found in namespace '{namespace}'")
-            return False
+            return self.fail("no_deployments_found", namespace=namespace)
 
         for deployment in deployments:
+            name = deployment.metadata.name
             desired = deployment.spec.replicas or 0
             ready = deployment.status.ready_replicas or 0
-            if desired < 1 or ready != desired:
-                print(f"FAIL: Deployment '{namespace}/{deployment.metadata.name}' has {ready}/{desired} replicas ready")
-                return False
-        return True
+            if desired < 1:
+                print(f"FAIL: Deployment '{namespace}/{name}' has {ready}/{desired} replicas ready")
+                return self.fail("required_deployment_scaled_to_zero", deployment=name, namespace=namespace)
+            if not deployment_rollout_complete(deployment):
+                print(f"FAIL: Deployment '{namespace}/{name}' rollout is incomplete ({ready}/{desired} replicas ready)")
+                return self.fail(
+                    "deployment_replicas_unready",
+                    deployment=name,
+                    namespace=namespace,
+                    ready=ready,
+                    desired=desired,
+                )
+        return None
 
-    def _app_replicas_not_reduced(self, namespace):
+    def _app_replicas_were_reduced(self, namespace):
         expected_replicas = getattr(self.problem, "_app_deployment_replicas", {}) or {}
         if not expected_replicas:
-            return True
+            return None
 
         deployments = {
             deployment.metadata.name: deployment
@@ -100,20 +133,23 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
             deployment = deployments.get(name)
             if deployment is None:
                 print(f"FAIL: Deployment '{namespace}/{name}' is missing")
-                return False
+                return self.fail("required_deployment_missing", deployment=name, namespace=namespace)
             desired = deployment.spec.replicas or 0
             if desired < expected:
                 print(f"FAIL: Deployment '{namespace}/{name}' was scaled down from {expected} to {desired} replicas")
-                return False
-        return True
+                # The replica count was recorded at injection time, so this is a
+                # comparison against a known-good *before* -- the one place in
+                # this oracle that can attribute confidently.
+                return self.fail("app_replicas_reduced", deployment=name, expected=expected, desired=desired)
+        return None
 
-    def _application_spans_multiple_nodes(self, namespace):
+    def _application_not_spanning_nodes(self, namespace):
         try:
             pods = self.core_v1.list_namespaced_pod(namespace).items
         except ApiException as e:
             if e.status == 404:
                 print(f"FAIL: Namespace '{namespace}' not found")
-                return False
+                return self.fail("namespace_missing", namespace=namespace)
             raise
 
         running_nodes = {
@@ -123,8 +159,8 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
         }
         if len(running_nodes) < 2:
             print("FAIL: Hotel Reservation pods do not span multiple nodes")
-            return False
-        return True
+            return self.fail("app_not_spanning_nodes", namespace=namespace, nodes=sorted(running_nodes))
+        return None
 
     def _calico_ready(self):
         result = self._run("kubectl -n kube-system rollout status ds/calico-node --timeout=30s", timeout=40)
@@ -305,27 +341,32 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
             return False
         return True
 
-    def _bgp_configuration_is_route_reflector_mode(self):
-        result = self._run("kubectl get bgpconfiguration default -o json")
+    def _bgp_configuration_not_route_reflector_mode(self):
+        result = self._run("kubectl get bgpconfiguration default -o json --ignore-not-found")
         if result.returncode != 0:
+            print("FAIL: Could not read Calico BGPConfiguration/default")
+            return self.fail("oracle_command_failed", resource="bgpconfiguration/default", stderr=result.stderr.strip())
+        if not result.stdout.strip():
             print("FAIL: Calico BGPConfiguration/default is missing")
-            return False
+            return self.fail("bgp_configuration_missing")
         config = json.loads(result.stdout)
         if config.get("spec", {}).get("nodeToNodeMeshEnabled") is not False:
             print("FAIL: Calico node-to-node mesh is enabled; route-reflector topology was bypassed")
-            return False
-        return True
+            # Re-enabling the full mesh makes connectivity work without fixing
+            # route-reflector selection: the headline way to game this problem.
+            return self.fail("node_to_node_mesh_enabled")
+        return None
 
-    def _route_reflector_peer_selects_nodes(self):
+    def _route_reflector_peer_selects_no_nodes(self):
         result = self._run("kubectl get bgppeers -o json")
         if result.returncode != 0:
             print("FAIL: Could not read Calico BGPPeer resources")
-            return False
+            return self.fail("oracle_command_failed", resource="bgppeers", stderr=result.stderr.strip())
 
         peers = json.loads(result.stdout).get("items", [])
         if not peers:
             print("FAIL: No Calico BGPPeer resources are configured")
-            return False
+            return self.fail("bgp_peers_missing")
 
         legacy_label = self.problem.LEGACY_MASTER_LABEL
         legacy_nodes = self._nodes_with_label(legacy_label)
@@ -343,11 +384,15 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
 
         if stale_unmatched:
             print(f"FAIL: BGPPeer selector still references unmatched legacy master label: {stale_unmatched}")
-            return False
+            # The injected fault restated: the peer selector still points at the
+            # legacy master label that no node carries any more.
+            return self.fail("fault_still_present", peers=sorted(stale_unmatched), label=legacy_label)
         if not selected_nodes:
             print("FAIL: No BGPPeer selects an existing route-reflector node")
-            return False
-        return self._selected_route_reflector_has_cluster_id(selected_nodes)
+            return self.fail("route_reflector_peer_unmatched")
+        if not self._selected_route_reflector_has_cluster_id(selected_nodes):
+            return self.fail("route_reflector_peer_unmatched", nodes=sorted(selected_nodes))
+        return None
 
     def evaluate(self) -> dict:
         print("== Calico Route Reflector Mitigation Evaluation ==")
@@ -355,24 +400,31 @@ class CalicoRouteReflectorMitigationOracle(Oracle):
         self._wait_for_rollouts(self.problem.namespace)
         self._wait_for_rollouts(self.problem.PROBE_NAMESPACE)
 
-        if not self._app_replicas_not_reduced(self.problem.namespace):
-            return {"success": False}
-        if not self._deployments_ready(self.problem.namespace):
-            return {"success": False}
-        if not self._deployments_ready(self.problem.PROBE_NAMESPACE):
-            return {"success": False}
-        if not self._application_spans_multiple_nodes(self.problem.namespace):
-            return {"success": False}
+        for check, namespace in (
+            (self._app_replicas_were_reduced, self.problem.namespace),
+            (self._deployments_unready, self.problem.namespace),
+            (self._deployments_unready, self.problem.PROBE_NAMESPACE),
+            (self._application_not_spanning_nodes, self.problem.namespace),
+        ):
+            failure = check(namespace)
+            if failure is not None:
+                return failure
+
         if not self._calico_ready():
-            return {"success": False}
-        if not self._bgp_configuration_is_route_reflector_mode():
-            return {"success": False}
-        if not self._route_reflector_peer_selects_nodes():
-            return {"success": False}
+            return self.fail("calico_not_ready")
+
+        for check in (
+            self._bgp_configuration_not_route_reflector_mode,
+            self._route_reflector_peer_selects_no_nodes,
+        ):
+            failure = check()
+            if failure is not None:
+                return failure
+
         if not self._cross_node_probe_ok():
-            return {"success": False}
+            return self.fail("cross_node_connectivity_failed")
         if not self._hotel_reservation_request_ok():
-            return {"success": False}
+            return self.fail("frontend_request_failed")
 
         print("PASS: Calico route-reflector selection and cross-node connectivity are healthy")
         return {"success": True}

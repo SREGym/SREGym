@@ -1,19 +1,33 @@
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
+import math
 import shlex
 import shutil
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+from kubernetes.client.rest import ApiException
 
 from sregym.conductor.constants import StartProblemResult
+from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.detection import DetectionOracle
 from sregym.conductor.oracles.diagnosis_oracle import DiagnosisOracle
 from sregym.conductor.problems.registry import ProblemRegistry
+from sregym.conductor.submission import (
+    SUBMISSION_STAGES,
+    EvaluationInProgress,
+    SubmissionAttemptClosed,
+    SubmissionAttemptMismatch,
+    SubmissionStage,
+    SubmissionStageMismatch,
+)
 from sregym.conductor.utils import is_ordered_subset
 from sregym.generators.fault.inject_remote_os import RemoteOSFaultInjector
 from sregym.generators.fault.inject_virtual import VirtualizationFaultInjector
@@ -21,7 +35,10 @@ from sregym.generators.noise.manager import get_noise_manager
 from sregym.observer.jaeger import Jaeger
 from sregym.observer.otel_collector import OtelCollector
 from sregym.paths import CLUSTER_BASELINE_STATE_FILE
+from sregym.phases import PhaseLedger
+from sregym.profile import is_svelte
 from sregym.service.apps.app_registry import AppRegistry
+from sregym.service.cluster_egress import ClusterEgressBoundary
 from sregym.service.cluster_state import ClusterStateManager
 from sregym.service.dm_flakey_manager import DmFlakeyManager
 from sregym.service.internet_policy import InternetPolicy
@@ -29,8 +46,14 @@ from sregym.service.k8s_proxy import KubernetesAPIProxy
 from sregym.service.khaos import KhaosController, KhaosUnsupportedError
 from sregym.service.kubectl import KubeCtl
 from sregym.service.mcp_server import MCPServer
+from sregym.service.rollout import deployment_rollout_complete
 from sregym.service.telemetry.loki import Loki
 from sregym.service.telemetry.prometheus import Prometheus
+
+# The agent-facing stages, in the only order they can run. Shared with
+# `--stages`' choices so the CLI and the conductor cannot disagree about what
+# exists.
+ALL_STAGES = ("diagnosis", "mitigation")
 
 
 @dataclass
@@ -41,7 +64,19 @@ class ConductorConfig:
     enable_noise: bool = False
     internet_policy: InternetPolicy = field(default_factory=InternetPolicy)
     k8s_proxy_listen_host: str = "127.0.0.1"
+    k8s_proxy_listen_port: int = 16443
     block_workload_creation: bool = False
+    # Which stages this run should attempt. None means every stage the problem
+    # supports, which is what an unset --stages leaves in place.
+    stages: tuple[str, ...] | None = None
+    baseline_override_s: int | None = None  # overrides per-problem baseline_duration_s when set
+    propagation_override_s: int | None = None  # overrides per-problem propagation_duration_s when set
+
+    @property
+    def restrict_network_access(self) -> bool:
+        # The old workload flag remains an input for programmatic callers.
+        # Derive the effective policy here, for both CLI and direct use.
+        return self.internet_policy.is_filtered or self.block_workload_creation
 
 
 class Conductor:
@@ -55,21 +90,22 @@ class Conductor:
         self.jaeger = Jaeger()
         self.otel_collector = OtelCollector()
         self.loki = Loki()
-        self.mcp_server = MCPServer()
+        self.mcp_server = MCPServer(restrict_network_access=self.config.restrict_network_access)
         self.apps = AppRegistry()
         self.agent_name = None
 
         self.khaos = KhaosController(self.kubectl)
         self.dm_flakey_manager = DmFlakeyManager(self.kubectl)
         self.cluster_state = ClusterStateManager(self.kubectl)
+        self.cluster_egress = ClusterEgressBoundary(self.kubectl)
         self._baseline_captured = False
 
         # Kubernetes API proxy to hide chaos engineering namespaces and load generators from agents
         self.k8s_proxy = KubernetesAPIProxy(
             hidden_namespaces={"chaos-mesh", "khaos"},
-            listen_port=16443,
+            listen_port=self.config.k8s_proxy_listen_port,
             listen_host=self.config.k8s_proxy_listen_host,
-            block_workload_creation=self.config.block_workload_creation,
+            restrict_network_access=self.config.restrict_network_access,
         )
         self._agent_kubeconfig_path: str | None = None
 
@@ -84,9 +120,21 @@ class Conductor:
         self.submission_stage = None
         self.results = {}
         self._submit_future = None  # Future for the executor running _submit_evaluate_and_advance
+        self._submit_evaluation_timeout: float | None = None
+        self._submission_lock = threading.RLock()
+        self._pending_submission_stages: dict[tuple[int, str], int] = {}
+        self._submission_generation = 0
+        self._aborted_submission_generations: set[int] = set()
+        self._accepting_submissions = False
+        self._attempt_closed = True
 
         self.tasklist = None
         self.logger = logging.getLogger("all.sregym.conductor")
+
+        # Phase-boundary ledger, bound per attempt by whoever owns the run
+        # directory (main.py). Left unset by cli.py, the external harness and
+        # the tests, where `_phase` degrades to a no-op.
+        self.phases: PhaseLedger | None = None
 
         self.stage_sequence: list[dict] = []
         self.current_stage_index: int = 0
@@ -110,15 +158,32 @@ class Conductor:
         Should be called before launching agents.
         """
         self.logger.info("Starting Kubernetes API filtering proxy...")
-        self.k8s_proxy.start()
-        self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig()
+        if self.config.internet_policy.is_filtered:
+            self.cluster_egress.start()
+        else:
+            self.cluster_egress.stop()
+        try:
+            self.k8s_proxy.start()
+            self._agent_kubeconfig_path = self.k8s_proxy.generate_agent_kubeconfig()
+        except BaseException:
+            self.cluster_egress.stop()
+            raise
         self.logger.info(f"Agent kubeconfig generated at: {self._agent_kubeconfig_path}")
 
     def stop_k8s_proxy(self):
         """Stop the Kubernetes API proxy."""
         self.logger.info("Stopping Kubernetes API filtering proxy...")
-        self.k8s_proxy.stop()
-        self._agent_kubeconfig_path = None
+        try:
+            self.k8s_proxy.stop()
+        finally:
+            try:
+                self.cluster_egress.stop()
+            finally:
+                self._agent_kubeconfig_path = None
+
+    def clear_cluster_egress_boundary(self):
+        """Remove a policy left by a previously interrupted filtered run."""
+        self.cluster_egress.stop()
 
     def get_agent_kubeconfig_path(self) -> str | None:
         """
@@ -134,13 +199,30 @@ class Conductor:
                 raise RuntimeError(f"[❌] Required dependency '{b}' not found.")
 
     def get_problem_stages(self):
+        """Record which stages this run intends to attempt.
+
+        Precedence: the run's own configuration (`--stages`), then the legacy
+        per-problem `tasklist.yml`, then every stage. Whether a stage *can* run
+        is a separate question, answered in `_build_stage_sequence` from the
+        oracles the problem actually attaches; this method only records intent.
+        """
+        if self.config.stages is not None:
+            requested = list(self.config.stages)
+            if not is_ordered_subset(requested, list(ALL_STAGES)):
+                msg = f"Requested stages {requested} must be a subset of {list(ALL_STAGES)}, in that order"
+                self.logger.error(msg)
+                raise ValueError(msg)
+            self.logger.info(f"Stages requested for this run: {requested}")
+            self.tasklist = requested
+            return
+
         file_dir = Path(__file__).resolve().parent
         tasklist_path = file_dir / "tasklist.yml"
 
         # If tasklist file doesn't exist, default to running diagnosis + mitigation
         if not tasklist_path.exists():
             self.logger.info("No tasklist.yml found. Defaulting to running diagnosis and mitigation for this problem.")
-            self.tasklist = ["diagnosis", "mitigation"]
+            self.tasklist = list(ALL_STAGES)
             return
 
         with open(tasklist_path) as f:
@@ -153,7 +235,7 @@ class Conductor:
 
         if self.problem_id not in (problems if problems else []):
             self.logger.warning("problem_id not found in tasklist. Defaulting to running diagnosis and mitigation.")
-            self.tasklist = ["diagnosis", "mitigation"]
+            self.tasklist = list(ALL_STAGES)
         else:
             problem_tasklist = problems[self.problem_id]
             if not problem_tasklist:
@@ -161,7 +243,7 @@ class Conductor:
                 self.logger.error(msg)
                 raise RuntimeError(msg)
 
-            if not is_ordered_subset(problem_tasklist, ["diagnosis", "mitigation"]):
+            if not is_ordered_subset(problem_tasklist, list(ALL_STAGES)):
                 msg = f"Task list for {self.problem_id} is either out of order or has an unknown step (allowed: diagnosis, mitigation)"
                 self.logger.error(msg)
                 raise RuntimeError(msg)
@@ -177,6 +259,7 @@ class Conductor:
         self.current_stage_index = 0
         self.waiting_for_agent = False
         self._evaluating = False
+        self._accepting_submissions = False
         self.fault_injected = False
 
         if not self.tasklist:
@@ -189,33 +272,35 @@ class Conductor:
             "mitigation": self._evaluate_mitigation,
         }
 
+        # A stage the caller named explicitly is a different thing from one that
+        # came from the default or tasklist.yml: an absent oracle is a conflict
+        # in the first case and merely a fact in the second.
+        explicitly_requested = self.config.stages is not None
+
         # Determine which stages are actually available (oracle attached)
         for name in self.tasklist:
-            if name not in stage_definitions:
+            evaluation = stage_definitions.get(name)
+            if evaluation is None:
                 self.logger.warning(f"Unknown stage '{name}' in tasklist; skipping.")
                 continue
 
-            if name == "diagnosis":
-                if getattr(self.problem, "diagnosis_oracle", None):
-                    self.stage_sequence.append(
-                        {
-                            "name": name,
-                            "evaluation": stage_definitions[name],
-                        }
-                    )
-                else:
-                    self.logger.info("⏩ Diagnosis oracle is not attached. Skipping diagnosis.")
+            if getattr(self.problem, f"{name}_oracle", None):
+                self.stage_sequence.append(
+                    {
+                        "name": name,
+                        "evaluation": evaluation,
+                    }
+                )
+                continue
 
-            elif name == "mitigation":
-                if getattr(self.problem, "mitigation_oracle", None):
-                    self.stage_sequence.append(
-                        {
-                            "name": name,
-                            "evaluation": stage_definitions[name],
-                        }
-                    )
-                else:
-                    self.logger.info("⏩ Mitigation oracle is not attached. Skipping mitigation.")
+            if explicitly_requested:
+                # Skipping quietly here would report a successful run that
+                # measured nothing at all.
+                msg = f"Stage {name!r} was requested for {self.problem_id!r}, but it has no {name}_oracle"
+                self.logger.error(msg)
+                raise ValueError(msg)
+
+            self.logger.info(f"⏩ {name.capitalize()} oracle is not attached. Skipping {name}.")
 
         if not self.stage_sequence:
             self.logger.warning(
@@ -258,14 +343,11 @@ class Conductor:
             r = problem.diagnosis_oracle.evaluate(solution)
         except Exception as e:
             self.logger.exception("Diagnosis oracle raised; recording as failure to avoid a stuck stage.")
-            r = {"success": False, "error": f"{type(e).__name__}: {e}"}
+            r = {**Oracle.fail_from_exception(e), "error": f"{type(e).__name__}: {e}"}
         r["submission"] = solution
-        self.results["Diagnosis"] = r
-        self.results["TTL"] = time.time() - self.execution_start_time
         self.logger.info(
-            f"[EVAL] Diagnosis "
-            f"{'Succeed' if self.results['Diagnosis'].get('success') else 'Failed'}\n "
-            f"TTL: {self.results['TTL']}"
+            f"[EVAL] Diagnosis {'Succeed' if r.get('success') else 'Failed'}\n "
+            f"TTL: {time.time() - self.execution_start_time}"
         )
         return r
 
@@ -278,17 +360,54 @@ class Conductor:
             r = problem.mitigation_oracle.evaluate()
         except Exception as e:
             self.logger.exception("Mitigation oracle raised; recording as failure to avoid a stuck stage.")
-            r = {"success": False, "error": f"{type(e).__name__}: {e}"}
-        self.results["Mitigation"] = r
-        self.results["TTM"] = time.time() - self.execution_start_time
+            # Keep the existing top-level error field for result consumers.
+            r = {**Oracle.fail_from_exception(e), "error": f"{type(e).__name__}: {e}"}
         self.logger.info(
-            f"[EVAL] Mitigation "
-            f"{'Succeed' if self.results['Mitigation'].get('success') else 'Failed'}\n "
-            f"TTM: {self.results['TTM']}"
+            f"[EVAL] Mitigation {'Succeed' if r.get('success') else 'Failed'}\n "
+            f"TTM: {time.time() - self.execution_start_time}"
         )
         return r
 
-    def _advance_to_next_stage(self, start_index: int = 0):
+    def bind_phase_ledger(self, path, **context) -> None:
+        """Point the phase ledger at this attempt's run directory.
+
+        Called per attempt by the caller that owns the directory, so each
+        attempt gets its own `phases.jsonl` rather than appending to a shared
+        one.
+        """
+        self.phases = PhaseLedger(path, context={"problem_id": self.problem_id, **context})
+
+    def _phase(self, name: str, **fields):
+        """Time a block as a phase, or do nothing if no ledger is bound.
+
+        A missing ledger must never change control flow, so the fallback is a
+        real no-op context manager rather than a branch at every call site.
+        `getattr` rather than attribute access: instrumentation must also
+        survive a Conductor built without __init__, which several tests and
+        external callers do.
+        """
+        ledger = getattr(self, "phases", None)
+        if ledger is None:
+            return contextlib.nullcontext()
+        return ledger.phase(name, **fields)
+
+    def _mark(self, name: str, event: str, **fields) -> None:
+        """Record one boundary for a phase that is not a block.
+
+        The agent stages start when the conductor opens them for submission and
+        end when their evaluation returns -- two different call sites, so they
+        cannot use the context manager.
+        """
+        ledger = getattr(self, "phases", None)
+        if ledger is not None:
+            ledger.record(name, event, **fields)
+
+    def _phase_is_open(self, name: str) -> bool:
+        """True if `name` was started and not yet ended. False with no ledger."""
+        ledger = getattr(self, "phases", None)
+        return ledger is not None and ledger.is_open(name)
+
+    async def _advance_to_next_stage(self, start_index: int = 0):
         """
         Advance to the next stage starting from start_index.
         If there are more stages, set up for agent submission.
@@ -298,13 +417,27 @@ class Conductor:
         self.current_stage_index = start_index
 
         if not self.stage_sequence:
-            self.logger.info("No stages configured; finishing problem immediately.")
-            self._finish_problem()
+            self.logger.info("No stages configured; starting problem cleanup.")
+            self.finish_problem_in_background()
             return
 
-        # Inject fault before the first stage if not already done
+        # Inject fault before the first stage if not already done -- the
+        # interactive visualizer injects itself before calling this.
         if start_index == 0 and not self.fault_injected:
-            self._inject_fault()
+            with self._phase("inject_fault"):
+                self._inject_fault()
+
+            # Let the fault surface in telemetry before the agent sees it.
+            propagation = (
+                self.config.propagation_override_s
+                if self.config.propagation_override_s is not None
+                else self.problem.propagation_duration_s
+            )
+            if propagation > 0:
+                self.logger.info(f"[PROPAGATION] Waiting {propagation}s for the fault to reach telemetry...")
+                with self._phase("propagation", seconds=propagation):
+                    await asyncio.sleep(propagation)
+                self.logger.info("[PROPAGATION] Propagation window complete.")
 
         if start_index < len(self.stage_sequence):
             stage = self.stage_sequence[start_index]
@@ -313,7 +446,11 @@ class Conductor:
             self.logger.debug(f"Advancing to stage '{stage_name}' and waiting for agent.")
             self.waiting_for_agent = True
             self.submission_stage = stage_name
+            self._accepting_submissions = not self._attempt_closed
             self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+            # The agent's clock for this stage starts here: submissions are now
+            # accepted. Ends where its evaluation returns.
+            self._mark(f"stage:{stage_name}", "start")
 
             # Update NoiseManager stage
             if self.config.enable_noise:
@@ -324,9 +461,9 @@ class Conductor:
                     self.logger.warning(f"Failed to set NoiseManager stage: {e}")
         else:
             # No more stages; finish the problem
-            self._finish_problem()
+            self.finish_problem_in_background()
 
-    def _cleanup_sync(self):
+    def _cleanup_sync(self, generation: int | None = None):
         """
         Blocking cleanup operations (fault recovery, app teardown, reconciliation).
         Captures self.problem at entry so that start_problem() can safely replace
@@ -335,6 +472,24 @@ class Conductor:
         # Snapshot the problem reference immediately so that any concurrent
         # replacement of self.problem by start_problem() does not affect this cleanup.
         problem = self.problem
+        cleanup_generation = self._submission_generation if generation is None else generation
+        cleanup_errors: list[str] = []
+
+        def cleanup_was_abandoned() -> bool:
+            with self._submission_lock:
+                return (
+                    cleanup_generation != self._submission_generation
+                    or cleanup_generation in self._aborted_submission_generations
+                )
+
+        def stop_late_cleanup() -> bool:
+            if not cleanup_was_abandoned():
+                return False
+            self.logger.warning(
+                "Stopping late cleanup work for aborted or replaced attempt generation %s",
+                cleanup_generation,
+            )
+            return True
 
         self.logger.info("[CLEANUP] Starting cleanup (fault recovery, undeploy, reconcile)")
 
@@ -347,17 +502,34 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to stop NoiseManager: {e}")
 
+        if stop_late_cleanup():
+            return
+
         # Recover fault using the captured problem reference
         if problem:
             self.logger.info("[CLEANUP] Recovering fault...")
-            problem.recover_fault()
-            self.logger.info("[CLEANUP] Fault recovered")
+            try:
+                problem.recover_fault()
+                self.logger.info("[CLEANUP] Fault recovered")
+            except Exception as exc:
+                self.logger.exception("[CLEANUP] Fault recovery failed")
+                cleanup_errors.append(f"recover_fault: {type(exc).__name__}: {exc}")
+
+        if stop_late_cleanup():
+            return
 
         # Undeploy app using the captured problem reference
         self.logger.info("[CLEANUP] Undeploying app...")
         if problem:
-            problem.app.cleanup()
-        self.logger.info("[CLEANUP] App undeployed")
+            try:
+                problem.app.cleanup()
+                self.logger.info("[CLEANUP] App undeployed")
+            except Exception as exc:
+                self.logger.exception("[CLEANUP] App cleanup failed")
+                cleanup_errors.append(f"app_cleanup: {type(exc).__name__}: {exc}")
+
+        if stop_late_cleanup():
+            return
 
         # Reconcile cluster state to baseline
         if self._baseline_captured:
@@ -368,13 +540,29 @@ class Conductor:
                     self.logger.info(f"Cluster state reconciliation changes: {changes}")
                 self.logger.info("[CLEANUP] Cluster state reconciled")
             except Exception as e:
-                self.logger.warning(f"Failed to reconcile cluster state: {e}")
+                self.logger.exception("[CLEANUP] Failed to reconcile cluster state")
+                cleanup_errors.append(f"cluster_reconcile: {type(e).__name__}: {e}")
 
-        # Set to "done" after all cleanup is complete
-        self.submission_stage = "done"
+        if stop_late_cleanup():
+            return
+
+        # Set to "done" after all cleanup is complete.
+        with self._submission_lock:
+            if cleanup_was_abandoned():
+                self.logger.warning(
+                    "Ignoring late cleanup state for aborted or replaced attempt generation %s",
+                    cleanup_generation,
+                )
+                return
+            if cleanup_errors:
+                self.results["cleanup_failed"] = True
+                self.results["cleanup_error"] = "; ".join(cleanup_errors)
+            self.submission_stage = "done"
+            self._accepting_submissions = False
+            self._attempt_closed = True
         self.logger.info("[CLEANUP] Cleanup complete, stage set to 'done'")
 
-    def _finish_problem(self):
+    def _finish_problem(self, generation: int | None = None):
         """
         Runs problem teardown synchronously (fault recovery, app undeploy, cluster
         reconciliation) before returning.
@@ -385,15 +573,76 @@ class Conductor:
         resets the stage to ``"setup"``, so the deploy-retry path still cleans up
         each failed attempt.
         """
-        if self.submission_stage in ("done", "tearing_down"):
-            self.logger.info(
-                f"[STAGE] _finish_problem already ran/running (submission_stage={self.submission_stage!r}); skipping"
-            )
-            return
-        self.logger.info("[STAGE] Done, starting teardown")
-        self.submission_stage = "tearing_down"
-        self._cleanup_sync()
+        cleanup_generation = self._submission_generation if generation is None else generation
+        with self._submission_lock:
+            if (
+                cleanup_generation != self._submission_generation
+                or cleanup_generation in self._aborted_submission_generations
+            ):
+                self.logger.warning(
+                    "Skipping cleanup transition for aborted or replaced attempt generation %s",
+                    cleanup_generation,
+                )
+                return
+            if self.submission_stage in ("done", "tearing_down"):
+                self.logger.info(
+                    f"[STAGE] _finish_problem already ran/running (submission_stage={self.submission_stage!r}); skipping"
+                )
+                return
+            self.logger.info("[STAGE] Done, starting teardown")
+            # A stage still open at teardown never received a submission -- the
+            # agent exited, timed out, or was killed. Close it here with a
+            # written-down end rather than leaving the reader to infer one from
+            # the next phase's start.
+            open_stage = self.submission_stage
+            self._accepting_submissions = False
+            self._attempt_closed = True
+            self.submission_stage = "tearing_down"
+        # Only close a stage that is genuinely still open. `submission_stage`
+        # still names the last stage after it has been evaluated, so closing on
+        # that alone writes a second end for a stage that finished cleanly.
+        if open_stage in {stage["name"] for stage in self.stage_sequence} and self._phase_is_open(
+            f"stage:{open_stage}"
+        ):
+            self._mark(f"stage:{open_stage}", "end", outcome="no_submission")
+        with self._phase("cleanup"):
+            self._cleanup_sync(cleanup_generation)
         self.logger.info("[STAGE] Teardown complete")
+
+    def finish_problem_in_background(self) -> concurrent.futures.Future:
+        """Return running teardown or start it so the driver can enforce a deadline."""
+        with self._submission_lock:
+            if self._submit_future is not None:
+                if self.submission_stage in ("tearing_down", "done"):
+                    return self._submit_future
+                raise RuntimeError("Cannot start cleanup while submission work is still active.")
+            if self.submission_stage == "tearing_down":
+                raise RuntimeError(
+                    "Cleanup stopped unexpectedly while tearing down; it cannot be treated as complete or retried safely."
+                )
+            generation = self._submission_generation
+            future: concurrent.futures.Future = concurrent.futures.Future()
+
+            def run_cleanup() -> None:
+                if not future.set_running_or_notify_cancel():
+                    return
+                try:
+                    self._finish_problem(generation)
+                except BaseException as exc:
+                    if isinstance(exc, Exception):
+                        future.set_exception(exc)
+                    else:
+                        future.set_exception(RuntimeError(f"Cleanup terminated with {type(exc).__name__}: {exc}"))
+                else:
+                    future.set_result(None)
+
+            self._submit_future = future
+            threading.Thread(
+                target=run_cleanup,
+                name=f"sregym-cleanup-{generation}",
+                daemon=True,
+            ).start()
+            return future
 
     async def start_problem(self) -> StartProblemResult:
         """
@@ -406,21 +655,40 @@ class Conductor:
         if self.problem_id is None:
             raise RuntimeError("Cannot start problem: problem_id is not set")
 
-        # Wait for the previous problem's executor (evaluation + cleanup) to finish
-        # before starting a new problem. _finish_problem() is called synchronously
-        # from within _submit_evaluate_and_advance(), so awaiting the future here
-        # guarantees that fault recovery, undeploy, and reconciliation are all done.
-        if self._submit_future is not None and not self._submit_future.done():
-            self.logger.info("[WAIT] Waiting for previous problem's cleanup to finish...")
-            await asyncio.wrap_future(self._submit_future)
-            self.logger.info("[WAIT] Previous problem's cleanup finished")
-        self._submit_future = None
+        with self._submission_lock:
+            if self._submission_generation in self._aborted_submission_generations:
+                raise RuntimeError(
+                    "This Conductor abandoned a stuck evaluator and cannot be reused. "
+                    "Start a new benchmark process so late external side effects cannot overlap another attempt."
+                )
+
+        # Wait for every accepted evaluation and any API request that is waiting
+        # for the next stage. This prevents a late request from one attempt from
+        # being submitted against the next problem.
+        # Close the old attempt before taking the drain snapshot. A request
+        # that was already registered can finish, but no later request can
+        # cross this boundary into the new attempt.
+        self.close_submissions()
+        if self._submit_future is not None or self._pending_submission_stages:
+            self.logger.info("[WAIT] Waiting for previous problem's submission work to finish...")
+            await self.wait_for_submission_work(timeout=None)
+            self.logger.info("[WAIT] Previous problem's submission work finished")
+        with self._submission_lock:
+            self._submit_future = None
+            self._submission_generation += 1
+            self._accepting_submissions = False
+            self._attempt_closed = False
+            self.submission_stage = "setup"
+            self.waiting_for_agent = False
+            self._evaluating = False
+            self.problem = None
+            self.app = None
+            self.results = {}
 
         self.execution_start_time = time.time()
         self.problem = self.problems.get_problem_instance(self.problem_id)
         self.app = self.problem.app
         self.detection_oracle = DetectionOracle(self.problem)
-        self.results = {}
 
         self.dependency_check(["kubectl", "helm", "docker"])
         self.logger.debug("Dependency check passed: kubectl, helm")
@@ -428,17 +696,20 @@ class Conductor:
         self.logger.info(f"[Session Start] Problem ID: {self.problem_id}")
         self.logger.info(f"[STAGE] Start testing on problem: {self.problem_id}")
 
-        self.fix_kubernetes()
+        with self._phase("fix_kubernetes"):
+            self.fix_kubernetes()
 
         self.get_problem_stages()
         self._build_stage_sequence()
 
         self.logger.info("Undeploying app leftovers...")
-        self.undeploy_app()  # Cleanup any leftovers
+        with self._phase("undeploy_leftovers"):
+            self.undeploy_app()  # Cleanup any leftovers
         self.logger.info("App leftovers undeployed.")
         self.logger.info("Deploying app...")
         try:
-            self.deploy_app()
+            with self._phase("deploy"):
+                self.deploy_app()
         except KhaosUnsupportedError as exc:
             self.logger.warning(
                 f"Problem '{self.problem_id}' requires host capabilities that are unavailable: {exc}. "
@@ -446,6 +717,17 @@ class Conductor:
             )
             return StartProblemResult.SKIPPED_KHAOS_REQUIRED
         self.logger.info("App deployed.")
+
+        baseline = (
+            self.config.baseline_override_s
+            if self.config.baseline_override_s is not None
+            else self.problem.baseline_duration_s
+        )
+        if baseline > 0:
+            self.logger.info(f"[BASELINE] Running steady-state for {baseline}s before fault injection...")
+            with self._phase("baseline", seconds=baseline):
+                await asyncio.sleep(baseline)
+            self.logger.info("[BASELINE] Baseline period complete.")
 
         # Update NoiseManager with problem context
         if self.config.enable_noise:
@@ -462,7 +744,7 @@ class Conductor:
                 self.logger.warning(f"Failed to update NoiseManager context: {e}")
 
         # After deployment, advance to the first stage
-        self._advance_to_next_stage(start_index=0)
+        await self._advance_to_next_stage(start_index=0)
 
         self.execution_start_time = time.time()  # Reset: measure agent time only
 
@@ -474,7 +756,7 @@ class Conductor:
             )
         return StartProblemResult.SUCCESS
 
-    def _submit_evaluate_and_advance(self, sol, current_stage):
+    def _submit_evaluate_and_advance(self, sol, current_stage, generation: int):
         """
         Blocking work for a submission: evaluate the oracle, advance stage, manage noise.
         Runs in a background thread so the HTTP response is not blocked.
@@ -491,90 +773,410 @@ class Conductor:
             except Exception as e:
                 self.logger.warning(f"Failed to stop noise manager: {e}")
 
+        # The agent's time on this stage ends when a submission arrives to be
+        # evaluated; grading time is its own phase, not the agent's.
+        self._mark(f"stage:{stage_name}", "end", outcome="submitted")
+
+        outcome = None
+        # Run the evaluation function for the current stage. The per-stage
+        # _evaluate_* methods catch their own oracle exceptions; this outer
+        # guard is defense in depth so an ordinary evaluation error still
+        # produces a failed stage result.
         try:
-            # Run the evaluation function for the current stage. The per-stage
-            # _evaluate_* methods catch their own oracle exceptions and record
-            # a failure result; this outer guard is defense in depth so the
-            # stage always advances even if something above the oracle blows up.
-            try:
-                current_stage["evaluation"](sol)
-            except Exception:
-                self.logger.exception(
-                    f"Stage '{stage_name}' evaluation raised unexpectedly; advancing anyway "
-                    "so the conductor doesn't get stuck waiting on a dead stage."
-                )
-                self.results.setdefault(
-                    stage_name.capitalize(), {"success": False, "error": "stage evaluation raised", "submission": sol}
-                )
-        finally:
-            self._evaluating = False
+            with self._phase(f"evaluate:{stage_name}"):
+                outcome = current_stage["evaluation"](sol)
+        except Exception:
+            self.logger.exception(
+                f"Stage '{stage_name}' evaluation raised unexpectedly; advancing anyway "
+                "so the conductor doesn't get stuck waiting on a dead stage."
+            )
+            outcome = {"success": False, "error": "stage evaluation raised", "submission": sol}
 
-        # After evaluation, advance to the next stage (if any)
         next_index = self.current_stage_index + 1
-        self._advance_to_next_stage(start_index=next_index)
+        next_stage_name: str | None = None
+        with self._submission_lock:
+            if generation != self._submission_generation or generation in self._aborted_submission_generations:
+                self.logger.warning(
+                    "Discarding %s result because attempt generation %s was aborted or replaced",
+                    stage_name,
+                    generation,
+                )
+                return
 
-        # Restart noise if there are more stages AND not in teardown
-        if self.config.enable_noise and self.submission_stage not in ("done", "tearing_down"):
+            if outcome is not None:
+                self.results[stage_name.capitalize()] = outcome
+                timing_key = "TTL" if stage_name == "diagnosis" else "TTM"
+                self.results[timing_key] = time.time() - self.execution_start_time
+
+            if next_index < len(self.stage_sequence):
+                next_stage_name = self.stage_sequence[next_index]["name"]
+            stage_ledger = getattr(self, "phases", None)
+
+        if next_stage_name is not None:
+            # Keep the old stage marked busy while noise is restarted. The
+            # API can wait for the next stage, but cannot submit into a
+            # partially completed transition. Do not hold the submission lock
+            # across NoiseManager I/O because a stuck noise backend must not
+            # prevent the driver from closing or abandoning the attempt.
+            if self.config.enable_noise:
+                nm = None
+                try:
+                    nm = get_noise_manager()
+                    self.logger.info("Restarting noise manager for next stage...")
+                    nm.start()
+                    with self._submission_lock:
+                        transition_aborted = (
+                            generation != self._submission_generation
+                            or generation in self._aborted_submission_generations
+                        )
+                    if not transition_aborted:
+                        nm.set_stage(next_stage_name)
+                except Exception as e:
+                    self.logger.warning(f"Failed to restart NoiseManager: {e}")
+
+                # A slow start/set_stage can finish after the driver abandons
+                # the evaluator and performs its global noise stop. Stop again
+                # so this late worker cannot leave noise running.
+                with self._submission_lock:
+                    transition_aborted = (
+                        generation != self._submission_generation or generation in self._aborted_submission_generations
+                    )
+                if transition_aborted and nm is not None:
+                    try:
+                        nm.stop()
+                    except Exception as e:
+                        self.logger.warning(f"Failed to stop late NoiseManager restart: {e}")
+                    return
+
+            # Keep submissions waiting until the start record is written.
+            # Use this attempt's ledger, and keep disk I/O outside the lock.
+            if stage_ledger is not None:
+                stage_ledger.record(f"stage:{next_stage_name}", "start")
+            with self._submission_lock:
+                transition_aborted = (
+                    generation != self._submission_generation or generation in self._aborted_submission_generations
+                )
+                if transition_aborted:
+                    self.logger.warning(
+                        "Skipping %s stage transition because attempt generation %s was aborted or replaced",
+                        next_stage_name,
+                        generation,
+                    )
+                else:
+                    self.current_stage_index = next_index
+                    self.submission_stage = next_stage_name
+                    self.waiting_for_agent = True
+                    self._evaluating = False
+                    self._accepting_submissions = not self._attempt_closed
+                    self.logger.info(f"[STAGE] Go to stage {self.submission_stage}")
+            if transition_aborted and stage_ledger is not None:
+                stage_ledger.record(f"stage:{next_stage_name}", "end", outcome="aborted")
+            return
+
+        if next_index >= len(self.stage_sequence):
+            # Keep the accepted evaluation marked as active until teardown
+            # finishes. A concurrent submit observes ``tearing_down`` instead
+            # of a brief, invalid "idle mitigation" state.
             try:
-                nm = get_noise_manager()
-                self.logger.info("Restarting noise manager for next stage...")
-                nm.start()
-            except Exception as e:
-                self.logger.warning(f"Failed to restart noise manager: {e}")
+                self._finish_problem(generation)
+            finally:
+                with self._submission_lock:
+                    if generation == self._submission_generation:
+                        self._evaluating = False
 
-    async def submit(self, solution: str | None) -> dict:
+    async def submit(
+        self,
+        solution: str | None,
+        *,
+        expected_stage: str | None = None,
+        expected_generation: int | None = None,
+    ) -> dict:
         """
         Called by CLI or HTTP /submit.  Kicks off evaluation in the
         background and returns immediately.
         """
         sol = solution
 
-        # If all tasks are already completed, simply return the final snapshot.
-        if self.submission_stage == "done":
-            self.logger.info("All tasks already completed; ignoring new submission.")
-            return dict(self.results)
+        with self._submission_lock:
+            if expected_generation is not None and expected_generation != self._submission_generation:
+                raise SubmissionAttemptMismatch(expected_generation, self._submission_generation)
 
-        # If teardown is in progress, return current results without evaluation
-        if self.submission_stage == "tearing_down":
-            self.logger.info("Teardown in progress; returning current results without evaluation.")
-            return dict(self.results)
-
-        if not self.stage_sequence:
-            self.logger.warning("submit() called but no stages are configured; returning current results.")
-            return dict(self.results)
-
-        if not self.waiting_for_agent:
-            if self._evaluating:
-                self.logger.info(
-                    "submit() called while evaluation is already in progress for "
-                    f"stage '{self.submission_stage}'. Submission was already accepted."
-                )
-                return {"status": "ok", "message": "Submission already accepted; evaluation in progress."}
-            self.logger.error(
-                "submit() called when conductor is not waiting for a submission. "
-                f"Current submission_stage={self.submission_stage}"
+            registered_request = (
+                expected_generation is not None
+                and self._pending_submission_stages.get((expected_generation, expected_stage or ""), 0) > 0
             )
-            raise RuntimeError("Conductor is not currently waiting for an agent submission.")
+            if not self._accepting_submissions and not registered_request:
+                raise SubmissionAttemptClosed("This attempt no longer accepts new submissions.")
 
-        current_stage = self.stage_sequence[self.current_stage_index]
+            # If all tasks are already completed, simply return the final snapshot.
+            if self.submission_stage == "done":
+                self.logger.info("All tasks already completed; ignoring new submission.")
+                return dict(self.results)
 
-        # Mark that we're no longer waiting so duplicate submits are rejected
-        self.waiting_for_agent = False
-        self._evaluating = True
+            # If teardown is in progress, return current results without evaluation
+            if self.submission_stage == "tearing_down":
+                self.logger.info("Teardown in progress; returning current results without evaluation.")
+                return dict(self.results)
 
-        # Run evaluation and stage advancement in an executor thread so the HTTP
-        # response returns immediately.  Store the future so start_problem() can
-        # await it and guarantee cleanup is fully done before the next problem starts.
-        # Use concurrent.futures directly (not asyncio's run_in_executor) so the
-        # future is loop-independent.  submit() is called from the uvicorn API thread
-        # which has its own event loop; start_problem() runs in the main driver loop.
-        # asyncio.wrap_future() in start_problem() binds the future to whichever loop
-        # is running at await time, avoiding "Future attached to a different loop".
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-        self._submit_future = executor.submit(self._submit_evaluate_and_advance, sol, current_stage)
-        executor.shutdown(wait=False)
+            if not self.stage_sequence:
+                self.logger.warning("submit() called but no stages are configured; returning current results.")
+                return dict(self.results)
 
-        return {"status": "ok", "message": "Submission received"}
+            if expected_stage is not None and self.submission_stage != expected_stage:
+                raise SubmissionStageMismatch(expected_stage, self.submission_stage)
+
+            if not self.waiting_for_agent:
+                if self._evaluating:
+                    self.logger.info(
+                        f"submit() called while evaluation is already in progress for stage '{self.submission_stage}'."
+                    )
+                    raise EvaluationInProgress(self.submission_stage)
+                self.logger.error(
+                    "submit() called when conductor is not waiting for a submission. "
+                    f"Current submission_stage={self.submission_stage}"
+                )
+                raise RuntimeError("Conductor is not currently waiting for an agent submission.")
+
+            current_stage = self.stage_sequence[self.current_stage_index]
+            accepted_stage: str = current_stage["name"]
+
+            # Mark that we're no longer waiting so duplicate submits are rejected.
+            self.waiting_for_agent = False
+            self._evaluating = True
+
+            # Run evaluation and stage advancement in an executor thread so the HTTP
+            # response returns immediately. Store the future so start_problem() can
+            # await it and guarantee cleanup is fully done before the next problem starts.
+            generation = self._submission_generation
+            future: concurrent.futures.Future = concurrent.futures.Future()
+
+            def run_evaluation() -> None:
+                if not future.set_running_or_notify_cancel():
+                    return
+                try:
+                    result = self._submit_evaluate_and_advance(sol, current_stage, generation)
+                except BaseException as exc:
+                    if isinstance(exc, Exception):
+                        future.set_exception(exc)
+                    else:
+                        future.set_exception(RuntimeError(f"Evaluator terminated with {type(exc).__name__}: {exc}"))
+                else:
+                    future.set_result(result)
+
+            oracle = getattr(self.problem, f"{accepted_stage}_oracle", None)
+            self._submit_evaluation_timeout = getattr(oracle, "evaluation_timeout_seconds", None)
+            self._submit_future = future
+            threading.Thread(
+                target=run_evaluation,
+                name=f"sregym-evaluate-{generation}-{accepted_stage}",
+                daemon=True,
+            ).start()
+
+        return {"status": "accepted", "message": "Submission received", "stage": accepted_stage}
+
+    def _register_pending_submission_locked(self, stage: str) -> int:
+        if self._attempt_closed or not self._accepting_submissions:
+            raise SubmissionAttemptClosed("This attempt no longer accepts new submissions.")
+        generation = self._submission_generation
+        key = (generation, stage)
+        self._pending_submission_stages[key] = self._pending_submission_stages.get(key, 0) + 1
+        return generation
+
+    def register_submission_request(
+        self,
+        solution: str,
+        stage: SubmissionStage | None = None,
+    ) -> tuple[SubmissionStage, int]:
+        """Resolve and register one request atomically.
+
+        Legacy clients omit the stage. Preserve the current-stage behavior and
+        recognize an empty request during diagnosis grading as early mitigation.
+        """
+        with self._submission_lock:
+            requested_stage = stage
+            if requested_stage is None:
+                if self.submission_stage == "mitigation":
+                    requested_stage = "mitigation"
+                elif self.submission_stage == "diagnosis":
+                    requested_stage = "mitigation" if self._evaluating and solution == "" else "diagnosis"
+                else:
+                    requested_stage = "mitigation" if solution == "" else "diagnosis"
+            if requested_stage not in SUBMISSION_STAGES:
+                raise ValueError(f"Unknown submission stage: {requested_stage!r}")
+            generation = self._register_pending_submission_locked(requested_stage)
+            return requested_stage, generation
+
+    def register_pending_submission(self, stage: str) -> int:
+        """Track a known-stage request and return its attempt generation."""
+        with self._submission_lock:
+            return self._register_pending_submission_locked(stage)
+
+    def submission_state(self) -> tuple[str | None, bool, int]:
+        """Return the agent-facing stage, evaluation flag, and attempt generation atomically."""
+        with self._submission_lock:
+            return self.submission_stage, self._evaluating, self._submission_generation
+
+    def unregister_pending_submission(self, stage: str, generation: int) -> None:
+        """Stop tracking an API request after it is accepted or rejected."""
+        with self._submission_lock:
+            key = (generation, stage)
+            remaining = self._pending_submission_stages.get(key, 0) - 1
+            if remaining > 0:
+                self._pending_submission_stages[key] = remaining
+            else:
+                self._pending_submission_stages.pop(key, None)
+
+    def close_submissions(self) -> bool:
+        """Atomically reject new requests and report whether registered work remains."""
+        with self._submission_lock:
+            self._accepting_submissions = False
+            self._attempt_closed = True
+            return self._submit_future is not None or bool(self._pending_submission_stages)
+
+    def abandon_submission_work(self) -> None:
+        """Detach a stuck evaluator and prevent it from mutating this or a later attempt."""
+        with self._submission_lock:
+            generation = self._submission_generation
+            self._aborted_submission_generations.add(generation)
+            self._attempt_closed = True
+            self._accepting_submissions = False
+            self.waiting_for_agent = False
+            self._evaluating = False
+            self.submission_stage = "aborted"
+            self._submit_future = None
+
+    async def wait_for_submission_evaluations(self, timeout: float | None) -> None:
+        """Wait for accepted stage requests and grading, but not teardown.
+
+        Give each accepted stage evaluation a fresh deadline. An early
+        mitigation request can wait behind diagnosis grading. Each will get
+        their own deadlines.
+
+        The final stage worker performs teardown in the same future. Return as
+        soon as that worker enters ``tearing_down`` so the driver can apply a
+        separate cleanup deadline without allowing attempts to overlap.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout if timeout is not None else None
+        observed_future: concurrent.futures.Future | None = None
+
+        while True:
+            with self._submission_lock:
+                stage = self.submission_stage
+                future = self._submit_future
+                pending = bool(self._pending_submission_stages)
+                oracle_timeout = getattr(self, "_submit_evaluation_timeout", None)
+
+            if future is not None and future is not observed_future:
+                observed_future = future
+                stage_timeout = timeout
+                if timeout is not None and type(oracle_timeout) in (int, float) and math.isfinite(oracle_timeout):
+                    stage_timeout = max(timeout, oracle_timeout)
+                deadline = loop.time() + stage_timeout if stage_timeout is not None else None
+
+            if future is not None and future.done():
+                try:
+                    future.result()
+                finally:
+                    with self._submission_lock:
+                        if self._submit_future is future:
+                            self._submit_future = None
+                continue
+
+            if stage in {"tearing_down", "done"}:
+                return
+
+            if future is None and not pending:
+                return
+
+            if deadline is not None:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError
+                await asyncio.sleep(min(0.05, remaining))
+            else:
+                await asyncio.sleep(0.05)
+
+    async def wait_for_submission_work(self, timeout: float | None) -> None:
+        """Wait for all accepted evaluations and registered stage requests.
+
+        An early mitigation request can be waiting while diagnosis is graded.
+        When diagnosis finishes, that request creates a new evaluation future.
+        Looping until both sources are idle prevents cleanup between those two
+        evaluations.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout if timeout is not None else None
+
+        while True:
+            with self._submission_lock:
+                future = self._submit_future
+                pending = bool(self._pending_submission_stages)
+
+            if future is not None:
+                try:
+                    if future.done():
+                        future.result()
+                    elif deadline is None:
+                        await asyncio.shield(asyncio.wrap_future(future))
+                    else:
+                        remaining = deadline - loop.time()
+                        if remaining <= 0:
+                            raise TimeoutError
+                        await asyncio.wait_for(
+                            asyncio.shield(asyncio.wrap_future(future)),
+                            timeout=remaining,
+                        )
+                finally:
+                    if future.done():
+                        with self._submission_lock:
+                            if self._submit_future is future:
+                                self._submit_future = None
+                continue
+
+            if pending:
+                if deadline is not None and loop.time() >= deadline:
+                    raise TimeoutError
+                await asyncio.sleep(0.05)
+                continue
+
+            return
+
+    def missing_submission_stages(self) -> list[str]:
+        """Return configured stages that did not produce an evaluation result."""
+        return [stage["name"] for stage in self.stage_sequence if stage["name"].capitalize() not in self.results]
+
+    def record_incomplete_attempt(
+        self,
+        reason: str,
+        *,
+        agent_return_code: int | None = None,
+    ) -> None:
+        """Record why an attempt ended without all configured stage results."""
+        missing = self.missing_submission_stages()
+        current_stage = self.submission_stage
+        if current_stage not in {"diagnosis", "mitigation", "tearing_down"}:
+            current_stage = missing[0] if missing else "run"
+
+        self.results["run_status"] = "incomplete"
+        self.results["incomplete_reason"] = reason
+        self.results["incomplete_stage"] = current_stage
+        self.results["missing_stages"] = ",".join(missing)
+        if agent_return_code is not None:
+            self.results["agent_return_code"] = agent_return_code
+
+    def finalize_attempt_status(self) -> str:
+        """Set an explicit complete or incomplete status before results are written."""
+        if self.results.get("run_status") == "incomplete":
+            return "incomplete"
+        if self.results.get("cleanup_failed"):
+            self.record_incomplete_attempt("cleanup_failed")
+            return "incomplete"
+        if self.missing_submission_stages():
+            self.record_incomplete_attempt("missing_stage_results")
+        else:
+            self.results["run_status"] = "complete"
+        return self.results["run_status"]
 
     @staticmethod
     def _q(value):
@@ -621,13 +1223,15 @@ class Conductor:
             ]
             marked_nodes = [node for node in marked_nodes if node]
 
-            bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} -o json")
+            bgppeer = kubectl_json(f"kubectl get bgppeer {self._q(problem.BGP_PEER_NAME)} --ignore-not-found -o json")
             bgppeers = (kubectl_json("kubectl get bgppeers -o json") or {}).get("items", [])
-            bgp_config = kubectl_json("kubectl get bgpconfiguration default -o json")
-            support_namespace = kubectl_json(f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} -o json")
+            bgp_config = kubectl_json("kubectl get bgpconfiguration default --ignore-not-found -o json")
+            support_namespace = kubectl_json(
+                f"kubectl get namespace {self._q(problem.PROBE_NAMESPACE)} --ignore-not-found -o json"
+            )
             state_configmap = kubectl_json(
                 f"kubectl -n {self._q(problem.STATE_NAMESPACE)} get configmap "
-                f"{self._q(problem.STATE_CONFIGMAP_NAME)} -o json"
+                f"{self._q(problem.STATE_CONFIGMAP_NAME)} --ignore-not-found -o json"
             )
             state_data = (state_configmap or {}).get("data", {}) or {}
 
@@ -803,18 +1407,36 @@ class Conductor:
             self._baseline_captured = True
 
         self.logger.info("[DEPLOY] Setting up metrics-server…")
-        self.kubectl.exec_command(
-            "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
-            "releases/latest/download/components.yaml"
-        )
-        self.kubectl.exec_command(
-            "kubectl -n kube-system patch deployment metrics-server "
-            "--type=json -p='["
-            '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"},'
-            '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
-            "]'"
-        )
+        # metrics-server lives in kube-system, which is protected from
+        # reconciliation, so it survives between problems. Re-applying it fetches
+        # the manifest from GitHub every problem and rolls the deployment for no
+        # gain. The apply and the patch must be skipped together: the patch is an
+        # `add` to the args list, and running it without the apply that resets
+        # those args would append duplicates on every problem.
+        if self._metrics_server_configured():
+            self.logger.info("[DEPLOY] metrics-server already present and patched; skipping re-apply")
+        else:
+            self.kubectl.exec_command(
+                "kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/"
+                "releases/latest/download/components.yaml"
+            )
+            self.kubectl.exec_command(
+                "kubectl -n kube-system patch deployment metrics-server "
+                "--type=json -p='["
+                '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"},'
+                '{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-preferred-address-types=InternalIP"}'
+                "]'"
+            )
+            # Apply retains selector keys added outside the original manifest.
+            # Replace the complete selector so the Service reaches metrics-server.
+            self.kubectl.core_v1_api.patch_namespaced_service(
+                "metrics-server",
+                "kube-system",
+                [{"op": "replace", "path": "/spec/selector", "value": {"k8s-app": "metrics-server"}}],
+                _request_timeout=10,
+            )
         self.kubectl.wait_for_ready("kube-system")
+        self._wait_for_infrastructure_ready("metrics-server", self._metrics_server_configured)
 
         # Only deploy Khaos if the problem requires it
         if problem.requires_khaos():
@@ -822,14 +1444,38 @@ class Conductor:
             self.khaos.ensure_deployed(problem.khaos_capabilities())
 
         self.logger.info("[DEPLOY] Setting up OpenEBS…")
-        self._preflight_openebs_udev_mount()
-        self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
-        self.kubectl.exec_command(
-            "kubectl patch storageclass openebs-hostpath "
-            '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
-        )
+        svelte = is_svelte()
+        # `openebs` is protected from reconciliation, so it persists across
+        # problems and the operator manifest only needs fetching once.
+        if self._openebs_ready(svelte):
+            self.logger.info("[DEPLOY] OpenEBS already deployed; skipping operator re-apply")
+        else:
+            if not svelte:
+                # The udev preflight exists solely for the node-disk-manager,
+                # which svelte does not deploy.
+                self._preflight_openebs_udev_mount()
+            self.kubectl.exec_command("kubectl apply -f https://openebs.github.io/charts/openebs-operator.yaml")
+            self.kubectl.exec_command(
+                "kubectl patch storageclass openebs-hostpath "
+                '-p \'{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}\''
+            )
+            if not svelte:
+                # The operator manifest has no NDM node selector. An extra
+                # selector can survive apply and prevent every NDM pod scheduling.
+                self.kubectl.apps_v1_api.patch_namespaced_daemon_set(
+                    "openebs-ndm",
+                    "openebs",
+                    [{"op": "add", "path": "/spec/template/spec/nodeSelector", "value": {}}],
+                    _request_timeout=10,
+                )
+        # Idempotent and cheap; also covers an `openebs` left over from an
+        # earlier full-profile run on the same cluster.
+        if svelte:
+            self._trim_openebs_ndm()
         self.kubectl.wait_for_ready("openebs")
-        self._ensure_openebs_device_storageclass()
+        self._wait_for_infrastructure_ready("OpenEBS", lambda: self._openebs_ready(svelte))
+        if not svelte:
+            self._ensure_openebs_device_storageclass()
 
         self.logger.info("[DEPLOY] Deploying Prometheus…")
         self.prometheus.deploy()
@@ -885,6 +1531,15 @@ class Conductor:
         if self.problem:
             self.problem.app.cleanup()
 
+    def _wait_for_infrastructure_ready(self, name: str, is_ready: Callable[[], bool], timeout: float = 180) -> None:
+        """Require functional infrastructure, not just Ready surviving pods."""
+        deadline = time.monotonic() + timeout
+        while not is_ready():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"{name} did not become healthy within {timeout:g}s; stopping application setup")
+            time.sleep(min(2, remaining))
+
     def _preflight_openebs_udev_mount(self) -> None:
         if shutil.which("docker") is None:
             self.logger.info("[DEPLOY] Docker is unavailable; skipping kind /run/udev preflight")
@@ -914,6 +1569,127 @@ class Conductor:
                 f"Missing /run/udev on: {missing_list}. Create /run/udev on the host before kind cluster "
                 "creation and mount hostPath /run/udev to containerPath /run/udev in the kind config."
             )
+
+    _METRICS_SERVER_ARGS = ("--kubelet-insecure-tls", "--kubelet-preferred-address-types=InternalIP")
+
+    # components.yaml creates this alongside the Deployment. It grants
+    # metrics-server the ability to create subjectaccessreviews; without it the
+    # aggregated API returns 500 and every `kubectl top` fails.
+    _METRICS_SERVER_BINDING = "metrics-server:system:auth-delegator"
+
+    def _metrics_server_configured(self) -> bool:
+        """True if metrics-server has its configuration, RBAC, and usable metrics.
+
+        Checking more than existence matters because the Deployment and its
+        cluster-scoped RBAC have different lifetimes: the Deployment sits in the
+        protected kube-system namespace, while the ClusterRoleBinding is
+        cluster-scoped. Accepting a Deployment whose binding has been reconciled
+        away would leave metrics-server permanently broken instead of repairing
+        it, so verify both and re-apply if either is missing.
+        """
+        args = self.kubectl.exec_command(
+            "kubectl -n kube-system get deployment metrics-server "
+            "-o jsonpath='{.spec.template.spec.containers[0].args}' --ignore-not-found --request-timeout=10s"
+        )
+        if not args or not args.strip():
+            return False
+        if not all(arg in args for arg in self._METRICS_SERVER_ARGS):
+            return False
+
+        binding = self.kubectl.exec_command(
+            f"kubectl get clusterrolebinding {self._METRICS_SERVER_BINDING} -o name "
+            "--ignore-not-found --request-timeout=10s"
+        )
+        if not binding or not binding.strip():
+            self.logger.info("[DEPLOY] metrics-server RBAC missing; re-applying components.yaml")
+            return False
+        # A Ready Deployment does not prove that its Service and aggregated API
+        # still work. Exercise the same API path used by kubectl top.
+        raw_metrics = self.kubectl.exec_command(
+            "kubectl get --raw /apis/metrics.k8s.io/v1beta1/nodes --request-timeout=10s"
+        )
+        try:
+            metrics = json.loads(raw_metrics)
+            return metrics.get("kind") == "NodeMetricsList" and bool(metrics.get("items"))
+        except (ValueError, TypeError, AttributeError):
+            return False
+
+    def _openebs_ready(self, svelte: bool) -> bool:
+        """True if the OpenEBS tier already matches what this profile wants.
+
+        Under `full` that includes the node-disk-manager, so that a
+        partially-present `openebs` namespace is repaired by re-applying the
+        operator manifest rather than silently accepted. Checking it also matters
+        because `openebs` persists between problems: a cluster whose last run was
+        `svelte` has had NDM removed, and accepting the provisioner alone would
+        leave `openebs-device` permanently unbacked after switching back.
+        """
+        out = self.kubectl.exec_command(
+            "kubectl -n openebs get deployment openebs-localpv-provisioner "
+            "-o json --ignore-not-found --request-timeout=10s"
+        )
+        try:
+            if not deployment_rollout_complete(json.loads(out)):
+                return False
+        except (ValueError, TypeError):
+            return False
+
+        if svelte:
+            return True
+
+        try:
+            ndm = self.kubectl.apps_v1_api.read_namespaced_daemon_set("openebs-ndm", "openebs", _request_timeout=10)
+        except ApiException:
+            return False
+        status = ndm.status
+        if status is None:
+            return False
+        desired = status.desired_number_scheduled or 0
+        return (
+            desired > 0
+            and (status.observed_generation or 0) >= (ndm.metadata.generation or 0)
+            and status.current_number_scheduled == desired
+            and status.updated_number_scheduled == desired
+            and status.number_ready == desired
+            and status.number_available == desired
+            and (status.number_misscheduled or 0) == 0
+        )
+
+    # openebs-operator.yaml bundles the node-disk-manager alongside the LocalPV
+    # provisioner. NDM exists to discover block devices and back the
+    # `openebs-device` StorageClass; SREGym only ever provisions through
+    # `openebs-hostpath`, which needs the provisioner alone. Measured on one
+    # problem, these seven pods cost 603m CPU (13% of the cluster) scanning
+    # disks nothing claims.
+    _OPENEBS_NDM_WORKLOADS = (
+        ("daemonset", "openebs-ndm"),
+        ("daemonset", "openebs-ndm-node-exporter"),
+        ("deployment", "openebs-ndm-operator"),
+        ("deployment", "openebs-ndm-cluster-exporter"),
+    )
+
+    def _trim_openebs_ndm(self) -> None:
+        """Remove unused device storage and node-disk-manager workloads.
+
+        Deleting rather than scaling: the operator manifest is a plain apply with
+        no controller to recreate them, and re-applying it recreates them for this
+        method to remove again.
+        """
+        baseline = self.cluster_state.baseline
+        if baseline is None:
+            raise RuntimeError("Cannot trim OpenEBS before the cluster baseline is available")
+        # Keep user-provided StorageClasses. The shared cluster baseline is
+        # captured before SREGym installs OpenEBS and survives interrupted runs.
+        if "openebs-device" not in baseline.storage_classes:
+            try:
+                self.cluster_state.storage_v1.delete_storage_class("openebs-device")
+            except ApiException as exc:
+                if exc.status != 404:
+                    raise
+
+        self.logger.info("[svelte] Removing OpenEBS node-disk-manager (openebs-hostpath does not use it)")
+        for kind, name in self._OPENEBS_NDM_WORKLOADS:
+            self.kubectl.exec_command(f"kubectl delete {kind} {name} -n openebs --ignore-not-found")
 
     def _ensure_openebs_device_storageclass(self) -> None:
         self.logger.info("[DEPLOY] Ensuring OpenEBS LocalPV-Device StorageClass…")

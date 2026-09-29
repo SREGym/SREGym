@@ -42,7 +42,7 @@ from ..atif import (
     ToolCall,
     Trajectory,
 )
-from ._common import _load_jsonl
+from ._common import TOKEN_METRICS_VERSION, _load_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -106,9 +106,9 @@ def _metrics_from_token_count_payload(
     total_tokens = last_usage.get("total_tokens")
 
     return {
-        "prompt_tokens": prompt_tokens if prompt_tokens else None,
-        "completion_tokens": completion_tokens or None,
-        "cached_tokens": cached_tokens or None,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "cached_tokens": cached_tokens,
         "extra": {
             "reasoning_output_tokens": reasoning_tokens,
             "total_tokens": total_tokens,
@@ -405,15 +405,16 @@ def _extract_final_metrics(raw_events: list[dict[str, Any]], total_steps: int) -
             total_cost_usd = info.get("cost_usd")
 
         final_extra: dict[str, Any] | None = {
+            "token_metrics_version": TOKEN_METRICS_VERSION,
             "reasoning_output_tokens": reasoning_tokens,
             "total_tokens": overall_tokens,
             "last_token_usage": info.get("last_token_usage"),
         }
 
         return FinalMetrics(
-            total_prompt_tokens=prompt_tokens if prompt_tokens else None,
-            total_completion_tokens=completion_tokens or None,
-            total_cached_tokens=cached_tokens or None,
+            total_prompt_tokens=prompt_tokens,
+            total_completion_tokens=completion_tokens,
+            total_cached_tokens=cached_tokens,
             total_cost_usd=total_cost_usd,
             total_steps=total_steps,
             extra=final_extra,

@@ -5,6 +5,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class ReadinessProbeMitigationOracle(Oracle):
@@ -23,19 +24,7 @@ class ReadinessProbeMitigationOracle(Oracle):
 
     @classmethod
     def _rollout_complete(cls, deployment) -> bool:
-        desired = cls._desired_replicas(deployment)
-        if desired < 1:
-            return False
-
-        generation = deployment.metadata.generation or 0
-        status = deployment.status
-        return (
-            (status.observed_generation or 0) >= generation
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _wait_for_current_rollout(self, deployment):
         deadline = time.monotonic() + self.rollout_timeout_seconds
@@ -163,22 +152,25 @@ class ReadinessProbeMitigationOracle(Oracle):
             desired = self._desired_replicas(deployment)
             if desired < 1:
                 print(f"[FAIL] Deployment '{service_name}' is scaled to {desired}")
-                return {"success": False}
+                return self.fail("required_deployment_scaled_to_zero", deployment=service_name, desired=desired)
 
             deployment = self._wait_for_current_rollout(deployment)
             if deployment is None:
                 print(f"[FAIL] Deployment '{service_name}' did not complete its current rollout")
-                return {"success": False}
+                # The readiness probe *is* what this problem breaks, and a
+                # broken probe is precisely what stops a rollout completing --
+                # so unlike elsewhere this is not an environmental signal.
+                return self.fail("fault_still_present", deployment=service_name)
 
             if not self._ready_current_endpoint_pods():
-                return {"success": False}
+                return self.fail("no_ready_endpoints", service=service_name)
 
             if not self._run_connectivity_check():
                 print(f"[FAIL] A fresh connection to Service '{service_name}' did not succeed")
-                return {"success": False}
+                return self.fail("connectivity_probe_failed", service=service_name)
         except Exception as exc:
             print(f"[FAIL] Error checking readiness recovery: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
 
         print(f"[PASS] Deployment '{service_name}' has current, reachable endpoints")
         return {"success": True}

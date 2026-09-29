@@ -15,6 +15,16 @@ class DevShmMitigationOracle(Oracle):
 
     importance = 1.0
 
+    # This oracle already returned a ``reason``, but as English sentences --
+    # "Worker deployment 'x' is scaled to 0 replicas." Useful to read, useless
+    # to filter or group on, and it interpolated names into the value so no two
+    # runs shared a string. The sentences move to prints, which is where the
+    # human-readable path belongs, and ``reason`` becomes a stable code with the
+    # varying parts in ``detail``.
+    #
+    # Every reason here is shared, so there is no local table: the memory-backed
+    # /dev/shm check is the fault signature and uses ``fault_still_present``.
+
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation (/dev/shm exhaustion) ==")
         apps_v1 = client.AppsV1Api()
@@ -26,35 +36,29 @@ class DevShmMitigationOracle(Oracle):
             deployment = apps_v1.read_namespaced_deployment(name, namespace)
         except ApiException as e:
             if e.status == 404:
-                return {"success": False, "reason": f"Worker deployment '{name}' no longer exists."}
+                print(f"❌ Worker deployment '{name}' no longer exists.")
+                return self.fail("required_deployment_missing", deployment=name, namespace=namespace)
             raise
         desired = deployment.spec.replicas or 0
         if desired < 1:
-            return {"success": False, "reason": f"Worker deployment '{name}' is scaled to {desired} replicas."}
+            print(f"❌ Worker deployment '{name}' is scaled to {desired} replicas.")
+            return self.fail("required_deployment_scaled_to_zero", deployment=name, desired=desired)
 
         if not self._has_memory_backed_shm(deployment.spec.template.spec):
-            return {
-                "success": False,
-                "reason": (
-                    f"Worker '{name}' does not mount a memory-backed emptyDir (medium: Memory) at "
-                    f"{self.problem.shm_mount_path}; the default 64 MiB shm is still in effect."
-                ),
-            }
+            print(
+                f"❌ Worker '{name}' does not mount a memory-backed emptyDir (medium: Memory) at "
+                f"{self.problem.shm_mount_path}; the default 64 MiB shm is still in effect."
+            )
+            return self.fail("fault_still_present", deployment=name, mount_path=self.problem.shm_mount_path)
 
         pods = core_v1.list_namespaced_pod(namespace, label_selector=f"app={name}").items
         if not pods:
-            return {"success": False, "reason": f"No pods found for worker '{name}'."}
-        for pod in pods:
-            if pod.status.phase != "Running":
-                return {"success": False, "reason": f"Pod {pod.metadata.name} is in phase {pod.status.phase}."}
-            for cs in pod.status.container_statuses or []:
-                if cs.state.waiting and cs.state.waiting.reason:
-                    return {
-                        "success": False,
-                        "reason": f"Container {cs.name} is waiting: {cs.state.waiting.reason}.",
-                    }
-                if not cs.ready:
-                    return {"success": False, "reason": f"Container {cs.name} is not ready."}
+            print(f"❌ No pods found for worker '{name}'.")
+            return self.fail("no_pods_found", namespace=namespace, selector=f"app={name}")
+
+        unready = self.pods_unready(pods, deployment=name)
+        if unready is not None:
+            return unready
 
         return {"success": True}
 

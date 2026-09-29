@@ -25,6 +25,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 from sregym.utils.decorators import mark_fault_injected
 
 
@@ -312,11 +313,7 @@ class CalicoRouteReflectorLabelDriftHotelReservation(Problem):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             deployment = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
-            desired = deployment.spec.replicas or 0
-            ready = deployment.status.ready_replicas or 0
-            updated = deployment.status.updated_replicas or 0
-            unavailable = deployment.status.unavailable_replicas or 0
-            if desired > 0 and ready == desired and updated == desired and unavailable == 0:
+            if deployment_rollout_complete(deployment):
                 return
             time.sleep(2)
         raise TimeoutError(f"Timed out waiting for deployment {namespace}/{name} to become ready")

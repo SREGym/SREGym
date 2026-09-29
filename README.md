@@ -69,15 +69,16 @@ SREGym runs on a self-managed Kubernetes cluster that you provision on Linux hos
 ### b) Emulated cluster
 SREGym can be run on an emulated cluster using [kind](https://kind.sigs.k8s.io/) on your local machine. However, not all problems are supported.
 
+For an experimental Docker-in-Docker environment with a private cluster per run,
+including parallel problem execution, see the [DinD guide](./docker/dind/README.md).
+
 **Note:** If you run into pod crashes or "too many open files" errors, see the [kind README](./kind/README.md) for required host kernel settings and troubleshooting.
 
 ```bash
-# For x86 machines
-bash kind/setup_kind_cluster.sh x86
-
-# For ARM machines
-bash kind/setup_kind_cluster.sh arm
+bash kind/setup_kind_cluster.sh
 ```
+
+For existing clusters, see the [upgrade and baseline instructions](./docs/network-access.md#cluster-maintenance).
 
 <h2 id="⚙️usage">⚙️ Usage</h2>
 
@@ -118,6 +119,36 @@ Use `--judge-model` to override the judge model separately (defaults to `--model
 uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627
 ```
 
+#### Stage Selection
+
+Each problem runs up to two agent stages, `diagnosis` then `mitigation`. By default a
+run attempts every stage the problem supports. `--stages` narrows that:
+
+```bash
+# Diagnose only; never enter the mitigation stage
+uv run main.py --problem network_policy_block --stages diagnosis
+
+# Both, stated explicitly (the default)
+uv run main.py --suite sregym-lite --stages diagnosis mitigation
+```
+
+`--stages` is independent of `--problem` and `--suite`: the stages decide what an
+attempt does, the problem selection decides which problems it does it to. Stages must
+be given in the order above.
+
+Useful mainly when iterating on a problem's diagnosis oracle, where a mitigation
+attempt is wasted time — note that `--agent-timeout` is a budget for the whole agent
+phase, so a slow diagnosis otherwise eats into mitigation's share.
+
+> [!NOTE]
+> A single-stage run is reported as `complete`, since completeness is measured against
+> the stages that were configured. It is not, however, useful input to
+> `sregym/results/report.py`'s difficulty tables, which treat a missing mitigation
+> result as inconclusive.
+
+Naming a stage the problem has no oracle for is an error rather than a silent skip, so
+a typo cannot produce a run that reports success having measured nothing.
+
 #### Container Isolation
 
 Agents always run in isolated Docker containers, preventing access to SREGym internals like problem definitions and grading logic. The image is built automatically on first run.
@@ -128,8 +159,78 @@ Use `--force-build` to rebuild the container image after updating dependencies o
 uv run main.py --agent codex --model gpt-5 --force-build
 ```
 
-Containerized agents can use the public internet by default, but direct access to the benchmark's GitHub source is
-blocked. Use `--internet-access open` only when you intentionally need the previous unrestricted network behavior.
+#### Network access
+
+Filtered access is the default. Agents can reach the selected model provider and internal services, but not other internet destinations.
+Application pods also have outbound restrictions.
+
+Use `--internet-access open` for unrestricted internet access.
+To allow an extra destination in filtered mode, add `--allow-agent-endpoint`:
+
+```bash
+uv run main.py --agent codex --model gpt-5.6-sol \
+  --allow-agent-endpoint https://telemetry.example.com/v1
+```
+
+Repeat the option for more destinations.
+
+Agent containers are hardened by default: every Linux capability is dropped except `DAC_OVERRIDE`, which container
+root needs to write to the host-owned `/logs` and `/workspace` bind mounts, and `no-new-privileges` is set. This
+blocks `apt-get`, which cannot drop to the `_apt` user without `setuid`/`setgid`. If your agent installs tooling
+during a run, turn it off:
+
+```bash
+uv run main.py --agent codex --model gpt-5 --container-hardening off
+```
+
+#### Optional Jev decision support
+
+Jev is disabled by default. To enable it for Codex, set `TYPESAFE_API_KEY` and run:
+
+```bash
+uv run main.py --agent codex --model gpt-5.6-luna --reasoning-effort medium \
+  --problem <problem-id> --jev-model jev-latest --force-build
+```
+
+Jev reviews diagnostic tests and submissions using evidence sent to TypeSafe.
+
+### Deployment Profiles
+
+`--profile` controls how much infrastructure SREGym stands up. It is independent of
+`--suite` — the profile selects *what gets deployed*, the suite selects *which problems run*.
+
+| Profile | Behaviour |
+|---------|-----------|
+| `full` (default) | The standard stack. Use this for results you intend to compare against the leaderboard. |
+| `svelte` | Additionally drops components that nothing in SREGym reads, and shortens metric retention. |
+
+```bash
+uv run main.py --suite sregym-lite --agent stratus --model gpt-5 --profile svelte
+```
+
+`svelte` removes:
+
+- astronomy-shop's bundled **OpenSearch**, **Grafana** and **Jaeger**. Nothing in `sregym/`,
+  `mcp_server/` or `clients/` queries OpenSearch or Grafana; the bundled Jaeger is deleted
+  moments after deployment anyway, by `Jaeger.create_external_name_service()`.
+- Prometheus **Alertmanager** and **Pushgateway** (no alert rules are configured and nothing
+  pushes), and TSDB retention cut from 15d to 2h.
+- The OpenEBS **node-disk-manager** stack, which backs the `openebs-device` StorageClass.
+  SREGym only provisions through `openebs-hostpath`.
+
+Measured on one astronomy-shop problem (peak RSS / peak CPU, sampled over the run):
+
+| | `full` | `svelte` |
+|---|---|---|
+| OpenSearch | 1096 MiB / 1709m | — |
+| Grafana | 475 MiB / 303m | — |
+| OpenEBS NDM (7 pods) | ~190 MiB / 582m | — |
+
+> [!WARNING]
+> `svelte` changes what an agent can observe in the cluster, so its scores are **not**
+> comparable with `full`. It is intended for local iteration on memory-constrained hosts,
+> not for leaderboard submissions. Note that `--profile svelte` and `--suite sregym-lite`
+> are unrelated: you can run either without the other.
 
 ### Model Selection
 
@@ -139,6 +240,7 @@ SREGym uses [LiteLLM](https://docs.litellm.ai/docs/providers) model strings dire
 |----------|---------|---------|
 | `--model` | `gpt-5` | Sets both agent and judge model |
 | `--judge-model` | (same as `--model`) | Override just the judge evaluator model |
+| `--judge-backend` | `api` | Judge access through the existing API endpoint, or `codex`, `claudecode`, `copilot`, or `cursor` |
 
 Set the required environment variable for your provider before running:
 
@@ -197,6 +299,25 @@ export JUDGE_API_BASE="https://example.test/v1"
 export JUDGE_API_KEY="..."
 uv run main.py --agent stratus --model ollama_chat/qwen3-coder:30b --judge-model gpt-5
 ```
+
+### Subscription-backed judges
+
+Choose a subscription judge independently of the agent with `--judge-backend` (default `api`).
+
+```bash
+uv run main.py --agent cursor --model auto --judge-backend codex --judge-model gpt-5.5
+```
+
+| Judge backend | Credentials |
+| --- | --- |
+| `codex` | Subscription login in `$CODEX_HOME/auth.json`, default `~/.codex/auth.json` |
+| `claudecode` | `CLAUDE_CODE_OAUTH_TOKEN` |
+| `copilot` | `COPILOT_GITHUB_TOKEN` |
+| `cursor` | `CURSOR_API_KEY` |
+
+Set `--judge-model` to a model supported by the selected CLI.
+
+For Copilot, use `export COPILOT_GITHUB_TOKEN="$(gh auth token)"` to reuse an existing GitHub CLI OAuth login.
 
 <details>
 <summary><strong>Provider Examples</strong></summary>

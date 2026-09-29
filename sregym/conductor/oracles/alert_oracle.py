@@ -3,6 +3,7 @@ import subprocess
 import time
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 # Prometheus endpoint used from *inside* the prometheus-server pod via
 # ``kubectl exec``.  We use localhost so the request doesn't depend on
@@ -26,6 +27,19 @@ class AlertOracle(Oracle):
     """
 
     importance = 1.0
+
+    # An alert still firing here is treated as the agent's failure, not as
+    # ambiguous, because everything this oracle does exists to make that call
+    # decisive: ``capture_baseline`` removes alerts that were already firing
+    # before injection (SREGym#745), ``exclude_alerts`` removes known-chronic
+    # ones, and the verdict requires a *sustained* silence window rather than an
+    # instant. What survives all three is a new, persistent alert in the
+    # problem's namespace. The residual risk -- an alert triggered by unrelated
+    # cluster degradation mid-run -- is what the environment-health precondition
+    # is for, not something to hedge by calling every failure ambiguous.
+    FAILURE_CLASSES = {
+        "alerts_still_firing": FailureClass.AGENT_ERROR,
+    }
 
     def __init__(
         self,
@@ -203,12 +217,29 @@ class AlertOracle(Oracle):
             if elapsed >= self.sustained_silence_seconds:
                 break
 
-            firing = self._query_firing_alerts(namespace)
+            try:
+                firing = self._query_firing_alerts(namespace)
+            except RuntimeError as exc:
+                # Prometheus is the instrument we grade *with*, not the thing
+                # under test. If it is unreachable we have no evidence either
+                # way, and that is the cluster's problem rather than the
+                # agent's. Letting this propagate would reach the conductor's
+                # exception handler and be recorded as a harness error, which
+                # would be wrong twice over: it blames our code, and it hides a
+                # real infrastructure failure behind a bare stack trace. This
+                # oracle backs 23 problems, so that misattribution would be the
+                # single largest source of miscounted failures.
+                print(f"❌ Cannot reach Prometheus to check alerts in {namespace}: {exc}")
+                return self.fail("prometheus_unreachable", namespace=namespace, error=str(exc))
 
             if firing:
                 names = ", ".join(self._fmt_alert(a) for a in firing)
                 print(f"❌ Firing alerts in {namespace}: {names}")
-                return {"success": False}
+                return self.fail(
+                    "alerts_still_firing",
+                    namespace=namespace,
+                    alerts=sorted({a.get("labels", {}).get("alertname", "") for a in firing}),
+                )
 
             elapsed_int = int(elapsed)
             if elapsed_int >= last_log_second + 30:

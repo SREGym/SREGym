@@ -11,9 +11,11 @@ import copy
 import logging
 import os
 import random
+import shlex
 import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -284,9 +286,12 @@ class NoiseManager:
             except Exception:
                 pass
 
+            # Share the multiarch helper images used by ChaosInjector.
+            values_file = Path(__file__).resolve().parent / "impl" / "chaos-mesh-values.yaml"
             install_cmd = (
                 f"helm upgrade --install chaos-mesh chaos-mesh/chaos-mesh "
                 f"-n {CHAOS_NAMESPACE} --create-namespace --version 2.8.0 "
+                f"-f {shlex.quote(str(values_file))} "
                 f"--set chaosDaemon.runtime={runtime} "
                 f"--set chaosDaemon.socketPath={socket_path}"
             )

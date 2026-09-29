@@ -66,16 +66,26 @@ def _node(name, annotations=None):
 
 def test_calico_route_reflector_global_cleanup_is_noop_without_problem_markers(monkeypatch):
     problem = CalicoRouteReflectorLabelDriftHotelReservation
+    optional_probes = {
+        f"kubectl get bgppeer {problem.BGP_PEER_NAME} --ignore-not-found -o json",
+        "kubectl get bgpconfiguration default --ignore-not-found -o json",
+        f"kubectl get namespace {problem.PROBE_NAMESPACE} --ignore-not-found -o json",
+        (
+            f"kubectl -n {problem.STATE_NAMESPACE} get configmap {problem.STATE_CONFIGMAP_NAME} "
+            "--ignore-not-found -o json"
+        ),
+    }
     fake = _FakeKubeCtl(
         {
             "kubectl get nodes -o json": _nodes(_node("control-plane-0")),
-            f"kubectl get namespace {problem.PROBE_NAMESPACE} -o json": _json_resource(name=problem.PROBE_NAMESPACE),
+            **dict.fromkeys(optional_probes, ""),
         }
     )
     conductor = _conductor(fake, monkeypatch)
 
     conductor._fix_calico_route_reflector_label_drift()
 
+    assert optional_probes.issubset(fake.commands)
     assert not any(command.startswith("kubectl delete") for command in fake.commands)
     assert not any("rollout restart ds/calico-node" in command for command in fake.commands)
 
@@ -86,10 +96,12 @@ def test_calico_route_reflector_global_cleanup_removes_problem_owned_state(monke
     fake = _FakeKubeCtl(
         {
             "kubectl get nodes -o json": _nodes(_node("control-plane-0", {problem.NODE_MARKER_ANNOTATION: "true"})),
-            f"kubectl get bgppeer {problem.BGP_PEER_NAME} -o json": _json_resource(labels, name=problem.BGP_PEER_NAME),
+            f"kubectl get bgppeer {problem.BGP_PEER_NAME} --ignore-not-found -o json": _json_resource(
+                labels, name=problem.BGP_PEER_NAME
+            ),
             "kubectl get bgppeers -o json": _bgppeers(problem.BGP_PEER_NAME),
-            "kubectl get bgpconfiguration default -o json": _json_resource(labels, name="default"),
-            f"kubectl get namespace {problem.PROBE_NAMESPACE} -o json": _json_resource(
+            "kubectl get bgpconfiguration default --ignore-not-found -o json": _json_resource(labels, name="default"),
+            f"kubectl get namespace {problem.PROBE_NAMESPACE} --ignore-not-found -o json": _json_resource(
                 labels, name=problem.PROBE_NAMESPACE
             ),
         }
@@ -113,9 +125,11 @@ def test_calico_route_reflector_global_cleanup_does_not_guess_mesh_when_snapshot
     fake = _FakeKubeCtl(
         {
             "kubectl get nodes -o json": _nodes(_node("control-plane-0", {problem.NODE_MARKER_ANNOTATION: "true"})),
-            f"kubectl get bgppeer {problem.BGP_PEER_NAME} -o json": _json_resource(labels, name=problem.BGP_PEER_NAME),
+            f"kubectl get bgppeer {problem.BGP_PEER_NAME} --ignore-not-found -o json": _json_resource(
+                labels, name=problem.BGP_PEER_NAME
+            ),
             "kubectl get bgppeers -o json": _bgppeers(problem.BGP_PEER_NAME),
-            "kubectl get bgpconfiguration default -o json": _json_resource(name="default"),
+            "kubectl get bgpconfiguration default --ignore-not-found -o json": _json_resource(name="default"),
         }
     )
     conductor = _conductor(fake, monkeypatch)
@@ -149,9 +163,10 @@ def test_calico_route_reflector_global_cleanup_restores_persisted_snapshot(monke
         {
             "kubectl get nodes -o json": _nodes(_node("control-plane-0")),
             "kubectl get bgppeers -o json": _bgppeers("preexisting-peer", problem.BGP_PEER_NAME, "agent-created-peer"),
-            f"kubectl -n {problem.STATE_NAMESPACE} get configmap {problem.STATE_CONFIGMAP_NAME} -o json": json.dumps(
-                {"metadata": {"name": problem.STATE_CONFIGMAP_NAME}, "data": state_data}
-            ),
+            (
+                f"kubectl -n {problem.STATE_NAMESPACE} get configmap {problem.STATE_CONFIGMAP_NAME} "
+                "--ignore-not-found -o json"
+            ): json.dumps({"metadata": {"name": problem.STATE_CONFIGMAP_NAME}, "data": state_data}),
         }
     )
     conductor = _conductor(fake, monkeypatch)
@@ -187,10 +202,13 @@ def test_calico_route_reflector_global_cleanup_keeps_unowned_support_namespace(m
         {
             "kubectl get nodes -o json": _nodes(),
             "kubectl get bgppeers -o json": _bgppeers(problem.BGP_PEER_NAME),
-            f"kubectl get namespace {problem.PROBE_NAMESPACE} -o json": _json_resource(name=problem.PROBE_NAMESPACE),
-            f"kubectl -n {problem.STATE_NAMESPACE} get configmap {problem.STATE_CONFIGMAP_NAME} -o json": json.dumps(
-                {"metadata": {"name": problem.STATE_CONFIGMAP_NAME}, "data": state_data}
+            f"kubectl get namespace {problem.PROBE_NAMESPACE} --ignore-not-found -o json": _json_resource(
+                name=problem.PROBE_NAMESPACE
             ),
+            (
+                f"kubectl -n {problem.STATE_NAMESPACE} get configmap {problem.STATE_CONFIGMAP_NAME} "
+                "--ignore-not-found -o json"
+            ): json.dumps({"metadata": {"name": problem.STATE_CONFIGMAP_NAME}, "data": state_data}),
         }
     )
     conductor = _conductor(fake, monkeypatch)

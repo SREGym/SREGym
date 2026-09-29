@@ -30,6 +30,7 @@ from sregym.conductor.oracles.node_clock_drift_mitigation import NodeClockDriftM
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
+from sregym.service.runtime_images import TLS_CLIENT_IMAGE
 from sregym.utils.decorators import mark_fault_injected
 
 # Affinity rule shared by the injector and restore pods to hard-prevent
@@ -204,17 +205,11 @@ class NodeClockDriftHotelReservation(Problem):
         Validates the short-lived cert against the node clock every 30 seconds.
         Once the node clock is skewed 30 days forward, openssl verify produces
         x509 certificate expired errors.
-        A readiness probe checks for /tmp/sidecar-ready, which is only touched
-        AFTER `apt-get install openssl` finishes. Without this, Kubernetes marks
-        the container "Ready" the instant the process starts, before openssl is
-        actually installed — _wait_for_sidecar_rollout() would then proceed to
-        drift the clock while apt-get is still mid-download, causing apt's own
-        HTTPS connection to the package mirror to start failing once the clock
-        skews (same x509 error class as the fault itself), stalling readiness
-        for several minutes before the sidecar loop ever starts.
+        The image includes OpenSSL. The readiness marker confirms that the
+        container started before _wait_for_sidecar_rollout() permits clock drift.
+        Initial startup and replacement pods need no package download.
         """
         sidecar_cmd = (
-            "apt-get update -qq && apt-get install -y -qq openssl && "
             "touch /tmp/sidecar-ready && "
             "while true; do "
             "  openssl verify -verbose -CAfile /etc/tls-ca/ca.crt /etc/tls-ca/ca.crt; "
@@ -235,7 +230,7 @@ class NodeClockDriftHotelReservation(Problem):
                         "containers": [
                             {
                                 "name": "tls-health-check",
-                                "image": "ubuntu:22.04",
+                                "image": TLS_CLIENT_IMAGE,
                                 "imagePullPolicy": "IfNotPresent",
                                 "command": ["sh", "-c"],
                                 "args": [sidecar_cmd],

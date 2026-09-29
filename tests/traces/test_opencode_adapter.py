@@ -89,11 +89,11 @@ def test_final_metrics_from_session_info():
     fm = traj.final_metrics
     assert fm is not None
     assert fm.total_prompt_tokens == 232529  # input + cache_read (ATIF convention)
-    assert fm.total_completion_tokens == 1963
+    assert fm.total_completion_tokens == 1963 + 2388  # output + reasoning
     assert fm.total_cached_tokens == 216704
     assert fm.total_cost_usd is None  # opencode reports cost 0
     assert fm.total_steps == EXPECTED_TOTAL_STEPS
-    # Raw input preserved in extra (matches results JSON usage_metrics).
+    # Raw uncached input remains available separately from the inclusive total.
     assert fm.extra["input_tokens"] == 15825
     assert fm.extra["reasoning_tokens"] == 2388
 

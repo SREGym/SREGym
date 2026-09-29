@@ -5,12 +5,27 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class EdgeRequestFilterMitigationOracle(Oracle):
     """Verify that the edge filter withstands the triggering request."""
 
     importance = 1.0
+
+    FAILURE_CLASSES = {
+        # The agent rewrites this Deployment's WAF configuration as its
+        # mitigation, so it is inside the blast radius: a rollout that never
+        # converges is not attributable to infrastructure here.
+        "required_deployment_not_rolled_out": FailureClass.AMBIGUOUS,
+        "target_container_missing": FailureClass.AGENT_ERROR,
+        # A probe that exercises both a crafted and a normal request. Failing
+        # it means the edge is not serving correctly, but a single probe run is
+        # not strong enough to attribute on its own.
+        "edge_filter_probe_failed": FailureClass.AMBIGUOUS,
+        "service_has_no_ports": FailureClass.AMBIGUOUS,
+    }
     rollout_timeout_seconds = 120
     probe_timeout_seconds = 60
     poll_interval_seconds = 2
@@ -23,20 +38,7 @@ class EdgeRequestFilterMitigationOracle(Oracle):
 
     @classmethod
     def _rollout_complete(cls, deployment) -> bool:
-        desired = cls._desired_replicas(deployment)
-        if desired < 1:
-            return False
-
-        generation = deployment.metadata.generation or 0
-        status = deployment.status
-        return (
-            (status.observed_generation or 0) >= generation
-            and (status.replicas or 0) == desired
-            and (status.updated_replicas or 0) == desired
-            and (status.ready_replicas or 0) == desired
-            and (status.available_replicas or 0) == desired
-            and (status.unavailable_replicas or 0) == 0
-        )
+        return deployment_rollout_complete(deployment)
 
     def _wait_for_current_rollout(self, deployment):
         deadline = time.monotonic() + self.rollout_timeout_seconds
@@ -79,13 +81,13 @@ class EdgeRequestFilterMitigationOracle(Oracle):
         labels = pod.metadata.labels or {}
         return all(labels.get(key) == value for key, value in selector.items())
 
-    def _service_has_ready_target_endpoint(self, deployment) -> bool:
+    def _service_target_endpoint_unready(self, deployment) -> dict | None:
         namespace = self.problem.namespace
         service_name = self.problem.faulty_service
         selector = deployment.spec.selector.match_labels or {}
         if not selector:
             print(f"[FAIL] Deployment '{service_name}' has no matchLabels selector")
-            return False
+            return self.fail("deployment_selector_missing", deployment=service_name)
 
         target_pods = {
             pod.metadata.name
@@ -94,7 +96,7 @@ class EdgeRequestFilterMitigationOracle(Oracle):
         }
         if not target_pods:
             print(f"[FAIL] Deployment '{service_name}' has no matching pods")
-            return False
+            return self.fail("no_matching_pods", deployment=service_name, selector=selector)
 
         endpoints = self.problem.kubectl.core_v1_api.read_namespaced_endpoints(
             name=service_name,
@@ -110,10 +112,10 @@ class EdgeRequestFilterMitigationOracle(Oracle):
         }
         if not ready_target_pods:
             print(f"[FAIL] Service '{service_name}' has no ready endpoint from its Deployment")
-            return False
-        return True
+            return self.fail("no_ready_endpoints", service=service_name)
+        return None
 
-    def _run_filter_probe(self) -> bool:
+    def _filter_probe_failed(self) -> dict | None:
         namespace = self.problem.namespace
         service_name = self.problem.faulty_service
         core_v1 = self.problem.kubectl.core_v1_api
@@ -121,7 +123,7 @@ class EdgeRequestFilterMitigationOracle(Oracle):
         service_ports = service.spec.ports or []
         if not service_ports:
             print(f"[FAIL] Service '{service_name}' has no ports")
-            return False
+            return self.fail("service_has_no_ports", service=service_name)
 
         service_port = service_ports[0].port
         base_url = f"http://{service_name}.{namespace}.svc.cluster.local:{service_port}"
@@ -169,10 +171,18 @@ class EdgeRequestFilterMitigationOracle(Oracle):
 
             logs = core_v1.read_namespaced_pod_log(name=pod_name, namespace=namespace)
             print(logs.strip())
-            return phase == "Succeeded" and "CRAFTED_OK" in logs and "NORMAL_OK" in logs
+            if phase == "Succeeded" and "CRAFTED_OK" in logs and "NORMAL_OK" in logs:
+                return None
+            return self.fail(
+                "edge_filter_probe_failed",
+                service=service_name,
+                phase=phase,
+                crafted_ok="CRAFTED_OK" in logs,
+                normal_ok="NORMAL_OK" in logs,
+            )
         except ApiException as exc:
             print(f"[FAIL] Edge filter probe failed: {exc}")
-            return False
+            return self.fail_from_exception(exc, service=service_name)
         finally:
             with contextlib.suppress(ApiException):
                 core_v1.delete_namespaced_pod(
@@ -191,31 +201,39 @@ class EdgeRequestFilterMitigationOracle(Oracle):
             desired = self._desired_replicas(deployment)
             if desired < 1:
                 print(f"[FAIL] Deployment '{deployment_name}' is scaled to {desired}")
-                return {"success": False}
+                return self.fail("required_deployment_scaled_to_zero", deployment=deployment_name)
 
             deployment = self._wait_for_current_rollout(deployment)
             if deployment is None:
                 print(f"[FAIL] Deployment '{deployment_name}' did not complete its current rollout")
-                return {"success": False}
+                return self.fail(
+                    "required_deployment_not_rolled_out",
+                    deployment=deployment_name,
+                    waited_seconds=self.rollout_timeout_seconds,
+                )
 
             container = self._find_container(deployment, deployment_name)
             if container is None:
                 print(f"[FAIL] Container '{deployment_name}' was not found")
-                return {"success": False}
+                return self.fail("target_container_missing", container=deployment_name)
 
             if self._known_bad_rule_active(container):
                 print("[FAIL] The injected vulnerable WAF rule is still active")
-                return {"success": False}
+                # The injected fault restated, and checked against the exact
+                # regex the injector wrote: the decisive branch here.
+                return self.fail("fault_still_present", rule=self.problem.bad_regex)
 
-            if not self._service_has_ready_target_endpoint(deployment):
-                return {"success": False}
+            unready = self._service_target_endpoint_unready(deployment)
+            if unready is not None:
+                return unready
 
-            if not self._run_filter_probe():
+            probe_failed = self._filter_probe_failed()
+            if probe_failed is not None:
                 print("[FAIL] Crafted and normal edge requests did not recover within the deadline")
-                return {"success": False}
+                return probe_failed
         except Exception as exc:
             print(f"[FAIL] Error checking edge request filter mitigation: {exc}")
-            return {"success": False}
+            return self.fail_from_exception(exc)
 
         print("[PASS] The edge accepts crafted and normal requests within the deadline")
         return {"success": True}

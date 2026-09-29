@@ -45,6 +45,7 @@ def _deployment(
             },
         },
         "status": {
+            "replicas": replicas,
             "observedGeneration": observed_generation,
             "updatedReplicas": updated,
             "readyReplicas": ready,

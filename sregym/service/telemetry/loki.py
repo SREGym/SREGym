@@ -1,9 +1,6 @@
 import json
 import logging
-import os
 import subprocess
-
-import yaml
 
 from sregym.paths import BASE_DIR, LOKI_METADATA
 from sregym.service.helm import Helm
@@ -18,7 +15,6 @@ class Loki:
         self.helm_configs = {}
         self.promtail_release_name = "promtail"
         self.promtail_values_file = str(BASE_DIR / "observer/loki/promtail-values.yaml")
-        self.pvc_config_file = None
 
         self.logger = logging.getLogger("all.infra.loki")
         self.logger.propagate = True
@@ -58,8 +54,6 @@ class Loki:
                         resolved_args.append(arg)
                 self.helm_configs["extra_args"] = resolved_args
 
-        self.pvc_config_file = os.path.join(BASE_DIR, metadata.get("PersistentVolumeClaimConfig"))
-
     def get_service_json(self) -> dict:
         """Get Loki service metadata in JSON format."""
         with open(self.config_file) as file:
@@ -88,16 +82,10 @@ class Loki:
             self._deploy_promtail()
             return
 
-        self._delete_pvc()
         Helm.uninstall(**self.helm_configs)
 
         # Add Grafana Helm repo for Loki chart
         self._add_grafana_helm_repo()
-
-        if self.pvc_config_file:
-            pvc_name = self._get_pvc_name_from_file(self.pvc_config_file)
-            if not self._pvc_exists(pvc_name):
-                self._apply_pvc()
 
         Helm.install(**self.helm_configs)
         Helm.assert_if_deployed(self.namespace)
@@ -116,43 +104,6 @@ class Loki:
         """Teardown the Loki deployment."""
         Helm.uninstall(**self.helm_configs)
         Helm.uninstall(release_name=self.promtail_release_name, namespace=self.namespace)
-
-        if self.pvc_config_file:
-            self._delete_pvc()
-
-    def _apply_pvc(self):
-        """Apply the PersistentVolumeClaim configuration."""
-        self.logger.info(f"Applying PersistentVolumeClaim from {self.pvc_config_file}")
-        KubeCtl().exec_command(f"kubectl apply -f {self.pvc_config_file} -n {self.namespace}")
-
-    def _delete_pvc(self):
-        """Delete the PersistentVolume and associated PersistentVolumeClaim."""
-        pvc_name = self._get_pvc_name_from_file(self.pvc_config_file)
-        result = KubeCtl().exec_command(f"kubectl get pvc {pvc_name} --ignore-not-found")
-
-        if result:
-            self.logger.info(f"Deleting PersistentVolumeClaim {pvc_name}")
-            KubeCtl().exec_command(f"kubectl delete pvc {pvc_name}")
-            self.logger.info(f"Successfully deleted PersistentVolumeClaim from {pvc_name}")
-        else:
-            self.logger.warning(f"PersistentVolumeClaim {pvc_name} not found. Skipping deletion.")
-
-    def _get_pvc_name_from_file(self, pv_config_file):
-        """Extract PVC name from the configuration file."""
-        with open(pv_config_file) as file:
-            pv_config = yaml.safe_load(file)
-            return pv_config["metadata"]["name"]
-
-    def _pvc_exists(self, pvc_name: str) -> bool:
-        """Check if the PersistentVolumeClaim exists."""
-        command = f"kubectl get pvc {pvc_name}"
-        try:
-            result = KubeCtl().exec_command(command)
-            if "No resources found" in result or "Error" in result:
-                return False
-        except subprocess.CalledProcessError:
-            return False
-        return True
 
     def _is_loki_running(self) -> bool:
         """Check if Loki is already running in the cluster."""

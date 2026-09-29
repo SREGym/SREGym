@@ -30,9 +30,12 @@ def _deployment(name, *, replicas=1, ready=None, updated=None, unavailable=0):
     ready = replicas if ready is None else ready
     updated = replicas if updated is None else updated
     return SimpleNamespace(
-        metadata=SimpleNamespace(name=name),
+        metadata=SimpleNamespace(generation=1, name=name),
         spec=SimpleNamespace(replicas=replicas),
         status=SimpleNamespace(
+            replicas=1 if replicas is None else replicas,
+            observed_generation=1,
+            available_replicas=ready,
             updated_replicas=updated,
             ready_replicas=ready,
             unavailable_replicas=unavailable,

@@ -30,11 +30,20 @@ logger = logging.getLogger("all.opencode.driver")
 
 def run_preflight() -> None:
     """Validate model + credentials by making a minimal OpenCode CLI call."""
+    import shutil
     import subprocess
+    import tempfile
+
+    from clients.opencode.opencode_agent import write_local_provider_config
 
     m = os.environ["AGENT_MODEL_ID"]
     env = os.environ.copy()
     env["OPENCODE_FAKE_VCS"] = "git"
+
+    config_dir = None
+    if m.startswith("local/"):
+        config_dir = tempfile.mkdtemp(prefix="opencode-preflight-")
+        env["OPENCODE_CONFIG"] = str(write_local_provider_config(m, Path(config_dir) / "opencode.json", env))
 
     command = [
         "opencode",
@@ -48,14 +57,18 @@ def run_preflight() -> None:
         command.extend(["--variant", reasoning_effort])
     command.append("say ok")
 
-    r = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env=env,
-        stdin=subprocess.DEVNULL,
-    )
+    try:
+        r = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+    finally:
+        if config_dir:
+            shutil.rmtree(config_dir, ignore_errors=True)
     if r.returncode:
         print(r.stdout or r.stderr)
     sys.exit(r.returncode)

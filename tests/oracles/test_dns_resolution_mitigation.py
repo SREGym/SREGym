@@ -33,6 +33,7 @@ def _deployment(
         metadata=SimpleNamespace(name=name, generation=generation),
         spec=SimpleNamespace(replicas=replicas, template=SimpleNamespace(spec=pod_spec)),
         status=SimpleNamespace(
+            replicas=1 if replicas is None else replicas,
             observed_generation=observed_generation,
             updated_replicas=updated,
             ready_replicas=ready,

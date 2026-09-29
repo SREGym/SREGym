@@ -14,14 +14,130 @@ from starlette.routing import Mount
 from uvicorn import Config, Server
 
 from logger import console
+from sregym.conductor.submission import (
+    SUBMISSION_STAGE_ORDER,
+    SUBMISSION_STAGES,
+    EvaluationInProgress,
+    SubmissionAttemptClosed,
+    SubmissionAttemptMismatch,
+    SubmissionStage,
+    SubmissionStageMismatch,
+)
 
 _conductor = None
 
 submit_mcp = FastMCP("Submit MCP Server")
 
+_SUBMISSION_WAIT_SECONDS = 300.0
+_SUBMISSION_POLL_SECONDS = 0.1
+
+
+class SubmissionRequestRejected(RuntimeError):
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        super().__init__(message)
+
+
+async def _submit_when_stage_is_ready(solution: str, stage: str | None) -> dict:
+    conductor = _conductor
+    if conductor is None:
+        raise SubmissionRequestRejected(400, "No problem has been started")
+
+    try:
+        requested_stage, generation = conductor.register_submission_request(solution, stage)
+    except ValueError as exc:
+        raise SubmissionRequestRejected(400, str(exc)) from exc
+    except SubmissionAttemptClosed as exc:
+        raise SubmissionRequestRejected(409, str(exc)) from exc
+    try:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _SUBMISSION_WAIT_SECONDS
+
+        while True:
+            current_stage, evaluating, current_generation = conductor.submission_state()
+
+            if current_generation != generation:
+                raise SubmissionRequestRejected(409, "This submission belongs to an earlier benchmark attempt.")
+
+            if current_stage == "done":
+                raise SubmissionRequestRejected(409, "This benchmark attempt is already closed.")
+
+            if current_stage in {"setup", None}:
+                raise SubmissionRequestRejected(
+                    409,
+                    f"Cannot submit before an agent stage is ready; current stage is {current_stage!r}.",
+                )
+
+            if current_stage == "tearing_down":
+                if loop.time() >= deadline:
+                    raise SubmissionRequestRejected(
+                        503,
+                        f"Stage {requested_stage!r} did not become available before the submission timeout.",
+                    )
+                await asyncio.sleep(_SUBMISSION_POLL_SECONDS)
+                continue
+
+            if current_stage not in SUBMISSION_STAGES:
+                raise SubmissionRequestRejected(409, f"Cannot submit at stage: {current_stage!r}")
+
+            current_order = SUBMISSION_STAGE_ORDER[current_stage]
+            requested_order = SUBMISSION_STAGE_ORDER[requested_stage]
+            if current_order > requested_order:
+                raise SubmissionRequestRejected(
+                    409,
+                    f"Stage {requested_stage!r} has already passed; current stage is {current_stage!r}.",
+                )
+
+            if current_order < requested_order:
+                if not evaluating:
+                    raise SubmissionRequestRejected(
+                        409,
+                        f"Stage {requested_stage!r} is not ready; submit stage {current_stage!r} first.",
+                    )
+                if loop.time() >= deadline:
+                    raise SubmissionRequestRejected(
+                        503,
+                        f"Stage {requested_stage!r} did not become available before the submission timeout.",
+                    )
+                await asyncio.sleep(_SUBMISSION_POLL_SECONDS)
+                continue
+
+            try:
+                result = await conductor.submit(
+                    solution,
+                    expected_stage=requested_stage,
+                    expected_generation=generation,
+                )
+            except EvaluationInProgress as exc:
+                raise SubmissionRequestRejected(409, str(exc)) from exc
+            except SubmissionStageMismatch:
+                if loop.time() >= deadline:
+                    raise SubmissionRequestRejected(
+                        503,
+                        f"Stage {requested_stage!r} did not become available before the submission timeout.",
+                    ) from None
+                await asyncio.sleep(_SUBMISSION_POLL_SECONDS)
+                continue
+            except (SubmissionAttemptClosed, SubmissionAttemptMismatch) as exc:
+                raise SubmissionRequestRejected(409, str(exc)) from exc
+            except RuntimeError as exc:
+                if loop.time() >= deadline:
+                    raise SubmissionRequestRejected(503, str(exc)) from exc
+                await asyncio.sleep(_SUBMISSION_POLL_SECONDS)
+                continue
+
+            if result.get("status") != "accepted" or result.get("stage") != requested_stage:
+                raise SubmissionRequestRejected(
+                    409,
+                    f"Stage {requested_stage!r} did not accept the submission.",
+                )
+            return result
+    finally:
+        conductor.unregister_pending_submission(requested_stage, generation)
+
 
 @submit_mcp.tool(name="submit")
-async def submit_via_conductor(ans: str) -> dict[str, str]:
+async def submit_via_conductor(ans: str, stage: str | None = None) -> dict[str, str]:
     """Submit task result to benchmark
 
     Args:
@@ -30,27 +146,14 @@ async def submit_via_conductor(ans: str) -> dict[str, str]:
     Returns:
         dict[str]: acknowledgment of submission status
     """
-    if _conductor is None or _conductor.submission_stage not in {"diagnosis", "mitigation"}:
-        stage = _conductor.submission_stage if _conductor else None
-        if stage == "done" and _conductor is not None:
-            return {
-                "status": "done",
-                "text": "All stages have been completed and graded. No further submissions are needed.",
-            }
-        return {"status": "error", "text": f"Cannot submit at stage: {stage!r}"}
+    try:
+        result = await _submit_when_stage_is_ready(ans, stage)
+    except SubmissionRequestRejected as exc:
+        return {"status": "error", "text": str(exc)}
+    except Exception as exc:
+        return {"status": "error", "text": f"Grading error: {exc}"}
 
-    max_wait = 60
-    for attempt in range(max_wait):
-        try:
-            await _conductor.submit(ans)
-            return {"status": "200", "text": "Submission received"}
-        except RuntimeError:
-            if attempt < max_wait - 1:
-                await asyncio.sleep(1)
-                continue
-            return {"status": "error", "text": "Previous stage is still being evaluated. Try again later."}
-        except Exception as e:
-            return {"status": "error", "text": f"Grading error: {e}"}
+    return {"status": "200", "text": result["message"], "stage": result["stage"]}
 
 
 app = FastAPI(
@@ -109,51 +212,30 @@ def set_conductor(c):
 
 class SubmitRequest(BaseModel):
     solution: str
+    stage: SubmissionStage | None = None
 
 
 @app.post("/submit")
 async def submit_solution(req: SubmitRequest):
-    allowed = {"diagnosis", "mitigation"}
-    if _conductor is None or _conductor.submission_stage not in allowed:
-        stage = _conductor.submission_stage if _conductor else None
-        if stage == "done" and _conductor is not None:
-            logger.debug("Submit received at stage 'done' — problem already graded, returning final results")
-            return {
-                "status": "done",
-                "message": "All stages have been completed and graded. No further submissions are needed.",
-            }
-        logger.error(f"Cannot submit at stage: {stage!r}")
-        raise HTTPException(status_code=400, detail=f"Cannot submit at stage: {stage!r}")
+    try:
+        result = await _submit_when_stage_is_ready(req.solution, req.stage)
+    except SubmissionRequestRejected as exc:
+        logger.error("Submission rejected: %s", exc)
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("Grading error: %s", exc)
+        raise HTTPException(status_code=400, detail=f"Grading error: {exc}") from exc
 
-    # The conductor evaluates submissions asynchronously. If a previous stage
-    # is still being evaluated, waiting_for_agent will be False and submit()
-    # raises RuntimeError.  Retry for up to 60s to handle this race.
-    max_wait = 60
-    for attempt in range(max_wait):
-        try:
-            await _conductor.submit(req.solution)
-            return {"status": "200", "message": "Submission received"}
-        except RuntimeError:
-            if attempt < max_wait - 1:
-                logger.debug("Conductor not ready for submission yet, retrying in 1s...")
-                await asyncio.sleep(1)
-                continue
-            logger.error("Conductor did not become ready for submission within timeout")
-            raise HTTPException(
-                status_code=503,
-                detail="Previous stage is still being evaluated. Try again later.",
-            ) from None
-        except Exception as e:
-            logger.error(f"Grading error: {e}")
-            raise HTTPException(status_code=400, detail=f"Grading error: {e}") from e
+    return {"status": "200", "message": result["message"], "stage": result["stage"]}
 
 
 @app.get("/status")
 async def get_status():
-    if _conductor is None:
+    conductor = _conductor
+    if conductor is None:
         logger.error("No problem has been started")
         raise HTTPException(status_code=400, detail="No problem has been started")
-    stage = _conductor.submission_stage
+    stage, _, _ = conductor.submission_state()
     logger.debug(f"API returns Current stage: {stage}")
     return {"stage": stage}
 
@@ -194,7 +276,7 @@ def run_api(conductor):
         Markdown(
             """
 **Available Endpoints**
-- **POST /submit**: `{ "solution": "<your-solution>" }` → grades the current stage
+- **POST /submit**: `{ "stage": "diagnosis", "solution": "<your-solution>" }` → grades the named stage
 - **GET /status**: returns `{ "stage": "setup" | "diagnosis" | "mitigation" | "tearing_down" | "done" }`
 """
         )

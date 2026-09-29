@@ -24,8 +24,14 @@ class WrongBinMitigationOracle(Oracle):
                 command = container.command or []
                 if expected_command not in command:
                     print(f"[❌] Deployment for container '{container.name}' is using wrong binary: {command}")
-                    results["success"] = False
-                    return results
+                    # Compared against the command the injector replaced, so
+                    # this is the injected fault observed directly.
+                    return self.fail(
+                        "fault_still_present",
+                        container=container.name,
+                        command=list(command),
+                        expected=expected_command,
+                    )
 
             print("[✅] Deployment is using the correct binary.")
             results["success"] = True
@@ -33,5 +39,4 @@ class WrongBinMitigationOracle(Oracle):
 
         except Exception as e:
             print(f"[ERROR] Exception during evaluation: {e}")
-            results["success"] = False
-            return results
+            return self.fail_from_exception(e)

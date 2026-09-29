@@ -1,4 +1,5 @@
 from sregym.conductor.oracles.base import Oracle
+from sregym.service.rollout import deployment_rollout_complete
 
 
 class ScalePodZeroMitigationOracle(Oracle):
@@ -23,7 +24,7 @@ class ScalePodZeroMitigationOracle(Oracle):
             desired_replicas = deployment.spec.replicas
             available_replicas = deployment.status.available_replicas
 
-            if desired_replicas != 1 or available_replicas != 1:
+            if desired_replicas != 1 or not deployment_rollout_complete(deployment):
                 print(
                     f"Faulty service {faulty_service} has {available_replicas} available replicas out of {desired_replicas} desired"
                 )

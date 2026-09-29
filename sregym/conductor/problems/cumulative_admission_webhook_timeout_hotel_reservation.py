@@ -60,6 +60,7 @@ from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsA
 from sregym.conductor.problems.base import Problem
 from sregym.service.apps.hotel_reservation import HotelReservation
 from sregym.service.kubectl import KubeCtl
+from sregym.service.rollout import deployment_rollout_complete
 from sregym.utils.decorators import mark_fault_injected
 
 logger = logging.getLogger(__name__)
@@ -866,13 +867,11 @@ srv.serve_forever()
                 raise
 
     def _wait_for_deployment_ready(self, name: str, namespace: str, timeout_s: int) -> None:
-        """Block until the deployment reports ready_replicas == spec.replicas."""
+        """Block until the Deployment completes its current rollout."""
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             d = self.apps_v1.read_namespaced_deployment(name=name, namespace=namespace)
-            desired = d.spec.replicas or 1
-            ready = d.status.ready_replicas or 0
-            if ready >= desired:
+            if deployment_rollout_complete(d):
                 return
             time.sleep(2)
         raise RuntimeError(f"deployment '{name}' in '{namespace}' did not become Available in {timeout_s}s")
@@ -1198,9 +1197,7 @@ srv.serve_forever()
         deadline = time.monotonic() + self.RECOVERY_TIMEOUT_S
         while time.monotonic() < deadline:
             d = self.apps_v1.read_namespaced_deployment(name=self.TARGET_DEPLOYMENT, namespace=self.namespace)
-            desired = d.spec.replicas or 1
-            ready = d.status.ready_replicas or 0
-            if ready >= desired:
+            if deployment_rollout_complete(d):
                 return
             time.sleep(self.RECOVERY_POLL_INTERVAL_S)
         raise RuntimeError(

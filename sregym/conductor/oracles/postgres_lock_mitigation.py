@@ -6,6 +6,7 @@ from kubernetes import client
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +108,16 @@ class PostgresLockMitigationOracle(Oracle):
                     grace_period_seconds=0,
                 )
 
+    FAILURE_CLASSES = {
+        # The lock is still held: the injected fault, read directly from
+        # Postgres.
+        "fault_still_present": FailureClass.AGENT_ERROR,
+        # The table reads fine but the catalog does not surface through the
+        # frontend, which has other possible causes.
+        "catalog_not_reachable": FailureClass.AMBIGUOUS,
+        "catalog_read_failed": FailureClass.AMBIGUOUS,
+    }
+
     def evaluate(self) -> dict:
         print("--- Mitigation Evaluation (Postgres lock contention) ---")
 
@@ -115,13 +126,8 @@ class PostgresLockMitigationOracle(Oracle):
             status = self.problem._catalog_read_status()
             if status != "ok":
                 logger.info("catalog.products read status is '%s'; not mitigated.", status)
-                return {
-                    "success": False,
-                    "reason": (
-                        "A read of catalog.products did not succeed (status="
-                        f"{status}); an ACCESS EXCLUSIVE lock is still held on the table."
-                    ),
-                }
+                reason = "fault_still_present" if status == "locked" else "catalog_read_failed"
+                return self.fail(reason, read_status=status)
             if time.monotonic() >= deadline:
                 break
             time.sleep(self.SAMPLE_INTERVAL)
@@ -132,10 +138,8 @@ class PostgresLockMitigationOracle(Oracle):
         )
 
         if not self._product_catalog_available():
-            return {
-                "success": False,
-                "reason": "The product catalog is not reachable through the frontend API with its expected data.",
-            }
+            logger.info("The product catalog is not reachable through the frontend API with its expected data.")
+            return self.fail("catalog_not_reachable")
 
         logger.info("Product catalog API returned the expected catalog item; mitigation accepted.")
         return {"success": True}

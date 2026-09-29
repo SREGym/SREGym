@@ -6,6 +6,7 @@ from kubernetes import client, config
 from kubernetes.config.config_exception import ConfigException
 
 from sregym.conductor.oracles.base import Oracle
+from sregym.conductor.oracles.failure import FailureClass
 
 logger = getLogger("all.sregym.diagnosis_oracle")
 logger.propagate = True
@@ -17,6 +18,12 @@ class DiagnosisOracle(Oracle):
 
     # BEFORE the agent are ask to act, expect function will be called and checkpoint will be saved
     # AFTER the agent finish its run, the expected function will be called AGAIN to compare with agents answer.
+
+    FAILURE_CLASSES = {
+        # Both are the agent's answer, not the cluster's state.
+        "diagnosis_incorrect": FailureClass.AGENT_ERROR,
+        "invalid_solution_format": FailureClass.AGENT_ERROR,
+    }
 
     def __init__(self, problem, namespace: str):
         super().__init__(problem)
@@ -149,9 +156,9 @@ class DiagnosisOracle(Oracle):
         if solution is None:
             logger.warning(f"Invalid format: expected string or list of strings. Solution: {solution}")
             return {
-                "success": False,
                 "accuracy": 0.0,
                 "is_subset": False,
+                **self.fail("invalid_solution_format"),
             }
 
         # get compare the new expectation with the checkpoint
@@ -161,10 +168,15 @@ class DiagnosisOracle(Oracle):
             f"Eval Diagnosis: new_expectation: {new_expectation}, solution: {solution} | {'✅' if correctness else '❌'}"
         )
 
+        if correctness:
+            return {"success": True, "accuracy": 100.0, "is_subset": False}
+        # Diagnosis already returns rich structure elsewhere, so the gap here is
+        # narrower than for mitigation -- but a wrong diagnosis still deserves a
+        # code, if only so it can be told apart from a malformed one.
         return {
-            "success": correctness,
-            "accuracy": 100.0 if correctness else 0.0,
+            "accuracy": 0.0,
             "is_subset": False,  # TODO: enable subset match
+            **self.fail("diagnosis_incorrect"),
         }
 
     ####### Helper functions ######

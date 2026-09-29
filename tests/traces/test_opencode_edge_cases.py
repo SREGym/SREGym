@@ -236,8 +236,8 @@ def test_final_metrics_from_info_tokens(tmp_path):
     )
     traj = opencode.convert_file(_session_file(run_dir))
     fm = traj.final_metrics
-    assert fm.total_prompt_tokens == 700  # input + cache_read
-    assert fm.total_completion_tokens == 50
+    assert fm.total_prompt_tokens == 710  # input + cache_read + cache_write
+    assert fm.total_completion_tokens == 55  # output + reasoning
     assert fm.total_cached_tokens == 200
     assert fm.total_cost_usd == 0.02
     assert fm.extra["input_tokens"] == 500

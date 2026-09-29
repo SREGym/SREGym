@@ -30,6 +30,7 @@ init_logger()
 import logging  # noqa: E402
 
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
+from clients.harness.token_usage import TOKEN_METRICS_VERSION  # noqa: E402
 from clients.stratus.configs.langgraph_tool_configs import LanggraphToolConfig  # noqa: E402
 from clients.stratus.stratus_agent.diagnosis_agent import (  # noqa: E402
     single_run_with_predefined_prompts as diagnosis_single_run,
@@ -212,18 +213,24 @@ def save_combined_trajectory(all_trajectories, problem_id, output_dir=None):
         return None
 
 
-def validate_oracles(oracles: list[BaseOracle]) -> list[bool | list[OracleResult]]:
+def validate_oracles(oracles: list[BaseOracle]) -> tuple[bool | None, list[OracleResult]]:
     results = []
     attempt_failed = False
+    attempt_inconclusive = False
     for oracle in oracles:
         logger.info(f"[Oracle] validating oracle: {oracle}")
         res: OracleResult = oracle.validate()
-        if not res.success:
+        if res.success is None:
+            attempt_inconclusive = True
+            results.append(res)
+        elif res.success is False:
             attempt_failed = True
             results.append(res)
     if attempt_failed:
-        return [False, results]
-    return [True, results]
+        return False, results
+    if attempt_inconclusive:
+        return None, results
+    return True, results
 
 
 def mitigation_submission_requested(last_state) -> bool:
@@ -447,17 +454,14 @@ async def mitigation_task_main(diagnosis_summary):
     llm_summarization_prompt = yaml.safe_load(llm_summarization_prompt_file.read_text())["mitigation_retry_prompt"]
     mitigation_agent_prompts = yaml.safe_load(mitigation_agent_prompt_path.read_text())
 
-    # oracle
-    logger.info("setting up oracles")
-    cluster_state_oracle = ClusterStateOracle()
-    oracles = [cluster_state_oracle]
-
-    # setting up workload oracle, need to interact with benchmark.
+    # Fetch the application namespace before creating its oracles.
     logger.info("getting app info")
     app_info = get_app_info()
     app_name = app_info["app_name"]
     app_description = app_info["descriptions"]
     app_namespace = app_info["namespace"]
+    logger.info("setting up oracles")
+    oracles = [ClusterStateOracle(app_namespace)]
     # if app_name not in ["Social Network", "Hotel Reservation"]:
     #     logger.info("Current app does not support workload oracle")
     # else:
@@ -548,23 +552,25 @@ async def mitigation_task_main(diagnosis_summary):
                 oracle_results = validate_oracles(oracles)
                 oracle_results_lst.append(str(oracle_results))
                 logger.info(f"oracle results: {oracle_results}")
-                has_succeeded = oracle_results[0] is True
+                oracle_verdict = oracle_results[0]
             except Exception as e:
                 logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
-                oracle_results = [False, []]
+                oracle_results = (None, [OracleResult(success=None, issues=[str(e)])])
                 oracle_results_lst.append(f"Oracle error: {str(e)}")
-                has_succeeded = False
+                oracle_verdict = None
 
-            if has_succeeded:
-                logger.info("Oracles succeeded; making real submission.")
-                await manual_submit_tool("")
+            if oracle_verdict is not False:
+                logger.info(
+                    "Oracles %s; making real submission.", "succeeded" if oracle_verdict else "were inconclusive"
+                )
+                await manual_submit_tool("", stage="mitigation")
                 break
 
             # Oracles failed — decide whether to retry or submit
             is_last_attempt = (curr_attempt + 1) >= mitigation_agent_max_retry_attempts
             if is_last_attempt:
                 logger.info("Last attempt reached; making real submission regardless of oracle results.")
-                await manual_submit_tool("")
+                await manual_submit_tool("", stage="mitigation")
                 break
 
             if mitigation_submission_requested(last_state):
@@ -657,16 +663,18 @@ async def mitigation_task_main(diagnosis_summary):
             try:
                 oracle_results = validate_oracles(oracles)
                 oracle_results_lst.append(str(oracle_results))
-                has_succeeded = oracle_results[0]
+                oracle_verdict = oracle_results[0]
             except Exception as e:
                 logger.error(f"Oracle validation failed with error: {e}", exc_info=True)
-                oracle_results = [False, []]
+                oracle_results = (None, [OracleResult(success=None, issues=[str(e)])])
                 oracle_results_lst.append(f"Oracle error: {str(e)}")
-                has_succeeded = False
+                oracle_verdict = None
 
-            if has_succeeded:
-                logger.info("Oracles succeeded; making real submission.")
-                await manual_submit_tool("")
+            if oracle_verdict is not False:
+                logger.info(
+                    "Oracles %s; making real submission.", "succeeded" if oracle_verdict else "were inconclusive"
+                )
+                await manual_submit_tool("", stage="mitigation")
                 break
 
             # Oracles failed — decide whether to retry (with rollback) or submit
@@ -702,7 +710,7 @@ async def mitigation_task_main(diagnosis_summary):
                 curr_attempt += 1
             else:
                 logger.info("Last attempt reached; making real submission regardless of oracle results.")
-                await manual_submit_tool("")
+                await manual_submit_tool("", stage="mitigation")
                 break
 
         agent_exec_stats["agent_name"] = agent_names_lst
@@ -776,53 +784,55 @@ async def main():
 
     # Collect all trajectories from this run
     all_trajectories = []
-
-    # run diagnosis agent 1 time for diagnosis (formerly called localization)
-    # here, running the file's main function should suffice
-    logger.info("*" * 25 + " Starting [diagnosis agent] for [diagnosis] " + "*" * 25)
-    (
-        diagnosis_agent_exec_stats,
-        diagnosis_agent_last_state,
-        diagnosis_graph_events,
-    ) = await diagnosis_with_localization_task_main()
-    all_trajectories.append({"stage": "diagnosis", "events": diagnosis_graph_events})
-    agent_names.append("diagnosis_agent")
-    agent_in_tokens.append(diagnosis_agent_exec_stats["input_tokens"])
-    agent_out_tokens.append(diagnosis_agent_exec_stats["output_tokens"])
-    agent_total_tokens.append(diagnosis_agent_exec_stats["total_tokens"])
-    agent_times.append(diagnosis_agent_exec_stats["time"])
-    agent_steps.append(diagnosis_agent_exec_stats["steps"])
-    agent_retry_attempts.append(diagnosis_agent_exec_stats["num_retry_attempts"])
-    agent_rollback_stack.append(diagnosis_agent_exec_stats["rollback_stack"])
-    agent_oracle_results.append(diagnosis_agent_exec_stats["oracle_results"])
-    logger.info("*" * 25 + " Finished [diagnosis agent] " + "*" * 25)
-
-    file_parent_dir = Path(__file__).resolve().parent.parent
-    diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
-    diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
-    diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
-    diagnosis_agent_prompts = yaml.safe_load(diagnosis_agent_prompt_path.read_text())
-
-    # Check if diagnosis prompts have the summary prompt, otherwise use a default key
-    summary_prompt_key = (
-        "diagnosis_summary_prompt"
-        if "diagnosis_summary_prompt" in diagnosis_agent_prompts
-        else "localization_summary_prompt"
+    benchmark_status = await wait_for_stage_switch(
+        current_stage="setup",
+        target_stages={"diagnosis", "mitigation", "done"},
     )
-    diagnosis_fault_summary = generate_run_summary(
-        diagnosis_agent_last_state, diagnosis_agent_prompts[summary_prompt_key]
-    )
+    diagnosis_fault_summary = "No diagnosis summary is available because this benchmark starts at mitigation."
 
-    # Diagnosis submission is graded asynchronously, so poll for the next stage
-    # instead of sampling status once and racing the stage transition.
-    try:
-        benchmark_status = await wait_for_stage_switch(
-            current_stage="diagnosis",
-            target_stages={"mitigation", "done"},
+    if benchmark_status == "diagnosis":
+        logger.info("*" * 25 + " Starting [diagnosis agent] for [diagnosis] " + "*" * 25)
+        (
+            diagnosis_agent_exec_stats,
+            diagnosis_agent_last_state,
+            diagnosis_graph_events,
+        ) = await diagnosis_with_localization_task_main()
+        all_trajectories.append({"stage": "diagnosis", "events": diagnosis_graph_events})
+        agent_names.append("diagnosis_agent")
+        agent_in_tokens.append(diagnosis_agent_exec_stats["input_tokens"])
+        agent_out_tokens.append(diagnosis_agent_exec_stats["output_tokens"])
+        agent_total_tokens.append(diagnosis_agent_exec_stats["total_tokens"])
+        agent_times.append(diagnosis_agent_exec_stats["time"])
+        agent_steps.append(diagnosis_agent_exec_stats["steps"])
+        agent_retry_attempts.append(diagnosis_agent_exec_stats["num_retry_attempts"])
+        agent_rollback_stack.append(diagnosis_agent_exec_stats["rollback_stack"])
+        agent_oracle_results.append(diagnosis_agent_exec_stats["oracle_results"])
+        logger.info("*" * 25 + " Finished [diagnosis agent] " + "*" * 25)
+
+        file_parent_dir = Path(__file__).resolve().parent.parent
+        diagnosis_agent_config_path = file_parent_dir.parent / "configs" / "diagnosis_agent_config.yaml"
+        diagnosis_agent_config = yaml.safe_load(diagnosis_agent_config_path.read_text())
+        diagnosis_agent_prompt_path = file_parent_dir.parent / "configs" / diagnosis_agent_config["prompts_path"]
+        diagnosis_agent_prompts = yaml.safe_load(diagnosis_agent_prompt_path.read_text())
+        summary_prompt_key = (
+            "diagnosis_summary_prompt"
+            if "diagnosis_summary_prompt" in diagnosis_agent_prompts
+            else "localization_summary_prompt"
         )
-    except TimeoutError as e:
-        logger.warning("Timed out waiting for post-diagnosis stage switch: %s", e)
-        benchmark_status = get_benchmark_status()
+        diagnosis_fault_summary = generate_run_summary(
+            diagnosis_agent_last_state, diagnosis_agent_prompts[summary_prompt_key]
+        )
+
+        try:
+            benchmark_status = await wait_for_stage_switch(
+                current_stage="diagnosis",
+                target_stages={"mitigation", "done"},
+            )
+        except TimeoutError as e:
+            logger.warning("Timed out waiting for post-diagnosis stage switch: %s", e)
+            benchmark_status = get_benchmark_status()
+    elif benchmark_status == "mitigation":
+        logger.info("Benchmark starts at mitigation; skipping diagnosis agent")
     logger.info(f"Benchmark status after diagnosis polling: {benchmark_status}")
 
     mitigation_last_state = None
@@ -856,6 +866,7 @@ async def main():
         )
 
     agent_output_df["agent_name"] = agent_names
+    # LangChain usage totals already include cache hits and reasoning.
     agent_output_df["input_tokens"] = agent_in_tokens
     agent_output_df["output_tokens"] = agent_out_tokens
     agent_output_df["total_tokens"] = agent_total_tokens
@@ -889,6 +900,7 @@ async def main():
         agent_output_df = pd.concat([agent_output_df, summary_row], ignore_index=True)
 
     csv_path = problem_dir / f"{current_problem}_stratus_output.csv"
+    agent_output_df["token_metrics_version"] = TOKEN_METRICS_VERSION
     agent_output_df.to_csv(csv_path, index=False, header=True)
     save_combined_trajectory(all_trajectories, current_problem, output_dir=problem_dir)
 

@@ -90,6 +90,7 @@ def _deployment(
             template=SimpleNamespace(spec=SimpleNamespace(containers=[_container(request=request, limit=limit)])),
         ),
         status=SimpleNamespace(
+            replicas=1 if replicas is None else replicas,
             observed_generation=observed_generation,
             updated_replicas=updated,
             ready_replicas=ready,

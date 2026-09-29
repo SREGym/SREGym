@@ -15,17 +15,26 @@ RUN apt-get update && apt-get install -y \
 # Add uv to PATH
 ENV PATH="/root/.local/bin:$PATH"
 
-# Copy project files
+# Install the locked dependencies without installing the benchmark package.
+# MCP runs from the limited runtime source tree below.
 COPY pyproject.toml uv.lock ./
-COPY mcp_server/ ./mcp_server/
-COPY sregym/ ./sregym/
-COPY clients/ ./clients/
-COPY scripts/ ./scripts/
-COPY llm_backend/ ./llm_backend/
-COPY logger/ ./logger/
+RUN uv sync --frozen --no-dev --no-install-project
 
-# Install dependencies with uv
-RUN uv sync --frozen --no-dev
+# Never copy fault definitions, injectors, or oracle answers into this image.
+COPY mcp_server/ ./mcp_server/
+COPY sregym/__init__.py ./sregym/
+COPY sregym/service/__init__.py \
+    sregym/service/k8s_proxy.py \
+    sregym/service/kubernetes_access_policy.py \
+    sregym/service/kubernetes_response.py ./sregym/service/
+COPY clients/__init__.py ./clients/
+COPY clients/stratus/__init__.py ./clients/stratus/
+COPY clients/stratus/configs/langgraph_tool_configs.py ./clients/stratus/configs/
+COPY clients/stratus/stratus_utils/__init__.py \
+    clients/stratus/stratus_utils/get_logger.py ./clients/stratus/stratus_utils/
+
+# Fail the build if a required runtime import is missing.
+RUN .venv/bin/python -c "import mcp_server.sregym_mcp_server"
 
 # Environment defaults (can be overridden at runtime)
 ENV PATH="/app/.venv/bin:$PATH"
