@@ -1,0 +1,787 @@
+{
+  "schema_version": 1,
+  "recorded_at": "2026-09-25T07:04:47.047564+00:00",
+  "model": "gpt-6-astra",
+  "reasoning": "agent default",
+  "stage": "mitigation",
+  "profile": "svelte",
+  "agent_timeout_seconds": 900,
+  "incident": "gitea_database_deletion",
+  "limitations": [
+    "Three attempts per tier are exploratory.",
+    "Database membership and issue volume vary together.",
+    "The previous selector comparison has a different fault and oracle contract.",
+    "The selector campaign used Codex CLI 0.156.1; this recovery campaign uses 0.157.0.",
+    "Logical recovery fixture on one host with tmpfs-backed Docker storage; no physical PITR or independent regions."
+  ],
+  "negative_controls": {
+    "single": {
+      "application": "gitea",
+      "incident": "database_deletion",
+      "tier": "single",
+      "passed": true,
+      "healthy": {
+        "success": true,
+        "scale_tier": "single",
+        "database_members_verified": 1
+      },
+      "deleted": {
+        "success": false,
+        "reason": "database_schema_missing",
+        "failure_class": "agent_error",
+        "detail": {
+          "member": "gitea-db-1"
+        }
+      },
+      "truncated_backup_rejected": true,
+      "old_baseline_replication": true,
+      "backup_only": {
+        "success": false,
+        "reason": "acknowledged_data_missing_or_changed",
+        "failure_class": "agent_error",
+        "detail": {
+          "members": {
+            "gitea-db-1": {
+              "users": {
+                "expected": 7,
+                "missing": 0,
+                "changed": 0
+              },
+              "repositories": {
+                "expected": 5,
+                "missing": 0,
+                "changed": 0
+              },
+              "issues": {
+                "expected": 26,
+                "missing": 6,
+                "changed": 0
+              },
+              "duplicate_issues": 0
+            }
+          }
+        }
+      },
+      "partial_replay": {
+        "success": false,
+        "reason": "acknowledged_data_missing_or_changed",
+        "failure_class": "agent_error",
+        "detail": {
+          "members": {
+            "gitea-db-1": {
+              "users": {
+                "expected": 7,
+                "missing": 0,
+                "changed": 0
+              },
+              "repositories": {
+                "expected": 5,
+                "missing": 0,
+                "changed": 0
+              },
+              "issues": {
+                "expected": 26,
+                "missing": 3,
+                "changed": 0
+              },
+              "duplicate_issues": 0
+            }
+          }
+        }
+      },
+      "second_replay": {
+        "verified": 6,
+        "created": 0
+      },
+      "recovered": {
+        "success": true,
+        "scale_tier": "single",
+        "database_members_verified": 1,
+        "recovered_records": {
+          "gitea-db-1": {
+            "users": {
+              "expected": 7,
+              "missing": 0,
+              "changed": 0
+            },
+            "repositories": {
+              "expected": 5,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 26,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "journal_entries_verified": 6,
+        "acknowledged_data_loss": 0
+      },
+      "restarted": {
+        "success": true,
+        "scale_tier": "single",
+        "database_members_verified": 1,
+        "recovered_records": {
+          "gitea-db-1": {
+            "users": {
+              "expected": 7,
+              "missing": 0,
+              "changed": 0
+            },
+            "repositories": {
+              "expected": 5,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 26,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "journal_entries_verified": 6,
+        "acknowledged_data_loss": 0
+      }
+    },
+    "replicated": {
+      "application": "gitea",
+      "incident": "database_deletion",
+      "tier": "replicated",
+      "passed": true,
+      "healthy": {
+        "success": true,
+        "scale_tier": "replicated",
+        "database_members_verified": 3
+      },
+      "deleted": {
+        "success": false,
+        "reason": "database_schema_missing",
+        "failure_class": "agent_error",
+        "detail": {
+          "member": "gitea-db-1"
+        }
+      },
+      "truncated_backup_rejected": true,
+      "old_baseline_replication": true,
+      "backup_only": {
+        "success": false,
+        "reason": "acknowledged_data_missing_or_changed",
+        "failure_class": "agent_error",
+        "detail": {
+          "members": {
+            "gitea-db-1": {
+              "users": {
+                "expected": 7,
+                "missing": 0,
+                "changed": 0
+              },
+              "repositories": {
+                "expected": 5,
+                "missing": 0,
+                "changed": 0
+              },
+              "issues": {
+                "expected": 98,
+                "missing": 30,
+                "changed": 0
+              },
+              "duplicate_issues": 0
+            }
+          }
+        }
+      },
+      "partial_replay": {
+        "success": false,
+        "reason": "acknowledged_data_missing_or_changed",
+        "failure_class": "agent_error",
+        "detail": {
+          "members": {
+            "gitea-db-1": {
+              "users": {
+                "expected": 7,
+                "missing": 0,
+                "changed": 0
+              },
+              "repositories": {
+                "expected": 5,
+                "missing": 0,
+                "changed": 0
+              },
+              "issues": {
+                "expected": 98,
+                "missing": 15,
+                "changed": 0
+              },
+              "duplicate_issues": 0
+            }
+          }
+        }
+      },
+      "second_replay": {
+        "verified": 30,
+        "created": 0
+      },
+      "recovered": {
+        "success": true,
+        "scale_tier": "replicated",
+        "database_members_verified": 3,
+        "recovered_records": {
+          "gitea-db-1": {
+            "users": {
+              "expected": 7,
+              "missing": 0,
+              "changed": 0
+            },
+            "repositories": {
+              "expected": 5,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 98,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitea-db-2": {
+            "users": {
+              "expected": 7,
+              "missing": 0,
+              "changed": 0
+            },
+            "repositories": {
+              "expected": 5,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 98,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitea-db-3": {
+            "users": {
+              "expected": 7,
+              "missing": 0,
+              "changed": 0
+            },
+            "repositories": {
+              "expected": 5,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 98,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "journal_entries_verified": 30,
+        "acknowledged_data_loss": 0
+      },
+      "restarted": {
+        "success": true,
+        "scale_tier": "replicated",
+        "database_members_verified": 3,
+        "recovered_records": {
+          "gitea-db-1": {
+            "users": {
+              "expected": 7,
+              "missing": 0,
+              "changed": 0
+            },
+            "repositories": {
+              "expected": 5,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 98,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitea-db-2": {
+            "users": {
+              "expected": 7,
+              "missing": 0,
+              "changed": 0
+            },
+            "repositories": {
+              "expected": 5,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 98,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitea-db-3": {
+            "users": {
+              "expected": 7,
+              "missing": 0,
+              "changed": 0
+            },
+            "repositories": {
+              "expected": 5,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 98,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "journal_entries_verified": 30,
+        "acknowledged_data_loss": 0
+      }
+    }
+  },
+  "cases": [
+    {
+      "tier": "single",
+      "problem": "gitea_database_deletion_single",
+      "lifecycle": {
+        "problem": "gitea_database_deletion_single",
+        "profile": "svelte",
+        "with_loki": false,
+        "passed": true,
+        "elapsed_seconds": 465.25,
+        "stages": {
+          "resolve": {
+            "name": "Resolve problem in registry",
+            "status": "pass",
+            "detail": "GiteaDatabaseDeletion \u00b7 app `Gitea`"
+          },
+          "deploy": {
+            "name": "Deploy application",
+            "status": "pass",
+            "detail": "`Gitea` deployed to namespace `gitea`"
+          },
+          "oracle_healthy": {
+            "name": "Oracle passes before fault injection",
+            "status": "pass",
+            "detail": "oracle reported success after 1 check(s)"
+          },
+          "inject": {
+            "name": "Inject fault",
+            "status": "pass",
+            "detail": "inject_fault() completed without error"
+          },
+          "oracle_fail": {
+            "name": "Oracle fails after fault injection",
+            "status": "pass",
+            "detail": "oracle reported failure after 1 check(s)"
+          },
+          "recover": {
+            "name": "Recover fault",
+            "status": "pass",
+            "detail": "recover_fault() completed without error"
+          },
+          "oracle_pass": {
+            "name": "Oracle passes after recovery",
+            "status": "pass",
+            "detail": "oracle reported success after 1 check(s)"
+          },
+          "cleanup": {
+            "name": "Clean up application and local port forwards",
+            "status": "pass",
+            "detail": "application namespace and local port forwards removed"
+          }
+        }
+      },
+      "summary": {
+        "requested": 3,
+        "complete": 3,
+        "successes": 3,
+        "mitigation_pass_rate": 1.0,
+        "difficulty": 0.0,
+        "ambiguous_failures": 0,
+        "inconclusive": false
+      },
+      "median_agent_seconds": 107.203,
+      "median_oracle_seconds": 20.169,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "Mitigation.reason": null,
+          "Mitigation.database_members_verified": "1",
+          "Mitigation.journal_entries_verified": "6",
+          "Mitigation.acknowledged_data_loss": "0",
+          "phase.stage:mitigation.duration_s": "107.203",
+          "phase.evaluate:mitigation.duration_s": "20.024",
+          "csv": "results/dind/sregym-gitea-recovery/0925_0604/codex/gitea_database_deletion_single/gitea_database_deletion_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea-recovery/0925_0604/codex/gitea_database_deletion_single/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.157.0",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 248042,
+            "total_completion_tokens": 1852,
+            "total_cached_tokens": 226560,
+            "total_steps": 16,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 44,
+              "total_tokens": 249894,
+              "last_token_usage": {
+                "input_tokens": 28710,
+                "cached_input_tokens": 28416,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 61,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 28771
+              }
+            }
+          },
+          "tool_calls": 10
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "Mitigation.reason": null,
+          "Mitigation.database_members_verified": "1",
+          "Mitigation.journal_entries_verified": "6",
+          "Mitigation.acknowledged_data_loss": "0",
+          "phase.stage:mitigation.duration_s": "123.144",
+          "phase.evaluate:mitigation.duration_s": "22.482",
+          "csv": "results/dind/sregym-gitea-recovery/0925_0604/codex/gitea_database_deletion_single/gitea_database_deletion_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea-recovery/0925_0604/codex/gitea_database_deletion_single/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.157.0",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 283033,
+            "total_completion_tokens": 2225,
+            "total_cached_tokens": 250112,
+            "total_steps": 17,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 50,
+              "total_tokens": 285258,
+              "last_token_usage": {
+                "input_tokens": 29724,
+                "cached_input_tokens": 29440,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 60,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 29784
+              }
+            }
+          },
+          "tool_calls": 11
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "Mitigation.reason": null,
+          "Mitigation.database_members_verified": "1",
+          "Mitigation.journal_entries_verified": "6",
+          "Mitigation.acknowledged_data_loss": "0",
+          "phase.stage:mitigation.duration_s": "106.054",
+          "phase.evaluate:mitigation.duration_s": "20.169",
+          "csv": "results/dind/sregym-gitea-recovery/0925_0604/codex/gitea_database_deletion_single/gitea_database_deletion_single_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea-recovery/0925_0604/codex/gitea_database_deletion_single/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.157.0",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 240223,
+            "total_completion_tokens": 2051,
+            "total_cached_tokens": 219136,
+            "total_steps": 16,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 25,
+              "total_tokens": 242274,
+              "last_token_usage": {
+                "input_tokens": 27987,
+                "cached_input_tokens": 27648,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 57,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 28044
+              }
+            }
+          },
+          "tool_calls": 10
+        }
+      ],
+      "campaign_result": {
+        "validated": true,
+        "application": "gitea",
+        "tier": "single",
+        "agent_exit_code": 0,
+        "requested": 3,
+        "complete": 3,
+        "successes": 3,
+        "mitigation_pass_rate": 1.0,
+        "difficulty": 0.0,
+        "ambiguous_failures": 0,
+        "inconclusive": false,
+        "csvs": [
+          "results/0925_0604/codex/gitea_database_deletion_single/gitea_database_deletion_single_codex_results.csv"
+        ]
+      }
+    },
+    {
+      "tier": "replicated",
+      "problem": "gitea_database_deletion_replicated",
+      "lifecycle": {
+        "problem": "gitea_database_deletion_replicated",
+        "profile": "svelte",
+        "with_loki": false,
+        "passed": true,
+        "elapsed_seconds": 355.66,
+        "stages": {
+          "resolve": {
+            "name": "Resolve problem in registry",
+            "status": "pass",
+            "detail": "GiteaDatabaseDeletion \u00b7 app `Gitea`"
+          },
+          "deploy": {
+            "name": "Deploy application",
+            "status": "pass",
+            "detail": "`Gitea` deployed to namespace `gitea`"
+          },
+          "oracle_healthy": {
+            "name": "Oracle passes before fault injection",
+            "status": "pass",
+            "detail": "oracle reported success after 1 check(s)"
+          },
+          "inject": {
+            "name": "Inject fault",
+            "status": "pass",
+            "detail": "inject_fault() completed without error"
+          },
+          "oracle_fail": {
+            "name": "Oracle fails after fault injection",
+            "status": "pass",
+            "detail": "oracle reported failure after 1 check(s)"
+          },
+          "recover": {
+            "name": "Recover fault",
+            "status": "pass",
+            "detail": "recover_fault() completed without error"
+          },
+          "oracle_pass": {
+            "name": "Oracle passes after recovery",
+            "status": "pass",
+            "detail": "oracle reported success after 1 check(s)"
+          },
+          "cleanup": {
+            "name": "Clean up application and local port forwards",
+            "status": "pass",
+            "detail": "application namespace and local port forwards removed"
+          }
+        }
+      },
+      "summary": {
+        "requested": 3,
+        "complete": 3,
+        "successes": 3,
+        "mitigation_pass_rate": 1.0,
+        "difficulty": 0.0,
+        "ambiguous_failures": 0,
+        "inconclusive": false
+      },
+      "median_agent_seconds": 137.226,
+      "median_oracle_seconds": 31.692,
+      "attempts": [
+        {
+          "attempt": "1",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "Mitigation.reason": null,
+          "Mitigation.database_members_verified": "3",
+          "Mitigation.journal_entries_verified": "30",
+          "Mitigation.acknowledged_data_loss": "0",
+          "phase.stage:mitigation.duration_s": "143.007",
+          "phase.evaluate:mitigation.duration_s": "31.692",
+          "csv": "results/dind/sregym-gitea-recovery/0925_0634/codex/gitea_database_deletion_replicated/gitea_database_deletion_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea-recovery/0925_0634/codex/gitea_database_deletion_replicated/run_1/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.157.0",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 325988,
+            "total_completion_tokens": 2241,
+            "total_cached_tokens": 293120,
+            "total_steps": 18,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 41,
+              "total_tokens": 328229,
+              "last_token_usage": {
+                "input_tokens": 30877,
+                "cached_input_tokens": 30464,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 70,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 30947
+              }
+            }
+          },
+          "tool_calls": 12
+        },
+        {
+          "attempt": "2",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "Mitigation.reason": null,
+          "Mitigation.database_members_verified": "3",
+          "Mitigation.journal_entries_verified": "30",
+          "Mitigation.acknowledged_data_loss": "0",
+          "phase.stage:mitigation.duration_s": "137.226",
+          "phase.evaluate:mitigation.duration_s": "31.317",
+          "csv": "results/dind/sregym-gitea-recovery/0925_0634/codex/gitea_database_deletion_replicated/gitea_database_deletion_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea-recovery/0925_0634/codex/gitea_database_deletion_replicated/run_2/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.157.0",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 311079,
+            "total_completion_tokens": 2197,
+            "total_cached_tokens": 290048,
+            "total_steps": 18,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 43,
+              "total_tokens": 313276,
+              "last_token_usage": {
+                "input_tokens": 29468,
+                "cached_input_tokens": 29184,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 56,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 29524
+              }
+            }
+          },
+          "tool_calls": 12
+        },
+        {
+          "attempt": "3",
+          "run_status": "complete",
+          "Mitigation.success": "True",
+          "Mitigation.failure_class": null,
+          "Mitigation.reason": null,
+          "Mitigation.database_members_verified": "3",
+          "Mitigation.journal_entries_verified": "30",
+          "Mitigation.acknowledged_data_loss": "0",
+          "phase.stage:mitigation.duration_s": "129.214",
+          "phase.evaluate:mitigation.duration_s": "32.097",
+          "csv": "results/dind/sregym-gitea-recovery/0925_0634/codex/gitea_database_deletion_replicated/gitea_database_deletion_replicated_codex_results.csv",
+          "trajectory": "results/dind/sregym-gitea-recovery/0925_0634/codex/gitea_database_deletion_replicated/run_3/trajectory.json",
+          "agent": {
+            "name": "codex",
+            "version": "0.157.0",
+            "model_name": "gpt-6-astra",
+            "extra": {
+              "originator": "codex_exec",
+              "cwd": "/logs"
+            }
+          },
+          "metrics": {
+            "total_prompt_tokens": 332535,
+            "total_completion_tokens": 2258,
+            "total_cached_tokens": 307584,
+            "total_steps": 18,
+            "extra": {
+              "token_metrics_version": 2,
+              "reasoning_output_tokens": 66,
+              "total_tokens": 334793,
+              "last_token_usage": {
+                "input_tokens": 31655,
+                "cached_input_tokens": 31360,
+                "cache_write_input_tokens": 0,
+                "output_tokens": 60,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 31715
+              }
+            }
+          },
+          "tool_calls": 12
+        }
+      ],
+      "campaign_result": {
+        "validated": true,
+        "application": "gitea",
+        "tier": "replicated",
+        "agent_exit_code": 0,
+        "requested": 3,
+        "complete": 3,
+        "successes": 3,
+        "mitigation_pass_rate": 1.0,
+        "difficulty": 0.0,
+        "ambiguous_failures": 0,
+        "inconclusive": false,
+        "csvs": [
+          "results/0925_0634/codex/gitea_database_deletion_replicated/gitea_database_deletion_replicated_codex_results.csv"
+        ]
+      }
+    }
+  ],
+  "complete": true,
+  "agent_cli_versions": [
+    "0.157.0"
+  ],
+  "evaluated_source_manifest": "results/dind/sregym-gitea-recovery/evaluated-source-manifest.json",
+  "runtime_version_pin": "results/dind/sregym-gitea-recovery/runtime-version-pin.json"
+}
