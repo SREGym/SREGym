@@ -1,0 +1,138 @@
+{
+  "problem": "stripe_feature_config_replicated",
+  "status": "three valid passes; difficulty target unmet",
+  "difficulty_target_met": false,
+  "model": "gpt-6-astra",
+  "cli_version": "0.157.1",
+  "reasoning_effort": "agent default",
+  "agent_timeout_seconds": 900,
+  "profile": "svelte",
+  "stages": [
+    "mitigation"
+  ],
+  "lifecycle_seconds": 427.33,
+  "lifecycle_passed": true,
+  "complete_attempts": 3,
+  "successes": 3,
+  "failures": 0,
+  "ambiguous_failures": 0,
+  "observed_difficulty": 0.0,
+  "median_agent_seconds": 110.77,
+  "attempts": [
+    {
+      "attempt": 1,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 110.77,
+      "grading_seconds": 86.239,
+      "deployment_seconds": 181.031,
+      "cleanup_seconds": 76.934,
+      "trajectory": "results/dind/sregym-difficulty-baseline/0926_0939/codex/stripe_feature_config_replicated/run_1/trajectory.json",
+      "trajectory_sha256": "7b2cb2f2215afbbcdf3bdd07a2226c1d5b76bbe6b5d4f8e75b10295937cba568",
+      "configuration": {
+        "settings": {
+          "enabled": true,
+          "bot_management_enabled": true,
+          "sources": [
+            "feature_old",
+            "feature_new"
+          ]
+        },
+        "current_features": 120,
+        "source_counts": {
+          "feature_old": 120,
+          "feature_new": 120
+        },
+        "safe": true
+      },
+      "original_volumes_verified": 6,
+      "database_members_verified": 3,
+      "acknowledged_payments_verified": 24,
+      "original_webhooks_delivered": 24,
+      "stable_traffic_seconds": 42,
+      "traffic_samples": 21
+    },
+    {
+      "attempt": 2,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 110.305,
+      "grading_seconds": 87.266,
+      "deployment_seconds": 250.827,
+      "cleanup_seconds": 103.321,
+      "trajectory": "results/dind/sregym-difficulty-baseline/0926_0939/codex/stripe_feature_config_replicated/run_2/trajectory.json",
+      "trajectory_sha256": "7f0ee7b03ed45e432b4dbb9ebc48af3f4c1a29170f1b125440fd7fd24fd764f9",
+      "configuration": {
+        "settings": {
+          "enabled": true,
+          "bot_management_enabled": true,
+          "sources": [
+            "feature_old",
+            "feature_new"
+          ]
+        },
+        "current_features": 120,
+        "source_counts": {
+          "feature_old": 120,
+          "feature_new": 120
+        },
+        "safe": true
+      },
+      "original_volumes_verified": 6,
+      "database_members_verified": 3,
+      "acknowledged_payments_verified": 24,
+      "original_webhooks_delivered": 24,
+      "stable_traffic_seconds": 42,
+      "traffic_samples": 21
+    },
+    {
+      "attempt": 3,
+      "run_status": "complete",
+      "success": true,
+      "reason": null,
+      "failure_class": null,
+      "model": "gpt-6-astra",
+      "cli_version": "0.157.1",
+      "agent_seconds": 133.796,
+      "grading_seconds": 86.561,
+      "deployment_seconds": 229.01,
+      "cleanup_seconds": 102.394,
+      "trajectory": "results/dind/sregym-difficulty-baseline/0926_0939/codex/stripe_feature_config_replicated/run_3/trajectory.json",
+      "trajectory_sha256": "16f55ac5aaa74e36d1ef743a12c31f5971c71249923c3275f12b434ca45a4cd8",
+      "configuration": {
+        "settings": {
+          "enabled": true,
+          "bot_management_enabled": true,
+          "sources": [
+            "feature_old",
+            "feature_new"
+          ]
+        },
+        "current_features": 120,
+        "source_counts": {
+          "feature_old": 120,
+          "feature_new": 120
+        },
+        "safe": true
+      },
+      "original_volumes_verified": 6,
+      "database_members_verified": 3,
+      "acknowledged_payments_verified": 24,
+      "original_webhooks_delivered": 24,
+      "stable_traffic_seconds": 42,
+      "traffic_samples": 21
+    }
+  ],
+  "raw_artifact_root": "results/dind/sregym-difficulty-baseline/stripe-three",
+  "source_manifest_sha256": "5a72f101fb9c8f9dbabdfae92bdc4fb1fea5ffdb8f8e0d63d378b8e0e0622396",
+  "stripe_image": "sregym-stripe-marathon:b584170d733ece2d",
+  "stripe_image_id": "sha256:4d228d74ac0eda8b689c27082c65d3c6376a816879f35d082a3653daf7a320e1"
+}

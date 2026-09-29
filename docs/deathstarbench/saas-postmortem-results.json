@@ -1,0 +1,904 @@
+{
+  "date_utc": "2026-09-26T03:57:33.968968+00:00",
+  "environment": {
+    "kind_nodes": 4,
+    "physical_hosts": 1,
+    "cpus": 8,
+    "memory_limit": "34GiB",
+    "private_docker_storage": "24GiB memory-backed ext4",
+    "base_image": "sregym-dind:saas-prototypes",
+    "source_overlay_sha256": {
+      "sregym/service/apps/gitlab_recovery.py": "6ed76b9b38ca5e3270f98260118a831ca13f0a40d2e76d804805ce31053a610b",
+      "sregym/service/apps/gitlab_recovery_workflow.py": "77fa128c7e1b8d316bfac9a84fcc789bb3b1374d1e00824ae53a39c8ec153391",
+      "sregym/service/apps/stripe_config.py": "8dd5887c641f805bb055e73c9252736341ecdae21c5317b635b2077e890e78a3",
+      "sregym/service/apps/incident_runtime/feature_edge.py": "7a9bef94caffcee437057add12faa2f7fc43b85c997eff56b16ae525e87056fe",
+      "sregym/service/apps/incident_runtime/requeue_webhooks.py": "9dbd5517115cfd6f741c8a8bd58747cddc891c307c5acbd75196896620319909",
+      "sregym/service/apps/saas_workflows.py": "83478caa0e6372e75c0b0fc46a776967febcd0ca1e9ffff5bb97b7dd1027cce2",
+      "sregym/conductor/problems/gitlab_database_deletion.py": "0675cd58ca2058947ba558a884fa964b806cfa6ba05231b23e2cf3b531a19266",
+      "sregym/conductor/problems/stripe_feature_config.py": "b997636d18ecb7db421cd18bb3b12c837c0695e1c7070c19de2af44a5f43923a",
+      "sregym/conductor/oracles/gitlab_database_recovery.py": "fa97ac36edd7d2fce8186141f5932e003aecd05533195e75017e124d0c4f0b0d",
+      "sregym/conductor/oracles/stripe_config_recovery.py": "00fe51cda204274f3b0119ad1a89a273f224ed204cdd6f3f19fdccb6955cbd54",
+      "sregym/conductor/problems/registry.py": "ffc66f1961f0f74b0766814c0f6f7cf00c4b375aedc9b377b7c053fee456eb71",
+      "scripts/evaluate_deathstarbench.py": "693c7e69803e7011e564152db12a169531d831d702d7ab7858d018cb51d4c0a2",
+      "tests/integration/validate_gitlab_recovery.py": "279e5b860802f85e542cb8d0a309c9b602e9dd5a4b0a5a7463ff3dcb13b8124f",
+      "tests/integration/validate_stripe_config.py": "f97fba21322e94efb74837cc751da16c801a4bb7b37db1a78f9eff73f7f995f4",
+      "tests/oracles/test_gitlab_database_recovery.py": "f8dfe4a1c1a1d4f96703a52fecd04ee901cebeff775ad375064187f96bee8913",
+      "tests/oracles/test_stripe_config_recovery.py": "d6a6fa301804447aff8fbb9f99e31bdef89af5cb27b81485ee1afbf375e48340",
+      "tests/service/apps/test_postmortem_apps.py": "7c1f35175f788324f5a1514370a749af83623b0fd3225e19634dd6034d97b910"
+    }
+  },
+  "cases": {
+    "gitlab-single": {
+      "application": "gitlab-ce",
+      "incident": "database_deletion",
+      "tier": "single",
+      "passed": true,
+      "images": {
+        "docker.io/library/python:3.12.13-alpine3.23": "docker.io/library/python@sha256:601d3d3797e90e2534782e69c85fafb7971b43f24c7b1b079b7e48dd435e458d",
+        "docker.io/gitlab/gitlab-ce:18.11.12-ce.0": "docker.io/gitlab/gitlab-ce@sha256:9dc94c49789d1ffec78e1998b088c83d7d1d9d5f2dc8b388cbb2bd2de328dd21",
+        "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie": "ghcr.io/cloudnative-pg/postgresql@sha256:04f35778ca3b55b52a81dae969bef179ead315b9f02d2b4b21a3415de269b836",
+        "docker.io/library/redis:7.4.2-alpine": "docker.io/library/redis@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
+      },
+      "healthy": {
+        "success": true,
+        "application": "gitlab-ce",
+        "scale_tier": "single",
+        "database_members_verified": 1,
+        "original_volumes_verified": 5,
+        "business_data_verified": true
+      },
+      "deleted": {
+        "success": false,
+        "reason": "database_schema_missing",
+        "failure_class": "agent_error",
+        "detail": {
+          "member": "gitlab-ce-db-1"
+        }
+      },
+      "truncated_backup_rejected": true,
+      "old_baseline_available": true,
+      "backup_only": {
+        "success": false,
+        "reason": "acknowledged_data_missing_or_changed",
+        "failure_class": "agent_error",
+        "detail": {
+          "members": {
+            "gitlab-ce-db-1": {
+              "users": {
+                "expected": 4,
+                "missing": 0,
+                "changed": 0
+              },
+              "projects": {
+                "expected": 4,
+                "missing": 0,
+                "changed": 0
+              },
+              "members": {
+                "expected": 7,
+                "missing": 0,
+                "changed": 0
+              },
+              "issues": {
+                "expected": 22,
+                "missing": 6,
+                "changed": 0
+              },
+              "duplicate_issues": 0
+            }
+          }
+        }
+      },
+      "partial_replay": {
+        "success": false,
+        "reason": "acknowledged_data_missing_or_changed",
+        "failure_class": "agent_error",
+        "detail": {
+          "members": {
+            "gitlab-ce-db-1": {
+              "users": {
+                "expected": 4,
+                "missing": 0,
+                "changed": 0
+              },
+              "projects": {
+                "expected": 4,
+                "missing": 0,
+                "changed": 0
+              },
+              "members": {
+                "expected": 7,
+                "missing": 0,
+                "changed": 0
+              },
+              "issues": {
+                "expected": 22,
+                "missing": 3,
+                "changed": 0
+              },
+              "duplicate_issues": 0
+            }
+          }
+        }
+      },
+      "second_replay": {
+        "verified": 6,
+        "created": 0
+      },
+      "recovered": {
+        "success": true,
+        "application": "gitlab-ce",
+        "scale_tier": "single",
+        "database_members_verified": 1,
+        "original_volumes_verified": 5,
+        "business_data_verified": true,
+        "recovered_records": {
+          "gitlab-ce-db-1": {
+            "users": {
+              "expected": 4,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 4,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 7,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 22,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "journal_entries_verified": 6,
+        "acknowledged_data_loss": 0
+      },
+      "restarted": {
+        "success": true,
+        "application": "gitlab-ce",
+        "scale_tier": "single",
+        "database_members_verified": 1,
+        "original_volumes_verified": 5,
+        "business_data_verified": true,
+        "recovered_records": {
+          "gitlab-ce-db-1": {
+            "users": {
+              "expected": 4,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 4,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 7,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 22,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "journal_entries_verified": 6,
+        "acknowledged_data_loss": 0
+      },
+      "elapsed_seconds": 1387.06
+    },
+    "gitlab-replicated": {
+      "application": "gitlab-ce",
+      "incident": "database_deletion",
+      "tier": "replicated",
+      "passed": true,
+      "images": {
+        "docker.io/library/python:3.12.13-alpine3.23": "docker.io/library/python@sha256:601d3d3797e90e2534782e69c85fafb7971b43f24c7b1b079b7e48dd435e458d",
+        "docker.io/gitlab/gitlab-ce:18.11.12-ce.0": "docker.io/gitlab/gitlab-ce@sha256:9dc94c49789d1ffec78e1998b088c83d7d1d9d5f2dc8b388cbb2bd2de328dd21",
+        "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie": "ghcr.io/cloudnative-pg/postgresql@sha256:04f35778ca3b55b52a81dae969bef179ead315b9f02d2b4b21a3415de269b836",
+        "docker.io/library/redis:7.4.2-alpine": "docker.io/library/redis@sha256:02419de7eddf55aa5bcf49efb74e88fa8d931b4d77c07eff8a6b2144472b6952"
+      },
+      "healthy": {
+        "success": true,
+        "application": "gitlab-ce",
+        "scale_tier": "replicated",
+        "database_members_verified": 3,
+        "original_volumes_verified": 7,
+        "business_data_verified": true
+      },
+      "deleted": {
+        "success": false,
+        "reason": "database_schema_missing",
+        "failure_class": "agent_error",
+        "detail": {
+          "member": "gitlab-ce-db-1"
+        }
+      },
+      "truncated_backup_rejected": true,
+      "old_baseline_available": true,
+      "backup_only": {
+        "success": false,
+        "reason": "acknowledged_data_missing_or_changed",
+        "failure_class": "agent_error",
+        "detail": {
+          "members": {
+            "gitlab-ce-db-1": {
+              "users": {
+                "expected": 6,
+                "missing": 0,
+                "changed": 0
+              },
+              "projects": {
+                "expected": 6,
+                "missing": 0,
+                "changed": 0
+              },
+              "members": {
+                "expected": 11,
+                "missing": 0,
+                "changed": 0
+              },
+              "issues": {
+                "expected": 94,
+                "missing": 30,
+                "changed": 0
+              },
+              "duplicate_issues": 0
+            }
+          }
+        }
+      },
+      "partial_replay": {
+        "success": false,
+        "reason": "acknowledged_data_missing_or_changed",
+        "failure_class": "agent_error",
+        "detail": {
+          "members": {
+            "gitlab-ce-db-1": {
+              "users": {
+                "expected": 6,
+                "missing": 0,
+                "changed": 0
+              },
+              "projects": {
+                "expected": 6,
+                "missing": 0,
+                "changed": 0
+              },
+              "members": {
+                "expected": 11,
+                "missing": 0,
+                "changed": 0
+              },
+              "issues": {
+                "expected": 94,
+                "missing": 15,
+                "changed": 0
+              },
+              "duplicate_issues": 0
+            }
+          }
+        }
+      },
+      "second_replay": {
+        "verified": 30,
+        "created": 0
+      },
+      "recovered": {
+        "success": true,
+        "application": "gitlab-ce",
+        "scale_tier": "replicated",
+        "database_members_verified": 3,
+        "original_volumes_verified": 7,
+        "business_data_verified": true,
+        "recovered_records": {
+          "gitlab-ce-db-1": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 94,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-2": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 94,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-3": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 94,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "journal_entries_verified": 30,
+        "acknowledged_data_loss": 0
+      },
+      "restarted": {
+        "success": true,
+        "application": "gitlab-ce",
+        "scale_tier": "replicated",
+        "database_members_verified": 3,
+        "original_volumes_verified": 7,
+        "business_data_verified": true,
+        "recovered_records": {
+          "gitlab-ce-db-1": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 94,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-2": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 94,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          },
+          "gitlab-ce-db-3": {
+            "users": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "projects": {
+              "expected": 6,
+              "missing": 0,
+              "changed": 0
+            },
+            "members": {
+              "expected": 11,
+              "missing": 0,
+              "changed": 0
+            },
+            "issues": {
+              "expected": 94,
+              "missing": 0,
+              "changed": 0
+            },
+            "duplicate_issues": 0
+          }
+        },
+        "journal_entries_verified": 30,
+        "acknowledged_data_loss": 0
+      },
+      "elapsed_seconds": 1148.24
+    },
+    "stripe-single": {
+      "application": "stripe-marathon",
+      "incident": "feature_config",
+      "tier": "single",
+      "passed": true,
+      "images": {
+        "docker.io/library/python:3.12.13-alpine3.23": "docker.io/library/python@sha256:601d3d3797e90e2534782e69c85fafb7971b43f24c7b1b079b7e48dd435e458d",
+        "docker.io/clickhouse/clickhouse-server:25.8.12.129-alpine": "docker.io/clickhouse/clickhouse-server@sha256:748db0f759216ac0dce8784f22fcfba1284c70874ebcc922a27998cb4e3de347",
+        "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie": "ghcr.io/cloudnative-pg/postgresql@sha256:04f35778ca3b55b52a81dae969bef179ead315b9f02d2b4b21a3415de269b836",
+        "docker.io/library/sregym-stripe-marathon:b584170d733ece2d": "sha256:de77560cc391e9a395f290b85b0041b04024aab722372b6fdfa4e27d6ba3ea11"
+      },
+      "healthy": {
+        "success": true,
+        "application": "stripe-marathon",
+        "scale_tier": "single",
+        "database_members_verified": 1,
+        "original_volumes_verified": 4,
+        "business_data_verified": true
+      },
+      "before_permissions": {
+        "settings": {
+          "enabled": true,
+          "bot_management_enabled": true,
+          "sources": [
+            "feature_old",
+            "feature_new"
+          ]
+        },
+        "current_features": 120,
+        "source_counts": {
+          "feature_old": 120,
+          "feature_new": 120
+        },
+        "safe": true
+      },
+      "injected": {
+        "success": false,
+        "reason": "recurring_configuration_risk",
+        "failure_class": "agent_error",
+        "detail": {
+          "configuration": {
+            "settings": {
+              "enabled": true,
+              "bot_management_enabled": true,
+              "sources": [
+                "feature_old",
+                "feature_new"
+              ]
+            },
+            "current_features": 240,
+            "source_counts": {
+              "feature_old": 120,
+              "feature_new": 240
+            },
+            "safe": false
+          }
+        }
+      },
+      "healthy_window": {
+        "success": false,
+        "reason": "recurring_configuration_risk",
+        "failure_class": "agent_error",
+        "detail": {
+          "configuration": {
+            "settings": {
+              "enabled": true,
+              "bot_management_enabled": true,
+              "sources": [
+                "feature_old",
+                "feature_new"
+              ]
+            },
+            "current_features": 120,
+            "source_counts": {
+              "feature_old": 120,
+              "feature_new": 240
+            },
+            "safe": false
+          }
+        }
+      },
+      "contained": {
+        "success": false,
+        "reason": "webhook_backlog_incomplete",
+        "failure_class": "agent_error",
+        "detail": {
+          "member": "stripe-marathon-db-1",
+          "changed_records": {},
+          "duplicate_financial_effects": 0,
+          "missing_events": [],
+          "undelivered_events": [
+            "evt_DOlWTrNUX60GJSz9CgPixKzH",
+            "evt_MIzsBvRdreJ4eBNc8EBx1ccv",
+            "evt_RSQeJyFDSVm55w9K1fo2oBXI",
+            "evt_RwN9FIzZlewJ263ftuTGskU6",
+            "evt_Vepu2qwfMpm6nyCaf2VMWpAF",
+            "evt_Yw4I208nc8hapUHzQcHvkIKp"
+          ]
+        }
+      },
+      "partial_replay": {
+        "success": false,
+        "reason": "webhook_backlog_incomplete",
+        "failure_class": "agent_error",
+        "detail": {
+          "member": "stripe-marathon-db-1",
+          "changed_records": {},
+          "duplicate_financial_effects": 0,
+          "missing_events": [],
+          "undelivered_events": [
+            "evt_RwN9FIzZlewJ263ftuTGskU6",
+            "evt_Vepu2qwfMpm6nyCaf2VMWpAF",
+            "evt_Yw4I208nc8hapUHzQcHvkIKp"
+          ]
+        }
+      },
+      "second_replay": {
+        "queued": 0,
+        "keys": []
+      },
+      "recovered": {
+        "success": true,
+        "application": "stripe-marathon",
+        "scale_tier": "single",
+        "database_members_verified": 1,
+        "original_volumes_verified": 4,
+        "business_data_verified": true,
+        "acknowledged_payments_verified": 6,
+        "original_webhooks_delivered": 6,
+        "configuration": {
+          "settings": {
+            "enabled": false,
+            "bot_management_enabled": true,
+            "sources": [
+              "feature_old",
+              "feature_new"
+            ]
+          },
+          "current_features": 120,
+          "source_counts": {},
+          "safe": true
+        },
+        "stable_traffic_seconds": 42,
+        "traffic_samples": 22
+      },
+      "query_fixed_and_restarted": {
+        "success": true,
+        "application": "stripe-marathon",
+        "scale_tier": "single",
+        "database_members_verified": 1,
+        "original_volumes_verified": 4,
+        "business_data_verified": true,
+        "acknowledged_payments_verified": 6,
+        "original_webhooks_delivered": 6,
+        "configuration": {
+          "settings": {
+            "enabled": true,
+            "bot_management_enabled": true,
+            "sources": [
+              "feature_old",
+              "feature_new"
+            ]
+          },
+          "current_features": 120,
+          "source_counts": {
+            "feature_old": 120,
+            "feature_new": 120
+          },
+          "safe": true
+        },
+        "stable_traffic_seconds": 42,
+        "traffic_samples": 22
+      },
+      "generation_history": "{\"at\": 1790392562.861439, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790392582.8731005, \"source\": \"feature_new\", \"feature_count\": 120}\n{\"at\": 1790392602.890702, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790392616.508218, \"source\": \"feature_new\", \"feature_count\": 240}\n{\"at\": 1790392627.4425292, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790392722.9124293, \"source\": \"feature_new\", \"feature_count\": 120}\n{\"at\": 1790392737.7094603, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790392757.723921, \"source\": \"feature_new\", \"feature_count\": 120}\n{\"at\": 1790392777.7390556, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790392797.752167, \"source\": \"feature_new\", \"feature_count\": 120}\n",
+      "elapsed_seconds": 338.87
+    },
+    "stripe-replicated": {
+      "application": "stripe-marathon",
+      "incident": "feature_config",
+      "tier": "replicated",
+      "passed": true,
+      "images": {
+        "docker.io/library/python:3.12.13-alpine3.23": "docker.io/library/python@sha256:601d3d3797e90e2534782e69c85fafb7971b43f24c7b1b079b7e48dd435e458d",
+        "docker.io/clickhouse/clickhouse-server:25.8.12.129-alpine": "docker.io/clickhouse/clickhouse-server@sha256:748db0f759216ac0dce8784f22fcfba1284c70874ebcc922a27998cb4e3de347",
+        "ghcr.io/cloudnative-pg/postgresql:16.14-system-trixie": "ghcr.io/cloudnative-pg/postgresql@sha256:04f35778ca3b55b52a81dae969bef179ead315b9f02d2b4b21a3415de269b836",
+        "docker.io/library/sregym-stripe-marathon:b584170d733ece2d": "sha256:de77560cc391e9a395f290b85b0041b04024aab722372b6fdfa4e27d6ba3ea11"
+      },
+      "healthy": {
+        "success": true,
+        "application": "stripe-marathon",
+        "scale_tier": "replicated",
+        "database_members_verified": 3,
+        "original_volumes_verified": 6,
+        "business_data_verified": true
+      },
+      "before_permissions": {
+        "settings": {
+          "enabled": true,
+          "bot_management_enabled": true,
+          "sources": [
+            "feature_old",
+            "feature_new"
+          ]
+        },
+        "current_features": 120,
+        "source_counts": {
+          "feature_old": 120,
+          "feature_new": 120
+        },
+        "safe": true
+      },
+      "injected": {
+        "success": false,
+        "reason": "recurring_configuration_risk",
+        "failure_class": "agent_error",
+        "detail": {
+          "configuration": {
+            "settings": {
+              "enabled": true,
+              "bot_management_enabled": true,
+              "sources": [
+                "feature_old",
+                "feature_new"
+              ]
+            },
+            "current_features": 240,
+            "source_counts": {
+              "feature_old": 120,
+              "feature_new": 240
+            },
+            "safe": false
+          }
+        }
+      },
+      "healthy_window": {
+        "success": false,
+        "reason": "recurring_configuration_risk",
+        "failure_class": "agent_error",
+        "detail": {
+          "configuration": {
+            "settings": {
+              "enabled": true,
+              "bot_management_enabled": true,
+              "sources": [
+                "feature_old",
+                "feature_new"
+              ]
+            },
+            "current_features": 120,
+            "source_counts": {
+              "feature_old": 120,
+              "feature_new": 240
+            },
+            "safe": false
+          }
+        }
+      },
+      "contained": {
+        "success": false,
+        "reason": "webhook_backlog_incomplete",
+        "failure_class": "agent_error",
+        "detail": {
+          "member": "stripe-marathon-db-1",
+          "changed_records": {},
+          "duplicate_financial_effects": 0,
+          "missing_events": [],
+          "undelivered_events": [
+            "evt_0O2NdNR9kFSmYoPnjniDsudK",
+            "evt_21wUUt2QUVaF7dxVA0IYPYx1",
+            "evt_4yj5cuS2joctXJIKQEP3MLqV",
+            "evt_6AFeLFmiZjwIpvpJyyqP9P8z",
+            "evt_C0OyetEVlW5PM635QFcrWNLS",
+            "evt_CbuFmeaOqpm9POGiwkLxa6LG",
+            "evt_ERxcmvuvKWlpdWWGSmYh1tjT",
+            "evt_KQVti3j7ODaa9kfxbFPer1rx",
+            "evt_NwSw2lhp2EOll5Rthjha0vHo",
+            "evt_QkeVOjbrtinijZA9iJJ9GFOO",
+            "evt_RK7SHT6jTDJw1GIbCwsfDLUB",
+            "evt_TBl7sLfYW2NEQI2ZQyiLjuQc",
+            "evt_TxaLz4ClwZBBW3zyORq0FwMr",
+            "evt_UBttJKcIL1AeAwtABQO2bC9I",
+            "evt_XE6Le8kblUSgoZnMLI5M23BE",
+            "evt_YLUM3qMGI2PCWj1WKA9fBkcY",
+            "evt_ZxYUqpZNpVRW3A2vpN9JlMP5",
+            "evt_cvRxJdzaIrMZZx7ytKZ3UIGt",
+            "evt_d3lVB5am2MhRI6Fy4T1rvgka",
+            "evt_kzQzyRLdAXUpJnSnqMhlyu59",
+            "evt_lAeiQ0AQLm8Jpfpyw5VXRCMS",
+            "evt_mnyCZjh0b68CnUJGAMBEpom5",
+            "evt_pPtWvRBWiD5lk4TSy5ufMNDJ",
+            "evt_wGtJQNsVOig3HQ1ZF3x5hyj7"
+          ]
+        }
+      },
+      "partial_replay": {
+        "success": false,
+        "reason": "webhook_backlog_incomplete",
+        "failure_class": "agent_error",
+        "detail": {
+          "member": "stripe-marathon-db-1",
+          "changed_records": {},
+          "duplicate_financial_effects": 0,
+          "missing_events": [],
+          "undelivered_events": [
+            "evt_TxaLz4ClwZBBW3zyORq0FwMr",
+            "evt_UBttJKcIL1AeAwtABQO2bC9I",
+            "evt_XE6Le8kblUSgoZnMLI5M23BE",
+            "evt_YLUM3qMGI2PCWj1WKA9fBkcY",
+            "evt_ZxYUqpZNpVRW3A2vpN9JlMP5",
+            "evt_cvRxJdzaIrMZZx7ytKZ3UIGt",
+            "evt_d3lVB5am2MhRI6Fy4T1rvgka",
+            "evt_kzQzyRLdAXUpJnSnqMhlyu59",
+            "evt_lAeiQ0AQLm8Jpfpyw5VXRCMS",
+            "evt_mnyCZjh0b68CnUJGAMBEpom5",
+            "evt_pPtWvRBWiD5lk4TSy5ufMNDJ",
+            "evt_wGtJQNsVOig3HQ1ZF3x5hyj7"
+          ]
+        }
+      },
+      "second_replay": {
+        "queued": 0,
+        "keys": []
+      },
+      "recovered": {
+        "success": true,
+        "application": "stripe-marathon",
+        "scale_tier": "replicated",
+        "database_members_verified": 3,
+        "original_volumes_verified": 6,
+        "business_data_verified": true,
+        "acknowledged_payments_verified": 24,
+        "original_webhooks_delivered": 24,
+        "configuration": {
+          "settings": {
+            "enabled": false,
+            "bot_management_enabled": true,
+            "sources": [
+              "feature_old",
+              "feature_new"
+            ]
+          },
+          "current_features": 120,
+          "source_counts": {},
+          "safe": true
+        },
+        "stable_traffic_seconds": 42,
+        "traffic_samples": 21
+      },
+      "query_fixed_and_restarted": {
+        "success": true,
+        "application": "stripe-marathon",
+        "scale_tier": "replicated",
+        "database_members_verified": 3,
+        "original_volumes_verified": 6,
+        "business_data_verified": true,
+        "acknowledged_payments_verified": 24,
+        "original_webhooks_delivered": 24,
+        "configuration": {
+          "settings": {
+            "enabled": true,
+            "bot_management_enabled": true,
+            "sources": [
+              "feature_old",
+              "feature_new"
+            ]
+          },
+          "current_features": 120,
+          "source_counts": {
+            "feature_old": 120,
+            "feature_new": 120
+          },
+          "safe": true
+        },
+        "stable_traffic_seconds": 42,
+        "traffic_samples": 21
+      },
+      "generation_history": "{\"at\": 1790392957.9747612, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790392977.9878395, \"source\": \"feature_new\", \"feature_count\": 120}\n{\"at\": 1790392998.011721, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790393018.038505, \"source\": \"feature_new\", \"feature_count\": 120}\n{\"at\": 1790393032.959981, \"source\": \"feature_new\", \"feature_count\": 240}\n{\"at\": 1790393064.234001, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790393198.0621865, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790393206.5345623, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790393226.549015, \"source\": \"feature_new\", \"feature_count\": 120}\n{\"at\": 1790393246.5727134, \"source\": \"feature_old\", \"feature_count\": 120}\n{\"at\": 1790393266.5874767, \"source\": \"feature_new\", \"feature_count\": 120}\n{\"at\": 1790393286.6066182, \"source\": \"feature_old\", \"feature_count\": 120}\n",
+      "elapsed_seconds": 509.12
+    }
+  },
+  "conductor_lifecycle": {
+    "problem": "stripe_feature_config_single",
+    "profile": "svelte",
+    "with_loki": false,
+    "passed": true,
+    "elapsed_seconds": 491.94,
+    "stages": {
+      "resolve": {
+        "name": "Resolve problem in registry",
+        "status": "pass",
+        "detail": "StripeFeatureConfig \u00b7 app `SWE-Marathon Stripe prototype`"
+      },
+      "deploy": {
+        "name": "Deploy application",
+        "status": "pass",
+        "detail": "`SWE-Marathon Stripe prototype` deployed to namespace `stripe-marathon`"
+      },
+      "oracle_healthy": {
+        "name": "Oracle passes before fault injection",
+        "status": "pass",
+        "detail": "oracle reported success after 1 check(s)"
+      },
+      "inject": {
+        "name": "Inject fault",
+        "status": "pass",
+        "detail": "inject_fault() completed without error"
+      },
+      "oracle_fail": {
+        "name": "Oracle fails after fault injection",
+        "status": "pass",
+        "detail": "oracle reported failure after 1 check(s)"
+      },
+      "recover": {
+        "name": "Recover fault",
+        "status": "pass",
+        "detail": "recover_fault() completed without error"
+      },
+      "oracle_pass": {
+        "name": "Oracle passes after recovery",
+        "status": "pass",
+        "detail": "oracle reported success after 1 check(s)"
+      },
+      "cleanup": {
+        "name": "Clean up application and local port forwards",
+        "status": "pass",
+        "detail": "application namespace and local port forwards removed"
+      }
+    }
+  },
+  "unit_tests": ".................................................                        [100%]\n49 passed in 7.36s",
+  "model_attempts": 0,
+  "difficulty_established": false,
+  "development_findings": [
+    "ClickHouse requires X-ClickHouse-User together with the password header; fixed before clean admission.",
+    "Atomic GitLab schema deletion exceeded the default PostgreSQL lock table; recovery environment now sets max_locks_per_transaction=1024.",
+    "GitLab was scheduled on another KIND worker; an unused cached image on the old worker was removed to recover private Docker space during setup. Healthy admission began only after readiness.",
+    "An earlier GitLab restart check overlapped conductor worker-kubelet resets and returned an ambiguous kubectl error. That run is excluded; final admission runs after conductor completion.",
+    "Final Stripe grading also rejects missing durable state and delivery jobs/pending counters left after receipt; covered by unit checks, clean admission and the conductor lifecycle."
+  ],
+  "sources": [
+    "https://about.gitlab.com/blog/postmortem-of-database-outage-of-january-31/",
+    "https://blog.cloudflare.com/18-november-2025-outage/"
+  ]
+}
