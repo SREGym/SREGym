@@ -117,3 +117,37 @@ python scripts/evaluate_deathstarbench.py \
 Admission is not a difficulty result, and this family has **not** yet been
 screened against any agent. See the [calibration report](difficulty-calibration.md)
 for the cohort rules that apply.
+
+## Completed live admission
+
+The `single` tier passed full admission in 1,963 seconds including cleanup, with
+no errors and no cleanup errors. Every stage returned the verdict the design
+predicts:
+
+| Elapsed | Stage | Verdict |
+|---:|---|---|
+| 725 s | healthy | pass |
+| 978 s | after the failover | `orphaned_writes_abandoned` |
+| 1,199 s | failed back to the demoted snapshot | `post_promotion_writes_lost` |
+| 1,422 s | promoted history rebuilt | `orphaned_writes_abandoned` |
+| 1,426 s | half the tail reconciled | `orphaned_writes_abandoned` |
+| 1,440 s | tail fully reconciled | pass |
+| 1,444 s | one write reconciled twice | `acknowledged_writes_duplicated` |
+| 1,681 s | recovery rebuilt from the promoted history | pass |
+| 1,875 s | after an application restart | pass |
+| 1,899 s | reference recovery | pass |
+
+The fixture produced 6 orphaned writes, 6 post-promotion writes and **6 colliding
+public identities** — `(project 2, 3, 4) × (IID 5, 6)`, every orphan's identity
+reissued to a different post-promotion issue. The journal carried all 6.
+
+The two decisive results are the middle rows. Failing back recovered all 6
+orphans and displaced all 6 post-promotion writes at exactly those identities.
+Rebuilding the promoted history displaced nothing, which confirms that restoring
+the shared snapshot resets GitLab's internal IID allocation so the same public
+identities are reissued — that is what makes the collision reproducible rather
+than incidental.
+
+Reference reconciliation moved each orphan to a fresh IID (for example original
+IID 6 in project 2 became IID 8) and reported the mapping. Running it again was a
+verified no-op, and both evidence snapshots were byte-unchanged at the end.
