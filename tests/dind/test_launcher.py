@@ -35,6 +35,15 @@ class LauncherTests(unittest.TestCase):
             command = launcher.run_command(args)
             self.assertEqual(command[-3:], payload)
 
+    def test_explicit_codex_auth_mount_is_read_only_and_does_not_mount_home(self):
+        with tempfile.TemporaryDirectory() as directory:
+            auth = Path(directory) / "auth.json"
+            auth.write_text("{}")
+            args = launcher.parser().parse_args(["run", "--output", directory, "--codex-auth-file", str(auth)])
+            command = launcher.run_command(args)
+            self.assertIn(f"type=bind,src={auth},dst=/root/.codex/auth.json,readonly", command)
+            self.assertNotIn("dst=/root/.codex,", " ".join(command))
+
     def test_optional_memory_backed_docker_data_keeps_results_on_host(self):
         with tempfile.TemporaryDirectory() as directory:
             args = launcher.parser().parse_args(
@@ -43,6 +52,7 @@ class LauncherTests(unittest.TestCase):
             command = launcher.run_command(args)
             self.assertEqual(command[command.index("--tmpfs") + 1], "/run/sregym-docker-data:rw,size=20g")
             self.assertIn("SREGYM_DOCKER_TMPFS_SIZE=20g", command)
+            self.assertIn("/tmp:rw,size=4g", command)
             self.assertEqual(command[command.index("--memory") + 1], "28g")
             self.assertIn("dst=/opt/sregym/results", command[command.index("--mount") + 1])
 

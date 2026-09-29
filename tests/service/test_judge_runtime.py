@@ -140,6 +140,8 @@ def test_main_image_selection_reuses_one_build(monkeypatch, backend, external, f
         profile="full",
         noise=False,
         stages=None,
+        baseline=None,
+        propagation=None,
     )
     with pytest.raises(StopBeforeCluster):
         main.main(args)

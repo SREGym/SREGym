@@ -51,6 +51,8 @@ def run_command(args):
             [
                 "--tmpfs",
                 f"/run/sregym-docker-data:rw,size={args.docker_tmpfs_size}",
+                "--tmpfs",
+                "/tmp:rw,size=4g",
                 "--env",
                 f"SREGYM_DOCKER_TMPFS_SIZE={args.docker_tmpfs_size}",
             ]
@@ -60,6 +62,11 @@ def run_command(args):
             command.extend(["--env", name])
     if args.env_file:
         command.extend(["--env-file", str(args.env_file.resolve())])
+    if args.codex_auth_file:
+        auth = args.codex_auth_file.expanduser().resolve(strict=True)
+        if not auth.is_file():
+            raise ValueError("--codex-auth-file must name an auth.json file")
+        command.extend(["--mount", f"type=bind,src={auth},dst=/root/.codex/auth.json,readonly"])
     command.append(args.image)
     payload = args.command
     if payload[:1] == ["--"]:
@@ -84,6 +91,9 @@ def parser():
         help="Store private Docker data in tmpfs (e.g. 20g); counts against --memory and changes disk behavior",
     )
     run.add_argument("--env-file", type=Path)
+    run.add_argument(
+        "--codex-auth-file", type=Path, help="Explicitly mount a Codex auth.json file read-only for evaluations"
+    )
     run.add_argument("command", nargs=argparse.REMAINDER)
     return result
 

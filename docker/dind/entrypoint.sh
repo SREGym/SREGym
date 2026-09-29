@@ -55,8 +55,10 @@ if [[ -n ${SREGYM_DOCKER_TMPFS_SIZE:-} ]]; then
     docker_data_image=/run/sregym-docker-data/docker.img
     truncate -s "$(numfmt --from=iec "${SREGYM_DOCKER_TMPFS_SIZE^^}")" "$docker_data_image"
     mkfs.ext4 -q -F -m 0 -E lazy_itable_init=0,lazy_journal_init=0 "$docker_data_image"
+    # Discard punches holes in the backing tmpfs file when ext4 frees blocks.
+    # Without it, deleted images and volumes keep consuming RAM across attempts.
     # mount's loop devices use autoclear and detach when the mount is released.
-    mount -o loop,noatime "$docker_data_image" /var/lib/docker
+    mount -o loop,noatime,discard "$docker_data_image" /var/lib/docker
 fi
 export container=docker
 dockerd --host=unix:///var/run/docker.sock \

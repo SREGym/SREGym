@@ -18,7 +18,7 @@ def _conductor(monkeypatch, validator):
     problem = Mock()
     problem.namespace = "test-app"
     problem.requires_khaos.return_value = False
-    problem.mitigation_oracle.evaluate.side_effect = [{"success": False}, {"success": True}]
+    problem.mitigation_oracle.evaluate.side_effect = [{"success": True}, {"success": False}, {"success": True}]
     conductor = Mock()
     conductor.problems.PROBLEM_REGISTRY = {"problem": lambda: problem}
     conductor.problems.get_problem_instance.return_value = problem
@@ -68,6 +68,16 @@ def test_oracle_exception_does_not_count_as_detecting_fault(validator):
     assert not matched
     assert checks == 1
     assert result["success"] is None
+
+
+def test_unhealthy_application_is_rejected_before_injection(monkeypatch, validator):
+    conductor, problem = _conductor(monkeypatch, validator)
+    problem.mitigation_oracle.evaluate.side_effect = [{"success": False}]
+    passed, stages = validator.validate("problem", 0, 0, 0)
+    assert not passed
+    assert stages["oracle_healthy"].status == validator.FAIL
+    problem.inject_fault.assert_not_called()
+    problem.app.cleanup.assert_called_once()
 
 
 def test_failed_recovery_still_cleans_up_application_and_proxies(monkeypatch, validator):

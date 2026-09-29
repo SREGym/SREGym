@@ -2,7 +2,8 @@
 
 A contributed problem must survive the full lifecycle that an agent exercises:
 
-    deploy app -> inject fault -> mitigation oracle FAILS
+    deploy app -> mitigation oracle PASSES
+               -> inject fault -> mitigation oracle FAILS
                 -> recover fault -> mitigation oracle PASSES
 
 This script runs exactly that sequence for one problem ID and exits non-zero if
@@ -93,6 +94,7 @@ def validate(
     stages = {
         "resolve": Stage("Resolve problem in registry"),
         "deploy": Stage("Deploy application"),
+        "oracle_healthy": Stage("Oracle passes before fault injection"),
         "inject": Stage("Inject fault"),
         "oracle_fail": Stage("Oracle fails after fault injection"),
         "recover": Stage("Recover fault"),
@@ -146,6 +148,12 @@ def validate(
         oracle.capture_baseline()
         stages["deploy"].status = PASS
         stages["deploy"].detail = f"`{problem.app.name}` deployed to namespace `{problem.namespace}`"
+
+        matched, checks, result = _poll_oracle(oracle, True, recover_timeout, poll_interval)
+        if not matched:
+            raise ValidationError(f"application is unhealthy before injection ({checks} checks). Last result: {result}")
+        stages["oracle_healthy"].status = PASS
+        stages["oracle_healthy"].detail = f"oracle reported success after {checks} check(s)"
 
         # --- Inject the fault -------------------------------------------------
         logger.info("[STAGE] Injecting fault")

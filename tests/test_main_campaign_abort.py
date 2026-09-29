@@ -90,6 +90,8 @@ def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, extern
         noise=False,
         use_external_harness=external,
         stages=stages,
+        baseline=None,
+        propagation=None,
     )
     with pytest.raises(ReachedConductor):
         benchmark_main._run_benchmark(args)
@@ -97,7 +99,10 @@ def test_judge_preflight_only_when_diagnosis_can_run(monkeypatch, stages, extern
 
 
 @pytest.mark.parametrize("platform_failure, expected_attempts", [(True, 1), (False, 3)])
-def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platform_failure, expected_attempts):
+@pytest.mark.parametrize("cleanup_budget", [None, 600])
+def test_deployment_retries_only_transient_failures(
+    monkeypatch, tmp_path, platform_failure, expected_attempts, cleanup_budget
+):
     benchmark_main = _load_main_module()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(benchmark_main.asyncio, "sleep", AsyncMock())
@@ -112,12 +117,18 @@ def test_deployment_retries_only_transient_failures(monkeypatch, tmp_path, platf
         finish_problem_in_background=Mock(),
         wait_for_submission_work=AsyncMock(),
     )
+    if cleanup_budget is not None:
+        conductor.problem = SimpleNamespace(cleanup_timeout_seconds=cleanup_budget)
 
     results = benchmark_main.driver_loop(conductor, use_external_harness=True)
 
     assert conductor.start_problem.await_count == expected_attempts
     assert conductor.finish_problem_in_background.call_count == expected_attempts
     assert conductor.wait_for_submission_work.await_count == expected_attempts
+    assert all(
+        call.kwargs["timeout"] == (cleanup_budget or benchmark_main.CLEANUP_DRAIN_TIMEOUT_SECONDS)
+        for call in conductor.wait_for_submission_work.await_args_list
+    )
     conductor.bind_phase_ledger.assert_called_once()
     assert results == [
         {None: [{"problem_id": "problem", "attempt": 1, "deployment_profile": "full", "deploy_failed": True}]}

@@ -52,6 +52,18 @@ EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
 CLEANUP_DRAIN_TIMEOUT_SECONDS = 300
 
 
+def get_benchmark_agent(name: str):
+    """Use the same configured registry for installation and attempt startup."""
+    path = Path(os.environ.get("SREGYM_AGENT_REGISTRY", Path(__file__).with_name("agents.yaml")))
+    return get_agent(name, path=path)
+
+
+def problem_cleanup_timeout(conductor) -> float:
+    """Allow stateful reference recovery its own budget after agent grading."""
+    problem = getattr(conductor, "problem", None)
+    return getattr(problem, "cleanup_timeout_seconds", CLEANUP_DRAIN_TIMEOUT_SECONDS)
+
+
 def _http_endpoint(value: str) -> str:
     """Validate an additional endpoint supplied on the command line."""
     try:
@@ -266,7 +278,7 @@ def driver_loop(
             """Run safety cleanup without letting a stuck Kubernetes call hang the campaign."""
             try:
                 conductor.finish_problem_in_background()
-                await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
             except TimeoutError:
                 conductor.abandon_submission_work()
                 conductor.results["cleanup_timed_out"] = True
@@ -511,17 +523,14 @@ def driver_loop(
 
                 if conductor.stage_sequence:
                     with _artifact_environment(run):
-                        reg = get_agent(
-                            agent_to_run,
-                            path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml",
-                        )
+                        reg = get_benchmark_agent(agent_to_run)
                         if reg:
                             agent_proc = await LAUNCHER.ensure_started(reg)
                 else:
                     console.log("⏩ No agent stages are configured; waiting only for bounded cleanup")
                     if conductor.close_submissions():
                         try:
-                            await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                            await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
                         except TimeoutError:
                             abort_campaign_after_attempt = True
                             conductor.abandon_submission_work()
@@ -626,7 +635,7 @@ def driver_loop(
                 # freezing the attempt snapshot or starting another attempt.
                 if not abort_campaign_after_attempt and conductor.close_submissions():
                     try:
-                        await conductor.wait_for_submission_work(timeout=CLEANUP_DRAIN_TIMEOUT_SECONDS)
+                        await conductor.wait_for_submission_work(timeout=problem_cleanup_timeout(conductor))
                     except TimeoutError:
                         abort_campaign_after_attempt = True
                         conductor.abandon_submission_work()
@@ -838,7 +847,9 @@ def main(args):
     init_logger()
     backend = "api" if args.use_external_harness else getattr(args, "judge_backend", "api")
     with managed_judge_backend(backend, force_build=args.force_build) as agent_image:
-        return _run_benchmark(args, judge_backend=backend, agent_image=agent_image)
+        return _run_benchmark(
+            args, judge_backend=backend, agent_image=getattr(args, "agent_image", None) or agent_image
+        )
 
 
 def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None = None):
@@ -882,11 +893,7 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
     )
 
     # Only build/check agent container image if the agent requires it
-    agent_reg = (
-        get_agent(args.agent, path=Path(os.path.dirname(os.path.abspath(__file__))) / "agents.yaml")
-        if args.agent
-        else None
-    )
+    agent_reg = get_benchmark_agent(args.agent) if args.agent else None
     if (
         internet_policy.is_filtered
         and not args.use_external_harness
@@ -1145,7 +1152,11 @@ if __name__ == "__main__":
         default=1,
         help="Number of attempts to run each problem (default: 1)",
     )
-    parser.add_argument(
+    image_selection = parser.add_mutually_exclusive_group()
+    image_selection.add_argument(
+        "--agent-image", help="Use an explicit agent container image, including a locally built driver update"
+    )
+    image_selection.add_argument(
         "--force-build",
         action="store_true",
         help="Force rebuild the agent Docker image even if it already exists (use after updating dependencies or build scripts)",
