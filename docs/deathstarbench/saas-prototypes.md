@@ -154,6 +154,15 @@ archives do not fill the host root disk; temporary files count against the outer
 memory limit. The configured 34 GiB/8 CPU budget is a validation setting, not a
 measured minimum. Run the large applications serially.
 
-The current fault is service-selector corruption, with preserved business-state
-invariants. These prototypes do not yet implement the GitLab 2017 deletion
-sequence, Slack packet-loss cascade, or a historical payment-processing outage.
+The fault described on this page is service-selector corruption, with preserved
+business-state invariants. That is the lifecycle fault these prototypes ship with;
+the incident families built on top of them live in their own documents:
+
+- GitLab 2017 deletion shape: [database deletion](saas-postmortems.md) and its
+  [notification](gitlab-notification-recovery.md) variants.
+- GitHub 2018 failover shape: [regional failover divergence](gitlab-regional-failover.md).
+- Slack 2021 cascade shape: [Mattermost capacity cascade](mattermost-capacity-cascade.md).
+- Cloudflare 2025 configuration shape: [recurring bad configuration](stripe-config-screen.md).
+
+Each reproduces the causal shape of its postmortem, not the incident itself; every
+family's document states what it does and does not model.
