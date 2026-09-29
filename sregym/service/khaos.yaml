@@ -93,10 +93,10 @@ spec:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
-                  - key: node-role.kubernetes.io/worker
-                    operator: Exists
-      nodeSelector:
-        node-role.kubernetes.io/worker: ""   # explicit worker targeting
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+                  - key: node-role.kubernetes.io/master
+                    operator: DoesNotExist
       containers:
         - name: khaos
           image: ghcr.io/xlab-uiuc/khaos:latest

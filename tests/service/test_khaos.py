@@ -90,3 +90,21 @@ def test_daemonsets_bootstrap_bpffs_with_privileged_xlab_image():
 
 def test_silent_data_corruption_requests_dm_flakey_instead_of_ebpf():
     assert SilentDataCorruption.khaos_capabilities(object()) == frozenset({KhaosCapability.DM_FLAKEY})
+
+
+def test_worker_daemonset_targets_unlabelled_worker_nodes():
+    # kind and minikube workers carry no node-role label, so select by absence of the control-plane role.
+    manifest = Path("sregym/service/khaos.yaml").read_text()
+    worker = next(ds for ds in yaml.safe_load_all(manifest) if ds["metadata"]["name"] == "khaos-worker")
+    pod_spec = worker["spec"]["template"]["spec"]
+    terms = pod_spec["affinity"]["nodeAffinity"]["requiredDuringSchedulingIgnoredDuringExecution"]["nodeSelectorTerms"]
+
+    assert "nodeSelector" not in pod_spec
+    assert terms == [
+        {
+            "matchExpressions": [
+                {"key": "node-role.kubernetes.io/control-plane", "operator": "DoesNotExist"},
+                {"key": "node-role.kubernetes.io/master", "operator": "DoesNotExist"},
+            ]
+        }
+    ]
