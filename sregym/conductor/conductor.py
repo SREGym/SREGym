@@ -490,12 +490,8 @@ class Conductor:
 
         # Stop noises
         if self.config.enable_noise:
-            try:
-                nm = get_noise_manager()
-                nm.stop()
-                self.logger.info("[CLEANUP] NoiseManager stopped")
-            except Exception as e:
-                self.logger.warning(f"Failed to stop NoiseManager: {e}")
+            get_noise_manager().stop()
+            self.logger.info("[CLEANUP] NoiseManager stopped")
 
         if stop_late_cleanup():
             return
@@ -754,12 +750,8 @@ class Conductor:
 
         # Stop noise before evaluation to ensure clean environment
         if self.config.enable_noise:
-            try:
-                nm = get_noise_manager()
-                self.logger.info("Stopping noise manager before evaluation...")
-                nm.stop()
-            except Exception as e:
-                self.logger.warning(f"Failed to stop noise manager: {e}")
+            self.logger.info("Stopping noise manager before evaluation...")
+            get_noise_manager().stop()
 
         # The agent's time on this stage ends when a submission arrives to be
         # evaluated; grading time is its own phase, not the agent's.
