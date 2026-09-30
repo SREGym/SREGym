@@ -36,6 +36,9 @@ all:
     valkey_memory_disruption:
     - diagnosis
     - mitigation
+    agent_retry_metastable_overload:
+    - diagnosis
+    - mitigation
     capacity_decrease_rpc_retry_storm:
     - diagnosis
     - mitigation

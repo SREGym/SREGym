@@ -1,0 +1,18 @@
+{
+    "Name": "Agentic Retry Platform",
+    "Namespace": "agentic-retry-platform",
+    "Desc": "Autonomous Agentic Retry Platform with multi-stage reasoning, PgBouncer pooling, Redis workflow backlog, and tiered retries.",
+    "Supported Operations": [
+        "Execute agentic workflow supervisor",
+        "Call tool gateway and data API",
+        "Query database connection pool",
+        "Inject transient backend latency perturbation",
+        "Observe multi-layer retry amplification"
+    ],
+    "Helm Config": {
+        "release_name": "agentic-retry-platform",
+        "chart_path": "agentic-retry-platform/helm",
+        "namespace": "agentic-retry-platform"
+    },
+    "K8S Deploy Path": "agentic-retry-platform/helm"
+}

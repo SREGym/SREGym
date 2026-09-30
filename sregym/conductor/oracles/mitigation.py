@@ -78,7 +78,6 @@ class MitigationOracle(Oracle):
         """Check current application health without another rollout grace period."""
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
-        results = {}
 
         deployments = kubectl.list_deployments(namespace)
         current_deps = {dep.metadata.name: dep for dep in deployments.items}
