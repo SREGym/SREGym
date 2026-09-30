@@ -9,14 +9,17 @@ from datetime import timedelta
 import pytest
 from cryptography import x509
 
-from sregym.service.k8s_proxy import (
+from sregym.service.agent_visibility_policy import (
     HELM_RELEASE_SECRET_NAME_PREFIX,
     HELM_RELEASE_SECRET_TYPE,
+    filter_resource_list,
+    is_helm_release_secret,
+)
+from sregym.service.k8s_proxy import (
     KubernetesAPIProxy,
-    _filter_resource_list,
     _inspect_workload_request,
     _is_cluster_egress_control_mutation,
-    _is_helm_release_secret,
+    _is_filtered_object_read,
     _is_helm_release_secret_request,
     _is_hidden_namespace_request,
     _is_secret_collection_delete,
@@ -166,19 +169,19 @@ def test_helm_release_detection_does_not_depend_on_labels():
     secret = copy.deepcopy(HELM_SECRET)
     secret["metadata"]["labels"] = {}
 
-    assert _is_helm_release_secret(secret)
-    assert not _is_helm_release_secret(ORDINARY_SECRET)
+    assert is_helm_release_secret(secret)
+    assert not is_helm_release_secret(ORDINARY_SECRET)
 
 
 def test_helm_release_type_is_hidden_even_with_an_unexpected_name():
     secret = copy.deepcopy(HELM_SECRET)
     secret["metadata"]["name"] = "unexpected-name"
 
-    assert _is_helm_release_secret(secret)
+    assert is_helm_release_secret(secret)
 
 
 def test_resource_lists_hide_helm_records_but_keep_ordinary_secrets():
-    result = _filter_resource_list(
+    result = filter_resource_list(
         {"items": [copy.deepcopy(HELM_SECRET), copy.deepcopy(ORDINARY_SECRET)]},
         hidden_namespaces=set(),
         hidden_labels={},
@@ -194,7 +197,7 @@ def test_resource_lists_still_hide_configured_labels_and_namespaces():
     }
     chaos_pod = {"metadata": {"name": "chaos", "namespace": "chaos-mesh"}}
 
-    result = _filter_resource_list(
+    result = filter_resource_list(
         {"items": [ordinary_pod, load_generator, chaos_pod]},
         hidden_namespaces={"chaos-mesh"},
         hidden_labels={"app": {"load-generator"}},
@@ -203,8 +206,87 @@ def test_resource_lists_still_hide_configured_labels_and_namespaces():
     assert result["items"] == [ordinary_pod]
 
 
+def test_chaos_control_plane_and_events_are_hidden_but_normal_events_remain():
+    chaos_crd = {"kind": "CustomResourceDefinition", "metadata": {"name": "podchaos.chaos-mesh.org"}}
+    chaos_event = {
+        "kind": "Event",
+        "metadata": {"name": "chaos-event", "namespace": "astronomy-shop"},
+        "reportingComponent": "chaos-controller-manager",
+    }
+    network_chaos_event = {
+        "metadata": {
+            "name": "network-chaos-event",
+            "namespace": "astronomy-shop",
+            "annotations": {"chaos-mesh.org/type": "updated"},
+        },
+        "source": {"component": "podnetworkchaos"},
+        "involvedObject": {"apiVersion": "chaos-mesh.org/v1alpha1", "kind": "PodNetworkChaos"},
+    }
+    kubelet_event = {
+        "kind": "Event",
+        "metadata": {"name": "pod-restarted", "namespace": "astronomy-shop"},
+        "source": {"component": "kubelet"},
+        "message": "Container restarted",
+    }
+
+    result = filter_resource_list(
+        {"items": [chaos_crd, chaos_event, network_chaos_event, kubelet_event]}, {"chaos-mesh"}, {}
+    )
+
+    assert result["items"] == [kubelet_event]
+
+
+def test_visible_pod_keeps_real_image_while_chaos_bookkeeping_is_removed():
+    pod = {
+        "kind": "Pod",
+        "metadata": {
+            "name": "checkout",
+            "namespace": "astronomy-shop",
+            "annotations": {"chaos-mesh.org/injected": "true", "team": "checkout"},
+            "managedFields": [{"manager": "chaos-controller-manager"}, {"manager": "kubectl"}],
+        },
+        "spec": {"containers": [{"name": "checkout", "image": "registry.k8s.io/pause:3.9"}]},
+    }
+
+    result = filter_resource_list({"items": [pod]}, {"chaos-mesh"}, {})["items"][0]
+
+    assert result["metadata"]["annotations"] == {"team": "checkout"}
+    assert result["metadata"]["managedFields"] == [{"manager": "kubectl"}]
+    assert result["spec"]["containers"][0]["image"] == "registry.k8s.io/pause:3.9"
+
+
+def test_direct_objects_require_json_but_streaming_subresources_do_not():
+    assert _is_filtered_object_read("/api/v1/namespaces/app/pods/frontend")
+    assert _is_filtered_object_read("/api/v1/namespaces/app/pods/frontend/status")
+    assert not _is_filtered_object_read("/api/v1/namespaces/app/pods/frontend/log")
+    assert not _is_filtered_object_read("/api/v1/namespaces/app/pods/frontend/exec")
+
+
+def test_direct_pod_read_sanitizes_metadata_without_changing_image(proxy):
+    FakeHTTPSConnection.response = FakeResponse(
+        json.dumps(
+            {
+                "kind": "Pod",
+                "metadata": {
+                    "name": "checkout",
+                    "namespace": "astronomy-shop",
+                    "annotations": {"chaos-mesh.org/injected": "true", "team": "checkout"},
+                },
+                "spec": {"containers": [{"image": "registry.k8s.io/pause:3.9"}]},
+            }
+        ).encode()
+    )
+
+    status, _, body = request(proxy, "/api/v1/namespaces/astronomy-shop/pods/checkout")
+    pod = json.loads(body)
+
+    assert status == 200
+    assert pod["metadata"]["annotations"] == {"team": "checkout"}
+    assert pod["spec"]["containers"][0]["image"] == "registry.k8s.io/pause:3.9"
+
+
 def test_table_responses_hide_helm_records():
-    result = _filter_resource_list(
+    result = filter_resource_list(
         {"rows": [{"object": copy.deepcopy(HELM_SECRET)}, {"object": copy.deepcopy(ORDINARY_SECRET)}]},
         hidden_namespaces=set(),
         hidden_labels={},
@@ -213,8 +295,21 @@ def test_table_responses_hide_helm_records():
     assert result["rows"] == [{"object": ORDINARY_SECRET}]
 
 
+def test_table_responses_hide_chaos_objects_and_preserve_ordinary_rows():
+    table = {
+        "rows": [
+            {"cells": ["podchaos.chaos-mesh.org"], "object": {"metadata": {"name": "podchaos.chaos-mesh.org"}}},
+            {"cells": ["checkout"], "object": {"metadata": {"name": "checkout", "namespace": "app"}}},
+        ]
+    }
+
+    result = filter_resource_list(table, {"chaos-mesh"}, {})
+
+    assert result["rows"] == [{"cells": ["checkout"], "object": {"metadata": {"name": "checkout", "namespace": "app"}}}]
+
+
 def test_uninspectable_table_rows_fail_closed():
-    result = _filter_resource_list(
+    result = filter_resource_list(
         {"rows": [{"cells": [HELM_SECRET_NAME], "object": None}]},
         hidden_namespaces=set(),
         hidden_labels={},
@@ -246,6 +341,119 @@ def test_namespaced_and_encoded_lists_are_filtered():
 def test_encoded_hidden_namespace_path_is_blocked():
     path = "/api/v1/%6eamespaces/chaos-mesh/pods"
     assert _is_hidden_namespace_request(path, {"chaos-mesh"})
+
+
+def test_hidden_namespace_looks_absent_to_agent(proxy):
+    status, _, body = request(proxy, "/api/v1/namespaces/chaos-mesh")
+
+    assert status == 404
+    assert b"chaos-mesh" not in body
+    assert FakeHTTPSConnection.requests == []
+
+
+def test_api_discovery_does_not_advertise_chaos_mesh(proxy):
+    FakeHTTPSConnection.response = FakeResponse(
+        json.dumps(
+            {
+                "kind": "APIGroupList",
+                "groups": [{"name": "chaos-mesh.org"}, {"name": "apps"}],
+            }
+        ).encode()
+    )
+
+    status, _, body = request(proxy, "/apis")
+
+    assert status == 200
+    assert json.loads(body)["groups"] == [{"name": "apps"}]
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "expected"),
+    [
+        (
+            "/openapi/v3",
+            {"paths": {"apis/chaos-mesh.org/v1alpha1": {"serverRelativeURL": "hidden"}, "api/v1": {}}},
+            {"paths": {"api/v1": {}}},
+        ),
+        (
+            "/openapi/v2",
+            {
+                "definitions": {"org.chaos-mesh.v1alpha1.PodChaos": {}, "io.k8s.api.core.v1.Pod": {}},
+                "paths": {"/apis/chaos-mesh.org/v1alpha1/podchaos": {}, "/api/v1/pods": {}},
+            },
+            {"definitions": {"io.k8s.api.core.v1.Pod": {}}, "paths": {"/api/v1/pods": {}}},
+        ),
+    ],
+)
+def test_openapi_discovery_hides_chaos_schemas(proxy, path, payload, expected):
+    content_type = "text/plain; charset=utf-8" if path == "/openapi/v3" else "application/json"
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(payload).encode(), content_type=content_type)
+
+    status, _, body = request(proxy, path)
+
+    assert status == 200
+    assert json.loads(body) == expected
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/apis/chaos-mesh.org/v1alpha1",
+        "/apis/%63haos-mesh.org/v1alpha1/namespaces/astronomy-shop/podchaos",
+        "/openapi/v3/apis/chaos-mesh.org/v1alpha1",
+        "/apis/apiextensions.k8s.io/v1/customresourcedefinitions/podchaos.chaos-mesh.org",
+        "/apis/rbac.authorization.k8s.io/v1/clusterroles/chaos-mesh-controller-manager",
+    ],
+)
+def test_direct_chaos_control_plane_requests_do_not_reach_upstream(proxy, path):
+    status, _, body = request(proxy, path)
+
+    assert status == 404
+    assert b"chaos-mesh" not in body
+    assert FakeHTTPSConnection.requests == []
+
+
+def test_direct_chaos_event_looks_absent(proxy):
+    FakeHTTPSConnection.response = FakeResponse(
+        json.dumps(
+            {
+                "metadata": {"name": "network-event", "namespace": "astronomy-shop"},
+                "involvedObject": {"apiVersion": "chaos-mesh.org/v1alpha1", "kind": "PodNetworkChaos"},
+            }
+        ).encode()
+    )
+
+    status, _, body = request(proxy, "/api/v1/namespaces/astronomy-shop/events/network-event")
+
+    assert status == 404
+    assert b"chaos-mesh" not in body
+
+
+def test_direct_event_read_does_not_accept_uninspectable_protobuf(proxy):
+    FakeHTTPSConnection.response = FakeResponse(b"opaque event", "application/vnd.kubernetes.protobuf")
+
+    status, _, _ = request(
+        proxy,
+        "/api/v1/namespaces/astronomy-shop/events/network-event",
+        headers={"Accept": "application/vnd.kubernetes.protobuf"},
+    )
+
+    assert status == 502
+    assert FakeHTTPSConnection.requests[-1][2]["Accept"] == "application/json"
+
+
+def test_upstream_error_does_not_expose_chaos_admission_component(proxy):
+    FakeHTTPSConnection.response = FakeResponse(
+        b'{"message":"chaos-mesh webhook denied this request"}',
+        status=403,
+    )
+
+    status, headers, body = request(proxy, "/api/v1/namespaces/astronomy-shop/pods")
+
+    assert status == 403
+    assert headers["Content-Type"] == "application/json"
+    assert b"chaos-mesh" not in body
+    assert json.loads(body)["kind"] == "Status"
 
 
 @pytest.mark.parametrize("watch_value", ["true", "TRUE", "1"])
@@ -508,7 +716,14 @@ def test_streams_arrive_before_upstream_closes_and_watch_hides_resources(proxy, 
     proxy.start()
     upstream_reader, upstream_writer = socket.socketpair()
     finish = threading.Event()
-    visible = {"type": "ADDED", "object": {"metadata": {"name": "api"}}}
+    visible = {
+        "type": "ADDED",
+        "object": {"metadata": {"name": "api", "annotations": {"chaos-mesh.org/injected": "true", "team": "api"}}},
+    }
+    expected_visible = {
+        "type": "ADDED",
+        "object": {"metadata": {"name": "api", "annotations": {"team": "api"}}},
+    }
     hidden = {"type": "ADDED", "object": {"metadata": {"name": "load", "labels": {"app": "load-generator"}}}}
     first = (json.dumps(hidden) + "\n" + json.dumps(visible) + "\n").encode() if watch else b"first log line\n"
     content_type = "application/json" if watch else "text/plain"
@@ -539,7 +754,7 @@ def test_streams_arrive_before_upstream_closes_and_watch_hides_resources(proxy, 
             response.begin()
             line = response.readline()
             assert response.status == 200 and not finish.is_set()
-            assert (json.loads(line) == visible) if watch else (line == first)
+            assert (json.loads(line) == expected_visible) if watch else (line == first)
             finish.set()
             assert response.read() == b""
     finally:

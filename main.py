@@ -29,7 +29,6 @@ from sregym.agent_launcher import AgentLauncher
 from sregym.agent_registry import get_agent, list_agents
 from sregym.conductor.conductor import ALL_STAGES, Conductor, ConductorConfig
 from sregym.conductor.conductor_api import request_shutdown, run_api
-from sregym.conductor.constants import StartProblemResult
 from sregym.conductor.problem_sets import PROBLEM_SETS
 from sregym.phases import read_ledger as read_phase_ledger
 from sregym.phases import results_columns as phase_results_columns
@@ -484,11 +483,6 @@ def driver_loop(
                     # Account for this attempt + remaining skipped attempts on the bar.
                     progress.advance(task_id, len(attempts_to_run) - attempt_position)
                     break
-
-                if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
-                    console.log(f"⏭️  Skipping problem '{pid}': requires Khaos but running on emulated cluster")
-                    progress.advance(task_id, len(attempts_to_run) - attempt_position)
-                    break  # Skip to next problem
 
                 # If using external harness, fault is injected - exit now
                 if use_external_harness:

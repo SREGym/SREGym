@@ -45,10 +45,8 @@ predicate shouldIgnore(ProblemSubclass c) {
         filename = "product_catalog_failure.py" or
         filename = "read_error.py" or
         filename = "recommendation_service_cache_failure.py" or
-        filename = "silent_data_corruption.py" or
         filename = "valkey_memory_disruption.py" or
         filename = "email_memory_leak.py" or
-        filename = "khaos_faults.py" or
         filename = "llm_inaccurate_response.py" or
         filename = "llm_rate_limit_error.py"
       )

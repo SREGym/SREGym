@@ -43,32 +43,45 @@ class AlertOracle(BaseOracle):
         self.buffer_seconds = buffer_seconds
 
     def _query_firing_alerts(self) -> list[dict] | None:
-        """Returns list of firing alerts, or None if the cluster is being torn down."""
-        # Use kubectl get --raw to proxy through the API server (plain HTTP, no WebSockets).
-        proxy_path = "/api/v1/namespaces/observe/services/prometheus-server:80/proxy/api/v1/alerts"
-        cmd = ["kubectl", "get", "--raw", proxy_path]
+        """Return firing alerts, or None when Prometheus cannot be checked."""
+        # The filtered Kubernetes proxy blocks Service proxy subresources. Exec
+        # into Prometheus instead, as the conductor's AlertOracle already does.
+        cmd = [
+            "kubectl",
+            "exec",
+            "-n",
+            "observe",
+            "deploy/prometheus-server",
+            "-c",
+            "prometheus-server",
+            "--",
+            "wget",
+            "-qO-",
+            "http://localhost:9090/api/v1/alerts",
+        ]
         try:
             result = subprocess.run(cmd, text=True, capture_output=True, timeout=15)
-            stderr = result.stderr or ""
             if result.returncode != 0:
-                if "NotFound" in stderr or "not found" in stderr.lower():
-                    logger.info("[AlertOracle] Prometheus not found (cluster teardown detected), stopping poll.")
-                    return None
-                logger.warning(f"Failed to query Prometheus alerts: exit {result.returncode}; stderr: {stderr!r}")
-                return []
+                logger.warning(
+                    "Failed to query Prometheus alerts: exit %s; stderr: %r", result.returncode, result.stderr
+                )
+                return None
             payload = json.loads(result.stdout)
-        except subprocess.TimeoutExpired as exc:
-            logger.warning(f"Failed to query Prometheus alerts: {exc}")
-            return []
-        except json.JSONDecodeError as exc:
-            logger.warning(f"Failed to parse Prometheus alerts response: {exc}")
-            return []
+            alerts = payload["data"]["alerts"]
+            if payload.get("status") != "success" or not isinstance(alerts, list):
+                raise ValueError("Unexpected Prometheus alerts response")
+            firing = []
+            for alert in alerts:
+                labels = alert["labels"]
+                if not isinstance(labels, dict):
+                    raise ValueError("Unexpected Prometheus alert labels")
+                if alert["state"] == "firing" and labels.get("namespace") == self.namespace:
+                    firing.append(alert)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, KeyError, TypeError, ValueError, OSError) as exc:
+            logger.warning("Failed to query Prometheus alerts: %s", exc)
+            return None
 
-        return [
-            alert
-            for alert in payload.get("data", {}).get("alerts", [])
-            if alert.get("state") == "firing" and alert.get("labels", {}).get("namespace") == self.namespace
-        ]
+        return firing
 
     def validate(self) -> OracleResult:
         logger.info(f"Waiting {self.buffer_seconds}s before checking alerts...")
@@ -79,22 +92,21 @@ class AlertOracle(BaseOracle):
             status = _get_benchmark_status()
             if status in ("tearing_down", "done"):
                 logger.info(f"[AlertOracle] Benchmark is '{status}', stopping alert polling.")
-                break
-
-            elapsed = time.monotonic() - start
-            if elapsed >= self.sustained_silence_seconds:
-                break
+                return OracleResult(success=None, issues=[f"Benchmark is {status}; alerts were not fully checked"])
 
             firing = self._query_firing_alerts()
             if firing is None:
-                break
+                return OracleResult(success=None, issues=["Could not query Prometheus alerts"])
             if firing:
                 names = ", ".join(a.get("labels", {}).get("alertname", "?") for a in firing)
                 logger.info(f"Firing alerts in {self.namespace}: {names}")
                 logger.info(f"[AlertOracle] FAIL — firing alerts detected in namespace '{self.namespace}': {names}")
                 return OracleResult(success=False, issues=[f"Firing alerts: {names}"])
 
-            time.sleep(self.poll_interval_seconds)
+            remaining = self.sustained_silence_seconds - (time.monotonic() - start)
+            if remaining <= 0:
+                break
+            time.sleep(min(self.poll_interval_seconds, remaining))
 
         logger.info(
             f"[AlertOracle] PASS — no firing alerts detected in namespace '{self.namespace}' for {self.sustained_silence_seconds}s"

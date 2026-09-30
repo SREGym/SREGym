@@ -35,9 +35,13 @@ opentelemetry-collector:
         metrics:
           exporters: [debug]
 
-# Backport opentelemetry-demo#3105 to the pinned 2.2.0 images. An explicit
-# maximum leaves room within the existing 300Mi limits for native memory and
-# instrumentation. Preserve the image's javaagent when overriding this variable.
+# Backport opentelemetry-demo#3105 to the pinned 2.2.0 images.
+# Neither ad nor fraud-detection defines a CPU limit, so on multi-core hosts
+# (e.g. 64 vCPUs) HotSpot sizes GC/JIT thread pools for all host cores and
+# combines with opentelemetry-javaagent metaspace/codecache (~150-180Mi) to
+# exceed the 300Mi cgroup ceiling (`OOMKilled`, exit 137). Cap
+# ActiveProcessorCount=2 and raise limits.memory to 512Mi while keeping
+# requests.memory at 300Mi so scheduling requests are unchanged.
 components:
   load-generator:
     # Helm replaces lists. Preserve the sidecar and use the multiarch build
@@ -72,11 +76,21 @@ components:
   ad:
     envOverrides:
       - name: JAVA_TOOL_OPTIONS
-        value: "-javaagent:/usr/src/app/opentelemetry-javaagent.jar -Xmx200m"
+        value: "-javaagent:/usr/src/app/opentelemetry-javaagent.jar -Xmx200m -XX:ActiveProcessorCount=2"
+    resources:
+      requests:
+        memory: 300Mi
+      limits:
+        memory: 512Mi
   fraud-detection:
     envOverrides:
       - name: JAVA_TOOL_OPTIONS
-        value: "-javaagent:/usr/src/app/opentelemetry-javaagent.jar -Xmx180m"
+        value: "-javaagent:/usr/src/app/opentelemetry-javaagent.jar -Xmx180m -XX:ActiveProcessorCount=2"
+    resources:
+      requests:
+        memory: 300Mi
+      limits:
+        memory: 512Mi
   kafka:
     resources:
       # KafkaFaultInjector._run (inject_kafka.py) execs the Kafka admin CLI
