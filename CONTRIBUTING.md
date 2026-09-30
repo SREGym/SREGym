@@ -297,7 +297,7 @@ To add a new problem:
    Any PR that changes files under `sregym/conductor/problems/` **must** include
    a `/validate-problem` line; a gate check fails the PR otherwise. If validation
    genuinely does not apply — a refactor, a `registry.py`/`base.py` change, or a
-   Khaos-only problem that cannot run on the CI kind cluster — opt out explicitly
+   problem that cannot run on the CI kind cluster — opt out explicitly
    with:
 
    ```

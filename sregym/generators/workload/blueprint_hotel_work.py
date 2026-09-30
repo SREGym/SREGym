@@ -6,6 +6,7 @@ import yaml
 from kubernetes import client, config
 
 from logger import console
+from sregym.generators.images import STRESS_IMAGE
 from sregym.generators.noise.impl.stress_injector import ChaosInjector
 from sregym.generators.workload.base import WorkloadEntry
 from sregym.generators.workload.stream import StreamWorkloadManager
@@ -379,7 +380,7 @@ class BHotelWrkWorkloadManager(StreamWorkloadManager):
                         "containers": [
                             {
                                 "name": "stress",
-                                "image": "polinux/stress",
+                                "image": STRESS_IMAGE,
                                 "command": ["/bin/sh", "-c"],
                                 "args": ["stress --cpu $(nproc)"],
                             }

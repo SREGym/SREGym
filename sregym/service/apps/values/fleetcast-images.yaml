@@ -1,0 +1,6 @@
+# Rebuild the existing backend source for both architectures. Keep the
+# upstream frontend and TiDB images, which already support AMD64 and ARM64.
+backend:
+  image:
+    repository: ghcr.io/sregym/fleetcast-backend
+    tag: 20260911-multiarch@sha256:e4c330ab7365c3b47ec05815f73ca945783d58d936e2f9103c1a19bd5078458c

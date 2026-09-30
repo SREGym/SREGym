@@ -1,5 +1,6 @@
-"""HTTP probe mitigation oracle for feature flag latent bug problem."""
+"""Verify that the frontend Service serves hotel searches after mitigation."""
 
+import json
 import re
 import shlex
 import time
@@ -9,7 +10,7 @@ from sregym.conductor.oracles.failure import FailureClass
 
 
 class FeatureFlagHttpProbeMitigationOracle(Oracle):
-    """Verifies the frontend /hotels endpoint returns HTTP 200.
+    """Verify the frontend Service returns real hotel search results.
 
     Probes via kubectl exec into an existing non-frontend pod in the
     namespace — no ephemeral pod needed, no Prometheus dependency.
@@ -20,6 +21,34 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
     def __init__(self, problem, probe_attempts: int = 5):
         super().__init__(problem)
         self.probe_attempts = probe_attempts
+
+    @staticmethod
+    def _valid_hotel_response(output: str) -> bool:
+        """Reject 200 responses that are not non-empty hotel search results."""
+        start = output.find("{")
+        if start < 0:
+            return False
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(output[start:])
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        features = payload.get("features")
+        return (
+            payload.get("type") == "FeatureCollection"
+            and isinstance(features, list)
+            and bool(features)
+            and all(
+                isinstance(feature, dict)
+                and isinstance(feature.get("id"), str)
+                and bool(feature["id"])
+                and isinstance(feature.get("properties"), dict)
+                and isinstance(feature["properties"].get("name"), str)
+                and bool(feature["properties"]["name"])
+                for feature in features
+            )
+        )
 
     def _get_probe_pod(self) -> str | None:
         """Find the consul pod as a reliable probe origin — always present
@@ -76,7 +105,7 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
             # wget exits nonzero for HTTP errors. Preserve its response inside the
             # pod, without masking a failure to execute the command through Kubernetes.
             script = (
-                "wget -T 10 -S -q -O /dev/null "
+                "wget -T 10 -S -O - "
                 "'http://frontend:5000/hotels?inDate=2015-04-09&outDate=2015-04-10&lat=37.7749&lon=-122.4194'"
                 " 2>&1 || true"
             )
@@ -85,7 +114,7 @@ class FeatureFlagHttpProbeMitigationOracle(Oracle):
             statuses = re.findall(r"^\s*HTTP/\S+\s+(\d{3})\b", result, re.MULTILINE)
             if not statuses:
                 return self.fail("http_probe_response_missing", pod=probe_pod, output=result.strip()[:500])
-            if statuses[-1] == "200":
+            if statuses[-1] == "200" and self._valid_hotel_response(result):
                 success_count += 1
             time.sleep(0.5)
 

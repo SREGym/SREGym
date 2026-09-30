@@ -67,3 +67,49 @@ agents:
     install_script: null
     agent_version: null
     container_isolation: false
+  - name: cloudthinker
+    kickoff_command: python -m clients.cloudthinker.driver
+    kickoff_workdir: .
+    kickoff_env:
+      # The client talks to the platform through its `ct` dev CLI, which resolves
+      # its compose slot from the checkout it runs in. Point CT_REPO_DIR and
+      # CT_BIN at your own installation.
+      CT_BIN: "/usr/local/bin/ct"
+      CT_REPO_DIR: "/REPLACE-WITH-YOUR-CLOUDTHINKER-CHECKOUT"
+      CT_TURN_TIMEOUT: "3600"
+      CT_RCA_TIMEOUT: "3600"
+      CT_MAX_APPROVALS: "20"
+      # The workspace holds the cluster behind the problem: its MCP connections
+      # are how the agent sees it and its Kubernetes connection is how the fix is
+      # applied. A workspace id is scoped to one installation, so this is a
+      # placeholder to replace, not a value to inherit.
+      CT_WORKSPACE: "00000000-0000-0000-0000-000000000000"
+      # The model tier to benchmark. The client does not fall back to a default:
+      # a run labelled by a model it never named is not comparable.
+      CT_SELECTION: "model:REPLACE-WITH-YOUR-MODEL"
+      # One prompt pair per mode; a prompt change ships as a new mode.
+      CT_PROMPT_MODE: "scoped"
+    install_script: null
+    agent_version: null
+    container_isolation: false
+
+  # Same driver, same workspace -- the only difference is CT_LANE. A separate
+  # agent name keeps the lanes apart: SREGym names the results file after the
+  # agent, so these rows land in cloudthinker_rca_ALL_results.csv and cannot be
+  # averaged into a chat-lane number by a careless glob.
+  - name: cloudthinker_rca
+    kickoff_command: python -m clients.cloudthinker.driver
+    kickoff_workdir: .
+    kickoff_env:
+      CT_LANE: "rca_flow"
+      CT_BIN: "/usr/local/bin/ct"
+      CT_REPO_DIR: "/REPLACE-WITH-YOUR-CLOUDTHINKER-CHECKOUT"
+      CT_TURN_TIMEOUT: "3600"
+      CT_RCA_TIMEOUT: "3600"
+      CT_MAX_APPROVALS: "20"
+      CT_WORKSPACE: "00000000-0000-0000-0000-000000000000"
+      CT_SELECTION: "model:REPLACE-WITH-YOUR-MODEL"
+      CT_PROMPT_MODE: "scoped"
+    install_script: null
+    agent_version: null
+    container_isolation: false

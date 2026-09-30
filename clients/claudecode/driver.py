@@ -15,7 +15,6 @@ import requests
 
 from clients.claudecode.claudecode_agent import ClaudeCodeAgent
 from clients.harness.problem_id import resolve_problem_id
-from clients.harness.workspace import append_workspace_hint
 from logger import init_logger
 
 # Add SREGym root to path
@@ -47,13 +46,23 @@ def run_preflight() -> None:
     if reasoning_effort:
         command.extend(["--effort", reasoning_effort])
 
-    r = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        env=env,
-    )
+    timeout_seconds = 150
+    try:
+        r = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=env,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired as exc:
+        if exc.stdout:
+            print(exc.stdout)
+        if exc.stderr:
+            print(exc.stderr)
+        print(f"Claude Code preflight timed out after {timeout_seconds} seconds")
+        sys.exit(1)
     if r.returncode:
         print(r.stdout or r.stderr)
     sys.exit(r.returncode)
@@ -190,7 +199,7 @@ Important:
 """
 
     logger.info(f"Built instruction:\n{instruction}")
-    return append_workspace_hint(instruction, app_info)
+    return instruction
 
 
 def save_results(

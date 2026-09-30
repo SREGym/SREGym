@@ -15,7 +15,6 @@ import requests
 
 from clients.copilot.copilot_agent import CopilotCliAgent
 from clients.harness.problem_id import resolve_problem_id
-from clients.harness.workspace import append_workspace_hint
 from logger import init_logger
 
 # Add SREGym root to path
@@ -178,7 +177,7 @@ Important:
 """
 
     logger.info(f"Built instruction:\n{instruction}")
-    return append_workspace_hint(instruction, app_info)
+    return instruction
 
 
 def save_results(

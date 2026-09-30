@@ -31,25 +31,30 @@ RUN python3 -m ensurepip --upgrade \
 # ───────────────────────────────────────────────
 # 3. kubectl
 # ───────────────────────────────────────────────
-RUN ARCH="$(dpkg --print-architecture)" \
-    && curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/${ARCH}/kubectl" \
+ARG TARGETARCH
+ARG KUBECTL_VERSION=stable
+RUN KUBECTL_ARCH="${TARGETARCH:-$(dpkg --print-architecture)}" \
+    && case "${KUBECTL_ARCH}" in amd64|arm64) ;; *) echo "Unsupported kubectl architecture: ${KUBECTL_ARCH}" >&2; exit 1 ;; esac \
+    && if [ "${KUBECTL_VERSION}" = stable ]; then KUBECTL_VERSION="$(curl -fsSL https://dl.k8s.io/release/stable.txt)"; fi \
+    && curl -fsSLo kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${KUBECTL_ARCH}/kubectl" \
     && chmod +x kubectl && mv kubectl /usr/local/bin/
 
 # ───────────────────────────────────────────────
 # 4. Python dependencies
 # ───────────────────────────────────────────────
-COPY requirements-container.txt /tmp/requirements-container.txt
+COPY docker/agents/requirements-container.txt /tmp/requirements-container.txt
 RUN python3 -m pip install --break-system-packages -r /tmp/requirements-container.txt
 
 # ───────────────────────────────────────────────
 # 5. Application code
 # ───────────────────────────────────────────────
-ARG CACHE_BUST=0
 COPY clients/        /opt/sregym/clients/
 COPY logger/         /opt/sregym/logger/
 COPY llm_backend/    /opt/sregym/llm_backend/
-COPY sregym/         /opt/sregym/sregym/
-COPY install-scripts/ /opt/sregym/install-scripts/
+COPY sregym/__init__.py sregym/paths.py /opt/sregym/sregym/
+COPY sregym/service/__init__.py sregym/service/kubectl.py sregym/service/helm.py /opt/sregym/sregym/service/
+COPY sregym/service/apps/base.py sregym/service/apps/helpers.py /opt/sregym/sregym/service/apps/
+COPY docker/agents/install-scripts/ /opt/sregym/install-scripts/
 RUN chmod +x /opt/sregym/install-scripts/*.sh
 
 # ───────────────────────────────────────────────

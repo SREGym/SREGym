@@ -6,14 +6,9 @@ from sregym.conductor.oracles.failure import classify
 
 
 class Oracle(ABC):
-    #: Reason codes this oracle uses that the shared table does not cover, or
-    #: covers differently. Consulted before ``SHARED_FAILURE_CLASSES``, so a
-    #: subclass can take its own view of a shared reason without editing the
-    #: shared table. Subclasses that only use shared reasons leave this empty.
-    #:
-    #: Tables merge along the MRO rather than shadowing -- see
-    #: ``_failure_classes`` -- so declaring one here is safe in a subclass of an
-    #: oracle that already has one.
+    # Long-running oracles can request a larger grading budget. None preserves
+    # the runner's default; this does not extend agent or cleanup deadlines.
+    evaluation_timeout_seconds: float | None = None
     FAILURE_CLASSES: dict[str, str] = {}
 
     def __init__(self, problem):

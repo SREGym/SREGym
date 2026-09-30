@@ -20,6 +20,7 @@ class TrainTicket(Application):
 
     def load_app_json(self):
         super().load_app_json()
+        self.helm_configs["values_file"] = str(Path(__file__).with_name("values") / "train-ticket-images.yaml")
         metadata = self.get_app_json()
         self.app_name = metadata["Name"]
         self.description = metadata["Desc"]

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
 from sregym.conductor.oracles.thundering_herd_mitigation import ThunderingHerdMitigationOracle
-from sregym.conductor.problems.base import EditableFile, Problem
+from sregym.conductor.problems.base import Problem
 from sregym.generators.fault.inject_app import ApplicationFaultInjector
 from sregym.generators.workload.recommendation_herd import RecommendationHerdWorkload
 from sregym.service.apps.astronomy_shop import AstronomyShop
@@ -48,15 +48,6 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
         )
         self._injection_attempted = False
         self._replacement_content = _ASSET.read_text(encoding="utf-8")
-        self.editable_files = [
-            EditableFile(
-                workspace_path="recommendation_server.py",
-                pod_path=self.source_path,
-                deployment=self.recommendation_deployment,
-                configmap_name=self.configmap_name,
-                host_source=str(_ASSET),
-            )
-        ]
         self.root_cause = self.build_structured_root_cause(
             component=f"deployment/{self.recommendation_deployment}",
             namespace=self.namespace,

@@ -70,24 +70,6 @@ def test_root_cause_names_duplicated_inflight_work_not_retries():
     assert structured.startswith("[fault_spec] component=deployment/recommendation")
 
 
-def test_has_workspace_when_host_source_is_configured():
-    from sregym.conductor.problems.base import EditableFile
-
-    problem = ThunderingHerdCascadeAstronomyShop.__new__(ThunderingHerdCascadeAstronomyShop)
-    problem.vendored_source_root = None
-    problem.editable_files = [
-        EditableFile(
-            workspace_path="recommendation_server.py",
-            pod_path="/app/recommendation_server.py",
-            deployment="recommendation",
-            configmap_name="recommendation-src-override",
-            host_source=str(_ASSET),
-        )
-    ]
-    assert problem.has_workspace() is True
-    assert Path(problem.editable_files[0].host_source).name == "thundering_herd_cascade_recommendation.py"
-
-
 def _problem():
     problem = ThunderingHerdCascadeAstronomyShop.__new__(ThunderingHerdCascadeAstronomyShop)
     problem.namespace = "astronomy-shop"

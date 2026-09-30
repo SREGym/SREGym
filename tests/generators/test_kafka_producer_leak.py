@@ -73,7 +73,7 @@ def test_memory_errors_without_serving_failure_do_not_complete_injection(monkeyp
     monkeypatch.setattr(inject_app, "broker_memory_failure", lambda *args: True)
     with pytest.raises(TimeoutError, match="serving failure"):
         injector._inject_kafka_producers("checkout", NS(check=lambda: True))
-    assert clock.now == 300
+    assert clock.now == 600
 
 
 @pytest.mark.parametrize("rollout_error", [False, True])
@@ -133,7 +133,8 @@ def oracle(monkeypatch):
     )
     evaluator = grading.KafkaProducerLeakOracle(problem)
     monkeypatch.setattr(grading.MitigationOracle, "evaluate", lambda self: {"success": True})
-    monkeypatch.setattr(evaluator, "_broker_restarts", lambda: {"uid-1": 0})
+    monkeypatch.setattr(evaluator, "_snapshot", lambda: {"broker": 0})
+    monkeypatch.setattr(evaluator, "_evaluate_current_state", lambda: {"success": True})
     monkeypatch.setattr(grading, "broker_memory_failure", lambda *args: False)
     probe = MagicMock()
     probe.__enter__.return_value = probe
@@ -149,7 +150,7 @@ def test_oracle_allows_startup_then_observes_full_window(monkeypatch, clock):
 
     probe.check.side_effect = check
     assert evaluator.evaluate()["success"] is True
-    assert clock.now >= 130
+    assert clock.now >= 610
 
 
 def test_oracle_rejects_running_broker_with_fresh_heap_failure(monkeypatch, clock):
@@ -168,7 +169,10 @@ def test_oracle_rejects_unavailable_broker_after_startup_grace(monkeypatch, cloc
 def test_oracle_rejects_removed_heap_limit(monkeypatch, clock):
     evaluator, _, resources = oracle(monkeypatch)
     resources["kafka"].spec.template.spec.containers[0].env = []
-    assert evaluator.evaluate()["reason"] == "fault_still_present"
+    evaluator.problem.heap_limit = "-Xmx400M -Xms400M"
+    evaluator.problem.memory_limit = "1Gi"
+    with pytest.raises(ValueError, match="heap or memory"):
+        evaluator._check_resources(resources["kafka"].spec.template.spec.containers[0])
 
 
 def test_client_pod_uses_same_image_separate_memory_and_is_deleted():

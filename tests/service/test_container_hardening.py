@@ -36,12 +36,12 @@ def test_hardening_can_be_disabled():
 def test_hardening_applies_under_every_internet_policy(tmp_path, mode):
     runner = make_runner(internet_policy=InternetPolicy.from_mode(mode))
     if runner.config.internet_policy.is_filtered:
-        runner._egress_network_name = "private-network"
-        runner._egress_proxy_name = "filter-proxy"
-        runner._egress_proxy_ca = tmp_path / "ca.pem"
-        runner._egress_ca_bundle = tmp_path / "bundle.pem"
-        runner._egress_proxy_ca.touch()
-        runner._egress_ca_bundle.touch()
+        runner._egress._network_name = "private-network"
+        runner._egress._proxy_name = "filter-proxy"
+        runner._egress._proxy_ca = tmp_path / "ca.pem"
+        runner._egress._ca_bundle = tmp_path / "bundle.pem"
+        runner._egress._proxy_ca.touch()
+        runner._egress._ca_bundle.touch()
 
     try:
         args = runner._build_base_docker_args()

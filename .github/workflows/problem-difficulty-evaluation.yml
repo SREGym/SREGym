@@ -532,8 +532,10 @@ jobs:
           set -euo pipefail
           echo "EVALUATION_STARTED=true" >> "$GITHUB_ENV"
 
+          build_args=()
           case "$PROVIDER" in
             zai)
+              build_args+=(--force-build)
               agent_name="codex"
               judge_model="openai/${ZAI_MODEL}-judge"
               export AGENT_API_BASE="http://127.0.0.1:$LITELLM_PORT/v1"
@@ -558,6 +560,7 @@ jobs:
             --n-attempts "$ATTEMPTS" \
             --agent-timeout 1800 \
             --internet-access filtered \
+            "${build_args[@]}" \
             2>&1 | tee benchmark.log
 
       - name: Dump cluster diagnostics

@@ -1,6 +1,7 @@
 """Interface to the Flight Ticket application"""
 
 import time
+from pathlib import Path
 
 from sregym.paths import FLIGHT_TICKET_METADATA
 from sregym.service.apps.base import Application
@@ -17,6 +18,7 @@ class FlightTicket(Application):
 
     def load_app_json(self):
         super().load_app_json()
+        self.helm_configs["values_file"] = str(Path(__file__).with_name("values") / "flight-ticket-images.yaml")
         metadata = self.get_app_json()
         self.app_name = metadata["Name"]
         self.description = metadata["Desc"]

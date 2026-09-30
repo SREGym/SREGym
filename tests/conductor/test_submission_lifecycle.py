@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 from types import MethodType, SimpleNamespace
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -51,7 +52,7 @@ def _conductor(diagnosis_evaluation=None, mitigation_evaluation=None) -> Conduct
     conductor._accepting_submissions = True
     conductor._attempt_closed = False
 
-    def advance(self, start_index=0):
+    async def advance(self, start_index=0):
         self.waiting_for_agent = False
         self.current_stage_index = start_index
         if start_index < len(self.stage_sequence):
@@ -669,6 +670,74 @@ def test_evaluation_and_cleanup_have_separate_deadlines():
     assert conductor._submit_future is None
 
 
+def test_oracle_budget_is_bound_to_accepted_stage():
+    gate = threading.Event()
+    conductor = _conductor(mitigation_evaluation=lambda _: gate.wait(2))
+    conductor.current_stage_index = 1
+    conductor.submission_stage = "mitigation"
+    conductor.problem = SimpleNamespace(
+        mitigation_oracle=SimpleNamespace(evaluation_timeout_seconds=0.3),
+        recover_fault=lambda: None,
+        app=SimpleNamespace(cleanup=lambda: None),
+    )
+
+    async def run():
+        await conductor.submit("", expected_stage="mitigation")
+        # A later stage/configuration change must not rewrite the accepted budget.
+        conductor.problem.mitigation_oracle.evaluation_timeout_seconds = 0.01
+
+        async def release():
+            await asyncio.sleep(0.1)
+            gate.set()
+
+        task = asyncio.create_task(release())
+        await conductor.wait_for_submission_evaluations(timeout=0.02)
+        await task
+        await conductor.wait_for_submission_work(timeout=1)
+
+    try:
+        asyncio.run(run())
+    finally:
+        gate.set()
+        _wait_for_current_evaluation(conductor)
+    assert conductor.submission_stage == "done"
+
+
+@pytest.mark.parametrize("budget", [None, -1, 0, float("inf"), float("nan"), "300", True])
+def test_unspecified_or_invalid_oracle_budget_preserves_default_deadline(budget):
+    gate = threading.Event()
+    conductor = _conductor(diagnosis_evaluation=lambda _: gate.wait(2))
+    conductor.problem = SimpleNamespace(diagnosis_oracle=SimpleNamespace(evaluation_timeout_seconds=budget))
+
+    async def run():
+        await conductor.submit("diagnosis", expected_stage="diagnosis")
+        with pytest.raises(TimeoutError):
+            await conductor.wait_for_submission_evaluations(timeout=0.01)
+
+    try:
+        asyncio.run(run())
+    finally:
+        gate.set()
+        _wait_for_current_evaluation(conductor)
+
+
+def test_mitigation_budget_does_not_extend_diagnosis():
+    gate = threading.Event()
+    conductor = _conductor(diagnosis_evaluation=lambda _: gate.wait(2))
+    conductor.problem = SimpleNamespace(mitigation_oracle=SimpleNamespace(evaluation_timeout_seconds=10))
+
+    async def run():
+        await conductor.submit("diagnosis", expected_stage="diagnosis")
+        with pytest.raises(TimeoutError):
+            await conductor.wait_for_submission_evaluations(timeout=0.01)
+
+    try:
+        asyncio.run(run())
+    finally:
+        gate.set()
+        _wait_for_current_evaluation(conductor)
+
+
 def test_abandoned_conductor_cannot_start_an_overlapping_attempt():
     conductor = _conductor()
     conductor.problem_id = "next-problem"
@@ -730,6 +799,50 @@ def test_late_noise_restart_is_stopped_after_attempt_is_abandoned(monkeypatch):
     assert noise.running is False
     assert noise.stages == []
     assert conductor.submission_stage == "aborted"
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("noise stop timed out"), RuntimeError("noise cleanup failed")])
+def test_noise_stop_failure_prevents_grading(monkeypatch, failure):
+    evaluate = Mock(return_value={"success": True})
+    conductor = _conductor(diagnosis_evaluation=evaluate)
+    conductor.config.enable_noise = True
+    noise = Mock()
+    noise.stop.side_effect = failure
+    monkeypatch.setattr(conductor_module, "get_noise_manager", lambda: noise)
+
+    async def run():
+        await conductor.submit("diagnosis", expected_stage="diagnosis")
+        with pytest.raises(type(failure), match=str(failure)):
+            await conductor.wait_for_submission_evaluations(timeout=1)
+
+    asyncio.run(run())
+    evaluate.assert_not_called()
+    noise.start.assert_not_called()
+    assert conductor.results == {}
+    assert conductor.current_stage_index == 0
+
+
+def test_noise_stop_failure_prevents_cluster_cleanup(monkeypatch):
+    conductor = _conductor()
+    conductor.config.enable_noise = True
+    conductor.problem = Mock()
+    conductor.cluster_state = Mock()
+    conductor.cluster_state.reconcile_to_baseline.return_value = {}
+    conductor._baseline_captured = True
+    noise = Mock()
+    noise.stop.side_effect = TimeoutError("noise stop timed out")
+    monkeypatch.setattr(conductor_module, "get_noise_manager", lambda: noise)
+
+    async def run():
+        conductor.finish_problem_in_background()
+        with pytest.raises(TimeoutError, match="noise stop timed out"):
+            await conductor.wait_for_submission_work(timeout=1)
+
+    asyncio.run(run())
+    conductor.problem.recover_fault.assert_not_called()
+    conductor.problem.app.cleanup.assert_not_called()
+    conductor.cluster_state.reconcile_to_baseline.assert_not_called()
+    assert conductor.submission_stage != "done"
 
 
 def test_incomplete_attempt_records_missing_stages_and_agent_exit():
@@ -900,7 +1013,7 @@ def test_no_stage_path_starts_bounded_background_cleanup():
     conductor.stage_sequence = []
 
     started_at = time.monotonic()
-    Conductor._advance_to_next_stage(conductor)
+    asyncio.run(Conductor._advance_to_next_stage(conductor))
     elapsed = time.monotonic() - started_at
 
     assert elapsed < 0.2

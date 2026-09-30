@@ -9,6 +9,9 @@ from kubernetes.client.rest import ApiException
 from sregym.conductor.oracles.feature_flag_http_probe_mitigation import FeatureFlagHttpProbeMitigationOracle
 from sregym.service.kubectl import KubeCtl
 
+HOTELS = '{"type":"FeatureCollection","features":[{"id":"hotel-1","properties":{"name":"Hotel One"}}]}'
+OK = f"HTTP/1.1 200 OK\n\n{HOTELS}"
+
 
 def _oracle(monkeypatch, responses):
     kube = SimpleNamespace(
@@ -23,7 +26,7 @@ def _oracle(monkeypatch, responses):
 
 @pytest.mark.parametrize("success_count", [0, 3, 4, 5])
 def test_http_response_threshold_is_unchanged(monkeypatch, success_count):
-    responses = ["HTTP/1.1 200 OK\n"] * success_count + ["HTTP/1.1 500 Internal Server Error\n"] * (5 - success_count)
+    responses = [OK] * success_count + ["HTTP/1.1 500 Internal Server Error\n"] * (5 - success_count)
     oracle = _oracle(monkeypatch, responses)
     result = oracle.evaluate()
     assert result["success"] is (success_count >= 4)
@@ -35,7 +38,7 @@ def test_http_response_threshold_is_unchanged(monkeypatch, success_count):
 
 @pytest.mark.parametrize("output", ["", "connection refused", "wget: not found", "not HTTP/1.1 200", "HTTP/1.1 2000"])
 def test_missing_http_response_is_not_an_http_error(monkeypatch, output):
-    oracle = _oracle(monkeypatch, ["HTTP/1.1 200 OK\n"] * 4 + [output])
+    oracle = _oracle(monkeypatch, [OK] * 4 + [output])
     result = oracle.evaluate()
     assert result["success"] is False
     assert result["reason"] == "http_probe_response_missing"
@@ -43,8 +46,29 @@ def test_missing_http_response_is_not_an_http_error(monkeypatch, output):
 
 
 def test_last_http_status_is_used_after_a_redirect(monkeypatch):
-    result = _oracle(monkeypatch, ["HTTP/1.1 302 Found\n  HTTP/1.1 200 OK\n"] * 5).evaluate()
+    result = _oracle(monkeypatch, [f"HTTP/1.1 302 Found\n  {OK}"] * 5).evaluate()
     assert result["success"] is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "ok",
+        '{"type":"FeatureCollection","features":[]}',
+        '{"type":"FeatureCollection","features":[{"properties":{"name":"Hotel One"}}]}',
+        '{"type":"FeatureCollection","features":[{"id":"hotel-1","properties":{}}]}',
+    ],
+)
+def test_status_200_without_hotels_is_not_a_repair(monkeypatch, body):
+    result = _oracle(monkeypatch, [f"HTTP/1.1 200 OK\n\n{body}"] * 5).evaluate()
+    assert result["success"] is False
+    assert result["reason"] == "endpoint_error_rate_high"
+
+
+def test_real_hotel_data_passes_without_endpoint_ownership_checks(monkeypatch):
+    oracle = _oracle(monkeypatch, [OK] * 5)
+    assert oracle.evaluate()["success"] is True
+    assert oracle.problem.kubectl.exec_command_checked.call_count == 5
 
 
 @pytest.mark.parametrize(
@@ -81,6 +105,7 @@ def test_only_the_in_pod_wget_exit_status_is_suppressed(monkeypatch):
     assert len(args) == 9
     script = args[-1]
     assert "-T 10" in script
+    assert " -q " not in script
     assert oracle.problem.kubectl.exec_command_checked.call_args.kwargs == {"timeout": 30}
     # An HTTP 500 makes wget exit nonzero, but the remote shell preserves its headers.
     stub = "wget() { printf '  HTTP/1.1 500 Internal Server Error\\n' >&2; return 1; }; "

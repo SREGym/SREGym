@@ -24,7 +24,6 @@ init_logger()
 
 from clients.cursor.cursor_agent import CursorAgent  # noqa: E402
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
-from clients.harness.workspace import append_workspace_hint  # noqa: E402
 
 logger = logging.getLogger("all.cursor.driver")
 
@@ -177,7 +176,7 @@ Important:
 """
 
     logger.info(f"Built instruction:\n{instruction}")
-    return append_workspace_hint(instruction, app_info)
+    return instruction
 
 
 def save_results(

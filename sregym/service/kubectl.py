@@ -24,6 +24,16 @@ from kubernetes.client.rest import ApiException  # noqa: E402
 from logger import console  # noqa: E402
 
 WAIT_FOR_POD_READY_TIMEOUT = int(os.getenv("WAIT_FOR_POD_READY_TIMEOUT", "600"))
+PLATFORM_ERROR_MARKERS = (
+    "exec format error",
+    "no matching manifest for",
+    "no match for platform in manifest",
+    "running an x86 program on an arm64 os",
+)
+
+
+class ContainerPlatformError(RuntimeError):
+    """A container image or executable cannot run on the selected node."""
 
 
 class KubeCtl:
@@ -193,20 +203,32 @@ class KubeCtl:
 
         console.log(f"[bold yellow]Waiting for all pods in {display_name} to be ready...")
 
-        wait = 0
+        deadline = time.monotonic() + max_wait
+        platform_log_retry_at = {}
 
-        while wait < max_wait:
+        while time.monotonic() < deadline:
             try:
                 if label_selectors:
                     # Collect pods from all services
                     all_pods = []
                     for selector in label_selectors:
-                        pod_list = self.core_v1_api.list_namespaced_pod(namespace=namespace, label_selector=selector)
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("Pod readiness deadline reached")
+                        pod_list = self.core_v1_api.list_namespaced_pod(
+                            namespace=namespace, label_selector=selector, _request_timeout=remaining
+                        )
                         all_pods.extend(pod_list.items)
                 else:
-                    all_pods = self.list_pods(namespace).items or []
+                    all_pods = self.list_pods(namespace, timeout=max(0.001, deadline - time.monotonic())).items or []
 
                 if all_pods:
+                    for pod in all_pods:
+                        self._check_container_platform(pod, namespace)
+                    for pod in all_pods:
+                        self._check_container_platform_logs(pod, namespace, platform_log_retry_at, deadline=deadline)
+                    if time.monotonic() >= deadline:
+                        break
                     ready_pods = [
                         pod
                         for pod in all_pods
@@ -231,15 +253,95 @@ class KubeCtl:
                         console.log(f"[bold green]All pods in {display_name} are ready.")
                         return
 
+            except ContainerPlatformError:
+                raise
             except Exception as e:
                 console.log(f"[red]Error checking pod statuses: {e}")
 
-            time.sleep(sleep)
-            wait += sleep
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(sleep, remaining))
 
         raise Exception(
             f"[red]Timeout: Not all pods in {display_name} reached the Ready state within {max_wait} seconds."
         )
+
+    @staticmethod
+    def _check_container_platform(pod, namespace: str):
+        """Surface explicit runtime platform failures before the readiness timeout.
+
+        Inspect init containers too; an incompatible init image prevents the main
+        containers from ever starting. Ordinary pull failures and application
+        crashes remain eligible for the normal readiness retry.
+        """
+        statuses = [
+            *(pod.status.init_container_statuses or []),
+            *(pod.status.container_statuses or []),
+        ]
+        for status in statuses:
+            if status.ready:
+                continue
+            for state in (status.state, status.last_state):
+                if state is None:
+                    continue
+                for detail in (state.waiting, state.terminated):
+                    message = getattr(detail, "message", None) or ""
+                    if any(marker in message.lower() for marker in PLATFORM_ERROR_MARKERS):
+                        raise KubeCtl._container_platform_error(pod, namespace, status, message)
+
+    @staticmethod
+    def _container_platform_error(pod, namespace, status, message):
+        return ContainerPlatformError(
+            f"Container platform failure in {namespace}/{pod.metadata.name}, "
+            f"container '{status.name}', image '{status.image}', "
+            f"node '{pod.spec.node_name}': {message.rstrip('.')}. "
+            "Verify that the image and its executables support the node architecture."
+        )
+
+    def _check_container_platform_logs(self, pod, namespace: str, retry_at: dict, *, deadline: float):
+        """Some runtimes report exec/loader failures only in container stderr.
+
+        Cache successful reads per container instance. Retry unavailable logs
+        after five seconds, within the readiness deadline. Ordinary application
+        crashes and log-fetch failures are not platform errors.
+        """
+        statuses = [*(pod.status.init_container_statuses or []), *(pod.status.container_statuses or [])]
+        for status in statuses:
+            if status.ready:
+                continue
+            terminated = status.state.terminated if status.state else None
+            previous = False
+            if terminated is None and status.last_state is not None:
+                terminated = status.last_state.terminated
+                previous = bool(status.state and status.state.running)
+            if terminated is None or terminated.exit_code == 0:
+                continue
+            key = (pod.metadata.uid or pod.metadata.name, status.name, status.restart_count, status.container_id)
+            now = time.monotonic()
+            if now >= deadline:
+                return
+            if now < retry_at.get(key, 0):
+                continue
+            retry_at[key] = now + 5
+            try:
+                logs = self.core_v1_api.read_namespaced_pod_log(
+                    name=pod.metadata.name,
+                    namespace=namespace,
+                    container=status.name,
+                    previous=previous,
+                    tail_lines=20,
+                    limit_bytes=4096,
+                    _request_timeout=min(3, deadline - now),
+                )
+            except Exception:
+                # Log files may not yet be available immediately after exit.
+                continue
+            if not isinstance(logs, str) or not logs:
+                continue
+            retry_at[key] = float("inf")
+            for line in logs.splitlines():
+                if any(marker in line.lower() for marker in PLATFORM_ERROR_MARKERS):
+                    raise self._container_platform_error(pod, namespace, status, line[:512])
 
     def wait_for_namespace_deletion(self, namespace, sleep=2, max_wait=300):
         """Wait for a namespace to be fully deleted before proceeding."""
@@ -582,13 +684,20 @@ class KubeCtl:
 
         for node_name in node_names:
             try:
-                count = self._run_localpv_gc_pod_on_node(
+                logs = self.run_node_script_pod(
                     node_name=node_name,
                     namespace=pod_namespace,
                     script=script,
-                    keep_blob=keep_blob,
+                    name_prefix="sregym-localpv-gc",
+                    env={"KEEP": keep_blob},
                     timeout=timeout,
                 )
+                count = 0
+                for line in logs.splitlines():
+                    if line.strip().startswith("GC_REMOVED="):
+                        with contextlib.suppress(ValueError):
+                            count = int(line.strip().split("=", 1)[1])
+                        break
                 results[node_name] = count
                 if count:
                     logger.info(f"[gc_localpv] {node_name}: removed {count} orphan dir(s)")
@@ -600,32 +709,32 @@ class KubeCtl:
 
         return results
 
-    def _run_localpv_gc_pod_on_node(
+    def run_node_script_pod(
         self,
         node_name: str,
         namespace: str,
         script: str,
-        keep_blob: str,
-        timeout: int,
-    ) -> int:
-        """Run a one-shot privileged busybox pod on ``node_name`` to execute ``script``.
+        name_prefix: str,
+        env: dict[str, str] | None = None,
+        timeout: int = 180,
+    ) -> str:
+        """Run ``script`` in a one-shot privileged busybox pod on ``node_name`` and return its logs.
 
-        Mounts host ``/`` at ``/host`` so the script can rm dirs under
+        Mounts host ``/`` at ``/host`` so the script can reach node paths such as
         ``/host/var/openebs/local``. Tolerates all taints so it can land on
-        control-plane nodes. Returns the integer parsed from the
-        ``GC_REMOVED=<n>`` line in pod stdout.
+        control-plane nodes. Raises if the pod does not succeed within ``timeout``.
         """
         # Pod name must be DNS-1123: lowercase, <=63 chars. Use first label of
         # the node hostname plus a short suffix.
         short_node = node_name.split(".")[0].lower().replace("_", "-")[:40]
-        pod_name = f"sregym-localpv-gc-{short_node}-{int(time.time()) % 10000}"
+        pod_name = f"{name_prefix}-{short_node}-{int(time.time()) % 10000}"
         pod_name = pod_name[:63]
 
         pod_body = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=pod_name,
                 namespace=namespace,
-                labels={"app": "sregym-localpv-gc"},
+                labels={"app": name_prefix},
             ),
             spec=client.V1PodSpec(
                 node_name=node_name,
@@ -639,7 +748,7 @@ class KubeCtl:
                         image="busybox:1.36",
                         image_pull_policy="IfNotPresent",
                         command=["sh", "-c", script],
-                        env=[client.V1EnvVar(name="KEEP", value=keep_blob)],
+                        env=[client.V1EnvVar(name=k, value=v) for k, v in (env or {}).items()],
                         security_context=client.V1SecurityContext(privileged=True),
                         volume_mounts=[
                             client.V1VolumeMount(name="host", mount_path="/host"),
@@ -673,34 +782,26 @@ class KubeCtl:
                 except ApiException as e:
                     if e.status == 404:
                         # Got deleted out from under us — treat as failure.
-                        raise RuntimeError(f"GC pod {pod_name} disappeared before completion") from e
+                        raise RuntimeError(f"Pod {pod_name} disappeared before completion") from e
                     raise
                 if phase in ("Succeeded", "Failed"):
                     break
                 time.sleep(sleep_s)
                 waited += sleep_s
             else:
-                raise TimeoutError(f"GC pod {pod_name} on {node_name} did not finish within {timeout}s (phase={phase})")
+                raise TimeoutError(f"Pod {pod_name} on {node_name} did not finish within {timeout}s (phase={phase})")
 
             logs = ""
             try:
                 logs = self.core_v1_api.read_namespaced_pod_log(name=pod_name, namespace=namespace)
             except ApiException as e:
-                logger.debug(f"[gc_localpv] Could not read logs for {pod_name}: {e}")
+                logger.debug(f"Could not read logs for {pod_name}: {e}")
 
             if phase != "Succeeded":
                 raise RuntimeError(
-                    f"GC pod {pod_name} on {node_name} ended with phase={phase}; logs: {logs.strip()[:500]}"
+                    f"Pod {pod_name} on {node_name} ended with phase={phase}; logs: {logs.strip()[:500]}"
                 )
-
-            removed = 0
-            for line in (logs or "").splitlines():
-                line = line.strip()
-                if line.startswith("GC_REMOVED="):
-                    with contextlib.suppress(ValueError):
-                        removed = int(line.split("=", 1)[1])
-                    break
-            return removed
+            return logs or ""
         finally:
             with contextlib.suppress(ApiException):
                 self.core_v1_api.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=0)
@@ -854,6 +955,26 @@ class KubeCtl:
                         break
 
         return matching_rs
+
+    def get_deployment_pods(self, deployment: client.V1Deployment, namespace: str) -> list[client.V1Pod]:
+        """Return pods controlled by this Deployment, including rolling replacements."""
+        replica_sets = self.get_matching_replicasets(namespace, deployment.metadata.name)
+        owned_uids = {
+            rs.metadata.uid
+            for rs in replica_sets
+            if any(
+                owner.kind == "Deployment" and owner.uid == deployment.metadata.uid and owner.controller
+                for owner in (rs.metadata.owner_references or [])
+            )
+        }
+        return [
+            pod
+            for pod in self.list_pods(namespace).items
+            if any(
+                owner.kind == "ReplicaSet" and owner.uid in owned_uids and owner.controller
+                for owner in (pod.metadata.owner_references or [])
+            )
+        ]
 
     def delete_replicaset(self, name: str, namespace: str):
         body = client.V1DeleteOptions(propagation_policy="Foreground")
