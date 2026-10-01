@@ -1,5 +1,9 @@
 # DeathStarBench 2.0: replicated application tiers
 
+**Picking this work up?** Start with [HANDOFF.md](HANDOFF.md) — the current
+state, the one result that matters, and the task queue.
+
+
 This first implementation scales **both existing applications**, HotelReservation
 and SocialNetwork. It keeps their service binaries and business APIs, replaces
 each standalone MongoDB Deployment with a real replica set, and increases the
