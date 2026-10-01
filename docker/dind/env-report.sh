@@ -46,10 +46,12 @@ kv sysbox "$sysbox"
 kv apparmor "$(tr -d '\0' < /proc/self/attr/current 2>/dev/null || echo unavailable)"
 
 section kernel
-# Kernel features SREGym's cluster relies on. Containers cannot load modules,
-# so a feature built as a module must already be loaded by the host.
+# Kernel features SREGym's cluster relies on. A module that is not loaded yet
+# may still load on demand when the cluster first uses it (as Calico's IPIP
+# tunnel does on most cloud kernels), so only a kernel config can prove absence.
 kernel_config=$( (zcat /proc/config.gz || cat "/boot/config-$(uname -r)") 2>/dev/null)
 missing=()
+unverified=()
 for entry in overlay:OVERLAY_FS br_netfilter:BRIDGE_NETFILTER nf_tables:NF_TABLES ip_tables:IP_NF_IPTABLES \
     iptable_nat:IP_NF_NAT nf_conntrack:NF_CONNTRACK ip_set:IP_SET xt_set:NETFILTER_XT_SET \
     ipip:NET_IPIP vxlan:VXLAN sch_netem:NET_SCH_NETEM; do
@@ -60,16 +62,16 @@ for entry in overlay:OVERLAY_FS br_netfilter:BRIDGE_NETFILTER nf_tables:NF_TABLE
     elif [[ $config == y ]]; then
         status="built in"
     elif [[ $config == m ]]; then
-        status="module not loaded (load it on the host)"
-        missing+=("$module")
+        status="module, not loaded yet (loads on demand if the sandbox allows it)"
+        unverified+=("$module")
     elif [[ -n $kernel_config ]]; then
         status="not in this kernel"
         missing+=("$module")
     elif [[ -d /sys/module/$module ]]; then
         status="built in"
     else
-        status="unknown (not loaded; kernel config unavailable)"
-        missing+=("$module?")
+        status="not loaded yet (kernel config unavailable)"
+        unverified+=("$module")
     fi
     kv "$module" "$status"
 done
@@ -115,5 +117,5 @@ fi
 section summary
 summary="kernel $(uname -r), cgroup v$cgroup_version, privileged $privileged, user namespace $userns, sysbox $sysbox"
 summary+=", $(nproc 2>/dev/null) CPUs, $(awk '/^MemTotal:/ {printf "%.0f GiB", $2 / 1048576}' /proc/meminfo)"
-summary+=", kernel features unavailable: ${missing[*]:-none}, egress: $egress"
+summary+=", kernel features missing: ${missing[*]:-none}, not loaded yet: ${unverified[*]:-none}, egress: $egress"
 echo "summary: $summary"
