@@ -44,6 +44,7 @@ from sregym.conductor.problems.gitlab_notification_expanded import GitLabNotific
 from sregym.conductor.problems.gitlab_notification_intermittent import GitLabNotificationIntermittent
 from sregym.conductor.problems.gitlab_notification_recovery import GitLabNotificationRecovery
 from sregym.conductor.problems.gitlab_regional_failover import GitLabRegionalFailover
+from sregym.conductor.problems.coordination_collapse import CoordinationCollapse
 from sregym.conductor.problems.mattermost_capacity_cascade import MattermostCapacityCascade
 from sregym.conductor.problems.stripe_feature_config import StripeFeatureConfig
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
@@ -251,6 +252,8 @@ class ProblemRegistry:
             "gitlab_regional_failover_replicated": lambda: GitLabRegionalFailover(scale_tier="replicated"),
             "mattermost_capacity_cascade_single": lambda: MattermostCapacityCascade(scale_tier="single"),
             "mattermost_capacity_cascade_replicated": lambda: MattermostCapacityCascade(scale_tier="replicated"),
+            "coordination_collapse_single": lambda: CoordinationCollapse(scale_tier="single"),
+            "coordination_collapse_replicated": lambda: CoordinationCollapse(scale_tier="replicated"),
             "stripe_feature_config_single": lambda: StripeFeatureConfig(scale_tier="single"),
             "stripe_feature_config_replicated": lambda: StripeFeatureConfig(scale_tier="replicated"),
             "wrong_service_selector_gitlab_ce_single": lambda: WrongServiceSelector(app_name="gitlab_ce", faulty_service="gitlab-ce", scale_tier="single"),
