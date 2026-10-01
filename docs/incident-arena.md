@@ -21,8 +21,9 @@ uv run main.py --problem incident_arena_slack_maintenance_collision --agent stra
 | Saleor (`saleor`) | Saleor 3.21 GraphQL API (uvicorn) and Celery worker over PostgreSQL 16, Valkey and RabbitMQ | storefront browsing and checkouts on a 3-shape peak/trough cycle |
 | Slack Spine (`slack-spine`) | A polyglot Slack clone: 9 TypeScript roles, Go real-time and connection tier, Python async workers over Redpanda, PostgreSQL 16, Redis, MinIO | seeded open-loop sends, reads, sessions and WebSocket delivery |
 
-Each app is a vendored Helm chart (`sregym/service/apps/incident_arena/charts/`, see its README),
-deployed with SREGym's values overlay (`.../values/<app>.yaml`). Incident Arena's own harness is
+Each app is a Helm chart in [SREGym-applications](https://github.com/SREGym/SREGym-applications)
+(`frappe/`, `saleor/`, `slack-spine/`; each README lists provenance and the SREGym edits), deployed
+with SREGym's values overlay (`sregym/service/apps/incident_arena/values/<app>.yaml`). Incident Arena's own harness is
 switched off:
 
 * SREGym's Prometheus/Loki/MCP stack replaces the in-chart observability. `sregym/observer/prometheus`
@@ -131,8 +132,14 @@ its fault:
 * The first Frappe install runs `bench new-site` and can take 15–30 minutes. The app waits up to 45.
 * The charts use ReadWriteOnce volumes shared by several pods of one app. That works with
   SREGym's default `openebs-hostpath` (local PVs pin consumers to one node) and on kind.
-* The port was validated offline only: unit tests and `helm template` of every problem
-  (`tests/incident_arena`). Run `tests/integration/validate_problem.py --problem <id>` on a cluster
-  before relying on a problem's numbers. Incident Arena calibrated its bands on single-node k3s.
+* Every problem is covered offline (unit tests and `helm template`, `tests/incident_arena`).
+  `tests/integration/validate_problem.py` has passed end to end on a 4-node kind cluster for
+  `incident_arena_frappe_desk_and_queue_oom` and `incident_arena_slack_sends_fail_strict_mode`.
+  Validate other problems on your cluster before relying on their numbers.
+* Saleor's checkout lane is bound by per-core speed (two uvicorn workers, about 2.5 s of API time
+  per checkout). On an older 2.0 GHz Xeon D-1548 the healthy app's checkouts queued past the load
+  generator's timeout, so most of them failed. Re-based latency bands do not cover that: the error
+  rate and goodput bands stay absolute, and slow hosts report `service_unhealthy` (`ambiguous`)
+  after a correct repair.
 * Incident Arena's binary graded report (the closed service/component vocabulary) is replaced by
   SREGym's free-text diagnosis stage. The incident report was advisory in most Incident Arena tasks anyway.

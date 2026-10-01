@@ -27,6 +27,10 @@ gradingHarness:
   # the chart renders a fault-free one (see sregym.neutralAnswerKey).
   answerKey:
     enabled: true
+  # The load generator pins pod restart counts before it starts; without this
+  # namespaced get/list-pods grant it waits 300s and never starts its schedule.
+  podState:
+    enabled: true
 
 erpnext:
   redis-queue:
@@ -61,5 +65,17 @@ sregym:
   enabled: true
   loadgenLabels:
     app: load-generator
+  loadgenEnv:
+    # SREGym pins the episode start itself, possibly long after the sidecar
+    # boots (Incident Arena's 1800 s limit assumed Harbor's healthcheck).
+    - name: EPISODE_START_TIMEOUT_S
+      value: "86400"
+  neutralAnswerKey:
+    scenario: sregym-healthy-baseline
+    # The load generator waits for these workloads before it starts. Its
+    # default list includes workers SREGym (like every Frappe task) does not
+    # deploy, so name only the deployed web tier, as the tasks' answer keys do.
+    docker_state:
+      services: [svc-frappe-web]
   toolbox:
     enabled: true

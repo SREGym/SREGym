@@ -2,11 +2,12 @@
 
 Incident Arena (https://github.com/abundant-ai/incident-arena) packages each
 incident as a Harbor task: a Helm chart for a whole system under test plus a
-Harbor-specific harness (agent foothold, egress proxy, in-pod grader). SREGym
-vendors those charts under ``charts/`` and deploys them with a values overlay
+Harbor-specific harness (agent foothold, egress proxy, in-pod grader). The
+charts live in SREGym-applications (``<app>/chart``; each app's README lists
+provenance and the SREGym edits). SREGym deploys them with a values overlay
 (``values/<app>.yaml``) that keeps the system under test and its load
 generator, but replaces the harness with SREGym's observability stack and an
-operator toolbox. See ``charts/README.md`` for provenance and the exact edits.
+operator toolbox.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from typing import Any
 import yaml
 
 from sregym.generators.workload.incident_arena import IncidentArenaLoadgen
+from sregym.paths import TARGET_MICROSERVICES
 from sregym.service.apps.base import Application
 from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
@@ -30,7 +32,6 @@ from sregym.service.kubectl import KubeCtl
 logger = logging.getLogger("all.application.incident_arena")
 
 PACKAGE_DIR = Path(__file__).resolve().parent
-CHARTS_DIR = PACKAGE_DIR / "charts"
 VALUES_DIR = PACKAGE_DIR / "values"
 
 # Long enough that the load generator's schedule never ends inside a run; the
@@ -70,7 +71,7 @@ def continuous_load_profile(name: str, profile: dict, drop_event_kinds: tuple[st
 class IncidentArenaApplication(Application):
     """A Helm-deployed Incident Arena system under test plus its load generator."""
 
-    #: Directory under ``charts/`` and file under ``values/`` (without .yaml).
+    #: App directory in SREGym-applications and file under ``values/`` (without .yaml).
     CHART_NAME: str = ""
     #: Upper bound for the whole system to become ready after ``helm install``.
     READY_TIMEOUT_S: int = 1200
@@ -94,7 +95,7 @@ class IncidentArenaApplication(Application):
         self.helm_configs = {
             "release_name": metadata["Helm Config"]["release_name"],
             "namespace": self.namespace,
-            "chart_path": str(CHARTS_DIR / self.CHART_NAME),
+            "chart_path": str(TARGET_MICROSERVICES / self.CHART_NAME / "chart"),
         }
 
     @property

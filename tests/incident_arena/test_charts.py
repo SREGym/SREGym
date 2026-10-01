@@ -68,10 +68,14 @@ def test_chart_renders_without_harness(offline_cluster, tmp_path, problem_cls):
     assert loadgen["spec"]["template"]["metadata"]["labels"]["app"] == "load-generator"
     env = {e["name"]: e.get("value") for e in loadgen["spec"]["template"]["spec"]["containers"][0]["env"]}
     assert env["PROFILE"] == problem.app.deploy_overrides["loadgen"]["profile"]
+    # SREGym pins the episode start itself, possibly long after the sidecar boots.
+    assert float(env["EPISODE_START_TIMEOUT_S"]) >= 86400
 
     # The load generator's answer key is the fault-free placeholder.
     grader_key = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "loadgen-grader-key")
-    assert yaml.safe_load(grader_key["data"]["ground-truth.yaml"]) == {"scenario": "sregym-healthy-baseline"}
+    neutral_key = yaml.safe_load(grader_key["data"]["ground-truth.yaml"])
+    assert neutral_key["scenario"] == "sregym-healthy-baseline"
+    assert set(neutral_key) <= {"scenario", "docker_state"}
 
     # Every pinned image is a registry reference SREGym nodes can pull.
     for workload in workloads.values():

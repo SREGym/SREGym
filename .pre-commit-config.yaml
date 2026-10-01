@@ -1,5 +1,3 @@
-# Vendored third-party Helm charts keep upstream formatting (SREGym's edits are listed in their README).
-exclude: ^sregym/service/apps/incident_arena/charts/
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

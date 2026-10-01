@@ -42,5 +42,10 @@ sregym:
   enabled: true
   loadgenLabels:
     app: load-generator
+  loadgenEnv:
+    # SREGym pins the episode start itself, possibly long after the sidecar
+    # boots (Incident Arena's 1800 s limit assumed Harbor's healthcheck).
+    - name: EPISODE_START_TIMEOUT_S
+      value: "86400"
   toolbox:
     enabled: true
