@@ -27,7 +27,7 @@ Use a Linux Docker host with the Buildx plugin (or a Linux VM behind Docker Desk
 privileged containers and writable cgroups. Start with **8 CPUs and 16 GiB RAM
 per concurrent SREGym-Lite run**, plus disk space for each daemon's image cache.
 Larger problems need more resources. This retains KIND's problem limitations;
-it does not add support for problems requiring real machines or Khaos.
+it does not add support for problems requiring real machines.
 
 Configure the host's inotify limits as described in the [KIND guide](../../kind/README.md).
 These limits are shared across containers, so parallel runs may require higher
