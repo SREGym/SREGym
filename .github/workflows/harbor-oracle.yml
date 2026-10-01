@@ -113,6 +113,14 @@ jobs:
           harbor run -y -q -p "$TASKS" -a nop -e docker -o "$JOBS" --job-name nop
           python3 .github/scripts/harbor_rewards.py "$JOBS/nop" 0
 
+      - name: Show sidecar host summary
+        if: always()
+        run: bash .github/scripts/harbor_diagnostics.sh "$JOBS"
+
+      - name: Show sidecar logs
+        if: failure()
+        run: bash .github/scripts/harbor_diagnostics.sh "$JOBS" --logs
+
       - name: Upload Harbor jobs
         if: always()
         uses: actions/upload-artifact@v4

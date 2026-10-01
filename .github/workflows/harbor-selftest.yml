@@ -15,6 +15,7 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/scripts/harbor_rewards.py'
+      - '.github/scripts/harbor_diagnostics.sh'
       - '.github/workflows/harbor-selftest.yml'
   pull_request:
     branches: [main]
@@ -27,6 +28,7 @@ on:
       - 'pyproject.toml'
       - 'uv.lock'
       - '.github/scripts/harbor_rewards.py'
+      - '.github/scripts/harbor_diagnostics.sh'
       - '.github/workflows/harbor-selftest.yml'
   workflow_dispatch:
 
@@ -85,6 +87,14 @@ jobs:
         run: |
           harbor run -y -q -p "$TASKS/harbor-selftest" -a nop -e docker -o "$JOBS" --job-name nop
           python3 .github/scripts/harbor_rewards.py "$JOBS/nop" 0
+
+      - name: Show sidecar host summary
+        if: always()
+        run: bash .github/scripts/harbor_diagnostics.sh "$JOBS"
+
+      - name: Show sidecar logs
+        if: failure()
+        run: bash .github/scripts/harbor_diagnostics.sh "$JOBS" --logs
 
       - name: Upload Harbor jobs
         if: always()
