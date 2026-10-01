@@ -74,7 +74,6 @@ class ConductorSession:
 
     def setup(self) -> str:
         from sregym.conductor.conductor import Conductor, ConductorConfig
-        from sregym.conductor.constants import StartProblemResult
         from sregym.service.internet_policy import InternetAccessMode, InternetPolicy
         from sregym.service.kubectl import ContainerPlatformError
 
@@ -93,7 +92,7 @@ class ConductorSession:
 
         for attempt in range(1, DEPLOY_ATTEMPTS + 1):
             try:
-                result = asyncio.run(self.conductor.start_problem())
+                asyncio.run(self.conductor.start_problem())
                 break
             except ContainerPlatformError:
                 raise
@@ -105,8 +104,6 @@ class ConductorSession:
                 # partially injected fault may also live outside the namespace.
                 if self.conductor.fault_injected and self.conductor.problem is not None:
                     self.conductor.problem.recover_fault()
-        if result == StartProblemResult.SKIPPED_KHAOS_REQUIRED:
-            raise RuntimeError(f"Problem '{self.problem_id}' requires Khaos, which KIND clusters cannot run")
 
         self.conductor.start_k8s_proxy()
         return self.conductor.get_agent_kubeconfig_path()

@@ -58,7 +58,7 @@ the Compose file.
 ## Generate tasks
 
 ```bash
-# Every eligible problem (121 of 125 today)
+# Every eligible problem (123 of 125 today)
 uv run python -m sregym.harbor.adapter --output-dir datasets/sregym
 
 # SREGym-Lite, or selected problems
@@ -73,7 +73,6 @@ No cluster is needed; problems are inspected against a placeholder kubeconfig.
 The generator skips problems it cannot turn into working tasks and prints the
 reason:
 
-- problems that need Khaos
 - problems that need a non-emulated cluster
 - problems whose constructor queries a live cluster (currently `taint_no_toleration_social_network`)
 
@@ -188,7 +187,7 @@ runtime was validated on cgroup v2 hosts in the
 
 - **Mitigation only, by design.** The Harbor reward is the deterministic
   mitigation oracle. SREGym's LLM-judged diagnosis stage is not part of the port.
-- **KIND-compatible problems only.** Problems that need Khaos or real nodes are
+- **KIND-compatible problems only.** Problems that need real nodes are
   skipped. Some problems that are hard to run reliably on KIND, such as
   TrainTicket, are generated but may fail setup on small hosts. Validate
   individual tasks with the oracle agent before relying on them.

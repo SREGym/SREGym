@@ -101,9 +101,6 @@ def _inspect_in_this_process(problem_ids: list[str] | None) -> Inspection:
         except (Exception, SystemExit) as exc:  # KubeCtl exits on API errors
             inspection.skipped[problem_id] = f"cannot be inspected without a cluster ({type(exc).__name__})"
             continue
-        if problem.requires_khaos():
-            inspection.skipped[problem_id] = "requires Khaos, which KIND clusters cannot run"
-            continue
         oracle = getattr(problem, "mitigation_oracle", None)
         if oracle is None:
             inspection.skipped[problem_id] = "has no mitigation oracle to grade with"

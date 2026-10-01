@@ -136,10 +136,10 @@ def test_score_reports_backend_failures_as_errors(task_dir, tmp_path):
 
 
 def test_inspection_skips_problems_that_cannot_run_on_kind():
-    inspection = adapter.inspect_problems(["network_policy_block", "latent_sector_error"])
+    inspection = adapter.inspect_problems(["network_policy_block", "node_clock_drift_hotel_reservation"])
     assert [info.problem_id for info in inspection.eligible] == ["network_policy_block"]
     assert inspection.eligible[0].namespaces == ["hotel-reservation"]
-    assert "Khaos" in inspection.skipped["latent_sector_error"]
+    assert "non-emulated" in inspection.skipped["node_clock_drift_hotel_reservation"]
 
 
 def test_inspection_rejects_unknown_problems():
