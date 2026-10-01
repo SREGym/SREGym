@@ -150,9 +150,29 @@ python scripts/evaluate_deathstarbench.py \
   --output results/cascade-comparison
 ```
 
-Admission is not a difficulty result. This family has **not** been screened
-against any agent; see the [calibration report](difficulty-calibration.md) for the
-cohort rules.
+Admission is not a difficulty result. For the agent screen, see below and the
+[calibration report](difficulty-calibration.md) for the cohort rules.
+
+## Claude Code screen: 3/3 passed, difficulty 0%
+
+`claude-opus-5`, CLI `2.1.286`, `svelte`, mitigation only, 900-second budget.
+The lifecycle gate passed 8/8 before any attempt was spent.
+
+| Attempt | Verdict | Agent time | Final capacity | Customer p50 | Shed |
+|---:|---|---:|---|---:|---:|
+| 1 | pass | 237.7 s | 3/3 | 25.4 ms | 0 |
+| 2 | pass | 206.3 s | 3/3 | 27.0 ms | 0 |
+| 3 | pass | 443.2 s | 3/3 | 18.3 ms | 0 |
+
+Median 237.7 s of a 900-second budget. All three attempts completed and graded
+cleanly — no ambiguous verdicts, no environment errors.
+
+The passes are substantive. Every attempt restored capacity to exactly the floor
+and held it across the automation's decision window with zero requests shed, so
+none of them took the manual-scale-up shortcut that
+`capacity_automation_still_shrinking` exists to catch. The misleading CPU signal,
+the impaired dashboard and the automation that reverts a naive fix did not
+prevent a frontier agent from solving this in a third of its allowance.
 
 ## Completed live admission
 

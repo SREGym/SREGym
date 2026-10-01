@@ -81,6 +81,41 @@ own, a manual scale-up rejected because the automation undid it, both single-sid
 repairs rejected, a gateway restart and persistent control state. It has **not**
 been screened against any agent.
 
+## Claude Code screens of the two newest families
+
+Both new families were screened with **Claude Code** (`claude-opus-5`, CLI
+`2.1.286`, `svelte` profile, mitigation only, 900-second budget). This is a
+separate cohort from the Codex rows above and must not be pooled with them.
+
+| Candidate | Lifecycle gate | Valid attempts | Passes | Median agent time | Difficulty |
+|---|---|---:|---:|---:|---:|
+| Mattermost capacity cascade, single | 8/8 pass | 3 | 3 | 237.7 s | **0%** |
+| GitLab regional failover, single | 8/8 pass | 3 | 3 | 263.5 s | **0%** |
+
+All six attempts completed and graded cleanly: no ambiguous verdicts, no
+environment errors, no missing grades, and `agent_exit_code` 0 throughout. The
+difficulty target — at least one genuine agent failure in three valid attempts —
+is **not met by either family**.
+
+The passes are substantive rather than lucky. Every cascade attempt restored
+capacity to exactly the service floor and held it across the automation's
+decision window with zero requests shed, so none took the manual-scale-up
+shortcut that `capacity_automation_still_shrinking` exists to catch. Every
+failover attempt recovered all six orphaned writes *and* retained all six
+post-promotion writes with zero acknowledged data loss, so none failed back and
+none abandoned the orphans.
+
+Agent time is the clearest signal: a median of 238 s and 264 s against a
+900-second budget means both families were solved in roughly a quarter to a third
+of the allowance, faster than the Codex medians on the older and simpler families
+above. Designing a task so that no single restore recovers it, or so that a
+correct metric points the wrong way, did not make it hard for a frontier agent.
+
+Two harness defects had to be fixed before any of this could run, and both would
+have produced invalid attempts rather than difficulty data: the campaign runner
+could not select either new incident, and the Claude Code client rejected
+subscription credentials outright. See the commit history.
+
 These are exploratory calibration screens with adaptive candidate development.
 They do not provide an independent held-out estimate of model reliability or
 establish that replicas alone caused a difficulty change. Earlier successes are

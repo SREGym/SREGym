@@ -114,9 +114,27 @@ python scripts/evaluate_deathstarbench.py \
   --output results/failover-comparison
 ```
 
-Admission is not a difficulty result, and this family has **not** yet been
-screened against any agent. See the [calibration report](difficulty-calibration.md)
-for the cohort rules that apply.
+Admission is not a difficulty result. For the agent screen, see below and the
+[calibration report](difficulty-calibration.md) for the cohort rules that apply.
+
+## Claude Code screen: 3/3 passed, difficulty 0%
+
+`claude-opus-5`, CLI `2.1.286`, `svelte`, mitigation only, 900-second budget.
+The lifecycle gate passed 8/8 (1,132 s) before any attempt was spent.
+
+| Attempt | Verdict | Agent time | Orphans recovered | Post-promotion retained | Data loss |
+|---:|---|---:|---:|---:|---:|
+| 1 | pass | 324.0 s | 6/6 | 6/6 | 0 |
+| 2 | pass | 245.3 s | 6/6 | 6/6 | 0 |
+| 3 | pass | 263.5 s | 6/6 | 6/6 | 0 |
+
+Median 263.5 s of a 900-second budget. All three completed and graded cleanly.
+
+Every attempt retained **both** acknowledged write sets: no attempt failed back
+(which would have displaced the six post-promotion writes), none abandoned the
+orphans, and none duplicated anything. Building the incident so that neither
+single restore recovers it did not make it hard for a frontier agent, which
+solved it in under a third of its allowance.
 
 ## Completed live admission
 
