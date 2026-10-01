@@ -1,7 +1,7 @@
 # Handoff: environment scaling, and the task on CloudLab
 
-Branch `feat/environment-scaling-postmortems`, 23 commits, 208 files, clean tree,
-**nothing pushed**. Everything below is reproducible from that branch.
+Branch `feat/environment-scaling-postmortems`, 26 commits, 209 files, clean
+tree, **nothing pushed**. Everything below is reproducible from that branch.
 
 This document is for the agent picking the work up on CloudLab. Read
 [the calibration report](difficulty-calibration.md) next; it is the running
@@ -65,7 +65,7 @@ changed; `sregym-lite` is untouched.
 | Stripe recurring config | stop a recurrence | admitted, 0% |
 | GitLab regional failover | **two histories, neither sufficient** | admitted, **0%** |
 | Mattermost capacity cascade | **a correct metric that misleads** | admitted, **0%** |
-| **Coordination collapse** | **long horizon + broken tools + accruing cost** | **unscreened** |
+| **Coordination collapse** | **long horizon + broken tools + accruing cost** | **admitted, unscreened** |
 
 ### The newest family is the one to care about
 
@@ -108,7 +108,7 @@ would measure the budget, not the agent** — that is the whole point.
 
 ## Your task, in order
 
-### 1. Screen the coordination family at its real budget
+### 1. Admit the replicated coordination tier
 
 **Live admission passed** on `coordination_collapse_single` in 883 s, clean
 cleanup, every lever proved on a cluster rather than asserted — stale `/status`
@@ -126,7 +126,7 @@ PYTHONPATH=/opt/sregym python tests/integration/validate_coordination_collapse.p
   --tier replicated --output results/coordination-admission-replicated.json
 ```
 
-### 2. Screen it at its real budget
+### 2. Screen the coordination family at its real budget
 
 ```sh
 python scripts/evaluate_deathstarbench.py \
