@@ -4,6 +4,8 @@ import pytest
 
 from scripts.evaluate_deathstarbench import (
     AGENT_CLIENT_SOURCES,
+    APPLICATIONS,
+    SUPPORTED_TIERS,
     prepare_agent_registry,
     problem_id,
     summarize,
@@ -113,3 +115,38 @@ def test_every_selectable_agent_has_its_driver_and_helper_packages():
         assert agent in names, f"{agent} must ship its own client package"
         for name in names:
             assert (root / "clients" / name).is_dir(), (agent, name)
+
+
+def test_every_incident_the_cli_offers_can_be_routed():
+    """The CLI's `--incident` choices and `problem_id` routing must agree.
+
+    They did not: both new families were routable but absent from the choices,
+    so `--incident capacity_cascade` died in argument parsing before any work.
+    """
+    import ast
+
+    source = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "evaluate_deathstarbench.py"
+    tree = ast.parse(source.read_text())
+    choices = None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        args = [a for a in node.args if isinstance(a, ast.Constant) and a.value == "--incident"]
+        if not args:
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "choices":
+                choices = [e.value for e in keyword.value.elts]
+    assert choices, "could not find the --incident choices"
+    assert {"regional_failover", "capacity_cascade"} <= set(choices)
+
+    # Every offered incident must route for at least one application and tier.
+    for incident in choices:
+        routed = []
+        for app in APPLICATIONS:
+            for tier in SUPPORTED_TIERS[app]:
+                try:
+                    routed.append(problem_id(app, tier, incident))
+                except ValueError:
+                    continue
+        assert routed, f"{incident} is selectable but routes nowhere"

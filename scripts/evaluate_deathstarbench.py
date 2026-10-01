@@ -150,6 +150,8 @@ def main():
             "notification_ambiguity",
             "notification_intermittent",
             "notification_delayed_audit",
+            "regional_failover",
+            "capacity_cascade",
         ),
         default="wrong_service_selector",
     )
