@@ -12,6 +12,11 @@ summarising every record sent after that mark (``summary`` mode). ``status``
 mode adds the sidecar's ``episode_done.json`` and log tail, which explain an
 episode that ended before sending anything.
 
+The load generator sends nothing until its episode is started: Incident
+Arena's harness calls ``POST /grader/episode-start`` with the verifier token
+once the system is healthy. ``start`` mode makes that call from inside the pod,
+with the token the pod already mounts.
+
 This module is stdlib-only on purpose: SREGym pipes its source into the load
 generator pod (``python3 - <mode> ...``) so the ledger never has to leave the
 pod, and imports it directly in tests. The arithmetic mirrors the Incident
@@ -27,6 +32,8 @@ import json
 import math
 import os
 import sys
+import urllib.error
+import urllib.request
 
 LEDGER_NAME = "loadgen.jsonl"
 # Written by the sidecar when its episode ends, including when it fails to start.
@@ -35,6 +42,7 @@ EPISODE_DONE_NAME = "episode_done.json"
 SIDECAR_LOG_NAME = "sidecar.log"
 DEFAULT_TAIL_BYTES = 262144
 LOG_TAIL_BYTES = 8192
+GRADER_ACCESS_HEADER = "X-SRE-World-Grader-Access"
 
 
 def grader_dir() -> str:
@@ -64,6 +72,31 @@ def read_log_tail(directory, tail_bytes=LOG_TAIL_BYTES):
             return handle.read().decode("utf-8", errors="replace").splitlines()[-40:]
     except OSError:
         return None
+
+
+def start_episode():
+    """POST the sidecar's episode-start gate; report the HTTP status it answered."""
+    port = os.environ.get("DECLARE_PORT", "9100")
+    token_file = os.environ.get("GRADER_ACCESS_TOKEN_FILE", "/run/grader-access/token")
+    try:
+        with open(token_file, encoding="utf-8") as handle:
+            token = handle.read().strip()
+    except OSError as exc:
+        return {"status": None, "error": f"grader token unavailable: {exc}"}
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/grader/episode-start",
+        data=b"",
+        method="POST",
+        headers={GRADER_ACCESS_HEADER: token},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(request, timeout=30) as response:
+            return {"status": response.status, "body": response.read(500).decode("utf-8", errors="replace")}
+    except urllib.error.HTTPError as exc:
+        return {"status": exc.code, "body": exc.read(500).decode("utf-8", errors="replace")}
+    except OSError as exc:
+        return {"status": None, "error": str(exc)}
 
 
 def parse_records(lines):
@@ -186,6 +219,9 @@ def main(argv):
     mode = argv[1] if len(argv) > 1 else "latest"
     if mode == "latest":
         print(json.dumps({"latest_sent_s": latest_sent_s(path)}))
+        return 0
+    if mode == "start":
+        print(json.dumps(start_episode()))
         return 0
     if mode == "status":
         directory = grader_dir()

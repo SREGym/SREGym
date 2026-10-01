@@ -216,7 +216,15 @@ class IncidentArenaMitigationOracle(Oracle):
             return self._verdict(results)
 
         workload = problem.app.wrk
-        mark = workload.latest_sent_s()
+        try:
+            # Normally one ledger read. A load generator pod that restarted
+            # waits for its episode to be started again before it sends.
+            mark = workload.wait_for_traffic()
+        except Exception as exc:
+            results.append(
+                CheckResult("traffic_observed", False, reason="no_traffic_observed", detail={"error": str(exc)})
+            )
+            return self._verdict(results)
         logger.info("Soaking for %.0fs from load generator mark %s", spec.soak_s, mark)
         time.sleep(spec.soak_s)
 

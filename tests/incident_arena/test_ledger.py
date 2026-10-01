@@ -120,3 +120,61 @@ def test_status_mode_reports_episode_end_and_sidecar_log(tmp_path):
     assert result["episode_done"]["error"] == "RuntimeError: no variants"
     assert result["log_tail"][-1] == "line 99"
     assert len(result["log_tail"]) == 40
+
+
+def test_start_mode_posts_the_episode_start_gate_with_the_pod_token(tmp_path):
+    import http.server
+    import threading
+
+    seen = []
+
+    class Gate(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen.append((self.path, self.headers.get("X-SRE-World-Grader-Access")))
+            body = b'{"started": true}'
+            self.send_response(202)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Gate)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    token = tmp_path / "token"
+    token.write_text("t" * 48 + "\n")
+    env = {
+        "GRADER_DIR": str(tmp_path),
+        "GRADER_ACCESS_TOKEN_FILE": str(token),
+        "DECLARE_PORT": str(server.server_address[1]),
+        "HTTP_PROXY": "http://127.0.0.1:9",  # the in-pod call must not use a proxy
+        "PATH": "/usr/bin:/bin",
+    }
+    try:
+        out = subprocess.run(
+            [sys.executable, "-", "start"],
+            input=Path(ledger.__file__).read_text(),
+            capture_output=True,
+            text=True,
+            env=env,
+            check=True,
+        )
+    finally:
+        server.shutdown()
+    assert json.loads(out.stdout) == {"status": 202, "body": '{"started": true}'}
+    assert seen == [("/grader/episode-start", "t" * 48)]
+
+
+def test_start_mode_reports_a_missing_token(tmp_path):
+    env = {"GRADER_ACCESS_TOKEN_FILE": str(tmp_path / "missing"), "PATH": "/usr/bin:/bin"}
+    out = subprocess.run(
+        [sys.executable, "-", "start"],
+        input=Path(ledger.__file__).read_text(),
+        capture_output=True,
+        text=True,
+        env=env,
+        check=True,
+    )
+    result = json.loads(out.stdout)
+    assert result["status"] is None and "grader token unavailable" in result["error"]

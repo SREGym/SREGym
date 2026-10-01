@@ -88,6 +88,10 @@ class _Workload:
         self.calls.append("latest")
         return 100.0
 
+    def wait_for_traffic(self):
+        self.calls.append("wait")
+        return 100.0
+
     def summary(self, since, latency_percentile, settle_s):
         self.calls.append(("summary", since, latency_percentile, settle_s))
         return _summary()
@@ -141,3 +145,17 @@ def test_oracle_reports_non_durable_repairs():
     verdict = IncidentArenaMitigationOracle(_Problem(challenge_pass=False)).evaluate()
     assert verdict["reason"] == "repair_not_durable"
     assert verdict["failure_class"] == FailureClass.AGENT_ERROR
+
+
+def test_oracle_reports_no_traffic_when_the_load_generator_cannot_be_started():
+    problem = _Problem()
+
+    def no_traffic():
+        raise RuntimeError("load generator produced no traffic within 900s")
+
+    problem.app.wrk.wait_for_traffic = no_traffic
+    verdict = IncidentArenaMitigationOracle(problem).evaluate()
+    assert verdict["success"] is False
+    assert verdict["reason"] == "no_traffic_observed"
+    assert verdict["detail"]["failed_checks"] == ["traffic_observed"]
+    assert problem.phases == ["declaration"]

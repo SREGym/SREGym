@@ -71,6 +71,10 @@ class IncidentArenaLoadgen(WorkloadManager):
         """Newest arrival time, the sidecar's episode-end record and its log tail."""
         return self._run_ledger("status")
 
+    def start_episode(self) -> dict:
+        """Open the sidecar's episode-start gate (idempotent; the HTTP status it answered)."""
+        return self._run_ledger("start")
+
     def logs(self, tail: int = 40) -> str:
         return self.kubectl.exec_command(
             f"kubectl logs -n {self.namespace} deploy/{self.deployment} -c {self.container} --tail={tail}"
@@ -93,18 +97,21 @@ class IncidentArenaLoadgen(WorkloadManager):
         max_restarts: int = 2,
         restart_delay_s: float = 30,
     ) -> float:
-        """Block until the ledger has arrivals; return the newest ``sent_s``.
+        """Start the episode and block until the ledger has arrivals; return the newest ``sent_s``.
 
-        The sidecar provisions its drivers before sending anything and gives up
-        after a few retries, for example while the system is still seeding. It
-        then records the error in ``episode_done.json`` and idles. Such an
-        episode is restarted up to ``max_restarts`` times before failing with
-        the sidecar's own error.
+        The sidecar provisions its drivers, then waits for ``POST
+        /grader/episode-start`` before sending anything. Incident Arena's
+        harness makes that call once the system is healthy; SREGym repeats it
+        on every poll until traffic appears. A sidecar that fails before then
+        records the error in ``episode_done.json`` and idles. Such an episode
+        is restarted up to ``max_restarts`` times before failing with the
+        sidecar's own error.
         """
         deadline = time.monotonic() + timeout_s
         restarts = 0
         last_error: Exception | None = None
         status: dict = {}
+        start: dict | None = None
         while time.monotonic() < deadline:
             try:
                 status = self.status()
@@ -131,8 +138,14 @@ class IncidentArenaLoadgen(WorkloadManager):
                 time.sleep(restart_delay_s)
                 self.restart()
                 continue
+            try:
+                start = self.start_episode()
+            except Exception as exc:
+                last_error = exc
             time.sleep(interval_s)
         detail = f"last error: {last_error}" if last_error is not None else self._describe(status)
+        if start is not None:
+            detail += f"; last episode-start response: {json.dumps(start)}"
         raise RuntimeError(
             f"load generator produced no traffic within {timeout_s:.0f}s ({detail}); recent logs:\n{self.logs()}"
         )

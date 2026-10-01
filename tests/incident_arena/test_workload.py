@@ -23,6 +23,7 @@ class ScriptedLoadgen(IncidentArenaLoadgen):
         super().__init__("ns", kubectl=None)
         self.script = list(script)
         self.restarts = 0
+        self.starts = 0
 
     def status(self):
         step = self.script.pop(0) if len(self.script) > 1 else self.script[0]
@@ -32,6 +33,10 @@ class ScriptedLoadgen(IncidentArenaLoadgen):
 
     def restart(self, timeout_s=600):
         self.restarts += 1
+
+    def start_episode(self):
+        self.starts += 1
+        return {"status": 202, "body": "{}"}
 
     def logs(self, tail=40):
         return "sidecar stdout"
@@ -53,10 +58,18 @@ FAILED = {
 SENDING = {"latest_sent_s": 12.5, "episode_done": None, "log_tail": None}
 
 
-def test_wait_for_traffic_returns_the_newest_arrival(clock):
-    loadgen = ScriptedLoadgen([RuntimeError("container not running"), STARTING, SENDING])
+def test_wait_for_traffic_starts_the_episode_until_traffic_flows(clock):
+    loadgen = ScriptedLoadgen([RuntimeError("container not running"), STARTING, STARTING, SENDING])
     assert loadgen.wait_for_traffic() == 12.5
+    assert loadgen.starts == 2
     assert loadgen.restarts == 0
+
+
+def test_wait_for_traffic_is_a_single_read_once_traffic_flows(clock):
+    loadgen = ScriptedLoadgen([SENDING])
+    assert loadgen.wait_for_traffic() == 12.5
+    assert loadgen.starts == 0
+    assert clock.now == 0.0
 
 
 def test_wait_for_traffic_restarts_an_episode_that_failed_to_start(clock):
@@ -78,6 +91,7 @@ def test_wait_for_traffic_times_out_with_the_pod_logs(clock):
     with pytest.raises(RuntimeError, match="no traffic within 60s") as raised:
         loadgen.wait_for_traffic(timeout_s=60)
     assert "episode still starting" in str(raised.value)
+    assert "last episode-start response" in str(raised.value)
     assert "sidecar stdout" in str(raised.value)
 
 
