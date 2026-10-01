@@ -3,6 +3,7 @@ Claude Code agent implementation for SREGym.
 Based on Harbor's Claude Code agent implementation for parity experiments.
 """
 
+import json
 import logging
 import os
 import shutil
@@ -12,6 +13,10 @@ from pathlib import Path
 from clients.harness.token_usage import aggregate_usage, read_jsonl, sum_counts, token_count, usage_metrics
 
 logger = logging.getLogger("all.claudecode.agent")
+
+#: Where a Claude Code subscription login stores its OAuth credentials. The
+#: harness mounts this into agent containers for subscription-backed runs.
+CREDENTIALS_FILE = Path("/root/.claude/.credentials.json")
 
 
 class ClaudeCodeAgent:
@@ -211,6 +216,32 @@ class ClaudeCodeAgent:
 
         logger.info(f"Created session directory structure at {self.sessions_dir}")
 
+    @staticmethod
+    def _subscription_credentials() -> Path | None:
+        """The subscription credentials file, if this host has a usable one."""
+        path = Path(os.environ.get("CLAUDE_CODE_CREDENTIALS_FILE", CREDENTIALS_FILE))
+        if path.is_symlink() or not path.is_file() or not os.access(path, os.R_OK):
+            return None
+        try:
+            oauth = json.loads(path.read_text()).get("claudeAiOauth")
+        except (OSError, ValueError):
+            return None
+        return path if isinstance(oauth, dict) and oauth.get("accessToken") else None
+
+    def _install_subscription_credentials(self, source: Path) -> None:
+        """Copy the credentials into the config dir the CLI will actually read.
+
+        The agent runs with ``CLAUDE_CONFIG_DIR`` pointed at its own sessions
+        directory so the run's traces are captured, which also means the CLI no
+        longer looks at the mounted ``~/.claude``. Copying rather than linking
+        keeps a token refresh inside the container from writing back to the
+        read-only mount.
+        """
+        destination = self.sessions_dir / ".credentials.json"
+        shutil.copyfile(source, destination)
+        destination.chmod(0o600)
+        logger.info(f"Installed subscription credentials for the agent at {destination}")
+
     def generate_trajectory(self, problem_id: str, output_dir: Path | None = None) -> Path | None:
         """
         Convert the claude-code.txt output file to a stratus JSONL trajectory
@@ -300,15 +331,24 @@ class ClaudeCodeAgent:
         # Set API key if available
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
         oauth_token = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN", "")
+        # A subscription login is a credentials file, not an env var, and it is
+        # how the harness supplies Claude Code auth for a subscription-backed
+        # evaluation. Seed it into CLAUDE_CONFIG_DIR below rather than rejecting
+        # the run for having "no authentication".
+        credentials = self._subscription_credentials()
 
-        if not api_key and not oauth_token:
+        if not api_key and not oauth_token and not credentials:
             logger.error("=" * 80)
             logger.error("ERROR: No Anthropic API authentication found")
-            logger.error("Please set one of the following environment variables:")
+            logger.error("Provide one of:")
             logger.error("  - ANTHROPIC_API_KEY")
             logger.error("  - CLAUDE_CODE_OAUTH_TOKEN")
+            logger.error(f"  - a subscription credentials file at {CREDENTIALS_FILE}")
             logger.error("=" * 80)
             return 1
+
+        if credentials and not api_key and not oauth_token:
+            self._install_subscription_credentials(credentials)
 
         # Prefer OAuth when explicitly set: an OAuth token in the env reflects
         # caller intent (e.g. driving the agent on a Claude Code subscription
