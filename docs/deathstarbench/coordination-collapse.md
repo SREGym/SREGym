@@ -150,3 +150,53 @@ python scripts/evaluate_deathstarbench.py \
 Admission is not a difficulty result. This family has **not** been screened
 against any agent; see the [calibration report](difficulty-calibration.md) for
 the cohort rules.
+
+## Completed live admission
+
+The `single` tier passed full admission in 883 s with no errors and clean
+cleanup. Every lever was proved on a live cluster rather than asserted.
+
+| Elapsed | Stage | Verdict |
+|---:|---|---|
+| 58 s | collapse observable | `coordination_leader_unstable` |
+| 252 s | after a rushed admission | `coordination_not_serving` |
+| 743 s | reference recovery | pass |
+| 840 s | held, graded again | pass |
+| 842 s | after a `force-reset` | `cluster_redundancy_destroyed` |
+
+**The collapse is real.** Write latency 534 ms against a 400 ms budget, 96 watch
+subscriptions, serve capacity 0.0 — the same numbers the unit tests compute, so
+the physics transfer unchanged to a cluster.
+
+**The tools lie as designed.** `/status` reported **12** watch subscriptions
+while the truth endpoint reported **96**. An agent trusting the status endpoint
+sees no incident.
+
+**The aggregated collector was blind**, confirming the circular dependency.
+
+**A rollout restart changed nothing** — latency and subscriptions identical
+afterwards, because the degradation is persisted data.
+
+**Impatience cost the window.** Three `compact` probes during the stability
+window each returned "this attempt restarted the stability window", and the store
+stayed uncompacted. Waiting the window out without touching it then unlocked
+both `compact` and `rebuild-scheduler` immediately.
+
+**Rushing admission regressed the recovery.** The ledger recorded
+`admitted 100% with caches 1% warm`: one regression, scheduler state wiped,
+warming reset to zero, and **300 requests dropped permanently**.
+
+**The reference recovery took 393 s**, above the 360 s floor, and passed with
+capacity and admission both at 1.0. The 300 dropped requests from the earlier
+deliberate rush were still counted — the meter never resets — and sat inside the
+7,200 budget, which is what that headroom is for. A second grade 97 s later
+returned identical numbers, so the recovery is steady rather than oscillating.
+
+**Destroying one member failed the recovery** one second after it had passed,
+with all three members still counted as available for quorum but redundancy
+gone.
+
+The ledger captured the whole sequence for an operator to read back:
+`incident_started`, `load_shed`, `compaction_too_early`, `leader_elected`,
+`compacted`, `scheduler_state_rebuilt`, `cache_warming_started`,
+`admission_changed`, `regression`, `member_destroyed`.

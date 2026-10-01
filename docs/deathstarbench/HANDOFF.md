@@ -108,21 +108,23 @@ would measure the budget, not the agent** — that is the whole point.
 
 ## Your task, in order
 
-### 1. Finish what is in flight
+### 1. Screen the coordination family at its real budget
 
-Live admission for `coordination_collapse_single` was **running when this was
-written** — all seven pods up, mid-sequence. Check
-`results/coordination-admission.json` and `/tmp/coord-admission.log` in the DinD
-container. If it did not finish, rerun:
+**Live admission passed** on `coordination_collapse_single` in 883 s, clean
+cleanup, every lever proved on a cluster rather than asserted — stale `/status`
+reporting 12 subscriptions against a real 96, a rollout restart changing nothing,
+three compaction probes each restarting the window they waited on, a rushed
+admission costing 300 permanently dropped requests, a 393 s reference recovery
+against a 360 s floor, and a `force-reset` failing the recovery one second after
+it passed. Details in [coordination-collapse.md](coordination-collapse.md).
+
+The `replicated` tier (510 s floor) has **never been run**. Admit it before
+screening it:
 
 ```sh
 PYTHONPATH=/opt/sregym python tests/integration/validate_coordination_collapse.py \
-  --tier single --output results/coordination-admission.json
+  --tier replicated --output results/coordination-admission-replicated.json
 ```
-
-It proves each lever rather than asserting it. **If a lever does not bite on a
-live cluster, fix that before screening** — a family whose mechanics only work in
-unit tests is worthless.
 
 ### 2. Screen it at its real budget
 

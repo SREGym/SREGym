@@ -144,8 +144,14 @@ Measured on the state machine: a flawless run reaches full service in 366 s with
 zero loss; a rushed run finishes *sooner* at zero capacity with permanent loss; a
 run that never sheds load makes no progress however long it waits.
 
-It is implemented and unit-tested (42 tests across physics and grading). It has
-**not** been screened against any agent, and live admission has not yet run.
+It is implemented, unit-tested (45 tests across physics and grading), and has
+**passed full live admission** on its `single` tier in 883 s — every lever proved
+on a cluster, including a stale `/status` reporting 12 subscriptions against a
+real 96, a restart changing nothing, three compaction probes each restarting the
+window they waited on, a rushed admission costing 300 permanently dropped
+requests, a reference recovery taking 393 s against its 360 s floor, and a
+`force-reset` failing the recovery one second after it passed. It has **not**
+been screened against any agent.
 
 These are exploratory calibration screens with adaptive candidate development.
 They do not provide an independent held-out estimate of model reliability or
