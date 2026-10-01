@@ -205,22 +205,45 @@ class CoordinationCluster(Mattermost):
             input_text=content,
         )
 
-    def coordinator_request(self, path, payload=None, timeout=90):
-        """Call the coordinator from inside the cluster, as an operator would."""
-        script = (
-            "import json,urllib.request,urllib.error\n"
-            f"body = {json.dumps(json.dumps(payload) if payload is not None else None)}\n"
-            f"req = urllib.request.Request('http://coordinator:8080{path}',\n"
-            "    data=body.encode() if body else None,\n"
+    @staticmethod
+    def request_script(path, payload=None):
+        """Build the in-cluster request script.
+
+        The body and path are embedded with ``repr`` rather than ``json.dumps``
+        because this is Python source, not JSON: ``json.dumps(None)`` is the
+        literal ``null``, which is a NameError once it lands in a script.
+        Separated out so it can be compiled in a unit test without a cluster.
+        """
+        body = json.dumps(payload) if payload is not None else None
+        return (
+            "import urllib.request,urllib.error\n"
+            f"body = {body!r}\n"
+            f"url = {('http://coordinator:8080' + path)!r}\n"
+            "req = urllib.request.Request(\n"
+            "    url,\n"
+            "    data=body.encode() if body is not None else None,\n"
             "    method='POST' if body is not None else 'GET',\n"
-            "    headers={'Content-Type': 'application/json'} if body is not None else {})\n"
+            "    headers={'Content-Type': 'application/json'} if body is not None else {},\n"
+            ")\n"
             "try:\n"
             "    print(urllib.request.urlopen(req, timeout=60).read().decode())\n"
             "except urllib.error.HTTPError as exc:\n"
             "    print(exc.read().decode())\n"
         )
+
+    def coordinator_request(self, path, payload=None, timeout=90):
+        """Call the coordinator from inside the cluster, as an operator would."""
         return json.loads(
-            self.command("exec", "-i", "application-client", "--", "python", "-", input_text=script, timeout=timeout)
+            self.command(
+                "exec",
+                "-i",
+                "application-client",
+                "--",
+                "python",
+                "-",
+                input_text=self.request_script(path, payload),
+                timeout=timeout,
+            )
         )
 
     def truth(self):

@@ -385,3 +385,48 @@ def test_unset_timestamps_are_none_not_zero(store):
     store.reconcile(state, 2.0)
     assert state["leader_elections"] == elections
     assert store.stable_seconds(state, 2.0) == 2.0
+
+
+def test_the_in_cluster_request_script_is_valid_python_for_every_call_shape():
+    """A GET embedded `null` into generated Python and died with a NameError.
+
+    `json.dumps(None)` is the JSON literal `null`, which is fine in a payload and
+    a NameError once it lands in a script. Every call shape has to compile, and
+    reads are the shape that was broken -- so the whole family's diagnosis path
+    was dead on a live cluster while the unit tests passed.
+    """
+    from sregym.service.apps.coordination_cluster import CoordinationCluster
+
+    shapes = [
+        ("/v1/internal/truth", None),
+        ("/status", None),
+        ("/ledger", None),
+        ("/v1/operator/compact", {}),
+        ("/v1/operator/shed", {"watch_subscriptions": 48}),
+        ("/v1/operator/admit", {"fraction": 0.25}),
+        ("/v1/operator/force-reset", {"member": "coordinator-1"}),
+    ]
+    for path, payload in shapes:
+        script = CoordinationCluster.request_script(path, payload)
+        compile(script, f"<{path}>", "exec")
+        assert "null" not in script.split("url =")[0], (path, script)
+        assert path in script
+
+
+def test_a_read_sends_no_body_and_a_write_sends_one():
+    from sregym.service.apps.coordination_cluster import CoordinationCluster
+
+    read = CoordinationCluster.request_script("/v1/internal/truth")
+    write = CoordinationCluster.request_script("/v1/operator/admit", {"fraction": 1.0})
+
+    assert "body = None" in read
+    assert '"fraction": 1.0' in write or "'fraction': 1.0" in write
+
+
+def test_an_awkward_payload_value_cannot_break_the_script():
+    """Values are embedded with repr, so quotes and newlines stay inert."""
+    from sregym.service.apps.coordination_cluster import CoordinationCluster
+
+    script = CoordinationCluster.request_script("/v1/operator/force-reset", {"member": "a'b\"c\nd"})
+
+    compile(script, "<awkward>", "exec")
