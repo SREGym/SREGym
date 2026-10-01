@@ -42,7 +42,8 @@ report_setup_failure() {
 cleanup() {
     local status=$?
     trap - EXIT TERM INT
-    if [[ $status != 0 && -n $stage ]]; then
+    # 130 and 143 mean the harness stopped us: that is not a setup failure.
+    if [[ $status != 0 && $status != 130 && $status != 143 && -n $stage ]]; then
         report_setup_failure "$status"
     fi
     if [[ -n $child_pid ]]; then
