@@ -6,7 +6,7 @@ name: Harbor Self-Test
 
 on:
   push:
-    branches: [main, claude/intelligent-ramanujan-eeykkl]  # TEMP: validate this branch; remove before merge
+    branches: [main]
     paths:
       - 'sregym/harbor/**'
       - 'sregym/service/k8s_proxy.py'

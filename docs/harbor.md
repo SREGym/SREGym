@@ -257,16 +257,25 @@ the no-op trial about 4. Each trial used the full four-node cluster.
 The **Harbor Oracle Sweep** workflow (`.github/workflows/harbor-oracle.yml`,
 manual) runs Harbor's oracle agent on real problems, one problem per runner.
 Harbor requires the oracle to score 1.0 on every task before it accepts an
-adapter. `network_policy_block` scored 1.0, with a 7m39s trial covering
-deployment, Calico NetworkPolicy fault injection, recovery and grading.
+adapter. On 2026-10-01, **all 21 SREGym-Lite problems scored 1.0**. Six jobs
+ran at a time, and each job took 10–21 minutes including the image build.
+`network_policy_block`'s trial took 7m39s, covering deployment, Calico
+NetworkPolicy fault injection, recovery and grading. The no-op agent check
+(`check_nop`), which confirms each fault is live, and the full problem set
+have not been run yet.
 
-Not yet validated: oracle and agent runs on real problems. These need
-unrestricted registry access (`registry.k8s.io`, `quay.io`, `ghcr.io`,
-`openebs.github.io` and other Helm repositories). On the cgroup v1 VM, KIND's
-worker kubelets could not start inside the nested daemon, so the self-test ran
-on a single-node cluster through a local Compose overlay. The four-node
-runtime was validated on cgroup v2 hosts in the
-[DinD guide](../docker/dind/README.md). Use cgroup v2 hosts for real problems.
+Run the sweep from the Actions tab: choose **Harbor Oracle Sweep** and enter
+`sregym-lite`, or a list of problem IDs. Each job deploys a full application,
+so keep `max_parallel` low enough to leave runners for other CI.
+
+Not yet validated: runs on cloud providers, the problems beyond SREGym-Lite,
+and real agents.
+
+The VM used for the first checks above runs cgroup v1 and blocks several
+registries. There, KIND's worker kubelets could not start inside the nested
+daemon, so the self-test used a single-node cluster through a local Compose
+overlay. Real problems need cgroup v2 and unrestricted registry access, as on
+the GitHub runners above.
 
 ## Limitations
 

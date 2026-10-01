@@ -16,15 +16,11 @@ on:
       max_parallel:
         description: Jobs to run at once
         required: true
-        default: '10'
+        default: '6'
       check_nop:
         description: Also require the no-op agent to score 0 (the fault is live)
         type: boolean
         default: false
-  push:  # TEMP: validate this branch; remove before merge
-    branches: [claude/intelligent-ramanujan-eeykkl]
-    paths:
-      - '.github/workflows/harbor-oracle.yml'
 
 permissions:
   contents: read
@@ -44,7 +40,7 @@ jobs:
       - name: Resolve problems
         id: plan
         env:
-          PROBLEMS: ${{ inputs.problems || 'sregym-lite' }}
+          PROBLEMS: ${{ inputs.problems }}
         run: |
           uv run --frozen python - >> "$GITHUB_OUTPUT" <<'EOF'
           import json
@@ -64,7 +60,7 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      max-parallel: ${{ fromJSON(inputs.max_parallel || '6') }}
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
       matrix:
         problem: ${{ fromJSON(needs.plan.outputs.problems) }}
     env:
