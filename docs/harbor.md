@@ -251,7 +251,14 @@ The **Harbor Self-Test** workflow (`.github/workflows/harbor-selftest.yml`)
 runs the self-test through Harbor's local Docker environment on a GitHub-hosted
 runner (cgroup v2, unrestricted network). It runs on changes to the Harbor
 integration, and requires reward 1 from the oracle agent and 0 from the no-op
-agent.
+agent. On its first runs it passed: the oracle trial took about 3 minutes and
+the no-op trial about 4. Each trial used the full four-node cluster.
+
+The **Harbor Oracle Sweep** workflow (`.github/workflows/harbor-oracle.yml`,
+manual) runs Harbor's oracle agent on real problems, one problem per runner.
+Harbor requires the oracle to score 1.0 on every task before it accepts an
+adapter. `network_policy_block` scored 1.0, with a 7m39s trial covering
+deployment, Calico NetworkPolicy fault injection, recovery and grading.
 
 Not yet validated: oracle and agent runs on real problems. These need
 unrestricted registry access (`registry.k8s.io`, `quay.io`, `ghcr.io`,
