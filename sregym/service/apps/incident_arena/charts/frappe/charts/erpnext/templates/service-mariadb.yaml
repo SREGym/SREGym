@@ -1,0 +1,27 @@
+{{- if (index .Values "mariadb-sts").enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "erpnext.fullname" . }}-mariadb-sts
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  ports:
+    - port: 3306
+      targetPort: mysql
+      protocol: TCP
+      name: mysql
+  selector:
+    app.kubernetes.io/name: {{ include "erpnext.name" . }}-mariadb-sts
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "erpnext.fullname" . }}-mariadb-sts
+data:
+  my.cnf: |
+{{ (index .Values "mariadb-sts").myCnf | indent 4 }}
+{{- end }}

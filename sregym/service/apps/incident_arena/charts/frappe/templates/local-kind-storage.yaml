@@ -1,0 +1,87 @@
+{{- if .Values.localKindStorage.enabled }}
+# Local qualification runs use a fresh single-node Kind cluster, which has no
+# dynamic provisioner. Pre-bind disposable hostPath volumes to the three claims
+# the Frappe stack needs. This path is enabled only by tools.local_run; hosted
+# k3s keeps using its built-in local-path provisioner.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-local-storage-init" .Release.Name | trunc 63 | trimSuffix "-" }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: permissions
+          image: busybox
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-ec", "chmod 0777 /storage/sites /storage/logs /storage/mariadb"]
+          volumeMounts:
+            - {name: sites, mountPath: /storage/sites}
+            - {name: logs, mountPath: /storage/logs}
+            - {name: mariadb, mountPath: /storage/mariadb}
+      volumes:
+        - name: sites
+          hostPath:
+            path: {{ printf "/var/local/sre-world/%s/%s/sites" .Release.Namespace .Release.Name | quote }}
+            type: DirectoryOrCreate
+        - name: logs
+          hostPath:
+            path: {{ printf "/var/local/sre-world/%s/%s/logs" .Release.Namespace .Release.Name | quote }}
+            type: DirectoryOrCreate
+        - name: mariadb
+          hostPath:
+            path: {{ printf "/var/local/sre-world/%s/%s/mariadb" .Release.Namespace .Release.Name | quote }}
+            type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ printf "%s-sites" .Release.Name | trunc 63 | trimSuffix "-" }}
+spec:
+  capacity: {storage: 1Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  claimRef:
+    namespace: {{ .Release.Namespace }}
+    name: erp
+  hostPath:
+    path: {{ printf "/var/local/sre-world/%s/%s/sites" .Release.Namespace .Release.Name | quote }}
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ printf "%s-logs" .Release.Name | trunc 63 | trimSuffix "-" }}
+spec:
+  capacity: {storage: 512Mi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: local-path
+  claimRef:
+    namespace: {{ .Release.Namespace }}
+    name: erp-logs
+  hostPath:
+    path: {{ printf "/var/local/sre-world/%s/%s/logs" .Release.Namespace .Release.Name | quote }}
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ printf "%s-mariadb" .Release.Name | trunc 63 | trimSuffix "-" }}
+spec:
+  capacity: {storage: 2Gi}
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  claimRef:
+    namespace: {{ .Release.Namespace }}
+    name: {{ printf "data-%s-mariadb-subchart-0" .Release.Name | trunc 63 | trimSuffix "-" }}
+  hostPath:
+    path: {{ printf "/var/local/sre-world/%s/%s/mariadb" .Release.Namespace .Release.Name | quote }}
+    type: DirectoryOrCreate
+{{- end }}

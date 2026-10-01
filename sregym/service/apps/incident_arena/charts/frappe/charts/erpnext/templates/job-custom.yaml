@@ -1,0 +1,48 @@
+{{- if .Values.jobs.custom.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.jobs.custom.jobName }}
+  labels:
+    {{- if .Values.jobs.custom.labels }}
+    {{ toYaml .Values.jobs.custom.labels | indent 4 }}
+    {{- else}}
+    {{- include "erpnext.labels" . | nindent 4 }}
+    {{- end }}
+spec:
+  backoffLimit: {{ .Values.jobs.custom.backoffLimit }}
+  template:
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ template "erpnext.serviceAccountName" $ }}
+    {{- with .Values.jobs.custom.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+    {{- with .Values.jobs.custom.containers }}
+      containers:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      restartPolicy: {{ .Values.jobs.custom.restartPolicy }}
+    {{- with .Values.jobs.custom.volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      {{- with .Values.jobs.custom.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jobs.custom.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jobs.custom.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

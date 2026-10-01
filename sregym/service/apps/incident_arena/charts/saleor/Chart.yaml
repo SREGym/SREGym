@@ -1,0 +1,31 @@
+apiVersion: v2
+name: saleor-spine
+description: |
+  AgentRepair Saleor substrate (P0 spike) — REAL OSS app tier (unmodified
+  upstream ghcr.io/saleor/saleor images: Django/GraphQL API + Celery worker)
+  over BLACK-BOXED CloudPirates infra subcharts (postgres, valkey, rabbitmq),
+  plus the operator-shell foothold (main) and default-off loadgen/obs stubs.
+  Peer to substrates/frappe/chart (the proven vendored-upstream pattern, D16)
+  — but here the app code is upstream too; only the deployment templates are
+  ours. Fault rule: NOTHING MANUFACTURED — faults are values, data, or real
+  upstream releases (see ../DESIGN.md §4.3).
+type: application
+version: 0.1.0
+appVersion: "3.21"
+
+# Vendored infra tier: CloudPirates OCI charts, exact-version pins. Vendor with
+# `helm dependency build` (tgz lands in charts/ and is COMMITTED — no download
+# at install time; upstream bump = substrate release + recalibration).
+# NOTE (spike finding): CloudPirates default image tags are ALREADY digest-
+# pinned upstream (e.g. postgres "18.4@sha256:..."), unlike the erpnext
+# chart's floating busybox — the images.lock.json story is simpler here.
+dependencies:
+  - name: postgres
+    version: "0.19.6"
+    repository: "oci://registry-1.docker.io/cloudpirates"
+  - name: valkey
+    version: "0.23.0"
+    repository: "oci://registry-1.docker.io/cloudpirates"
+  - name: rabbitmq
+    version: "0.21.7"
+    repository: "oci://registry-1.docker.io/cloudpirates"

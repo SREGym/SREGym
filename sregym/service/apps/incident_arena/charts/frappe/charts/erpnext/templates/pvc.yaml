@@ -1,0 +1,20 @@
+{{- if and .Values.persistence.worker.enabled (not .Values.persistence.worker.existingClaim) }}
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  labels:
+    app: {{ template "erpnext.name" . }}
+    chart: {{ template "erpnext.chart" . }}
+    heritage: {{ .Release.Service }}
+    release: {{ .Release.Name }}
+  name: {{ template "erpnext.fullname" . }}
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.worker.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.worker.size | quote }}
+  {{- if .Values.persistence.worker.storageClass }}
+  storageClassName: {{ .Values.persistence.worker.storageClass }}
+  {{- end }}
+{{- end }}

@@ -1,0 +1,27 @@
+dependencies:
+- name: mariadb
+  repository: https://charts.bitnami.com/bitnami
+  version: 11.5.7
+- name: postgresql
+  repository: https://charts.bitnami.com/bitnami
+  version: 12.1.6
+- name: redis
+  repository: https://charts.bitnami.com/bitnami
+  version: 17.15.2
+- name: redis
+  repository: https://charts.bitnami.com/bitnami
+  version: 17.15.2
+- name: dragonfly
+  repository: oci://ghcr.io/dragonflydb/dragonfly/helm
+  version: v1.34.2
+- name: dragonfly
+  repository: oci://ghcr.io/dragonflydb/dragonfly/helm
+  version: v1.34.2
+- name: valkey
+  repository: https://valkey-io.github.io/valkey-helm
+  version: 0.9.3
+- name: valkey
+  repository: https://valkey-io.github.io/valkey-helm
+  version: 0.9.3
+digest: sha256:385ed6a17002451098bf5843447ae3ae92fc171473fe53bd8159e0d3db3f0280
+generated: "2026-01-25T10:46:54.985349932+05:30"

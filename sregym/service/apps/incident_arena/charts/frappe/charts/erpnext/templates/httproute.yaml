@@ -1,0 +1,50 @@
+{{- if .Values.httproute.enabled }}
+{{- $fullName := include "erpnext.fullname" . -}}
+{{- $svcPort := .Values.nginx.service.port -}}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  {{- if .Values.httproute.name }}
+  name: {{ .Values.httproute.name }}
+  {{- else }}
+  name: {{ $fullName }}-httproute
+  {{- end }}
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+  {{- with .Values.httproute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- range .Values.httproute.parentRefs }}
+    - name: {{ .gatewayName }}
+      {{- if .gatewayNamespace }}
+      namespace: {{ .gatewayNamespace }}
+      {{- end }}
+      {{- if .gatewayKind }}
+      kind: {{ .gatewayKind }}
+      {{- end }}
+      {{- if .gatewaySectionName }}
+      sectionName: {{ .gatewaySectionName }}
+      {{- end }}
+    {{- end }}
+
+  hostnames:
+    {{- range .Values.httproute.hostnames }}
+    - {{ . | quote }}
+    {{- end }}
+
+  rules:
+    {{- range .Values.httproute.rules }}
+    - matches:
+        {{- range .matches }}
+        - path:
+            type: {{ .pathType | default "PathPrefix" }}
+            value: {{ .path | default "/" }}
+        {{- end }}
+      backendRefs:
+        - name: {{ include "erpnext.fullname" $ }}
+          port: {{ $.Values.nginx.service.port }}
+    {{- end }}
+{{- end }}

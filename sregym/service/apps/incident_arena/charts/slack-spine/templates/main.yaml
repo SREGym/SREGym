@@ -1,0 +1,465 @@
+{{- if include "slack.enabled" (dict "root" $ "key" "main") }}
+# ── main: the agent's operator shell + foothold pod ──────────────────────────
+# The Helm backend resolves the agent's single foothold pod via main_selector
+# (task.toml pins it to component=main) and exec/cp ONLY here. main holds the MCP
+# client, the config-inspect/edit surface, and restart-<svc>.sh wrappers that call
+# each SUT pod's /admin API over cluster DNS. Confined tasks have no Kubernetes
+# credential; release-authorized shell/build tasks receive only exact pod get/exec
+# RBAC, and workload mutation stays isolated in the rebuild broker.
+{{- $reportVocabulary := .Values.agentReport.vocabulary | default (dict) }}
+{{- $reportServices := $reportVocabulary.services | default (list) }}
+{{- $reportComponents := $reportVocabulary.components | default (list) }}
+{{- if or $reportServices $reportComponents }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: main-report-vocabulary
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+data:
+  vocabulary.txt: |
+    services:
+    {{- range $reportServices }}
+      - {{ . }}
+    {{- end }}
+    components:
+    {{- $reportDescriptions := $reportVocabulary.descriptions | default (dict) }}
+    {{- range $reportComponents }}
+      - {{ . }}{{ with (index $reportDescriptions .) }}: {{ . }}{{ end }}
+    {{- end }}
+---
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: main
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: main
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: main
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: main
+    spec:
+      {{- include "slack.confinedDns" $ | nindent 6 }}
+      serviceAccountName: main
+      {{- /*
+        confined: NO API credential (renders `false`, byte-identical to the
+        pre-surface chart). shell-visible/build-capable: the foothold gets a token so
+        the agent can kubectl-exec into app pods / rebuild the one target
+        StatefulSet, scoped by the Role in agent-surface.yaml (DECISIONS D20/D21).
+        The main image ships kubectl. Helm strips
+        this comment from the rendered output, so confined stays byte-identical.
+      */}}
+      automountServiceAccountToken: {{ if or .Values.agentSurface.exec.enabled .Values.agentSurface.buildCapable.enabled }}true{{ else }}false{{ end }}
+      shareProcessNamespace: true
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      # Do not set pod fsGroup: Kubernetes applies it to every mounted Secret,
+      # which would make the verifier-only grader capability group-readable by
+      # the agent. This one-shot init owns only the writable emptyDirs instead.
+      initContainers:
+        {{- if .Values.platformTools.enabled }}
+        {{- $toolsImage := printf "ghcr.io/abundant-ai/sre-world/codex-tools@%s" .Values.platformTools.digest }}
+        {{- if and (ne .Values.global.imagePullPolicy "Never") (ne $toolsImage .Values.platformTools.image) }}
+        {{- fail "hosted platformTools.image must exactly equal the locked ghcr.io/abundant-ai/sre-world/codex-tools@digest identity" }}
+        {{- end }}
+        - name: codex-tools
+          image: {{ required "platformTools.image is required" .Values.platformTools.image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-ceu"]
+          args:
+            - |
+              cp -R /opt/harbor-agent-tools/. /staged-tools/
+              chmod -R a+rX /staged-tools
+              export PATH=/staged-tools/bin:/usr/local/bin:/usr/bin:/bin
+              command -v curl >/dev/null
+              command -v rg >/dev/null
+              command -v codex >/dev/null
+              codex --version
+              rg --version >/dev/null
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: codex-tools
+              mountPath: /staged-tools
+            - name: codex-tools-no-service-account
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+        {{- end }}
+        - name: main-permissions
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - sh
+            - -ceu
+            - |
+              install -d -m 1777 /tmp
+              # Harbor's pre-agent healthcheck and root verifier automatically
+              # `cd /home/agent`. Root has no DAC_OVERRIDE in this container, so
+              # the home must be traversal-only for non-owners. 0711 prevents
+              # directory listing while allowing that fixed workdir traversal.
+              install -d -m 0711 /home/agent
+              # Harbor retrieves agent logs as capability-dropped root after the
+              # run, so this agent-owned directory must be searchable/listable.
+              # Verifier logs and tests remain root-owned and private. The
+              # solution mount must stay traversable because Harbor uploads the
+              # golden directory only for OracleAgent, then launches this
+              # dispatcher as the unprivileged agent identity. Real agents see
+              # only the generic dispatcher; no golden directory is uploaded.
+              install -d -m 0755 /logs/agent
+              install -d -m 0700 /logs/verifier /tests
+              install -d -m 0755 /solution
+              # Stock Harbor copies a solution DIRECTORY into an existing
+              # /solution mount, producing /solution/harbor_*/solve.sh, but then
+              # invokes /solution/solve.sh. Keep the root filesystem read-only
+              # and bridge that fixed contract with an immutable dispatcher.
+              cat > /solution/solve.sh <<'HARBOR_SOLUTION_DISPATCH'
+              #!/bin/sh
+              set -eu
+              set -- /solution/harbor_*/solve.sh
+              [ "$#" -eq 1 ] && [ -f "$1" ] || {
+                echo "solution dispatcher: expected exactly one /solution/harbor_*/solve.sh" >&2
+                exit 1
+              }
+              candidate="$1"
+              cd "$(dirname "$candidate")"
+              attempts=0
+              until [ -r "$candidate" ]; do
+                attempts=$((attempts + 1))
+                [ "$attempts" -lt 100 ] || {
+                  echo "solution dispatcher: uploaded solve.sh stayed unreadable" >&2
+                  exit 126
+                }
+                sleep 0.05
+              done
+              # Harbor uploads the golden directory through kubectl as the pod
+              # transport user, then launches the Oracle as uid 10001. The
+              # root-owned normalizer below makes only that transient upload
+              # readable; real agent runs never receive a harbor_* directory.
+              exec /bin/bash "$candidate"
+              HARBOR_SOLUTION_DISPATCH
+              chmod 0755 /solution/solve.sh
+              # The stock shared verifier has the same upload-dir/fixed-path
+              # contract for /tests/test.sh. /tests stays root-only, so this
+              # bridge is invisible and unwritable to the agent.
+              cat > /tests/test.sh <<'HARBOR_TEST_DISPATCH'
+              #!/bin/sh
+              set -eu
+              set -- /tests/harbor_*/test.sh
+              [ "$#" -eq 1 ] && [ -f "$1" ] || {
+                echo "test dispatcher: expected exactly one /tests/harbor_*/test.sh" >&2
+                exit 1
+              }
+              candidate="$1"
+              cd "$(dirname "$candidate")"
+              exec /bin/bash "$candidate"
+              HARBOR_TEST_DISPATCH
+              chmod 0700 /tests/test.sh
+              # `install -o` performs chmod after chown, which needs CAP_FOWNER
+              # once ownership changed. Set modes first, then use the sole
+              # retained CHOWN capability for the two agent-writable roots.
+              chown agent:agent /home/agent /logs/agent
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: agent-home
+              mountPath: /home/agent
+            - name: tests
+              mountPath: /tests
+            - name: logs
+              mountPath: /logs
+            - name: solution
+              mountPath: /solution
+      containers:
+        - name: main
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          # Long-lived idle shell: the agent's exec lands here while the SUT serves
+          # in the svc-* pods. The image MUST ship bash + tar (kubectl exec/cp).
+          command: ["sh", "-ceu"]
+          args:
+            - |
+              test -w /tmp
+              test "$(stat -c %a /home/agent)" = 711
+              test -d /logs/verifier
+              test -d /tests
+              {{- if or .Values.agentSurface.exec.enabled .Values.agentSurface.buildCapable.enabled }}
+              token=/var/run/secrets/kubernetes.io/serviceaccount/token
+              ca=/var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+              test -s "$token"
+              test -s "$ca"
+              export token ca
+              # CAP_CHOWN is deliberately absent. Create the kubeconfig as the
+              # unprivileged agent, with a restrictive umask, instead of creating
+              # it as root and trying to chown a mounted file afterward.
+              runuser -u agent -- sh -ceu '
+                umask 077
+                export HOME=/home/agent KUBECONFIG=/home/agent/.kube/config
+                test -w /home/agent
+                install -d -m 0700 /home/agent/.kube
+                kubectl config set-cluster in-cluster \
+                  --server="https://agent-kube-api-proxy.{{ .Release.Namespace }}.svc:8443" \
+                  --tls-server-name=kubernetes.default.svc \
+                  --certificate-authority="$ca" --embed-certs=true >/dev/null
+                kubectl config set-credentials main --token="$(cat "$token")" >/dev/null
+                kubectl config set-context main --cluster=in-cluster --user=main \
+                  --namespace={{ .Release.Namespace | quote }} >/dev/null
+                kubectl config use-context main >/dev/null
+                kubectl version --client=true
+                test "$(stat -c %a "$KUBECONFIG")" = 600
+              '
+              {{- end }}
+              # Normalize only Harbor's transient golden-solution upload. The
+              # Oracle runs as the unprivileged agent, while kubectl cp extracts
+              # as this container's root transport user. Without this bridge a
+              # mode/owner combination that is valid on the host can arrive
+              # unreadable and make the Oracle exit 126 before testing the task.
+              # /solution itself stays root-owned and non-writable to agents.
+              (
+                while true; do
+                  for uploaded in /solution/harbor_*; do
+                    [ -d "$uploaded" ] || continue
+                    chmod -R a+rX "$uploaded"
+                  done
+                  sleep 0.05
+                done
+              ) &
+              exec sleep infinity
+          securityContext:
+            # Stock Harbor bootstraps OS packages as root before it switches to
+            # uid 10001 for the harness. The writable foothold is isolated from
+            # all SUT pods and from the root-only grader capability.
+            readOnlyRootFilesystem: {{ .Values.main.readOnlyRootFilesystem }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              # Root needs these only while Harbor installs distro packages.
+              # Harbor then executes the harness as uid/gid agent; with
+              # allowPrivilegeEscalation false it cannot acquire these caps.
+              add: ["CHOWN", "FOWNER", "SETUID", "SETGID"]
+          env:
+            {{- if .Values.platformTools.enabled }}
+            - name: PATH
+              value: "/opt/harbor-agent-tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            {{- end }}
+            # kubectl cp streams a host-created tar archive into this
+            # capability-dropped root container. Never import the host runner's
+            # uid/gid: preserving ownership would require CAP_CHOWN and is not
+            # part of the file-transfer contract.
+            - name: TAR_OPTIONS
+              value: "--no-same-owner"
+            - name: AGENT_EGRESS_PROXY_PORT
+              value: {{ .Values.agentEgressProxy.port | quote }}
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: http_proxy
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: https_proxy
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: NO_PROXY
+              value: {{ .Values.agentEgressProxy.noProxy | quote }}
+            - name: no_proxy
+              value: {{ .Values.agentEgressProxy.noProxy | quote }}
+            {{- if or .Values.agentSurface.exec.enabled .Values.agentSurface.buildCapable.enabled }}
+            - name: KUBECONFIG
+              value: /home/agent/.kube/config
+            {{- end }}
+            - name: OBS_MCP_URL
+              value: "http://obs-mcp:8000/mcp"
+            {{- if or $reportServices $reportComponents }}
+            - name: REPORT_VOCABULARY_FILE
+              value: /etc/sre-world/report-vocabulary/vocabulary.txt
+            {{- end }}
+            # Privileged Postgres DSN for direct database inspection + corrective action.
+            # Present in BOTH clean and faulted charts (the svc_admin role exists in both),
+            # so it is never a fault tell. The app user cannot pg_terminate_backend/VACUUM
+            # other roles' tables -> the agent MUST use this DSN.
+            - name: DB_ADMIN_DSN
+              value: "postgresql://{{ .Values.postgres.adminRole }}:{{ .Values.postgres.adminPassword }}@db:5432/{{ .Values.postgres.database }}"
+            - name: DB_APP_DSN
+              value: "postgresql://{{ .Values.postgres.appUser }}:{{ .Values.postgres.appPassword }}@db:5432/{{ .Values.postgres.database }}"
+            {{- if .Values.agentSurface.buildCapable.enabled }}
+            - name: BUILD_TARGET_ROLE
+              value: {{ .Values.agentSurface.buildCapable.targetRole | quote }}
+            - name: REBUILD_BROKER_URL
+              value: "http://rebuild-broker:9180"
+            {{- end }}
+            {{- if .Values.runtimeConfigBroker.enabled }}
+            - name: SEQUENCER_CONFIG_BROKER_URL
+              value: "http://sequencer-config-broker:{{ .Values.runtimeConfigBroker.port }}"
+            {{- end }}
+            {{- if (index .Values.components "maintenanceController").enabled }}
+            # The maintenance controller's API, published the same way the broker
+            # above is, and gated on the controller actually being deployed.
+            # Without this, nothing in the agent's reachable surface names the
+            # path: it exists only in the controller's own source, the verifier
+            # profile and the answer key, so the repair was reachable only by
+            # guessing (one trial probed seven plausible paths and 404'd on all).
+            - name: MAINTENANCE_API_URL
+              value: "http://db-maintenance:8081/v1/maintenance"
+            {{- end }}
+          readinessProbe:
+            exec:
+              {{- if .Values.agentSurface.buildCapable.enabled }}
+              command: ["sh", "-c", "curl -fsS http://loadgen:9100/healthz >/dev/null"]
+              {{- else }}
+              command: ["true"]
+              {{- end }}
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "main") | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.platformTools.enabled }}
+            - name: codex-tools
+              mountPath: /opt/harbor-agent-tools
+              readOnly: true
+            {{- end }}
+            - name: grader-access
+              mountPath: /run/verifier/grader-access
+              readOnly: true
+            - name: agent-egress-cutover-token
+              mountPath: /run/agent-egress-cutover
+              readOnly: true
+            - name: agent-egress-cutover-script
+              mountPath: /usr/local/bin/set-agent-egress-phase
+              subPath: set-agent-egress-phase
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: agent-home
+              mountPath: /home/agent
+            - name: tests
+              mountPath: /tests
+            - name: logs
+              mountPath: /logs
+            # Harbor's OracleAgent uploads the reference solve script here.
+            # The volume is empty for every real agent run.
+            - name: solution
+              mountPath: /solution
+            {{- if .Values.runtimeConfigBroker.enabled }}
+            - name: sequencer-config-helper
+              mountPath: /usr/local/bin/set-sequencer-mode
+              subPath: set-sequencer-mode
+              readOnly: true
+            {{- end }}
+            {{- if or $reportServices $reportComponents }}
+            - name: report-vocabulary
+              mountPath: /etc/sre-world/report-vocabulary
+              readOnly: true
+            {{- end }}
+        - name: agent-freezer
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python3", "/usr/local/lib/sre-world/agent_freezer.py"]
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["KILL"]
+          env:
+            - name: GRADER_ACCESS_TOKEN_FILE
+              value: /run/grader-access/token
+            # Compatibility with already-published main images: their freezer
+            # still contains the retired uid-observation opener. Disable it;
+            # Harbor's environment healthcheck owns the opening boundary.
+            - name: EPISODE_START_ENABLED
+              value: "0"
+          ports:
+            - name: freeze
+              containerPort: 9101
+          volumeMounts:
+            - name: grader-access
+              mountPath: /run/grader-access
+              readOnly: true
+      volumes:
+        {{- if .Values.platformTools.enabled }}
+        - name: codex-tools
+          emptyDir: {}
+        - name: codex-tools-no-service-account
+          emptyDir: {}
+        {{- end }}
+        - name: grader-access
+          secret:
+            secretName: loadgen-grader-access
+            # The agent is uid 10001; only the root verifier can read this file.
+            defaultMode: 0400
+        - name: agent-egress-cutover-token
+          secret:
+            secretName: agent-egress-cutover-auth
+            defaultMode: 0400
+        - name: agent-egress-cutover-script
+          configMap:
+            name: agent-egress-cutover
+            defaultMode: 0555
+        - name: tmp
+          emptyDir: {}
+        - name: agent-home
+          emptyDir: {}
+        - name: tests
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: solution
+          emptyDir: {}
+        {{- if .Values.runtimeConfigBroker.enabled }}
+        - name: sequencer-config-helper
+          configMap:
+            name: sequencer-config-helper
+            defaultMode: 0555
+        {{- end }}
+        {{- if or $reportServices $reportComponents }}
+        - name: report-vocabulary
+          configMap:
+            name: main-report-vocabulary
+            defaultMode: 0444
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-freezer
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  selector:
+    app.kubernetes.io/component: main
+  ports:
+    - name: freeze
+      port: 9101
+      targetPort: freeze
+{{- end }}

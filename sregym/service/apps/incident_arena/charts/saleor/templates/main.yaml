@@ -1,0 +1,422 @@
+{{- if .Values.main.enabled }}
+# ── main: the agent's operator shell + foothold pod (Saleor substrate) ──────
+# Peer of frappe main.yaml: no kubeconfig, automountServiceAccountToken:false;
+# the agent's exec lands ONLY here (harbor main_selector: component=main).
+# Repair verbs: psql over the scenario-selected database repair DSN, curl to the
+# app's REAL admin/GraphQL surfaces, and helm-values changes through the harness.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: main
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: main
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: main
+  template:
+    metadata:
+      labels:
+        {{- include "saleor-spine.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: main
+    spec:
+      serviceAccountName: main
+      automountServiceAccountToken: false
+      # The agent-freezer sidecar SIGKILLs the agent's uid-10001 processes from
+      # /proc on declare; that requires a shared PID namespace across the pod.
+      shareProcessNamespace: true
+      {{- include "saleor-spine.confinedDns" $ | nindent 6 }}
+      # Harbor uploads oracle/verifier directories through a root transport
+      # user, while the oracle itself runs as uid 10001.  A worker umask of
+      # 077 therefore makes the uploaded solution untraversable unless the pod
+      # owns an explicit transfer contract.  Keep the fixed entrypoints in
+      # root-owned emptyDirs and dispatch to the transient upload only after
+      # its permissions have been normalized.  Real agents never receive a
+      # harbor_* solution directory.
+      initContainers:
+        {{- if .Values.platformTools.enabled }}
+        {{- $toolsImage := printf "ghcr.io/abundant-ai/sre-world/codex-tools@%s" .Values.platformTools.digest }}
+        {{- if and (ne .Values.global.imagePullPolicy "Never") (ne $toolsImage .Values.platformTools.image) }}
+        {{- fail "hosted platformTools.image must exactly equal the locked ghcr.io/abundant-ai/sre-world/codex-tools@digest identity" }}
+        {{- end }}
+        - name: codex-tools
+          image: {{ required "platformTools.image is required" .Values.platformTools.image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-ceu"]
+          args:
+            - |
+              cp -R /opt/harbor-agent-tools/. /staged-tools/
+              chmod -R a+rX /staged-tools
+              export PATH=/staged-tools/bin:/usr/local/bin:/usr/bin:/bin
+              command -v curl >/dev/null
+              command -v rg >/dev/null
+              command -v codex >/dev/null
+              codex --version
+              rg --version >/dev/null
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: codex-tools
+              mountPath: /staged-tools
+            - name: codex-tools-no-service-account
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+        {{- end }}
+        - name: main-permissions
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - sh
+            - -ceu
+            - |
+              install -d -m 1777 /tmp
+              install -d -m 0711 /home/agent
+              install -d -m 0755 /logs/agent
+              install -d -m 0700 /logs/verifier /tests
+              install -d -m 0755 /solution
+              cat > /solution/solve.sh <<'HARBOR_SOLUTION_DISPATCH'
+              #!/bin/sh
+              set -eu
+              candidate=
+              attempts=0
+              while [ "$attempts" -lt 100 ]; do
+                set -- /solution/harbor_*/solve.sh
+                if [ "$#" -eq 1 ] && [ -r "$1" ]; then
+                  candidate="$1"
+                  break
+                fi
+                attempts=$((attempts + 1))
+                sleep 0.05
+              done
+              [ -n "$candidate" ] || {
+                echo "solution dispatcher: expected one readable /solution/harbor_*/solve.sh" >&2
+                exit 126
+              }
+              cd "$(dirname "$candidate")"
+              exec /bin/bash "$candidate"
+              HARBOR_SOLUTION_DISPATCH
+              chmod 0755 /solution/solve.sh
+              cat > /tests/test.sh <<'HARBOR_TEST_DISPATCH'
+              #!/bin/sh
+              set -eu
+              set -- /tests/harbor_*/test.sh
+              [ "$#" -eq 1 ] && [ -f "$1" ] || {
+                echo "test dispatcher: expected exactly one /tests/harbor_*/test.sh" >&2
+                exit 1
+              }
+              candidate="$1"
+              cd "$(dirname "$candidate")"
+              exec /bin/bash "$candidate"
+              HARBOR_TEST_DISPATCH
+              chmod 0700 /tests/test.sh
+              chown agent:agent /home/agent /logs/agent
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: agent-home, mountPath: /home/agent}
+            - {name: tests, mountPath: /tests}
+            - {name: logs, mountPath: /logs}
+            - {name: solution, mountPath: /solution}
+        {{- if .Values.faultInit.postgres.readyMarker }}
+        # Do not release Harbor's agent foothold until the task-local runtime
+        # fault has landed.  Without this handshake, Helm can report the main
+        # Deployment ready while postgres-fault-init is still waiting for the
+        # Saleor/loadgen bootstrap; an Oracle can then repair healthy state and
+        # have the late Job re-inject the fault underneath it.
+        - name: incident-ready
+          image: "postgres:16"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-ceu"]
+          args:
+            - |
+              attempts=0
+              until PGOPTIONS="-c statement_timeout=0" psql -v ON_ERROR_STOP=1 \
+                "postgresql://{{ .Values.postgres.auth.username }}:{{ .Values.postgres.auth.password }}@postgres:5432/{{ .Values.postgres.auth.database }}" \
+                -tAc "SELECT marker FROM sre_world_fault_ready WHERE marker = 1" \
+                | tr -d '[:space:]' | grep -qx 1; do
+                attempts=$((attempts + 1))
+                if [ "$attempts" -ge 200 ]; then
+                  echo "incident-ready: postgres fault marker did not appear within 600s" >&2
+                  exit 1
+                fi
+                echo "incident-ready: waiting for postgres fault marker"
+                sleep 3
+              done
+              echo "incident-ready: postgres fault is armed"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+        {{- end }}
+        {{- if .Values.loadgen.enabled }}
+        # The loadgen publishes /episode-ready only after it has captured the
+        # immutable boot-time runtime basis and started the exact episode.  The
+        # local Kind oracle keys agent availability off this Deployment, so the
+        # Deployment itself must own this ordering contract; task.toml's hosted
+        # agent setup gate alone cannot prevent an early local oracle mutation.
+        - name: grading-ready
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-ceu"]
+          args:
+            - |
+              attempts=0
+              until curl -fsS http://loadgen:9100/episode-ready >/dev/null; do
+                attempts=$((attempts + 1))
+                if [ "$attempts" -ge 200 ]; then
+                  echo "grading-ready: boot snapshot and episode did not become ready within 600s" >&2
+                  exit 1
+                fi
+                echo "grading-ready: waiting for boot snapshot and live episode"
+                sleep 3
+              done
+              echo "grading-ready: immutable boot snapshot and live episode are ready"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+        {{- end }}
+      containers:
+        - name: main
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-ceu"]
+          args:
+            - |
+              test -w /tmp
+              test "$(stat -c %a /home/agent)" = 711
+              test -d /logs/verifier
+              test -d /tests
+              # Normalize only Harbor's transient golden upload. kubectl cp
+              # preserves the worker's secure 0700 modes; the oracle must stay
+              # unprivileged and must not receive FOWNER merely to compensate.
+              (
+                while :; do
+                  for uploaded in /solution/harbor_*; do
+                    [ -d "$uploaded" ] || continue
+                    chmod -R a+rX "$uploaded"
+                  done
+                  sleep 0.05
+                done
+              ) &
+              exec sleep infinity
+          securityContext:
+            readOnlyRootFilesystem: {{ .Values.main.readOnlyRootFilesystem }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER", "SETUID", "SETGID"]
+          env:
+            {{- if .Values.platformTools.enabled }}
+            - name: PATH
+              value: "/opt/harbor-agent-tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            {{- end }}
+            # Do not import host uid/gid metadata through kubectl cp into this
+            # capability-dropped root transport container.
+            - name: TAR_OPTIONS
+              value: "--no-same-owner"
+            - name: AGENT_EGRESS_PROXY_PORT
+              value: {{ .Values.agentEgressProxy.port | quote }}
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: http_proxy
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: https_proxy
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: NO_PROXY
+              value: {{ .Values.agentEgressProxy.noProxy | quote }}
+            - name: no_proxy
+              value: {{ .Values.agentEgressProxy.noProxy | quote }}
+            {{- if eq .Values.main.databaseAccess "repair" }}
+            # Narrow database repair identity: read-only table access plus SELECT
+            # grant option. It cannot mutate rows/schema or run server programs.
+            - name: DB_REPAIR_DSN
+              value: "postgres://{{ .Values.postgres.repairUser }}:{{ .Values.postgres.repairPassword }}@postgres:5432/{{ .Values.postgres.auth.database }}"
+            {{- else if eq .Values.main.databaseAccess "admin" }}
+            # Legacy privileged Postgres DSN (CloudPirates auth.username is a
+            # custom SUPERUSER). New ACL tasks must select the repair identity.
+            - name: DB_ADMIN_DSN
+              value: "postgres://{{ .Values.postgres.auth.username }}:{{ .Values.postgres.auth.password }}@postgres:5432/{{ .Values.postgres.auth.database }}"
+            {{- else }}
+            {{- fail "main.databaseAccess must be admin or repair" }}
+            {{- end }}
+            - name: SALEOR_API_URL
+              value: "http://svc-saleor-api:8000/graphql/"
+            {{- if not .Values.agentSurface.buildCapable.enabled }}
+            # RabbitMQ management API — the broker-tier repair verb for
+            # confined runtime tasks. The chart auth user is an administrator,
+            # so source-repair tasks must never receive this unrelated,
+            # destructive capability.
+            - name: RABBITMQ_ADMIN_URL
+              value: "http://{{ .Values.rabbitmq.auth.username }}:{{ .Values.rabbitmq.auth.password }}@rabbitmq:15672"
+            {{- end }}
+            {{- if .Values.agentSurface.buildCapable.enabled }}
+            - name: BUILD_TARGET_ROLE
+              value: {{ .Values.agentSurface.buildCapable.targetRole | quote }}
+            - name: REBUILD_BROKER_URL
+              value: "http://saleor-rebuild-broker:9180"
+            - name: BUILD_SOURCE_ROOT
+              value: /workspace
+            {{- end }}
+          readinessProbe:
+            exec:
+              command: ["true"]
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          # Sized for REAL AGENTS, not just the idle shell: harbor installs
+          # and runs the agent CLI (node + subprocesses) inside this
+          # container, and 256Mi OOM-killed the Claude Code installer (exit
+          # 137) on the first live agent trial. slack-spine's main runs
+          # unlimited; we keep explicit-but-generous.
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "2",    memory: "2Gi"   }
+          volumeMounts:
+            {{- if .Values.platformTools.enabled }}
+            - name: codex-tools
+              mountPath: /opt/harbor-agent-tools
+              readOnly: true
+            {{- end }}
+            - {name: tmp, mountPath: /tmp}
+            - {name: agent-home, mountPath: /home/agent}
+            - {name: tests, mountPath: /tests}
+            - {name: logs, mountPath: /logs}
+            - {name: solution, mountPath: /solution}
+            - name: agent-egress-cutover-token
+              mountPath: /run/agent-egress-cutover
+              readOnly: true
+            - name: agent-egress-cutover-script
+              mountPath: /usr/local/bin/set-agent-egress-phase
+              subPath: set-agent-egress-phase
+              readOnly: true
+            # Verifier-only grader capability, mounted ROOT-ONLY (defaultMode
+            # 0400): test.sh runs as root and reads the token to send the
+            # X-SRE-World-Grader-Access header to /grader/verdict; the Harbor
+            # agent execs as the non-root `agent` user and cannot read it, so
+            # it can never forge grader access.
+            - name: grader-access
+              mountPath: /run/verifier/grader-access
+              readOnly: true
+            {{- if .Values.agentSurface.buildCapable.enabled }}
+            # The agent sees only the explicitly seeded task-local source files.
+            # It receives no Saleor base-image filesystem and no Kubernetes token.
+            - name: agent-source
+              mountPath: /workspace
+            - name: agent-surface
+              mountPath: /usr/local/bin/rebuild-saleor-app
+              subPath: rebuild-saleor-app
+              readOnly: true
+            {{- end }}
+        {{- if .Values.loadgen.enabled }}
+        # Agent-freezer (#91 terminal-declaration boundary). On declare the
+        # loadgen POSTs http://agent-freezer:9101/freeze to SIGKILL the agent's
+        # uid-10001 processes before the graded soak, so no agent-owned work
+        # overlaps grading. Same image (python3 + the baked agent_freezer.py).
+        - name: agent-freezer
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python3", "/usr/local/lib/sre-world/agent_freezer.py"]
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["KILL"]
+          env:
+            - name: GRADER_ACCESS_TOKEN_FILE
+              value: /run/grader-access/token
+            # Compatibility with already-published main images: disable their
+            # retired uid-observation opener. The Harbor healthcheck owns t0.
+            - name: EPISODE_START_ENABLED
+              value: "0"
+          ports:
+            - name: freeze
+              containerPort: 9101
+          volumeMounts:
+            - name: grader-access
+              mountPath: /run/grader-access
+              readOnly: true
+        {{- end }}
+      volumes:
+        {{- if .Values.platformTools.enabled }}
+        - name: codex-tools
+          emptyDir: {}
+        - name: codex-tools-no-service-account
+          emptyDir: {}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: agent-home
+          emptyDir: {}
+        - name: tests
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        - name: solution
+          emptyDir: {}
+        - name: agent-egress-cutover-token
+          secret:
+            secretName: agent-egress-cutover-auth
+            defaultMode: 0400
+        - name: agent-egress-cutover-script
+          configMap:
+            name: agent-egress-cutover
+            defaultMode: 0555
+        - name: grader-access
+          secret:
+            secretName: loadgen-grader-access
+            defaultMode: 0400
+        {{- if .Values.agentSurface.buildCapable.enabled }}
+        - name: agent-source
+          persistentVolumeClaim:
+            claimName: saleor-agent-source
+        - name: agent-surface
+          configMap:
+            name: saleor-agent-surface
+            defaultMode: 0555
+        {{- end }}
+{{- if .Values.loadgen.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-freezer
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  selector:
+    app.kubernetes.io/component: main
+  ports:
+    - name: freeze
+      port: 9101
+      targetPort: freeze
+{{- end }}
+{{- end }}

@@ -5,6 +5,7 @@ from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.apps.blueprint_hotel_reservation import BlueprintHotelReservation
 from sregym.service.apps.fleet_cast import FleetCast
 from sregym.service.apps.hotel_reservation import HotelReservation
+from sregym.service.apps.incident_arena import Frappe, Saleor, SlackSpine
 from sregym.service.apps.social_network import SocialNetwork
 
 # from sregym.service.apps.train_ticket import TrainTicket
@@ -20,6 +21,9 @@ class AppRegistry:
             # "Train Ticket": TrainTicket
             "Fleet Cast": FleetCast,
             "Blueprint Hotel Reservation": BlueprintHotelReservation,
+            "Frappe": Frappe,
+            "Saleor": Saleor,
+            "Slack Spine": SlackSpine,
         }
 
         self.APP_PATH = {
@@ -30,6 +34,9 @@ class AppRegistry:
             # "Train Ticket": TRAIN_TICKET_METADATA
             "Fleet Cast": FLEET_CAST_METADATA,  # noqa: F405
             "Blueprint Hotel Reservation": BLUEPRINT_HOTEL_RES_METADATA,  # noqa: F405
+            "Frappe": FRAPPE_METADATA,  # noqa: F405
+            "Saleor": SALEOR_METADATA,  # noqa: F405
+            "Slack Spine": SLACK_SPINE_METADATA,  # noqa: F405
         }
 
     def get_app_instance(self, app_name: str):

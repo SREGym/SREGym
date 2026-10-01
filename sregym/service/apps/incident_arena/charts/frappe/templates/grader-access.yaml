@@ -1,0 +1,15 @@
+{{- if include "frappe-spine.enabled" (dict "root" $ "key" "loadgen") }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace "loadgen-grader-access" }}
+# The agent does not receive this capability. It is readable by loadgen and by
+# Harbor's root verifier only, which prevents post-declaration result probing.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: loadgen-grader-access
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+type: Opaque
+data:
+  token: {{ if $existing }}{{ required "existing loadgen-grader-access Secret lacks token" (index $existing.data "token") | quote }}{{ else }}{{ randAlphaNum 48 | b64enc | quote }}{{ end }}
+{{- end }}

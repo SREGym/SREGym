@@ -1,0 +1,212 @@
+{{- $sfc := .Values.agentSurface }}
+{{- if or $sfc.exec.enabled $sfc.buildCapable.enabled }}
+{{- if not $sfc.releaseApproved }}
+{{- fail "SECURITY QUARANTINE: non-confined agent surfaces remain disabled until immutable runtime/builder images and adversarial gates are release-approved." }}
+{{- end }}
+{{- $podNames := list }}
+{{- $podComponents := list }}
+{{- range $role, $_ := .Values.app.roles }}
+{{- if include "slack.enabled" (dict "root" $ "key" $role) }}
+{{- $podNames = append $podNames (printf "svc-%s-0" $role) }}
+{{- $podComponents = append $podComponents (printf "svc-%s" $role) }}
+{{- end }}
+{{- end }}
+# Exact-name shell access. Kubernetes authorizes pods/exec against the parent
+# pod name, so resourceNames constrains both get and exec/create. No list/watch
+# verb exists and loadgen is deliberately absent.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: main-app-exec
+  labels:
+    {{- include "slack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: main
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: {{ $podNames | toJson }}
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    resourceNames: {{ $podNames | toJson }}
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: main-app-exec
+  labels:
+    {{- include "slack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: main
+subjects:
+  - kind: ServiceAccount
+    name: main
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: main-app-exec
+  apiGroup: rbac.authorization.k8s.io
+---
+# Every pod reachable through pods/exec is namespace-confined. It may talk to
+# the SUT and kube-dns, but not public IPs or either task-owned egress stage.
+# This closes the direct-shell bypass while preserving normal service traffic.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-reachable-app-egress
+  labels:
+    {{- include "slack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: {{ $podComponents | toJson }}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: NotIn
+                values: [agent-egress-proxy, agent-egress-tls-gateway, agent-kube-api-proxy]
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+{{- end }}
+{{- if $sfc.buildCapable.enabled }}
+{{- $target := required "agentSurface.buildCapable.targetRole is required" $sfc.buildCapable.targetRole }}
+# The only writable persistent state is the target's TypeScript source tree.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: src-svc-{{ $target }}
+  labels:
+    {{- include "slack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: svc-{{ $target }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ $sfc.buildCapable.storage | quote }}
+---
+# Rebuild authority is isolated in a dedicated fixed-target broker. Main has no
+# workload-controller permissions; this RoleBinding names only the broker SA.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: rebuild-broker
+  labels:
+    {{- include "slack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rebuild-broker
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: rebuild-broker-{{ $target }}
+  labels:
+    {{- include "slack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: main
+rules:
+  - apiGroups: ["apps"]
+    resources: ["statefulsets/scale"]
+    resourceNames: ["svc-{{ $target }}"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: ["svc-{{ $target }}-0"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: rebuild-broker-{{ $target }}
+  labels:
+    {{- include "slack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: main
+subjects:
+  - kind: ServiceAccount
+    name: rebuild-broker
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: rebuild-broker-{{ $target }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rebuild-broker
+  labels:
+    {{- include "slack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rebuild-broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: rebuild-broker
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" . | nindent 8 }}
+        app.kubernetes.io/component: rebuild-broker
+    spec:
+      serviceAccountName: rebuild-broker
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10002
+        runAsGroup: 10002
+        fsGroup: 10002
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: broker
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "/app/rebuild_broker.py"]
+          env:
+            - name: BUILD_TARGET_ROLE
+              value: {{ $target | quote }}
+            - name: REBUILD_TIMEOUT_S
+              value: {{ $sfc.buildCapable.rebuildTimeoutSeconds | quote }}
+          ports:
+            - name: http
+              containerPort: 9180
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rebuild-broker
+  labels:
+    {{- include "slack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rebuild-broker
+spec:
+  selector:
+    app.kubernetes.io/component: rebuild-broker
+  ports:
+    - name: http
+      port: 9180
+      targetPort: http
+{{- end }}

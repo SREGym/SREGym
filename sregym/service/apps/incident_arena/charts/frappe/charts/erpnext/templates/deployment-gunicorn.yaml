@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "erpnext.fullname" . }}-gunicorn
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.worker.gunicorn.autoscaling.enabled }}
+  replicas: {{ .Values.worker.gunicorn.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "erpnext.name" . }}-gunicorn
+      app.kubernetes.io/instance: {{ .Release.Name }}-gunicorn
+  template:
+    metadata:
+      {{- with .Values.worker.gunicorn.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        app.kubernetes.io/name: {{ include "erpnext.name" . }}-gunicorn
+        app.kubernetes.io/instance: {{ .Release.Name }}-gunicorn
+        app.kubernetes.io/app: frappe
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ include "erpnext.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+    {{- if .Values.worker.gunicorn.initContainers }}
+      initContainers:
+        {{- toYaml .Values.worker.gunicorn.initContainers | nindent 8 }}
+    {{- end }}
+      containers:
+        - name: gunicorn
+          {{- if .Values.worker.gunicorn.envVars }}
+          env:
+            {{- toYaml .Values.worker.gunicorn.envVars | nindent 12 }}
+          {{- end }}
+          args:
+            {{- toYaml .Values.worker.gunicorn.args | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          volumeMounts:
+          - name: sites-dir
+            mountPath: /home/frappe/frappe-bench/sites
+          - name: logs
+            mountPath: /home/frappe/frappe-bench/logs
+          ports:
+            - name: http
+              containerPort: {{ .Values.worker.gunicorn.service.port }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.worker.gunicorn.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.worker.gunicorn.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.worker.gunicorn.resources | nindent 12 }}
+      {{- if .Values.worker.gunicorn.sidecars }}
+        {{- toYaml .Values.worker.gunicorn.sidecars | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: sites-dir
+          {{- if .Values.persistence.worker.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.worker.existingClaim }}
+            claimName: {{ .Values.persistence.worker.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: logs
+          {{- if .Values.persistence.logs.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.logs.existingClaim }}
+            claimName: {{ .Values.persistence.logs.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}-logs
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.worker.gunicorn.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.worker.gunicorn.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.worker.gunicorn.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      topologySpreadConstraints:
+        {{- if .Values.worker.topologySpreadConstraints }}
+        {{- toYaml .Values.worker.topologySpreadConstraints | nindent 8 }}
+        {{- else }}
+        - maxSkew: {{ .Values.worker.defaultTopologySpread.maxSkew | default 1 }}
+          topologyKey: {{ .Values.worker.defaultTopologySpread.topologyKey | default "kubernetes.io/hostname" }}
+          whenUnsatisfiable: {{ .Values.worker.defaultTopologySpread.whenUnsatisfiable | default "ScheduleAnyway" }}
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "erpnext.name" . }}-gunicorn
+              app.kubernetes.io/instance: {{ .Release.Name }}-gunicorn
+        {{- end }}

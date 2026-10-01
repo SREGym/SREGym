@@ -1,0 +1,138 @@
+{{- $cfg := .Values.gradingHarness.verifierChallenge }}
+{{- if $cfg.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: verifier-challenge
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: verifier-challenge-fixed-target
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: [{{ $cfg.targetPod | quote }}]
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: verifier-challenge-fixed-target
+subjects:
+  - kind: ServiceAccount
+    name: verifier-challenge
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: verifier-challenge-fixed-target
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: verifier-challenge-code
+data:
+  __init__.py: ""
+  broker.py: |
+{{ .Files.Get "files/verifier-broker.py" | indent 4 }}
+  textual.py: |
+{{ .Files.Get "files/verifier-textual.py" | indent 4 }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: verifier-challenge-receipt
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 64Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verifier-challenge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: verifier-challenge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: verifier-challenge
+    spec:
+      serviceAccountName: verifier-challenge
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: broker
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python3", "-m", "verifier.broker"]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PYTHONPATH
+              value: /opt/verifier
+            - name: TARGET_POD
+              value: {{ $cfg.targetPod | quote }}
+            - name: TARGET_SERVICE
+              value: {{ $cfg.targetService | quote }}
+            - name: READINESS_PATH
+              value: {{ $cfg.readinessPath | quote }}
+            - name: CHALLENGE_TIMEOUT_S
+              value: {{ $cfg.timeoutSec | quote }}
+            - name: CHALLENGE_CHANNELS
+              value: {{ $cfg.channels | quote }}
+            - name: GRADER_ACCESS_TOKEN_FILE
+              value: /run/grader-access/token
+          ports:
+            - name: http
+              containerPort: 9190
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+          volumeMounts:
+            - name: code
+              mountPath: /opt/verifier/verifier
+              readOnly: true
+            - name: grader-access
+              mountPath: /run/grader-access
+              readOnly: true
+            - name: receipt
+              mountPath: /var/run/verifier
+      volumes:
+        - name: code
+          configMap:
+            name: verifier-challenge-code
+            defaultMode: 0444
+        - name: grader-access
+          secret:
+            secretName: loadgen-grader-access
+            defaultMode: 0400
+        - name: receipt
+          persistentVolumeClaim:
+            claimName: verifier-challenge-receipt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: verifier-challenge
+spec:
+  selector:
+    app.kubernetes.io/component: verifier-challenge
+  ports:
+    - name: http
+      port: 9190
+      targetPort: http
+{{- end }}

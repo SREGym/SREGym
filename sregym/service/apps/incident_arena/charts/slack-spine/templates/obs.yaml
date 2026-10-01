@@ -1,0 +1,488 @@
+# ── observability plane (agent-reachable ONLY via obs-mcp; telemetry backends
+#    are not advertised to the agent — foothold-enforced, see DECISIONS) ───────
+{{- if include "slack.enabled" (dict "root" $ "key" "prometheus") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: {{ .Values.obs.scrapeIntervalSeconds }}s
+      evaluation_interval: {{ .Values.obs.scrapeIntervalSeconds }}s
+    scrape_configs:
+      - job_name: sut
+        static_configs:
+{{- range $role, $rc := .Values.app.roles }}
+          - targets: ["svc-{{ $role }}:{{ $.Values.app.server.port }}"]
+            labels:
+              service: "svc-{{ $role }}"
+{{- end }}
+      - job_name: spine
+        static_configs:
+          - {targets: ["ws-gateway:9101"],   labels: {service: ws-gateway}}
+          - {targets: ["flannel:8200"],      labels: {service: flannel}}
+          - {targets: ["channel-rt:8201"],   labels: {service: channel-rt}}
+          - {targets: ["dispatcher:8202"],   labels: {service: dispatcher}}
+          - {targets: ["presence:8123"],     labels: {service: presence}}
+          - {targets: ["geodns:8053"],       labels: {service: geodns}}
+          - {targets: ["kafkagate:8120"],    labels: {service: kafkagate}}
+          - {targets: ["scheduler:8121"],    labels: {service: scheduler}}
+          - {targets: ["search-engine:7280"],labels: {service: search-engine}}
+{{- if .Values.components.maintenanceController.enabled }}
+          - {targets: ["db-maintenance:8081"],labels: {service: db-maintenance}}
+{{- end }}
+{{- range $lane := .Values.async.lanes }}
+          - {targets: ["worker-{{ $lane }}:8122"], labels: {service: worker, lane: "{{ $lane }}"}}
+{{- end }}
+      - job_name: envoy
+        metrics_path: /stats/prometheus
+        static_configs:
+          - {targets: ["envoy-edge:9901"], labels: {service: envoy-edge}}
+      - job_name: redpanda
+        metrics_path: /public_metrics
+        static_configs:
+          - {targets: ["redpanda:9644"], labels: {service: redpanda}}
+{{- if .Values.obs.postgresExporter.enabled }}
+      - job_name: postgres-exporter
+        static_configs:
+          - {targets: ["postgres-exporter:9187"], labels: {service: postgres-exporter}}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: prometheus
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: prometheus
+    spec:
+      containers:
+        - name: prometheus
+          image: {{ .Values.images.prometheus | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+          ports:
+            - name: http
+              containerPort: 9090
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "obs") | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  selector:
+    app.kubernetes.io/component: prometheus
+  ports:
+    - name: http
+      port: 9090
+      targetPort: http
+---
+# Keep raw metrics behind the MCP facade. Agent shells can reach namespace
+# services, so service discovery alone is not a sufficient boundary.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: prometheus-ingress
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: prometheus
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: prometheus
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: obs-mcp
+      ports:
+        - {protocol: TCP, port: 9090}
+{{- end }}
+{{- if include "slack.enabled" (dict "root" $ "key" "loki") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loki
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: loki
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: loki
+    spec:
+      containers:
+        - name: loki
+          image: {{ .Values.images.loki | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["-config.file=/etc/loki/local-config.yaml"]
+          ports:
+            - name: http
+              containerPort: 3100
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "obs") | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: loki
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loki
+spec:
+  selector:
+    app.kubernetes.io/component: loki
+  ports:
+    - name: http
+      port: 3100
+      targetPort: http
+---
+# Promtail may ingest raw logs and obs-mcp may query them. No agent-reachable
+# application pod gets direct access to the unredacted Loki API.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: loki-ingress
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loki
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: loki
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: obs-mcp
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/component: promtail
+      ports:
+        - {protocol: TCP, port: 3100}
+{{- end }}
+{{- if include "slack.enabled" (dict "root" $ "key" "promtail") }}
+---
+# promtail: k8s pod-log discovery (services log to stdout — sidesteps the RWX
+# shared-volume blocker and mirrors real k8s observability). Needs pod-list RBAC.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: promtail
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: promtail
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-promtail
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "services", "pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Name }}-promtail
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Name }}-promtail
+subjects:
+  - kind: ServiceAccount
+    name: promtail
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: promtail-config
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+data:
+  promtail.yaml: |
+    server:
+      http_listen_port: 9080
+      grpc_listen_port: 0
+    positions:
+      filename: /run/promtail/positions.yaml
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+    scrape_configs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            target_label: service
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - action: replace
+            source_labels: [__meta_kubernetes_pod_uid, __meta_kubernetes_pod_container_name]
+            target_label: __path__
+            separator: /
+            replacement: /var/log/pods/*$1/*.log
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: promtail
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: promtail
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: promtail
+    spec:
+      serviceAccountName: promtail
+      containers:
+        - name: promtail
+          image: {{ .Values.images.promtail | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["-config.file=/etc/promtail/promtail.yaml"]
+          env:
+            - name: HOSTNAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: config
+              mountPath: /etc/promtail
+            - name: run
+              mountPath: /run/promtail
+            - name: pods
+              mountPath: /var/log/pods
+              readOnly: true
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "obs") | nindent 12 }}
+      volumes:
+        - name: config
+          configMap:
+            name: promtail-config
+        - name: run
+          emptyDir: {}
+        - name: pods
+          hostPath:
+            path: /var/log/pods
+{{- end }}
+{{- if include "slack.enabled" (dict "root" $ "key" "obsMcp") }}
+---
+# obs-mcp: the ONLY telemetry surface advertised to the agent (PromQL/LogQL tools).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: obs-mcp
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: obs-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: obs-mcp
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: obs-mcp
+    spec:
+      containers:
+        - name: obs-mcp
+          image: {{ .Values.images.obsMcp | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - name: PROMETHEUS_URL
+              value: "http://prometheus:9090"
+            - name: LOKI_URL
+              value: "http://loki:3100"
+            # Loki egress denylist (query_logs redaction). Raw Loki keeps every line;
+            # only the agent-facing tool output drops lines matching these substrings.
+            - name: OBS_DENIED_LOG_SUBSTRINGS
+              value: {{ .Values.obs.deniedLogSubstrings | quote }}
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "obs") | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: obs-mcp
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: obs-mcp
+spec:
+  selector:
+    app.kubernetes.io/component: obs-mcp
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+{{- end }}
+{{- if .Values.obs.postgresExporter.enabled }}
+---
+# postgres-exporter: scrapes the shared cluster for a small set of per-database health
+# gauges. These are READ-ONLY autocommit queries (no counter assignment), so they keep
+# working under the refuse-writes regime. The metric NAMES and descriptions are kept
+# deliberately NEUTRAL — they expose the numeric SHAPE the agent must read from first
+# principles, never the root cause in plain text. (Leak-guarded by tools/lint_scenario.py:
+# any root-cause token in a metric name/column/description fails the pre-flight lint.)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-exporter-queries
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+data:
+  queries.yaml: |
+    pg_database_internal_age:
+      query: "SELECT datname, age(datfrozenxid) AS current, (2^31 - 3000000 - age(datfrozenxid)) AS headroom FROM pg_database"
+      master: true
+      metrics:
+        - datname:
+            usage: "LABEL"
+            description: "database name"
+        - current:
+            usage: "GAUGE"
+            description: "per-database internal age gauge"
+        - headroom:
+            usage: "GAUGE"
+            description: "per-database internal age headroom gauge"
+    pg_longest_transaction_seconds:
+      query: "SELECT COALESCE(max(extract(epoch from (now()-xact_start))),0) AS seconds FROM pg_stat_activity WHERE state <> 'idle'"
+      master: true
+      metrics:
+        - seconds:
+            usage: "GAUGE"
+            description: "duration of the longest open transaction in seconds"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-exporter
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: postgres-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: postgres-exporter
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: postgres-exporter
+    spec:
+      containers:
+        - name: postgres-exporter
+          image: {{ .Values.images.postgresExporter | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args:
+            - "--extend.query-path=/etc/postgres-exporter/queries.yaml"
+          env:
+            - name: DATA_SOURCE_NAME
+              value: "postgresql://{{ .Values.postgres.adminRole }}:{{ .Values.postgres.adminPassword }}@db:5432/{{ .Values.postgres.database }}?sslmode=disable"
+          ports:
+            - name: http
+              containerPort: 9187
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: queries
+              mountPath: /etc/postgres-exporter
+              readOnly: true
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "obs") | nindent 12 }}
+      volumes:
+        - name: queries
+          configMap:
+            name: postgres-exporter-queries
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-exporter
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: postgres-exporter
+spec:
+  selector:
+    app.kubernetes.io/component: postgres-exporter
+  ports:
+    - name: http
+      port: 9187
+      targetPort: http
+{{- end }}

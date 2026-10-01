@@ -1,0 +1,120 @@
+{{- if .Values.faultInit.postgres.enabled }}
+# ── fault-init: runtime fault injector (DEFAULT-OFF; slack-spine D14 tier-3) ──
+# A committed conf-file fault is at war with first-boot provisioning (spike
+# finding: a statement_timeout in postgresql.conf cancels the postgres
+# entrypoint's own CREATE DATABASE, killing initdb scripts forever). Runtime
+# faults therefore apply AFTER postgres is Ready, via this one-shot Job. It is
+# harness machinery in the healthy chart, default-off; a scenario's
+# fault.values.yaml flips it with the statements to run. The agent has no
+# kubectl and cannot see or reach it; the injected state is discoverable
+# through the REAL operator surfaces (pg_settings source, auto.conf).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: postgres-fault-init
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: fault-init
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "saleor-spine.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: fault-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: fault-init
+          image: "postgres:16"
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              until pg_isready -h postgres -U {{ .Values.postgres.auth.username }} -d {{ .Values.postgres.auth.database }}; do
+                echo "init: waiting for db"; sleep 3
+              done
+              {{- if .Values.loadgen.enabled }}
+              # Wait for the HARNESS to finish provisioning before arming the
+              # fault: at tight ceilings (3ms) the loadgen's own catalog
+              # discovery dies under the fault (calibration finding). The
+              # loadgen turns healthy only after variant discovery, so the
+              # fault lands during warmup — provisioning is fault-free by
+              # construction and every graded peak is fully faulted.
+              until timeout 2 bash -c "</dev/tcp/loadgen/9100" 2>/dev/null; do
+                echo "init: waiting for services"; sleep 3
+              done
+              sleep 5   # provisioning completes sub-second after the port opens
+              {{- end }}
+              {{- range .Values.faultInit.postgres.statements }}
+              PGOPTIONS="-c statement_timeout=0" psql -v ON_ERROR_STOP=1 "postgresql://{{ $.Values.postgres.auth.username }}:{{ $.Values.postgres.auth.password }}@postgres:5432/{{ $.Values.postgres.auth.database }}" -c {{ . | quote }}
+              {{- end }}
+              {{- if .Values.faultInit.postgres.readyMarker }}
+              # Fixed task-local handshake: the loadgen's typed boot gate waits
+              # for this row before capturing the pre-agent runtime basis.
+              PGOPTIONS="-c statement_timeout=0" psql -v ON_ERROR_STOP=1 "postgresql://{{ $.Values.postgres.auth.username }}:{{ $.Values.postgres.auth.password }}@postgres:5432/{{ $.Values.postgres.auth.database }}" -c "CREATE TABLE IF NOT EXISTS sre_world_fault_ready (marker integer PRIMARY KEY)"
+              PGOPTIONS="-c statement_timeout=0" psql -v ON_ERROR_STOP=1 "postgresql://{{ $.Values.postgres.auth.username }}:{{ $.Values.postgres.auth.password }}@postgres:5432/{{ $.Values.postgres.auth.database }}" -c "INSERT INTO sre_world_fault_ready (marker) VALUES (1) ON CONFLICT (marker) DO NOTHING"
+              {{- end }}
+              echo "init: done"
+{{- end }}
+{{- if .Values.faultInit.saleorApp.enabled }}
+---
+# ── fault-init: SALEOR APP-STATE injector (DEFAULT-OFF; async-lane tier-3) ──
+# Strips a permission from a webhook-owning App via the Saleor ORM after the
+# loadgen has registered it. Saleor dispatches an async webhook only if its
+# App is active AND holds the event's permission (webhook/utils.py filter),
+# so removing MANAGE_ORDERS makes ORDER_CREATED events skip the app SILENTLY:
+# no EventDelivery is created, no error is raised, checkouts are unaffected.
+# The agent repairs through a REAL surface — GraphQL appUpdate (re-grant) or
+# the admin DSN. Runtime app state; the agent has no kubectl and cannot see
+# this Job.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: saleor-app-fault-init
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: fault-init
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "saleor-spine.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: fault-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: fault-init
+          # The stock Saleor image (has django + the ORM) — no extra pulls.
+          image: {{ .Values.images.saleorApp | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            {{- include "saleor-spine.saleorEnv" (dict "root" $) | nindent 12 }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              APP="{{ .Values.faultInit.saleorApp.appName }}"
+              {{- if .Values.loadgen.enabled }}
+              until timeout 2 sh -c "</dev/tcp/loadgen/9100" 2>/dev/null; do
+                echo "init: waiting for services"; sleep 3
+              done
+              {{- end }}
+              # Wait for the loadgen to have registered the observer App.
+              until python3 -c "import os,django;os.environ.setdefault('DJANGO_SETTINGS_MODULE','saleor.settings');django.setup();from saleor.app.models import App;import sys;sys.exit(0 if App.objects.filter(name='$APP').exists() else 1)" 2>/dev/null; do
+                echo "init: waiting for services"; sleep 3
+              done
+              python3 - <<'PY'
+              import os, django
+              os.environ.setdefault("DJANGO_SETTINGS_MODULE","saleor.settings"); django.setup()
+              from saleor.app.models import App
+              app = App.objects.get(name="{{ .Values.faultInit.saleorApp.appName }}")
+              before = sorted(p.codename for p in app.permissions.all())
+              app.permissions.clear()
+              print("init: done")
+              PY
+{{- end }}

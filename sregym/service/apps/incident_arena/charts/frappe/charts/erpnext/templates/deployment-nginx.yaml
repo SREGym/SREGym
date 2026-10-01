@@ -1,0 +1,129 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "erpnext.fullname" . }}-nginx
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.nginx.autoscaling.enabled }}
+  replicas: {{ .Values.nginx.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "erpnext.name" . }}-nginx
+      app.kubernetes.io/instance: {{ .Release.Name }}-nginx
+  template:
+    metadata:
+      {{- with .Values.nginx.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        app.kubernetes.io/name: {{ include "erpnext.name" . }}-nginx
+        app.kubernetes.io/instance: {{ .Release.Name }}-nginx
+        app.kubernetes.io/app: frappe
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ include "erpnext.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+    {{- if .Values.nginx.initContainers }}
+      initContainers:
+        {{- toYaml .Values.nginx.initContainers | nindent 8 }}
+    {{- end }}
+      containers:
+        - name: nginx
+          args:
+          {{- if .Values.nginx.config }}
+          - nginx
+          - -g
+          - 'daemon off;'
+          {{- else }}
+          - nginx-entrypoint.sh
+          {{- end }}
+          env:
+            - name: "BACKEND"
+              value: {{ print (include "erpnext.fullname" .) "-gunicorn:" .Values.worker.gunicorn.service.port }}
+            - name: "SOCKETIO"
+              value: {{ print (include "erpnext.fullname" .) "-socketio:" .Values.socketio.service.port }}
+            - name: "UPSTREAM_REAL_IP_ADDRESS"
+              value: {{ .Values.nginx.environment.upstreamRealIPAddress | quote }}
+            - name: "UPSTREAM_REAL_IP_RECURSIVE"
+              value: {{ .Values.nginx.environment.upstreamRealIPRecursive | quote }}
+            - name: "UPSTREAM_REAL_IP_HEADER"
+              value: {{ .Values.nginx.environment.upstreamRealIPHeader }}
+            - name: "FRAPPE_SITE_NAME_HEADER"
+              value: {{ .Values.nginx.environment.frappeSiteNameHeader }}
+            - name: "PROXY_READ_TIMEOUT"
+              value: {{ .Values.nginx.environment.proxyReadTimeout | quote }}
+            - name: "CLIENT_MAX_BODY_SIZE"
+              value: {{ .Values.nginx.environment.clientMaxBodySize }}
+          {{- if .Values.nginx.envVars }}
+            {{- toYaml .Values.nginx.envVars | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.nginx.service.port }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.nginx.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.nginx.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.nginx.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+          - name: sites-dir
+            mountPath: /home/frappe/frappe-bench/sites
+          {{- if .Values.nginx.config }}
+          - name: nginx-config
+            mountPath: /etc/nginx/conf.d
+          {{- end }}
+      volumes:
+        - name: sites-dir
+          {{- if .Values.persistence.worker.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.worker.existingClaim }}
+            claimName: {{ .Values.persistence.worker.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- if .Values.nginx.config }}
+        - name: nginx-config
+          configMap:
+            name: {{ include "erpnext.fullname" . }}-nginx-config
+        {{- end }}
+      {{- with .Values.nginx.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.nginx.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.nginx.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      topologySpreadConstraints:
+        {{- if .Values.nginx.topologySpreadConstraints }}
+        {{- toYaml .Values.nginx.topologySpreadConstraints | nindent 8 }}
+        {{- else }}
+        - maxSkew: {{ .Values.nginx.defaultTopologySpread.maxSkew | default 1 }}
+          topologyKey: {{ .Values.nginx.defaultTopologySpread.topologyKey | default "kubernetes.io/hostname" }}
+          whenUnsatisfiable: {{ .Values.nginx.defaultTopologySpread.whenUnsatisfiable | default "ScheduleAnyway" }}
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ include "erpnext.name" . }}-nginx
+              app.kubernetes.io/instance: {{ .Release.Name }}-nginx
+        {{- end }}

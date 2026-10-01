@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "erpnext.fullname" . }}-scheduler
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.worker.scheduler.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "erpnext.name" . }}-scheduler
+      app.kubernetes.io/instance: {{ .Release.Name }}-scheduler
+  template:
+    metadata:
+      {{- with .Values.worker.scheduler.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        app.kubernetes.io/name: {{ include "erpnext.name" . }}-scheduler
+        app.kubernetes.io/instance: {{ .Release.Name }}-scheduler
+        app.kubernetes.io/app: frappe
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ template "erpnext.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+    {{- if .Values.worker.scheduler.initContainers }}
+      initContainers:
+        {{- toYaml .Values.worker.scheduler.initContainers | nindent 8 }}
+    {{- end }}
+      containers:
+        - name: scheduler
+          {{- if .Values.worker.scheduler.envVars }}
+          env:
+            {{- toYaml .Values.worker.scheduler.envVars | nindent 12 }}
+          {{- end }}
+          args:
+          - bench
+          - schedule
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          livenessProbe:
+            {{- if .Values.worker.scheduler.livenessProbe.override }}
+            {{- toYaml .Values.worker.scheduler.livenessProbe.probe | nindent 12 }}
+            {{- else }}
+            {{ tpl .Values.worker.healthProbe . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            {{- if .Values.worker.scheduler.readinessProbe.override }}
+            {{- toYaml .Values.worker.scheduler.readinessProbe.probe | nindent 12 }}
+            {{- else }}
+            {{ tpl .Values.worker.healthProbe . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.worker.scheduler.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+          - name: sites-dir
+            mountPath: /home/frappe/frappe-bench/sites
+          - name: logs
+            mountPath: /home/frappe/frappe-bench/logs
+      {{- if .Values.worker.scheduler.sidecars }}
+        {{- toYaml .Values.worker.scheduler.sidecars | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: sites-dir
+          {{- if .Values.persistence.worker.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.worker.existingClaim }}
+            claimName: {{ .Values.persistence.worker.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: logs
+          {{- if .Values.persistence.logs.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.logs.existingClaim }}
+            claimName: {{ .Values.persistence.logs.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}-logs
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.worker.scheduler.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.worker.scheduler.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.worker.scheduler.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}

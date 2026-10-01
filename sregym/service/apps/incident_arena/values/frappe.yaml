@@ -1,0 +1,65 @@
+# SREGym deployment overlay for the Incident Arena frappe chart.
+#
+# Deploys the healthy Frappe site with the images pinned by the Incident Arena
+# tasks and the workload shape every Frappe task shares (one supervised long
+# worker, no scheduler/socketio), drops the Harbor harness (agent foothold,
+# egress proxy, DNS filter, in-chart Prometheus/Loki/obs-mcp) in favour of
+# SREGym's own observability stack, and replaces the foothold with an operator
+# toolbox. Problems layer their load profile and fault values on top.
+global:
+  imagePullPolicy: IfNotPresent
+
+images:
+  main: ghcr.io/abundant-ai/sre-world/frappe-main@sha256:d40b49eb1c050f14d4fa91ad5bb894ee1db61724466caea903ee0a952574210e
+  loadgen: ghcr.io/abundant-ai/sre-world/frappe-loadgen@sha256:0372494536eb9a0b40745cdc92a1915ec5b144a67f8bc509845eba5e411b310c
+  obsMcp: ghcr.io/abundant-ai/sre-world/frappe-obs-mcp@sha256:1646a2a67d5d0e484dc1b760c2900cb756c7986e9a86cead61175b2737883808
+  frappeAdmin: ghcr.io/abundant-ai/sre-world/frappe-admin-sidecar@sha256:9975944f1d375dea6afb9c35159f978c4d82691f232e4818ff7faff66121cd2d
+
+main:
+  enabled: false
+
+loadgen:
+  enabled: true
+  profile: frappe_jobs_agent
+
+gradingHarness:
+  # The load generator requires an answer key at startup; under sregym.enabled
+  # the chart renders a fault-free one (see sregym.neutralAnswerKey).
+  answerKey:
+    enabled: true
+
+erpnext:
+  redis-queue:
+    master:
+      # Healthy queue broker: finite, loss-intolerant capacity.
+      extraFlags:
+        - --maxmemory
+        - 64mb
+        - --maxmemory-policy
+        - noeviction
+      persistence:
+        enabled: true
+  worker:
+    default:
+      replicaCount: 0
+    short:
+      replicaCount: 0
+    long:
+      replicaCount: 1
+      supervise: true
+      resources:
+        requests:
+          cpu: 250m
+        limits:
+          cpu: 1000m
+    scheduler:
+      replicaCount: 0
+  socketio:
+    replicaCount: 0
+
+sregym:
+  enabled: true
+  loadgenLabels:
+    app: load-generator
+  toolbox:
+    enabled: true

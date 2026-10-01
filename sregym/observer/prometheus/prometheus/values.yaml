@@ -1313,6 +1313,84 @@ extraScrapeConfigs: |
       - targets:
           - basic-tidb.tidb-cluster.svc.cluster.local:10080
           - basic-pd.tidb-cluster.svc.cluster.local:2379
+  # ---- Incident Arena ports (sregym/service/apps/incident_arena) ----
+  # The charts' own Prometheus is not deployed under SREGym; these jobs scrape the
+  # same targets it did. Targets of a namespace that is not deployed are simply down.
+  - job_name: 'incident-arena-slack-spine-app'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - svc-auth.slack-spine.svc.cluster.local:8000
+          - svc-workspace.slack-spine.svc.cluster.local:8000
+          - svc-channel.slack-spine.svc.cluster.local:8000
+          - svc-message.slack-spine.svc.cluster.local:8000
+          - svc-thread.slack-spine.svc.cluster.local:8000
+          - svc-file.slack-spine.svc.cluster.local:8000
+          - svc-search.slack-spine.svc.cluster.local:8000
+          - svc-notification.slack-spine.svc.cluster.local:8000
+          - svc-platform.slack-spine.svc.cluster.local:8000
+        labels:
+          namespace: slack-spine
+  - job_name: 'incident-arena-slack-spine-services'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - ws-gateway.slack-spine.svc.cluster.local:9101
+          - flannel.slack-spine.svc.cluster.local:8200
+          - channel-rt.slack-spine.svc.cluster.local:8201
+          - dispatcher.slack-spine.svc.cluster.local:8202
+          - presence.slack-spine.svc.cluster.local:8123
+          - geodns.slack-spine.svc.cluster.local:8053
+          - kafkagate.slack-spine.svc.cluster.local:8120
+          - scheduler.slack-spine.svc.cluster.local:8121
+          - search-engine.slack-spine.svc.cluster.local:7280
+          - db-maintenance.slack-spine.svc.cluster.local:8081
+          - worker-index.slack-spine.svc.cluster.local:8122
+          - worker-unfurl.slack-spine.svc.cluster.local:8122
+          - worker-av.slack-spine.svc.cluster.local:8122
+          - worker-push.slack-spine.svc.cluster.local:8122
+          - worker-email.slack-spine.svc.cluster.local:8122
+          - worker-events.slack-spine.svc.cluster.local:8122
+          - worker-rollup.slack-spine.svc.cluster.local:8122
+          - worker-retention.slack-spine.svc.cluster.local:8122
+          - postgres-exporter.slack-spine.svc.cluster.local:9187
+        labels:
+          namespace: slack-spine
+  - job_name: 'incident-arena-slack-spine-envoy'
+    scrape_interval: 15s
+    metrics_path: /stats/prometheus
+    static_configs:
+      - targets:
+          - envoy-edge.slack-spine.svc.cluster.local:9901
+        labels:
+          namespace: slack-spine
+  - job_name: 'incident-arena-slack-spine-redpanda'
+    scrape_interval: 15s
+    metrics_path: /public_metrics
+    static_configs:
+      - targets:
+          - redpanda.slack-spine.svc.cluster.local:9644
+        labels:
+          namespace: slack-spine
+  - job_name: 'incident-arena-frappe'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - mysqld-exporter.frappe.svc.cluster.local:9104
+          - redis-exporter-cache.frappe.svc.cluster.local:9121
+          - redis-exporter-queue.frappe.svc.cluster.local:9121
+          - frappe-admin.frappe.svc.cluster.local:8000
+        labels:
+          namespace: frappe
+  - job_name: 'incident-arena-saleor'
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - postgres-metrics.saleor.svc.cluster.local:9187
+          - valkey-metrics.saleor.svc.cluster.local:9121
+          - rabbitmq.saleor.svc.cluster.local:15692
+        labels:
+          namespace: saleor
 
 # Adds option to add alert_relabel_configs to avoid duplicate alerts in alertmanager
 # useful in H/A prometheus with different external labels but the same alerts

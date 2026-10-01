@@ -1,0 +1,605 @@
+# slack-spine — full faithful polyglot SUT. Deploying this chart with NO overlay is
+# fault-free (HEALTHY by default). Each scenario supplies one task.values.yaml.
+#
+# Conventions (unchanged from slice-1):
+#  * Service DNS names are FIXED (no release prefix) so cross-pod DNS is stable (one
+#    namespace per trial -> no collisions).
+#  * Agent foothold pod is `main` (app.kubernetes.io/component=main).
+#  * Images are side-loaded (load_images); imagePullPolicy: Never.
+
+global:
+  imagePullPolicy: Never
+
+# Harbor installs operating-system prerequisites as root and then installs and
+# runs the selected harness as uid 10001. Only this foothold is writable for
+# that bootstrap; SUT pods and the grader capability remain independently hard.
+main:
+  readOnlyRootFilesystem: false
+
+# Confined foothold egress. Main has no direct external route: HTTP(S) clients
+# inherit this task-owned proxy, whose exact hostname allowlist covers only the
+# two qualification harness installers/model APIs and Ubuntu package metadata
+# needed by Harbor's root setup. Scenario-source hosts are deliberately absent.
+agentEgressProxy:
+  port: 3128
+  tlsGatewayPort: 15443
+  # Runtime allowlist. Oddish narrows this per trial to the single provider the
+  # selected agent actually dials (agentEgressProxy.runtimeAllowedHosts), so this
+  # static set is the direct-Helm/local fallback and the ceiling for a hosted
+  # trial: it must cover every provider we evaluate across models.
+  #
+  # Harness INSTALLERS are deliberately absent (github, npm, nodejs, the
+  # antigravity/opencode download hosts). They are fetched while the proxy is in
+  # its public bootstrap phase, and raw.githubusercontent.com must keep being
+  # DENIED here because set-agent-egress-phase proves the runtime cutover landed
+  # by requiring a stable 403 for exactly that host. Scenario-source hosts stay
+  # absent for the same anti-leak reason they always were.
+  allowedHosts:
+    - archive.ubuntu.com
+    - security.ubuntu.com
+    - downloads.claude.ai
+    - api.openai.com
+    - ab.chatgpt.com
+    - api.anthropic.com
+    - mcp-proxy.anthropic.com
+    - generativelanguage.googleapis.com
+    - x.ai
+    - api.x.ai
+    - api.fireworks.ai
+    - api.deepseek.com
+    - api.z.ai
+    - api.minimax.io
+    - api.moonshot.ai
+    - openrouter.ai
+    - api.ai.meta.com
+    - api.meta.ai
+    - lookaside.facebook.com
+    - bedrock-runtime.us-east-1.amazonaws.com
+    - bedrock.us-east-1.amazonaws.com
+    - bedrock-runtime.us-west-2.amazonaws.com
+    - bedrock.us-west-2.amazonaws.com
+    - sts.amazonaws.com
+    - antigravity-unleash.goog
+    - play.googleapis.com
+    - playwright.azureedge.net
+    - playwright-akamai.azureedge.net
+    - playwright-verizon.azureedge.net
+  # Harbor temporarily switches the proxy to a public bootstrap configuration
+  # Harbor temporarily switches the proxy to a public bootstrap configuration
+  # only while trusted agent.setup() runs. Runtime always returns to this fixed
+  # allowlist before agent.run().
+  noProxy: "localhost,127.0.0.1,10.43.0.1,.svc,.cluster.local,db,db-replica,db-maintenance,redis,redpanda,minio,loadgen,obs-mcp,agent-freezer,rebuild-broker,sequencer-config-broker,pgbouncer,search-engine,kafkagate,dispatcher,channel-rt,ws-gateway,envoy,envoy-edge,cdn,cdn-static,geodns,flannel,presence,scheduler,worker,worker-index,broker-inspector,capacity-controller,maintenance-controller,svc-auth,svc-workspace,svc-channel,svc-message,svc-thread,svc-file,svc-search,svc-notification,svc-platform"
+
+# Hosted k3s uses 10.43.0.0/16 for Services. Blacksmith's Kind surface check
+# pins the same service CIDR. Main and PostgreSQL use this task-owned resolver,
+# which forwards cluster.local names only.
+agentDnsFilter:
+  clusterIP: 10.43.0.53
+  port: 5353
+
+# Platform-owned and independent of images.release. Generated hosted tasks must
+# replace this disabled staging value with one lock-derived @sha256 identity.
+platformTools:
+  enabled: false
+  image: ""
+  digest: ""
+
+images:
+  # custom (built by substrate/build.sh)
+  app: slack-app:dev          # TS application tier (tier-03 + tier-04), SERVICE_ROLE-selected
+  appBuilder: slack-app-builder:dev # trusted compiler + clean source seed; init-only
+  go: slack-go:dev            # Go connection/real-time/proxy tier (binary per cmd)
+  py: slack-py:dev            # Python async tier (scheduler/worker/presence)
+  main: slack-main:dev
+  obsMcp: slack-obs-mcp:dev
+  loadgen: slack-loadgen:dev
+  pgbouncer: slack-pgbouncer:dev
+  # stock infra
+  postgres: postgres:16
+  redis: redis:7-alpine
+  redpanda: redpandadata/redpanda:v24.2.7
+  minio: ghcr.io/abundant-ai/sre-world/slack-main@sha256:7910f6ae9706a6cc4a19f8e2c78c49e0f98c0ae4728aa4045fb33221b9e6d74a
+  # (no searchEngine image: the search-engine deployment runs the custom Go binary on
+  #  images.go — a stock search image here would be a dead/misleading config fingerprint)
+  envoy: envoyproxy/envoy:v1.31-latest
+  # Chart-only guard processes. Their templates force IfNotPresent and these
+  # immutable refs are deliberately outside the custom release/side-load set.
+  egressEnvoy: envoyproxy/envoy@sha256:caa5b411be1633b90023592a34a7e010c933d6e60206c758f631485e53006865
+  coredns: registry.k8s.io/coredns/coredns@sha256:9caabbf6238b189a65d0d6e6ac138de60d6a1c419e5a341fbbb7c78382559c6e
+  cdn: nginx:1.27-alpine
+  prometheus: prom/prometheus:v2.54.1
+  loki: grafana/loki:3.1.0
+  promtail: grafana/promtail:3.1.0
+  postgresExporter: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+
+# Component enable-gates. Full spine = all true; a scenario overlay may flip one off
+# only if its fault doesn't need it (cut-levers, 07 §A.5).
+components:
+  main:        {enabled: true}
+  # tier-03 core messaging (TS app roles -> svc-<role>)
+  auth:        {enabled: true}
+  workspace:   {enabled: true}
+  channel:     {enabled: true}
+  message:     {enabled: true}
+  thread:      {enabled: true}
+  # tier-04 supporting app services (TS app roles -> svc-<role>)
+  file:         {enabled: true}
+  search:       {enabled: true}
+  notification: {enabled: true}
+  platform:     {enabled: true}
+  # tier-01 edge
+  envoy:       {enabled: true}
+  wsGateway:   {enabled: true}
+  cdn:         {enabled: true}
+  geodns:      {enabled: true}
+  # tier-02 real-time
+  flannel:     {enabled: true}
+  channelRt:   {enabled: true}
+  dispatcher:  {enabled: true}
+  presence:    {enabled: true}
+  # tier-05 async
+  redpanda:    {enabled: true}
+  kafkagate:   {enabled: true}
+  scheduler:   {enabled: true}
+  worker:      {enabled: true}
+  brokerInspector: {enabled: true}
+  # capacity-controller: the in-substrate autoscaler (07-M2 "scaling in the loop"). DEFAULT-OFF so
+  # the healthy chart renders nothing and every existing scenario is byte-identical; only the 07-M2
+  # overlay enables it. It has NO /admin surface (not an agent fix lever) and mutates no config.
+  capacityController: {enabled: false}
+  # tier-06 data
+  db:          {enabled: true}
+  maintenanceController: {enabled: false}
+  pgbouncer:   {enabled: false}
+  dbReplica:   {enabled: true}
+  redis:       {enabled: true}
+  searchEngine: {enabled: true}
+  minio:       {enabled: true}
+  # obs / load plane
+  prometheus:  {enabled: true}
+  loki:        {enabled: true}
+  promtail:    {enabled: true}
+  obsMcp:      {enabled: true}
+  loadgen:     {enabled: true}
+
+# TS application tier. ALL roles carry the SAME db key set (D7 uniform keys). The app
+# pods also receive REDIS_URL + the tier-04 store URLs (harmless for roles that ignore them).
+app:
+  server:
+    port: 8000
+  db:
+    dsn: "postgresql+asyncpg://app:app@db:5432/app"
+  redisUrl: "redis://redis:6379"
+  # tier-04 store wiring (consumed by file/search/notification/platform roles)
+  env:
+    minioEndpoint: "minio:9000"
+    minioAccessKey: "minioadmin"
+    minioSecretKey: "minioadmin"
+    minioBucket: "files"
+    searchUrl: "http://search-engine:7280"
+    kafkagateUrl: "http://kafkagate:8120"
+    channelRtUrl: "http://channel-rt:8201"
+    notificationUrl: "http://svc-notification:8000"
+    # dispatcher per-route budget (epstore read + endpoint /deliver POSTs). Default 1500
+    # == the dispatcher's own Go default, so this env is a NO-OP for the healthy baseline;
+    # a fault overlay sets it low to starve the WS fan-out deliver leg (delivery gate).
+    routeTimeoutMs: "1500"
+    holdJitter: "1"
+    holdJitterSeed: "7"
+    holdJitterSigma: "0.35"
+    holdJitterMaxMultiplier: "3.0"
+    unfurlAllowlist: "ext-link-svc"     # egress allowlist for platform.unfurl_fetch (SSRF guard)
+  # Each role carries a UNIFORM `env` map (extra container env). Empty by default;
+  # a scenario overlay may set plausible product toggles per role (D7: the key
+  # exists uniformly across all roles so it is never a greppable outlier).
+  #
+  # Each role ALSO carries a UNIFORM `mesh` client-policy block (the service-to-service
+  # HTTP retry/breaker policy consumed by servicekit/mesh.ts). DEFAULT-SAFE on every role:
+  # retries=1 + retryOnTimeout=false + breaker off => exactly one fetch, byte-identical to the
+  # prior plain fetchJson, so every existing scenario is behaviorally unchanged. The block is
+  # rendered into the app.yaml ConfigMap uniformly (tier03.yaml), so a 07-M2 overlay that arms an
+  # AGGRESSIVE policy (retries>1 + retryOnTimeout) on message+channel is a graded minimality diff,
+  # never a greppable outlier. Written inline per role (NOT a shared YAML anchor) so a per-role
+  # overlay merge can never bleed across roles.
+  roles:
+    auth:         {db: {pool_size: 20, max_overflow: 10, pool_timeout_s: 30.0, hold_ms: 5},   env: {}, mesh: {retries: 1, retryOnTimeout: false, perTryTimeoutMs: 3000, backoffMs: 0, breakerEnabled: false, breakerThreshold: 1000000}}
+    workspace:    {db: {pool_size: 20, max_overflow: 10, pool_timeout_s: 30.0, hold_ms: 8},   env: {}, mesh: {retries: 1, retryOnTimeout: false, perTryTimeoutMs: 3000, backoffMs: 0, breakerEnabled: false, breakerThreshold: 1000000}}
+    channel:      {db: {pool_size: 20, max_overflow: 10, pool_timeout_s: 30.0, hold_ms: 10},  env: {WORKSPACE_POLICY_CHECK: "1"}, mesh: {retries: 1, retryOnTimeout: false, perTryTimeoutMs: 3000, backoffMs: 0, breakerEnabled: false, breakerThreshold: 1000000}}
+    message:      {db: {pool_size: 20, max_overflow: 10, pool_timeout_s: 30.0, hold_ms: 150}, env: {AUTH_CHECK: "1", AUTHZ_CHECK: "1", ENQUEUE_INDEX: "1", PUBLISH_FANOUT: "1", NOTIFY_FANOUT: "1", NOTIFY_RECIPIENTS_PER_MESSAGE: "8"}, mesh: {retries: 1, retryOnTimeout: false, perTryTimeoutMs: 3000, backoffMs: 0, breakerEnabled: false, breakerThreshold: 1000000}}
+    thread:       {db: {pool_size: 20, max_overflow: 10, pool_timeout_s: 30.0, hold_ms: 12},  env: {}, mesh: {retries: 1, retryOnTimeout: false, perTryTimeoutMs: 3000, backoffMs: 0, breakerEnabled: false, breakerThreshold: 1000000}}
+    file:         {db: {pool_size: 20, max_overflow: 10, pool_timeout_s: 30.0, hold_ms: 8},   env: {ENQUEUE_FILE_JOBS: "1"}, mesh: {retries: 1, retryOnTimeout: false, perTryTimeoutMs: 3000, backoffMs: 0, breakerEnabled: false, breakerThreshold: 1000000}}
+    search:       {db: {pool_size: 20, max_overflow: 10, pool_timeout_s: 30.0, hold_ms: 8},   env: {}, mesh: {retries: 1, retryOnTimeout: false, perTryTimeoutMs: 3000, backoffMs: 0, breakerEnabled: false, breakerThreshold: 1000000}}
+    notification: {db: {pool_size: 20, max_overflow: 10, pool_timeout_s: 30.0, hold_ms: 8},   env: {}, mesh: {retries: 1, retryOnTimeout: false, perTryTimeoutMs: 3000, backoffMs: 0, breakerEnabled: false, breakerThreshold: 1000000}}
+    platform:     {db: {pool_size: 20, max_overflow: 10, pool_timeout_s: 30.0, hold_ms: 8},   env: {}, mesh: {retries: 1, retryOnTimeout: false, perTryTimeoutMs: 3000, backoffMs: 0, breakerEnabled: false, breakerThreshold: 1000000}}
+
+postgres:
+  # Private BOOTSTRAP superuser — used ONLY by initdb; never placed in any service
+  # DSN and unreachable by the agent (no kubectl to read pod env). The services and
+  # any agent connect as the least-privilege `appUser` role created by db-init SQL.
+  user: slackadmin
+  password: "bootstrap-only-not-in-any-dsn"
+  database: app
+  # Least-privilege application role the services use (app.db.dsn = appUser:appPassword).
+  # NOSUPERUSER => cannot CREATE OR REPLACE in pg_catalog, so cannot shadow
+  # pg_catalog.pg_sleep (the H2 reward-hack); the /work query is pg_catalog-qualified
+  # so a search_path override cannot redirect it either. Keeps CREATE on schema public
+  # for the services' own CREATE TABLE DDL.
+  appUser: app
+  appPassword: app
+  maxConnections: 200
+  adminEnabled: false
+  # max_prepared_transactions: 0 in the clean chart (Postgres' own default; 2PC off).
+  # 06-F2b's overlay raises it (e.g. 8) so the orphaned PREPARED transaction the
+  # fault-init manufactures RECOVERS into the live cluster and keeps pinning
+  # datfrozenxid. Threaded into the db StatefulSet args as -c max_prepared_transactions=<v>.
+  maxPreparedTransactions: 0
+  storage: 1Gi
+  replicaStorage: 1Gi
+  autovacuum: "on"            # threaded into the db StatefulSet args as -c autovacuum=<v>
+  adminRole: "svc_admin"      # privileged role (pg_signal_backend + VACUUM + db owner)
+  adminPassword: "svc_admin"  # provisioned in BOTH clean + faulted charts (never a fault tell)
+
+# Tier-3 runtime fault injector. DEFAULT-OFF: with no overlay nothing renders,
+# the clean chart is byte-identically healthy.
+faultInit:
+  db:
+    enabled: false           # gate for the fault-init initContainer
+    stage: "A"               # "A" | "B"
+    resetXidOffsetFromStop: 1000000   # legacy from-t0 path: XIDs ABOVE (2^31 - 3_000_000) the manufactured counter sits at (NEXT lands in [STOP, 2^31)); used only when headroomXids=0
+    seedRows: 50             # rows seeded into the near-empty schema before VACUUM FREEZE
+    # headroomXids: TEMPORAL-EMERGENCE knob (06-F2b only, used when pin.kind="prepared" AND
+    # headroomXids>0). The manufactured NextXID lands JUST BELOW the wraparound stop point
+    # (NEXT = STOP - headroomXids), so age(datfrozenxid) at boot is just under the threshold
+    # and the cluster boots HEALTHY (early writes SUCCEED). The in-episode xid-burner then
+    # consumes ~headroomXids more transaction-ids to push age TO the stop and trip
+    # wraparound MID-EPISODE under load. DEFAULT 0 keeps the legacy from-t0 hard
+    # refuse-writes path (NEXT = STOP + resetXidOffsetFromStop) byte-identical for F2a/F2c.
+    headroomXids: 0
+    # pin: the XID-wraparound holdback mechanism. DEFAULT-OFF (kind:"") -> the fault-init
+    # script's legacy (autovacuum-off / idle-holdback) path is untouched (F2a/F2c). 06-F2b
+    # sets kind:"prepared" + a gid -> the script opens an orphaned PREPARED (2PC) transaction
+    # that genuinely pins datfrozenxid and SURVIVES pg_resetwal + restart (recovered as long
+    # as the live cluster runs with postgres.maxPreparedTransactions>0).
+    pin:
+      kind: ""               # "" (legacy) | "prepared"
+      gid: ""                # global transaction id of the orphaned prepared xact (when kind=prepared)
+      owner: ""              # DB role that PREPAREs the orphan (06-F2b: a message-named role so
+                             # pg_prepared_xacts.owner traces the orphan to the message coordinator).
+                             # "" -> PREPARE as the bootstrap superuser (legacy F2a/F2c: inert).
+    holdback:
+      enabled: false         # Stage B only: render the holdback-seeder Job
+      role: "message"        # app role the leaked idle-in-transaction originates from
+      dsnRole: "app"         # the role/user the holdback connects as (so client_addr->role is traceable)
+    # burner: the TEMPORAL-EMERGENCE trip mechanism (06-F2b). DEFAULT-OFF. When enabled the
+    # xid-burner Deployment waits for the SUT to be healthy + startDelaySeconds, then burns
+    # burnXids transaction-ids (in chunkXids-sized subtransaction loops) to push
+    # age(datfrozenxid) to the stop, tripping wraparound MID-EPISODE. burnXids should be
+    # >= headroomXids (a small surplus is harmless: once at the stop the db just refuses).
+    burner:
+      enabled: false
+      burnXids: 0            # total XIDs to burn (>= headroomXids); 0 = inert
+      chunkXids: 200000      # subtransactions per DO block (one XID each); also the age-probe granularity
+      startDelaySeconds: 20  # wait after the SUT is healthy before tripping (keeps the trip mid-episode, not at t0)
+
+# Optional database intermediary. Disabled in the healthy substrate and enabled
+# only by scenarios that deliberately put it on the message path.
+pgbouncer:
+  listenPort: 6432
+  poolMode: transaction
+  defaultPoolSize: 20
+  reservePoolSize: 5
+  maxClientConnections: 200
+  queryTimeoutSeconds: 10
+
+redpanda:
+  # Seastar pin (07 §A.3 / 05 §6.1) — non-negotiable; unpinned it eats a core + RAM.
+  smp: 1
+  memory: "900M"
+  reserveMemory: "0M"
+  storage: 2Gi
+  # Explicit topic topology. jobs.index and its compacted DLQ must have the same
+  # partition count so quarantine records retain their source partition.
+  indexPartitions: 8
+
+minio:
+  rootUser: minioadmin
+  rootPassword: minioadmin
+  bucket: files
+  storage: 1Gi
+
+searchEngine:
+  storage: 1Gi
+
+# Shared consistent-hash ring (the 01<->02 seam: ws-gateway + flannel mount the SAME
+# ring.yaml). Single source of truth; neutral key names (D7 leak hygiene).
+ring:
+  nodes: ["flannel-0", "flannel-1"]
+  vnodes: 150
+  hashKey: workspace_id
+
+# Async tier: one worker image, a Deployment per lane (LANE env). Topics jobs.<lane>
+# (push->jobs.notify.push, email->jobs.notify.email handled in worker.py).
+async:
+  lanes: [index, unfurl, av, push, email, events, rollup, retention]
+  handlerMsDefault: 20
+  concurrencyDefault: 4
+  # Per-lane boot-time knob overrides. DEFAULT-EMPTY: with no overlay the worker
+  # env block (tier05.yaml) emits NO HANDLER_MS/LANE_CONCURRENCY/MAX_RETRIES line,
+  # so the worker reads its built-in per-lane defaults and the prior scenarios render
+  # byte-identically. A scenario overlay sets a per-lane override, e.g.
+  #   laneConfig: {index: {handlerMs: 60000}}
+  # which renders HANDLER_MS only on the worker-index Deployment (the worker reads
+  # HANDLER_MS at boot; no worker.py change). Known per-lane keys: handlerMs,
+  # concurrency (-> LANE_CONCURRENCY), maxRetries (-> MAX_RETRIES).
+  laneConfig: {}
+
+# capacity-controller (07-M2 "scaling in the loop") config. Only consumed when
+# components.capacityController.enabled=true (07-M2 overlay). It watches the target's pool
+# saturation and scales a bounded synthetic-reader fleet against the same bottleneck — a
+# deepener, never the latch. maxWorkers is PROVISIONAL: calibrate it BELOW the level that could
+# independently saturate svc-workspace, so the golden (retries tamed) drains even at max scale.
+capacityController:
+  targetUrl: "http://svc-workspace:8000"
+  targetRole: "workspace"
+  probePath: "/orgs/cap-probe/settings"
+  scaleUpPct: 70
+  scaleDownPct: 40
+  step: 4
+  maxWorkers: 16
+  minWorkers: 0
+  tickMs: 1000
+  consecutive: 2
+  readerDelayMs: 50
+  requestTimeoutMs: 2000
+  port: 8130
+
+# loadgen (long-lived: writes episode_done.json then sleeps so the host verifier can cp).
+loadgen:
+  # Load profile compiled into the loadgen image (substrate/loadgen/schedule.py
+  # PROFILES). The clean substrate defaults to the realistic virtual-session mix.
+  # FROZEN-SNAPSHOT CONTRACT: shipped scenarios under tasks/*/environment/chart are
+  # snapshots of this chart taken at CALIBRATION time. Do NOT regenerate them from this
+  # chart without re-running tools/calibrate.py — this default (and the jitter / cross-tier
+  # env above) differs from what their FP=FN=0 bands were calibrated against.
+  # generate_tasks.py pins each scenario's own profile explicitly so regen can't silently
+  # swap it. Must be a known PROFILES key or the sidecar refuses to start (fail loudly).
+  profile: "slack_session"
+  # OPTIONAL inline YAML document defining custom load profiles (see
+  # loadgen/profile_loader.py for the schema: cycles, repeat_cycles, loop,
+  # rate_jitter, baseline_rps, drivers, events, session fields...). Non-empty ->
+  # rendered into the loadgen-profiles ConfigMap, mounted read-only at
+  # /etc/loadgen/profiles.yaml, and merged OVER the compiled PROFILES at sidecar
+  # startup, so `profile` above may name a profile defined here — custom load
+  # patterns deploy to any environment without an image rebuild. DEFAULT EMPTY:
+  # no ConfigMap / mount / env line renders, byte-identical to the prior pod
+  # spec. NOTE: a YAML profile has no calibrated bands unless you stamp them —
+  # shadowing a compiled profile name logs a loud warning for exactly that reason.
+  profilesYaml: ""
+  target: "http://svc-message:8000"
+  # Presence runs as its own Python service on a NON-8000 port, so the session_presence
+  # driver's base URL cannot be host-swapped from `target` (the svc-<role>:8000 roles can).
+  # In-cluster service DNS; overridable. Only consumed when a session profile fires
+  # session_presence — dormant otherwise.
+  presenceTarget: "http://presence:8123"
+  authTarget: "http://svc-auth:8000"
+  fileTarget: "http://svc-file:8000"
+  channelRtTarget: "http://channel-rt:8201"
+  wsGatewayTarget: "http://ws-gateway:9101"
+  graderDir: /grader
+  obsDir: /obs
+  # Optional infra /admin/config snapshot targets for distance-4/5 ladder variants
+  # (comma-joined logical names; e.g. "postgres" or "pgbouncer"). DEFAULT EMPTY:
+  # no infra snapshot is taken and prior scenarios render byte-identically.
+  snapshotInfra: ""
+  # Optional comma-separated app roles whose live /admin/config is captured at
+  # declaration for the protected minimality diff. Empty preserves the full-spine
+  # default (all app roles). Reduced-runtime tasks must set this explicitly to the
+  # enabled app roles; the task-consistency gate enforces exact agreement.
+  snapshotServices: ""
+  # P3a multi-service async-tier scrape targets — comma-joined host:port entries
+  # (e.g. "worker-index:8122"). DEFAULT EMPTY: the sidecar runs the unchanged
+  # single-svc-message scrape, creates NO async scrape task, and writes NO
+  # async_metrics.jsonl, so the prior scenarios render + grade byte-identically.
+  # The loadgen.yaml env line is conditional on this being non-empty, so an empty
+  # default renders NO new env line. A P3b worker-lane overlay sets it.
+  scrapeServices: ""
+  # Worker /admin/config targets captured at baseline, declaration, and soak end
+  # for runtime retry-policy minimality. DEFAULT EMPTY keeps prior renders stable.
+  workerSnapshotServices: ""
+  # In-pod grading (the Oddish/stock-harbor path). BOTH default-OFF so the clean
+  # substrate and every previously-stamped scenario render byte-identically; the
+  # stamper's grader-key.values.yaml overlay turns them on per task.
+  podState:
+    # true -> a dedicated loadgen ServiceAccount + namespaced Role (get/list
+    # pods) + RoleBinding, with the token mounted: the sidecar snapshots
+    # per-component restartCount/readiness at grade time (/grader/pod_state.json,
+    # the restart-masking basis). Build-capable attestation independently grants
+    # this same SA exact-name get on its one target pod, even when podState is off.
+    enabled: false
+  graderKey:
+    # true -> render the `loadgen-grader-key` ConfigMap (the per-task answer key:
+    # ground-truth.yaml + stamp-time-pre-rendered config_before.json) and mount
+    # it READ-ONLY at /grader-key in the loadgen pod ONLY. The agent has no k8s
+    # API and no exec on this pod, so the key is unreachable during the episode.
+    enabled: false
+  # In-pod db_state probe (XID-wraparound family ONLY). true -> render DB_ADMIN_DSN
+  # from postgres.* (the SAME superuser DSN main gets), so the sidecar can run the
+  # contract SQL over TCP. DEFAULT-OFF: no env rendered (no secret duplication).
+  dbState:
+    enabled: false
+  # In-pod lock_state probe (Tier-2 image fault 09-I1 leaked-row-lock family ONLY).
+  # true -> render the SAME superuser DB_ADMIN_DSN so the sidecar can query for
+  # idle-in-transaction backends holding a channel_seq lock over TCP. DEFAULT-OFF.
+  lockState:
+    enabled: false
+
+maintenanceController:
+  # Reusable and inert by default. A scenario must both enable the sidecar and
+  # establish its loadgen epoch before any checkpoint is scheduled.
+  enabled: false
+  periodS: 60
+  offsetS: 55
+  durationS: 8
+
+# Task-only evidence collection gates. The committed task.values.yaml overlay
+# enables these; the clean substrate defaults remain inert.
+gradingHarness:
+  # Verifier-v2 evidence must outlive a loadgen pod replacement. The generator
+  # enables this only for verification.version=2 tasks; legacy charts retain
+  # their private pod-local emptyDir.
+  verifierEvidence:
+    persistent: false
+    size: 256Mi
+  podState:
+    enabled: false
+  answerKey:
+    enabled: false
+  dbState:
+    enabled: false
+  lockState:
+    enabled: false
+  # Private PostgreSQL evidence for commit-after-timeout temporal events.
+  # DEFAULT-OFF; only an explicitly opted-in task receives the superuser DSN.
+  temporalHistory:
+    enabled: false
+
+# Agent-facing declaration vocabulary. The task generator fills this from the
+# scenario's closed service/component registry; it deliberately excludes the
+# correct pairing and mechanism. `submit_incident_report --help` reads the mounted
+# ConfigMap so terse task instructions need not duplicate the full inventory.
+agentReport:
+  vocabulary:
+    services: []
+    components: []
+
+# ── agent access surface. Non-confined capabilities stay release-gated, and all
+#    surfaces share the same runtime egress boundary. Exact exec RBAC is paired
+#    with task-pod egress confinement so an app shell cannot bypass main's proxy.
+agentSurface:
+  profile: confined            # confined | shell-visible | build-capable
+  # Final release gate. Keep false until the immutable source-free runtime and
+  # builder images are published/pinned and the image + kind adversarial gates
+  # are green. Helm fails loudly for every non-confined activation meanwhile.
+  releaseApproved: false
+  # The exact-name exec token reaches Kubernetes through a task-owned fixed-
+  # target TCP proxy. This avoids CNI-dependent Service-DNAT policy behavior:
+  # some clusters enforce NetworkPolicy against the API endpoint address rather
+  # than the 10.43.0.1 Service VIP. The proxy has no token and can only connect
+  # to kubernetes.default.svc:443.
+  # shell-visible + build-capable: harden every exec-reachable app pod so a shell
+  # cannot persist an invisible on-pod mutation (readOnlyRootFilesystem) or reach the
+  # k8s API (automountServiceAccountToken:false). The build-capable TARGET pod keeps a
+  # writable /src volume (its only writable path) but is otherwise equally locked down.
+  hardenAppPods: false
+  exec:
+    # true -> stable one-replica app StatefulSets and exact resourceNames RBAC for
+    # pods/get + pods/exec/create. No list/watch and no loadgen/infrastructure names.
+    enabled: false
+  buildCapable:
+    # true -> only target source persists in a PVC. A trusted init reconstructs
+    # runtime/dependencies/output into emptyDir and compiles offline on every boot.
+    # main can only call the fixed-target broker through rebuild-svc.sh; the
+    # broker, not main, owns the exact StatefulSet scale permission.
+    enabled: false
+    targetRole: ""
+    sourcePaths: []             # workspace-relative minimality allowlist
+    storage: 2Gi               # sizes the writable /src PVC (single-node default StorageClass)
+    snapshotMaxFiles: 256
+    snapshotMaxFileBytes: 1048576
+    snapshotMaxBytes: 8388608
+    rebuildTimeoutSeconds: 180
+
+# Closed fixed-target runtime configuration repair surface. Disabled by default.
+# When enabled, a dedicated broker can change only svc-message's SEQUENCER_MODE
+# from the faulted rmw value to atomic. The StatefulSet pod-template mutation is
+# durable across the verifier-owned restart; main receives no Kubernetes credential.
+runtimeConfigBroker:
+  enabled: false
+  port: 9181
+  timeoutSeconds: 180
+
+obs:
+  scrapeIntervalSeconds: 5
+  promtail:
+    enabled: true
+  postgresExporter:
+    enabled: true            # DEFAULT-ON: per-database health gauges are always exported
+  # Loki egress denylist applied at the obs-mcp boundary (query_logs redaction). The
+  # raw Loki backend ingests ALL pod stdout unchanged; only the agent-facing tool
+  # output drops lines matching these substrings (case-insensitive). Semicolon-joined.
+  # Includes the literal Postgres refuse-writes wording AND the SQLSTATE 54000 code
+  # (program_limit_exceeded) the driver surfaces, with its common driver framings, so the
+  # app 500 path (which logs the raw driver exception) cannot leak the wraparound text.
+  deniedLogSubstrings: "to avoid wraparound;not accepting commands;must be vacuumed;database is not accepting commands;wraparound;stop the postmaster;single-user mode;datfrozenxid;mxid;54000;sqlstate 54000;sqlstate: 54000;pgcode 54000;pgcode: 54000;pgcode=54000;code 54000;code: 54000;code=54000;sqlstate=54000;objectnotinprerequisitestate;program_limit_exceeded"
+
+# postgres-exporter resource block (shares the obs profile via slack.resources key "obs").
+postgresExporter: {}
+
+# Per-component resource requests/limits. CPU limits are load-bearing (a fault must
+# saturate at the component's own limit, not on host contention). Target 12 vCPU/16 GB.
+resources:
+  default:      {requests: {cpu: "50m",  memory: "64Mi"},  limits: {cpu: "300m",  memory: "192Mi"}}
+  # app tier
+  auth:         {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "400m",  memory: "256Mi"}}
+  workspace:    {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "400m",  memory: "256Mi"}}
+  channel:      {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "400m",  memory: "256Mi"}}
+  message:      {requests: {cpu: "200m", memory: "160Mi"}, limits: {cpu: "900m",  memory: "320Mi"}}
+  thread:       {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "400m",  memory: "256Mi"}}
+  file:         {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "400m",  memory: "256Mi"}}
+  search:       {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "400m",  memory: "256Mi"}}
+  notification: {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "400m",  memory: "256Mi"}}
+  platform:     {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "400m",  memory: "256Mi"}}
+  # tier-01/02 Go
+  envoy:        {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "500m",  memory: "256Mi"}}
+  wsGateway:    {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "500m",  memory: "256Mi"}}
+  cdn:          {requests: {cpu: "20m",  memory: "32Mi"},  limits: {cpu: "100m",  memory: "96Mi"}}
+  geodns:       {requests: {cpu: "20m",  memory: "32Mi"},  limits: {cpu: "100m",  memory: "64Mi"}}
+  flannel:      {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "500m",  memory: "256Mi"}}
+  channelRt:    {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "500m",  memory: "256Mi"}}
+  dispatcher:   {requests: {cpu: "50m",  memory: "64Mi"},  limits: {cpu: "300m",  memory: "192Mi"}}
+  presence:     {requests: {cpu: "50m",  memory: "96Mi"},  limits: {cpu: "300m",  memory: "192Mi"}}
+  # tier-05
+  redpanda:     {requests: {cpu: "300m", memory: "700Mi"}, limits: {cpu: "1000m", memory: "1200Mi"}}
+  kafkagate:    {requests: {cpu: "50m",  memory: "48Mi"},  limits: {cpu: "300m",  memory: "128Mi"}}
+  scheduler:    {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "400m",  memory: "256Mi"}}
+  worker:       {requests: {cpu: "100m", memory: "96Mi"},  limits: {cpu: "400m",  memory: "256Mi"}}
+  brokerInspector: {requests: {cpu: "40m", memory: "64Mi"}, limits: {cpu: "200m", memory: "128Mi"}}
+  # tier-06
+  # db memory raised 512Mi -> 1Gi: the 06-F2b XID-wraparound regime forces a heavy
+  # crash/2PC-recovery + anti-wraparound failsafe-vacuum pass on boot (the orphaned
+  # PREPARED transaction must be recovered while the counter is at the stop point),
+  # which OOMKills at 512Mi and then recovers pathologically slowly under memory
+  # pressure. 1Gi gives the recovery headroom. Backward-safe for every other scenario
+  # (a higher limit only adds headroom). Well within the 12 vCPU/16 GB budget.
+  db:           {requests: {cpu: "250m", memory: "384Mi"}, limits: {cpu: "1000m", memory: "1Gi"}}
+  maintenanceController: {requests: {cpu: "75m", memory: "96Mi"}, limits: {cpu: "250m", memory: "192Mi"}}
+  pgbouncer:    {requests: {cpu: "50m",  memory: "64Mi"},  limits: {cpu: "300m",  memory: "192Mi"}}
+  dbReplica:    {requests: {cpu: "150m", memory: "192Mi"}, limits: {cpu: "700m",  memory: "384Mi"}}
+  redis:        {requests: {cpu: "50m",  memory: "64Mi"},  limits: {cpu: "300m",  memory: "192Mi"}}
+  searchEngine: {requests: {cpu: "150m", memory: "384Mi"}, limits: {cpu: "700m",  memory: "640Mi"}}
+  minio:        {requests: {cpu: "100m", memory: "128Mi"}, limits: {cpu: "400m",  memory: "384Mi"}}
+  # obs / foothold
+  # main is the agent foothold: it must fit the in-pod claude-code install + the agent
+  # runtime over a full episode. 512Mi OOM-killed the claude-code native-build install
+  # (exit 137); 2Gi/2cpu gives headroom without starving the rest of the spine.
+  main:         {requests: {cpu: "200m", memory: "256Mi"}, limits: {cpu: "2",     memory: "2Gi"}}
+  obs:          {requests: {cpu: "100m", memory: "128Mi"}, limits: {cpu: "500m",  memory: "512Mi"}}
+  # The in-pod oracle retains the complete NOP evidence stream until the
+  # one-hour episode ends. 256Mi OOM-killed it before reward.json was written,
+  # leaving the persistent grader ledger behind for the next attempt. 1Gi is
+  # required for the final accumulated-evidence evaluation to complete.
+  loadgen:      {requests: {cpu: "150m", memory: "96Mi"},  limits: {cpu: "500m",  memory: "1Gi"}}
+
+# ── SREGym port (not part of upstream Incident Arena) ─────────────────────────
+# Inert by default: with `sregym.enabled: false` the chart renders exactly as the
+# Incident Arena task chart did. SREGym's values overlay switches it on to drop
+# verifier-only baseline capture, label the load generator so SREGym hides it from
+# agents, and deploy an operator toolbox in place of the Harbor `main` foothold.
+sregym:
+  enabled: false
+  loadgenLabels: {}
+  # Rendered as the load generator's answer key when sregym.enabled is true.
+  neutralAnswerKey:
+    scenario: sregym-healthy-baseline
+  toolbox:
+    enabled: false

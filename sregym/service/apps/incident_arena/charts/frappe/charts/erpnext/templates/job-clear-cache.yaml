@@ -1,0 +1,77 @@
+{{- if .Values.jobs.clearCache.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  {{- if .Values.jobs.clearCache.jobName }}
+  name: {{ .Values.jobs.clearCache.jobName }}
+  {{- else }}
+  name: {{ include "erpnext.fullname" . }}-clear-cache
+  {{- end }}
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-upgrade
+    "helm.sh/hook-delete-policy": hook-succeeded
+spec:
+  backoffLimit: {{ .Values.jobs.clearCache.backoffLimit | default 2 }}
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.jobs.clearCache.serviceAccountName | default (include "erpnext.serviceAccountName" .) }}
+      {{- if .Values.jobs.clearCache.initContainer.enabled }}
+      initContainers:
+      - name: wait-for-rollout
+        image: {{ .Values.jobs.clearCache.initContainer.image }}
+        command:
+          - "sh"
+          - "-c"
+          - |
+            set -e
+            kubectl rollout status deployment/{{ include "erpnext.fullname" . }}-{{ .Values.jobs.clearCache.initContainer.deployment.name | default "gunicorn" }} --timeout={{ .Values.jobs.clearCache.initContainer.timeout }}
+      {{- end }}
+      containers:
+        - name: clear-cache
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy | default "IfNotPresent" }}
+          command:
+            - "sh"
+            - "-c"
+            - |
+              set -e
+              echo "Clearing Bench-level cache for ALL sites..."
+              bench --site all clear-website-cache
+              bench --site all clear-cache
+
+              {{- if .Values.jobs.clearCache.redisFlush.enabled }}
+              echo "Performing full Redis flush...."
+              bench --site all execute "frappe.cache.flushdb"
+              {{- end }}
+          {{- if .Values.jobs.clearCache.resources }}
+          resources:
+            {{- toYaml .Values.jobs.clearCache.resources | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: sites-dir
+              mountPath: /home/frappe/frappe-bench/sites
+      volumes:
+        - name: sites-dir
+          {{- if .Values.persistence.worker.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.worker.existingClaim | default (include "erpnext.fullname" .) }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.jobs.clearCache.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jobs.clearCache.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jobs.clearCache.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

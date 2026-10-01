@@ -1,0 +1,114 @@
+# --- fault and workload settings ---
+loadgen:
+  profilesYaml: "profiles:\n  saleor_timeout_eval:\n    base: saleor_eval\n    drivers:\n\
+    \    - browse\n    - browse\n    - browse\n    - checkout_readback\n    - checkout_readback\n\
+    \    declare_deadline_s: 3650.0\n    soak_cycles: 4\n    cycles:\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n    - - 14.0\n\
+    \      - 6.0\n      - 34.0\n      - 1.4\n    - - 9.0\n      - 7.5\n      - 41.0\n\
+    \      - 0.9\n    - - 17.0\n      - 5.0\n      - 30.0\n      - 1.7\n"
+  profile: saleor_timeout_eval
+  enabled: true
+faultInit:
+  postgres:
+    enabled: true
+    readyMarker: true
+    statements:
+    - ALTER ROLE saleor_app IN DATABASE saleor SET statement_timeout = '150ms'
+# --- agent access settings ---
+agentSurface:
+  profile: confined
+# --- grading-harness settings ---
+gradingHarness:
+  podState:
+    enabled: true
+  answerKey:
+    enabled: true
+  dbState:
+    enabled: true
+  lockState:
+    enabled: false
+  verifierEvidence:
+    persistent: true
+    size: 256Mi
+# --- agent report vocabulary ---
+agentReport:
+  vocabulary:
+    services:
+    - saleor-api
+    - saleor-worker
+    - postgres
+    - valkey
+    - rabbitmq
+    - network
+    - load-generator
+    components:
+    - saleor-api.resolver
+    - saleor-api.db-conn
+    - saleor-api.config
+    - saleor-worker.consumer
+    - saleor-worker.db-conn
+    - postgres.config
+    - postgres.privileges
+    - postgres.storage
+    - valkey.config
+    - rabbitmq.config
+    - network
+# --- pinned-image settings ---
+global:
+  imagePullPolicy: IfNotPresent
+images:
+  main: ghcr.io/abundant-ai/sre-world/saleor-main@sha256:ece6147d06e9f60750b33827302a063cebfa4112e1a37f002dd778b441c09ba5
+  loadgen: ghcr.io/abundant-ai/sre-world/saleor-loadgen@sha256:cdee1728463bbaa0c2665a809bb39b5c7919a48a4575fd629b3c4f6a857f812e
+  obsMcp: ghcr.io/abundant-ai/sre-world/saleor-obs-mcp@sha256:5772f8a4e64b6030ff214837cf9376fbfe67e6659fbca6d595da6c2af855f309
+  saleorApp: ghcr.io/abundant-ai/sre-world/saleor-app@sha256:d4d0581c2c2082a0a0f11e58dcf67f739cd8e20e83d953ff24d74e0791fc9f40
+platformTools:
+  enabled: true
+  image: ghcr.io/abundant-ai/sre-world/codex-tools@sha256:c0ed85e5280e4d70c3ec341288fd240d2d64647d952db3712f94cd27c9c08d64
+  digest: sha256:c0ed85e5280e4d70c3ec341288fd240d2d64647d952db3712f94cd27c9c08d64

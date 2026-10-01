@@ -1,0 +1,485 @@
+# substrates/frappe/chart/values.yaml — overlay of the upstream frappe/helm
+# ERPNext chart (v8.0.65) plus knobs for the SRE-World sidecars (main pod,
+# loadgen, obs stack, frappe-admin per-workload sidecar). D16.
+#
+# Sizing target: fit inside Daytona's 4 vCPU / 8 GiB / 10 GiB per-sandbox cap
+# (mirrors the profile that already works for the Slack substrate). All
+# upstream workloads are sized here; anything not overridden below inherits
+# the upstream default.
+
+# Platform agent-setup boundary. The proxy starts in restricted runtime mode,
+# opens generally only while Harbor executes trusted agent.setup(), and returns
+# to this fixed allowlist before any model command.
+agentEgressProxy:
+  port: 3128
+  tlsGatewayPort: 15443
+  # Runtime allowlist. Oddish narrows this per trial to the single provider the
+  # selected agent actually dials (agentEgressProxy.runtimeAllowedHosts), so this
+  # static set is the direct-Helm/local fallback and the ceiling for a hosted
+  # trial: it must cover every provider we evaluate across models.
+  #
+  # Harness INSTALLERS are deliberately absent (github, npm, nodejs, the
+  # antigravity/opencode download hosts). They are fetched while the proxy is in
+  # its public bootstrap phase, and raw.githubusercontent.com must keep being
+  # DENIED here because set-agent-egress-phase proves the runtime cutover landed
+  # by requiring a stable 403 for exactly that host. Scenario-source hosts stay
+  # absent for the same anti-leak reason they always were.
+  allowedHosts:
+    - archive.ubuntu.com
+    - security.ubuntu.com
+    - downloads.claude.ai
+    - api.openai.com
+    - ab.chatgpt.com
+    - api.anthropic.com
+    - mcp-proxy.anthropic.com
+    - generativelanguage.googleapis.com
+    - x.ai
+    - api.x.ai
+    - api.fireworks.ai
+    - api.deepseek.com
+    - api.z.ai
+    - api.minimax.io
+    - api.moonshot.ai
+    - openrouter.ai
+    - api.ai.meta.com
+    - api.meta.ai
+    - lookaside.facebook.com
+    - bedrock-runtime.us-east-1.amazonaws.com
+    - bedrock.us-east-1.amazonaws.com
+    - bedrock-runtime.us-west-2.amazonaws.com
+    - bedrock.us-west-2.amazonaws.com
+    - sts.amazonaws.com
+    - antigravity-unleash.goog
+    - play.googleapis.com
+    - playwright.azureedge.net
+    - playwright-akamai.azureedge.net
+    - playwright-verizon.azureedge.net
+  # A host that is missing here is answered by the agent's OWN egress proxy
+  # with a bodiless 403, which reads as an access-control fault rather than as
+  # "no such host". curl matches a no_proxy entry only at a dot boundary, so
+  # every short name the foothold may type has to appear literally — `erp`
+  # does NOT cover `erp-gunicorn`.
+  #
+  # erp, erp-gunicorn, erp-socketio are the deployed upstream Service names
+  # behind the svc-frappe-web alias (erpnext.fullnameOverride: "erp"; no task
+  # overrides it). Their pods carry `app.kubernetes.io/app: frappe` and
+  # main-egress.yaml permits the foothold to 8000/8080/9000 on exactly that
+  # selector, so they are genuinely reachable and were being proxied.
+  #
+  # Telemetry (prometheus, loki, mysqld-exporter, redis-exporter-*) is
+  # deliberately ABSENT: contracts/topology.yaml declares that network
+  # agent-UNREACHABLE with obs-mcp the only bridge, and main-egress.yaml grants
+  # the foothold no route to it. Their 403 is the designed seam, not a gap.
+  noProxy: "localhost,127.0.0.1,.svc,.cluster.local,loadgen,obs-mcp,agent-freezer,svc-frappe-web,svc-mariadb,frappe-admin,svc-redis-queue,svc-redis-cache,erp,erp-gunicorn,erp-socketio"
+
+agentDnsFilter:
+  clusterIP: 10.43.0.53
+  port: 5353
+
+# Platform-owned and independent of images.release. Generated hosted tasks must
+# replace this disabled staging value with one lock-derived @sha256 identity.
+platformTools:
+  enabled: false
+  image: ""
+  digest: ""
+
+# Kind does not ship a dynamic storage provisioner. tools.local_run enables
+# this only for its one-node, per-trial Kind cluster so the chart's three
+# persistent claims bind to disposable hostPath PVs. Hosted k3s leaves it off
+# and continues to use its normal local-path provisioner.
+localKindStorage:
+  enabled: false
+
+# ---------------------------------------------------------------------------
+# UPSTREAM ERPNEXT OVERRIDES
+# ---------------------------------------------------------------------------
+# Values under `erpnext:` are passed to the vendored subchart at
+# charts/erpnext/values.yaml. Keys mirror the upstream schema exactly.
+erpnext:
+  # Short fixed name for every templated erpnext.* resource so the createSite +
+  # configureBench Jobs' Deployment labels stay under Kubernetes' 63-char limit
+  # (RFC 1123). Without this the job label reads
+  # `<release>-erpnext-conf-bench-<timestamp>` = ~69 chars and helm install
+  # fails at admission. With fullnameOverride the label becomes
+  # `erp-conf-bench-<timestamp>` = ~29 chars — well under the cap.
+  # service-aliases.yaml is updated in lockstep to point at `erp-*` names.
+  fullnameOverride: "erp"
+
+  image:
+    repository: frappe/erpnext
+    tag: v16.26.2                # matches upstream chart.appVersion
+    pullPolicy: IfNotPresent
+
+  nginx:
+    replicaCount: 1
+    resources:
+      requests: { cpu: "50m",  memory: "64Mi"  }
+      limits:   { cpu: "200m", memory: "128Mi" }
+    autoscaling: { enabled: false }
+
+  worker:
+    gunicorn:
+      replicaCount: 1
+      resources:
+        requests: { cpu: "150m", memory: "384Mi" }
+        limits:   { cpu: "1000m", memory: "768Mi" }
+      autoscaling: { enabled: false }
+      envVars:
+        - { name: GUNICORN_WORKERS, value: "2" }
+        - { name: GUNICORN_THREADS, value: "4" }
+        - { name: GUNICORN_TIMEOUT, value: "120" }
+    default:
+      replicaCount: 1
+      resources:
+        requests: { cpu: "50m",  memory: "160Mi" }
+        limits:   { cpu: "400m", memory: "384Mi" }
+      autoscaling: { enabled: false }
+    short:
+      replicaCount: 1
+      resources:
+        requests: { cpu: "50m",  memory: "160Mi" }
+        limits:   { cpu: "400m", memory: "384Mi" }
+      autoscaling: { enabled: false }
+    long:
+      replicaCount: 1
+      resources:
+        requests: { cpu: "50m",  memory: "160Mi" }
+        limits:   { cpu: "400m", memory: "384Mi" }
+      autoscaling: { enabled: false }
+
+  scheduler:
+    resources:
+      requests: { cpu: "50m",  memory: "128Mi" }
+      limits:   { cpu: "300m", memory: "256Mi" }
+    autoscaling: { enabled: false }
+
+  socketio:
+    replicaCount: 1
+    resources:
+      requests: { cpu: "50m",  memory: "96Mi"  }
+      limits:   { cpu: "200m", memory: "192Mi" }
+    autoscaling: { enabled: false }
+
+  # First-boot site creation — the upstream chart's Job pattern. Timeouts are
+  # bumped from the upstream defaults to survive Daytona sandbox contention on
+  # a cold pull. See D16 Phase-1 risk 5 in DECISIONS.md.
+  jobs:
+    createSite:
+      enabled: true
+      forceCreate: false
+      # Bump init waiter (default 600 in upstream). Kubernetes Job pollers on
+      # Daytona have been observed to need ~15 min under 4-CPU contention.
+      configTimeoutSec: 900
+      # Bump DB wait (default 180 upstream).
+      dbTimeoutSec: 300
+      # Match the LOADGEN's FRAPPE_LOGIN_USER/PWD defaults + the site name the
+      # loadgen resolves at DNS. Frappe routes by Host header, so bench new-site
+      # must create the site under the exact hostname the loadgen will connect
+      # to (svc-frappe-web) — otherwise every /api call 404s with "site not
+      # found". Admin password aligns with loadgen.frappeLogin.password so the
+      # SessionPool's initial login succeeds. Overrideable per-scenario if a
+      # scenario ever needs to lock the site down further.
+      siteName: "svc-frappe-web"
+      adminPassword: "admin"
+      # Skip the ERPNext app install inside `bench new-site` — our loadgen only
+      # exercises core Frappe DeskAPI (DocType, ToDo, RQ enqueue), and the
+      # ERPNext install adds ~5-10 min of migration work per fresh site under
+      # Daytona's 4-vCPU contention. Overrideable per-scenario if a future
+      # scenario needs the ERPNext models.
+      installApps: []
+
+  # Persistent volume for sites/ — RWO is sufficient on the single-node
+  # ephemeral clusters used by qualification and hosted trials.
+  persistence:
+    worker:
+      enabled: true
+      size: 1Gi
+      # Empty means use the cluster's default StorageClass. Local Kind runs
+      # override this to local-path to match their pre-bound disposable PVs.
+      storageClass: ""
+      accessModes: [ReadWriteOnce]
+    logs:
+      enabled: true
+      size: 512Mi
+      storageClass: ""
+      accessModes: [ReadWriteOnce]
+
+  # Bundled MariaDB (bitnami subchart). Alias 'mariadb-subchart' in upstream
+  # Chart.yaml means override under the aliased key.
+  mariadb:
+    enabled: true
+  mariadb-subchart:
+    enabled: true
+    auth:
+      rootPassword: sre-world-mariadb-root
+      username: erpnext
+      password: sre-world-erpnext
+      database: erpnext
+    primary:
+      resources:
+        requests: { cpu: "250m", memory: "512Mi" }
+        limits:   { cpu: "1000m", memory: "1Gi"  }
+      persistence:
+        enabled: true
+        size: 2Gi
+      # Bitnami's `configuration` replaces the entire my.cnf. Keep its socket,
+      # client, and manager contracts intact; SRE World changes only
+      # performance_schema and the fault-relevant max_connections value.
+      configuration: |-
+        [mysqld]
+        skip-name-resolve
+        explicit_defaults_for_timestamp
+        basedir=/opt/bitnami/mariadb
+        plugin_dir=/opt/bitnami/mariadb/plugin
+        port=3306
+        socket=/opt/bitnami/mariadb/tmp/mysql.sock
+        tmpdir=/opt/bitnami/mariadb/tmp
+        max_allowed_packet=16M
+        bind-address=*
+        pid-file=/opt/bitnami/mariadb/tmp/mysqld.pid
+        log-error=/opt/bitnami/mariadb/logs/mysqld.log
+        character-set-server=UTF8
+        collation-server=utf8_general_ci
+        slow_query_log=0
+        slow_query_log_file=/opt/bitnami/mariadb/logs/mysqld.log
+        long_query_time=10.0
+        performance_schema=ON
+        max_connections=200
+
+        [client]
+        port=3306
+        socket=/opt/bitnami/mariadb/tmp/mysql.sock
+        default-character-set=UTF8
+        plugin_dir=/opt/bitnami/mariadb/plugin
+
+        [manager]
+        port=3306
+        socket=/opt/bitnami/mariadb/tmp/mysql.sock
+        pid-file=/opt/bitnami/mariadb/tmp/mysqld.pid
+      # Cold ERPNext initialization can make the default one-second MariaDB
+      # exec probes time out even while the server is healthy. Preserve a wide,
+      # explicit startup window and tolerate transient boot load.
+      livenessProbe:
+        timeoutSeconds: 10
+        failureThreshold: 6
+      readinessProbe:
+        timeoutSeconds: 10
+        failureThreshold: 6
+      startupProbe:
+        enabled: true
+        periodSeconds: 10
+        timeoutSeconds: 10
+        failureThreshold: 30
+
+  postgresql:
+    enabled: false
+  postgresql-subchart:
+    enabled: false
+
+  redis-cache:
+    enabled: true
+    architecture: standalone
+    master:
+      resources:
+        requests: { cpu: "50m",  memory: "96Mi"  }
+        limits:   { cpu: "200m", memory: "192Mi" }
+      persistence:
+        enabled: false
+    auth: { enabled: false }
+  redis-queue:
+    enabled: true
+    architecture: standalone
+    master:
+      resources:
+        requests: { cpu: "50m",  memory: "96Mi"  }
+        limits:   { cpu: "200m", memory: "192Mi" }
+      persistence:
+        enabled: false
+    auth: { enabled: false }
+
+  dragonfly-cache: { enabled: false }
+  dragonfly-queue: { enabled: false }
+  valkey-cache:    { enabled: false }
+  valkey-queue:    { enabled: false }
+
+# ---------------------------------------------------------------------------
+# SRE-WORLD ADDITIONS
+# ---------------------------------------------------------------------------
+# Values below drive our own templates under substrates/frappe/chart/templates/*.
+# Phase 1 authors the placeholders; Phase 3 wires Prometheus + Loki scrapes.
+
+# The operator-shell foothold (agent's exec target). Harbor installs system
+# prerequisites as root, then installs and runs the harness as uid 10001.
+main:
+  enabled: true
+  readOnlyRootFilesystem: false
+  # Claude Code's trusted bootstrap installer exceeded the old hard-coded
+  # 256Mi limit in every hosted EC2 real-agent qualification trial (exit 137).
+  # Match the proven Slack foothold envelope while keeping requests modest so
+  # the full Frappe stack still schedules on the 8-vCPU / 16-GiB EC2 runner.
+  resources:
+    requests: { cpu: "200m", memory: "256Mi" }
+    limits:   { cpu: "2",    memory: "2Gi"   }
+
+# Out-of-band episode driver and evidence collector. Default-off in a bare
+# `helm install`; a stamped task's task.values.yaml flips
+# `loadgen.enabled: true` and gradingHarness settings so
+# the loadgen Deployment + declare Service render and drive the seeded
+# schedule against svc-frappe-web:8000.
+loadgen:
+  enabled: false
+  profile: frappe_dev              # loadgen_frappe/schedule.py PROFILES key
+  # OPTIONAL inline YAML defining custom load profiles (schema in the staged
+  # slack-spine loadgen/profile_loader.py). Non-empty -> loadgen-profiles
+  # ConfigMap mounted at /etc/loadgen/profiles.yaml, merged over the compiled
+  # PROFILES at sidecar startup; `profile` above may then name a profile from
+  # this file. DEFAULT EMPTY: renders nothing (byte-identical pod spec).
+  profilesYaml: ""
+  target: http://svc-frappe-web:8000
+
+  # Grade-time pod_state basis: a namespaced SA + Role +
+  # RoleBinding that lets the sidecar's grade step read per-pod restartCount /
+  # readiness. Default-off; a stamped task flips it via task.values.yaml.
+  # The agent cannot use this SA (no k8s client in main,
+  # no exec on the loadgen pod, and the /grader endpoints never proxy the API).
+  podState:
+    enabled: false
+
+  # Per-task answer key + pre-rendered config_before (stamped by
+  # tools/generate_tasks.py). Default-off in the wrapper chart;
+  # task.values.yaml flips it on with the actual materials.
+  graderKey:
+    enabled: false
+
+  # MariaDB SQL-state probe (peer of Slack's Postgres db_state probe).
+  # DEFAULT-OFF; a Phase-6+ scenario overlay flips it on when it needs the
+  # sidecar to snapshot mariadb runtime state at declare.
+  dbState:
+    enabled: false
+
+  # Runtime env for the schedule + sidecar.
+  graderDir: /grader
+  sutAdminPort: 8000
+  # Phase 4 STANDALONE ADMIN SIDECAR MODE (default). The Frappe substrate ships
+  # a SINGLE standalone `frappe-admin` Service/Deployment (see
+  # chart/templates/frappe-admin.yaml) rather than one sidecar container per
+  # Frappe workload. So the loadgen's declare-time snapshot fans out to exactly
+  # ONE endpoint, http://frappe-admin:8000/admin/config, resolved by
+  # loadgen_sidecar._snapshot_service_configs when this list is empty.
+  #
+  # Phase 6+ note: once per-workload sidecar injection lands (chart hook or
+  # mutating webhook), each Frappe workload gets its own /admin/config surface
+  # and this list should be populated with the workload Service names:
+  #   snapshotServices: "frappe-web,frappe-worker-short,..."
+  # AND service-aliases.yaml must grow ExternalName aliases for each listed
+  # name — a non-empty list whose entries don't resolve at DNS was the
+  # pre-fix bug that silently 404'd every snapshot on the golden solve.
+  snapshotServices: ""
+  sessionPoolSize: 32
+  # Frappe Desk login for the SessionPool. Matches the upstream chart's
+  # `bench new-site` non-interactive default; a scenario overlay may swap
+  # for a locked-down site.
+  frappeLogin:
+    user: Administrator
+    password: admin
+
+  # Sized for the Daytona 4/8/10 sandbox: the loadgen is Python + aiohttp,
+  # peak concurrency is bounded by the seeded schedule (SESSION_POOL_SIZE=32
+  # aiohttp coroutines) and the request rate stays low relative to the SUT.
+  resources:
+    requests: { cpu: "50m",  memory: "128Mi" }
+    limits:   { cpu: "300m", memory: "384Mi" }
+
+gradingHarness:
+  podState:
+    enabled: false
+  answerKey:
+    enabled: false
+  dbState:
+    enabled: false
+
+# Runtime faults are activated by the trusted loadgen only after the Frappe
+# site is serving and immediately before the grader captures its baseline.
+# Generated task overlays may select only code-owned, validator-allowlisted
+# operations; they never provide SQL.  Keeping this default-off makes the
+# shared substrate healthy and keeps the fault entirely in task.values.yaml.
+faultInit:
+  mariadb:
+    enabled: false
+    kind: ""
+    variable: ""
+    value: ""
+  lockState:
+    enabled: false
+
+# Agent-facing closed attribution inventory. Task generation fills this only for
+# scenarios that opt in; it exposes valid spellings, never the correct pairing.
+agentReport:
+  vocabulary:
+    services: []
+    components: []
+
+# Per-workload admin sidecar (fix-application primitive). Phase 3 flip: on by
+# default. Sidecar injection into upstream Frappe workloads is deferred to
+# Phase 4/6 (needs a chart hook or manual overlay); until then the sidecar
+# runs as a standalone Deployment so its /metrics is scrapable by Prometheus
+# and Phase 3 gauge parsing is exercisable. See DECISIONS D16 Phase 1 risk 6.
+frappeAdmin:
+  enabled: true
+
+# Observability MCP + Prometheus + Loki + exporters (Phase 3). ON by default:
+# every fault scenario needs the obs stack to grade the outcome gate against
+# metric trends. Turn off only when the loadgen client-side metrics alone are
+# sufficient for a given scenario (rare).
+obs:
+  enabled: true
+  scrapeIntervalSeconds: 5
+  # The raw backend remains complete for trusted QA, while the agent-facing MCP
+  # drops any line that names the grader capability or answer-key paths.
+  deniedLogSubstrings: "x-sre-world-grader-access;grader-access;grader-key;ground-truth.yaml"
+  prometheus:
+    image: prom/prometheus:v2.54.1
+  loki:
+    image: grafana/loki:3.1.0
+  promtail:
+    image: grafana/promtail:3.1.0
+  mysqldExporter:
+    enabled: true
+    image: prom/mysqld-exporter:v0.15.1
+  redisExporter:
+    enabled: true
+    image: oliver006/redis_exporter:v1.62.0
+
+# The 4 SRE-World-authored images (values.images.<key> — the substrate
+# manifest's images.custom map; the registry overlay repoints exactly these).
+images:
+  main: frappe-main:dev
+  loadgen: frappe-loadgen:dev
+  obsMcp: frappe-obs-mcp:dev
+  frappeAdmin: frappe-admin-sidecar:dev
+  # Immutable chart-only guard images; not part of the custom release set.
+  egressEnvoy: envoyproxy/envoy@sha256:caa5b411be1633b90023592a34a7e010c933d6e60206c758f631485e53006865
+  coredns: registry.k8s.io/coredns/coredns@sha256:9caabbf6238b189a65d0d6e6ac138de60d6a1c419e5a341fbbb7c78382559c6e
+
+# Global image pull policy applied to the SRE-World-authored templates.
+# Never = side-loaded local :dev images (a forgotten build FAILS LOUDLY);
+# the generated task.values.yaml flips this to IfNotPresent + pinned
+# release refs for hosted pulls. Upstream chart images keep their own policy
+# under erpnext.*.
+global:
+  imagePullPolicy: Never
+
+# ── SREGym port (not part of upstream Incident Arena) ─────────────────────────
+# Inert by default: with `sregym.enabled: false` the chart renders exactly as the
+# Incident Arena task chart did. SREGym's values overlay switches it on to keep
+# only the MariaDB/Redis exporters from the observability plane (SREGym runs its
+# own Prometheus/Loki), label the load generator so SREGym hides it from agents,
+# and deploy an operator toolbox in place of the Harbor `main` foothold.
+sregym:
+  enabled: false
+  loadgenLabels: {}
+  # Rendered as the load generator's answer key when sregym.enabled is true.
+  neutralAnswerKey:
+    scenario: sregym-healthy-baseline
+  toolbox:
+    enabled: false

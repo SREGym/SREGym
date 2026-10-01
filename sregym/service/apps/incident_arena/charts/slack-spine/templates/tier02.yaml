@@ -1,0 +1,277 @@
+# ── tier-02 real-time core: flannel (edge cache), channel-rt (pub/sub) as stateful
+#    sticky members; dispatcher (stateless router) + presence (Python) as Deployments. ──
+
+{{- if include "slack.enabled" (dict "root" $ "key" "flannel") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: flannel
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: flannel
+spec:
+  clusterIP: None        # headless: stable identity for the cache members
+  selector:
+    app.kubernetes.io/component: flannel
+  ports:
+    - name: http
+      port: 8200
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: flannel
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: flannel
+spec:
+  serviceName: flannel
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: flannel
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: flannel
+    spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/component: flannel
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: flannel
+          image: {{ .Values.images.go | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/usr/local/bin/flannel"]
+          env:
+            - name: PORT
+              value: "8200"
+            - name: RING_PATH
+              value: /config/ring.yaml
+            - name: CHANNEL_URL
+              value: "http://svc-channel:8000"
+            - name: AUTH_URL
+              value: "http://svc-auth:8000"
+            - name: MESSAGE_URL
+              value: "http://svc-message:8000"
+          ports:
+            - name: http
+              containerPort: 8200
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: ring-config
+              mountPath: /config
+              readOnly: true
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "flannel") | nindent 12 }}
+      volumes:
+        - name: ring-config
+          configMap:
+            name: ring-config
+{{- end }}
+
+{{- if include "slack.enabled" (dict "root" $ "key" "channelRt") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: channel-rt
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: channel-rt
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/component: channel-rt
+  ports:
+    - name: http
+      port: 8201
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: channel-rt
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: channel-rt
+spec:
+  serviceName: channel-rt
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: channel-rt
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: channel-rt
+    spec:
+      containers:
+        - name: channel-rt
+          image: {{ .Values.images.go | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/usr/local/bin/channel-rt"]
+          env:
+            - name: PORT
+              value: "8201"
+            - name: REDIS_URL
+              value: {{ .Values.app.redisUrl | quote }}
+            - name: DISPATCHER_URL
+              value: "http://dispatcher:8202"
+            - name: RING_PATH
+              value: /config/ring.yaml
+          ports:
+            - name: http
+              containerPort: 8201
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: ring-config
+              mountPath: /config
+              readOnly: true
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "channelRt") | nindent 12 }}
+      volumes:
+        - name: ring-config
+          configMap:
+            name: ring-config
+{{- end }}
+
+{{- if include "slack.enabled" (dict "root" $ "key" "dispatcher") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dispatcher
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: dispatcher
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: dispatcher
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: dispatcher
+    spec:
+      containers:
+        - name: dispatcher
+          image: {{ .Values.images.go | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/usr/local/bin/dispatcher"]
+          env:
+            - name: PORT
+              value: "8202"
+            - name: REDIS_URL
+              value: {{ .Values.app.redisUrl | quote }}
+            # Per-route deliver budget; default 1500 == the dispatcher's Go default (no-op).
+            # A fault overlay starves this to drop the WS fan-out deliver leg.
+            - name: ROUTE_TIMEOUT_MS
+              value: {{ .Values.app.env.routeTimeoutMs | default "1500" | quote }}
+          ports:
+            - name: http
+              containerPort: 8202
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "dispatcher") | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dispatcher
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: dispatcher
+spec:
+  selector:
+    app.kubernetes.io/component: dispatcher
+  ports:
+    - name: http
+      port: 8202
+      targetPort: http
+{{- end }}
+
+{{- if include "slack.enabled" (dict "root" $ "key" "presence") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: presence
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: presence
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: presence
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: presence
+    spec:
+      containers:
+        - name: presence
+          image: {{ .Values.images.py | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["presence.py"]
+          env:
+            - name: PORT
+              value: "8123"
+            - name: REDIS_URL
+              value: {{ .Values.app.redisUrl | quote }}
+          ports:
+            - name: http
+              containerPort: 8123
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "presence") | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: presence
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: presence
+spec:
+  selector:
+    app.kubernetes.io/component: presence
+  ports:
+    - name: http
+      port: 8123
+      targetPort: http
+{{- end }}

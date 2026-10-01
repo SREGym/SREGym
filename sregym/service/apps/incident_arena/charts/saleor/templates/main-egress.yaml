@@ -1,0 +1,25 @@
+{{- if .Values.main.enabled }}
+# Main can reach labelled namespace-local services, including the task-owned
+# HTTP proxy and DNS filter, but cannot connect directly to the TLS gateway.
+# It has no direct public or recursive-DNS route, including when a client
+# ignores the injected HTTP_PROXY/HTTPS_PROXY environment.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: main-egress
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: main
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: NotIn
+                values: [agent-egress-tls-gateway]
+{{- end }}

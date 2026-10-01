@@ -1,0 +1,165 @@
+{{- if include "slack.enabled" (dict "root" $ "key" "main") }}
+{{- $allowedHosts := .Values.agentEgressProxy.allowedHosts }}
+{{- $runtimeAllowedHosts := list }}
+{{- range splitList ";" (.Values.agentEgressProxy.runtimeAllowedHosts | default "") }}
+{{- $host := trim . }}
+{{- if $host }}{{- $runtimeAllowedHosts = append $runtimeAllowedHosts $host }}{{- end }}
+{{- end }}
+{{- if gt (len $runtimeAllowedHosts) 0 }}{{- $allowedHosts = uniq $runtimeAllowedHosts }}{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agent-egress-tls-gateway-config
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: agent-egress-tls-gateway
+data:
+  envoy.yaml: |-
+    admin:
+      address:
+        socket_address: {address: 127.0.0.1, port_value: 9901}
+    static_resources:
+      listeners:
+        - name: agent_tls_gateway
+          address:
+            socket_address: {address: 0.0.0.0, port_value: {{ .Values.agentEgressProxy.tlsGatewayPort }}}
+          listener_filters:
+            - name: envoy.filters.listener.tls_inspector
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector
+          filter_chains:
+          {{- range $allowedHosts }}
+            - filter_chain_match:
+                server_names: [{{ . | quote }}]
+              filters:
+                - name: envoy.filters.network.tcp_proxy
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy
+                    stat_prefix: {{ printf "tls_%s" (replace "." "_" .) }}
+                    cluster: {{ printf "tls-%s" (replace "." "-" .) }}
+          {{- end }}
+      clusters:
+      {{- range $allowedHosts }}
+        - name: {{ printf "tls-%s" (replace "." "-" .) }}
+          type: STRICT_DNS
+          dns_lookup_family: V4_ONLY
+          connect_timeout: 10s
+          load_assignment:
+            cluster_name: {{ printf "tls-%s" (replace "." "-" .) }}
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address: {address: {{ . | quote }}, port_value: 443}
+      {{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: agent-egress-tls-gateway
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: agent-egress-tls-gateway
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-egress-tls-gateway
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: agent-egress-tls-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/component: agent-egress-tls-gateway}
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: agent-egress-tls-gateway
+      annotations:
+        checksum/config: {{ printf "stock-egress-v3:%v:%s" .Values.agentEgressProxy.tlsGatewayPort (toJson $allowedHosts) | sha256sum }}
+    spec:
+      serviceAccountName: agent-egress-tls-gateway
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: gateway
+          image: {{ .Values.images.egressEnvoy | quote }}
+          # This chart-only guard image is not part of the custom substrate
+          # release or local side-load set. Always resolve its immutable digest.
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "/etc/agent-egress/envoy.yaml", "--service-cluster", "agent-egress-tls-gateway"]
+          ports:
+            - {name: tls-gateway, containerPort: {{ .Values.agentEgressProxy.tlsGatewayPort }}}
+          readinessProbe:
+            tcpSocket: {port: tls-gateway}
+            initialDelaySeconds: 1
+            periodSeconds: 3
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "20m", memory: "48Mi"}
+            limits: {cpu: "200m", memory: "128Mi"}
+          volumeMounts:
+            - {name: config, mountPath: /etc/agent-egress, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: agent-egress-tls-gateway-config}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-egress-tls-gateway
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: agent-egress-tls-gateway
+spec:
+  selector: {app.kubernetes.io/component: agent-egress-tls-gateway}
+  ports:
+    - name: tls-gateway
+      port: {{ .Values.agentEgressProxy.tlsGatewayPort }}
+      targetPort: tls-gateway
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-egress-tls-gateway
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {app.kubernetes.io/component: agent-egress-tls-gateway}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: agent-egress-proxy}
+      ports:
+        - {protocol: TCP, port: {{ .Values.agentEgressProxy.tlsGatewayPort }}}
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: kube-system}
+          podSelector:
+            matchLabels: {k8s-app: kube-dns}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.0.2.0/24, 192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24, 224.0.0.0/4, 240.0.0.0/4]
+      ports:
+        - {protocol: TCP, port: 443}
+{{- end }}

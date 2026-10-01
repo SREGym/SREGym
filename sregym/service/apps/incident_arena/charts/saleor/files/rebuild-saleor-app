@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+
+url="${REBUILD_BROKER_URL:-}"
+[ -n "$url" ] || {
+  echo "rebuild-saleor-app: this task has no build-capable rollout broker" >&2
+  exit 2
+}
+response="$(mktemp)" || exit 2
+trap 'rm -f "$response"' EXIT
+if curl --fail-with-body --silent --show-error \
+  --noproxy saleor-rebuild-broker \
+  --request POST --header 'Content-Length: 0' --output "$response" \
+  "$url/rebuild"; then
+  :
+else
+  rc=$?
+  sed -n '1,80p' "$response" >&2 || true
+  echo "rebuild-saleor-app: trusted rollout failed (curl rc=$rc)" >&2
+  exit "$rc"
+fi
+grep -Eq '"ok"[[:space:]]*:[[:space:]]*true' "$response" || {
+  sed -n '1,80p' "$response" >&2
+  echo "rebuild-saleor-app: broker returned no ok:true result" >&2
+  exit 1
+}
+cat "$response"

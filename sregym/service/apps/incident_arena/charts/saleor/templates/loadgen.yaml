@@ -1,0 +1,395 @@
+{{- if .Values.loadgen.enabled }}
+# ── loadgen: seeded open-loop cyclical schedule against svc-saleor-api. LONG-
+#    LIVED: runs the schedule, GRADES IN-POD at episode end, writes
+#    /grader/episode_done.json, then `sleep infinity` so the gated GET /grader/*
+#    surface keeps serving after the soak (test.sh polls it).
+#    /grader is a PRIVATE emptyDir mounted ONLY here — never in main.
+#
+# Peer of substrates/frappe/chart/templates/loadgen.yaml; wire shape identical,
+# env vars Saleor-specific (svc-saleor-api GraphQL target, postgresql://...
+# DB_ADMIN_DSN, no frappe login creds — the storefront lane is unauthenticated).
+# Default-OFF in a bare install; the stamped task's grader.values.yaml flips
+# enabled + podState + graderKey. The answer-key ConfigMap mounts ONLY here —
+# never reachable from main (the anti-cheat invariant every substrate shares).
+{{- if .Values.gradingHarness.podState.enabled }}
+# Restart-masking basis (in-pod grading): a DEDICATED ServiceAccount with a
+# NAMESPACED get/list-pods Role only — the narrowest read that yields per-
+# component restartCount/readiness. The agent cannot use it: no k8s API client
+# in main, no exec on this pod, and the /grader endpoints never proxy the API.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loadgen
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: loadgen-pod-reader
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: loadgen-pod-reader
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+subjects:
+  - kind: ServiceAccount
+    name: loadgen
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: loadgen-pod-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+{{- end }}
+{{- if .Values.gradingHarness.answerKey.enabled }}
+# The per-task answer key (in-pod grading), stamped by the scenario stamper.
+# Mounted READ-ONLY at /grader-key in the loadgen pod ONLY — never in main.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen-grader-key
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+data:
+{{- if $.Values.sregym.enabled }}
+  # SREGym port: the load generator refuses to start without a mapping here,
+  # but SREGym grades through its own oracles, so ship a fault-free key.
+  ground-truth.yaml: |
+{{ toYaml $.Values.sregym.neutralAnswerKey | indent 4 }}
+  config_before.json: |
+    {}
+{{- else }}
+  ground-truth.yaml: |
+{{ .Files.Get "ground-truth.yaml" | indent 4 }}
+  config_before.json: |
+{{ .Files.Get "config-before.json" | indent 4 }}
+{{- end }}
+---
+{{- end }}
+{{- if .Values.loadgen.profilesYaml }}
+# YAML-defined load profiles (loadgen/profile_loader.py). Mounted read-only at
+# /etc/loadgen/profiles.yaml in the loadgen pod ONLY; merged over the compiled
+# PROFILES at sidecar startup. The sidecar FAILS LOUDLY on a malformed file.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen-profiles
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+data:
+  profiles.yaml: {{ .Values.loadgen.profilesYaml | quote }}
+---
+{{- end }}
+# Runtime grading compatibility shim. This is chart-mounted task-local code,
+# not a rebuilt substrate image. It makes persisted pg_file_settings visible
+# even when the grading DSN's safety timeout masks pg_settings.source as a
+# client override.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen-runtime-hooks
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+data:
+  loadgen-entrypoint.py: |
+{{ .Files.Get "files/loadgen-entrypoint.py" | indent 4 }}
+  protected_postgres.py: |
+{{ .Files.Get "files/protected-postgres.py" | indent 4 }}
+{{- $taskCollector := .Files.Get "files/task-protected-collector.py" }}
+{{- if $taskCollector }}
+  task-protected-collector.py: |
+{{ $taskCollector | indent 4 }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: loadgen
+  template:
+    metadata:
+      labels:
+        {{- include "saleor-spine.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 8 }}{{- end }}
+    spec:
+      {{- if .Values.gradingHarness.podState.enabled }}
+      # Grade-time pod_state snapshot needs the scoped SA token (see Role above).
+      serviceAccountName: loadgen
+      automountServiceAccountToken: true
+      {{- else }}
+      # No in-pod grading -> no reason for ANY API credential in this pod.
+      automountServiceAccountToken: false
+      {{- end }}
+      # Block until the Saleor GraphQL API answers a REAL query (DB up + schema
+      # migrated — the same deep healthcheck as substrate.yaml), then drive the
+      # schedule. A shallow socket ping would start episodes on a half-booted SUT.
+      initContainers:
+        - name: wait-for-saleor-api
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          # Gate on SEEDED CATALOG, not liveness: {shop{name}} passes after
+          # migrate but BEFORE populatedb finishes, and variant discovery
+          # needs products to exist (spike finding: the shallow gate raced
+          # the init Job and provisioning died on OperationalError).
+          command:
+            - "sh"
+            - "-c"
+            - |
+              # Gate on SEEDED CATALOG (products exist) — populatedb has run far
+              # enough for variant discovery.
+              until curl -fsS -X POST -H 'Content-Type: application/json' \
+                -d '{"query":"{ products(first:1, channel:\"default-channel\") { totalCount } }"}' \
+                {{ .Values.loadgen.target }}/graphql/ | grep -Eq '"totalCount": *[1-9]'; do
+                echo waiting for seeded saleor catalog; sleep 5
+              done
+              {{- if or (hasPrefix "saleor_async" .Values.loadgen.profile) (hasPrefix "saleor_mixed" .Values.loadgen.profile) }}
+              # SUPERUSER-DEPENDENT lanes: the async webhook registration
+              # (run_episode -> tokenCreate) AND the mixed profiles' login
+              # driver need the admin@example.com superuser, which populatedb
+              # creates AFTER the catalog above — so the catalog gate can pass
+              # before the superuser exists. On a slow backend the sidecar's
+              # registration retries can all fail ("Please, enter valid
+              # credentials"), which raises out of run_episode and WEDGES the
+              # whole loadgen (no load, /declare 503, /grader 500); a login
+              # lane would grade a spurious error floor. Deterministically
+              # close that race: block the sidecar's start until tokenCreate
+              # actually returns a token. Scoped to saleor_async_*/saleor_mixed_*
+              # so plain sync tasks pay no extra wait.
+              until curl -fsS -X POST -H 'Content-Type: application/json' \
+                -d '{"query":"mutation { tokenCreate(email: \"admin@example.com\", password: \"admin\") { token } }"}' \
+                {{ .Values.loadgen.target }}/graphql/ | grep -Eq '"token": *"'; do
+                echo "waiting for saleor superuser (login/webhook lanes)"; sleep 5
+              done
+              {{- end }}
+      containers:
+        - name: loadgen
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          {{- if $.Values.sregym.enabled }}
+          # SREGym port: run the image's sidecar directly; the grading shim below
+          # only adds Incident Arena evidence capture that SREGym does not use.
+          command: ["python", "-u", "/app/loadgen_sidecar.py"]
+          {{- else }}
+          command: ["python", "-u", "/grader-runtime/loadgen-entrypoint.py"]
+          {{- end }}
+          env:
+            # Load profile compiled into the image (loadgen_saleor/schedule.py
+            # PROFILES). Explicitly set so a scenario overlay can select a
+            # longer window without touching the image.
+            - name: PROFILE
+              value: {{ .Values.loadgen.profile | quote }}
+            {{- if .Values.loadgen.profilesYaml }}
+            # YAML-defined load profiles: merged OVER the compiled PROFILES at
+            # sidecar startup — custom load patterns without an image rebuild.
+            # DEFAULT-OFF: empty renders no env line / ConfigMap / mount.
+            - name: PROFILE_FILE
+              value: /etc/loadgen/profiles.yaml
+            {{- end }}
+            - name: TARGET
+              value: {{ .Values.loadgen.target | quote }}
+            - name: LOADGEN_TARGET_BASE_URL
+              value: {{ .Values.loadgen.target | quote }}
+            - name: GRADER_DIR
+              value: {{ .Values.loadgen.graderDir | quote }}
+            # Verifier-only grader capability (upstream main): the sidecar's
+            # grader HTTP app refuses to start without it; test.sh sends it as
+            # the X-SRE-World-Grader-Access header to read /grader/episode_done
+            # and fetch /grader/bundle (the finalized evidence, graded verifier-side).
+            - name: GRADER_ACCESS_TOKEN_FILE
+              value: /run/grader-access/token
+            # Declare-time admin-config snapshot fan-out. EMPTY on saleor P1
+            # (no admin-config HTTP surface exists on this substrate yet —
+            # runtime capture is grader_hooks' seam, DESIGN.md §4.4); a future
+            # admin sidecar populates this via a values overlay.
+            - name: SNAPSHOT_SERVICES
+              value: {{ .Values.loadgen.snapshotServices | default "" | quote }}
+            # Async-tier metrics scrape targets (queue-lag observability;
+            # DEFAULT "" = scraper never starts, episode byte-identical). A
+            # queue scenario sets e.g. "rabbitmq:15692" (the broker's native
+            # prometheus plugin) so async_metrics.jsonl feeds the oracle's
+            # lane_health gate.
+            - name: SCRAPE_SERVICES
+              value: {{ .Values.loadgen.scrapeServices | default "" | quote }}
+            # checkout_async round-trip wait window (seconds; driver default
+            # 15). A drop-style broker fault sets this above its worst-case
+            # post-repair drain time so the gate measures LOSS (dropped
+            # deliveries never complete) rather than transient queueing delay.
+            - name: ASYNC_WAIT_S
+              value: {{ .Values.loadgen.asyncWaitS | default "15" | quote }}
+            # ORDER events the loadgen-observer webhook subscribes to (async
+            # lanes; DEFAULT ORDER_CREATED = registration byte-identical). A
+            # queue-pressure scenario widens the list so every checkout fires
+            # SEVERAL worker deliveries (the arrival multiplier).
+            - name: WEBHOOK_EVENTS
+              value: {{ .Values.loadgen.webhookEvents | default "ORDER_CREATED" | quote }}
+            # Grading-plane admin DSN (grader_hooks.collect_runtime_snapshot —
+            # the declare-time live pg_settings capture that makes ALTER SYSTEM
+            # repairs diff-visible). ALWAYS present: this pod is never agent-
+            # reachable, and grading fails closed without the capture. Same
+            # expression as main.yaml's DB_ADMIN_DSN (no drift).
+            #
+            # STATEMENT-TIMEOUT FENCE (30-Q1 overrun fix): every in-pod grade DB
+            # probe (grader_hooks.collect_runtime_snapshot, db_min_rowcounts
+            # count(*), async_integrity counts, docker_state SELECT 1) connects
+            # over THIS DSN with connect_timeout=10 — which bounds the CONNECT but
+            # NOT statement execution. A grade count(*) over the seeded ~6M-row
+            # webhook_delivery_audit that stalls (lock/contention on a saturated
+            # SUT) then hangs the sidecar's run_episode FOREVER: episode_done.json
+            # is never written, GET /grader/bundle serves 503 until test.sh times
+            # out (the confirmed 30-Q1 ~41-min overrun; a raise would be a fast
+            # 500, a 503 storm is a genuine hang). A session `statement_timeout`
+            # caps every grade statement so a stalled probe RAISES instead of
+            # hanging — the probe then fails CLOSED (db_min_rowcounts writes no
+            # value -> the check fails) and run_episode ALWAYS reaches
+            # episode_done.json, so test.sh gets the finalized bundle. Set via libpq
+            # `options` (URL-encoded `-c statement_timeout=<ms>`), whose GUC source
+            # is `session` — EXCLUDED from collect_runtime_snapshot's
+            # `source IN ('configuration file','database','role','user')` filter,
+            # so it never pollutes the minimality snapshot. Healthy probes finish
+            # in <1s and never approach the ceiling.
+            - name: PG_ADMIN_DSN
+              value: "postgres://{{ .Values.postgres.auth.username }}:{{ .Values.postgres.auth.password }}@postgres:5432/{{ .Values.postgres.auth.database }}?options=-c%20statement_timeout%3D{{ .Values.loadgen.graderStatementTimeoutMs | default 120000 }}"
+            {{- if .Values.gradingHarness.dbState.enabled }}
+            # Privileged Postgres DSN for in-pod db_state probes (future
+            # scenarios). DEFAULT-OFF: no env line otherwise. Rendered from
+            # the postgres subchart auth block — the SAME expression as
+            # main.yaml's DB_ADMIN_DSN, so the two can never drift. Same
+            # statement-timeout fence as PG_ADMIN_DSN above.
+            - name: DB_ADMIN_DSN
+              value: "postgres://{{ .Values.postgres.auth.username }}:{{ .Values.postgres.auth.password }}@postgres:5432/{{ .Values.postgres.auth.database }}?options=-c%20statement_timeout%3D{{ .Values.loadgen.graderStatementTimeoutMs | default 120000 }}"
+            {{- end }}
+          ports:
+            - name: declare
+              containerPort: 9100
+          volumeMounts:
+            - name: grader-runtime-hooks
+              mountPath: /grader-runtime
+              readOnly: true
+            - name: grader
+              mountPath: {{ .Values.loadgen.graderDir }}
+            - name: grader-access
+              mountPath: /run/grader-access
+              readOnly: true
+            {{- if .Values.gradingHarness.answerKey.enabled }}
+            - name: grader-key
+              mountPath: /grader-key
+              readOnly: true
+            {{- end }}
+            {{- if .Values.loadgen.profilesYaml }}
+            - name: profiles
+              mountPath: /etc/loadgen
+              readOnly: true
+            {{- end }}
+          resources:
+            {{- toYaml .Values.loadgen.resources | nindent 12 }}
+        {{- if .Values.agentSurface.buildCapable.enabled }}
+        # Protected source evidence collector. It has no grader key, database
+        # credential, or agent route; it can only read the declared PVC and
+        # write the private /grader evidence volume shared with loadgen.
+        - name: source-collector
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python3", "/surface/saleor-source-collector.py"]
+          env:
+            - name: GRADER_DIR
+              value: {{ .Values.loadgen.graderDir | quote }}
+            - name: SOURCE_ROOT
+              value: /source
+            - name: SOURCE_PATHS_JSON
+              value: {{ .Values.agentSurface.buildCapable.sourcePaths | toJson | quote }}
+            - name: SOURCE_MAX_FILE_BYTES
+              value: {{ .Values.agentSurface.buildCapable.snapshotMaxFileBytes | int64 | quote }}
+            - name: SOURCE_MAX_BYTES
+              value: {{ .Values.agentSurface.buildCapable.snapshotMaxBytes | int64 | quote }}
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: grader, mountPath: {{ .Values.loadgen.graderDir }}}
+            - {name: agent-source, mountPath: /source, readOnly: true}
+            - {name: agent-surface, mountPath: /surface, readOnly: true}
+            - {name: source-collector-tmp, mountPath: /tmp}
+        {{- end }}
+      volumes:
+        - name: grader-runtime-hooks
+          configMap:
+            name: loadgen-runtime-hooks
+        - name: grader
+          emptyDir: {}
+        - name: grader-access
+          secret:
+            secretName: loadgen-grader-access
+            defaultMode: 0444
+        {{- if .Values.gradingHarness.answerKey.enabled }}
+        - name: grader-key
+          configMap:
+            name: loadgen-grader-key
+        {{- end }}
+        {{- if .Values.loadgen.profilesYaml }}
+        - name: profiles
+          configMap:
+            name: loadgen-profiles
+        {{- end }}
+        {{- if .Values.agentSurface.buildCapable.enabled }}
+        - name: agent-source
+          persistentVolumeClaim:
+            claimName: saleor-agent-source
+        - name: agent-surface
+          configMap:
+            name: saleor-agent-surface
+            defaultMode: 0555
+        - name: source-collector-tmp
+          emptyDir: {}
+        {{- end }}
+---
+# Declare endpoint Service: main's submit_incident_report POSTs the agent's
+# incident report to http://loadgen:9100/declare (the agent never reaches /grader).
+apiVersion: v1
+kind: Service
+metadata:
+  name: loadgen
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+spec:
+  selector:
+    app.kubernetes.io/component: loadgen
+  ports:
+    - name: declare
+      port: 9100
+      targetPort: declare
+{{- end }}

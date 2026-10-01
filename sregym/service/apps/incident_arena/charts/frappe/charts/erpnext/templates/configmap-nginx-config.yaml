@@ -1,0 +1,10 @@
+{{- if .Values.nginx.config }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "erpnext.fullname" . }}-nginx-config
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+data:
+  default.conf: {{ .Values.nginx.config | quote }}
+{{- end }}

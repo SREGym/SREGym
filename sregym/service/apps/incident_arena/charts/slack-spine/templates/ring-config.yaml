@@ -1,0 +1,19 @@
+# Shared consistent-hash ring (the 01<->02 seam). ws-gateway (01) AND flannel (02)
+# mount this SAME ConfigMap at /config/ring.yaml so their hashing agrees — single
+# source of truth. Neutral key names, no intent comments (D7 leak hygiene).
+{{- if or (include "slack.enabled" (dict "root" $ "key" "wsGateway")) (include "slack.enabled" (dict "root" $ "key" "flannel")) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ring-config
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+data:
+  ring.yaml: |
+    nodes:
+{{- range .Values.ring.nodes }}
+      - {{ . | quote }}
+{{- end }}
+    vnodes: {{ .Values.ring.vnodes }}
+    hash_key: {{ .Values.ring.hashKey }}
+{{- end }}

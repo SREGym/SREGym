@@ -1,0 +1,11 @@
+apiVersion: v2
+name: slack-spine
+description: >-
+  Slack-clone SUT as a Helm chart (SRE-World). Slice-1 = the D07-7
+  vertical: tier-03 messaging (svc-auth, svc-message[fault site], svc-channel)
+  + tier-06 data (db, redis) + obs plane + operator-shell `main` + long-lived
+  loadgen, reproducing 03-F1 pool exhaustion. Runs under Harbor's `helm`
+  environment backend (`-e helm`, ephemeral kind/k3d per trial).
+type: application
+version: 0.1.0
+appVersion: "slice-1"

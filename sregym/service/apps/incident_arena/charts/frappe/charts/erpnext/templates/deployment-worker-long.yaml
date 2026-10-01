@@ -1,0 +1,129 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "erpnext.fullname" . }}-worker-l
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.worker.long.autoscaling.enabled }}
+  replicas: {{ .Values.worker.long.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "erpnext.name" . }}-worker-l
+      app.kubernetes.io/instance: {{ .Release.Name }}-worker-l
+  template:
+    metadata:
+      {{- with .Values.worker.long.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        app.kubernetes.io/name: {{ include "erpnext.name" . }}-worker-l
+        app.kubernetes.io/instance: {{ .Release.Name }}-worker-l
+        app.kubernetes.io/app: frappe
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ template "erpnext.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+    {{- if .Values.worker.long.initContainers }}
+      initContainers:
+        {{- toYaml .Values.worker.long.initContainers | nindent 8 }}
+    {{- end }}
+      containers:
+        - name: long
+          {{- if .Values.worker.long.envVars }}
+          env:
+            {{- toYaml .Values.worker.long.envVars | nindent 12 }}
+          {{- end }}
+          {{- if .Values.worker.long.supervise }}
+          # Faulted queue tasks must remain bootable while Redis rejects the
+          # worker's birth registration. Keep the pod alive and retry the real
+          # worker so it begins draining immediately after the agent repairs
+          # Redis; Kubernetes-level CrashLoopBackOff would block Helm --wait.
+          command: ["bash", "-c"]
+          args:
+          - |-
+            trap 'kill "${child:-}" 2>/dev/null || true; wait "${child:-}" 2>/dev/null || true; exit 0' TERM INT
+            while true; do
+              bench worker --queue long,default,short &
+              child=$!
+              wait "$child"
+              rc=$?
+              echo "worker process exited with status ${rc}; retrying in 5s" >&2
+              sleep 5
+            done
+          {{- else }}
+          args:
+          - bench
+          - worker
+          - --queue
+          - long,default,short
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          livenessProbe:
+            {{- if .Values.worker.long.livenessProbe.override }}
+            {{- toYaml .Values.worker.long.livenessProbe.probe | nindent 12 }}
+            {{- else }}
+            {{ tpl .Values.worker.healthProbe . | nindent 12 }}
+            {{- end }}
+          readinessProbe:
+            {{- if .Values.worker.long.readinessProbe.override }}
+            {{- toYaml .Values.worker.long.readinessProbe.probe | nindent 12 }}
+            {{- else }}
+            {{ tpl .Values.worker.healthProbe . | nindent 12 }}
+            {{- end }}
+          resources:
+            {{- toYaml .Values.worker.long.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+          - name: sites-dir
+            mountPath: /home/frappe/frappe-bench/sites
+          - name: logs
+            mountPath: /home/frappe/frappe-bench/logs
+      {{- if .Values.worker.long.sidecars }}
+        {{- toYaml .Values.worker.long.sidecars | nindent 8 }}
+      {{- end }}
+      volumes:
+        - name: sites-dir
+          {{- if .Values.persistence.worker.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.worker.existingClaim }}
+            claimName: {{ .Values.persistence.worker.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: logs
+          {{- if .Values.persistence.logs.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.logs.existingClaim }}
+            claimName: {{ .Values.persistence.logs.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}-logs
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.worker.long.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    {{- with .Values.worker.long.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+    {{- with .Values.worker.long.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}

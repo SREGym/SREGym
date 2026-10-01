@@ -1,0 +1,40 @@
+{{- if .Values.worker.default.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "erpnext.fullname" . }}-worker-d
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "erpnext.fullname" . }}-worker-d
+  minReplicas: {{ .Values.worker.default.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.default.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.worker.default.autoscaling.targetCPU }}
+    - type: Resource
+      resource:
+        name: cpu
+        {{- if semverCompare "<1.23-0" .Capabilities.KubeVersion.GitVersion }}
+        targetAverageUtilization: {{ .Values.worker.default.autoscaling.targetCPU }}
+        {{- else }}
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.default.autoscaling.targetCPU }}
+        {{- end }}
+    {{- end }}
+    {{- if .Values.worker.default.autoscaling.targetMemory }}
+    - type: Resource
+      resource:
+        name: memory
+        {{- if semverCompare "<1.23-0" .Capabilities.KubeVersion.GitVersion }}
+        targetAverageUtilization: {{ .Values.worker.default.autoscaling.targetMemory }}
+        {{- else }}
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.default.autoscaling.targetMemory }}
+        {{- end }}
+    {{- end }}
+{{- end }}

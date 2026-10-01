@@ -1,0 +1,20 @@
+apiVersion: v2
+name: frappe-spine
+description: |
+  SRE-World Frappe substrate — overlay of the upstream frappe/helm ERPNext
+  chart plus the operator-shell foothold (main), out-of-band loadgen with in-pod
+  grader, observability MCP + Prometheus/Loki stack, and per-workload
+  frappe-admin sidecars. Peer to substrate/chart (Slack-spine) per DECISIONS D16.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+# Vendored upstream chart lives at charts/erpnext/ (Helm's standard subchart
+# location; no download at install time). Version pin is exact to catch
+# upstream drift on rebuilds.
+dependencies:
+  - name: erpnext
+    version: "8.0.65"
+    # Upstream chart imports its own transitive subcharts (bitnami mariadb,
+    # postgres, redis) — those .tgz files are cached in charts/erpnext/charts/,
+    # so `helm dependency build` is not needed at install time.

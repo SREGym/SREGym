@@ -1,0 +1,72 @@
+{{- if and .Values.sregym.enabled .Values.sregym.toolbox.enabled }}
+# ── SREGym port: operator toolbox ────────────────────────────────────────────
+# Replaces the Harbor `main` foothold (egress proxy, DNS filter, agent freezer
+# and grader capability are not deployed under SREGym). It keeps the operator
+# repair surface the Incident Arena tasks were designed around: psql with the
+# privileged DSN, curl, and the restart-svc.sh / reconfigure-infra.sh helpers
+# that drive each service's /admin API. The episode-control commands are
+# replaced with stubs because SREGym collects diagnoses through its own
+# submission API and never ends the load generator's schedule.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ops-toolbox-stubs
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: ops-toolbox
+data:
+  disabled-command: |
+    #!/bin/sh
+    echo "$(basename "$0") is not used in this environment; report findings through the SREGym submission API." >&2
+    exit 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ops-toolbox
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: ops-toolbox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: ops-toolbox
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: ops-toolbox
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      containers:
+        - name: toolbox
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sleep", "infinity"]
+          env:
+            - name: DB_ADMIN_DSN
+              value: "postgresql://{{ .Values.postgres.adminRole }}:{{ .Values.postgres.adminPassword }}@db:5432/{{ .Values.postgres.database }}"
+            - name: DB_APP_DSN
+              value: "postgresql://{{ .Values.postgres.appUser }}:{{ .Values.postgres.appPassword }}@db:5432/{{ .Values.postgres.database }}"
+            - name: MAINTENANCE_API_URL
+              value: "http://db-maintenance:8081/v1/maintenance"
+            - name: SEQUENCER_CONFIG_BROKER_URL
+              value: "http://sequencer-config-broker:{{ .Values.runtimeConfigBroker.port }}"
+          volumeMounts:
+            - name: stubs
+              mountPath: /usr/local/bin/submit_incident_report
+              subPath: disabled-command
+            - name: stubs
+              mountPath: /usr/local/bin/declare_repair_complete
+              subPath: disabled-command
+          resources:
+            requests: {cpu: "20m", memory: "32Mi"}
+            limits: {cpu: "500m", memory: "256Mi"}
+      volumes:
+        - name: stubs
+          configMap:
+            name: ops-toolbox-stubs
+            defaultMode: 0555
+{{- end }}

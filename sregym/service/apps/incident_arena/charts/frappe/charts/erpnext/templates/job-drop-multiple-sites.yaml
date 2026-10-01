@@ -1,0 +1,139 @@
+{{- if and .Values.jobs.dropMultipleSites.enabled (not .Values.jobs.dropSite.enabled) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  {{- if .Values.jobs.dropMultipleSites.jobName }}
+  name: {{ .Values.jobs.dropMultipleSites.jobName }}
+  {{- else }}
+  name: {{ template "erpnext.fullname" . }}-drop-sites-{{ now | date "20060102150405" }}
+  {{- end }}
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.jobs.dropMultipleSites.backoffLimit }}
+  template:
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ template "erpnext.serviceAccountName" $ }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: drop-sites
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["bash", "-c"]
+        args:
+          - >
+            {{- range $site := .Values.jobs.dropMultipleSites.sites }}
+              bench drop-site {{ $site.name }} --root-login=$DB_ROOT_USER --root-password=$DB_ROOT_PASSWORD --archived-sites-path=archived_sites --no-backup {{- if $.Values.jobs.dropMultipleSites.forced }} --force{{- end }};
+            {{- end }}
+
+        env:
+          - name: DB_HOST
+            {{- if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+            value: {{ .Release.Name }}-mariadb-subchart
+            {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+            value: {{ .Release.Name }}-postgresql-subchart
+            {{- else if (get .Values "mariadb-sts").enabled }}
+            value: {{ include "erpnext.fullname" . }}-mariadb-sts
+            {{- else if (get .Values "postgresql-sts").enabled }}
+            value: {{ include "erpnext.fullname" . }}-postgresql-sts
+            {{- else }}
+            value: "{{ .Values.dbHost }}"
+            {{- end }}
+          - name: DB_ROOT_USER
+            {{- if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+            value: "root"
+            {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+            value: "postgres"
+            {{- else }}
+            value: "{{ .Values.dbRootUser }}"
+            {{- end }}
+          - name: DB_ROOT_PASSWORD
+            {{- if (get .Values "mariadb-sts").enabled }}
+            valueFrom:
+              secretKeyRef:
+                key: mariadb-root-password
+                name: {{ template "erpnext.fullname" . }}
+            {{- else if (get .Values "postgresql-sts").enabled }}
+            valueFrom:
+              secretKeyRef:
+                key: postgres-password
+                name: {{ template "erpnext.fullname" . }}
+            {{- else if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Release.Name }}-mariadb-subchart
+                key: mariadb-root-password
+            {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Release.Name }}-postgresql-subchart
+                key: postgres-password
+            {{- else if .Values.dbExistingSecret }}
+            valueFrom:
+              secretKeyRef:
+                key: {{ .Values.dbExistingSecretPasswordKey }}
+                name: {{ .Values.dbExistingSecret }}
+            {{- else if .Values.dbRootPassword }}
+            valueFrom:
+              secretKeyRef:
+                key: db-root-password
+                name: {{ template "erpnext.fullname" . }}
+            {{- else }}
+            valueFrom:
+              secretKeyRef:
+                key: db-root-password
+                name: {{ template "erpnext.fullname" . }}
+            {{- end }}
+        resources:
+          {{- toYaml .Values.jobs.dropMultipleSites.resources | nindent 12 }}
+        securityContext:
+          {{- toYaml $.Values.securityContext | nindent 12 }}
+        volumeMounts:
+          - name: sites-dir
+            mountPath: /home/frappe/frappe-bench/sites
+          - name: logs
+            mountPath: /home/frappe/frappe-bench/logs
+      restartPolicy: Never
+      volumes:
+        - name: sites-dir
+          {{- if .Values.persistence.worker.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.worker.existingClaim }}
+            claimName: {{ .Values.persistence.worker.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: logs
+          {{- if .Values.persistence.logs.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.logs.existingClaim }}
+            claimName: {{ .Values.persistence.logs.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}-logs
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.jobs.dropMultipleSites.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jobs.dropMultipleSites.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jobs.dropMultipleSites.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

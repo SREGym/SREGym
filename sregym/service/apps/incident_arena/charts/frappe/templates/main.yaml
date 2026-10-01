@@ -1,0 +1,402 @@
+{{- if include "frappe-spine.enabled" (dict "root" $ "key" "main") }}
+{{- $reportVocabulary := .Values.agentReport.vocabulary | default (dict) }}
+{{- $reportServices := $reportVocabulary.services | default (list) }}
+{{- $reportComponents := $reportVocabulary.components | default (list) }}
+{{- if or $reportServices $reportComponents }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: main-report-vocabulary
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+data:
+  vocabulary.txt: |
+    services:
+    {{- range $reportServices }}
+      - {{ . }}
+    {{- end }}
+    components:
+    {{- range $reportComponents }}
+      - {{ . }}
+    {{- end }}
+---
+{{- end }}
+{{- if include "frappe-spine.enabled" (dict "root" $ "key" "loadgen") }}
+# The grader bearer capability never enters the agent's exec container.  A
+# separate root-only sidecar owns it and forwards only the three fixed verifier
+# operations over a mode-0600 Unix socket.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grader-broker
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+data:
+  grader_broker.py: |
+{{ .Files.Get "files/grader_broker.py" | indent 4 }}
+---
+{{- end }}
+# ── main: the agent's operator shell + foothold pod (Frappe substrate) ──────
+# Peer to substrate/chart/templates/main.yaml. The Helm backend resolves the
+# agent's single foothold pod via main_selector (task.toml pins it to
+# component=main) and exec/cp ONLY here. main holds the config-inspect/edit
+# scripts (restart-svc.sh, submit_incident_report, reconfigure-infra.sh)
+# that call each Frappe workload's frappe-admin sidecar over cluster DNS
+# (the agent has NO kubeconfig/kubectl).
+# automountServiceAccountToken:false → the foothold cannot list/get cluster objects.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: main
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: main
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: main
+  template:
+    metadata:
+      labels:
+        {{- include "frappe-spine.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: main
+    spec:
+      serviceAccountName: main
+      automountServiceAccountToken: false
+      # Kubernetes injects every Service in the namespace into every pod's env
+      # as <SERVICE>_SERVICE_HOST / _PORT. Service names carry the Helm release,
+      # which is the scenario id, which names the fault: agents were reading
+      # HB_FRAPPE_03F1_CONNECTION_CAP_*_SERVICE_HOST out of `env` and quoting it
+      # as their diagnosis (147 hits across one experiment's transcripts). The
+      # foothold reaches services by their fixed svc-* DNS names; it needs none
+      # of these. leak_probe enforces this stays off.
+      enableServiceLinks: false
+      shareProcessNamespace: true
+      {{- include "frappe-spine.confinedDns" $ | nindent 6 }}
+      # Harbor uploads the oracle and verifier as host-created directories. A
+      # root-owned 0700 transfer directory makes the fixed /solution/solve.sh
+      # path unexecutable by uid 10001, so initialize explicit writable roots
+      # and immutable dispatchers before the foothold starts. Real agents only
+      # see the generic dispatcher; no golden directory is uploaded for them.
+      initContainers:
+        {{- if .Values.platformTools.enabled }}
+        {{- $toolsImage := printf "ghcr.io/abundant-ai/sre-world/codex-tools@%s" .Values.platformTools.digest }}
+        {{- if and (ne .Values.global.imagePullPolicy "Never") (ne $toolsImage .Values.platformTools.image) }}
+        {{- fail "hosted platformTools.image must exactly equal the locked ghcr.io/abundant-ai/sre-world/codex-tools@digest identity" }}
+        {{- end }}
+        - name: codex-tools
+          image: {{ required "platformTools.image is required" .Values.platformTools.image | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-ceu"]
+          args:
+            - |
+              cp -R /opt/harbor-agent-tools/. /staged-tools/
+              chmod -R a+rX /staged-tools
+              export PATH=/staged-tools/bin:/usr/local/bin:/usr/bin:/bin
+              command -v curl >/dev/null
+              command -v rg >/dev/null
+              command -v codex >/dev/null
+              codex --version
+              rg --version >/dev/null
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: codex-tools
+              mountPath: /staged-tools
+            - name: codex-tools-no-service-account
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+        {{- end }}
+        - name: main-permissions
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - sh
+            - -ceu
+            - |
+              install -d -m 1777 /tmp
+              install -d -m 0711 /home/agent
+              install -d -m 0755 /logs/agent
+              install -d -m 0700 /logs/verifier /tests
+              install -d -m 0755 /solution
+              cat > /solution/solve.sh <<'HARBOR_SOLUTION_DISPATCH'
+              #!/bin/sh
+              set -eu
+              candidate=
+              attempt=0
+              while [ "$attempt" -lt 15 ]; do
+                set -- /solution/harbor_*/solve.sh
+                if [ "$#" -eq 1 ] && [ -x "$1" ]; then
+                  candidate="$1"
+                  break
+                fi
+                attempt=$((attempt + 1))
+                sleep 1
+              done
+              [ -n "$candidate" ] || {
+                echo "solution dispatcher: expected exactly one /solution/harbor_*/solve.sh" >&2
+                exit 1
+              }
+              cd "$(dirname "$candidate")"
+              exec "$candidate"
+              HARBOR_SOLUTION_DISPATCH
+              chmod 0755 /solution/solve.sh
+              cat > /tests/test.sh <<'HARBOR_TEST_DISPATCH'
+              #!/bin/sh
+              set -eu
+              set -- /tests/harbor_*/test.sh
+              [ "$#" -eq 1 ] && [ -f "$1" ] || {
+                echo "test dispatcher: expected exactly one /tests/harbor_*/test.sh" >&2
+                exit 1
+              }
+              candidate="$1"
+              cd "$(dirname "$candidate")"
+              exec "$candidate"
+              HARBOR_TEST_DISPATCH
+              chmod 0700 /tests/test.sh
+              chown agent:agent /home/agent /logs/agent
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN"]
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: agent-home, mountPath: /home/agent}
+            - {name: tests, mountPath: /tests}
+            - {name: logs, mountPath: /logs}
+            - {name: solution, mountPath: /solution}
+      containers:
+        - name: main
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          # Long-lived idle shell: the agent's exec lands here while the Frappe
+          # SUT serves in svc-frappe-* pods. The image MUST ship bash + tar
+          # (kubectl exec/cp) + mariadb-client (direct DB inspection).
+          command: ["sh", "-ceu"]
+          args:
+            - |
+              test -w /tmp
+              test "$(stat -c %a /home/agent)" = 711
+              test -d /logs/verifier
+              test -d /tests
+              # Harbor stages an Oracle solution through a host temporary
+              # directory whose 0700 mode is preserved by kubectl cp. The
+              # unprivileged agent must not receive FOWNER, so this root-owned
+              # pod supervisor makes only that one trusted solution path
+              # traversable/executable. The dispatcher above waits for this
+              # bounded handoff; real-agent runs never receive a candidate.
+              (
+                while :; do
+                  set -- /solution/harbor_*/solve.sh
+                  if [ "$#" -eq 1 ] && [ -f "$1" ]; then
+                    chmod 0755 "$(dirname "$1")" "$1"
+                  fi
+                  sleep 1
+                done
+              ) &
+              exec sleep infinity
+          securityContext:
+            # Keep the SUT separate: only the Harbor foothold is writable while
+            # root installs OS prerequisites, before the harness runs as agent.
+            readOnlyRootFilesystem: {{ .Values.main.readOnlyRootFilesystem }}
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "FOWNER", "SETUID", "SETGID"]
+          env:
+            {{- if .Values.platformTools.enabled }}
+            - name: PATH
+              value: "/opt/harbor-agent-tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            {{- end }}
+            # Never preserve the host runner's uid/gid during kubectl cp into
+            # this capability-dropped container.
+            - name: TAR_OPTIONS
+              value: "--no-same-owner"
+            - name: AGENT_EGRESS_PROXY_PORT
+              value: {{ .Values.agentEgressProxy.port | quote }}
+            - name: HTTP_PROXY
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: HTTPS_PROXY
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: http_proxy
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: https_proxy
+              value: "http://agent-egress-proxy:{{ .Values.agentEgressProxy.port }}"
+            - name: NO_PROXY
+              value: {{ .Values.agentEgressProxy.noProxy | quote }}
+            - name: no_proxy
+              value: {{ .Values.agentEgressProxy.noProxy | quote }}
+            - name: OBS_MCP_URL
+              value: "http://obs-mcp:8000/mcp"
+            {{- if or $reportServices $reportComponents }}
+            - name: REPORT_VOCABULARY_FILE
+              value: /etc/sre-world/report-vocabulary/vocabulary.txt
+            {{- end }}
+            # Privileged MariaDB DSN for direct DB inspection + corrective action
+            # (Phase 5 max_connections repair path). Peer of Slack's DB_ADMIN_DSN.
+            - name: DB_ADMIN_DSN
+              value: "mysql://root:{{ index .Values.erpnext "mariadb-subchart" "auth" "rootPassword" }}@svc-mariadb:3306/{{ index .Values.erpnext "mariadb-subchart" "auth" "database" }}"
+          readinessProbe:
+            exec:
+              command: ["true"]
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.main.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.platformTools.enabled }}
+            - name: codex-tools
+              mountPath: /opt/harbor-agent-tools
+              readOnly: true
+            {{- end }}
+            - {name: tmp, mountPath: /tmp}
+            - {name: agent-home, mountPath: /home/agent}
+            - {name: tests, mountPath: /tests}
+            - {name: logs, mountPath: /logs}
+            - {name: solution, mountPath: /solution}
+            - name: agent-egress-cutover-token
+              mountPath: /run/agent-egress-cutover
+              readOnly: true
+            - name: agent-egress-cutover-script
+              mountPath: /usr/local/bin/set-agent-egress-phase
+              subPath: set-agent-egress-phase
+              readOnly: true
+            {{- if include "frappe-spine.enabled" (dict "root" $ "key" "loadgen") }}
+            - name: verifier-broker
+              mountPath: /run/verifier-broker
+              readOnly: true
+            {{- end }}
+            {{- if or $reportServices $reportComponents }}
+            - name: report-vocabulary
+              mountPath: /etc/sre-world/report-vocabulary
+              readOnly: true
+            {{- end }}
+        {{- if include "frappe-spine.enabled" (dict "root" $ "key" "loadgen") }}
+        - name: agent-freezer
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python3", "/usr/local/lib/sre-world/agent_freezer.py"]
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["KILL"]
+          env:
+            - name: GRADER_ACCESS_TOKEN_FILE
+              value: /run/grader-access/token
+            # Compatibility with already-published main images: disable their
+            # retired uid-observation opener. The Harbor healthcheck owns t0.
+            - name: EPISODE_START_ENABLED
+              value: "0"
+          ports:
+            - name: freeze
+              containerPort: 9101
+          volumeMounts:
+            - name: grader-access
+              mountPath: /run/grader-access
+              readOnly: true
+        {{- end }}
+        {{- if include "frappe-spine.enabled" (dict "root" $ "key" "loadgen") }}
+        - name: grader-broker
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python3", "/opt/grader-broker/grader_broker.py"]
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: GRADER_ACCESS_TOKEN_FILE
+              value: /run/grader-access/token
+            - name: GRADER_BROKER_SOCKET
+              value: /run/verifier-broker/grader.sock
+          volumeMounts:
+            - name: grader-broker-code
+              mountPath: /opt/grader-broker
+              readOnly: true
+            - name: grader-access
+              mountPath: /run/grader-access
+              readOnly: true
+            - name: verifier-broker
+              mountPath: /run/verifier-broker
+        {{- end }}
+      volumes:
+        {{- if .Values.platformTools.enabled }}
+        - name: codex-tools
+          emptyDir: {}
+        - name: codex-tools-no-service-account
+          emptyDir: {}
+        {{- end }}
+        - {name: tmp, emptyDir: {}}
+        - {name: agent-home, emptyDir: {}}
+        - {name: tests, emptyDir: {}}
+        - {name: logs, emptyDir: {}}
+        - {name: solution, emptyDir: {}}
+        - name: agent-egress-cutover-token
+          secret:
+            secretName: agent-egress-cutover-auth
+            defaultMode: 0400
+        - name: agent-egress-cutover-script
+          configMap:
+            name: agent-egress-cutover
+            defaultMode: 0555
+        {{- if include "frappe-spine.enabled" (dict "root" $ "key" "loadgen") }}
+        - name: grader-broker-code
+          configMap:
+            name: grader-broker
+            defaultMode: 0444
+        - name: verifier-broker
+          emptyDir: {}
+        - name: grader-access
+          secret:
+            secretName: loadgen-grader-access
+            # Harbor runs the verifier as root and the agent as uid `agent`.
+            defaultMode: 0400
+        {{- end }}
+        {{- if or $reportServices $reportComponents }}
+        - name: report-vocabulary
+          configMap:
+            name: main-report-vocabulary
+            defaultMode: 0444
+        {{- end }}
+{{- if include "frappe-spine.enabled" (dict "root" $ "key" "loadgen") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-freezer
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  selector:
+    app.kubernetes.io/component: main
+  ports:
+    - name: freeze
+      port: 9101
+      targetPort: freeze
+{{- end }}
+{{- end }}

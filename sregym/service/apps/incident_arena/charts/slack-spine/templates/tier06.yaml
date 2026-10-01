@@ -1,0 +1,782 @@
+# ── tier-06 data: db (Postgres StatefulSet + PVC) and redis ──────────────────
+{{- if include "slack.enabled" (dict "root" $ "key" "db") }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: db
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: db
+spec:
+  clusterIP: None          # headless: stable identity for the StatefulSet
+  selector:
+    app.kubernetes.io/component: db
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+{{- if .Values.postgres.adminEnabled }}
+    - name: admin
+      port: 8080
+      targetPort: admin
+{{- end }}
+{{- if .Values.components.maintenanceController.enabled }}
+    - name: maintenance
+      port: 8081
+      targetPort: maintenance
+{{- end }}
+---
+{{- if .Values.components.maintenanceController.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-maintenance
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: maintenance-controller
+spec:
+  selector:
+    app.kubernetes.io/component: db
+  ports:
+    - name: http
+      port: 8081
+      targetPort: maintenance
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-init
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: db
+data:
+  # db-init: stock first-boot provisioning hook. Postgres runs *.sql in
+  # /docker-entrypoint-initdb.d (lexical order) on initdb of an empty PVC. This single
+  # ConfigMap provisions BOTH roles so the CLEAN chart is role-identical to the FAULTED
+  # chart (whose fault-init initContainer initdb's the PVC first, making the main
+  # entrypoint skip this dir; fault-init-db.sh re-creates the same two roles there).
+  #
+  # 00-roles.sql: the privileged operator role (svc_admin) the agent's DB_ADMIN_DSN +
+  # the postgres-exporter connect as. SUPERUSER is REQUIRED for the Stage-A repair
+  # (`ALTER SYSTEM SET autovacuum=on` + pg_terminate_backend + VACUUM). Provisioned in
+  # BOTH clean + faulted charts so DB_ADMIN_DSN is always valid (never a fault tell).
+  00-roles.sql: |
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '{{ .Values.postgres.adminRole }}') THEN
+        CREATE ROLE {{ .Values.postgres.adminRole }} LOGIN SUPERUSER PASSWORD '{{ .Values.postgres.adminPassword }}';
+      END IF;
+    END
+    $$;
+    GRANT ALL PRIVILEGES ON DATABASE {{ .Values.postgres.database }} TO {{ .Values.postgres.adminRole }};
+  # 10-app-role.sql: the least-privilege application role the services + agent connect as.
+  # NOSUPERUSER => it cannot CREATE OR REPLACE in pg_catalog (cannot shadow
+  # pg_catalog.pg_sleep/md5); with the pg_catalog-qualified /work query, the H2
+  # pg_sleep-shadow reward-hack is closed. Keeps CONNECT + USAGE/CREATE on schema public
+  # for the services' CREATE TABLE. (Runs after 00-roles.sql by lexical filename order.)
+  10-app-role.sql: |
+    DO $$
+    BEGIN
+      IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ .Values.postgres.appUser }}') THEN
+        CREATE ROLE {{ .Values.postgres.appUser }} LOGIN PASSWORD '{{ .Values.postgres.appPassword }}'
+          NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+      END IF;
+    END
+    $$;
+    GRANT CONNECT ON DATABASE {{ .Values.postgres.database }} TO {{ .Values.postgres.appUser }};
+    GRANT USAGE, CREATE ON SCHEMA public TO {{ .Values.postgres.appUser }};
+    -- Bound row-lock waits at the role level (production hygiene + it fences a leaked-lock
+    -- fault): a write that cannot acquire a lock within 2s errors fast and RELEASES its
+    -- connection instead of hanging forever. Healthy sends never wait this long, so behavior
+    -- is byte-identical; but the 09-I1 seq-lock leak's blocked writers now fail in 2s (the
+    -- intended 503 symptom) instead of piling up and choking the Node event loop (which
+    -- made even the static /healthz unresponsive under the fault).
+    ALTER ROLE {{ .Values.postgres.appUser }} SET lock_timeout = '2s';
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: db
+spec:
+  serviceName: db
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: db
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: db
+    spec:
+      {{- include "slack.confinedDns" $ | nindent 6 }}
+{{- if .Values.postgres.adminEnabled }}
+      shareProcessNamespace: true
+{{- end }}
+      {{- if or .Values.faultInit.db.enabled .Values.postgres.adminEnabled }}
+      initContainers:
+      {{- if .Values.faultInit.db.enabled }}
+        - name: fault-init
+          image: {{ .Values.images.postgres | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+            - {name: POSTGRES_USER, value: {{ .Values.postgres.user | quote }}}
+            - {name: POSTGRES_PASSWORD, value: {{ .Values.postgres.password | quote }}}
+            - {name: POSTGRES_DB, value: {{ .Values.postgres.database | quote }}}
+            # int64 first: `| quote` alone renders a large int (e.g. 1000000) through a
+            # float as "1e+06", which the fault-init script's bash arithmetic cannot
+            # parse. int64 forces a plain decimal string before quoting.
+            - {name: RESET_OFFSET, value: {{ .Values.faultInit.db.resetXidOffsetFromStop | int64 | quote }}}
+            - {name: SEED_ROWS, value: {{ .Values.faultInit.db.seedRows | int64 | quote }}}
+            # TEMPORAL-EMERGENCE headroom (06-F2b). >0 (with pin.kind=prepared) manufactures
+            # NEXT = STOP - HEADROOM_XIDS so the cluster boots HEALTHY (just below the stop)
+            # and the xid-burner trips wraparound mid-episode. 0 keeps the legacy from-t0
+            # path (NEXT = STOP + RESET_OFFSET). int64-then-quote: same large-int float hazard.
+            - {name: HEADROOM_XIDS, value: {{ .Values.faultInit.db.headroomXids | int64 | quote }}}
+            - {name: ADMIN_ROLE, value: {{ .Values.postgres.adminRole | quote }}}
+            - {name: ADMIN_PASSWORD, value: {{ .Values.postgres.adminPassword | quote }}}
+            - {name: APP_USER, value: {{ .Values.postgres.appUser | quote }}}
+            - {name: APP_PASSWORD, value: {{ .Values.postgres.appPassword | quote }}}
+            # Orphaned-prepared-xact pin (06-F2b). DEFAULT-OFF: pin.kind="" leaves the
+            # fault-init script's legacy path untouched (F2a/F2c). When pin.kind="prepared"
+            # the local postmaster runs with max_prepared_transactions so PREPARE (and the
+            # post-resetwal RECOVERY) works. int64-then-quote: same large-int float hazard.
+            - {name: PIN_KIND, value: {{ .Values.faultInit.db.pin.kind | quote }}}
+            - {name: PIN_GID, value: {{ .Values.faultInit.db.pin.gid | quote }}}
+            # PIN_OWNER (06-F2b): a message-named DB role the orphan is PREPAREd under
+            # (SET ROLE), so pg_prepared_xacts.owner traces it to the message coordinator.
+            # "" -> PREPARE as the bootstrap superuser (legacy F2a/F2c: inert).
+            - {name: PIN_OWNER, value: {{ .Values.faultInit.db.pin.owner | default "" | quote }}}
+            - {name: MAX_PREPARED_TX, value: {{ .Values.postgres.maxPreparedTransactions | int64 | quote }}}
+          command: ["/bin/bash","-c"]
+          args:
+            - {{ .Files.Get "files/fault-init-db.sh" | quote }}
+          volumeMounts:
+            - {name: pgdata, mountPath: /var/lib/postgresql/data}
+      {{- end }}
+      {{- if .Values.postgres.adminEnabled }}
+        - name: init-runtime-config
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              printf '%s\n' '{{ .Values.postgres.maxConnections }}' > /runtime/max_connections
+              chmod 0666 /runtime/max_connections
+          volumeMounts:
+            - {name: runtime-config, mountPath: /runtime}
+      {{- end }}
+      {{- end }}
+      containers:
+        - name: postgres
+          image: {{ .Values.images.postgres | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+{{- if .Values.postgres.adminEnabled }}
+          command: ["sh", "-c"]
+          args: ["exec docker-entrypoint.sh postgres -c max_connections=$(cat /runtime/max_connections) -c autovacuum={{ .Values.postgres.autovacuum }} -c max_prepared_transactions={{ .Values.postgres.maxPreparedTransactions }}"]
+{{- else }}
+          args:
+            - "-c"
+            - "max_connections={{ .Values.postgres.maxConnections }}"
+            - "-c"
+            - "autovacuum={{ .Values.postgres.autovacuum }}"
+            # max_prepared_transactions: the LIVE cluster must run with this >0 (06-F2b)
+            # so the orphaned PREPARED (2PC) transaction manufactured by fault-init
+            # RECOVERS into the running cluster and keeps pinning datfrozenxid. Defaults
+            # to 0 (clean chart + F2a/F2c unaffected: Postgres' own default is 0).
+            - "-c"
+            - "max_prepared_transactions={{ .Values.postgres.maxPreparedTransactions }}"
+{{- end }}
+          env:
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.user | quote }}
+            - name: POSTGRES_PASSWORD
+              value: {{ .Values.postgres.password | quote }}
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.database | quote }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.postgres.user }}", "-d", "{{ .Values.postgres.database }}"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+            - name: db-init
+              mountPath: /docker-entrypoint-initdb.d
+              readOnly: true
+{{- if .Values.postgres.adminEnabled }}
+            - {name: runtime-config, mountPath: /runtime}
+{{- end }}
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "db") | nindent 12 }}
+{{- if .Values.postgres.adminEnabled }}
+        - name: config-admin
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "/app/db_admin.py"]
+          env:
+            - {name: ADMIN_CONFIG_PATH, value: /runtime/max_connections}
+            - {name: ADMIN_CONFIG_KEY, value: max_connections}
+            - {name: ADMIN_PROCESS_MATCH, value: "postgres -c"}
+            - {name: ADMIN_RELOAD_SIGNAL, value: SIGTERM}
+          ports: [{name: admin, containerPort: 8080}]
+          volumeMounts: [{name: runtime-config, mountPath: /runtime}]
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "default") | nindent 12 }}
+{{- end }}
+{{- if .Values.components.maintenanceController.enabled }}
+        - name: maintenance-controller
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "/app/maintenance_controller.py"]
+          env:
+            - name: MAINTENANCE_DB_DSN
+              value: "postgresql://{{ .Values.postgres.adminRole }}:{{ .Values.postgres.adminPassword }}@127.0.0.1:5432/{{ .Values.postgres.database }}"
+            - name: MAINTENANCE_ENABLED
+              value: {{ .Values.maintenanceController.enabled | quote }}
+            - name: MAINTENANCE_PERIOD_S
+              value: {{ .Values.maintenanceController.periodS | quote }}
+            - name: MAINTENANCE_OFFSET_S
+              value: {{ .Values.maintenanceController.offsetS | quote }}
+            - name: MAINTENANCE_DURATION_S
+              value: {{ .Values.maintenanceController.durationS | quote }}
+          ports: [{name: maintenance, containerPort: 8081}]
+          readinessProbe:
+            httpGet: {path: /healthz, port: maintenance}
+            initialDelaySeconds: 3
+            periodSeconds: 3
+            timeoutSeconds: {{ .Values.maintenanceController.readinessProbeTimeoutSeconds }}
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "maintenanceController") | nindent 12 }}
+{{- end }}
+      volumes:
+        - name: db-init
+          configMap:
+            name: db-init
+{{- if .Values.postgres.adminEnabled }}
+        - name: runtime-config
+          emptyDir: {}
+{{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage | quote }}
+---
+# postgres-config: the cluster-level knob set rendered as a diffable ConfigMap. The
+# verifier renders+diffs this (config_before) against the LIVE `SHOW autovacuum`
+# (config_after) so the Stage-A minimality key is exactly `postgres.autovacuum`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+data:
+  postgres.yaml: |
+    postgres:
+      autovacuum: {{ .Values.postgres.autovacuum | quote }}
+{{- end }}
+{{- if and .Values.faultInit.db.enabled .Values.faultInit.db.holdback.enabled }}
+---
+# holdback-seeder: Stage-B deterministic seed of the idle-in-transaction holdback that
+# pins backend_xmin. application_name encodes the leaking role so client_addr->pod->role
+# is traceable in pg_stat_activity. The Job re-runs (backoffLimit/OnFailure) if the agent
+# kills the session but does NOT restart svc-message — modeling a service that KEEPS
+# re-leaking. (svc-message itself also re-leaks via LEAK_IDLE_TXN; this Job guarantees
+# the holdback exists even before first traffic.)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: holdback-seeder
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: holdback-seeder
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: holdback-seeder
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: holdback
+          image: {{ .Values.images.postgres | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - {name: PGPASSWORD, value: {{ .Values.postgres.password | quote }}}
+            - {name: HB_ROLE, value: {{ .Values.faultInit.db.holdback.dsnRole | quote }}}
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              set -euo pipefail
+              until pg_isready -h db -U {{ .Values.faultInit.db.holdback.dsnRole }} -d {{ .Values.postgres.database }}; do sleep 2; done
+              psql "host=db user=$HB_ROLE dbname={{ .Values.postgres.database }} application_name=svc-{{ .Values.faultInit.db.holdback.role }}-txn" \
+                   -c "BEGIN; SELECT 1; SELECT pg_sleep(86400);"
+{{- end }}
+{{- if and .Values.faultInit.db.enabled .Values.faultInit.db.burner.enabled }}
+---
+# xid-burner: the TEMPORAL-EMERGENCE trip mechanism (06-F2b). fault-init manufactures the
+# counter JUST BELOW the wraparound stop (NEXT = STOP - headroomXids) so the cluster boots
+# HEALTHY and early writes succeed. This Deployment then, AFTER the SUT is healthy + a
+# startup delay, BURNS the remaining headroom of transaction-ids so age(datfrozenxid)
+# climbs to the hardcoded stop point and the shared db starts refusing writes MID-EPISODE
+# under load (the faithful "fault triggers as load runs" presentation). The loadgen's own
+# WORK_WRITES burn ~tens of XIDs/sec — far too slow to trip within the agent window — so a
+# deterministic burner is used: each BEGIN/EXCEPTION subtransaction in the DO block assigns
+# one XID when its INSERT into the burner-OWNED table succeeds. Once age reaches the stop
+# the failsafe refuses the INSERTs (which then no longer assign XIDs), so age plateaus at
+# the stop — the burner detects that (age >= stop) and stops; the cluster stays tripped.
+#
+# A DEPLOYMENT (not a Job): `helm install --wait` waits for Jobs to reach Complete, which
+# would hang the deploy for the whole burn; a Deployment is "Ready" as soon as its pod is
+# Running (no readiness probe), so deploy converges fast and the burn proceeds in the
+# background. The burn is INFRA, never an agent foothold: the burner pod is unreachable
+# from the agent and its stdout carries only neutral "age=N / burning" progress lines
+# (no wraparound wording), so it is not an answer-key tell.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xid-burner
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: xid-burner
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: xid-burner
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: xid-burner
+    spec:
+      containers:
+        - name: xid-burner
+          image: {{ .Values.images.postgres | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            # Connect as the least-privilege APP role (same role the services use) — it has
+            # CREATE on schema public + DML, so it can create its own burn table and assign
+            # XIDs by INSERTing into it over TCP. (The bootstrap superuser's scram password
+            # is NOT the app password, so do NOT use POSTGRES_USER here.)
+            - {name: PGPASSWORD, value: {{ .Values.postgres.appPassword | quote }}}
+            - {name: PGUSER, value: {{ .Values.postgres.appUser | quote }}}
+            - {name: PGDATABASE, value: {{ .Values.postgres.database | quote }}}
+            # Total XIDs to burn (>= headroomXids so age reaches the stop). Chunked so we
+            # can observe the climb. Startup delay holds off until the SUT is healthy so the
+            # trip lands MID-EPISODE, not at t0 (which would crash-loop the app pre-agent).
+            - {name: BURN_XIDS, value: {{ .Values.faultInit.db.burner.burnXids | int64 | quote }}}
+            - {name: BURN_CHUNK, value: {{ .Values.faultInit.db.burner.chunkXids | int64 | quote }}}
+            - {name: BURN_START_DELAY_S, value: {{ .Values.faultInit.db.burner.startDelaySeconds | int64 | quote }}}
+          command: ["/bin/bash","-c"]
+          args:
+            - |
+              set -uo pipefail
+              echo "[xid-burner] waiting for db + svc-message to be reachable before tripping"
+              # postgres:16 has no curl/wget; use pg_isready for the db and a bash /dev/tcp
+              # port-open probe for svc-message (helm --wait already gates the agent phase on
+              # svc-message readiness, so this is belt-and-suspenders to keep the trip post-boot).
+              until pg_isready -h db -U "$PGUSER" -d "$PGDATABASE" >/dev/null 2>&1; do sleep 2; done
+              until (exec 3<>/dev/tcp/svc-message/8000) 2>/dev/null; do echo "[xid-burner] waiting for svc-message"; sleep 2; done
+              echo "[xid-burner] SUT reachable; holding $BURN_START_DELAY_S s so the trip lands mid-episode"
+              sleep "$BURN_START_DELAY_S"
+              PSQL() { psql -X -q -v ON_ERROR_STOP=0 -h db -U "$PGUSER" -d "$PGDATABASE" "$@"; }
+              # FAIL LOUDLY if the burner cannot connect / cannot create its burn table — a
+              # silently-failing burner would never trip the fault (a non-fault would ship).
+              if ! PSQL -tAc "SELECT 1" 2>/dev/null | grep -q 1; then
+                echo "[xid-burner] FATAL: cannot connect to db as $PGUSER — the trip mechanism is dead." >&2
+                exit 1
+              fi
+              # Use a dedicated burn table the burner's own role creates (so it OWNS it and
+              # INSERTs succeed -> each subtransaction actually assigns an XID). A table the
+              # burner does NOT own would deny the INSERT, and a permission-denied subxact
+              # rolls back WITHOUT consuming an XID, so the burn would silently do nothing.
+              if ! PSQL -c "CREATE TABLE IF NOT EXISTS xid_burn (id bigserial PRIMARY KEY, at timestamptz NOT NULL DEFAULT now());" >/dev/null 2>&1; then
+                echo "[xid-burner] FATAL: cannot create xid_burn table — the trip mechanism is dead." >&2
+                exit 1
+              fi
+              # Sanity: confirm a small DO block actually consumes XIDs before committing to the
+              # full burn (each BEGIN/EXCEPTION subtransaction assigns one XID).
+              x0=$(PSQL -tAc "SELECT txid_current()" 2>/dev/null | tr -dc '0-9')
+              PSQL -c "DO \$\$ BEGIN FOR i IN 1..1000 LOOP BEGIN INSERT INTO xid_burn DEFAULT VALUES; EXCEPTION WHEN OTHERS THEN NULL; END; END LOOP; END \$\$;" >/dev/null 2>&1 || true
+              x1=$(PSQL -tAc "SELECT txid_current()" 2>/dev/null | tr -dc '0-9')
+              if [ -z "$x0" ] || [ -z "$x1" ] || [ "$(( x1 - x0 ))" -lt 500 ]; then
+                echo "[xid-burner] FATAL: a 1000-subxact probe consumed only $(( ${x1:-0} - ${x0:-0} )) XIDs (txid $x0 -> $x1) — the subtransaction burn is not assigning XIDs; trip mechanism would never fire." >&2
+                exit 1
+              fi
+              echo "[xid-burner] connection + burn verified ($(( x1 - x0 )) XIDs per 1000-subxact probe); burning up to $BURN_XIDS transaction-ids in chunks of $BURN_CHUNK"
+              done_n=0
+              while [ "$done_n" -lt "$BURN_XIDS" ]; do
+                # Each BEGIN/EXCEPTION subtransaction assigns one XID; OTHERS-swallow keeps
+                # the loop burning even once the db starts refusing the inner INSERT.
+                PSQL -c "DO \$\$ BEGIN FOR i IN 1..$BURN_CHUNK LOOP BEGIN INSERT INTO xid_burn DEFAULT VALUES; EXCEPTION WHEN OTHERS THEN NULL; END; END LOOP; END \$\$;" >/dev/null 2>&1 || true
+                done_n=$(( done_n + BURN_CHUNK ))
+                age=$(PSQL -tAc "SELECT age(datfrozenxid) FROM pg_database WHERE datname='$PGDATABASE'" 2>/dev/null | tr -dc '0-9')
+                echo "[xid-burner] burned ~$done_n xids; datfrozenxid age=${age:-?}"
+                # Once the failsafe trips (age at the stop) writes — including ours — are
+                # refused and age stops climbing; the trip is achieved, so stop early.
+                if [ -n "$age" ] && [ "$age" -ge 2144483000 ]; then
+                  echo "[xid-burner] wraparound stop reached (age=$age); the shared db is now refusing writes."
+                  break
+                fi
+              done
+              echo "[xid-burner] burn phase complete (~$done_n xids); sleeping."
+              sleep infinity
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "loadgen") | nindent 12 }}
+{{- end }}
+
+{{- if include "slack.enabled" (dict "root" $ "key" "pgbouncer") }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgbouncer-bootstrap
+data:
+  userlist.txt: |
+    "app" "app"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbouncer
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: pgbouncer
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app.kubernetes.io/component: pgbouncer}
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: pgbouncer
+    spec:
+      shareProcessNamespace: true
+      initContainers:
+        - name: init-runtime-config
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["sh", "-c"]
+          args:
+            - |
+              printf '%s\n' '{{ .Values.pgbouncer.defaultPoolSize }}' > /runtime/default_pool_size
+              chmod 0666 /runtime/default_pool_size
+              ADMIN_CONFIG_PATH=/runtime/default_pool_size \
+              ADMIN_CONFIG_KEY=default_pool_size \
+              ADMIN_PROCESS_MATCH=none \
+              ADMIN_MODE=pgbouncer \
+              ADMIN_RENDER_PATH=/runtime/pgbouncer.ini \
+              PGBOUNCER_RESERVE_POOL_SIZE={{ .Values.pgbouncer.reservePoolSize }} \
+              PGBOUNCER_MAX_CLIENT_CONN={{ .Values.pgbouncer.maxClientConnections }} \
+              PGBOUNCER_QUERY_TIMEOUT={{ .Values.pgbouncer.queryTimeoutSeconds }} \
+              python -c 'import asyncio,db_admin; asyncio.run(db_admin.reload_config(None))' || true
+          volumeMounts: [{name: runtime-config, mountPath: /runtime}]
+      containers:
+        - name: pgbouncer
+          image: {{ .Values.images.pgbouncer | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["/runtime/pgbouncer.ini"]
+          ports: [{name: postgres, containerPort: 6432}]
+          readinessProbe:
+            tcpSocket: {port: postgres}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - {name: runtime-config, mountPath: /runtime}
+            - {name: bootstrap, mountPath: /etc/pgbouncer, readOnly: true}
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "pgbouncer") | nindent 12 }}
+        - name: config-admin
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python", "/app/db_admin.py"]
+          env:
+            - {name: ADMIN_CONFIG_PATH, value: /runtime/default_pool_size}
+            - {name: ADMIN_CONFIG_KEY, value: default_pool_size}
+            - {name: ADMIN_PROCESS_MATCH, value: pgbouncer}
+            - {name: ADMIN_RELOAD_SIGNAL, value: SIGHUP}
+            - {name: ADMIN_MODE, value: pgbouncer}
+            - {name: ADMIN_RENDER_PATH, value: /runtime/pgbouncer.ini}
+            - {name: PGBOUNCER_RESERVE_POOL_SIZE, value: {{ .Values.pgbouncer.reservePoolSize | quote }}}
+            - {name: PGBOUNCER_MAX_CLIENT_CONN, value: {{ .Values.pgbouncer.maxClientConnections | quote }}}
+            - {name: PGBOUNCER_QUERY_TIMEOUT, value: {{ .Values.pgbouncer.queryTimeoutSeconds | quote }}}
+          ports: [{name: admin, containerPort: 8080}]
+          volumeMounts: [{name: runtime-config, mountPath: /runtime}]
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "default") | nindent 12 }}
+      volumes:
+        - {name: runtime-config, emptyDir: {}}
+        - name: bootstrap
+          configMap: {name: pgbouncer-bootstrap}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbouncer
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: pgbouncer
+spec:
+  selector: {app.kubernetes.io/component: pgbouncer}
+  ports:
+    - {name: postgres, port: 6432, targetPort: postgres}
+    - {name: admin, port: 8080, targetPort: admin}
+{{- end }}
+{{- if include "slack.enabled" (dict "root" $ "key" "redis") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: redis
+    spec:
+      containers:
+        - name: redis
+          image: {{ .Values.images.redis | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "redis") | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  selector:
+    app.kubernetes.io/component: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+{{- end }}
+
+{{- if include "slack.enabled" (dict "root" $ "key" "dbReplica") }}
+---
+# db-replica: the read-side Postgres. HEALTHY substrate ships it as a present, ready
+# standalone Postgres (a real read endpoint); real streaming replication + apply-delay
+# is wired when the F3 replication-lag fault is authored (06-F3).
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-replica
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: db-replica
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/component: db-replica
+  ports:
+    - {name: postgres, port: 5432, targetPort: 5432}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db-replica
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: db-replica
+spec:
+  serviceName: db-replica
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: db-replica
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: db-replica
+    spec:
+      containers:
+        - name: postgres
+          image: {{ .Values.images.postgres | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            - {name: POSTGRES_USER, value: {{ .Values.postgres.user | quote }}}
+            - {name: POSTGRES_PASSWORD, value: {{ .Values.postgres.password | quote }}}
+            - {name: POSTGRES_DB, value: {{ .Values.postgres.database | quote }}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          ports:
+            - {name: postgres, containerPort: 5432}
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "{{ .Values.postgres.user }}", "-d", "{{ .Values.postgres.database }}"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: pgdata-replica
+              mountPath: /var/lib/postgresql/data
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "dbReplica") | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata-replica
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.postgres.replicaStorage | quote }}
+{{- end }}
+
+{{- if include "slack.enabled" (dict "root" $ "key" "minio") }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      containers:
+        - name: minio
+          image: {{ .Values.images.minio | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["minio", "server", "/data", "--console-address", ":9001"]
+          env:
+            - {name: MINIO_ROOT_USER, value: {{ .Values.minio.rootUser | quote }}}
+            - {name: MINIO_ROOT_PASSWORD, value: {{ .Values.minio.rootPassword | quote }}}
+          ports:
+            - {name: api, containerPort: 9000}
+            - {name: console, containerPort: 9001}
+          readinessProbe:
+            httpGet: {path: /minio/health/ready, port: api}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: miniodata
+              mountPath: /data
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "minio") | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: miniodata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.minio.storage | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  selector:
+    app.kubernetes.io/component: minio
+  ports:
+    - {name: api, port: 9000, targetPort: api}
+    - {name: console, port: 9001, targetPort: console}
+{{- end }}
+
+{{- if include "slack.enabled" (dict "root" $ "key" "searchEngine") }}
+---
+# search-engine: the Lucene-lite index engine (custom Go service; the §2.2 lighter-
+# engine shrink in lieu of stock OpenSearch/Quickwit to keep the RAM floor small and
+# the /index+/search contract honest). In-memory index (rebuildable by re-indexing).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-engine
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: search-engine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: search-engine
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: search-engine
+    spec:
+      containers:
+        - name: search-engine
+          image: {{ .Values.images.go | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/usr/local/bin/search-engine"]
+          env:
+            - {name: PORT, value: "7280"}
+          ports:
+            - name: http
+              containerPort: 7280
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "searchEngine") | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: search-engine
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: search-engine
+spec:
+  selector:
+    app.kubernetes.io/component: search-engine
+  ports:
+    - {name: http, port: 7280, targetPort: http}
+{{- end }}

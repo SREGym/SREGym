@@ -1,0 +1,257 @@
+{{- if and .Values.faultInit.mariadb.enabled (not .Values.gradingHarness.dbState.enabled) }}
+{{- fail "frappe: faultInit.mariadb requires gradingHarness.dbState.enabled so activation and direct state proof fail closed" }}
+{{- end }}
+{{- if include "frappe-spine.enabled" (dict "root" $ "key" "loadgen") }}
+# ── loadgen: seeded open-loop cyclical schedule against svc-frappe-web. LONG-LIVED:
+#    runs the schedule, GRADES IN-POD at episode end (D14 Oddish path), writes
+#    /grader/episode_done.json, then `sleep infinity` so the gated GET /grader/*
+#    surface keeps serving after the soak (test.sh polls it).
+#    /grader is a PRIVATE emptyDir mounted ONLY here — never in main (D9 tamper-resist).
+#
+# Peer of substrate/chart/templates/loadgen.yaml; wire shape identical, env
+# vars Frappe-specific (svc-frappe-web target, mysql://... DB_ADMIN_DSN, no
+# Slack-specific auth/file/channel-rt/ws-gateway/presence base URLs).
+{{- if .Values.gradingHarness.podState.enabled }}
+# Restart-masking basis (in-pod grading): a DEDICATED ServiceAccount with a
+# NAMESPACED get/list-pods Role only — the narrowest read that yields per-
+# component restartCount/readiness. The agent cannot use it: no k8s API client
+# in main, no exec on this pod, and the /grader endpoints never proxy the API.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loadgen
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: loadgen-pod-reader
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: loadgen-pod-reader
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+subjects:
+  - kind: ServiceAccount
+    name: loadgen
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: loadgen-pod-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+{{- end }}
+{{- if .Values.gradingHarness.answerKey.enabled }}
+# The per-task answer key used by evidence collection, stamped by generate_tasks.
+# Mounted READ-ONLY at /grader-key in the loadgen pod ONLY — never in main.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen-grader-key
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+data:
+{{- if $.Values.sregym.enabled }}
+  # SREGym port: the load generator refuses to start without a mapping here,
+  # but SREGym grades through its own oracles, so ship a fault-free key.
+  ground-truth.yaml: |
+{{ toYaml $.Values.sregym.neutralAnswerKey | indent 4 }}
+  config_before.json: |
+    {}
+{{- else }}
+  ground-truth.yaml: |
+{{ .Files.Get "ground-truth.yaml" | indent 4 }}
+  config_before.json: |
+{{ .Files.Get "config-before.json" | indent 4 }}
+{{- end }}
+---
+{{- end }}
+{{- if .Values.loadgen.profilesYaml }}
+# YAML-defined load profiles (loadgen/profile_loader.py, staged slack-spine core).
+# Mounted read-only at /etc/loadgen/profiles.yaml in the loadgen pod ONLY; merged
+# over the compiled PROFILES at sidecar startup. FAILS LOUDLY on a malformed file.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadgen-profiles
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+data:
+  profiles.yaml: {{ .Values.loadgen.profilesYaml | quote }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgen
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: loadgen
+  template:
+    metadata:
+      labels:
+        {{- include "frappe-spine.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 8 }}{{- end }}
+    spec:
+      {{- if .Values.gradingHarness.podState.enabled }}
+      # Grade-time pod_state snapshot needs the scoped SA token (see Role above).
+      serviceAccountName: loadgen
+      automountServiceAccountToken: true
+      {{- else }}
+      # No in-pod grading -> no reason for ANY API credential in this pod.
+      automountServiceAccountToken: false
+      {{- end }}
+      # Block until Frappe Desk API is serving, then drive the schedule.
+      initContainers:
+        - name: wait-for-frappe-web
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command:
+            - "sh"
+            - "-c"
+            - "until curl -sf {{ .Values.loadgen.target }}/api/method/ping; do echo waiting for svc-frappe-web; sleep 5; done"
+      containers:
+        - name: loadgen
+          image: {{ .Values.images.loadgen | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          env:
+            # Load profile compiled into the image (loadgen_frappe/schedule.py
+            # PROFILES). Explicitly set so a scenario overlay can select a longer
+            # window without touching the image.
+            - name: PROFILE
+              value: {{ .Values.loadgen.profile | quote }}
+            {{- if .Values.loadgen.profilesYaml }}
+            # YAML-defined load profiles ConfigMap mount (see above). DEFAULT-OFF:
+            # empty renders no env line / ConfigMap / mount.
+            - name: PROFILE_FILE
+              value: /etc/loadgen/profiles.yaml
+            {{- end }}
+            - name: TARGET
+              value: {{ .Values.loadgen.target | quote }}
+            - name: LOADGEN_TARGET_BASE_URL
+              value: {{ .Values.loadgen.target | quote }}
+            - name: GRADER_DIR
+              value: {{ .Values.loadgen.graderDir | quote }}
+            - name: GRADER_ACCESS_TOKEN_FILE
+              value: /run/grader-access/token
+            # Every Frappe workload role whose /admin/config the sidecar
+            # snapshots at declare — the verifier's minimality basis
+            # (config_after) is rebuilt from this snapshot. Comma-joined list;
+            # values.yaml default lists the 6 workloads.
+            - name: SNAPSHOT_SERVICES
+              value: {{ .Values.loadgen.snapshotServices | quote }}
+            - name: SUT_ADMIN_PORT
+              value: {{ .Values.loadgen.sutAdminPort | default 8000 | quote }}
+            # Frappe Desk login creds — the SessionPool bootstraps N sessions
+            # against these before the schedule fires. Default Administrator /
+            # admin match the bench new-site defaults; a scenario overlay may
+            # override for a locked-down site.
+            - name: FRAPPE_LOGIN_USER
+              value: {{ .Values.loadgen.frappeLogin.user | quote }}
+            - name: FRAPPE_LOGIN_PWD
+              value: {{ .Values.loadgen.frappeLogin.password | quote }}
+            - name: FRAPPE_SESSION_POOL_SIZE
+              value: {{ .Values.loadgen.sessionPoolSize | default 32 | quote }}
+            {{- if .Values.gradingHarness.dbState.enabled }}
+            # Privileged MariaDB DSN for in-pod db_state probes (Phase-6+
+            # scenarios). DEFAULT-OFF: no env line otherwise. Rendered from
+            # the mariadb subchart's root password.
+            - name: DB_ADMIN_DSN
+              value: "mysql://root:sre-world-mariadb-root@svc-mariadb:3306/erpnext"
+            {{- end }}
+            {{- if .Values.faultInit.mariadb.enabled }}
+            # Trusted, post-site runtime fault declaration.  The sidecar owns
+            # the SQL allowlist and verifies the read-back before baseline.
+            - name: MARIADB_FAULT_KIND
+              value: {{ .Values.faultInit.mariadb.kind | quote }}
+            - name: MARIADB_FAULT_VARIABLE
+              value: {{ .Values.faultInit.mariadb.variable | quote }}
+            - name: MARIADB_FAULT_VALUE
+              value: {{ .Values.faultInit.mariadb.value | quote }}
+            {{- end }}
+          ports:
+            - name: declare
+              containerPort: 9100
+          volumeMounts:
+            - name: grader
+              mountPath: {{ .Values.loadgen.graderDir }}
+            - name: grader-access
+              mountPath: /run/grader-access
+              readOnly: true
+            {{- if .Values.gradingHarness.answerKey.enabled }}
+            - name: grader-key
+              mountPath: /grader-key
+              readOnly: true
+            {{- end }}
+            {{- if .Values.loadgen.profilesYaml }}
+            - name: profiles
+              mountPath: /etc/loadgen
+              readOnly: true
+            {{- end }}
+          resources:
+            requests:
+              {{- toYaml .Values.loadgen.resources.requests | nindent 14 }}
+            limits:
+              {{- toYaml .Values.loadgen.resources.limits | nindent 14 }}
+      volumes:
+        - name: grader
+          emptyDir: {}
+        - name: grader-access
+          secret:
+            secretName: loadgen-grader-access
+            defaultMode: 0444
+        {{- if .Values.gradingHarness.answerKey.enabled }}
+        - name: grader-key
+          configMap:
+            name: loadgen-grader-key
+        {{- end }}
+        {{- if .Values.loadgen.profilesYaml }}
+        - name: profiles
+          configMap:
+            name: loadgen-profiles
+        {{- end }}
+---
+# Declare endpoint Service: main's submit_incident_report POSTs the agent's
+# incident report to http://loadgen:9100/declare (the agent never reaches /grader).
+apiVersion: v1
+kind: Service
+metadata:
+  name: loadgen
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: loadgen
+{{- with $.Values.sregym.loadgenLabels }}{{ toYaml . | nindent 4 }}{{- end }}
+spec:
+  selector:
+    app.kubernetes.io/component: loadgen
+  ports:
+    - name: declare
+      port: 9100
+      targetPort: declare
+{{- end }}

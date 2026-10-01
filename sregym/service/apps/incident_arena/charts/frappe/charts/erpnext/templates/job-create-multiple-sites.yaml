@@ -1,0 +1,239 @@
+{{- if and .Values.jobs.createMultipleSites.enabled (not .Values.jobs.createSite.enabled) }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  {{- if .Values.jobs.createMultipleSites.jobName }}
+  name: {{ .Values.jobs.createMultipleSites.jobName }}
+  {{- else }}
+  name: {{ template "erpnext.fullname" . }}-new-sites-{{ now | date "20060102150405" }}
+  {{- end }}
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+  annotations:
+{{- with .Values.jobs.createMultipleSites.annotations }}
+{{- range $key, $value := . }}
+    {{ $key }}: {{ $value | quote }}
+{{- end }}
+{{- end }}
+spec:
+  backoffLimit: {{ .Values.jobs.createMultipleSites.backoffLimit }}
+  template:
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ template "erpnext.serviceAccountName" $ }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: validate-config
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["bash", "-c"]
+          args:
+            - >
+              export start=`date +%s`;
+              until [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".db_host // empty"` ]] && \
+                [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_cache // empty"` ]] && \
+                [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_queue // empty"` ]];
+              do
+                echo "Waiting for sites/common_site_config.json to be created";
+                sleep 5;
+                if (( `date +%s`-start > 600 )); then
+                  echo "could not find sites/common_site_config.json with required keys";
+                  exit 1
+                fi
+              done;
+              echo "sites/common_site_config.json found";
+
+              echo "Waiting for database to be reachable...";
+              wait-for-it -t 180 $(DB_HOST):$(DB_PORT);
+              echo "Database is reachable.";
+          env:
+            - name: "DB_HOST"
+              {{- if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+              value: {{ .Release.Name }}-mariadb-subchart
+              {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+              value: {{ .Release.Name }}-postgresql-subchart
+              {{- else if (get .Values "mariadb-sts").enabled }}
+              value: {{ include "erpnext.fullname" . }}-mariadb-sts
+              {{- else if (get .Values "postgresql-sts").enabled }}
+              value: {{ include "erpnext.fullname" . }}-postgresql-sts
+              {{- else }}
+              value: "{{ .Values.dbHost }}"
+              {{- end }}
+            - name: "DB_PORT"
+              {{- if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+              value: "3306"
+              {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+              value: "5432"
+              {{- else if .Values.dbPort }}
+              value: {{ .Values.dbPort | quote }}
+              {{- else if eq .Values.jobs.createMultipleSites.dbType "mariadb" }}
+              value: "3306"
+              {{- else if eq .Values.jobs.createMultipleSites.dbType "postgres" }}
+              value: "5432"
+              {{- end }}
+          resources:
+            {{- toYaml .Values.jobs.createMultipleSites.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: sites-dir
+              mountPath: /home/frappe/frappe-bench/sites
+      containers:
+      - name: create-site
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ["bash", "-c"]
+        args:
+          - >
+            set -x;
+
+            {{- range $site := .Values.jobs.createMultipleSites.sites }}
+
+            bench_output=$(bench new-site {{ $site.name }} --no-mariadb-socket --db-type=${DB_TYPE} --db-host=${DB_HOST} --db-port=${DB_PORT} --admin-password=${ADMIN_PASSWORD} --mariadb-root-username=${DB_ROOT_USER} --mariadb-root-password=${DB_ROOT_PASSWORD}{{- if $.Values.jobs.createMultipleSites.forceCreate }} --force{{- end }}{{- if $site.installApps }}{{- range $site.installApps }} --install-app={{ . }}{{- end }}{{- end }} | tee /dev/stderr);
+
+            bench_exit_status=$?;
+
+            if [ $bench_exit_status -ne 0 ]; then
+                if [[ "$bench_output" == *"already exists"* ]]; then
+                    echo "Site {{ $site.name }} already exists, continuing...";
+                else
+                    echo "An error occurred while creating site {{ $site.name }}";
+                    exit $bench_exit_status;
+                fi
+            fi;
+
+            {{- end }}
+
+            set -e;
+            rm -f currentsite.txt;
+
+        env:
+          - name: "SITE_NAME"
+            value: "{{ .Values.jobs.createMultipleSites.siteName }}"
+          - name: "DB_TYPE"
+            value: {{ .Values.jobs.createMultipleSites.dbType }}
+          - name: DB_HOST
+            {{- if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+            value: {{ .Release.Name }}-mariadb-subchart
+            {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+            value: {{ .Release.Name }}-postgresql-subchart
+            {{- else if (get .Values "mariadb-sts").enabled }}
+            value: {{ include "erpnext.fullname" . }}-mariadb-sts
+            {{- else if (get .Values "postgresql-sts").enabled }}
+            value: {{ include "erpnext.fullname" . }}-postgresql-sts
+            {{- else }}
+            value: "{{ .Values.dbHost }}"
+            {{- end }}
+          - name: "DB_PORT"
+            {{- if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+            value: "3306"
+            {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+            value: "5432"
+            {{- else if .Values.dbPort }}
+            value: {{ .Values.dbPort | quote }}
+            {{- else if eq .Values.jobs.createMultipleSites.dbType "mariadb" }}
+            value: "3306"
+            {{- else if eq .Values.jobs.createMultipleSites.dbType "postgresql" }}
+            value: "5432"
+            {{- end }}
+          - name: "DB_ROOT_USER"
+            {{- if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+            value: "root"
+            {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+            value: "postgres"
+            {{- else }}
+            value: "{{ .Values.dbRootUser }}"
+            {{- end }}
+          - name: "DB_ROOT_PASSWORD"
+            {{- if (get .Values "mariadb-sts").enabled }}
+            valueFrom:
+              secretKeyRef:
+                key: mariadb-root-password
+                name: {{ template "erpnext.fullname" . }}
+            {{- else if (index .Values "postgresql-sts").enabled }}
+            valueFrom:
+              secretKeyRef:
+                key: postgresql-password
+                name: {{ template "erpnext.fullname" . }}
+            {{- else if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Release.Name }}-mariadb-subchart
+                key: mariadb-root-password
+            {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Release.Name }}-postgresql-subchart
+                key: postgres-password
+            {{- else if .Values.dbExistingSecret }}
+            valueFrom:
+              secretKeyRef:
+                key: {{ .Values.dbExistingSecretPasswordKey }}
+                name: {{ .Values.dbExistingSecret }}
+            {{- else if .Values.dbRootPassword }}
+            valueFrom:
+              secretKeyRef:
+                key: db-root-password
+                name: {{ template "erpnext.fullname" . }}
+            {{- end }}
+          - name: "ADMIN_PASSWORD"
+            {{- if .Values.jobs.createMultipleSites.adminExistingSecret }}
+            valueFrom:
+              secretKeyRef:
+                key: {{ .Values.jobs.createMultipleSites.adminExistingSecretKey }}
+                name: {{ .Values.jobs.createMultipleSites.adminExistingSecret }}
+            {{- else}}
+            value: "{{ .Values.jobs.createMultipleSites.adminPassword }}"
+            {{- end }}
+        resources:
+          {{- toYaml .Values.jobs.createMultipleSites.resources | nindent 10 }}
+        securityContext:
+          {{- toYaml $.Values.securityContext | nindent 10 }}
+        volumeMounts:
+          - name: sites-dir
+            mountPath: /home/frappe/frappe-bench/sites
+          - name: logs
+            mountPath: /home/frappe/frappe-bench/logs
+      restartPolicy: Never
+      volumes:
+        - name: sites-dir
+          {{- if .Values.persistence.worker.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.worker.existingClaim }}
+            claimName: {{ .Values.persistence.worker.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: logs
+          {{- if .Values.persistence.logs.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.logs.existingClaim }}
+            claimName: {{ .Values.persistence.logs.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}-logs
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.jobs.createMultipleSites.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jobs.createMultipleSites.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jobs.createMultipleSites.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

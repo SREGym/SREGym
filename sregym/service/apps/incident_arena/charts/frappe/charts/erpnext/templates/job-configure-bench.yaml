@@ -1,0 +1,167 @@
+{{- if .Values.jobs.configure.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  {{- if .Values.jobs.configure.jobName }}
+  name: {{ .Values.jobs.configure.jobName }}
+  {{- else }}
+  name: {{ template "erpnext.fullname" . }}-conf-bench-{{ now | date "20060102150405" }}
+  {{- end }}
+  labels:
+    {{- include "erpnext.labels" . | nindent 4 }}
+spec:
+  backoffLimit: {{ .Values.jobs.configure.backoffLimit }}
+  template:
+    spec:
+    {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+    {{- end }}
+      serviceAccountName: {{ template "erpnext.serviceAccountName" $ }}
+      {{- if .Values.jobs.configure.fixVolume }}
+      initContainers:
+      - name: frappe-bench-ownership
+        image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command: ['sh', '-c']
+        args:
+          - chown -R "{{ default 1000 .Values.securityContext.runAsUser }}:{{ default 1000 .Values.securityContext.runAsUser }}" /home/frappe/frappe-bench/sites /home/frappe/frappe-bench/logs
+        resources:
+          {{- toYaml .Values.jobs.configure.resources | nindent 10 }}
+        securityContext:
+          # run as root to set ownership
+          runAsUser: 0
+        volumeMounts:
+          - name: sites-dir
+            mountPath: /home/frappe/frappe-bench/sites
+          - name: logs
+            mountPath: /home/frappe/frappe-bench/logs
+      {{- end }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      containers:
+      - name: configure
+        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        {{- if .Values.jobs.configure.command }}
+          {{- toYaml .Values.jobs.configure.command | nindent 10 }}
+        {{- else }}
+          - bash
+          - -c
+        {{- end }}
+        args:
+        {{- if .Values.jobs.configure.args }}
+          {{- toYaml .Values.jobs.configure.args | nindent 10 }}
+        {{- else }}
+          - >
+            ls -1 apps > sites/apps.txt;
+            [[ -f sites/common_site_config.json ]] || echo "{}" > sites/common_site_config.json;
+            bench set-config -gp db_port $DB_PORT;
+            bench set-config -g db_host $DB_HOST;
+            {{- if .Values.dbRds }}
+            bench set-config -gp rds_db 1;
+            {{- end}}
+            bench set-config -g redis_cache $REDIS_CACHE;
+            bench set-config -g redis_queue $REDIS_QUEUE;
+            bench set-config -g redis_socketio $REDIS_QUEUE;
+            bench set-config -gp socketio_port $SOCKETIO_PORT;
+        {{- end }}
+        env:
+          - name: DB_HOST
+            {{- if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+            value: {{ .Release.Name }}-mariadb-subchart
+            {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+            value: {{ .Release.Name }}-postgresql-subchart
+            {{- else if (get .Values "mariadb-sts").enabled }}
+            value: {{ include "erpnext.fullname" . }}-mariadb-sts
+            {{- else if (get .Values "postgresql-sts").enabled }}
+            value: {{ include "erpnext.fullname" . }}-postgresql-sts
+            {{- else }}
+            value: "{{ .Values.dbHost }}"
+            {{- end }}
+          - name: DB_PORT
+            {{- if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled }}
+            value: "3306"
+            {{- else if or .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled }}
+            value: "5432"
+            {{- else if .Values.dbPort }}
+            value: {{ .Values.dbPort | quote }}
+            {{- end }}
+          {{- if .Values.externalRedis.cache }}
+          - name: REDIS_CACHE
+            value: {{ .Values.externalRedis.cache | quote }}
+          {{- else if (get .Values "valkey-cache").enabled }}
+          - name: REDIS_CACHE
+            value: redis://{{ .Release.Name }}-valkey-cache:6379
+          {{- else if (get .Values "dragonfly-cache").enabled }}
+          - name: REDIS_CACHE
+            value: redis://{{ .Release.Name }}-dragonfly-cache:6379
+          {{- else if (get .Values "redis-cache").enabled }}
+          - name: REDIS_CACHE
+            value: redis://{{ .Release.Name }}-redis-cache-master:6379
+          {{- end }}
+          {{- if .Values.externalRedis.queue }}
+          - name: REDIS_QUEUE
+            value: {{ .Values.externalRedis.queue | quote }}
+          {{- else if (get .Values "valkey-queue").enabled }}
+          - name: REDIS_QUEUE
+            value: redis://{{ .Release.Name }}-valkey-queue:6379
+          {{- else if (get .Values "dragonfly-queue").enabled }}
+          - name: REDIS_QUEUE
+            value: redis://{{ .Release.Name }}-dragonfly-queue:6379
+          {{- else if (get .Values "redis-queue").enabled }}
+          - name: REDIS_QUEUE
+            value: redis://{{ .Release.Name }}-redis-queue-master:6379
+          {{- end }}
+          {{- if .Values.jobs.configure.envVars }}
+            {{- toYaml .Values.jobs.configure.envVars | nindent 10 }}
+          {{- end }}
+          - name: SOCKETIO_PORT
+            value: {{ .Values.socketio.service.port | quote }}
+        resources:
+          {{- toYaml .Values.jobs.configure.resources | nindent 10 }}
+        volumeMounts:
+          - name: sites-dir
+            mountPath: /home/frappe/frappe-bench/sites
+          - name: logs
+            mountPath: /home/frappe/frappe-bench/logs
+      restartPolicy: Never
+      volumes:
+        - name: sites-dir
+          {{- if .Values.persistence.worker.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.worker.existingClaim }}
+            claimName: {{ .Values.persistence.worker.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: logs
+          {{- if .Values.persistence.logs.enabled }}
+          persistentVolumeClaim:
+            {{- if .Values.persistence.logs.existingClaim }}
+            claimName: {{ .Values.persistence.logs.existingClaim }}
+            {{- else }}
+            claimName: {{ template "erpnext.fullname" . }}-logs
+            {{- end }}
+            readOnly: false
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+      {{- with .Values.jobs.configure.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jobs.configure.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.jobs.configure.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

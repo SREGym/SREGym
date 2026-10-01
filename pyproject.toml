@@ -178,6 +178,8 @@ exclude = [
     "*.egg-info",
     # Vendored verbatim from Harbor (see atif_converter/atif/UPSTREAM.md).
     "atif_converter/atif",
+    # Vendored Incident Arena Helm charts (see sregym/service/apps/incident_arena/charts/README.md).
+    "sregym/service/apps/incident_arena/charts",
 ]
 
 [tool.ruff.lint]

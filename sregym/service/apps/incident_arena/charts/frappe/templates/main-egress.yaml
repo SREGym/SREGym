@@ -1,0 +1,58 @@
+{{- if .Values.main.enabled }}
+# Main can reach only the task-owned proxy/DNS controls, the redacting
+# observability bridge, the declaration endpoint, and the SUT's operational
+# surfaces. Raw telemetry backends and grader-only endpoints are intentionally
+# absent. It has no direct public or recursive-DNS route, including when a
+# client ignores the injected HTTP_PROXY/HTTPS_PROXY environment.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: main-egress
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: main
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: main
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/component: agent-dns-filter}
+      ports:
+        - {protocol: UDP, port: {{ .Values.agentDnsFilter.port }}}
+        - {protocol: TCP, port: {{ .Values.agentDnsFilter.port }}}
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values:
+                  - agent-egress-controller
+                  - agent-egress-proxy
+                  - frappe-admin
+                  - loadgen
+                  - obs-mcp
+      ports:
+        - {protocol: TCP, port: 3128}
+        - {protocol: TCP, port: 8000}
+        - {protocol: TCP, port: 9100}
+        - {protocol: TCP, port: 9191}
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: [mariadb-subchart, redis-cache, redis-queue]
+      ports:
+        - {protocol: TCP, port: 3306}
+        - {protocol: TCP, port: 6379}
+    - to:
+        - podSelector:
+            matchLabels: {app.kubernetes.io/app: frappe}
+      ports:
+        - {protocol: TCP, port: 8000}
+        - {protocol: TCP, port: 8080}
+        - {protocol: TCP, port: 9000}
+{{- end }}

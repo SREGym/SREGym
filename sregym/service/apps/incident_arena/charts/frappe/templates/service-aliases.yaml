@@ -1,0 +1,83 @@
+{{- /*
+Stable-name ExternalName Service aliases for Frappe workloads + infra.
+
+The upstream chart templates its Service names with the Helm release name
+(`t-mariadb-subchart`, `t-erpnext-gunicorn`, `t-redis-cache-master`, ...).
+Our foothold scripts, admin sidecar env, loadgen target URL, and
+fault-injection scenarios all reference STABLE names (`svc-mariadb`,
+`svc-frappe-web`, `svc-redis-cache`, `svc-redis-queue`). ExternalName
+services provide the alias without adding an extra hop — they emit a
+DNS CNAME the resolver follows to the templated name in the same namespace.
+
+Peer of the Slack substrate, where the workload templates set `metadata.name`
+directly to the stable name (no aliasing needed because there is no vendored
+subchart).
+*/}}
+{{- $rel := .Release.Name -}}
+{{- $ns := .Release.Namespace | default "default" -}}
+---
+# svc-mariadb → <release>-mariadb-subchart
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-mariadb
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: mariadb
+spec:
+  type: ExternalName
+  externalName: {{ printf "%s-mariadb-subchart.%s.svc.cluster.local" $rel $ns | quote }}
+  ports:
+    - name: mysql
+      port: 3306
+---
+# svc-redis-cache → <release>-redis-cache-master
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-redis-cache
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: redis-cache
+spec:
+  type: ExternalName
+  externalName: {{ printf "%s-redis-cache-master.%s.svc.cluster.local" $rel $ns | quote }}
+  ports:
+    - name: redis
+      port: 6379
+---
+# svc-redis-queue → <release>-redis-queue-master
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-redis-queue
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: redis-queue
+spec:
+  type: ExternalName
+  externalName: {{ printf "%s-redis-queue-master.%s.svc.cluster.local" $rel $ns | quote }}
+  ports:
+    - name: redis
+      port: 6379
+---
+# svc-frappe-web is a real ClusterIP selecting gunicorn. This avoids a second
+# cluster-internal CNAME lookup and gives the healthcheck/loadgen the same
+# kube-proxy path as ordinary workload Services. Its Host header remains the
+# created Frappe site name.
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-frappe-web
+  labels:
+    {{- include "frappe-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: frappe-web
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: erpnext-gunicorn
+    app.kubernetes.io/instance: {{ printf "%s-gunicorn" $rel }}
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http

@@ -1,0 +1,42 @@
+# SREGym deployment overlay for the Incident Arena saleor chart.
+#
+# Deploys the healthy Saleor stack with the images pinned by the Incident Arena
+# task, drops the Harbor harness (agent foothold, egress proxy, DNS filter,
+# in-chart Prometheus/Loki/obs-mcp) in favour of SREGym's own observability
+# stack, and replaces the foothold with an operator toolbox. Problems layer
+# their load profile and fault values on top.
+global:
+  imagePullPolicy: IfNotPresent
+
+images:
+  main: ghcr.io/abundant-ai/sre-world/saleor-main@sha256:ece6147d06e9f60750b33827302a063cebfa4112e1a37f002dd778b441c09ba5
+  loadgen: ghcr.io/abundant-ai/sre-world/saleor-loadgen@sha256:cdee1728463bbaa0c2665a809bb39b5c7919a48a4575fd629b3c4f6a857f812e
+  obsMcp: ghcr.io/abundant-ai/sre-world/saleor-obs-mcp@sha256:5772f8a4e64b6030ff214837cf9376fbfe67e6659fbca6d595da6c2af855f309
+  saleorApp: ghcr.io/abundant-ai/sre-world/saleor-app@sha256:d4d0581c2c2082a0a0f11e58dcf67f739cd8e20e83d953ff24d74e0791fc9f40
+
+saleor:
+  # Django's URL validator needs a dotted host, so this pins the namespace.
+  publicUrl: "http://svc-saleor-api.saleor.svc.cluster.local:8000/"
+  allowedHosts: "svc-saleor-api,svc-saleor-api.saleor.svc.cluster.local,localhost,127.0.0.1"
+
+main:
+  enabled: false
+
+obs:
+  enabled: false
+
+loadgen:
+  enabled: true
+
+gradingHarness:
+  # The load generator requires an answer key at startup; under sregym.enabled
+  # the chart renders a fault-free one (see sregym.neutralAnswerKey).
+  answerKey:
+    enabled: true
+
+sregym:
+  enabled: true
+  loadgenLabels:
+    app: load-generator
+  toolbox:
+    enabled: true

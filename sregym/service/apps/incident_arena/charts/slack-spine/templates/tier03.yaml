@@ -1,0 +1,463 @@
+# Required benchmark-only Ed25519 fixture. The auth role fails loudly if this
+# mount is missing, malformed, or does not contain K1/K2/K3.
+{{- if include "slack.enabled" (dict "root" $ "key" "auth") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-signing-keys
+data:
+  keys.json: |-
+    {"keys":[
+      {"kid":"K1","private_pem":"-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIEl8c1YUnuEyztzqSRWJBw8x5nJu1vb8yOUaK/0pEm5G\n-----END PRIVATE KEY-----\n","public_pem":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAmTaH7IOipPYm/YRgQ76lKKeqPJlEYIjRXQcsY2/QIcs=\n-----END PUBLIC KEY-----\n"},
+      {"kid":"K2","private_pem":"-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEINovst6hkMNMXaRoq0DV5xRNo5smTSIeOFJsIKy/eZ77\n-----END PRIVATE KEY-----\n","public_pem":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAlufOUvqQGJEYzjTF8EAXtMQvmr0dlu0Gyo4QIsx+pXE=\n-----END PUBLIC KEY-----\n"},
+      {"kid":"K3","private_pem":"-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIP8nIhRvhh/DTxtxJYtSQ2lrq0qHS2qLmTKpgodp7J6Y\n-----END PRIVATE KEY-----\n","public_pem":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAbz1U8CMNaLVirjImE7lPzauh/Esdf+LWxNExJRDaop8=\n-----END PUBLIC KEY-----\n"}
+    ]}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: auth-controller-public
+data:
+  controller-public.pem: |-
+    -----BEGIN PUBLIC KEY-----
+    MCowBQYDK2VwAyEA9O4LfaVSldy0KZMIX8rkei++hF6j1CcDfjB7rlTGQyQ=
+    -----END PUBLIC KEY-----
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: auth-controller-private
+type: Opaque
+stringData:
+  controller-private.pem: |-
+    -----BEGIN PRIVATE KEY-----
+    MC4CAQAwBQYDK2VwBCIEIC9jEnCmTb5vGfIf62PKnUn1cUYjdUEt2FWKRnuCzev/
+    -----END PRIVATE KEY-----
+---
+{{- end }}
+# ── tier-03 messaging services: one slack-app image, SERVICE_ROLE selects the
+#    config section. svc-message is the 03-F1 fault site. ──────────────────────
+{{- range $role, $rc := .Values.app.roles }}
+{{- if include "slack.enabled" (dict "root" $ "key" $role) }}
+{{- $sfc := $.Values.agentSurface }}
+{{- $bcTarget := and $sfc.buildCapable.enabled (eq $role $sfc.buildCapable.targetRole) }}
+{{- $runtimeTarget := and $.Values.runtimeConfigBroker.enabled (eq $role "message") }}
+{{- $vc := $.Values.gradingHarness.verifierChallenge }}
+{{- $challengeTarget := and $vc.enabled (eq (printf "svc-%s" $role) $vc.targetService) }}
+{{- $surfaceEnabled := or $sfc.exec.enabled $sfc.buildCapable.enabled $runtimeTarget $challengeTarget }}
+{{- /* Any surface that lets the agent reach a pod (exec) or run build-capable must
+       harden every app pod + strip its SA token — so all three flags feed $harden. */}}
+{{- $harden := or $sfc.hardenAppPods $sfc.exec.enabled $sfc.buildCapable.enabled }}
+{{- $noToken := $harden }}
+---
+apiVersion: apps/v1
+kind: {{ if $surfaceEnabled }}StatefulSet{{ else }}Deployment{{ end }}
+metadata:
+  name: svc-{{ $role }}
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: svc-{{ $role }}
+spec:
+  replicas: 1
+  {{- if $surfaceEnabled }}
+  serviceName: svc-{{ $role }}-headless
+  podManagementPolicy: OrderedReady
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: svc-{{ $role }}
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: svc-{{ $role }}
+    spec:
+      {{- if $noToken }}
+      # shell-visible/build-capable: the app pod carries NO k8s API credential — a
+      # shelled agent cannot reach the API from inside it (DECISIONS D18).
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      {{- end }}
+      {{- if $bcTarget }}
+      # Trusted restart-time build. The immutable builder seeds only editable app
+      # source, compiles in an init-only work volume, and exports executable JS +
+      # production dependencies into a separate read-only runtime volume.
+      initContainers:
+        - name: source-seed
+          image: {{ $.Values.images.appBuilder | quote }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          command:
+            - sh
+            - -ceu
+            - |
+              set -eux
+              src=/source/services/app/src
+              mkdir -p /source/services/app
+              if [ ! -f /source/.seeded ]; then
+                test ! -e "$src"
+                seed_tmp="/source/services/app/.src-seed.$$"
+                marker_tmp="/source/.seeded.$$"
+                cp -R --no-preserve=mode,ownership /seed/services/app/src "$seed_tmp"
+                chmod -R u=rwX,go=rX "$seed_tmp"
+                chown -R 10001:10001 "$seed_tmp"
+                mv "$seed_tmp" "$src"
+                printf 'schema=1\n' > "$marker_tmp"
+                chown 10001:10001 "$marker_tmp"
+                mv "$marker_tmp" /source/.seeded
+              fi
+              chown -R 10001:10001 /source
+              test -r "$src"
+              test -w "$src"
+
+              # Task-layer Docker COPY permissions are host-umask dependent. Build
+              # the disposable compiler tree here while this pre-agent init still
+              # has narrowly scoped DAC/ownership capabilities, then hand the
+              # normalized tree to the non-root trusted compiler. The image
+              # filesystem remains immutable and is never mounted into the app.
+              cp -a /workspace/. /work/
+              chmod -R u=rwX,go=rX /work
+              rm -rf /work/services/app/src
+              cp -R --no-preserve=mode,ownership "$src" /work/services/app/src
+              chmod -R u=rwX,go=rX /work/services/app/src
+              chown -R 10001:10001 /work
+              test -r /work/services/app/src
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
+          volumeMounts:
+            - name: source
+              mountPath: /source
+            - name: work
+              mountPath: /work
+            - name: tmp
+              mountPath: /tmp
+        # A restartable init sidecar starts after source normalization and before
+        # trusted-build. If compilation fails, the application stays down but the
+        # agent can still correct its source and request another trusted rebuild.
+        - name: source-editor
+          image: {{ $.Values.images.main | quote }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          restartPolicy: Always
+          command: ["sleep", "infinity"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: source
+              mountPath: /src
+        - name: trusted-build
+          image: {{ $.Values.images.appBuilder | quote }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          command:
+            - sh
+            - -ceu
+            - |
+              set -eux
+              src=/source/services/app/src
+              test -f /source/.seeded
+              test -d "$src"
+              source_json="$(node /workspace/tools/canonical-digest.mjs "$src" \
+                {{ $sfc.buildCapable.snapshotMaxFiles | int64 }} \
+                {{ $sfc.buildCapable.snapshotMaxFileBytes | int64 }} \
+                {{ $sfc.buildCapable.snapshotMaxBytes | int64 }})"
+
+              test -d /work/services/app/src
+              cd /work
+              # Generate declarations only inside the init-only work tree so the
+              # app compile can type-resolve servicekit, then rebuild clean runtime
+              # outputs with comments/declarations/maps/incremental data disabled.
+              ./node_modules/.bin/tsc -b packages/servicekit --force
+              rm -rf services/app/dist
+              ./node_modules/.bin/tsc -p services/app/tsconfig.runtime.json
+              rm -rf packages/servicekit/dist
+              ./node_modules/.bin/tsc -p packages/servicekit/tsconfig.runtime.json
+
+              cp -R /runtime-seed/. /runtime/
+              mkdir -p /runtime/dist /runtime/node_modules/@slackspine/servicekit/dist
+              cd /work/services/app/dist
+              find . -type f -name '*.js' -exec cp --parents '{}' /runtime/dist/ \;
+              cd /work/packages/servicekit/dist
+              find . -type f -name '*.js' -exec cp --parents '{}' \
+                /runtime/node_modules/@slackspine/servicekit/dist/ \;
+              if find /runtime/dist -type f \
+                \( -name '*.ts' -o -name '*.d.ts' -o -name '*.map' \
+                -o -name '*.tsbuildinfo' -o -name 'tsconfig*.json' \) \
+                -print -quit | grep -q .; then
+                echo 'trusted-build: forbidden app source/build metadata in runtime' >&2
+                exit 1
+              fi
+              if find /runtime/node_modules/@slackspine/servicekit -maxdepth 1 -type f \
+                \( -name '*.ts' -o -name '*.d.ts' -o -name '*.map' \
+                -o -name '*.tsbuildinfo' -o -name 'tsconfig*.json' \) \
+                -print -quit | grep -q . || \
+                test -e /runtime/node_modules/@slackspine/servicekit/src; then
+                echo 'trusted-build: forbidden servicekit source/build metadata in runtime' >&2
+                exit 1
+              fi
+              if find /runtime -type l -print -quit | grep -q .; then
+                echo 'trusted-build: runtime contains a symlink' >&2
+                exit 1
+              fi
+              runtime_json="$(node /workspace/tools/canonical-digest.mjs /runtime 50000 16777216 536870912)"
+              node -e '
+                const source = JSON.parse(process.argv[1]);
+                const runtime = JSON.parse(process.argv[2]);
+                process.stdout.write(JSON.stringify({
+                  schema_version: 1,
+                  source_sha256: source.sha256,
+                  runtime_sha256: runtime.sha256,
+                  source_file_count: source.file_count,
+                  source_byte_count: source.byte_count,
+                }));
+              ' "$source_json" "$runtime_json" > /dev/termination-log
+          terminationMessagePolicy: File
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: source
+              mountPath: /source
+            - name: work
+              mountPath: /work
+            - name: runtime
+              mountPath: /runtime
+            - name: tmp
+              mountPath: /tmp
+      {{- end }}
+      containers:
+        - name: app
+          image: {{ $.Values.images.app | quote }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          {{- if $bcTarget }}
+          workingDir: /runtime
+          command: ["node", "/runtime/dist/main.js"]
+          {{- end }}
+          {{- if or $harden $bcTarget }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          {{- end }}
+          env:
+            - name: SERVICE_ROLE
+              value: {{ $role | quote }}
+            - name: APP_CONFIG
+              value: /config/app.yaml
+            - name: DB_DSN
+              value: {{ $.Values.app.db.dsn | quote }}
+            - name: REDIS_URL
+              value: {{ $.Values.app.redisUrl | quote }}
+            - name: MINIO_ENDPOINT
+              value: {{ $.Values.app.env.minioEndpoint | quote }}
+            - name: MINIO_ACCESS_KEY
+              value: {{ $.Values.app.env.minioAccessKey | quote }}
+            - name: MINIO_SECRET_KEY
+              value: {{ $.Values.app.env.minioSecretKey | quote }}
+            - name: MINIO_BUCKET
+              value: {{ $.Values.app.env.minioBucket | quote }}
+            - name: SEARCH_URL
+              value: {{ $.Values.app.env.searchUrl | quote }}
+            - name: KAFKAGATE_URL
+              value: {{ $.Values.app.env.kafkagateUrl | quote }}
+            - name: CHANNEL_RT_URL
+              value: {{ $.Values.app.env.channelRtUrl | quote }}
+            - name: NOTIFICATION_URL
+              value: {{ $.Values.app.env.notificationUrl | quote }}
+            {{- if eq $role "auth" }}
+            - name: AUTH_KEY_BUNDLE_PATH
+              value: /auth-keys/keys.json
+            - name: AUTH_CONTROLLER_PUBLIC_KEY_PATH
+              value: /auth-controller/controller-public.pem
+            {{- end }}
+            # | default mirrors jitter.ts's own fallbacks so a scenario overlay that
+            # replaces app.env WITHOUT re-supplying these renders a valid value (an empty
+            # string would make parseBoolEnv/parseNumberEnv throw at first query). Default
+            # OFF: jitter is opt-in for any overlay that doesn't carry it.
+            - name: HOLD_JITTER
+              value: {{ $.Values.app.env.holdJitter | default "0" | quote }}
+            - name: HOLD_JITTER_SEED
+              value: {{ $.Values.app.env.holdJitterSeed | default "7" | quote }}
+            - name: HOLD_JITTER_SIGMA
+              value: {{ $.Values.app.env.holdJitterSigma | default "0.35" | quote }}
+            - name: HOLD_JITTER_MAX_MULTIPLIER
+              value: {{ $.Values.app.env.holdJitterMaxMultiplier | default "3.0" | quote }}
+            - name: PLATFORM_UNFURL_ALLOWLIST
+              value: {{ $.Values.app.env.unfurlAllowlist | quote }}
+            {{- range $k, $v := (default (dict) $rc.env) }}
+            - name: {{ $k | quote }}
+              value: {{ $v | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ $.Values.app.server.port }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            # Tolerant enough not to FLAP a loaded pod out of the Service endpoints: under a
+            # heavy pool-exhaustion fault the event loop can be transiently slow to answer the
+            # static /healthz, and a tight default readiness would drop the pod (-> callers see
+            # "connection refused" instead of the intended 503).
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            # Liveness must catch a DEAD process, not a merely LOADED one. A heavy fault can
+            # make the static /healthz transiently slow; the tight 1s/3-failure default would
+            # RESTART the pod — catastrophic for a Tier-2 image fault that RE-ARMS on boot
+            # (the restart re-injects the fault, so the operator's repair can never hold).
+            # 5s timeout x 6 failures = ~60s of true unresponsiveness before a restart.
+            timeoutSeconds: 5
+            failureThreshold: 6
+          volumeMounts:
+            - name: app-config
+              mountPath: /config
+              readOnly: true
+            {{- if eq $role "auth" }}
+            - name: auth-signing-keys
+              mountPath: /auth-keys
+              readOnly: true
+            - name: auth-controller-public
+              mountPath: /auth-controller
+              readOnly: true
+            {{- end }}
+            {{- if $bcTarget }}
+            - name: runtime
+              mountPath: /runtime
+              readOnly: true
+            {{- end }}
+            {{- if $harden }}
+            # readOnlyRootFilesystem needs a writable scratch dir for the runtime.
+            - name: tmp
+              mountPath: /tmp
+            {{- end }}
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" $role) | nindent 12 }}
+      volumes:
+        - name: app-config
+          configMap:
+            name: app-config
+        {{- if eq $role "auth" }}
+        - name: auth-signing-keys
+          configMap:
+            name: auth-signing-keys
+        - name: auth-controller-public
+          configMap:
+            name: auth-controller-public
+        {{- end }}
+        {{- if $bcTarget }}
+        - name: source
+          persistentVolumeClaim:
+            claimName: src-svc-{{ $role }}
+        - name: runtime
+          emptyDir: {}
+        - name: work
+          emptyDir: {}
+        {{- end }}
+        {{- if $harden }}
+        - name: tmp
+          emptyDir: {}
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-{{ $role }}
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: svc-{{ $role }}
+spec:
+  selector:
+    app.kubernetes.io/component: svc-{{ $role }}
+  ports:
+    - name: http
+      port: {{ $.Values.app.server.port }}
+      targetPort: http
+{{- if $surfaceEnabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc-{{ $role }}-headless
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: svc-{{ $role }}
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/component: svc-{{ $role }}
+  ports:
+    - name: http
+      port: {{ $.Values.app.server.port }}
+      targetPort: http
+{{- end }}
+{{- end }}
+{{- end }}
+---
+# app-config: ALL role sections rendered with a UNIFORM key set so the faulted
+# knob (under a scenario overlay) is never a greppable outlier (D7). The app
+# reads roles.<SERVICE_ROLE>.db; the DSN comes from the DB_DSN env, not this file.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+data:
+  app.yaml: |
+    roles:
+{{- range $role, $rc := .Values.app.roles }}
+      {{ $role }}:
+        db:
+          pool_size: {{ $rc.db.pool_size }}
+          max_overflow: {{ $rc.db.max_overflow }}
+          pool_timeout_s: {{ $rc.db.pool_timeout_s }}
+          hold_ms: {{ $rc.db.hold_ms }}
+          # In-lock sequencer hold (default 0 -> no-op; servicekit also defaults it to 0
+          # if absent, so every shipped scenario is behaviorally byte-identical). A fault
+          # overlay (03-S1) sets it > 0 on the message role to serialize hot-channel writes.
+          seq_lock_hold_ms: {{ $rc.db.seq_lock_hold_ms | default 0 }}
+        # Mesh client policy (servicekit/mesh.ts): the per-role service-to-service HTTP retry/breaker
+        # knobs. Rendered UNIFORMLY on every role (D7) with default-safe values (retries=1, breaker off)
+        # so it is byte-identical to a one-shot fetch and never a greppable outlier. GET /admin/config
+        # returns this block; every key is present so a partial runtime update is captured key-preserving.
+        mesh:
+          # int64 forces plain-integer rendering (Helm coerces values to float64, so a large
+          # breakerThreshold would otherwise render as 1e+06). Booleans render as-is.
+          retries: {{ $rc.mesh.retries | default 1 | int64 }}
+          retryOnTimeout: {{ $rc.mesh.retryOnTimeout | default false }}
+          perTryTimeoutMs: {{ $rc.mesh.perTryTimeoutMs | default 3000 | int64 }}
+          backoffMs: {{ $rc.mesh.backoffMs | default 0 | int64 }}
+          breakerEnabled: {{ $rc.mesh.breakerEnabled | default false }}
+          breakerThreshold: {{ $rc.mesh.breakerThreshold | default 1000000 | int64 }}
+{{- end }}
+    server:
+      port: {{ .Values.app.server.port }}

@@ -1,0 +1,49 @@
+apiVersion: v2
+name: erpnext
+description: Kubernetes Helm Chart for the latest stable ERPNext branch
+icon: 
+  https://raw.githubusercontent.com/frappe/erpnext/develop/erpnext/public/images/erpnext-logo.png
+type: application
+version: 8.0.65
+appVersion: v16.26.2
+dependencies:
+- name: mariadb
+  condition: mariadb.enabled,mariadb-subchart.enabled
+  alias: mariadb-subchart
+  version: "11.5.7"
+  repository: "https://charts.bitnami.com/bitnami"
+- name: postgresql
+  condition: postgresql.enabled,postgresql-subchart.enabled
+  alias: postgresql-subchart
+  version: "12.1.6"
+  repository: "https://charts.bitnami.com/bitnami"
+- name: redis
+  condition: redis-cache.enabled
+  alias: redis-cache
+  version: "17.15.2"
+  repository: "https://charts.bitnami.com/bitnami"
+- name: redis
+  condition: redis-queue.enabled
+  alias: redis-queue
+  version: "17.15.2"
+  repository: "https://charts.bitnami.com/bitnami"
+- name: dragonfly
+  condition: dragonfly-cache.enabled
+  alias: dragonfly-cache
+  version: "v1.34.2"
+  repository: "oci://ghcr.io/dragonflydb/dragonfly/helm"
+- name: dragonfly
+  condition: dragonfly-queue.enabled
+  alias: dragonfly-queue
+  version: "v1.34.2"
+  repository: "oci://ghcr.io/dragonflydb/dragonfly/helm"
+- name: valkey
+  condition: valkey-cache.enabled
+  alias: valkey-cache
+  version: "0.9.3"
+  repository: "https://valkey-io.github.io/valkey-helm"
+- name: valkey
+  condition: valkey-queue.enabled
+  alias: valkey-queue
+  version: "0.9.3"
+  repository: "https://valkey-io.github.io/valkey-helm"

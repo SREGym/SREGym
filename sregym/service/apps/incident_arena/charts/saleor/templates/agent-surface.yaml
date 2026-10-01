@@ -1,0 +1,166 @@
+{{- $surface := .Values.agentSurface }}
+{{- if $surface.buildCapable.enabled }}
+{{- if not $surface.releaseApproved }}
+{{- fail "SECURITY QUARANTINE: Saleor build-capable requires agentSurface.releaseApproved=true after the real Kind surface gate passes" }}
+{{- end }}
+{{- $target := required "agentSurface.buildCapable.targetRole is required" $surface.buildCapable.targetRole }}
+{{- if not (has $target (list "api" "worker")) }}
+{{- fail "agentSurface.buildCapable.targetRole must be api or worker" }}
+{{- end }}
+{{- if empty $surface.buildCapable.sourcePaths }}
+{{- fail "agentSurface.buildCapable.sourcePaths must not be empty" }}
+{{- end }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: saleor-agent-source
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: saleor-{{ $target }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ $surface.buildCapable.storage | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: saleor-agent-snapshot
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: trusted-source-snapshot
+data:
+  placeholder: ""
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: saleor-agent-surface
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: rebuild-broker
+data:
+  saleor-rebuild-broker.py: |
+{{ .Files.Get "files/saleor-rebuild-broker.py" | indent 4 }}
+  rebuild-saleor-app: |
+{{ .Files.Get "files/rebuild-saleor-app" | indent 4 }}
+  saleor-source-collector.py: |
+{{ .Files.Get "files/saleor-source-collector.py" | indent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: saleor-rebuild-broker
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: rebuild-broker
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: saleor-rebuild-broker
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: rebuild-broker
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["saleor-{{ $target }}"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["saleor-agent-snapshot"]
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: saleor-rebuild-broker
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: rebuild-broker
+subjects:
+  - kind: ServiceAccount
+    name: saleor-rebuild-broker
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: saleor-rebuild-broker
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: saleor-rebuild-broker
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: rebuild-broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: rebuild-broker
+  template:
+    metadata:
+      labels:
+        {{- include "saleor-spine.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: rebuild-broker
+    spec:
+      serviceAccountName: saleor-rebuild-broker
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: broker
+          image: {{ .Values.images.main | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["python3", "/surface/saleor-rebuild-broker.py"]
+          env:
+            - name: BUILD_TARGET_ROLE
+              value: {{ $target | quote }}
+            - name: SOURCE_PATHS_JSON
+              value: {{ $surface.buildCapable.sourcePaths | toJson | quote }}
+            - name: REBUILD_TIMEOUT_S
+              value: {{ $surface.buildCapable.rebuildTimeoutSeconds | quote }}
+          ports:
+            - {name: http, containerPort: 9180}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: ["ALL"]}
+          volumeMounts:
+            - {name: surface, mountPath: /surface, readOnly: true}
+            - {name: source, mountPath: /source, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: surface
+          configMap:
+            name: saleor-agent-surface
+            defaultMode: 0555
+        - name: source
+          persistentVolumeClaim:
+            claimName: saleor-agent-source
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: saleor-rebuild-broker
+  labels:
+    {{- include "saleor-spine.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: rebuild-broker
+spec:
+  selector:
+    app.kubernetes.io/component: rebuild-broker
+  ports:
+    - {name: http, port: 9180, targetPort: http}
+{{- end }}

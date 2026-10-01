@@ -1,0 +1,67 @@
+Frappe/ERPNext Release deployed
+
+{{- if or .Values.mariadb.enabled (get .Values "mariadb-subchart").enabled .Values.postgresql.enabled (get .Values "postgresql-subchart").enabled (get .Values "redis-cache").enabled (get .Values "redis-queue").enabled }}
+
+DEPRECATION WARNING:
+You are using one or more of the legacy Bitnami subcharts (MariaDB, PostgreSQL, or Redis).
+Support for these subcharts is deprecated and will be removed in a future major release.
+
+We strongly recommend migrating to the new built-in components for database and caching.
+Please follow the migration guide to update your deployment:
+https://github.com/frappe/helm/blob/main/erpnext/MIGRATION.md
+{{- end }}
+
+Release Name: {{ include "erpnext.fullname" . }}
+
+Wait for the pods to start.
+
+To create sites and other resources, refer to the main README:
+https://github.com/frappe/helm/blob/main/erpnext/README.md
+
+Frequently Asked Questions:
+https://helm.erpnext.com/faq
+
+Frappe Helm Chart v8.0.0 Upgrade Notice: Important Changes to MariaDB
+
+=============================================================================
+>>> ACTION REQUIRED BEFORE UPGRADING TO v8.0.0 <<<
+=============================================================================
+
+The Frappe Helm Charts are removing the deprecated Bitnami subcharts.
+
+- v7.x.x: Bitnami MariaDB subchart was enabled BY DEFAULT.
+- v8.0.0+: NO MariaDB dependency is enabled BY DEFAULT.
+
+If you upgrade without explicitly enabling MariaDB, your deployment will fail
+or be non-functional.
+
+-----------------------------------------------------------------------------
+HOW TO ENABLE MARIA DB FOR v8.0.0+
+-----------------------------------------------------------------------------
+
+You MUST explicitly set one of the following in your values.yaml:
+
+1.  RECOMMENDED FUTURE OPTION (New StatefulSet-based MariaDB):
+    Use the new dedicated chart option. This is the long-term replacement.
+    New installations use this for in cluster MariaDB.
+
+    mariadb-sts.enabled: true
+
+2.  TEMPORARY SUPPORT OPTION (Deprecated Bitnami Subchart):
+    Only use this if you are currently using bitnami subcharts and need time to transition.
+    This WILL be removed later.
+
+    mariadb.enabled: true
+    # or
+    mariadb-subchart.enabled: true
+
+3.  EXTERNAL MARIA DB:
+    If connecting to a cloud or externally managed MariaDB instance.
+
+    mariadb.enabled: false
+    # Configure your external connection details in README...
+
+-----------------------------------------------------------------------------
+
+Failing to set a MariaDB option will result in a deployment error.
+Please review your configuration before performing the upgrade.

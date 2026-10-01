@@ -1,0 +1,301 @@
+# ── tier-01 edge: envoy-edge (DaemonSet, real Envoy), ws-gateway (stateful WS, PVC
+#    send buffer + shared ring), cdn-static (nginx), geodns (Go stub). ──
+
+{{- if include "slack.enabled" (dict "root" $ "key" "envoy") }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: envoy-config
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+data:
+  envoy.yaml: |
+    admin:
+      address:
+        socket_address: {address: 0.0.0.0, port_value: 9901}
+    static_resources:
+      listeners:
+        - name: edge
+          address:
+            socket_address: {address: 0.0.0.0, port_value: 8443}
+          filter_chains:
+            - filters:
+                - name: envoy.filters.network.http_connection_manager
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                    stat_prefix: edge
+                    upgrade_configs:
+                      - upgrade_type: websocket
+                    route_config:
+                      name: edge_routes
+                      virtual_hosts:
+                        - name: edge
+                          domains: ["*"]
+                          routes:
+                            - match: {prefix: "/ws"}
+                              route: {cluster: ws_gateway, timeout: 0s}
+                            - match: {prefix: "/"}
+                              route: {cluster: app_message}
+                    http_filters:
+                      - name: envoy.filters.http.router
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      clusters:
+        - name: ws_gateway
+          type: STRICT_DNS
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: ws_gateway
+            endpoints:
+              - lb_endpoints:
+                  - endpoint: {address: {socket_address: {address: ws-gateway, port_value: 9101}}}
+        - name: app_message
+          type: STRICT_DNS
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: app_message
+            endpoints:
+              - lb_endpoints:
+                  - endpoint: {address: {socket_address: {address: svc-message, port_value: 8000}}}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: envoy-edge
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: envoy-edge
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: envoy-edge
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: envoy-edge
+    spec:
+      containers:
+        - name: envoy
+          image: {{ .Values.images.envoy | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["envoy", "-c", "/etc/envoy/envoy.yaml", "--service-cluster", "edge"]
+          ports:
+            - {name: edge, containerPort: 8443}
+            - {name: admin, containerPort: 9901}
+          readinessProbe:
+            httpGet: {path: /ready, port: admin}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - name: envoy-config
+              mountPath: /etc/envoy
+              readOnly: true
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "envoy") | nindent 12 }}
+      volumes:
+        - name: envoy-config
+          configMap:
+            name: envoy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: envoy-edge
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: envoy-edge
+spec:
+  selector:
+    app.kubernetes.io/component: envoy-edge
+  ports:
+    - {name: edge, port: 8443, targetPort: edge}
+    - {name: admin, port: 9901, targetPort: admin}
+{{- end }}
+
+{{- if include "slack.enabled" (dict "root" $ "key" "wsGateway") }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ws-gateway
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: ws-gateway
+spec:
+  clusterIP: None        # headless: stable identity for the stateful gateway
+  selector:
+    app.kubernetes.io/component: ws-gateway
+  ports:
+    - name: http
+      port: 9101
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ws-gateway
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: ws-gateway
+spec:
+  serviceName: ws-gateway
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: ws-gateway
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: ws-gateway
+    spec:
+      containers:
+        - name: ws-gateway
+          image: {{ .Values.images.go | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/usr/local/bin/ws-gateway"]
+          env:
+            - name: PORT
+              value: "9101"
+            - name: RING_PATH
+              value: /config/ring.yaml
+            - name: GW_BUFFER_DIR
+              value: /var/lib/gateway/buffer
+            - name: FLANNEL_URL
+              value: "http://flannel:8200"
+          ports:
+            - name: http
+              containerPort: 9101
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          volumeMounts:
+            - name: ring-config
+              mountPath: /config
+              readOnly: true
+            - name: gw-buffer
+              mountPath: /var/lib/gateway/buffer
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "wsGateway") | nindent 12 }}
+      volumes:
+        - name: ring-config
+          configMap:
+            name: ring-config
+  volumeClaimTemplates:
+    - metadata:
+        name: gw-buffer
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+{{- end }}
+
+{{- if include "slack.enabled" (dict "root" $ "key" "cdn") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cdn-static
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cdn-static
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: cdn-static
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: cdn-static
+    spec:
+      containers:
+        - name: nginx
+          image: {{ .Values.images.cdn | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - name: http
+              containerPort: 80
+          readinessProbe:
+            httpGet: {path: /, port: http}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "cdn") | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cdn-static
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: cdn-static
+spec:
+  selector:
+    app.kubernetes.io/component: cdn-static
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+{{- end }}
+
+{{- if include "slack.enabled" (dict "root" $ "key" "geodns") }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: geodns
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: geodns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: geodns
+  template:
+    metadata:
+      labels:
+        {{- include "slack.labels" $ | nindent 8 }}
+        app.kubernetes.io/component: geodns
+    spec:
+      containers:
+        - name: geodns
+          image: {{ .Values.images.go | quote }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/usr/local/bin/geodns"]
+          env:
+            - {name: PORT, value: "8053"}
+          ports:
+            - name: http
+              containerPort: 8053
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            {{- include "slack.resources" (dict "root" $ "key" "geodns") | nindent 12 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: geodns
+  labels:
+    {{- include "slack.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: geodns
+spec:
+  selector:
+    app.kubernetes.io/component: geodns
+  ports:
+    - name: http
+      port: 8053
+      targetPort: http
+{{- end }}
