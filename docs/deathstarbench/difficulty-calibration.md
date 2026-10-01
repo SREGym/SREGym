@@ -116,6 +116,37 @@ have produced invalid attempts rather than difficulty data: the campaign runner
 could not select either new incident, and the Claude Code client rejected
 subscription credentials outright. See the commit history.
 
+## What the 0% screens imply, and the family built in response
+
+Three families now score 0% against a frontier agent: the two newest and, by
+Codex medians, the older ones too. They varied topology, state size, telemetry
+volume, acknowledged-write accounting and grading contract. None of that
+separated models.
+
+The common shape they share is a *short, forgiving* recovery: diagnose, act once
+or twice, submit, and the whole thing fits comfortably inside a 900-second
+budget. The agent times — 206-443 s — say the budget was never the constraint.
+
+[Coordination collapse](coordination-collapse.md) is the response, and it changes
+the shape rather than the volume:
+
+- recovery has a **measured floor** of 360 s (`single`) before any diagnosis,
+  with every phase gated on the previous one settling, and premature action
+  *regressing* progress rather than merely failing. Its declared budget is
+  2,700 s, because running a 360-second floor at 900 s measures the budget.
+- the convenient tools **lie**: `/status` serves a pre-incident snapshot, the
+  obvious diagnostic hangs and makes things worse, and the aggregated metrics
+  collector is circularly dependent on the service it monitors.
+- requests lost are **lost permanently** against a budget, and forcing progress
+  by destroying members leaves damage the grader refuses to call recovery.
+
+Measured on the state machine: a flawless run reaches full service in 366 s with
+zero loss; a rushed run finishes *sooner* at zero capacity with permanent loss; a
+run that never sheds load makes no progress however long it waits.
+
+It is implemented and unit-tested (42 tests across physics and grading). It has
+**not** been screened against any agent, and live admission has not yet run.
+
 These are exploratory calibration screens with adaptive candidate development.
 They do not provide an independent held-out estimate of model reliability or
 establish that replicas alone caused a difficulty change. Earlier successes are

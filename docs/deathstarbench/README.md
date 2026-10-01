@@ -29,6 +29,10 @@ The [Mattermost capacity cascade](mattermost-capacity-cascade.md) is the first
 family that is not a data-recovery task at all: a correct CPU measurement means the
 wrong thing, and the capacity automation that believes it keeps removing replicas
 and undoing manual scale-ups.
+The [coordination collapse family](coordination-collapse.md) answers the screens
+directly: all three earlier families scored 0% difficulty, so this one uses the
+levers none of them did — a recovery floor that cannot be compressed, tooling
+that lies rather than being absent, and losses that accumulate irreversibly.
 The [difficulty calibration report](difficulty-calibration.md) records the fixed
 three-attempt postmortem screens and the current candidate's validation status.
 
