@@ -35,6 +35,9 @@ TEMPLATE_DIR = Path(__file__).parent / "task-template"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BACKEND_IMAGE = "ghcr.io/sregym/sregym-dind:latest"
 DEFAULT_KUBECTL_VERSION = "v1.32.1"
+# Google's public Docker Hub cache. Parallel trials otherwise exhaust Docker
+# Hub's anonymous pull limit; images it lacks are pulled from Docker Hub.
+DEFAULT_REGISTRY_MIRROR = "https://mirror.gcr.io"
 # SREGym's own runner gives agents 1800s per attempt.
 DEFAULT_AGENT_TIMEOUT_S = 1800
 # Default oracle budget: the base mitigation oracle waits up to 60s for
@@ -192,6 +195,8 @@ class SREGymAdapter:
         cpus: int = 8,
         memory_mb: int = 16384,
         storage_mb: int = 51200,
+        registry_mirror: str = DEFAULT_REGISTRY_MIRROR,
+        kind_node_image: str = "",
     ):
         self.output_dir = output_dir
         self.limit = limit
@@ -203,6 +208,8 @@ class SREGymAdapter:
         self.cpus = cpus
         self.memory_mb = memory_mb
         self.storage_mb = storage_mb
+        self.registry_mirror = registry_mirror
+        self.kind_node_image = kind_node_image
 
     def _values(self, info: ProblemInfo, oracle_token: str) -> dict[str, str]:
         if len(info.namespaces) > 1:
@@ -230,6 +237,8 @@ class SREGymAdapter:
             "ready_timeout": f"{float(READY_WAIT_S + 60)}",
             "ready_retries": str(READY_BUDGET_S // READY_WAIT_S),
             "backend_image": self.backend_image,
+            "registry_mirror": self.registry_mirror,
+            "kind_node_image": self.kind_node_image,
             "kubectl_version": DEFAULT_KUBECTL_VERSION,
             "oracle_token": oracle_token,
             "oracle_token_sha256": hashlib.sha256(oracle_token.encode()).hexdigest(),
@@ -294,6 +303,16 @@ def main(argv=None) -> int:
         default=DEFAULT_BACKEND_IMAGE,
         help="SREGym DinD image for the sidecar; SREGYM_HARBOR_IMAGE overrides it when a task runs",
     )
+    parser.add_argument(
+        "--registry-mirror",
+        default=DEFAULT_REGISTRY_MIRROR,
+        help="Docker Hub pull-through mirror for the sidecar and KIND nodes; pass '' to pull from Docker Hub directly",
+    )
+    parser.add_argument(
+        "--kind-node-image",
+        default="",
+        help="Prebuilt KIND node image (built from kind/Dockerfile); by default each trial builds it during setup",
+    )
     parser.add_argument("--agent-timeout", type=int, default=DEFAULT_AGENT_TIMEOUT_S, help="Agent time limit (s)")
     parser.add_argument("--cpus", type=int, default=8, help="CPUs requested for the task's whole Compose stack")
     parser.add_argument("--memory-mb", type=int, default=16384, help="Memory requested for the whole stack")
@@ -312,6 +331,8 @@ def main(argv=None) -> int:
         cpus=args.cpus,
         memory_mb=args.memory_mb,
         storage_mb=args.storage_mb,
+        registry_mirror=args.registry_mirror,
+        kind_node_image=args.kind_node_image,
     )
     try:
         written, skipped = adapter.run()

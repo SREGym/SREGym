@@ -20,6 +20,17 @@ services:
     environment:
       SREGYM_PROBLEM_ID: "{{problem_id}}"
       SREGYM_ORACLE_TOKEN_SHA256: "{{oracle_token_sha256}}"
+      # Docker Hub pull-through mirror for the private daemon and every KIND
+      # node; pulls fall back to Docker Hub. Set the variable empty to disable.
+      SREGYM_REGISTRY_MIRROR: "${SREGYM_REGISTRY_MIRROR-{{registry_mirror}}}"
+      # Prebuilt KIND node image; empty builds kind/Dockerfile during setup.
+      SREGYM_KIND_NODE_IMAGE: "${SREGYM_KIND_NODE_IMAGE-{{kind_node_image}}}"
+      # Setup diagnostics (host report, dockerd and KIND logs) go to the
+      # collected log directory. A failed setup marks the shared state failed,
+      # so the healthcheck stops at once, and stays up so Harbor can collect them.
+      SREGYM_DIND_RESULTS: "{{log_dir}}/dind"
+      SREGYM_FAILURE_STATE_DIR: "{{backend_shared_dir}}"
+      SREGYM_HOLD_ON_FAILURE_S: "3600"
     volumes:
       - sregym-shared:{{backend_shared_dir}}
     stop_grace_period: 60s

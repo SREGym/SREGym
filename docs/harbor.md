@@ -81,27 +81,40 @@ Other options:
 | Option | Default | Meaning |
 |---|---|---|
 | `--backend-image` | `ghcr.io/sregym/sregym-dind:latest` | Sidecar image. `SREGYM_HARBOR_IMAGE` overrides it when a task runs. |
+| `--kind-node-image` | empty | Prebuilt KIND node image (see [Build the images](#build-the-images)). Empty means each trial builds `kind/Dockerfile` during setup, which is slower and needs Ubuntu's package mirrors. |
+| `--registry-mirror` | `https://mirror.gcr.io` | Docker Hub pull-through mirror for the sidecar's daemon and every KIND node. Images the mirror lacks are pulled from Docker Hub. Pass `''` to pull from Docker Hub directly. |
 | `--agent-timeout` | `1800` | Agent time limit in seconds, matching SREGym's runner. |
 | `--cpus` / `--memory-mb` / `--storage-mb` | `8` / `16384` / `51200` | Resources requested for the whole task. Cloud providers size the sandbox from these. |
 | `--limit`, `--overwrite` | | Standard Harbor adapter flags. |
 
 Task names are `sregym/<problem-id>`, lowercased with `_` replaced by `-`.
 
-## Build the backend image
+## Build the images
 
 The sidecar runs the DinD image with the SREGym checkout baked in, so rebuild
-it whenever problems or oracles change:
+it whenever problems or oracles change.
+
+**For cloud providers**, run the **Publish Harbor Images** workflow
+(`.github/workflows/publish-harbor-images.yml`, from the Actions tab). It
+pushes two images:
+
+- `ghcr.io/sregym/sregym-dind:<tag>`
+- `ghcr.io/sregym/kind-node:v1.32.11-<tag>`, a prebuilt KIND node image
+
+The workflow summary prints the matching adapter command. Cloud sandboxes pull
+anonymously, so make both GHCR packages public the first time they are
+published. Generate tasks with both `--backend-image` and `--kind-node-image`
+pointing at the published tag, so a dataset always pins the SREGym version
+that produced it.
+
+**For local runs**:
 
 ```bash
 git submodule update --init --recursive
 python3 docker/dind/run.py build                  # tags sregym-dind:local
-docker tag sregym-dind:local ghcr.io/sregym/sregym-dind:<version>
-docker push ghcr.io/sregym/sregym-dind:<version>
 ```
 
-Generate tasks with `--backend-image` pointing at the pushed tag, so a dataset
-always pins the SREGym version that produced it. For local runs, either
-generate with `--backend-image sregym-dind:local` or export
+Then either generate with `--backend-image sregym-dind:local` or export
 `SREGYM_HARBOR_IMAGE=sregym-dind:local`.
 
 ## Run with Harbor
@@ -129,13 +142,15 @@ because every trial starts with an empty image cache.
 
 ### Sidecar options
 
-Set these with a Compose overlay on the `sregym` service. Pass the overlay with
+Generated tasks already set the registry mirror and node image from the
+adapter flags above. To change these or other sidecar settings for one run, put
+a Compose overlay on the `sregym` service and pass it with
 `harbor run --extra-docker-compose overlay.yaml`:
 
 | Variable | Purpose |
 |---|---|
-| `SREGYM_REGISTRY_MIRROR` | Docker Hub pull-through mirror, e.g. `https://mirror.gcr.io`, for the private daemon and every KIND node. Parallel trials otherwise exhaust Docker Hub's anonymous pull limit quickly. |
-| `SREGYM_KIND_NODE_IMAGE` | Use a prebuilt node image instead of building `kind/Dockerfile` in every trial. |
+| `SREGYM_REGISTRY_MIRROR` | Docker Hub pull-through mirror for the private daemon and every KIND node. Defaults to `--registry-mirror`. Set it empty to pull from Docker Hub directly. Without a mirror, parallel trials quickly exhaust Docker Hub's anonymous pull limit. |
+| `SREGYM_KIND_NODE_IMAGE` | Prebuilt node image used instead of building `kind/Dockerfile` in every trial. Defaults to `--kind-node-image`. |
 | `SREGYM_EXTRA_CA_CERTS` | PEM bundle to trust in the sidecar and on every node, for TLS-inspecting egress proxies. Mount the file into the sidecar. |
 | `SREGYM_ETCD_TMPFS_SIZE`, `SREGYM_DOCKER_STORAGE_DRIVER`, ... | The existing [DinD settings](../docker/dind/README.md). |
 
@@ -145,22 +160,71 @@ Example:
 services:
   sregym:
     environment:
-      SREGYM_REGISTRY_MIRROR: https://mirror.gcr.io
+      SREGYM_REGISTRY_MIRROR: https://registry.example.internal
 ```
 
 ### Cloud providers
 
-The task needs a provider that runs Docker Compose with `privileged: true`
-services and lets that service run its own Docker daemon and KIND cluster.
-According to Harbor's documentation:
+A provider must run Docker Compose tasks and let the `privileged: true`
+sidecar run its own Docker daemon and KIND cluster.
 
-- Compose runs natively on `docker`, `ec2` and `vercel`.
-- Compose runs inside Docker-in-Docker on `daytona`, `gke` (Standard, not
-  Autopilot), `modal` and others. These providers add another layer of nesting.
-- Providers without Compose support cannot run these tasks.
+**Harbor itself does not get in the way.** It never rewrites or rejects a
+service's `privileged`, `cgroup`, `security_opt` or `devices` keys; its
+generated overrides only touch the `main` service. Whether the sidecar works
+depends on what the provider's sandbox is.
 
-Only local Docker has been exercised so far. Start with the self-test task on a
-new provider before scheduling real problems.
+The table below comes from reading Harbor's environment code (`main` on
+2026-10-01). **None of these providers has been tested with SREGym yet.**
+
+| Provider (`-e`) | Where Compose runs | Expected for the sidecar | Sizing notes |
+|---|---|---|---|
+| `ec2` | Real VM; Docker CE installed by Harbor | Should work (full kernel) | The default `m7i-flex.large` (2 vCPU, 8 GiB) is too small: set `instance_type` and `root_volume_size_gb`. |
+| `gke` | Privileged `docker:dind` pod | Should work on GKE Standard | Autopilot blocks privileged pods. |
+| `daytona` | DinD sandbox built from `docker:28.3.3-dind`. Daytona runs DinD sandboxes on Sysbox (per Daytona's issue tracker), which confines privileged nested containers to the sandbox. | Should work | CPU, memory and disk are passed through, except when `--ek dind_snapshot` is used. Your Daytona organization's sandbox limits must allow 8 CPUs and 16 GiB. |
+| `prime`, `islo`, `tensorlake`, `blaxel`, `novita`, `vercel` | VM or microVM sandboxes | Likely | `vercel` caps disk at 32 GB: pass `--storage-mb 32768`. `blaxel` cannot set CPUs. `novita` sizes the sandbox from its template. `tensorlake` hosts may lack KVM, which makes them very slow. |
+| `langsmith`, `hyperbrowser`, `runta` | Not stated in Harbor's code | Unknown | |
+| `modal` | gVisor by default, with no bridge networking for Compose | No. The alpha `--ek modal_vm_runtime=true` microVM runtime is untested. | |
+| `beam` | Forces host network, PID and cgroup on every service | Unlikely | |
+
+On most providers, `allow_internet = false` isolates only the `main` service;
+the sidecar keeps the registry access that problem setup needs. `islo`,
+`tensorlake`, `prime`, `hyperbrowser` and `runta` apply network policy to the
+whole sandbox instead.
+
+Start every new provider with the self-test task:
+
+```bash
+uv run python -m sregym.harbor.adapter --self-test --output-dir datasets/sregym-selftest \
+    --backend-image ghcr.io/sregym/sregym-dind:<tag> --kind-node-image ghcr.io/sregym/kind-node:v1.32.11-<tag>
+harbor run -p datasets/sregym-selftest -a oracle -e daytona
+```
+
+### Diagnosing a provider
+
+The sidecar records what the host offers before it starts anything, in
+`logs/dind/environment.txt` among the trial's collected artifacts:
+
+- kernel and cgroup version, CPUs, memory and free disk
+- whether the container is really privileged, and whether it runs in a user
+  namespace or under Sysbox
+- whether the kernel features SREGym uses are available (`br_netfilter`,
+  `ipip` for Calico, `sch_netem` for Chaos Mesh delays, and others)
+- inotify limits
+- which registries and chart repositories are reachable
+
+The same directory holds `dockerd.log`, plus `kind-logs/` when cluster creation
+fails. The report's one-line summary also appears in the sidecar's log.
+
+If setup fails before the backend starts, the sidecar marks the shared state
+`failed` with the stage that broke. The healthcheck then stops at once with a
+message such as:
+
+```
+SREGym sidecar setup failed during: private Docker daemon (exit 1). Diagnostics: /sregym-harbor/logs/dind
+```
+
+The sidecar then stays up for an hour so Harbor can still collect its
+diagnostics.
 
 ## Validation status
 
@@ -174,6 +238,20 @@ That VM uses cgroup v1, and its egress policy blocks several registries.
 | Agent isolation, probed from `main` during a trial | `kubectl` works through the proxy. The shared volume is read-only. The grading port is unreachable. Recovery without the token returns 403. There is no Docker socket, KIND nodes do not resolve, and the problem ID is not visible. |
 | Sidecar exits during cluster setup | Harbor reports `HealthcheckError` about a minute later, not after the full hour. |
 | Real problem (`network_policy_block`) | The Conductor path ran inside the sidecar: `fix_kubernetes`, mitigation-only stages, cleanup, deploy. Deployment then stopped because the VM blocks `registry.k8s.io`. The backend reported `failed` with the reason, Harbor reported `HealthcheckError`, and the backend logs were still collected. |
+
+The setup-failure path was checked by running a generated task's Compose file
+with a sidecar whose setup fails. Two cases were tried: a sidecar image without
+`dockerd`, and the same sidecar with `privileged` removed. In both, the agent
+container's `sregym-ready` failed within 5 seconds, naming the failing stage
+(`private Docker daemon` or `cgroup delegation`). The held sidecar still served
+`environment.txt` and `dockerd.log` to `docker compose cp`, which is how
+artifacts are copied.
+
+The **Harbor Self-Test** workflow (`.github/workflows/harbor-selftest.yml`)
+runs the self-test through Harbor's local Docker environment on a GitHub-hosted
+runner (cgroup v2, unrestricted network). It runs on changes to the Harbor
+integration, and requires reward 1 from the oracle agent and 0 from the no-op
+agent.
 
 Not yet validated: oracle and agent runs on real problems. These need
 unrestricted registry access (`registry.k8s.io`, `quay.io`, `ghcr.io`,

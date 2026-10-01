@@ -104,8 +104,12 @@ docker exec -it sregym-dev bash
 docker stop sregym-dev
 ```
 
-The entrypoint starts the daemon, waits for Docker, creates the cluster, waits
-for Calico/nodes, then starts the requested command. It propagates command exit
+The entrypoint first writes a host report (`environment.txt`, from
+`env-report.sh`) to the run's `dind/` directory. The report covers kernel,
+cgroups, privilege and Sysbox detection, required kernel features, inotify
+limits and registry reachability. The entrypoint then starts the daemon, waits
+for Docker, creates the cluster, waits for Calico/nodes, then starts the
+requested command. It propagates command exit
 status, handles termination and shuts down the daemon. Startup failures leave
 diagnostics under the run's `dind/` directory. An existing Docker socket is rejected.
 On cgroup v2 it first moves its processes into an `init` child group and delegates
@@ -115,6 +119,14 @@ explicitly requests a private cgroup namespace. Failed KIND nodes are retained
 until their logs have been exported, then removed with the outer environment.
 If overlay2 is unavailable on the backing filesystem, try setting
 `SREGYM_DOCKER_STORAGE_DRIVER=vfs` via the env file (slower and larger).
+
+Harnesses can adjust where diagnostics go and how setup failures are reported:
+
+| Variable | Effect |
+|---|---|
+| `SREGYM_DIND_RESULTS` | Diagnostics directory. Default: `/opt/sregym/results/dind`. |
+| `SREGYM_FAILURE_STATE_DIR` | On a setup failure, write `state` (`failed`) and `status.json` here, as the Harbor backend does. |
+| `SREGYM_HOLD_ON_FAILURE_S` | On a setup failure, stay up this many seconds so diagnostics can be copied out. |
 
 ## Harbor
 

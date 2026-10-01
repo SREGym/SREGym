@@ -1,0 +1,81 @@
+name: Publish Harbor Images
+
+# Publishes the images that generated Harbor tasks pull on cloud providers:
+# the SREGym sidecar (docker/dind) and a prebuilt KIND node image, which
+# saves every trial from building kind/Dockerfile during setup.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag (default is the commit's short SHA)
+        required: false
+      latest:
+        description: Also tag the sidecar image as latest
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      REGISTRY: ghcr.io/sregym
+      KIND_BASE_IMAGE: kindest/node:v1.32.11
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Choose the tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: echo "tag=${INPUT_TAG:-$(git rev-parse --short=12 HEAD)}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push the sidecar image
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          LATEST: ${{ inputs.latest }}
+        run: |
+          tags=(-t "$REGISTRY/sregym-dind:$TAG")
+          if [[ $LATEST == true ]]; then tags+=(-t "$REGISTRY/sregym-dind:latest"); fi
+          # BuildKit picks up docker/dind/Dockerfile.dockerignore.
+          docker buildx build --push "${tags[@]}" -f docker/dind/Dockerfile .
+
+      - name: Build and push the KIND node image
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          docker buildx build --push --build-arg "KIND_NODE_IMAGE=$KIND_BASE_IMAGE" \
+            -t "$REGISTRY/kind-node:${KIND_BASE_IMAGE##*:}-$TAG" kind
+
+      - name: Summary
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          {
+            echo "Generate tasks that use these images:"
+            echo '```'
+            echo "uv run python -m sregym.harbor.adapter --output-dir datasets/sregym \\"
+            echo "  --backend-image $REGISTRY/sregym-dind:$TAG \\"
+            echo "  --kind-node-image $REGISTRY/kind-node:${KIND_BASE_IMAGE##*:}-$TAG"
+            echo '```'
+            echo "Cloud providers pull these anonymously: make both GHCR packages public once."
+          } >> "$GITHUB_STEP_SUMMARY"

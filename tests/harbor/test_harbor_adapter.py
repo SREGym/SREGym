@@ -3,14 +3,19 @@
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import subprocess
 import tomllib
+from pathlib import Path
 
 import pytest
 import yaml
 
 from sregym.harbor import adapter, protocol
 from sregym.harbor.adapter import ProblemInfo, SREGymAdapter
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _info(**overrides) -> ProblemInfo:
@@ -68,6 +73,46 @@ def test_generated_task_is_complete_and_parses(task_dir):
     main = compose["services"]["main"]
     assert "privileged" not in main
     assert main["volumes"] == [f"sregym-shared:{protocol.AGENT_SHARED_DIR}:ro"]
+
+
+def test_sidecar_defaults_suit_cloud_providers(task_dir):
+    compose = yaml.safe_load((task_dir / "environment/docker-compose.yaml").read_text())
+    environment = compose["services"][protocol.SERVICE_NAME]["environment"]
+    # Overridable when the task runs; an empty value disables the mirror.
+    assert environment["SREGYM_REGISTRY_MIRROR"] == f"${{SREGYM_REGISTRY_MIRROR-{adapter.DEFAULT_REGISTRY_MIRROR}}}"
+    assert environment["SREGYM_KIND_NODE_IMAGE"] == "${SREGYM_KIND_NODE_IMAGE-}"
+    # Setup diagnostics land in the collected log directory, and a failed
+    # setup is reported through the shared state the healthcheck reads.
+    assert environment["SREGYM_DIND_RESULTS"].startswith(protocol.LOG_DIR + "/")
+    assert environment["SREGYM_FAILURE_STATE_DIR"] == protocol.BACKEND_SHARED_DIR
+    assert int(environment["SREGYM_HOLD_ON_FAILURE_S"]) > 0
+
+
+def test_mirror_and_node_image_can_be_set(tmp_path):
+    task = SREGymAdapter(tmp_path, registry_mirror="", kind_node_image="example.test/node:1").generate_task(_info())
+    environment = yaml.safe_load((task / "environment/docker-compose.yaml").read_text())["services"][
+        protocol.SERVICE_NAME
+    ]["environment"]
+    assert environment["SREGYM_REGISTRY_MIRROR"] == "${SREGYM_REGISTRY_MIRROR-}"
+    assert environment["SREGYM_KIND_NODE_IMAGE"] == "${SREGYM_KIND_NODE_IMAGE-example.test/node:1}"
+
+
+def test_dind_setup_failures_use_the_backend_state_files(tmp_path):
+    # The DinD entrypoint fails before the backend exists, so it writes the
+    # backend's state files itself; sregym-ready must read them the same way.
+    script = (ROOT / "docker/dind/entrypoint.sh").read_text()
+    function = re.search(r"^report_setup_failure\(\) \{\n.*?^\}\n", script, re.S | re.M).group(0)
+    shared = tmp_path / "shared"
+    subprocess.run(
+        ["bash", "-c", function + 'stage="KIND cluster"; results=/logs; report_setup_failure 3'],
+        env={**os.environ, "SREGYM_FAILURE_STATE_DIR": str(shared), "SREGYM_HOLD_ON_FAILURE_S": "0"},
+        check=True,
+        capture_output=True,
+    )
+    assert (shared / protocol.STATE_NAME).read_text().strip() == protocol.STATE_FAILED
+    status = json.loads((shared / protocol.STATUS_NAME).read_text())
+    assert status["state"] == protocol.STATE_FAILED
+    assert "KIND cluster" in status["error"]
 
 
 def test_only_the_reference_solution_can_trigger_recovery(task_dir, tmp_path):
