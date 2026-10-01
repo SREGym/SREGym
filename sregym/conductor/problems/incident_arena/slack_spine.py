@@ -916,6 +916,8 @@ class SlackSeqLockLeak(SlackSpineProblem):
 
     TASK = "018--slack-spine--09-I1-seq-lock-leak-0b7c2973"
     PROBLEM_ID = "incident_arena_slack_seq_lock_leak"
+    # The faulty release is deployed from the start.
+    HEALTHY_BASELINE = False
     # The reference repair bounds idle transactions server-wide.
     ALLOWED_PG_SETTINGS = ("idle_in_transaction_session_timeout",)
 
@@ -928,6 +930,8 @@ class SlackDistractorVolumeSeqLock(SlackSpineProblem):
 
     TASK = "019--slack-spine--13-P1-distractor-volume-shell-f73987d7"
     PROBLEM_ID = "incident_arena_slack_distractor_volume_seq_lock"
+    # The faulty release is deployed from the start.
+    HEALTHY_BASELINE = False
 
     def build_legs(self):
         return [SessionHandoffLock()]

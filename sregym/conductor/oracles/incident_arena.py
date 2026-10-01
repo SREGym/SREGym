@@ -5,7 +5,10 @@ Incident Arena grades a repair with two gates (abundant-ai/incident-arena,
 
 * **outcome** -- client-measured health over a post-repair soak window: error
   rate, goodput, per-driver limits and (for most Slack/Saleor tasks) latency,
-  with a repository-wide 20% tolerance on every band;
+  with a repository-wide 20% tolerance on every band. Latency bands are
+  absolute milliseconds from Incident Arena's hardware, so they are re-based
+  on the healthy latency this cluster showed before injection when that is
+  higher (``OutcomeSpec.latency_baseline``);
 * **safe repair** -- white-box state: the injected cause is gone, the change
   stayed inside the allowed scope, and it survives a verifier-owned restart.
 
@@ -23,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from sregym.conductor.oracles.base import Oracle
@@ -58,13 +61,28 @@ class CheckResult:
         return {"name": self.name, "passed": self.passed, "reason": self.reason, "detail": self.detail}
 
 
+# A latency band is never tighter than this multiple of the healthy p99 that the
+# same cluster showed before injection (see ``OutcomeSpec.latency_baseline``).
+LATENCY_BASELINE_FACTOR = 2.0
+
+
 @dataclass(frozen=True)
 class OutcomeSpec:
-    """Client-side health bands for the soak window (Incident Arena ``thresholds``)."""
+    """Client-side health bands for the soak window (Incident Arena ``thresholds``).
+
+    Incident Arena calibrated its latency bands in absolute milliseconds on its
+    own hardware (8 vCPU, single-node k3s). ``latency_baseline`` holds the
+    healthy p99 per phase kind (``overall``) and per driver (``by_driver``)
+    measured on this cluster before injection; each latency band becomes
+    ``max(band, latency_baseline_factor * healthy p99)`` before the 20%
+    tolerance. Error-rate and goodput bands stay absolute.
+    """
 
     thresholds: dict[str, Any]
     gate_latency: bool = True
     soak_s: float = 180.0
+    latency_baseline: dict[str, Any] | None = None
+    latency_baseline_factor: float = LATENCY_BASELINE_FACTOR
 
     @property
     def latency_percentile(self) -> float:
@@ -129,16 +147,31 @@ def evaluate_outcome(summary: dict[str, Any], spec: OutcomeSpec) -> list[CheckRe
         results.append(CheckResult(f"driver_{driver}_within_limits", passed, reason="service_unhealthy", detail=detail))
 
     if spec.gate_latency:
+        baseline = spec.latency_baseline or {}
+        factor = spec.latency_baseline_factor
         results.append(
-            _latency_check("sustained_latency", summary.get("latency") or {}, thresholds.get("p99_ms_by_phase") or {})
+            _latency_check(
+                "sustained_latency",
+                summary.get("latency") or {},
+                thresholds.get("p99_ms_by_phase") or {},
+                baseline.get("overall") or {},
+                factor,
+            )
         )
         for driver, bands in sorted((thresholds.get("latency_by_driver") or {}).items()):
             stats = (by_driver.get(driver) or {}).get("latency") or {}
-            results.append(_latency_check(f"driver_{driver}_latency", stats, bands))
+            healthy = (baseline.get("by_driver") or {}).get(driver) or {}
+            results.append(_latency_check(f"driver_{driver}_latency", stats, bands, healthy, factor))
     return results
 
 
-def _latency_check(name: str, latency: dict[str, Any], bands: dict[str, Any]) -> CheckResult:
+def _latency_check(
+    name: str,
+    latency: dict[str, Any],
+    bands: dict[str, Any],
+    healthy: dict[str, Any] | None = None,
+    factor: float = LATENCY_BASELINE_FACTOR,
+) -> CheckResult:
     per_kind = {}
     passed = True
     seen = False
@@ -149,10 +182,19 @@ def _latency_check(name: str, latency: dict[str, Any], bands: dict[str, Any]) ->
             per_kind[kind] = {"n": stats.get("n", 0), "value": None}
             continue
         seen = True
-        limit = relaxed_ceiling(band)
+        healthy_p = (healthy or {}).get(kind)
+        effective = max(float(band), factor * float(healthy_p)) if healthy_p is not None else float(band)
+        limit = relaxed_ceiling(effective)
         ok = value <= limit
         passed = passed and ok
-        per_kind[kind] = {"n": stats.get("n"), "value": value, "limit": limit, "pass": ok}
+        per_kind[kind] = {
+            "n": stats.get("n"),
+            "value": value,
+            "band": band,
+            "healthy": healthy_p,
+            "limit": limit,
+            "pass": ok,
+        }
     return CheckResult(name, passed and seen, reason="service_unhealthy", detail=per_kind)
 
 
@@ -179,12 +221,46 @@ class IncidentArenaMitigationOracle(Oracle):
         "no_traffic_observed": FailureClass.AMBIGUOUS,
     }
 
+    # Healthy traffic measured before injection to calibrate the latency bands.
+    LATENCY_BASELINE_WINDOW_S = 180.0
+
     def __init__(self, problem):
         super().__init__(problem)
         self.results: list[CheckResult] = []
+        self.latency_baseline: dict[str, Any] | None = None
 
     def capture_baseline(self) -> None:
         self.problem.capture_baseline()
+        spec: OutcomeSpec = self.problem.outcome_spec()
+        if not spec.gate_latency or not getattr(self.problem, "HEALTHY_BASELINE", True):
+            return
+        try:
+            self.latency_baseline = self._measure_latency_baseline(spec)
+        except Exception:
+            logger.warning("Could not measure the healthy latency; grading against absolute bands", exc_info=True)
+            self.latency_baseline = None
+        logger.info("Healthy latency baseline (p%.0f, ms): %s", spec.latency_percentile, self.latency_baseline)
+
+    def _measure_latency_baseline(self, spec: OutcomeSpec) -> dict[str, Any]:
+        """Healthy p-latency per phase kind and per driver over the last baseline window."""
+        workload = self.problem.app.wrk
+        window = max(float(spec.soak_s), self.LATENCY_BASELINE_WINDOW_S)
+        latest = workload.wait_for_traffic()
+        if latest < window:
+            # Too little healthy traffic yet (the validator injects right after deploy).
+            time.sleep(window - latest)
+            latest = workload.latest_sent_s() or latest
+        summary = workload.summary(latest - window, latency_percentile=spec.latency_percentile, settle_s=0.0)
+
+        def p_ms(stats: dict[str, Any]) -> dict[str, Any]:
+            return {
+                kind: v.get("p_ms") for kind, v in (stats.get("latency") or {}).items() if v.get("p_ms") is not None
+            }
+
+        return {
+            "overall": p_ms(summary),
+            "by_driver": {driver: p_ms(stats) for driver, stats in (summary.get("by_driver") or {}).items()},
+        }
 
     def _verdict(self, results: list[CheckResult]) -> dict:
         self.results = results
@@ -203,7 +279,7 @@ class IncidentArenaMitigationOracle(Oracle):
     def evaluate(self, *args, **kwargs) -> dict:
         print("== Mitigation Evaluation (Incident Arena) ==")
         problem = self.problem
-        spec: OutcomeSpec = problem.outcome_spec()
+        spec: OutcomeSpec = replace(problem.outcome_spec(), latency_baseline=self.latency_baseline)
         results: list[CheckResult] = []
 
         results.extend(problem.run_checks("declaration"))

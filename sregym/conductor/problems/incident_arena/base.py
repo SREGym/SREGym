@@ -86,6 +86,9 @@ class IncidentArenaProblem(Problem):
     #: Seconds of healthy traffic before injection / after injection.
     BASELINE_S: int = 120
     PROPAGATION_S: int = 120
+    #: Re-base latency bands on the latency measured before injection. Off when
+    #: the fault ships with the deployed release, so that window is not healthy.
+    HEALTHY_BASELINE: bool = True
 
     def __init__(self):
         self.task = IncidentArenaTask.load(self.TASK)

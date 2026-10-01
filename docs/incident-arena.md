@@ -113,7 +113,11 @@ its fault:
   2. **Outcome.** After the challenges, the oracle soaks for the task's `soak_s`. It then reads the
      load generator's own request ledger and checks error rate, correct goodput, per-driver lanes
      and, where Incident Arena gates it, the p90/p99 latency per peak/trough. It uses the task's
-     bands with Incident Arena's 20% tolerance.
+     bands with Incident Arena's 20% tolerance. The latency bands are absolute milliseconds
+     calibrated on Incident Arena's hardware, so each one is raised to twice the healthy latency
+     this cluster showed in the 180 s before injection when that is higher. On hardware like
+     Incident Arena's the task's own bands apply unchanged. Tasks 018 and 019 keep the absolute
+     bands, because their faulty release runs from deploy.
 
   Failures carry SREGym's failure classes:
   * Fault still present, unsafe or non-durable repairs, and restart-masking are `agent_error`.

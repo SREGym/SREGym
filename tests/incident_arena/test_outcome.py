@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+import pytest
+
+import sregym.conductor.oracles.incident_arena as oracle_module
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.incident_arena import (
     CheckResult,
@@ -67,6 +70,27 @@ def test_latency_is_only_graded_when_the_task_gates_it():
     assert "sustained_latency" not in _by_name(evaluate_outcome(slow, OutcomeSpec(THRESHOLDS, gate_latency=False)))
 
 
+def test_latency_bands_rebase_on_a_slower_healthy_baseline():
+    slow = _summary(latency={"peak": {"n": 50, "p_ms": 1500.0}, "trough": {"n": 50, "p_ms": 300.0}})
+    absolute = _by_name(evaluate_outcome(slow, OutcomeSpec(THRESHOLDS)))["sustained_latency"]
+    assert not absolute.passed
+
+    # This cluster served 800ms at healthy peaks: the band becomes 2 x 800ms (+20%).
+    healthy = {"overall": {"peak": 800.0, "trough": 100.0}, "by_driver": {}}
+    rebased = _by_name(evaluate_outcome(slow, OutcomeSpec(THRESHOLDS, latency_baseline=healthy)))["sustained_latency"]
+    assert rebased.passed
+    assert rebased.detail["peak"]["limit"] == relaxed_ceiling(1600.0)
+    # A fast healthy baseline never tightens Incident Arena's own band.
+    assert rebased.detail["trough"]["limit"] == relaxed_ceiling(467)
+
+
+def test_rebased_latency_bands_still_catch_regressions():
+    regressed = _summary(latency={"peak": {"n": 50, "p_ms": 2500.0}, "trough": {"n": 50, "p_ms": 300.0}})
+    healthy = {"overall": {"peak": 800.0}, "by_driver": {}}
+    spec = OutcomeSpec(THRESHOLDS, latency_baseline=healthy)
+    assert not _by_name(evaluate_outcome(regressed, spec))["sustained_latency"].passed
+
+
 def test_missing_driver_traffic_fails_its_lane():
     summary = _summary(by_driver={})
     assert not _by_name(evaluate_outcome(summary, OutcomeSpec(THRESHOLDS)))[
@@ -78,6 +102,13 @@ def test_no_traffic_short_circuits():
     results = evaluate_outcome(_summary(offered=0), OutcomeSpec(THRESHOLDS))
     assert [r.name for r in results] == ["traffic_observed"]
     assert results[0].reason == "no_traffic_observed"
+
+
+@pytest.fixture(autouse=True)
+def no_sleep(monkeypatch):
+    slept = []
+    monkeypatch.setattr(oracle_module.time, "sleep", slept.append)
+    return slept
 
 
 class _Workload:
@@ -131,6 +162,34 @@ def test_oracle_passes_after_declaration_challenge_soak_and_outcome():
     assert problem.app.wrk.calls[-1] == ("summary", 100.0, 90.0, 0.0)
 
 
+def test_capture_baseline_measures_healthy_latency_over_a_full_window(no_sleep):
+    problem = _Problem()
+    oracle = IncidentArenaMitigationOracle(problem)
+    oracle.capture_baseline()
+    # Only 100s of traffic so far: wait for the rest of the 180s window, then read it.
+    assert no_sleep == [80.0]
+    assert ("summary", 100.0 - 180.0, 90.0, 0.0) in problem.app.wrk.calls
+    assert oracle.latency_baseline == {
+        "overall": {"peak": 400.0, "trough": 300.0},
+        "by_driver": {"write_readback": {}},
+    }
+    sustained = next(c for c in oracle.evaluate()["checks"] if c["name"] == "sustained_latency")
+    assert sustained["detail"]["peak"]["healthy"] == 400.0
+
+
+def test_capture_baseline_falls_back_to_absolute_bands(no_sleep):
+    problem = _Problem()
+
+    def no_traffic():
+        raise RuntimeError("load generator produced no traffic")
+
+    problem.app.wrk.wait_for_traffic = no_traffic
+    oracle = IncidentArenaMitigationOracle(problem)
+    oracle.capture_baseline()
+    assert problem.baseline_captured
+    assert oracle.latency_baseline is None
+
+
 def test_oracle_fails_fast_when_the_fault_is_still_present():
     problem = _Problem(declaration_pass=False)
     verdict = IncidentArenaMitigationOracle(problem).evaluate()
@@ -159,3 +218,12 @@ def test_oracle_reports_no_traffic_when_the_load_generator_cannot_be_started():
     assert verdict["reason"] == "no_traffic_observed"
     assert verdict["detail"]["failed_checks"] == ["traffic_observed"]
     assert problem.phases == ["declaration"]
+
+
+def test_capture_baseline_skips_calibration_when_the_fault_ships_with_the_release(no_sleep):
+    problem = _Problem()
+    problem.HEALTHY_BASELINE = False
+    oracle = IncidentArenaMitigationOracle(problem)
+    oracle.capture_baseline()
+    assert oracle.latency_baseline is None
+    assert problem.app.wrk.calls == []

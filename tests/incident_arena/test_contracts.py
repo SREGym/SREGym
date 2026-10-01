@@ -117,3 +117,8 @@ def test_event_legs_carry_their_latent_hold_dose(offline_cluster):
         "workspace": "100",
         "notification": "100",
     }
+
+
+def test_only_the_image_fault_problems_skip_the_healthy_latency_baseline():
+    unhealthy = {pid for pid, cls in INCIDENT_ARENA_PROBLEMS.items() if not cls.HEALTHY_BASELINE}
+    assert unhealthy == {"incident_arena_slack_seq_lock_leak", "incident_arena_slack_distractor_volume_seq_lock"}
