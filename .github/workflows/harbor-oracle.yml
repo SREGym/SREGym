@@ -44,7 +44,7 @@ jobs:
       - name: Resolve problems
         id: plan
         env:
-          PROBLEMS: ${{ inputs.problems || 'network_policy_block' }}
+          PROBLEMS: ${{ inputs.problems || 'sregym-lite' }}
         run: |
           uv run --frozen python - >> "$GITHUB_OUTPUT" <<'EOF'
           import json
@@ -64,7 +64,7 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      max-parallel: ${{ fromJSON(inputs.max_parallel || '10') }}
+      max-parallel: ${{ fromJSON(inputs.max_parallel || '6') }}
       matrix:
         problem: ${{ fromJSON(needs.plan.outputs.problems) }}
     env:
