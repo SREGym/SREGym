@@ -8,7 +8,9 @@ append one JSON record per scheduled arrival to ``$GRADER_DIR/loadgen.jsonl``::
 
 ``sent_s`` is relative to the generator's own clock origin, so SREGym windows
 the ledger by first reading the newest ``sent_s`` (``latest`` mode) and later
-summarising every record sent after that mark (``summary`` mode).
+summarising every record sent after that mark (``summary`` mode). ``status``
+mode adds the sidecar's ``episode_done.json`` and log tail, which explain an
+episode that ended before sending anything.
 
 This module is stdlib-only on purpose: SREGym pipes its source into the load
 generator pod (``python3 - <mode> ...``) so the ledger never has to leave the
@@ -27,11 +29,41 @@ import os
 import sys
 
 LEDGER_NAME = "loadgen.jsonl"
+# Written by the sidecar when its episode ends, including when it fails to start.
+EPISODE_DONE_NAME = "episode_done.json"
+# The sidecar's own log, teed into the grader directory (Saleor only).
+SIDECAR_LOG_NAME = "sidecar.log"
 DEFAULT_TAIL_BYTES = 262144
+LOG_TAIL_BYTES = 8192
+
+
+def grader_dir() -> str:
+    return os.environ.get("GRADER_DIR", "/grader")
 
 
 def ledger_path() -> str:
-    return os.path.join(os.environ.get("GRADER_DIR", "/grader"), LEDGER_NAME)
+    return os.path.join(grader_dir(), LEDGER_NAME)
+
+
+def read_episode_done(directory):
+    """The sidecar's episode-end record, or None while the episode runs."""
+    try:
+        with open(os.path.join(directory, EPISODE_DONE_NAME), encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    return document if isinstance(document, dict) else {"raw": document}
+
+
+def read_log_tail(directory, tail_bytes=LOG_TAIL_BYTES):
+    """The last lines of the sidecar log, or None when the sidecar keeps none."""
+    try:
+        with open(os.path.join(directory, SIDECAR_LOG_NAME), "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            handle.seek(max(0, handle.tell() - tail_bytes))
+            return handle.read().decode("utf-8", errors="replace").splitlines()[-40:]
+    except OSError:
+        return None
 
 
 def parse_records(lines):
@@ -154,6 +186,18 @@ def main(argv):
     mode = argv[1] if len(argv) > 1 else "latest"
     if mode == "latest":
         print(json.dumps({"latest_sent_s": latest_sent_s(path)}))
+        return 0
+    if mode == "status":
+        directory = grader_dir()
+        print(
+            json.dumps(
+                {
+                    "latest_sent_s": latest_sent_s(path),
+                    "episode_done": read_episode_done(directory),
+                    "log_tail": read_log_tail(directory),
+                }
+            )
+        )
         return 0
     if mode == "summary":
         since_s = float(argv[2]) if len(argv) > 2 and argv[2] != "none" else None

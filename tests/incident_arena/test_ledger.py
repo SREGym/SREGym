@@ -100,3 +100,23 @@ def test_script_runs_standalone_like_in_the_pod(tmp_path):
         check=True,
     )
     assert json.loads(summary.stdout)["offered"] == 1
+
+
+def test_status_mode_reports_episode_end_and_sidecar_log(tmp_path):
+    source = Path(ledger.__file__).read_text()
+    env = {"GRADER_DIR": str(tmp_path), "PATH": "/usr/bin:/bin"}
+
+    def status():
+        out = subprocess.run(
+            [sys.executable, "-", "status"], input=source, capture_output=True, text=True, env=env, check=True
+        )
+        return json.loads(out.stdout)
+
+    assert status() == {"latest_sent_s": None, "episode_done": None, "log_tail": None}
+
+    (tmp_path / "episode_done.json").write_text(json.dumps({"done": False, "error": "RuntimeError: no variants"}))
+    (tmp_path / "sidecar.log").write_text("".join(f"line {i}\n" for i in range(100)))
+    result = status()
+    assert result["episode_done"]["error"] == "RuntimeError: no variants"
+    assert result["log_tail"][-1] == "line 99"
+    assert len(result["log_tail"]) == 40

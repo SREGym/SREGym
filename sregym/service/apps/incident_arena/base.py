@@ -126,7 +126,23 @@ class IncidentArenaApplication(Application):
         self.wait_until_ready()
 
     def wait_until_ready(self) -> None:
+        deadline = time.monotonic() + self.READY_TIMEOUT_S
         self.kubectl.wait_for_ready(self.namespace, max_wait=self.READY_TIMEOUT_S)
+        self.wait_for_jobs(max(60, int(deadline - time.monotonic())))
+
+    def wait_for_jobs(self, timeout_s: int) -> None:
+        """Wait for the chart's one-shot Jobs (migrate, seed, new-site) to complete.
+
+        Pod readiness counts a running Job pod as ready, so without this the
+        load generator can start against a system that is still being seeded.
+        """
+        jobs = self.kubectl.exec_command_checked(f"kubectl get jobs -n {self.namespace} -o name").split()
+        if not jobs:
+            return
+        self.kubectl.exec_command_checked(
+            f"kubectl wait --for=condition=complete {' '.join(jobs)} -n {self.namespace} --timeout={timeout_s}s",
+            timeout=timeout_s + 30,
+        )
 
     def create_workload(self):
         self.wrk = IncidentArenaLoadgen(self.namespace, self.kubectl)

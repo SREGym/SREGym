@@ -28,7 +28,8 @@ switched off:
 * SREGym's Prometheus/Loki/MCP stack replaces the in-chart observability. `sregym/observer/prometheus`
   scrapes the same exporters and application metrics.
 * The chart's load generator keeps running with the task's own traffic profile, looped for the whole
-  run. It is labelled `app: load-generator`, so agents never see it.
+  run. It is labelled `app: load-generator`, so agents never see it. SREGym starts it only after the
+  chart's seed Jobs complete, and restarts it if its episode fails before sending traffic.
 * An `ops-toolbox` pod replaces Incident Arena's confined operator shell. It has the same repair CLIs
   and privileged database DSN, so the operational repair paths the tasks were designed around
   (`psql`/`mysql`, `restart-svc.sh`, `reconfigure-infra.sh`) are still available. Agents can also use

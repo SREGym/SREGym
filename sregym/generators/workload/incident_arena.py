@@ -67,19 +67,84 @@ class IncidentArenaLoadgen(WorkloadManager):
         """Newest arrival time on the generator's clock (None before any traffic)."""
         return self._run_ledger("latest").get("latest_sent_s")
 
-    def wait_for_traffic(self, timeout_s: float = 600, interval_s: float = 10) -> float:
-        """Block until the ledger has arrivals; return the newest ``sent_s``."""
+    def status(self) -> dict:
+        """Newest arrival time, the sidecar's episode-end record and its log tail."""
+        return self._run_ledger("status")
+
+    def logs(self, tail: int = 40) -> str:
+        return self.kubectl.exec_command(
+            f"kubectl logs -n {self.namespace} deploy/{self.deployment} -c {self.container} --tail={tail}"
+        )
+
+    def restart(self, timeout_s: int = 600) -> None:
+        """Replace the load generator pod; its private ledger starts empty."""
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout restart deployment/{self.deployment} -n {self.namespace}",
+        )
+        self.kubectl.exec_command_checked(
+            f"kubectl rollout status deployment/{self.deployment} -n {self.namespace} --timeout={timeout_s}s",
+            timeout=timeout_s + 30,
+        )
+
+    def wait_for_traffic(
+        self,
+        timeout_s: float = 900,
+        interval_s: float = 10,
+        max_restarts: int = 2,
+        restart_delay_s: float = 30,
+    ) -> float:
+        """Block until the ledger has arrivals; return the newest ``sent_s``.
+
+        The sidecar provisions its drivers before sending anything and gives up
+        after a few retries, for example while the system is still seeding. It
+        then records the error in ``episode_done.json`` and idles. Such an
+        episode is restarted up to ``max_restarts`` times before failing with
+        the sidecar's own error.
+        """
         deadline = time.monotonic() + timeout_s
-        last_error = None
+        restarts = 0
+        last_error: Exception | None = None
+        status: dict = {}
         while time.monotonic() < deadline:
             try:
-                latest = self.latest_sent_s()
-                if latest is not None:
-                    return latest
+                status = self.status()
+                last_error = None
             except Exception as exc:  # pod still starting
                 last_error = exc
+                time.sleep(interval_s)
+                continue
+            if status.get("latest_sent_s") is not None:
+                return float(status["latest_sent_s"])
+            done = status.get("episode_done")
+            if done is not None:
+                reason = self._describe(status)
+                if restarts >= max_restarts:
+                    raise RuntimeError(f"load generator episode failed before sending traffic: {reason}")
+                restarts += 1
+                logger.warning(
+                    "Load generator episode ended before sending traffic (%s); restart %d/%d in %.0fs",
+                    reason,
+                    restarts,
+                    max_restarts,
+                    restart_delay_s,
+                )
+                time.sleep(restart_delay_s)
+                self.restart()
+                continue
             time.sleep(interval_s)
-        raise RuntimeError(f"load generator produced no traffic within {timeout_s}s (last error: {last_error})")
+        detail = f"last error: {last_error}" if last_error is not None else self._describe(status)
+        raise RuntimeError(
+            f"load generator produced no traffic within {timeout_s:.0f}s ({detail}); recent logs:\n{self.logs()}"
+        )
+
+    @staticmethod
+    def _describe(status: dict) -> str:
+        done = status.get("episode_done")
+        parts = [f"episode_done={json.dumps(done)}" if done is not None else "episode still starting"]
+        tail = status.get("log_tail")
+        if tail:
+            parts.append("sidecar log tail:\n" + "\n".join(tail[-15:]))
+        return "; ".join(parts)
 
     def summary(self, since_s: float | None, latency_percentile: float = 99.0, settle_s: float = 0.0) -> dict:
         """Aggregate every arrival sent after ``since_s`` (see the ledger module)."""
