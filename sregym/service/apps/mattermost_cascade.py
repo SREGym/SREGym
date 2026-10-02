@@ -27,28 +27,6 @@ DEFAULT_SCALER_POLICY = {
     "max": 6,
 }
 
-#: A service reference, not an incident briefing. The capacity floor is a
-#: documented SLO an on-call engineer would have; everything else about this
-#: incident -- which signal misleads, what the automation does, where the
-#: latency comes from -- is discoverable and is the task. Diagnosis is never
-#: disclosed.
-CASCADE_GUIDE = (
-    """Chat gateway service reference
-
-All customer traffic reaches Mattermost through `chat-gateway`, which serves each
-request from a bounded pool of worker threads and exposes /metrics and /health.
-
-`capacity-scaler` adjusts the gateway's replica count on a schedule. Its policy
-and its decision log live in the gateway's control volume, mounted at /control in
-both pods.
-
-Documented service requirement: the gateway's capacity floor is """
-    + str(CAPACITY_FLOOR)
-    + """
-replicas. Below that, a single rollout or node loss takes chat down.
-"""
-)
-
 
 class MattermostCascade(Mattermost):
     data_volumes = (*Mattermost.data_volumes, CONTROL_VOLUME)
@@ -63,7 +41,12 @@ class MattermostCascade(Mattermost):
 
     def get_app_json(self):
         result = super().get_app_json()
-        result["Desc"] += " Customer traffic reaches chat through chat-gateway; see /control/README.txt."
+        # Architecture only. No incident, no pointer to a briefing.
+        result["Desc"] += (
+            " Customer traffic reaches chat through a `chat-gateway` fronting service"
+            " with a bounded worker pool, and a `capacity-scaler` that adjusts its"
+            " replica count automatically."
+        )
         return result
 
     def runtime_source(self, name):
@@ -185,7 +168,6 @@ class MattermostCascade(Mattermost):
         for name in (*self.cascade_deployments, "chat-traffic"):
             self.command("rollout", "status", f"deployment/{name}", "--timeout=300s", timeout=330)
         self.write_control("upstream_delay_ms", "0\n")
-        self.write_control("README.txt", CASCADE_GUIDE)
         self.wait_for_gateway()
         if not self.command("get", "configmap", "capacity-calibrated", "--ignore-not-found", "-o", "name").strip():
             self.calibrate_scaler()

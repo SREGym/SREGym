@@ -28,38 +28,6 @@ TIER_SETTINGS = {
     "replicated": (90, 180, 60),
 }
 
-#: The operator surface is a custom HTTP API: no amount of kubectl reveals that
-#: `/v1/operator/compact` exists, so without this reference the incident is
-#: unsolvable rather than hard. It is a tool reference and nothing more -- it
-#: states what each verb does and which one is destructive, the way an API doc
-#: would, and says nothing about the incident, which signals to trust, or what
-#: order to do anything in. Diagnosis is the task and is never disclosed.
-SERVICE_REFERENCE = """Coordinator service reference
-
-`coordinator` is a three-member coordination service. `session-service` and
-`presence-service` resolve their backends through it; `discovery-metrics`
-aggregates service metrics. Coordinator state is on a persistent volume.
-
-HTTP surface:
-
-  GET  /status                    service status
-  GET  /v1/internal/truth         full internal state, read-only, no side effects
-  GET  /keys                      enumerate every key in the store
-  GET  /ledger                    operations recorded on this cluster
-  POST /v1/operator/shed              {"watch_subscriptions": N}
-  POST /v1/operator/compact           {}
-  POST /v1/operator/rebuild-scheduler {}
-  POST /v1/operator/admit             {"fraction": 0.0-1.0}
-  POST /v1/operator/force-reset       {"member": "..."}   DESTRUCTIVE: wipes a
-                                      member's store; it cannot serve again.
-
-Operator calls return an error body explaining any refusal. Each service also
-exposes its own /metrics.
-
-Documented service requirements: the coordinator must serve all admitted traffic,
-all three members must remain usable, and customer requests must not be dropped.
-"""
-
 
 class CoordinationCluster(Mattermost):
     """Reuses the PostgreSQL SaaS lifecycle for its business-state checks.
@@ -89,11 +57,13 @@ class CoordinationCluster(Mattermost):
 
     def get_app_json(self):
         result = super().get_app_json()
-        # Describes the application, not the incident: the agent is told what the
-        # system is and where its API reference lives, and nothing else.
+        # Architecture only, in the register the stock applications use. The
+        # agent is told what the system is, never that anything is wrong with
+        # it: the task description stays the generic one.
         result["Desc"] += (
-            " Customer sessions resolve their backends through the `coordinator`"
-            " service; its API reference is /control/README.txt in that pod."
+            " Customer sessions resolve their backends through a three-member"
+            " `coordinator` service with an HTTP operator API, fronted by"
+            " `session-service` and `presence-service`."
         )
         return result
 
@@ -168,7 +138,6 @@ class CoordinationCluster(Mattermost):
         super().deploy()
         for name in self.incident_deployments:
             self.command("rollout", "status", f"deployment/{name}", "--timeout=300s", timeout=330)
-        self.write_control("README.txt", SERVICE_REFERENCE)
         self.wait_for_coordinator()
 
     def write_control(self, name, content):

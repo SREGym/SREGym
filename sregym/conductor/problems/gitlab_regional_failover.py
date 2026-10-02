@@ -90,29 +90,15 @@ class GitLabRegionalFailover(Problem):
 
     def write_evidence(self, promoted):
         app = self.app
-        # Evidence records what happened and what people observed. It must not
-        # state the diagnosis or the recovery contract: working those out is the
-        # task. Real incident chatter also carries wrong hypotheses, so there is
-        # one here.
+        # The orchestrator's own log, and nothing authored at the responder. A
+        # failover tool really does record what it did; a colleague writing down
+        # the diagnosis is a briefing by another name.
         app.archive_write(
             "/recovery/orchestrator.log",
             "region-east primary unreachable for 43s; health checks failed in 3 consecutive probes\n"
             "failover policy: promote most advanced reachable replica in region-west\n"
             f"promoted {promoted}; region-east demoted, writes refused\n"
             "replication lag at promotion: unknown\n",
-        )
-        app.archive_write(
-            "/recovery/chat.txt",
-            "on-call: customers report issues they opened this morning are missing from their projects\n"
-            "on-call: issues opened later today look fine, and creating new ones works\n"
-            "on-call: looks like a partial restore to me, checking whether a backup job ran\n"
-            "support: a customer says their issue link opens a different issue than the one they filed\n"
-            "storage: repository files are intact, nothing touched the Git volumes\n",
-        )
-        app.archive_write(
-            "/recovery/ticket.txt",
-            "Customers report issues missing from their projects, and at least one reports an issue "
-            "link opening a different issue. Restore normal service and account for customer data.\n",
         )
 
     @mark_fault_injected

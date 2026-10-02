@@ -20,36 +20,6 @@ PARTITION_JOURNAL = "/recovery/journal/partition-acknowledged.json"
 #: Tenant projects, shared history issues, orphaned writes, post-failover writes.
 DIVERGENCE_COUNTS = {"single": (3, 12, 6, 6), "replicated": (5, 60, 30, 30)}
 
-#: An evidence inventory, not an incident briefing. Which artifacts exist is
-#: what a backup catalog would tell a responder; what happened, which of them is
-#: usable, and what a correct recovery preserves are the task, and are never
-#: disclosed.
-FAILOVER_GUIDE = (
-    """GitLab recovery evidence inventory
-
-/recovery/east holds two read-only database snapshots:
-
-  pre-partition.dump    taken from the region-east primary
-  last-replicated.dump  the last state both regions had in common
-
-"""
-    + PARTITION_JOURNAL
-    + """
-is a write-acceptance journal. Each entry records the project ID, public issue
-IID, title, description and confidentiality of a write this service
-acknowledged to a client, in acceptance order.
-
-/recovery/orchestrator.log records the database orchestrator's actions.
-/recovery/chat.txt and /recovery/ticket.txt carry the incident correspondence.
-
-Do not modify anything under /recovery: it is the evidence record.
-
-The console has PostgreSQL client tools; its PG* environment targets this
-application's writable service. Restore a snapshot into a scratch database if
-you want to inspect it.
-"""
-)
-
 
 class GitLabFailover(GitLabRecovery):
     @property
@@ -74,13 +44,17 @@ class GitLabFailover(GitLabRecovery):
 
     def get_app_json(self):
         result = super().get_app_json()
-        result["Desc"] += " Two histories diverged at an automated failover; see /recovery/failover.txt."
+        # Architecture only: that the deployment has two database regions under
+        # an orchestrator is a fact about the system, not a description of any
+        # incident affecting it.
+        # The inherited description already names the evidence volume, so this
+        # adds only the architectural fact that there are two database regions.
+        result["Desc"] += " The database runs in two regions behind a failover orchestrator."
         return result
 
     def deploy(self):
         super().deploy()
         self.archive_command("mkdir", "-p", "/recovery/east")
-        self.archive_write("/recovery/failover.txt", FAILOVER_GUIDE)
 
     def restore_archive(self, path=EAST_SNAPSHOT):
         """Replace the live history wholesale, as a fail-back would.

@@ -327,6 +327,32 @@ class Coordinator(BaseHTTPRequestHandler):
 
     def do_GET(self):
         now = time.time()
+        if self.path in ("/", "/v1"):
+            # A real HTTP service advertises its own routes, and this one must:
+            # no amount of kubectl reveals that /v1/operator/compact exists, so
+            # without self-description the incident would be unsolvable rather
+            # than hard. Discovery, not disclosure -- it says what each route
+            # does, never what is wrong or what to do about it.
+            return self.reply(
+                200,
+                {
+                    "service": "coordinator",
+                    "member": MEMBER,
+                    "routes": {
+                        "GET /health": "liveness",
+                        "GET /status": "service status",
+                        "GET /v1/internal/truth": "full internal state, read-only",
+                        "GET /keys": "enumerate every key in the store",
+                        "GET /ledger": "operations recorded on this cluster",
+                        "POST /v1/operator/shed": '{"watch_subscriptions": N}',
+                        "POST /v1/operator/compact": "{}",
+                        "POST /v1/operator/rebuild-scheduler": "{}",
+                        "POST /v1/operator/admit": '{"fraction": 0.0-1.0}',
+                        "POST /v1/operator/force-reset": '{"member": "..."} DESTRUCTIVE: '
+                        "wipes that member's store; it cannot serve again",
+                    },
+                },
+            )
         if self.path == "/health":
             # Liveness stays up even when the cluster serves nothing, so a probe
             # cannot be mistaken for recovery.

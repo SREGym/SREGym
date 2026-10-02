@@ -488,73 +488,45 @@ def test_a_slow_agent_is_not_charged_for_elapsed_time(store):
     assert state["dropped_requests"] == 0
 
 
-def test_no_guide_states_the_diagnosis_or_the_recovery_order():
-    """Diagnosis is the task and is never disclosed. This is the rule.
+def test_no_family_ships_an_authored_briefing():
+    """The task description is the generic one. No guide files, at all.
 
-    It was broken in all three families. On the cascade screen the agent's first
-    action was `cat /control/README.txt` and its next thirty commands applied
-    what that file said, which measures instruction-following. Each guide is now
-    a service or evidence reference: what exists, what the API is, what the
-    documented requirement is -- never what went wrong or what to do about it.
+    I had written per-family README/guide files and justified them as fairness.
+    They stated the diagnosis, and an agent's first action was to read one and
+    then execute it. The applications now describe only what the system *is*, in
+    the register the stock applications use.
     """
-    from sregym.service.apps.coordination_cluster import SERVICE_REFERENCE
-    from sregym.service.apps.gitlab_failover import FAILOVER_GUIDE
-    from sregym.service.apps.mattermost_cascade import CASCADE_GUIDE
+    import pathlib
 
-    forbidden = [
-        # Causal explanation.
-        "blocked rather than busy",
-        "amplification source",
-        "does not help",
-        "last successful leader",
-        "restarts that window",
-        "staircase",
-        # The recovery contract or ordering.
-        "Recovery order",
-        "Requirements for recovery",
-        "keep the identity they already have",
-        "necessarily",
-        "is not recovery",
-        "judged on that outcome",
-        # Telling the agent which signal to distrust.
-        "before trusting it",
-        "Both are stale",
-        "no series at all",
-    ]
-    for name, guide in (
-        ("cascade", CASCADE_GUIDE),
-        ("failover", FAILOVER_GUIDE),
-        ("coordination", SERVICE_REFERENCE),
-    ):
-        flat = " ".join(guide.split())
-        for phrase in forbidden:
-            assert phrase not in flat, f"{name} guide still states: {phrase}"
+    apps = pathlib.Path("sregym/service/apps")
+    for name in ("coordination_cluster.py", "mattermost_cascade.py", "gitlab_failover.py"):
+        source = (apps / name).read_text()
+        for symbol in ("INCIDENT_GUIDE", "CASCADE_GUIDE", "FAILOVER_GUIDE", "SERVICE_REFERENCE", "DIAGNOSIS_NOTES"):
+            assert symbol not in source, f"{name} still defines {symbol}"
+        assert "README.txt" not in source, f"{name} still writes a briefing"
 
 
-def test_the_guides_still_make_each_task_solvable():
-    """Withholding diagnosis must not withhold the tools.
+def test_the_operator_api_describes_itself():
+    """The one thing kubectl cannot reveal has to come from the service.
 
-    A custom operator API is not discoverable by any amount of kubectl, and a
-    documented SLO is something on-call genuinely has. Removing those would make
-    the tasks unsolvable rather than hard.
+    Without self-description `/v1/operator/compact` is unguessable and the
+    incident is unsolvable rather than hard. Advertising routes is what an HTTP
+    service does; it says what each route is, never what is wrong.
     """
-    from sregym.service.apps.coordination_cluster import SERVICE_REFERENCE
-    from sregym.service.apps.gitlab_failover import FAILOVER_GUIDE
-    from sregym.service.apps.mattermost_cascade import CASCADE_GUIDE
+    import importlib
+    import pathlib
 
-    # The operator verbs exist nowhere else.
+    source = pathlib.Path("sregym/service/apps/incident_runtime/coordination_store.py").read_text()
     for verb in ("shed", "compact", "rebuild-scheduler", "admit", "force-reset"):
-        assert f"/v1/operator/{verb}" in SERVICE_REFERENCE, verb
-    assert "DESTRUCTIVE" in SERVICE_REFERENCE
+        assert f"POST /v1/operator/{verb}" in source, verb
+    assert "DESTRUCTIVE" in source
 
-    # The capacity floor is a documented requirement, not a diagnosis.
-    assert "capacity floor" in CASCADE_GUIDE
-    assert "chat-gateway" in CASCADE_GUIDE
-
-    # The evidence inventory says which artifacts exist, not which to use.
-    assert "pre-partition.dump" in FAILOVER_GUIDE
-    assert "last-replicated.dump" in FAILOVER_GUIDE
-    assert "acceptance journal" in FAILOVER_GUIDE
+    # And it must not smuggle the diagnosis into the route descriptions.
+    store = importlib.import_module("sregym.service.apps.incident_runtime.coordination_store")
+    routes = " ".join(source[source.index('"routes": {') : source.index('if self.path == "/health"')].split())
+    for leak in ("amplification", "stale", "restarts that window", "staircase", "does not help"):
+        assert leak not in routes, leak
+    assert store.WATCH_BUDGET > 0
 
 
 def test_the_gates_stay_discoverable_from_the_api_alone():
@@ -638,12 +610,39 @@ def test_no_injected_evidence_states_the_diagnosis():
             assert phrase not in blob, f"{name} evidence still states: {phrase}"
 
 
-def test_the_injected_evidence_still_carries_a_wrong_hypothesis():
-    """Real incident chatter contains bad guesses; that is part of the task."""
+def test_no_problem_writes_narrative_evidence_at_the_agent():
+    """Colleague chatter is a briefing by another name.
+
+    I twice leaked the diagnosis through files `inject_fault` wrote -- an
+    on-call channel reporting that CPU was low and falling, and a DBA
+    instructing the responder not to restore a snapshot. Sanitising them was not
+    enough, because the next edit re-introduces the leak. The environment now
+    provides systems and their own logs, and nothing authored at the responder.
+    """
     import pathlib
 
-    cascade = pathlib.Path("sregym/conductor/problems/mattermost_capacity_cascade.py").read_text()
+    problems = pathlib.Path("sregym/conductor/problems")
+    for name in ("mattermost_capacity_cascade.py", "gitlab_regional_failover.py", "coordination_collapse.py"):
+        source = (problems / name).read_text()
+        for authored in ("incident-notes.txt", "chat.txt", "ticket.txt"):
+            assert authored not in source, f"{name} still writes {authored}"
+        # Speaker-prefixed lines are the tell-tale of authored chatter.
+        for speaker in ("on-call:", "dba:", "support:", "platform:", "storage:"):
+            assert speaker not in source, f"{name} still contains {speaker!r} chatter"
+
+
+def test_a_genuine_system_log_is_still_allowed():
+    """A failover orchestrator really does record what it did.
+
+    The distinction that matters is who the text is for: a tool's own log is
+    part of the system, a colleague's summary is a briefing.
+    """
+    import pathlib
+
     failover = pathlib.Path("sregym/conductor/problems/gitlab_regional_failover.py").read_text()
 
-    assert "database is struggling" in cascade
-    assert "partial restore" in failover
+    assert "/recovery/orchestrator.log" in failover
+    assert "failover policy" in failover
+    # But it must not editorialise about what the responder should conclude.
+    for leak in ("were not discarded", "do NOT", "is not recovery"):
+        assert leak not in failover, leak
