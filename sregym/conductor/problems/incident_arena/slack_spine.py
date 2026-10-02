@@ -448,6 +448,8 @@ class SequencerMode(SlackLeg):
             f"kubectl set env deployment/svc-message -n {self.namespace} -c app SEQUENCER_MODE-", timeout=60
         )
         self.slack.wait_rollout("deployment", "svc-message")
+        # Re-sequence only once no rmw pod can still allocate a duplicate.
+        self.slack.wait_terminated(self.slack.role_selector("message"))
         self.slack.psql(
             "BEGIN; SELECT 1 FROM channel_seq FOR UPDATE; "
             "WITH renum AS (SELECT id, ROW_NUMBER() OVER (PARTITION BY channel_id ORDER BY id) AS new_seq FROM messages) "

@@ -32,6 +32,15 @@ obs:
   postgresExporter:
     enabled: true
 
+resources:
+  # search-engine keeps its index in memory, so each write costs more as the
+  # corpus grows. SREGym loops the load for the whole run (Incident Arena ran
+  # one hour), and at the chart's 700m the async search lane (task 007) fell
+  # behind within ~15 minutes on a 2.0 GHz host.
+  searchEngine:
+    limits:
+      cpu: "2"
+
 gradingHarness:
   # Rendered as a fault-free placeholder under sregym.enabled (see
   # sregym.neutralAnswerKey); the load generator reads it at episode end.

@@ -231,6 +231,20 @@ class IncidentArenaApplication(Application):
         reply = json.loads(out.strip().splitlines()[-1])
         return int(reply["status"]), reply["body"]
 
+    def wait_terminated(self, selector: str, timeout_s: int = 300) -> None:
+        """Wait until no pod matching ``selector`` is still terminating.
+
+        ``rollout status`` returns once the new pods are ready, while the old
+        ones can keep serving requests through their grace period.
+        """
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            pods = self.kubectl.core_v1_api.list_namespaced_pod(self.namespace, label_selector=selector)
+            if not any(pod.metadata.deletion_timestamp for pod in pods.items):
+                return
+            time.sleep(2)
+        raise RuntimeError(f"pods matching {selector} still terminating after {timeout_s}s")
+
     def rollout_restart(self, kind: str, name: str, timeout_s: int = 600) -> None:
         self.kubectl.exec_command_checked(f"kubectl rollout restart {kind}/{name} -n {self.namespace}", timeout=60)
         self.wait_rollout(kind, name, timeout_s)
