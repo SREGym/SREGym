@@ -15,6 +15,7 @@ from sregym.conductor.problems.incident_arena.slack_spine import (
     AdminEvent,
     MaintenanceSchedule,
     RolePoolSize,
+    SessionHandoffLock,
     SlackScopeGuard,
 )
 
@@ -328,6 +329,49 @@ def test_slack_scope_guard_permits_the_allowed_postgres_setting():
     assert all(r.passed for r in guard.checks("d"))
     app.pg += "file:max_connections=1000\n"
     assert _passed(guard.checks("d"))["postgres_scope_unchanged"] is False
+
+
+class FakeCheckpointSlack:
+    """svc-message as task 019's release serves it: ``/admin/checkpoint`` is PUT-only,
+    ``/internal/s13/cp`` reports the stored mode and the generation the process booted."""
+
+    def __init__(self):
+        self.cp = {"mode": "session", "generation": 1, "boot_generation": 1, "starts": 1, "persisted": True}
+        self.holders = 1
+
+    def admin(self, role, path, method="GET", body=None):
+        assert role == "message"
+        if path == "/admin/checkpoint" and method == "PUT":
+            self.cp.update(mode=body["mode"], generation=self.cp["generation"] + 1)
+            return {}
+        if path == "/admin/reload" and method == "POST":
+            self.cp.update(boot_generation=self.cp["generation"], starts=self.cp["starts"] + 1)
+            return {}
+        if path == "/internal/s13/cp" and method == "GET":
+            return dict(self.cp)
+        raise RuntimeError(f"{method} svc-message{path} returned 404")
+
+    def psql(self, sql):
+        if "pg_terminate_backend" in sql:
+            terminated, self.holders = self.holders, (0 if self.cp["mode"] == "request" else self.holders)
+            return str(terminated)
+        return str(self.holders)
+
+
+def test_session_handoff_repair_needs_the_persisted_mode_running():
+    app = FakeCheckpointSlack()
+    leg = _bind(SessionHandoffLock(), app)
+    passed = _passed(leg.checks("declaration"))
+    assert not passed["request_mode_persisted"] and not passed["no_channel_seq_lock_holder"]
+
+    # Persisting the mode without a reload leaves the session handoff running.
+    app.admin("message", "/admin/checkpoint", "PUT", {"mode": "request"})
+    passed = _passed(leg.checks("declaration"))
+    assert passed["request_mode_persisted"] and not passed["request_mode_live"]
+
+    app.cp["mode"] = "session"
+    leg.recover()
+    assert all(r.passed for r in leg.checks("declaration"))
 
 
 # ---------------------------------------------------------------------- Saleor

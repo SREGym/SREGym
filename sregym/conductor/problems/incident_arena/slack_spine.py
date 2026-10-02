@@ -590,7 +590,9 @@ class SessionHandoffLock(SlackLeg):
     The message role persists its checkpoint/handoff mode in ``app_kv_state``.
     In ``session`` mode a retry-reused database lease keeps one seeded channel
     cohort's ``channel_seq`` row locked in an idle transaction. The durable
-    repair persists ``request`` mode (``PUT /admin/checkpoint``) and reloads.
+    repair persists ``request`` mode (``PUT /admin/checkpoint``, write-only)
+    and reloads, which restarts the role's process. ``GET /internal/s13/cp``
+    reports the persisted mode and the generation the running process booted.
     """
 
     component = "message/message.sequencer"
@@ -601,7 +603,7 @@ class SessionHandoffLock(SlackLeg):
         return {"images": {"app": self.problem.task.task_values["images"]["app"]}}
 
     def _mode(self) -> dict:
-        return self.slack.admin("message", "/admin/checkpoint")
+        return self.slack.admin("message", "/internal/s13/cp")
 
     def inject(self) -> None:
         self.wait_for(lambda: self.holder_count() > 0, timeout_s=600, what="a leaked channel_seq lock holder")
@@ -618,6 +620,14 @@ class SessionHandoffLock(SlackLeg):
             CheckResult(
                 f"request_mode_persisted@{phase}",
                 mode.get("mode") == "request" and mode.get("persisted", True) is not False,
+                reason=reason,
+                detail=mode,
+            ),
+            # A PUT without a reload persists the mode but leaves the process on
+            # the session handoff it booted with.
+            CheckResult(
+                f"request_mode_live@{phase}",
+                int(mode.get("boot_generation") or 0) >= int(mode.get("generation") or 0),
                 reason=reason,
                 detail=mode,
             ),
