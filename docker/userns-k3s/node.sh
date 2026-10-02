@@ -67,15 +67,25 @@ if [ -n "${NODE_PROXY:-}" ]; then
     export CONTAINERD_NO_PROXY=127.0.0.0/8,10.0.0.0/8,localhost,.svc,.cluster.local
 fi
 
+# Like KIND, never evict or collect images over disk usage: the nodes share
+# the container's filesystem, whose free share says nothing about this node.
+# One key per flag; repeated eviction-hard flags merge.
 common="--node-ip=$ip --token=${K3S_TOKEN:-userns-k3s}
     --kubelet-arg=cgroup-driver=cgroupfs
     --kubelet-arg=feature-gates=KubeletInUserNamespace=true
+    --kubelet-arg=eviction-hard=memory.available<100Mi
+    --kubelet-arg=eviction-hard=nodefs.available<0%
+    --kubelet-arg=eviction-hard=nodefs.inodesFree<0%
+    --kubelet-arg=eviction-hard=imagefs.available<0%
+    --kubelet-arg=image-gc-high-threshold=100
     --kube-proxy-arg=conntrack-max-per-core=0"
 if [ "$role" = server ]; then
     # KIND/kubeadm mark the control plane with an empty label value; k3s uses
     # "true". SREGym's charts select the KIND form. Kubelets cannot set
-    # node-role labels themselves, so relabel once the node has registered.
-    (until k3s kubectl label node "$name" node-role.kubernetes.io/control-plane= --overwrite >/dev/null 2>&1; do
+    # node-role labels themselves, and k3s sets both labels in one update after
+    # registration, so relabel once its master label appears.
+    (until [ "$(kubectl get node "$name" -o 'jsonpath={.metadata.labels.node-role\.kubernetes\.io/master}' 2>/dev/null)" = true ] &&
+        kubectl label node "$name" node-role.kubernetes.io/control-plane= --overwrite >/dev/null 2>&1; do
         sleep 2
     done) &
     exec k3s server $common --disable=traefik,servicelb,metrics-server,local-storage \

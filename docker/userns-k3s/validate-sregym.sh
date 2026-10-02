@@ -8,7 +8,9 @@
 #
 # Needs docker, uv, kubectl and helm (4+) on PATH, and network access for image
 # pulls. Writes ~/.kube/config, which SREGym's API proxy reads, and keeps a
-# backup of an existing one. Summaries go to results/userns-k3s/.
+# backup of an existing one. A new cluster also discards SREGym's cached
+# cluster baseline (~/cache_dir/cluster_baseline_state.json). Summaries go to
+# results/userns-k3s/.
 #
 # Environment:
 #   EGRESS_PROXY      host:port of an HTTP proxy that containerd uses for pulls
@@ -38,13 +40,17 @@ if [[ $(docker inspect -f '{{.State.Running}}' "$name" 2>/dev/null) != true ]]; 
     [[ -n ${CA_BUNDLE:-} ]] && args+=(-v "$CA_BUNDLE:/etc/ssl/certs/ca-certificates.crt:ro")
     [[ -n ${REGISTRIES:-} ]] && args+=(-v "$(realpath "$REGISTRIES"):/etc/userns-k3s/registries.yaml:ro")
     docker run -d --name "$name" "${args[@]}" -v "$name:/var/lib/rancher/k3s" sregym-userns-k3s >/dev/null
+    # SREGym caches the bare cluster's state and reconciles to it after each
+    # problem. A cache from another cluster would restore that cluster's labels.
+    rm -f ~/cache_dir/cluster_baseline_state.json
 fi
 docker inspect "$name" --format 'Privileged={{.HostConfig.Privileged}} CapAdd={{.HostConfig.CapAdd}} Devices={{.HostConfig.Devices}}'
 
 timeout 300 bash -c "until docker exec $name test -s $kubeconfig 2>/dev/null; do sleep 3; done"
 mkdir -p ~/.kube
-if [[ -f ~/.kube/config ]] && ! cmp -s ~/.kube/config <(docker exec "$name" cat "$kubeconfig"); then
-    cp -n ~/.kube/config ~/.kube/config.before-userns-k3s
+backup=~/.kube/config.before-userns-k3s
+if [[ -f ~/.kube/config && ! -e $backup ]] && ! cmp -s ~/.kube/config <(docker exec "$name" cat "$kubeconfig"); then
+    cp ~/.kube/config "$backup"
 fi
 docker exec "$name" cat "$kubeconfig" > ~/.kube/config
 chmod 600 ~/.kube/config
@@ -72,6 +78,11 @@ for problem in "$@"; do
         outcome[$problem]=FAIL
     fi
     grep -E "✅|❌|⏭️" "$results/$problem.log" | cut -c1-160 || true
+    # Each node keeps its own image store on the container's disk. Drop the
+    # images the finished problem's app no longer uses.
+    docker exec "$name" sh -c 'for pid in $(ps -eo pid,args | awk "/k3s (server|agent)\$/ {print \$1}"); do
+        nsenter -U -m -p -t "$pid" --preserve-credentials crictl rmi --prune >/dev/null 2>&1 || true
+    done'
 done
 
 echo

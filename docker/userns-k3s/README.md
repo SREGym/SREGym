@@ -3,10 +3,13 @@
 This directory is a feasibility prototype. It is not wired into SREGym.
 
 It runs a four-node Kubernetes cluster (k3s: one server and three agents) inside
-one Docker container. The container does **not** use `--privileged`, adds no
-capabilities and gets no devices or host mounts. The cluster has no route to the
+one Docker container. The nodes use KIND's names (`kind-control-plane`,
+`kind-worker`, `kind-worker2`, `kind-worker3`), so SREGym treats it as its
+emulated cluster. The container does **not** use `--privileged`, adds no
+capabilities and gets no devices or host mounts. Pods have no route to the
 outside world. The only way in is the API server, forwarded to the container's
-port 6443.
+port 6443. The only way out is optional and serves image pulls only: set
+`EGRESS_PROXY` and containerd on every node pulls through that HTTP proxy.
 
 ## Why `--privileged` is normally needed
 
@@ -71,8 +74,24 @@ AppArmor profile that allows `mount` and `userns`. This is untested.
   into a read-only one. Privileged pods include CNI agents, chaos daemons and
   node exporters.
 
-Images must be preloaded, because the cluster has no network. k3s imports every
-tarball found in `/var/lib/rancher/k3s/airgap/` at startup.
+Images come from one of two places:
+
+- **Preloaded tarballs.** k3s imports every tarball found in
+  `/var/lib/rancher/k3s/airgap/` at startup.
+- **An image-pull proxy.** With `EGRESS_PROXY=host:port`, `entrypoint.sh`
+  forwards a unix socket to that proxy, and `fabric.sh` exposes it on the
+  bridge. Each node's containerd then gets it as `CONTAINERD_HTTP(S)_PROXY`,
+  which k3s does not pass to pods. `egress-proxy.py` is a minimal proxy to
+  run on the host. Mount a containerd `registries.yaml` at
+  `/etc/userns-k3s/registries.yaml` to add mirrors or rewrites (see
+  `registries.yaml`).
+
+`node.sh` also matches two KIND behaviors that SREGym depends on:
+
+- **Control-plane label.** It gives the control plane KIND's empty
+  `node-role.kubernetes.io/control-plane` label, which SREGym's charts select.
+- **No disk-based eviction or image GC.** The nodes share the container's
+  filesystem, so its free share says nothing about any one node.
 
 ## Run
 
@@ -97,7 +116,7 @@ docker run -d --name k3s --network userns-k3s -e K3S_TLS_SAN=k3s \
     --cgroupns=private -v userns-k3s:/var/lib/rancher/k3s sregym-userns-k3s
 
 # The kubeconfig is written once the server is up.
-docker exec k3s cat /var/lib/rancher/k3s/nodes/server/etc-rancher/k3s/k3s.yaml \
+docker exec k3s cat /var/lib/rancher/k3s/nodes/kind-control-plane/etc-rancher/k3s/k3s.yaml \
     | sed 's#https://127.0.0.1:6443#https://k3s:6443#' > /tmp/userns-k3s.yaml
 
 # Run as an "agent": a separate container with default security settings.
