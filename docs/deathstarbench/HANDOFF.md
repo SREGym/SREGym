@@ -254,6 +254,36 @@ immediately **before** a GitLab-family deploy as well, and watch the figure
 during the unpack rather than only between families. Pruning a node that is not
 the one pulling is safe while a pull is in flight.
 
+### Pruning images breaks the one app that is built locally
+
+`crictl rmi --prune` on the KIND nodes is the only effective way to reclaim the
+inner filesystem (see above), but it deletes `sregym-stripe-marathon:<digest>`
+along with everything else, and that image has no registry behind it: it is built
+from `docker/stripe-marathon` by `scripts/prepare_saas_prototypes.py` and pushed
+onto the nodes with `kind load docker-image`. With `imagePullPolicy: IfNotPresent`
+and nothing to pull from, the pods sit in `ImagePullBackOff` and the only symptom
+is the deploy stage timing out:
+
+```
+Deploy application: CalledProcessError: Command '['kubectl', '-n',
+'stripe-marathon', 'rollout', 'status', 'deployment/stripe-worker',
+'--timeout=900s']' returned non-zero exit status 1.
+```
+
+That cost one screen and 18 minutes of cluster time before I looked at the nodes.
+The image is still in the DinD daemon — only the node copies are gone — so the
+repair is a reload, not a rebuild:
+
+```bash
+docker exec sregym-difficulty-baseline \
+  kind load docker-image sregym-stripe-marathon:<digest>
+# the digest is content-addressed:
+#   python -c "from sregym.service.apps.stripe_marathon import STRIPE_IMAGE; print(STRIPE_IMAGE)"
+```
+
+Reload it after any prune and before any `stripe_marathon` run. Every other
+family pulls from a public registry and recovers on its own.
+
 ### The full test suite deploys to the live cluster
 
 `tests/problems/test_stale_hostaliases_dns_poisoning_astronomy_shop.py::test_lifecycle_against_a_live_cluster`
