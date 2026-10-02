@@ -169,7 +169,10 @@ def test_failover_environment_adds_evidence_without_new_storage():
     assert app.expected_volume_count == GitLabRecovery().expected_volume_count == 7
     # Two full-schema restores in one attempt need more than the inherited 1 GiB.
     assert app.database_document()["spec"]["resources"]["limits"]["memory"] == "2Gi"
-    assert "/recovery/failover.txt" in app.get_app_json()["Desc"]
+    # The description is architecture only; it must not advertise a briefing.
+    description = app.get_app_json()["Desc"]
+    assert "two regions behind a failover orchestrator" in description
+    assert "failover.txt" not in description
 
 
 @pytest.mark.parametrize(("tier", "projects", "orphaned", "post"), [("single", 3, 6, 6), ("replicated", 5, 30, 30)])
@@ -184,13 +187,18 @@ def test_failover_tiers_acknowledge_writes_on_both_sides_of_the_partition(tier, 
     assert orphaned and post
 
 
-def test_failover_guide_states_the_identity_contract_the_oracle_grades():
-    """The agent cannot be expected to infer which side keeps its IIDs."""
-    from sregym.service.apps.gitlab_failover import FAILOVER_GUIDE, PARTITION_JOURNAL
+def test_the_failover_family_ships_no_guide():
+    """This test previously *required* the leak.
 
-    assert PARTITION_JOURNAL in FAILOVER_GUIDE
-    assert "Post-promotion issues keep the identity they already have" in FAILOVER_GUIDE
-    assert "present exactly once" in FAILOVER_GUIDE
+    It asserted the guide stated which side keeps its IIDs -- the recovery
+    contract, which is the judgement the family exists to test. Removing that
+    one disclosure took the family from 3 of 3 solved to 1 of 3.
+    """
+    import sregym.service.apps.gitlab_failover as failover
+
+    assert not hasattr(failover, "FAILOVER_GUIDE")
+    # The journal still exists: it is the evidence, not a briefing about it.
+    assert failover.PARTITION_JOURNAL.endswith("partition-acknowledged.json")
 
 
 def test_failover_rejects_a_bad_snapshot_before_stopping_the_application():
@@ -316,14 +324,19 @@ def test_customer_traffic_is_concurrent_and_part_of_the_environment():
     assert app.start_workload() is None
 
 
-def test_cascade_guide_points_at_the_evidence_that_survived():
-    from sregym.service.apps.mattermost_cascade import CASCADE_GUIDE
+def test_the_cascade_family_ships_no_guide():
+    """This test previously required the leak too.
 
-    assert "chat-gateway:8080/metrics" in CASCADE_GUIDE
-    assert "scaler.json" in CASCADE_GUIDE
-    assert "upstream_delay_ms" in CASCADE_GUIDE
-    # The contract the oracle actually grades must be discoverable.
-    assert "Restoring capacity that is then taken away again is not recovery" in CASCADE_GUIDE
+    It asserted the guide stated that capacity taken away again is not recovery,
+    and pointed at the metrics endpoint and the latency control file. The agent's
+    first action on the old screen was to read that file and then execute it.
+    """
+    import sregym.service.apps.mattermost_cascade as cascade
+
+    assert not hasattr(cascade, "CASCADE_GUIDE")
+    description = cascade.MattermostCascade().get_app_json()["Desc"]
+    assert "chat-gateway" in description
+    assert "README" not in description
 
 
 def test_calibrated_policy_still_reads_a_saturated_gateway_as_idle():
