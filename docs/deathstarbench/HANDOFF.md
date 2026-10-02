@@ -11,40 +11,57 @@ record of every graded screen.
 
 ## The one result that matters
 
-**Every family screened so far scores 0% difficulty.** Not "nearly saturated" —
-zero failures in every valid graded attempt, with agents using a quarter to a
-third of their time budget.
+Three families, re-screened with Codex `gpt-6-astra` under task descriptions that
+withhold the diagnosis. Nine valid attempts, no ambiguous or environment
+failures.
 
-| Family | Agent | Valid attempts | Passes | Difficulty | Median agent time |
-|---|---|---:|---:|---:|---:|
-| GitLab database deletion, replicated | Codex `gpt-6-astra` | 3 | 3 | 0% | 420.7 s |
-| GitLab notification recovery | Codex | 3 | 3 | 0% | 469.4 s |
-| Stripe recurring config | Codex | 3 | 3 | 0% | 110.8 s |
-| GitLab ambiguous notification | Codex | 3 | 3 | 0% | 465.0 s |
-| GitLab intermittent SMTP | Codex | 3 | 3 | 0% | 664.3 s |
-| GitLab delayed audit | Codex | 3 | 3 | 0% | 510.7 s |
-| GitLab delayed audit, expanded (4×) | Codex | 2 valid, 1 invalid | 2 | — | 662.2 s |
-| **Mattermost capacity cascade** | Claude Code `claude-opus-5` | 3 | 3 | **0%** | 237.7 s |
-| **GitLab regional failover** | Claude Code `claude-opus-5` | 3 | 3 | **0%** | 263.5 s |
+```
+mattermost_capacity_cascade_single   ███   3 of 3   median 243s / 900s
+gitlab_regional_failover_single      █░░   1 of 3   median 287s / 900s
+coordination_collapse_single         ███   3 of 3   median 437s / 2700s
+```
 
-28 valid graded attempts. 28 passes.
+`█` solved · `░` not solved. Reproduce with `python scripts/screen_report.py`.
 
-**Read the failure mode correctly.** These families varied *volume* — topology,
-state size, telemetry, tenancy, acknowledged-write accounting, grading contract.
-The expanded tier quadrupled tenancy, backlog and audit records and changed
-nothing. What they all share is a **short, forgiving recovery shape**: diagnose,
-act once or twice, submit, comfortably inside 900 s. The agent times say the
-budget was never the constraint.
+**Only one family separates a frontier agent, and it is the one that requires a
+judgement with no safe default.** Failover asks which of two acknowledged write
+sets to preserve when neither restore is sufficient; the agent chose wrong twice
+in three, both times by failing back — recovering all six orphaned writes and
+destroying all six post-promotion writes at the colliding identities.
 
-I also verified the passes were substantive, not lucky — every cascade attempt
-held capacity across the automation's decision window with zero requests shed,
-and every failover attempt retained *both* acknowledged write sets with zero data
-loss. The agents genuinely solved them.
+**The two families that ask for a procedure were solved every time, quickly.**
+Cascade asks the agent to distrust a correct-but-misleading metric: found in four
+minutes. Coordination asks for a long gated sequence and is the surprise — it was
+built specifically to be hard, with a 360-second recovery floor, five phases each
+gated on the previous settling, premature action *regressing* progress, tooling
+that lies, and permanently accumulating loss. The agent solved it 3 of 3 with
+**zero regressions, zero dropped requests, one leader election and all three
+members intact every time**, two attempts landing within 80 seconds of the
+theoretical minimum. Every protective mechanic went untouched: it read the
+refusal messages and waited.
 
-**Corollary for scaling up: do not scale volume.** More tenants, more replicas,
-more records will not move these numbers. The lever is recovery *shape*.
+### Two things this overturns
 
----
+1. **"Scale the horizon" is not the lever.** I previously recommended building
+   more long-horizon families (Rogers, Kinesis, CrowdStrike). On this evidence
+   duration, damaged tooling and accumulating cost all failed to bite. Build
+   incidents around *a decision the responder can get wrong*, which is cheaper
+   than a 73-hour recovery and demonstrably works.
+2. **Earlier saturation was partly my own doing.** Every pre-correction screen
+   ran against descriptions that stated their own diagnosis. The failover family
+   scored 3 of 3 because one line I wrote into its evidence said *"dba: do NOT
+   restore the east snapshot over the live database, we have taken writes
+   since"* — the incident's central decision, handed over. Removing it took the
+   family from saturated to 1 of 3. Treat every result dated before 2026-10-02
+   as void; they are quarantined under `results/_voided/`.
+
+**Never disclose the diagnosis.** The harness gives a generic "diagnose and fix"
+instruction and the application description says what the application *is*, in
+the register the stock applications use. No guide files, no README written into a
+volume, no colleague chatter authored at the responder. Tests enforce this, since
+sanitising a leak only lasts until the next edit. The one exception that had to be
+*solved* rather than deleted: the coordinator's operator API is unguessable, so
+the service advertises its own routes at `GET /` — discovery, not disclosure.
 
 ## What exists
 
@@ -108,69 +125,61 @@ would measure the budget, not the agent** — that is the whole point.
 
 ## Your task, in order
 
-### 1. Admit the replicated coordination tier
+### 1. Confirm the one discriminating result at n=10
 
-**Live admission passed** on `coordination_collapse_single` in 883 s, clean
-cleanup, every lever proved on a cluster rather than asserted — stale `/status`
-reporting 12 subscriptions against a real 96, a rollout restart changing nothing,
-three compaction probes each restarting the window they waited on, a rushed
-admission costing 300 permanently dropped requests, a 393 s reference recovery
-against a 360 s floor, and a `force-reset` failing the recovery one second after
-it passed. Details in [coordination-collapse.md](coordination-collapse.md).
-
-The `replicated` tier (510 s floor) has **never been run**. Admit it before
-screening it:
-
-```sh
-PYTHONPATH=/opt/sregym python tests/integration/validate_coordination_collapse.py \
-  --tier replicated --output results/coordination-admission-replicated.json
-```
-
-### 2. Screen the coordination family at its real budget
+`gitlab_regional_failover_single` failed 2 of 3. At n=3 that is 1 solve from
+noise, and it is the only evidence in this whole effort that an environment here
+separates a frontier agent — so it is worth a real measurement before anything is
+built on it.
 
 ```sh
 python scripts/evaluate_deathstarbench.py \
-  --applications mattermost --incident coordination_collapse \
-  --tiers single --agent claudecode --model claude-opus-5 \
-  --attempts 3 --profile svelte --agent-timeout 2700 \
-  --output results/coordination-screen
+  --applications gitlab_ce --incident regional_failover --tiers single \
+  --agent codex --model gpt-6-astra --agent-version 0.160.0 \
+  --attempts 10 --profile svelte --agent-timeout 900 \
+  --output results/failover-n10
 ```
 
-This is the first screen that can actually answer the question. Two outcomes,
-both informative:
+Also run it on a second agent (`--agent claudecode --model claude-opus-5`) as its
+own cohort. If both land near 1/3 the problem is real; if Codex is an outlier it
+is a model quirk, not a benchmark property.
 
-- **Non-zero difficulty** → recovery *shape* is the lever, and the roadmap should
-  pivot to long-horizon families. Then build the next two or three on the same
-  principle (candidates #2 Rogers, #11 AWS Kinesis, #14 CrowdStrike are the
-  long-horizon ones) and screen at matched budgets.
-- **0% again** → shape is not sufficient either, and the honest conclusion is
-  that a 45-minute single-agent episode cannot be made hard by environment design
-  alone. That would be a significant finding and should be written up as one
-  rather than buried. The next lever would be *multi-incident* or *multi-day*
-  episodes, which the current harness does not support.
+### 2. Build the next families around contested judgement
 
-**Do not pool cohorts.** Codex and Claude Code rows are separate. Changing agent,
-model or budget starts a new cohort.
+Not around duration. The roadmap candidates worth reading again with that lens
+are the ones with a genuinely two-sided decision:
 
-### 3. What scaling up should mean on CloudLab
+- **#4 GitHub 2018** — already built, and the one that works.
+- **#12 Atlassian 2022** — hundreds of dependency-aware restores where
+  per-customer validation can be got wrong.
+- **#3 GitLab 2017** — already built, but currently a restore-and-replay
+  procedure; it would need a contested choice added to discriminate.
+- **#10 Knight Capital** — halt-versus-continue under accumulating loss is a
+  judgement, and the loss meter already exists in the coordination runtime.
 
-This machine was the binding constraint: **8 CPUs, 39 GiB RAM, 78 GB disk at 88%
-full**. That forced `single` tiers, one family at a time, and serial screens.
-With real hardware, the valuable things are, in order:
+Avoid: longer recoveries, more impaired tooling, bigger state. All three were
+tried and none of them bit.
 
-1. **More attempts per cohort.** n=3 moves in 33% steps. n=10 would let you
-   distinguish 0% from 10%, which matters enormously once something finally
-   fails.
-2. **Both tiers, and the `replicated` coordination tier** (510 s floor) which has
-   never been run at all.
+### 3. Decide what to do with the two saturated families
+
+`cascade` and `coordination` are both solved 3 of 3 under clean descriptions.
+They are sound environments with working graders and full live admission, so they
+are useful as *regression* tasks and as tier comparisons, but they do not
+separate models. Either retire them from the difficulty set or add a contested
+decision to each. Do not re-screen them hoping for a different answer.
+
+### 4. What scaling up should mean on CloudLab
+
+This machine was the constraint: **8 CPUs, 39 GiB RAM, 78 GB disk**. That forced
+`single` tiers, one family at a time, and serial screens. With real hardware, in
+priority order:
+
+1. **n=10 cohorts**, so a 2-of-3 result can be distinguished from a 7-of-10 one.
+2. **Both agents on every family**, as separate cohorts, to tell benchmark
+   properties from model quirks.
 3. **Parallel families** across separate DinD containers — the architecture
-   already supports it (`docker/dind/run.py`), it was only ever a resources
-   problem. One container per family, matched settings.
-4. **Longer budgets as an explicit variable.** Screen coordination collapse at
-   2700 s and at 5400 s. If difficulty drops as budget rises, the environment is
-   gated on time rather than on reasoning — worth knowing either way.
-
----
+   already supports it, it was only ever resources.
+4. **The `replicated` coordination tier** (510 s floor), never run.
 
 ## Operational notes that will cost you hours
 
