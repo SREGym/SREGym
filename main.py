@@ -910,8 +910,8 @@ def _run_benchmark(args, *, judge_backend: str = "api", agent_image: str | None 
         k8s_proxy_listen_port=int(os.environ.get("K8S_PROXY_PORT", "16443")),
         block_workload_creation=internet_policy.is_filtered,
         stages=tuple(args.stages) if args.stages else None,
-        baseline_override_s=args.baseline,
-        propagation_override_s=args.propagation,
+        baseline_override_s=getattr(args, "baseline", None),
+        propagation_override_s=getattr(args, "propagation", None),
     )
     LAUNCHER.set_internet_policy(conductor_config.internet_policy)
     LAUNCHER.set_container_hardening(harden_container)
