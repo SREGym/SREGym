@@ -56,6 +56,11 @@ mount -t tmpfs tmpfs /tmp
 mkdir -p /run/udev
 mount --make-rshared /
 
+if [ -f /etc/userns-k3s/registries.yaml ]; then
+    # Registry mirrors and rewrites for containerd (k3s registries.yaml format).
+    mkdir -p /etc/rancher/k3s
+    cp /etc/userns-k3s/registries.yaml /etc/rancher/k3s/registries.yaml
+fi
 if [ -n "${NODE_PROXY:-}" ]; then
     # Image pulls only: k3s passes these to containerd, not to pods.
     export CONTAINERD_HTTP_PROXY=$NODE_PROXY CONTAINERD_HTTPS_PROXY=$NODE_PROXY
@@ -67,6 +72,12 @@ common="--node-ip=$ip --token=${K3S_TOKEN:-userns-k3s}
     --kubelet-arg=feature-gates=KubeletInUserNamespace=true
     --kube-proxy-arg=conntrack-max-per-core=0"
 if [ "$role" = server ]; then
+    # KIND/kubeadm mark the control plane with an empty label value; k3s uses
+    # "true". SREGym's charts select the KIND form. Kubelets cannot set
+    # node-role labels themselves, so relabel once the node has registered.
+    (until k3s kubectl label node "$name" node-role.kubernetes.io/control-plane= --overwrite >/dev/null 2>&1; do
+        sleep 2
+    done) &
     exec k3s server $common --disable=traefik,servicelb,metrics-server,local-storage \
         --write-kubeconfig-mode=600 --tls-san=${K3S_TLS_SAN:-kubernetes}
 else
