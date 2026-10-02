@@ -138,10 +138,9 @@ its fault:
   and for `incident_arena_saleor_checkout_statement_timeout_canary` in SREGym's GitHub Actions
   problem validation (kind on a 4 vCPU runner). Validate other problems on your cluster before
   relying on their numbers.
-* Saleor's checkout lane is bound by per-core speed (two uvicorn workers, about 2.5 s of API time
-  per checkout). On an older 2.0 GHz Xeon D-1548 the healthy app's checkouts queued past the load
-  generator's timeout, so most of them failed. Re-based latency bands do not cover that: the error
-  rate and goodput bands stay absolute, and slow hosts report `service_unhealthy` (`ambiguous`)
-  after a correct repair.
+* SREGym sizes two components above the charts' defaults, because its load runs for the whole
+  run and some hosts are slower than Incident Arena's: Saleor's API gets 4 uvicorn workers and 4 CPU
+  (checkouts queued past the load generator's timeout at 2 CPU on a 2.0 GHz host), and Slack's
+  in-memory search-engine gets 2 CPU (the async search lane fell behind as its corpus grew).
 * Incident Arena's binary graded report (the closed service/component vocabulary) is replaced by
   SREGym's free-text diagnosis stage. The incident report was advisory in most Incident Arena tasks anyway.

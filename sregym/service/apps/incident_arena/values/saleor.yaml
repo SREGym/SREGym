@@ -18,6 +18,15 @@ saleor:
   # Django's URL validator needs a dotted host, so this pins the namespace.
   publicUrl: "http://svc-saleor-api.saleor.svc.cluster.local:8000/"
   allowedHosts: "svc-saleor-api,svc-saleor-api.saleor.svc.cluster.local,localhost,127.0.0.1"
+  # The checkout chain costs ~2.5 s of API time per checkout on a 2.0 GHz
+  # core, so the image's two uvicorn workers at 2 CPU queue checkouts past the
+  # load generator's timeout even on a healthy system. Incident Arena sized 2
+  # CPU for its faster hosts; double both for headroom.
+  api:
+    workers: 4
+    resources:
+      limits:
+        cpu: "4"
 
 main:
   enabled: false
