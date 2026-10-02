@@ -254,6 +254,15 @@ class ProblemRegistry:
             "mattermost_capacity_cascade_replicated": lambda: MattermostCapacityCascade(scale_tier="replicated"),
             "coordination_collapse_single": lambda: CoordinationCollapse(scale_tier="single"),
             "coordination_collapse_replicated": lambda: CoordinationCollapse(scale_tier="replicated"),
+            # Same environment, same fault, same grader; the responder is handed
+            # the diagnosis and the recovery order. Exists to measure how much of
+            # the difficulty is the environment and how much is the framing.
+            "coordination_collapse_single_runbook": lambda: CoordinationCollapse(
+                scale_tier="single", disclosure="runbook"
+            ),
+            "coordination_collapse_single_page": lambda: CoordinationCollapse(
+                scale_tier="single", disclosure="page"
+            ),
             "stripe_feature_config_single": lambda: StripeFeatureConfig(scale_tier="single"),
             "stripe_feature_config_replicated": lambda: StripeFeatureConfig(scale_tier="replicated"),
             "wrong_service_selector_gitlab_ce_single": lambda: WrongServiceSelector(app_name="gitlab_ce", faulty_service="gitlab-ce", scale_tier="single"),

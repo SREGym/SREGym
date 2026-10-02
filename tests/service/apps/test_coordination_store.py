@@ -486,3 +486,104 @@ def test_a_slow_agent_is_not_charged_for_elapsed_time(store):
         store.reconcile(state, 1000.0 + tick * 10)
 
     assert state["dropped_requests"] == 0
+
+
+def test_disclosure_levels_are_strictly_nested():
+    """Each level adds to the one below, so the only variable is how much is told."""
+    from sregym.service.apps.coordination_cluster import incident_guide
+
+    page, oncall, runbook = (incident_guide(d) for d in ("page", "oncall", "runbook"))
+
+    assert page in oncall and oncall in runbook
+    assert len(page.split()) < len(oncall.split()) < len(runbook.split())
+
+
+def test_the_default_disclosure_withholds_the_diagnosis():
+    """The giveaway was handing over the answer; `oncall` is the fix.
+
+    An agent screened at `runbook` read the guide as its first action and then
+    executed it, which measures instruction-following rather than diagnosis.
+    """
+    from sregym.service.apps.coordination_cluster import incident_guide
+
+    oncall = incident_guide("oncall")
+
+    # The diagnosis must not be stated.
+    for answer in (
+        "Restarting the service does not help",
+        "served from the last successful leader snapshot",
+        "the amplification source",
+        "restarts that window",
+        "Admission is a staircase",
+        "Recovery order",
+    ):
+        assert answer not in oncall, answer
+
+    # But the symptom, the topology and the tool reference must be.
+    for needed in ("not serving", "session-service", "/v1/operator/shed", "/v1/internal/truth", "DESTRUCTIVE"):
+        assert needed in oncall, needed
+
+
+def test_the_runbook_level_states_the_diagnosis_on_purpose():
+    """It exists as the control arm, not as the default."""
+    from sregym.service.apps.coordination_cluster import incident_guide
+
+    runbook = incident_guide("runbook")
+
+    for answer in ("Restarting the service does not help", "restarts that window", "Recovery order"):
+        assert answer in runbook
+
+
+def test_the_page_level_is_only_the_symptom():
+    from sregym.service.apps.coordination_cluster import incident_guide
+
+    page = incident_guide("page")
+
+    assert "not serving" in page
+    assert "/v1/operator" not in page
+
+
+def test_an_unknown_disclosure_level_is_rejected():
+    """Validated before the application touches a cluster, so a typo fails fast."""
+    from sregym.service.apps.coordination_cluster import CoordinationCluster, incident_guide
+
+    with pytest.raises(ValueError, match="disclosure"):
+        incident_guide("everything")
+    with pytest.raises(ValueError, match="disclosure"):
+        CoordinationCluster(disclosure="everything")
+
+
+def test_the_gates_stay_discoverable_without_the_runbook():
+    """Withholding the diagnosis must not make the task unsolvable.
+
+    The refusal messages carry the gate semantics, so an agent can learn the
+    rules by trying -- and pays a window for doing so, which is the task.
+    """
+    import importlib
+
+    store = importlib.import_module("sregym.service.apps.incident_runtime.coordination_store")
+    state = store.collapsed(store.settled(1000.0), 1000.0)
+    handler = store.Coordinator.__new__(store.Coordinator)
+
+    # While the leader is churning, the refusal says debt was added -- enough to
+    # learn that the attempt was counterproductive.
+    handler.path = "/v1/operator/compact"
+    assert "added debt" in handler.operate(state, {}, 1000.0)["error"]
+
+    # Once load is shed the leader holds, and the refusal then names the window
+    # and says the attempt restarted it. That is how the gate is discoverable.
+    handler.path = "/v1/operator/shed"
+    handler.operate(state, {"watch_subscriptions": store.WATCH_BUDGET}, 1000.0)
+    state["compaction_debt"] = 0
+    store.reconcile(state, 1000.0)
+    handler.path = "/v1/operator/compact"
+    refusal = handler.operate(state, {}, 1010.0)["error"]
+    assert "stability window" in refusal and "required" in refusal
+
+    handler.path = "/v1/operator/rebuild-scheduler"
+    assert "compact" in handler.operate(state, {}, 1010.0)["error"]
+
+    # And the truth endpoint publishes every threshold the gates use.
+    reported = store.truth(state, 1000.0)
+    for key in ("latency_budget_ms", "watch_budget", "stability_required_seconds", "cold_admission_limit"):
+        assert key in reported, key

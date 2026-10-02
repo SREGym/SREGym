@@ -28,59 +28,86 @@ TIER_SETTINGS = {
     "replicated": (90, 180, 60),
 }
 
-INCIDENT_GUIDE = """Coordination service collapse
+#: How much of the incident the responder is told. The default is what an
+#: on-call engineer actually has; `runbook` additionally states the diagnosis and
+#: the recovery contract, which is the task itself, and exists to measure how
+#: much of the difficulty is the environment versus the framing.
+DISCLOSURE_LEVELS = ("page", "oncall", "runbook")
+
+#: Always included. What a page says.
+SYMPTOM = """Coordination service collapse
 
 Customer traffic is failing. Every request resolves its backend through
 `coordinator`, a three-member coordination service, and it is not serving.
-
-Read this before you touch anything, because two of the obvious moves make the
-incident worse rather than better.
-
-What is true about this cluster:
-
-- The coordinator's write path is amplified by its watch subscriptions. While
-  write latency is over its budget the leader cannot hold a term, and every
-  election re-reads the store, which keeps latency over budget. Restarting it
-  does not help: the degradation is in its data, on a persistent volume.
-- `http://coordinator:8080/status` is served from the last successful leader
-  snapshot while the leader is churning. It will tell you the cluster is healthy
-  and that there are 12 watch subscriptions. Both are stale.
-  `http://coordinator:8080/v1/internal/truth` is the unvarnished state, and
-  reading it is free and has no side effects.
-- `http://coordinator:8080/keys` is a full key scan. It is the amplification
-  source: it hangs, and asking for it adds compaction debt. Do not use it to
-  find out how many keys there are; the truth endpoint reports that.
-- `http://discovery-metrics:8080/metrics` resolves its scrape targets through
-  the coordinator, so it returns no series at all while coordination is
-  degraded. Each service's own `/metrics` is reachable directly and is honest.
-
-Recovery is a sequence, and each step is gated on the previous one having
-settled. The operator surface is POST to `http://coordinator:8080/v1/operator/`:
-
-  shed              {"watch_subscriptions": N}  reduce streaming load
-  compact           {}                          reclaim the store
-  rebuild-scheduler {}                          refresh stale placement data
-  admit             {"fraction": 0.0-1.0}       admit customer traffic
-  force-reset       {"member": "..."}           DESTRUCTIVE, see below
-
-Three things cost you if you rush them:
-
-1. `compact` requires the leader to have held for the full stability window, and
-   *an attempt made too early restarts that window*. Polling it to discover
-   whether the leader is ready guarantees it never becomes ready. Check with the
-   truth endpoint instead; it reports leader_stable_seconds and the requirement.
-2. Admitting more traffic than the cluster can serve drops requests permanently,
-   and a large admission while caches are cold re-collapses the cluster and
-   costs you the warming phase again. Admission is a staircase, and each step
-   must hold before the next.
-3. `force-reset` wipes a member's store. That member can never serve again.
-   Destroying a majority makes the incident unrecoverable, and nothing you do
-   afterwards will bring service back.
-
-Dropped requests accumulate in a counter that no action decreases. You are
-graded on the final state of the system, on how many requests were lost getting
-there, and on whether you left the cluster able to tolerate another failure.
 """
+
+#: Service topology and the tool reference. An on-call engineer has both: they
+#: know how their own system is wired and they have their own API docs.
+ONCALL_CONTEXT = """
+Topology:
+
+- `session-service` and `presence-service` serve customers, and both resolve
+  their backends through `coordinator`.
+- `discovery-metrics` aggregates service metrics.
+- The coordinator keeps its state on a persistent volume.
+
+Coordinator HTTP surface:
+
+  GET  /status                    service status
+  GET  /v1/internal/truth         full internal state, read-only, no side effects
+  GET  /keys                      enumerate every key in the store
+  GET  /ledger                    operations recorded during this incident
+  POST /v1/operator/shed              {"watch_subscriptions": N}
+  POST /v1/operator/compact           {}
+  POST /v1/operator/rebuild-scheduler {}
+  POST /v1/operator/admit             {"fraction": 0.0-1.0}
+  POST /v1/operator/force-reset       {"member": "..."}   DESTRUCTIVE: wipes a
+                                      member's store; it cannot serve again.
+
+Each service exposes its own /metrics. Operator calls return an error body
+explaining any refusal.
+
+You are graded on the state of the system, on how many customer requests were
+lost getting there, and on whether the cluster can still tolerate a failure.
+"""
+
+#: Runbook-only. States the diagnosis and the recovery sequence -- which is the
+#: task. Included so the same environment can be screened both ways.
+DIAGNOSIS_NOTES = """
+Diagnosis and recovery notes:
+
+- The write path is amplified by watch subscriptions. While write latency is over
+  budget the leader cannot hold a term, and every election re-reads the store,
+  which keeps latency over budget. Restarting the service does not help: the
+  degradation is its persisted data.
+- `/status` is served from the last successful leader snapshot while the leader
+  is churning, so it will claim the cluster is healthy. `/v1/internal/truth` is
+  the unvarnished state.
+- `/keys` is the amplification source. It hangs, and asking for it adds
+  compaction debt.
+- `discovery-metrics` resolves its scrape targets through the coordinator, so it
+  returns no series at all while coordination is degraded.
+- Recovery order: shed load, compact, rebuild scheduler state, let caches warm,
+  then admit traffic in steps.
+- `compact` requires the leader to have held for the full stability window, and
+  an attempt made too early restarts that window.
+- Admitting more than the cluster can serve drops requests permanently, and a
+  large admission while caches are cold re-collapses it. Admission is a
+  staircase, and each step must hold before the next.
+- Destroying a majority of members makes the incident unrecoverable.
+"""
+
+
+def incident_guide(disclosure):
+    """Compose the guide for a disclosure level."""
+    if disclosure not in DISCLOSURE_LEVELS:
+        raise ValueError(f"Unsupported disclosure {disclosure!r}: choose {DISCLOSURE_LEVELS}")
+    guide = SYMPTOM
+    if disclosure in ("oncall", "runbook"):
+        guide += ONCALL_CONTEXT
+    if disclosure == "runbook":
+        guide += DIAGNOSIS_NOTES
+    return guide
 
 
 class CoordinationCluster(Mattermost):
@@ -99,6 +126,12 @@ class CoordinationCluster(Mattermost):
     incident_deployments = ("coordinator", "discovery-metrics", *SESSION_SERVICES)
     coordination_members = 3
 
+    def __init__(self, tier="single", disclosure="oncall", **kwargs):
+        if disclosure not in DISCLOSURE_LEVELS:
+            raise ValueError(f"Unsupported disclosure {disclosure!r}: choose {DISCLOSURE_LEVELS}")
+        self.disclosure = disclosure
+        super().__init__(tier, **kwargs)
+
     @property
     def settings(self):
         return TIER_SETTINGS[self.scale_tier]
@@ -113,7 +146,8 @@ class CoordinationCluster(Mattermost):
         result = super().get_app_json()
         result["Desc"] += (
             " Customer traffic resolves backends through a degraded coordination"
-            " service; read /control/README.txt in the coordinator before acting."
+            " service; /control/README.txt in the coordinator has what the"
+            f" responder was given (disclosure: {self.disclosure})."
         )
         return result
 
@@ -188,7 +222,7 @@ class CoordinationCluster(Mattermost):
         super().deploy()
         for name in self.incident_deployments:
             self.command("rollout", "status", f"deployment/{name}", "--timeout=300s", timeout=330)
-        self.write_control("README.txt", INCIDENT_GUIDE)
+        self.write_control("README.txt", incident_guide(self.disclosure))
         self.wait_for_coordinator()
 
     def write_control(self, name, content):

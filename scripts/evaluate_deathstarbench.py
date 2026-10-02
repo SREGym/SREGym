@@ -87,10 +87,13 @@ def problem_id(app, tier, incident="wrong_service_selector"):
             raise ValueError("Database deletion supports Gitea and GitLab CE single and replicated tiers")
         prefix = "gitlab" if app == "gitlab_ce" else "gitea"
         return f"{prefix}_database_deletion_{tier}"
-    if incident == "coordination_collapse":
+    if incident in ("coordination_collapse", "coordination_collapse_runbook", "coordination_collapse_page"):
         if app != "mattermost" or tier not in SUPPORTED_TIERS[app]:
             raise ValueError("Coordination collapse supports Mattermost single and replicated tiers")
-        return f"coordination_collapse_{tier}"
+        suffix = incident.removeprefix("coordination_collapse")
+        if suffix and tier != "single":
+            raise ValueError("Disclosure variants exist for the single tier only")
+        return f"coordination_collapse_{tier}{suffix}"
     if incident == "capacity_cascade":
         if app != "mattermost" or tier not in SUPPORTED_TIERS[app]:
             raise ValueError("Capacity cascade supports Mattermost single and replicated tiers")
@@ -157,6 +160,8 @@ def main():
             "regional_failover",
             "capacity_cascade",
             "coordination_collapse",
+            "coordination_collapse_runbook",
+            "coordination_collapse_page",
         ),
         default="wrong_service_selector",
     )
