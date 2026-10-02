@@ -134,8 +134,10 @@ its fault:
   SREGym's default `openebs-hostpath` (local PVs pin consumers to one node) and on kind.
 * Every problem is covered offline (unit tests and `helm template`, `tests/incident_arena`).
   `tests/integration/validate_problem.py` has passed end to end on a 4-node kind cluster for
-  `incident_arena_frappe_desk_and_queue_oom` and `incident_arena_slack_sends_fail_strict_mode`.
-  Validate other problems on your cluster before relying on their numbers.
+  `incident_arena_frappe_desk_and_queue_oom` and `incident_arena_slack_sends_fail_strict_mode`,
+  and for `incident_arena_saleor_checkout_statement_timeout_canary` in SREGym's GitHub Actions
+  problem validation (kind on a 4 vCPU runner). Validate other problems on your cluster before
+  relying on their numbers.
 * Saleor's checkout lane is bound by per-core speed (two uvicorn workers, about 2.5 s of API time
   per checkout). On an older 2.0 GHz Xeon D-1548 the healthy app's checkouts queued past the load
   generator's timeout, so most of them failed. Re-based latency bands do not cover that: the error
