@@ -326,9 +326,9 @@ Harbor requires the oracle to score 1.0 on every task before it accepts an
 adapter. On 2026-10-01, **all 21 SREGym-Lite problems scored 1.0**. Six jobs
 ran at a time, and each job took 10–21 minutes including the image build.
 `network_policy_block`'s trial took 7m39s, covering deployment, Calico
-NetworkPolicy fault injection, recovery and grading. The no-op agent check
-(`check_nop`), which confirms each fault is live, and the full problem set
-have not been run yet.
+NetworkPolicy fault injection, recovery and grading. On 2026-10-02 the no-op
+agent scored 0.0 on all 21, so every fault is live. That run used the
+run-time oracle secret. The full problem set has not been swept yet.
 
 Run the sweep from the Actions tab: choose **Harbor Oracle Sweep** and enter
 `sregym-lite`, or a list of problem IDs. Each job deploys a full application,
