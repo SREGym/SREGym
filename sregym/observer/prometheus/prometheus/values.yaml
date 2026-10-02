@@ -882,14 +882,17 @@ serverFiles:
             - alert: HighRequestErrorRate
               # Locust load generator error detection (train-ticket).
               # Fires when any endpoint has failures and enough requests to be meaningful.
+              # locust_requests_num_* are cumulative since the load test started, so a
+              # ratio of raw totals never recovers after a fault is fixed. Compare the
+              # increase over a sliding window instead (locust is scraped every 15 s).
               expr: |
                 (
-                  locust_requests_num_failures{namespace="train-ticket", name!="Aggregated"}
+                  increase(locust_requests_num_failures{namespace="train-ticket", name!="Aggregated"}[2m])
                     /
-                  locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"}
+                  increase(locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"}[2m])
                 ) > 0.1
                   and
-                locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"} > 0
+                increase(locust_requests_num_requests{namespace="train-ticket", name!="Aggregated"}[2m]) > 0
               for: 1m
               labels:
                 severity: critical
@@ -900,14 +903,15 @@ serverFiles:
             - alert: HighRequestErrorRate
               # Locust load generator error detection (astronomy-shop).
               # Fires when any endpoint has failures and enough requests to be meaningful.
+              # See the train-ticket rule above for why this uses increase().
               expr: |
                 (
-                  locust_requests_num_failures{namespace="astronomy-shop", name!="Aggregated"}
+                  increase(locust_requests_num_failures{namespace="astronomy-shop", name!="Aggregated"}[2m])
                     /
-                  locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}
+                  increase(locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}[2m])
                 ) > 0.1
                   and
-                locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"} > 0
+                increase(locust_requests_num_requests{namespace="astronomy-shop", name!="Aggregated"}[2m]) > 0
               for: 1m
               labels:
                 severity: critical
