@@ -19,7 +19,7 @@ if [ "$cgroup_version" = 2 ]; then
     # root holds no process and can delegate controllers.
     for attempt in $(seq 30); do
         for p in $(cat /sys/fs/cgroup/cgroup.procs); do echo "$p" > /sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true; done
-        if for c in $(cat /sys/fs/cgroup/cgroup.controllers); do echo "+$c" > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || exit 1; done; then
+        if (for c in $(cat /sys/fs/cgroup/cgroup.controllers); do echo "+$c" > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || exit 1; done); then
             break
         fi
         [ "$attempt" = 30 ] && { echo "cannot delegate cgroup controllers" >&2; exit 1; }

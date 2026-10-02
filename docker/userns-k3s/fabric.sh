@@ -20,7 +20,7 @@ if [ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ]; then
     mkdir -p /sys/fs/cgroup/fabric
     for attempt in 1 2 3 4 5 6 7 8 9 10; do
         for p in $(cat /sys/fs/cgroup/cgroup.procs); do echo "$p" > /sys/fs/cgroup/fabric/cgroup.procs 2>/dev/null || true; done
-        if for c in $(cat /sys/fs/cgroup/cgroup.controllers); do echo "+$c" > /sys/fs/cgroup/cgroup.subtree_control || exit 1; done; then
+        if (for c in $(cat /sys/fs/cgroup/cgroup.controllers); do echo "+$c" > /sys/fs/cgroup/cgroup.subtree_control || exit 1; done); then
             break
         fi
         sleep 1
