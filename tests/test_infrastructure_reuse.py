@@ -1,6 +1,9 @@
+import fnmatch
 import json
 import logging
+import re
 import shutil
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -13,6 +16,8 @@ from sregym.conductor.conductor import Conductor
 from sregym.service import helm as helm_module
 from sregym.service.cluster_state import ClusterBaseline, ClusterStateManager
 from sregym.service.helm import Helm
+
+VENDORED_CHART_ROOT = Path(__file__).resolve().parents[1] / "sregym"
 
 
 @pytest.fixture
@@ -302,6 +307,23 @@ def test_failed_dependency_update_stops_before_install(monkeypatch, chart):
     assert "partial update" in str(error.value)
     assert "repository failed" in str(error.value)
     popen.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "chart_file",
+    [path for path in VENDORED_CHART_ROOT.rglob("Chart.yaml") if path.parent.parent.name != "charts"],
+    ids=lambda path: str(path.parent.relative_to(VENDORED_CHART_ROOT)),
+)
+def test_vendored_subcharts_satisfy_their_pins(chart_file):
+    # A pin the vendored copy misses sends every deploy to the chart repository.
+    dependencies = (yaml.safe_load(chart_file.read_text()) or {}).get("dependencies", [])
+    for dependency in dependencies:
+        vendored = chart_file.parent / "charts" / dependency["name"] / "Chart.yaml"
+        assert vendored.exists(), f"{dependency['name']} is not vendored next to {chart_file}"
+        pin = str(dependency.get("version", "*"))
+        assert re.fullmatch(r"[0-9.*]+", pin), f"extend this check for the version range {pin!r}"
+        version = yaml.safe_load(vendored.read_text())["version"]
+        assert fnmatch.fnmatchcase(version, pin), f"{dependency['name']} {version} does not satisfy {pin}"
 
 
 @pytest.mark.skipif(shutil.which("helm") is None, reason="Helm CLI is not installed")
