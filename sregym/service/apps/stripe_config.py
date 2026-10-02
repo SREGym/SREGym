@@ -17,7 +17,8 @@ class StripeConfig(StripeMarathon):
     def get_app_json(self):
         result = super().get_app_json()
         result["Desc"] += (
-            " The payments edge publishes periodic ClickHouse-derived bot configuration. Operational evidence is in stripe-marathon's edge container at /control."
+            " The payments edge publishes periodic ClickHouse-derived bot configuration"
+            " to a persistent volume mounted at /control."
         )
         return result
 
