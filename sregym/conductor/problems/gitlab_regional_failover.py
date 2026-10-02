@@ -90,27 +90,29 @@ class GitLabRegionalFailover(Problem):
 
     def write_evidence(self, promoted):
         app = self.app
+        # Evidence records what happened and what people observed. It must not
+        # state the diagnosis or the recovery contract: working those out is the
+        # task. Real incident chatter also carries wrong hypotheses, so there is
+        # one here.
         app.archive_write(
             "/recovery/orchestrator.log",
             "region-east primary unreachable for 43s; health checks failed in 3 consecutive probes\n"
             "failover policy: promote most advanced reachable replica in region-west\n"
             f"promoted {promoted}; region-east demoted, writes refused\n"
-            "replication lag at promotion: unknown; replica was behind the primary\n"
-            "NOTE: the demoted primary's unreplicated writes were not discarded by this tool.\n",
+            "replication lag at promotion: unknown\n",
         )
         app.archive_write(
             "/recovery/chat.txt",
-            "on-call: some issues customers opened during the blip are gone from the UI\n"
-            "on-call: but issues opened since the failover are fine, and new ones work\n"
-            "dba: do NOT restore the east snapshot over the live database, we have taken writes since\n"
-            "support: two customers say their issue URL now shows somebody else's issue\n"
-            "storage: repository files were never affected\n",
+            "on-call: customers report issues they opened this morning are missing from their projects\n"
+            "on-call: issues opened later today look fine, and creating new ones works\n"
+            "on-call: looks like a partial restore to me, checking whether a backup job ran\n"
+            "support: a customer says their issue link opens a different issue than the one they filed\n"
+            "storage: repository files are intact, nothing touched the Git volumes\n",
         )
         app.archive_write(
             "/recovery/ticket.txt",
-            "Account for every write both regions acknowledged. Issues opened during the partition are "
-            "missing, and some of their URLs now resolve to different issues opened after the failover. "
-            "Neither set may be lost or duplicated. A healthy /-/health is not recovery.\n",
+            "Customers report issues missing from their projects, and at least one reports an issue "
+            "link opening a different issue. Restore normal service and account for customer data.\n",
         )
 
     @mark_fault_injected

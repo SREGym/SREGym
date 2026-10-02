@@ -58,11 +58,15 @@ class MattermostCapacityCascade(Problem):
         }
         app.write_control(
             "incident-notes.txt",
-            "change window: upstream connection settings were adjusted on the chat path\n"
-            "on-call: chat requests time out; gateway logs show workers busy and requests shed\n"
-            "on-call: the capacity dashboard shows CPU LOW and falling, and replicas going down\n"
-            "on-call: scaling the gateway up by hand helped for under a minute\n"
-            "platform: latency and saturation dashboard panels are unavailable; use the gateway's own metrics\n",
+            # Symptoms and actions, not conclusions, and one wrong hypothesis --
+            # which is what a real incident channel looks like. Naming the
+            # misleading signal, or the fact that a manual scale-up gets
+            # reverted, would hand over the task.
+            "change window: upstream connection settings on the chat path were adjusted at 14:02\n"
+            "on-call: customers report chat timing out; some requests come back 503\n"
+            "on-call: mattermost itself answers fine when I curl it from inside the cluster\n"
+            "on-call: feels like the database is struggling, asking the DB owner to look\n"
+            "platform: parts of the capacity dashboard are not rendering\n",
         )
 
         self.latency_injected = True

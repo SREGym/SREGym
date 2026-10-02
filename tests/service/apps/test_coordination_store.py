@@ -591,3 +591,59 @@ def test_the_gates_stay_discoverable_from_the_api_alone():
     reported = store.truth(state, 1000.0)
     for key in ("latency_budget_ms", "watch_budget", "stability_required_seconds", "cold_admission_limit"):
         assert key in reported, key
+
+
+def test_no_injected_evidence_states_the_diagnosis():
+    """Stripping the guides was not enough: injection writes evidence too.
+
+    A re-screen trace showed the agent reading `/control/incident-notes.txt`,
+    which is written by `inject_fault` rather than by the guide. It had been
+    telling the agent that CPU was low and falling and that a manual scale-up
+    only held for a minute -- the whole task, in a second channel. The failover
+    chat went further and instructed the responder not to restore the snapshot,
+    which is the central decision.
+
+    Evidence may report symptoms, actions taken and wrong hypotheses. It may not
+    state a cause, name the misleading signal, or give the recovery contract.
+    """
+    import ast
+    import pathlib
+
+    forbidden = [
+        "CPU LOW",
+        "workers busy",
+        "requests shed",
+        "helped for under a minute",
+        "use the gateway's own metrics",
+        "do NOT restore",
+        "we have taken writes since",
+        "both regions acknowledged",
+        "Neither set may be lost",
+        "is not recovery",
+        "were not discarded by this tool",
+        "now resolve to different issues",
+    ]
+    problems = pathlib.Path("sregym/conductor/problems")
+    for name in ("mattermost_capacity_cascade.py", "gitlab_regional_failover.py", "coordination_collapse.py"):
+        source = (problems / name).read_text()
+        # Every string literal in the problem, which covers whatever it writes
+        # as evidence regardless of the helper used.
+        literals = [
+            node.value
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        blob = " ".join(" ".join(x.split()) for x in literals)
+        for phrase in forbidden:
+            assert phrase not in blob, f"{name} evidence still states: {phrase}"
+
+
+def test_the_injected_evidence_still_carries_a_wrong_hypothesis():
+    """Real incident chatter contains bad guesses; that is part of the task."""
+    import pathlib
+
+    cascade = pathlib.Path("sregym/conductor/problems/mattermost_capacity_cascade.py").read_text()
+    failover = pathlib.Path("sregym/conductor/problems/gitlab_regional_failover.py").read_text()
+
+    assert "database is struggling" in cascade
+    assert "partial restore" in failover
