@@ -124,12 +124,79 @@ docker run --rm --network userns-k3s -v /tmp/userns-k3s.yaml:/kc:ro -v $PWD/smok
     -e KUBECONFIG=/kc --entrypoint sh rancher/k3s:v1.32.5-k3s1 /smoke.sh
 ```
 
+### Run SREGym problems
+
+`validate-sregym.sh` builds and starts the container if it is not running, then
+points `~/.kube/config` at it (SREGym's API proxy reads that file). It runs
+SREGym's lifecycle validator for each problem and writes summaries to
+`results/userns-k3s/`. To pull images through a proxy on the host:
+
+```bash
+python3 docker/userns-k3s/egress-proxy.py --listen 127.0.0.1 --port 3128 &
+EGRESS_PROXY=127.0.0.1:3128 DOCKER_NETWORK=host \
+    REGISTRIES=docker/userns-k3s/registries.yaml \
+    docker/userns-k3s/validate-sregym.sh network_policy_block
+```
+
 ## Validation status
 
 Validated on a Firecracker VM (kernel 6.18, cgroup v1 hybrid, no AppArmor or
 SELinux, Docker 29.6.2). The outer container ran with
-`Privileged=false CapAdd=[] Devices=[]` and `seccomp.json`. All 10 checks in
-`smoke.sh` passed:
+`Privileged=false CapAdd=[] Devices=[]` and `seccomp.json`.
+
+### SREGym-Lite: 21/21
+
+`validate-sregym.sh` ran SREGym's own lifecycle validator
+(`tests/integration/validate_problem.py`) on every SREGym-Lite problem:
+
+1. deploy the application
+2. inject the fault
+3. require the mitigation oracle to fail
+4. recover the fault
+5. require the oracle to pass
+6. clean up
+
+All 21 passed, on one cluster created once:
+
+- **Hotel Reservation:** `network_policy_block`,
+  `cronjob_sidecar_blocks_completion_hotel_reservation`,
+  `finalizer_deadlock_controller_hotel_reservation`,
+  `service_wrong_pod_selection_hotel_reservation`, `namespace_memory_limit`,
+  `admission_webhook_outage_hotel_reservation`,
+  `search_rate_retry_collapse_hotel_reservation`
+- **Social Network:** `mutating_webhook_resource_limits_social_network`,
+  `service_dns_resolution_failure_social_network`,
+  `readiness_probe_misconfiguration_social_network`,
+  `duplicate_pvc_mounts_social_network`,
+  `wrong_service_selector_social_network`,
+  `rolling_update_misconfigured_social_network`
+- **Astronomy Shop:** `edge_request_filter_cpu_saturation`,
+  `env_variable_shadowing_astronomy_shop`, `kafka_poison_pill_hol_block`,
+  `internal_traffic_policy_local_astronomy_shop`, `valkey_auth_disruption`,
+  `secret_rotation_stale_env_credentials_astronomy_shop`,
+  `unschedulable_incorrect_port_assignment`, `wrong_dns_policy_astronomy_shop`
+
+SREGym's usual infrastructure ran alongside them:
+
+- metrics-server
+- OpenEBS, including its privileged host-network node-disk-manager
+- the Prometheus stack
+- Jaeger
+- the OTel collector
+- the MCP server
+
+Images were pulled through `EGRESS_PROXY` with `registries.yaml`.
+
+That VM boots with `ipv6.disable=1`. Two Astronomy Shop listeners are
+hardcoded to IPv6: `image-provider`'s nginx (`listen [::]`) and `flagd-ui`
+(`ip: {0,0,0,0,0,0,0,0}`). Both fail with `EAFNOSUPPORT` on such a kernel
+under any cluster, KIND included. For the Astronomy Shop runs, a local,
+uncommitted values override rewrote both to IPv4 at container start. Hosts
+with IPv6 do not need it.
+
+### Cluster checks
+
+All 10 checks in `smoke.sh` passed:
 
 - 4 Ready nodes
 - pods spread across 3 nodes, with pod-to-pod traffic across nodes
@@ -149,15 +216,16 @@ Two more manual checks passed:
 
 Not validated:
 
-- **cgroup v2 hosts.** The cgroup v2 path is written but untested; it mirrors
-  `docker/dind/prepare-cgroups.sh`.
+- **cgroup v2 hosts.** The cgroup v2 path is written but untested end to end;
+  it mirrors `docker/dind/prepare-cgroups.sh`.
 - **AppArmor or SELinux hosts.**
 - **Calico.**
-- **Any SREGym application or problem.**
+- **SREGym problems outside SREGym-Lite.**
 
 ## Gaps before SREGym could use this
 
-- **CNI.** k3s ships flannel and kube-router network policies. SREGym installs
+- **CNI.** k3s ships flannel and kube-router network policies, which were
+  enough for SREGym-Lite (including `network_policy_block`). SREGym installs
   Calico. Its filtered agent mode needs Calico Tiers and a GlobalNetworkPolicy,
   and two problems use Calico CRDs. Calico would need to be installed with
   `--flannel-backend=none`, or this could become *kind on a dockerd running
@@ -173,5 +241,6 @@ Not validated:
     built in.
 - **Kernel modules.** Every module must already be loaded on the host,
   including `sch_netem` for Chaos Mesh delay and `ipip` for Calico IPIP.
-- **Air-gapped images.** Every image, chart and manifest must be preloaded, or
-  served by a pull-through mirror reachable from the fabric.
+- **Images without network access.** Without `EGRESS_PROXY`, every image,
+  chart and manifest must be preloaded, or served by a mirror reachable from
+  the fabric.
