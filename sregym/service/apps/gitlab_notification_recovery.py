@@ -8,22 +8,6 @@ from sregym.service.apps.gitlab_recovery import ARCHIVE, GitLabRecovery
 
 NOTIFICATION_REASON = "sregym-ack"
 NOTIFICATION_JOURNAL = "/recovery/journal/acknowledged-notifications.json"
-#: API reference only. It must not say what is wrong, interpret a
-#: symptom, or state what a correct recovery preserves.
-MAIL_GUIDE = """
-Notification delivery
-
-GitLab sends issue notifications through its ordinary Notify mailer and the
-Sidekiq mailers queue. Redis and the recipient mailbox are on their own volumes,
-independent of the database.
-
-/recovery/journal/acknowledged-notifications.json records notification intent:
-project ID, public issue IID, recipient and queue job ID per entry.
-
-The provider's read-only audit is http://notification-mailbox:8080/messages. It
-accepts local synthetic mail only and exposes no mutation endpoints. The
-journal's notification reason distinguishes incident mail from unrelated mail.
-"""
 
 
 class GitLabNotificationRecovery(GitLabRecovery):
@@ -98,7 +82,6 @@ class GitLabNotificationRecovery(GitLabRecovery):
 
     def deploy(self):
         super().deploy()
-        self.archive_write("/recovery/notifications.txt", MAIL_GUIDE)
 
     def rails(self, ruby):
         output = self.command(

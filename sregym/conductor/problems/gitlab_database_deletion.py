@@ -64,11 +64,7 @@ class GitLabDatabaseDeletion(Problem):
             "/recovery/backups/catalog.json",
             json.dumps(
                 [
-                    {
-                        "file": "nightly.dump",
-                        "status": "scheduled",
-                        "note": "remote archive job; delivery notification unavailable",
-                    },
+                    {"file": "nightly.dump", "status": "scheduled"},
                     {"file": "staging.dump", "status": "completed", "sha256": self.archive_sha256},
                     {"file": "latest.dump", "status": "completed", "sha256": checksum},
                 ],
@@ -89,13 +85,6 @@ class GitLabDatabaseDeletion(Problem):
     def inject_fault(self):
         self.prepare_recovery_material()
         app = self.app
-        primary = app.cluster()["status"]["currentPrimary"]
-        app.archive_write(
-            "/recovery/operations.log",
-            "maintenance requested: rebuild lagging secondary\n"
-            f"shell prompt: db-secondary; connection PGHOST=gitlab-ce-db-rw; server={primary}\n"
-            "reset command completed\n",
-        )
         self.deletion_attempted = True
         app.sql("""DO $$ DECLARE n text; BEGIN
           FOR n IN SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg_%'

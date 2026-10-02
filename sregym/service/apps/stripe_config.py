@@ -8,31 +8,6 @@ from sregym.service.apps.stripe_marathon import StripeMarathon
 CATALOG_IMAGE = "clickhouse/clickhouse-server:25.8.12.129-alpine"
 RUNTIME_IMAGE = "python:3.12.13-alpine3.23"
 COUNTS = {"single": 6, "replicated": 24}
-#: Workspace reference: what exists and what the tools do. It must not
-#: state the recovery contract, interpret the symptom, or warn the
-#: responder away from a mistake -- that is the task.
-GUIDE = """Payments operations workspace
-
-The edge and the configuration producer share /control:
-
-  settings.json     publication (enabled), rollout query identities (sources),
-                    and the bot-management kill switch (bot_management_enabled)
-  current.json      the configuration file currently distributed to the edge
-  known-good.json   the last release that passed validation
-  query.sql         the producer's ClickHouse query
-
-The feature-catalog service is ClickHouse; the edge container holds an operator
-credential in CATALOG_PASSWORD. /incident/feature_edge.py supports the sql,
-safety, settings, generate and known-good commands, which operate on real
-catalog grants, queries and persistent files. Generation history and each
-service's /metrics are reachable directly.
-
-The application has bounded delivery retries, and exhausted webhook events stay
-in PostgreSQL with their delivery history. In stripe-worker,
-`PYTHONPATH=/app python /incident/requeue_webhooks.py [JSON event-ID list]`
-requeues original events transactionally, skipping successful and pending work.
-Receipts are deduplicated by event ID on stripe-receiver's volume.
-"""
 
 
 class StripeConfig(StripeMarathon):
@@ -50,7 +25,6 @@ class StripeConfig(StripeMarathon):
         documents = super().application_documents()
         runtime = Path(__file__).with_name("incident_runtime")
         scripts = {p.name: p.read_text() for p in runtime.glob("*.py")}
-        scripts["README.txt"] = GUIDE
         volumes = [{"name": "incident", "configMap": {"name": "incident-runtime"}}]
         mount = {"name": "incident", "mountPath": "/incident", "readOnly": True}
         for document in documents:

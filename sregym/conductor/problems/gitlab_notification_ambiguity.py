@@ -61,14 +61,6 @@ class GitLabNotificationAmbiguity(GitLabNotificationRecovery):
         public = app.public_messages()
         if public != app.messages():
             raise RuntimeError("Public provider audit does not expose the full durable evidence")
-        app.archive_write(
-            "/recovery/notification-operations.log",
-            "Earlier audit: six incident notifications accepted before the worker was resumed.\n"
-            "Subsequent worker batch: SMTP transport failures occurred while sending DATA; delivery outcomes "
-            "were not confirmed by the sender. Redis retains failed notification work.\n"
-            "The provider's transport is available again. Its paginated audit includes ordinary digest mail.\n"
-            "Issue sequence allocations included aborted import reservations after the staging archive.\n",
-        )
 
     def reconcile_notifications(self):
         app = self.app

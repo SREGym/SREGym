@@ -627,6 +627,33 @@ ALL_PROBLEM_FILES = (
 )
 
 
+def test_no_family_ships_a_guide_of_any_kind():
+    """No briefing, not even a tool reference. The bar is no authored evidence.
+
+    I kept "harmless" API and workspace references in four families and judged
+    them fair. Everything in them was discoverable anyway -- file inventories by
+    `ls`, response shapes by one request, tool usage from `--help` or a module
+    docstring -- so they bought the agent nothing it could not find, while
+    costing the screen its meaning. They are gone.
+
+    The one thing kept is the coordinator advertising its own routes at `GET /`,
+    because a custom HTTP API is unguessable and the task would be unsolvable
+    rather than hard. That is the service describing itself, not a briefing.
+    """
+    import pathlib
+
+    for path in pathlib.Path("sregym/service/apps").glob("*.py"):
+        source = path.read_text()
+        for line in source.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            assert "GUIDE" not in stripped or "=" not in stripped, f"{path.name}: {stripped[:70]}"
+        # And nothing may write a briefing into a volume.
+        for artifact in ("README.txt", "notifications.txt", "provider-audit.txt", "failover.txt"):
+            assert artifact not in source, f"{path.name} writes {artifact}"
+
+
 def test_no_family_anywhere_states_a_recovery_contract_or_a_cause():
     """The rule applies to every family, not the three I noticed first.
 

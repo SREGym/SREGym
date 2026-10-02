@@ -23,27 +23,6 @@ SELECT json_build_object(
 );
 """
 
-#: Workspace reference: what exists and what the tools do. It must not
-#: state the recovery contract, interpret the symptom, or warn the
-#: responder away from a mistake -- that is the task.
-OPERATIONS_GUIDE = """Gitea service recovery workspace
-
-/recovery/backups holds custom-format PostgreSQL logical archives, and
-catalog.json records what the backup uploader reported about each one.
-
-/recovery/journal/acknowledged-issues.json is a write-acceptance journal. Each
-entry records repository, public issue number, title and body in acceptance
-order. In Gitea, repository plus issue number is an issue's public identity;
-database row IDs are internal.
-
-The tools container includes psql, pg_dump and pg_restore; its PG* environment
-points at the application's writable database service using the application
-role. Git repository storage is on its own volume, independent of the database.
-
-Application API credentials are in the gitea-admin Secret, mounted at
-/credentials in application-client.
-"""
-
 
 class GiteaRecovery(Gitea):
     @property
@@ -52,10 +31,7 @@ class GiteaRecovery(Gitea):
 
     def get_app_json(self):
         metadata = super().get_app_json()
-        metadata["Desc"] += (
-            " Database archives, a backup catalog and a write-acceptance journal are kept in"
-            " the recovery-console pod at /recovery."
-        )
+        metadata["Desc"] += " The recovery-console pod mounts the database archive volume at /recovery."
         return metadata
 
     def render(self):
@@ -114,7 +90,6 @@ class GiteaRecovery(Gitea):
         super().deploy()
         self.command("wait", "--for=condition=Ready", "pod/recovery-console", "--timeout=300s", timeout=320)
         self.archive_command("mkdir", "-p", "/recovery/backups", "/recovery/journal")
-        self.archive_write("/recovery/README.txt", OPERATIONS_GUIDE)
 
     def archive_command(self, *args, input_text=None, timeout=180):
         return self.command(

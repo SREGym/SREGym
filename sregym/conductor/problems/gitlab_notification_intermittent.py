@@ -26,18 +26,6 @@ class GitLabNotificationIntermittent(GitLabNotificationAmbiguity):
     def prepare_recovery_material(self):
         super().prepare_recovery_material()
         self.app.ongoing_fault(True)
-        self.app.archive_write(
-            "/recovery/notification-operations.log",
-            "Earlier audit: six incident notifications accepted before the worker was resumed.\n"
-            "Subsequent worker batch: SMTP transport failures occurred during DATA; the sender could not "
-            "confirm which attempts were accepted. Redis retains failed work.\n"
-            "Current provider advisory: intermittent DATA connection failures continue during recovery. "
-            "A failed send may already be recipient-visible, or may not have been accepted. "
-            "Successful and failed attempts are interleaved. The paginated provider audit remains available.\n"
-            "Automatic retries can duplicate accepted mail. Reconcile the original intent without duplicate "
-            "or wrong-recipient deliveries while restoring normal GitLab notification service.\n"
-            "Issue sequence allocations included aborted import reservations after the staging archive.\n",
-        )
 
     def reconcile_notifications(self):
         self.app.control("stop", "sidekiq")

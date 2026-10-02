@@ -3,19 +3,7 @@
 import json
 from pathlib import Path
 
-from sregym.service.apps.gitlab_notification_ambiguity import AUDIT_GUIDE
 from sregym.service.apps.gitlab_notification_intermittent import GitLabNotificationIntermittent
-
-#: API reference only. It must not say what is wrong, interpret a
-#: symptom, or state what a correct recovery preserves.
-DELAY_GUIDE = """
-Provider audit fields
-
-Each audit response includes observed_at, complete_through and
-publication_delay_seconds, expressed using the provider's clock. A snapshot
-contains every acceptance at or before its complete_through. Follow next to read
-an entire snapshot; start again without a cursor to obtain a newer one.
-"""
 
 
 class GitLabNotificationDelayedAudit(GitLabNotificationIntermittent):
@@ -43,7 +31,6 @@ class GitLabNotificationDelayedAudit(GitLabNotificationIntermittent):
 
     def deploy(self):
         super().deploy()
-        self.archive_write("/recovery/provider-audit.txt", AUDIT_GUIDE + DELAY_GUIDE)
 
     def publication_report(self):
         return json.loads(

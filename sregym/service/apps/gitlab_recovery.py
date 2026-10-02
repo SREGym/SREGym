@@ -22,26 +22,6 @@ SELECT json_build_object(
       FROM issues ORDER BY project_id, iid) r)
 );
 """
-#: Workspace reference: what exists and what the tools do. It must not
-#: state the recovery contract, interpret the symptom, or warn the
-#: responder away from a mistake -- that is the task.
-GUIDE = """GitLab incident recovery workspace
-
-/recovery/backups holds custom-format PostgreSQL logical archives, and
-catalog.json records what the backup job reported about each one.
-
-/recovery/journal/acknowledged-issues.json is a write-acceptance journal. Each
-entry records project ID, public issue IID, title, description and
-confidentiality in acceptance order. In GitLab, project plus IID is an issue's
-public identity; internal SQL row IDs are not.
-
-The console includes PostgreSQL tools; its PG* environment targets this
-application's writable service as the application role. Repository storage and
-the archive volume are on their own volumes, independent of the database.
-
-Application credentials are in application-credentials, mounted at /credentials
-in application-client.
-"""
 
 
 class GitLabRecovery(GitLabCE):
@@ -61,7 +41,7 @@ class GitLabRecovery(GitLabCE):
 
     def get_app_json(self):
         result = super().get_app_json()
-        result["Desc"] += " Recovery evidence, backup catalog and issue receipts are in recovery-console:/recovery."
+        result["Desc"] += " The recovery-console pod mounts the database archive volume at /recovery."
         return result
 
     def render(self):
@@ -106,7 +86,6 @@ class GitLabRecovery(GitLabCE):
         super().deploy()
         self.command("wait", "--for=condition=Ready", "pod/recovery-console", "--timeout=300s", timeout=320)
         self.archive_command("mkdir", "-p", "/recovery/backups", "/recovery/journal")
-        self.archive_write("/recovery/README.txt", GUIDE)
         marker = self.command("get", "configmap", "recovery-fixtures", "--ignore-not-found", "-o", "json")
         if not marker.strip():
             self.projects = self.recovery_client("seed", count=self.recovery_counts[0])

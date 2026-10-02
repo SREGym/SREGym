@@ -20,13 +20,3 @@ class GitLabNotificationDelayedAudit(GitLabNotificationIntermittent):
             "notification using complete provider evidence before retrying uncertain sends.",
         )
         self.diagnosis_oracle.expected = self.root_cause
-
-    def prepare_recovery_material(self):
-        super().prepare_recovery_material()
-        self.app.archive_command(
-            "sh",
-            "-c",
-            "printf '\\nProvider update: receipt publication is delayed during the continuing SMTP incident. "
-            "See the completeness-watermark contract in /recovery/provider-audit.txt.\\n' "
-            ">> /recovery/notification-operations.log",
-        )

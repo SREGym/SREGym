@@ -74,11 +74,6 @@ puts 'RESULT:' + result.to_json
             or report["duplicates"]
         ):
             raise RuntimeError(f"Notification fixture did not establish six accepted deliveries: {report}")
-        self.app.archive_write(
-            "/recovery/notification-operations.log",
-            "Provider audit confirms six deliveries before the database incident. Remaining acknowledged mail "
-            "was queued in Redis. Issue sequence allocations included aborted import reservations after staging.\n",
-        )
 
     @mark_fault_injected
     def inject_fault(self):

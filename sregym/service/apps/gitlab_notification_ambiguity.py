@@ -5,19 +5,6 @@ from pathlib import Path
 
 from sregym.service.apps.gitlab_notification_recovery import GitLabNotificationRecovery
 
-#: API reference only. It must not say what is wrong, interpret a
-#: symptom, or state what a correct recovery preserves.
-AUDIT_GUIDE = """
-Provider audit API
-
-GET http://notification-mailbox:8080/messages returns an object containing
-items, next, snapshot and total. Each response contains at most 40 messages.
-Follow the relative next URL until it is null; subsequent pages retain the same
-snapshot. Begin a new request without a cursor to observe later deliveries.
-The audit includes unrelated local synthetic mail. There are no audit mutation
-endpoints.
-"""
-
 
 class GitLabNotificationAmbiguity(GitLabNotificationRecovery):
     def application_documents(self):
@@ -41,16 +28,6 @@ class GitLabNotificationAmbiguity(GitLabNotificationRecovery):
             }
         )
         return documents
-
-    def deploy(self):
-        super().deploy()
-        # Keep the outcome contract, but explicitly replace the old list-only API.
-        self.archive_write("/recovery/provider-audit.txt", AUDIT_GUIDE)
-        self.archive_command(
-            "sh",
-            "-c",
-            "printf '\\nThe provider audit is paginated; see /recovery/provider-audit.txt.\\n' >> /recovery/notifications.txt",
-        )
 
     def provider_fault(self, remaining=None):
         self.command(

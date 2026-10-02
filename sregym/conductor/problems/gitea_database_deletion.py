@@ -98,13 +98,6 @@ class GiteaDatabaseDeletion(Problem):
     @mark_fault_injected
     def inject_fault(self):
         self.prepare_recovery_material()
-        primary = self.app.cluster()["status"]["currentPrimary"]
-        self.app.archive_write(
-            "/recovery/operations.log",
-            "maintenance: requested disposable database reset\n"
-            f"session: namespace={self.namespace} host=gitea-db-rw database=gitea server={primary}\n"
-            "statement: DROP SCHEMA public CASCADE; CREATE SCHEMA public AUTHORIZATION gitea;\n",
-        )
         self.deletion_attempted = True
         self.app.sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public AUTHORIZATION gitea;")
         deadline = time.monotonic() + 60
