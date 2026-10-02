@@ -1,0 +1,115 @@
+{
+  "status": "clean source-blind fleet recovery-tail trial; difficulty remains short despite scale",
+  "run": "native-fleet-3",
+  "tier": "fleet",
+  "workers": 12,
+  "cache_pools": 96,
+  "nomad_allocations": 245,
+  "source_sha256": {
+    "topology.py": "ecc797d5e5bad5ca0baacceebc57dd48bb8dc63b186419d4748eb87c2c73eb5a",
+    "runner.py": "7e60dd4890c6fe144cc0001475e2ab44a7cd43e175581c195e776666892f738f",
+    "grading.py": "ed69956c8242e3e7e6f75ed2eec229930c606dfbfc757b53293f05ad19a17eca",
+    "runtime/routing.py": "63dd73c22a7baaba2cd23f2f5c4ae39a4a237bad4e95f19276b4724f556c9023",
+    "runtime/cache_reconciler.py": "47ba99bcd744bb5e5e120bf2d8ae76809b7da4d584e4682b202e8e407640672b",
+    "runtime/application.py": "0ade2ac86832b95d9da7ec85c7116535d53ccc7e7e8ccc4866cff06f731afd6c"
+  },
+  "baselines": [
+    {
+      "valid": true,
+      "passed": true,
+      "successful": 600,
+      "attempted": 600,
+      "failed_checks": []
+    },
+    {
+      "valid": true,
+      "passed": true,
+      "successful": 600,
+      "attempted": 600,
+      "failed_checks": []
+    },
+    {
+      "valid": true,
+      "passed": true,
+      "successful": 600,
+      "attempted": 600,
+      "failed_checks": []
+    }
+  ],
+  "pre_agent_grades": [
+    {
+      "valid": true,
+      "passed": false,
+      "successful": 94,
+      "attempted": 600,
+      "failed_checks": [
+        "workflows",
+        "workflow_latency",
+        "cache_redeployment_complete"
+      ]
+    },
+    {
+      "valid": true,
+      "passed": false,
+      "successful": 132,
+      "attempted": 600,
+      "failed_checks": [
+        "workflows",
+        "workflow_latency",
+        "cache_redeployment_complete"
+      ]
+    }
+  ],
+  "pre_agent_capacity_and_integrity": {
+    "service_capacity": true,
+    "placement_shards_live": true,
+    "consul_quorum": true,
+    "workers_ready": true,
+    "acknowledged_work_preserved": true
+  },
+  "recovery_rollout": {
+    "native_controller_pools_stopped_before_agent_pause": 4,
+    "agent_batch_size": 4,
+    "agent_verified_replacements": 93,
+    "manual_batch_rollout_seconds": 275.497,
+    "first_native_stop_to_complete_seconds": 419.933,
+    "native_controller_restored": true
+  },
+  "agent": "Codex CLI 0.155.1",
+  "model": "gpt-6-astra",
+  "elapsed_seconds": 1228.49,
+  "timed_out": false,
+  "exit_code": 0,
+  "post_agent_grade": {
+    "valid": true,
+    "passed": true,
+    "successful": 600,
+    "attempted": 600,
+    "failed_checks": []
+  },
+  "post_agent_checks": {
+    "full_admission": true,
+    "workflows": true,
+    "correct_responses": true,
+    "identities_preserved": true,
+    "balances_conserved": true,
+    "unique_transactions": true,
+    "consistent_transactions": true,
+    "acknowledged_work_preserved": true,
+    "recovery_tail_processed": true,
+    "consul_quorum": true,
+    "workers_ready": true,
+    "service_capacity": true,
+    "placement_shards_live": true,
+    "workflow_latency": true,
+    "cache_redeployment_complete": true
+  },
+  "acknowledgments_checked": 22855,
+  "usage": {
+    "input_tokens": 5288685,
+    "cached_input_tokens": 5169920,
+    "cache_write_input_tokens": 0,
+    "output_tokens": 20174,
+    "reasoning_output_tokens": 4739
+  }
+}
