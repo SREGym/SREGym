@@ -18,6 +18,7 @@ KIND cluster, or cannot be graded, are skipped with the reason reported.
 import argparse
 import contextlib
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -171,6 +172,32 @@ def inspect_problems(problem_ids: list[str] | None = None) -> Inspection:
     )
 
 
+def oracle_token(secret: str, name: str) -> str:
+    """The token that lets task ``name``'s reference solution trigger recovery."""
+    return hmac.new(secret.encode(), name.encode(), hashlib.sha256).hexdigest()
+
+
+def resolve_oracle_secret(output_dir: Path) -> tuple[str, Path | None]:
+    """Return the oracle secret and, if one was generated or reused, its file.
+
+    ``SREGYM_ORACLE_SECRET`` wins. Otherwise a secret saved at the dataset root
+    by an earlier run is reused, so tasks generated into the same directory
+    share it, or a new one is generated and saved there.
+    """
+    secret = os.environ.get(protocol.ORACLE_SECRET_ENV, "").strip()
+    if secret:
+        return secret, None
+    path = output_dir / protocol.ORACLE_SECRET_FILE
+    if path.exists():
+        return path.read_text().strip(), path
+    output_dir.mkdir(parents=True, exist_ok=True)
+    secret = secrets.token_urlsafe(32)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w") as handle:
+        handle.write(secret + "\n")
+    return secret, path
+
+
 def _render(text: str, values: dict[str, str]) -> str:
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
@@ -210,8 +237,16 @@ class SREGymAdapter:
         self.storage_mb = storage_mb
         self.registry_mirror = registry_mirror
         self.kind_node_image = kind_node_image
+        self._oracle_secret: str | None = None
+        self.oracle_secret_file: Path | None = None
 
-    def _values(self, info: ProblemInfo, oracle_token: str) -> dict[str, str]:
+    @property
+    def oracle_secret(self) -> str:
+        if self._oracle_secret is None:
+            self._oracle_secret, self.oracle_secret_file = resolve_oracle_secret(self.output_dir)
+        return self._oracle_secret
+
+    def _values(self, info: ProblemInfo) -> dict[str, str]:
         if len(info.namespaces) > 1:
             namespace_block = (
                 f"Namespaces: {', '.join(info.namespaces)}\n"
@@ -240,8 +275,10 @@ class SREGymAdapter:
             "registry_mirror": self.registry_mirror,
             "kind_node_image": self.kind_node_image,
             "kubectl_version": DEFAULT_KUBECTL_VERSION,
-            "oracle_token": oracle_token,
-            "oracle_token_sha256": hashlib.sha256(oracle_token.encode()).hexdigest(),
+            "oracle_secret_env": protocol.ORACLE_SECRET_ENV,
+            "oracle_token_sha256": hashlib.sha256(
+                oracle_token(self.oracle_secret, task_name(info.problem_id)).encode()
+            ).hexdigest(),
             "service_name": protocol.SERVICE_NAME,
             "api_port": str(protocol.API_PORT),
             "grade_port": str(protocol.GRADE_PORT),
@@ -262,9 +299,7 @@ class SREGymAdapter:
             if not self.overwrite:
                 raise FileExistsError(f"{task_dir} exists; pass --overwrite to replace it")
             shutil.rmtree(task_dir)
-        # A fresh token per generated task: it lets only this task's reference
-        # solution trigger recover_fault(), and the sidecar stores its hash.
-        values = self._values(info, secrets.token_urlsafe(24))
+        values = self._values(info)
         for source in sorted(TEMPLATE_DIR.rglob("*")):
             if source.is_dir() or "__pycache__" in source.parts:
                 continue
@@ -341,6 +376,11 @@ def main(argv=None) -> int:
     for problem_id, reason in sorted(skipped.items()):
         print(f"skipped {problem_id}: {reason}", file=sys.stderr)
     print(f"Wrote {len(written)} Harbor task(s) to {args.output_dir} ({len(skipped)} skipped)")
+    if written and adapter.oracle_secret_file:
+        print(
+            f"The oracle agent needs {protocol.ORACLE_SECRET_ENV}, saved in {adapter.oracle_secret_file} "
+            f"(never published):\n  export {protocol.ORACLE_SECRET_ENV}=$(cat {adapter.oracle_secret_file})"
+        )
     return 0
 
 

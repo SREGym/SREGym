@@ -47,9 +47,17 @@ on the [Docker-in-Docker runtime](../docker/dind/README.md).
    the mitigation oracle succeeds and 0.0 otherwise. If the backend could not
    grade, no reward is written, so Harbor reports an error instead of a zero.
 5. **Reference solution.** Harbor's oracle agent runs `solution/solve.sh`. It
-   asks the sidecar to run the problem's own `recover_fault()`. Only the
-   solution contains the token for this endpoint; the sidecar stores just its
-   SHA-256.
+   asks the sidecar to run the problem's own `recover_fault()`. The endpoint
+   needs a per-task token: an HMAC of the task name keyed by the dataset's
+   oracle secret. The task carries only the token's SHA-256. The secret reaches
+   `solve.sh` at run time through task.toml's `[solution] env`, which Harbor
+   resolves for the oracle agent only. A published task therefore holds no
+   usable token.
+
+   The adapter reads the secret from `SREGYM_ORACLE_SECRET`. If that is unset,
+   it generates a secret and saves it in `.sregym-oracle-secret` at the dataset
+   root, which `harbor publish` never uploads. Export the secret before running
+   the oracle agent.
 
 The generated `instruction.md` never names the fault or problem ID. The problem
 ID appears only in files that stay on the Harbor host: `task.toml` metadata and
@@ -122,8 +130,11 @@ Then either generate with `--backend-image sregym-dind:local` or export
 ```bash
 uv tool install harbor            # 0.23 or newer
 
-# Reference solution: every task should score 1.0
+# Reference solution: every task should score 1.0. The oracle agent needs
+# the secret the adapter saved beside the tasks.
+export SREGYM_ORACLE_SECRET=$(cat datasets/sregym-selftest/.sregym-oracle-secret)
 harbor run -p datasets/sregym-selftest -a oracle
+export SREGYM_ORACLE_SECRET=$(cat datasets/sregym/.sregym-oracle-secret)
 harbor run -p datasets/sregym/network-policy-block -a oracle
 
 # No-op agent: every task should score 0.0
@@ -196,6 +207,7 @@ Start every new provider with the self-test task:
 ```bash
 uv run python -m sregym.harbor.adapter --self-test --output-dir datasets/sregym-selftest \
     --backend-image ghcr.io/sregym/sregym-dind:<tag> --kind-node-image ghcr.io/sregym/kind-node:v1.32.11-<tag>
+export SREGYM_ORACLE_SECRET=$(cat datasets/sregym-selftest/.sregym-oracle-secret)
 harbor run -p datasets/sregym-selftest -a oracle -e daytona
 ```
 

@@ -100,6 +100,8 @@ jobs:
 
       - name: Oracle agent scores 1
         run: |
+          # The adapter saved this dataset's oracle secret beside its tasks.
+          export SREGYM_ORACLE_SECRET="$(cat "$TASKS/.sregym-oracle-secret")"
           harbor run -y -q -p "$TASKS" -a oracle -e docker -o "$JOBS" --job-name oracle
           python3 .github/scripts/harbor_rewards.py "$JOBS/oracle" 1
 

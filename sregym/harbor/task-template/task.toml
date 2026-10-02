@@ -34,6 +34,10 @@ timeout_sec = {{grade_timeout_hook}}
 [agent]
 timeout_sec = {{agent_timeout}}
 
+# Only the oracle agent receives this. Export it before `harbor run -a oracle`.
+[solution]
+env = { {{oracle_secret_env}} = "${{{oracle_secret_env}}}" }
+
 [environment]
 # Covers building the agent image and pulling the backend image. Cluster and
 # problem setup are waited for by the healthcheck below.

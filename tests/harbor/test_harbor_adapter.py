@@ -115,15 +115,49 @@ def test_dind_setup_failures_use_the_backend_state_files(tmp_path):
     assert "KIND cluster" in status["error"]
 
 
-def test_only_the_reference_solution_can_trigger_recovery(task_dir, tmp_path):
-    token = re.search(r"Bearer (\S+)\"", (task_dir / "solution/solve.sh").read_text()).group(1)
+def test_only_the_oracle_secret_unlocks_recovery(task_dir, tmp_path):
+    secret = (tmp_path / protocol.ORACLE_SECRET_FILE).read_text().strip()
     compose = yaml.safe_load((task_dir / "environment/docker-compose.yaml").read_text())
     expected = compose["services"][protocol.SERVICE_NAME]["environment"][protocol.ORACLE_TOKEN_SHA256_ENV]
+    token = adapter.oracle_token(secret, task_dir.name)
     assert hashlib.sha256(token.encode()).hexdigest() == expected
 
-    # Tokens differ per generated task.
-    other = SREGymAdapter(tmp_path / "other").generate_task(_info())
-    assert token not in (other / "solution/solve.sh").read_text()
+    # The reference solution derives the token at run time from the secret,
+    # which Harbor passes to the oracle agent only.
+    config = tomllib.loads((task_dir / "task.toml").read_text())
+    assert config["solution"]["env"] == {protocol.ORACLE_SECRET_ENV: f"${{{protocol.ORACLE_SECRET_ENV}}}"}
+    solve = task_dir / "solution/solve.sh"
+    derived = subprocess.run(
+        ["bash", "-c", solve.read_text().split("curl ")[0] + 'printf %s "$token"'],
+        env={**os.environ, protocol.ORACLE_SECRET_ENV: secret},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert derived == token
+
+    # Nothing that gets published holds the secret or a usable token.
+    for path in task_dir.rglob("*"):
+        if path.is_file():
+            assert secret not in path.read_text() and token not in path.read_text(), path
+    assert (tmp_path / protocol.ORACLE_SECRET_FILE).stat().st_mode & 0o077 == 0
+
+
+def test_oracle_secret_comes_from_the_environment_or_the_dataset_root(tmp_path, monkeypatch):
+    monkeypatch.delenv(protocol.ORACLE_SECRET_ENV, raising=False)
+    first = SREGymAdapter(tmp_path / "a")
+    first.generate_task(_info())
+    # Later runs into the same dataset reuse its secret; other datasets differ.
+    again = SREGymAdapter(tmp_path / "a", overwrite=True)
+    again.generate_task(_info())
+    assert again.oracle_secret == first.oracle_secret
+    assert SREGymAdapter(tmp_path / "b").oracle_secret != first.oracle_secret
+
+    monkeypatch.setenv(protocol.ORACLE_SECRET_ENV, "maintainer-secret")
+    pinned = SREGymAdapter(tmp_path / "c")
+    pinned.generate_task(_info())
+    assert pinned.oracle_secret == "maintainer-secret"
+    assert not (tmp_path / "c" / protocol.ORACLE_SECRET_FILE).exists()
 
 
 def test_agent_visible_files_do_not_reveal_the_problem(task_dir):

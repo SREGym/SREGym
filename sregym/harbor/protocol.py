@@ -31,6 +31,15 @@ LOG_DIR = f"{BACKEND_OUTPUT_DIR}/logs"
 PROBLEM_ID_ENV = "SREGYM_PROBLEM_ID"
 ORACLE_TOKEN_SHA256_ENV = "SREGYM_ORACLE_TOKEN_SHA256"
 
+# Each task's oracle token is HMAC-SHA256(secret, task name). Tasks carry only
+# the token's SHA-256; the reference solution receives the secret at run time
+# through task.toml's [solution] env, which Harbor resolves for the oracle
+# agent only. Published tasks therefore hold no usable token.
+ORACLE_SECRET_ENV = "SREGYM_ORACLE_SECRET"
+# A generated secret is kept here, at the dataset root: outside every task
+# directory, so `harbor publish` never uploads it.
+ORACLE_SECRET_FILE = ".sregym-oracle-secret"
+
 # Values of the ``state`` file.
 STATE_STARTING = "starting"
 STATE_DEPLOYING = "deploying"
