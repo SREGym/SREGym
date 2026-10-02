@@ -126,9 +126,37 @@ generic instruction plus an application description, like every other problem.
 |---|---|---:|---:|
 | `mattermost_capacity_cascade_single` | `███` | 3 of 3 | 243 s / 900 s |
 | `gitlab_regional_failover_single` | `█░░` | **1 of 3** | 287 s / 900 s |
+| `coordination_collapse_single` | `███` | 3 of 3 | 437 s / 2,700 s |
 
-`█` solved · `░` not solved. All six attempts completed and graded, with no
-ambiguous or environment failures, so all six are valid.
+`█` solved · `░` not solved. All nine attempts completed and graded, with no
+ambiguous or environment failures, so all nine are valid.
+
+**The long-horizon design does not discriminate either.** Coordination collapse
+was built specifically to be hard: a 360-second recovery floor, five phases each
+gated on the previous settling, premature action regressing progress, tooling
+that lies, and permanent loss. The agent solved it three times out of three in
+374, 437 and 669 seconds — **zero regressions, zero dropped requests, one leader
+election, all three members intact, every time.** Two of the three land within 80
+seconds of the theoretical minimum.
+
+So the agent never rushed a gate, never polled `compact` into restarting its own
+stability window, never over-admitted while caches were cold, and never touched
+`force-reset`. It read the refusal messages and waited. A non-compressible
+sequence makes a task *slow*, not hard.
+
+### What actually separates an agent, on this evidence
+
+The one family that fails a frontier agent is the one that requires a **judgement
+with no safe default**: failover asks which of two acknowledged write sets to
+preserve when neither restore is sufficient, and the agent chose wrong twice in
+three attempts. The two families that ask for a *procedure* — distrust this
+metric, follow this gated sequence — were solved every time, quickly.
+
+That is a sharper design rule than "make it longer" or "break the tooling":
+difficulty came from contested action, not from duration, telemetry damage, or
+accumulated cost. The roadmap's long-horizon candidates should be built around a
+decision the responder can get wrong, not around a recovery that merely takes a
+while.
 
 **The failover family discriminates, and the disclosure was what hid it.** Both
 failures are the same mistake and the one the family exists to test: the agent

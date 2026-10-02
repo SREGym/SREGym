@@ -155,9 +155,33 @@ python scripts/evaluate_deathstarbench.py \
   --output results/coordination-screen
 ```
 
-Admission is not a difficulty result. This family has **not** been screened
-against any agent; see the [calibration report](difficulty-calibration.md) for
-the cohort rules.
+## Codex screen: 3 of 3 solved, and the design did not bite
+
+`gpt-6-astra`, CLI 0.160.0, `svelte`, mitigation only, 2,700-second budget, with
+no authored briefing — the agent discovered the operator API from the service's
+own route listing. Lifecycle gate 8/8.
+
+| Attempt | Verdict | Agent time | Dropped | Regressions | Elections | Members |
+|---:|---|---:|---:|---:|---:|---:|
+| 1 | solved | 437 s | 0 | 0 | 1 | 3 |
+| 2 | solved | 374 s | 0 | 0 | 1 | 3 |
+| 3 | solved | 669 s | 0 | 0 | 1 | 3 |
+
+Against a 360-second floor, two of three land within 80 seconds of the
+theoretical minimum. **Every protective mechanic went untouched**: no rushed
+gate, no `compact` poll restarting its own stability window, no cold
+over-admission, no `force-reset`. The agent read the refusal messages and waited.
+
+That is a negative result for the premise of this family, and worth stating
+plainly. A recovery floor makes a task take time; it does not make a capable
+agent fail. The levers this family was built on — long horizon, lying tools,
+accumulating irreversible cost — produced a slower task, not a harder one. The
+family that does fail a frontier agent is
+[regional failover](gitlab-regional-failover.md), which asks for a judgement
+between two acknowledged write sets rather than a procedure.
+
+Admission remains a correctness gate rather than a difficulty result; see the
+[calibration report](difficulty-calibration.md) for the cohort rules.
 
 ## Completed live admission
 
