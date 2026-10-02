@@ -27,41 +27,25 @@ DEFAULT_SCALER_POLICY = {
     "max": 6,
 }
 
+#: A service reference, not an incident briefing. The capacity floor is a
+#: documented SLO an on-call engineer would have; everything else about this
+#: incident -- which signal misleads, what the automation does, where the
+#: latency comes from -- is discoverable and is the task. Diagnosis is never
+#: disclosed.
 CASCADE_GUIDE = (
-    """Chat gateway capacity incident
+    """Chat gateway service reference
 
-Chat is timing out. All customer traffic reaches Mattermost through
-`chat-gateway`, which serves each request from a bounded pool of worker threads.
+All customer traffic reaches Mattermost through `chat-gateway`, which serves each
+request from a bounded pool of worker threads and exposes /metrics and /health.
 
-What you can see is not the whole picture:
+`capacity-scaler` adjusts the gateway's replica count on a schedule. Its policy
+and its decision log live in the gateway's control volume, mounted at /control in
+both pods.
 
-- The capacity dashboard at http://capacity-scaler:8080/dashboard is the only
-  dashboard that survived. It has CPU and replica panels. Its request-latency,
-  worker-saturation and error-rate panels are unavailable.
-- The gateway's own http://chat-gateway:8080/metrics reports worker saturation,
-  shed requests and measured upstream latency. Its pod logs carry the same.
-
-`capacity-scaler` adjusts the gateway's replica count automatically on a schedule.
-Its policy is a control file at /control/scaler.json in the gateway control
-volume, and every decision it makes is appended to /control/scaler-decisions.jsonl.
-A manual replica change does not stop it from making the next decision.
-
-The gateway's control volume also holds /control/upstream_delay_ms, the currently
-applied added latency on the gateway's upstream call.
-
-Requirements for recovery:
-
-- Chat must serve requests without shedding them, at normal latency.
-- The gateway must hold at least """
+Documented service requirement: the gateway's capacity floor is """
     + str(CAPACITY_FLOOR)
-    + """ replicas, its documented
-  capacity floor, and must still hold it after automation has had time to act
-  again. Restoring capacity that is then taken away again is not recovery.
-- Existing messages and attachments must be retained, new messages must work,
-  and the configured PostgreSQL membership and durability must be preserved.
-
-CPU utilization is a real measurement here. Consider what it means for a service
-whose workers are blocked rather than busy before trusting it as a capacity signal.
+    + """
+replicas. Below that, a single rollout or node loss takes chat down.
 """
 )
 

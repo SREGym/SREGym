@@ -35,8 +35,8 @@ class CoordinationCollapse(Problem):
     #: time to diagnose it, so running it at 900s would measure the budget.
     recommended_agent_timeout_seconds = RECOMMENDED_AGENT_TIMEOUT
 
-    def __init__(self, scale_tier="single", disclosure="oncall"):
-        super().__init__(self.application_class(scale_tier, disclosure=disclosure))
+    def __init__(self, scale_tier="single"):
+        super().__init__(self.application_class(scale_tier))
         self.kubectl = self.app.kubectl
         self.faulty_service, self.expected_service_port = "coordinator", 8080
         self.collapsed = False

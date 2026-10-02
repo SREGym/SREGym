@@ -116,6 +116,31 @@ have produced invalid attempts rather than difficulty data: the campaign runner
 could not select either new incident, and the Claude Code client rejected
 subscription credentials outright. See the commit history.
 
+## The earlier 0% results were measured with the answer disclosed
+
+Every screen above was run against a task description that stated its own
+diagnosis. The guide files handed the responder the causal explanation and the
+recovery order: the failover guide stated 4 of its 4 giveaways and the
+coordination guide 6 of 6, including that restarting would not help, that
+`/status` was stale, that an early compaction attempt restarts its window, and
+that admission had to be staged.
+
+The traces show what that produced. On the cascade screen the agent's **first
+action** was `cat /control/README.txt`, and its next thirty commands applied what
+that file said. That measures instruction-following, not diagnosis.
+
+Diagnosis is never disclosed; the harness gives a generic "diagnose and fix"
+instruction and the application description says what the application *is*. The
+guides now contain only a service or evidence reference — the custom operator API,
+which no amount of kubectl reveals; documented SLOs such as the capacity floor;
+and which evidence artifacts exist. They were cut from 164/258/431 words to
+75/106/124, and a test enforces that no guide states a cause, a recovery order,
+or which signal to distrust.
+
+**So every row above should be read as "0% when handed the answer."** Those
+numbers do not measure environment difficulty and the families need re-screening
+under the corrected descriptions before any of them can be called saturated.
+
 ## What the 0% screens imply, and the family built in response
 
 Three families now score 0% against a frontier agent: the two newest and, by

@@ -28,35 +28,24 @@ TIER_SETTINGS = {
     "replicated": (90, 180, 60),
 }
 
-#: How much of the incident the responder is told. The default is what an
-#: on-call engineer actually has; `runbook` additionally states the diagnosis and
-#: the recovery contract, which is the task itself, and exists to measure how
-#: much of the difficulty is the environment versus the framing.
-DISCLOSURE_LEVELS = ("page", "oncall", "runbook")
+#: The operator surface is a custom HTTP API: no amount of kubectl reveals that
+#: `/v1/operator/compact` exists, so without this reference the incident is
+#: unsolvable rather than hard. It is a tool reference and nothing more -- it
+#: states what each verb does and which one is destructive, the way an API doc
+#: would, and says nothing about the incident, which signals to trust, or what
+#: order to do anything in. Diagnosis is the task and is never disclosed.
+SERVICE_REFERENCE = """Coordinator service reference
 
-#: Always included. What a page says.
-SYMPTOM = """Coordination service collapse
+`coordinator` is a three-member coordination service. `session-service` and
+`presence-service` resolve their backends through it; `discovery-metrics`
+aggregates service metrics. Coordinator state is on a persistent volume.
 
-Customer traffic is failing. Every request resolves its backend through
-`coordinator`, a three-member coordination service, and it is not serving.
-"""
-
-#: Service topology and the tool reference. An on-call engineer has both: they
-#: know how their own system is wired and they have their own API docs.
-ONCALL_CONTEXT = """
-Topology:
-
-- `session-service` and `presence-service` serve customers, and both resolve
-  their backends through `coordinator`.
-- `discovery-metrics` aggregates service metrics.
-- The coordinator keeps its state on a persistent volume.
-
-Coordinator HTTP surface:
+HTTP surface:
 
   GET  /status                    service status
   GET  /v1/internal/truth         full internal state, read-only, no side effects
   GET  /keys                      enumerate every key in the store
-  GET  /ledger                    operations recorded during this incident
+  GET  /ledger                    operations recorded on this cluster
   POST /v1/operator/shed              {"watch_subscriptions": N}
   POST /v1/operator/compact           {}
   POST /v1/operator/rebuild-scheduler {}
@@ -64,50 +53,12 @@ Coordinator HTTP surface:
   POST /v1/operator/force-reset       {"member": "..."}   DESTRUCTIVE: wipes a
                                       member's store; it cannot serve again.
 
-Each service exposes its own /metrics. Operator calls return an error body
-explaining any refusal.
+Operator calls return an error body explaining any refusal. Each service also
+exposes its own /metrics.
 
-You are graded on the state of the system, on how many customer requests were
-lost getting there, and on whether the cluster can still tolerate a failure.
+Documented service requirements: the coordinator must serve all admitted traffic,
+all three members must remain usable, and customer requests must not be dropped.
 """
-
-#: Runbook-only. States the diagnosis and the recovery sequence -- which is the
-#: task. Included so the same environment can be screened both ways.
-DIAGNOSIS_NOTES = """
-Diagnosis and recovery notes:
-
-- The write path is amplified by watch subscriptions. While write latency is over
-  budget the leader cannot hold a term, and every election re-reads the store,
-  which keeps latency over budget. Restarting the service does not help: the
-  degradation is its persisted data.
-- `/status` is served from the last successful leader snapshot while the leader
-  is churning, so it will claim the cluster is healthy. `/v1/internal/truth` is
-  the unvarnished state.
-- `/keys` is the amplification source. It hangs, and asking for it adds
-  compaction debt.
-- `discovery-metrics` resolves its scrape targets through the coordinator, so it
-  returns no series at all while coordination is degraded.
-- Recovery order: shed load, compact, rebuild scheduler state, let caches warm,
-  then admit traffic in steps.
-- `compact` requires the leader to have held for the full stability window, and
-  an attempt made too early restarts that window.
-- Admitting more than the cluster can serve drops requests permanently, and a
-  large admission while caches are cold re-collapses it. Admission is a
-  staircase, and each step must hold before the next.
-- Destroying a majority of members makes the incident unrecoverable.
-"""
-
-
-def incident_guide(disclosure):
-    """Compose the guide for a disclosure level."""
-    if disclosure not in DISCLOSURE_LEVELS:
-        raise ValueError(f"Unsupported disclosure {disclosure!r}: choose {DISCLOSURE_LEVELS}")
-    guide = SYMPTOM
-    if disclosure in ("oncall", "runbook"):
-        guide += ONCALL_CONTEXT
-    if disclosure == "runbook":
-        guide += DIAGNOSIS_NOTES
-    return guide
 
 
 class CoordinationCluster(Mattermost):
@@ -126,12 +77,6 @@ class CoordinationCluster(Mattermost):
     incident_deployments = ("coordinator", "discovery-metrics", *SESSION_SERVICES)
     coordination_members = 3
 
-    def __init__(self, tier="single", disclosure="oncall", **kwargs):
-        if disclosure not in DISCLOSURE_LEVELS:
-            raise ValueError(f"Unsupported disclosure {disclosure!r}: choose {DISCLOSURE_LEVELS}")
-        self.disclosure = disclosure
-        super().__init__(tier, **kwargs)
-
     @property
     def settings(self):
         return TIER_SETTINGS[self.scale_tier]
@@ -144,10 +89,11 @@ class CoordinationCluster(Mattermost):
 
     def get_app_json(self):
         result = super().get_app_json()
+        # Describes the application, not the incident: the agent is told what the
+        # system is and where its API reference lives, and nothing else.
         result["Desc"] += (
-            " Customer traffic resolves backends through a degraded coordination"
-            " service; /control/README.txt in the coordinator has what the"
-            f" responder was given (disclosure: {self.disclosure})."
+            " Customer sessions resolve their backends through the `coordinator`"
+            " service; its API reference is /control/README.txt in that pod."
         )
         return result
 
@@ -222,7 +168,7 @@ class CoordinationCluster(Mattermost):
         super().deploy()
         for name in self.incident_deployments:
             self.command("rollout", "status", f"deployment/{name}", "--timeout=300s", timeout=330)
-        self.write_control("README.txt", incident_guide(self.disclosure))
+        self.write_control("README.txt", SERVICE_REFERENCE)
         self.wait_for_coordinator()
 
     def write_control(self, name, content):

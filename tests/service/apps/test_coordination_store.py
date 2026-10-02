@@ -488,72 +488,76 @@ def test_a_slow_agent_is_not_charged_for_elapsed_time(store):
     assert state["dropped_requests"] == 0
 
 
-def test_disclosure_levels_are_strictly_nested():
-    """Each level adds to the one below, so the only variable is how much is told."""
-    from sregym.service.apps.coordination_cluster import incident_guide
+def test_no_guide_states_the_diagnosis_or_the_recovery_order():
+    """Diagnosis is the task and is never disclosed. This is the rule.
 
-    page, oncall, runbook = (incident_guide(d) for d in ("page", "oncall", "runbook"))
-
-    assert page in oncall and oncall in runbook
-    assert len(page.split()) < len(oncall.split()) < len(runbook.split())
-
-
-def test_the_default_disclosure_withholds_the_diagnosis():
-    """The giveaway was handing over the answer; `oncall` is the fix.
-
-    An agent screened at `runbook` read the guide as its first action and then
-    executed it, which measures instruction-following rather than diagnosis.
+    It was broken in all three families. On the cascade screen the agent's first
+    action was `cat /control/README.txt` and its next thirty commands applied
+    what that file said, which measures instruction-following. Each guide is now
+    a service or evidence reference: what exists, what the API is, what the
+    documented requirement is -- never what went wrong or what to do about it.
     """
-    from sregym.service.apps.coordination_cluster import incident_guide
+    from sregym.service.apps.coordination_cluster import SERVICE_REFERENCE
+    from sregym.service.apps.gitlab_failover import FAILOVER_GUIDE
+    from sregym.service.apps.mattermost_cascade import CASCADE_GUIDE
 
-    oncall = incident_guide("oncall")
-
-    # The diagnosis must not be stated.
-    for answer in (
-        "Restarting the service does not help",
-        "served from the last successful leader snapshot",
-        "the amplification source",
+    forbidden = [
+        # Causal explanation.
+        "blocked rather than busy",
+        "amplification source",
+        "does not help",
+        "last successful leader",
         "restarts that window",
-        "Admission is a staircase",
+        "staircase",
+        # The recovery contract or ordering.
         "Recovery order",
+        "Requirements for recovery",
+        "keep the identity they already have",
+        "necessarily",
+        "is not recovery",
+        "judged on that outcome",
+        # Telling the agent which signal to distrust.
+        "before trusting it",
+        "Both are stale",
+        "no series at all",
+    ]
+    for name, guide in (
+        ("cascade", CASCADE_GUIDE),
+        ("failover", FAILOVER_GUIDE),
+        ("coordination", SERVICE_REFERENCE),
     ):
-        assert answer not in oncall, answer
-
-    # But the symptom, the topology and the tool reference must be.
-    for needed in ("not serving", "session-service", "/v1/operator/shed", "/v1/internal/truth", "DESTRUCTIVE"):
-        assert needed in oncall, needed
+        flat = " ".join(guide.split())
+        for phrase in forbidden:
+            assert phrase not in flat, f"{name} guide still states: {phrase}"
 
 
-def test_the_runbook_level_states_the_diagnosis_on_purpose():
-    """It exists as the control arm, not as the default."""
-    from sregym.service.apps.coordination_cluster import incident_guide
+def test_the_guides_still_make_each_task_solvable():
+    """Withholding diagnosis must not withhold the tools.
 
-    runbook = incident_guide("runbook")
+    A custom operator API is not discoverable by any amount of kubectl, and a
+    documented SLO is something on-call genuinely has. Removing those would make
+    the tasks unsolvable rather than hard.
+    """
+    from sregym.service.apps.coordination_cluster import SERVICE_REFERENCE
+    from sregym.service.apps.gitlab_failover import FAILOVER_GUIDE
+    from sregym.service.apps.mattermost_cascade import CASCADE_GUIDE
 
-    for answer in ("Restarting the service does not help", "restarts that window", "Recovery order"):
-        assert answer in runbook
+    # The operator verbs exist nowhere else.
+    for verb in ("shed", "compact", "rebuild-scheduler", "admit", "force-reset"):
+        assert f"/v1/operator/{verb}" in SERVICE_REFERENCE, verb
+    assert "DESTRUCTIVE" in SERVICE_REFERENCE
 
+    # The capacity floor is a documented requirement, not a diagnosis.
+    assert "capacity floor" in CASCADE_GUIDE
+    assert "chat-gateway" in CASCADE_GUIDE
 
-def test_the_page_level_is_only_the_symptom():
-    from sregym.service.apps.coordination_cluster import incident_guide
-
-    page = incident_guide("page")
-
-    assert "not serving" in page
-    assert "/v1/operator" not in page
-
-
-def test_an_unknown_disclosure_level_is_rejected():
-    """Validated before the application touches a cluster, so a typo fails fast."""
-    from sregym.service.apps.coordination_cluster import CoordinationCluster, incident_guide
-
-    with pytest.raises(ValueError, match="disclosure"):
-        incident_guide("everything")
-    with pytest.raises(ValueError, match="disclosure"):
-        CoordinationCluster(disclosure="everything")
+    # The evidence inventory says which artifacts exist, not which to use.
+    assert "pre-partition.dump" in FAILOVER_GUIDE
+    assert "last-replicated.dump" in FAILOVER_GUIDE
+    assert "acceptance journal" in FAILOVER_GUIDE
 
 
-def test_the_gates_stay_discoverable_without_the_runbook():
+def test_the_gates_stay_discoverable_from_the_api_alone():
     """Withholding the diagnosis must not make the task unsolvable.
 
     The refusal messages carry the gate semantics, so an agent can learn the

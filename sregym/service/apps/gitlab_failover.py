@@ -20,52 +20,33 @@ PARTITION_JOURNAL = "/recovery/journal/partition-acknowledged.json"
 #: Tenant projects, shared history issues, orphaned writes, post-failover writes.
 DIVERGENCE_COUNTS = {"single": (3, 12, 6, 6), "replicated": (5, 60, 30, 30)}
 
+#: An evidence inventory, not an incident briefing. Which artifacts exist is
+#: what a backup catalog would tell a responder; what happened, which of them is
+#: usable, and what a correct recovery preserves are the task, and are never
+#: disclosed.
 FAILOVER_GUIDE = (
-    """Regional failover divergence
+    """GitLab recovery evidence inventory
 
-A brief network partition between the two database regions triggered automated
-failover. The replica in the surviving region was promoted and has been taking
-writes ever since. The demoted primary had already acknowledged writes to clients
-that never reached the promoted replica.
+/recovery/east holds two read-only database snapshots:
 
-There are therefore two histories, and neither is complete:
+  pre-partition.dump    taken from the region-east primary
+  last-replicated.dump  the last state both regions had in common
 
-- The live database holds the shared history plus every write accepted after
-  promotion.
-- The demoted primary's snapshot holds the shared history plus the writes it
-  acknowledged during the partition. It does not contain anything accepted after
-  promotion.
-
-Both sets of writes were acknowledged to clients. Restoring the demoted
-primary's snapshot over the live database would discard the post-promotion
-writes; leaving it unused abandons the writes it acknowledged. Recover a single
-history that retains both, without duplicating either.
-
-Public issue identity is (project ID, issue IID). Because both regions kept
-allocating IIDs after they diverged, the same IID was issued twice in the same
-project for different issues.
-
-Post-promotion issues keep the identity they already have; they are live and
-already published, and reassigning them would break more clients than it fixes.
-Each orphaned write therefore keeps its project and content and necessarily
-receives a new IID. Recovery is judged on that outcome, not on how you reach it:
-every orphaned write present exactly once, every post-promotion issue still at
-its own IID with its own content, and the shared history untouched.
-
-/recovery/east holds the demoted primary's snapshot and the last shared
-snapshot, as read-only evidence. Do not modify them. The journal at
 """
     + PARTITION_JOURNAL
     + """
-records the acknowledged-but-unreplicated writes in acceptance order.
-/recovery/orchestrator.log records the failover decision.
+is a write-acceptance journal. Each entry records the project ID, public issue
+IID, title, description and confidentiality of a write this service
+acknowledged to a client, in acceptance order.
 
-The console includes PostgreSQL tools; its PG* environment targets this
-application's writable service. Restore evidence into a scratch database if you
-want to inspect it, never over the live one. Availability alone does not
-complete this incident: a healthy endpoint can still be serving an incomplete
-history. Fresh writes must work afterwards, and the configured PostgreSQL
-membership and synchronous durability must be restored.
+/recovery/orchestrator.log records the database orchestrator's actions.
+/recovery/chat.txt and /recovery/ticket.txt carry the incident correspondence.
+
+Do not modify anything under /recovery: it is the evidence record.
+
+The console has PostgreSQL client tools; its PG* environment targets this
+application's writable service. Restore a snapshot into a scratch database if
+you want to inspect it.
 """
 )
 
