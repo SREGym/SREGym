@@ -1078,3 +1078,13 @@ def test_events_for_hidden_workloads_are_filtered_from_lists_and_direct_reads(pr
     FakeHTTPSConnection.response = FakeResponse(json.dumps(loadgen_event).encode())
     status, _, _ = request(proxy, "/api/v1/namespaces/astronomy-shop/events/load-generator-5d945c566-2lbl4.18a1")
     assert status == 404
+
+
+def test_resolve_upstream_kubeconfig_honors_env_and_skips_agent_proxy_files(monkeypatch, tmp_path):
+    agent_cfg = tmp_path / "sregym-agent-kubeconfig-12345.yaml"
+    agent_cfg.write_text("apiVersion: v1\n")
+    cluster_cfg = tmp_path / "isolated-cluster-kubeconfig"
+    cluster_cfg.write_text("apiVersion: v1\n")
+
+    monkeypatch.setenv("KUBECONFIG", f"{agent_cfg}:{cluster_cfg}")
+    assert KubernetesAPIProxy._resolve_upstream_kubeconfig() == str(cluster_cfg)

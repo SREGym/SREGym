@@ -476,20 +476,34 @@ class KubernetesAPIProxy:
             self.api_host = os.environ.get("KUBERNETES_SERVICE_HOST", "kubernetes.default.svc")
             self.api_port = int(os.environ.get("KUBERNETES_SERVICE_PORT", "443"))
         else:
-            # Running outside the cluster — load from kubeconfig
-            # Always load from the default kubeconfig path, ignoring KUBECONFIG env var
-            # This prevents circular dependency if KUBECONFIG points to our proxy
-            default_kubeconfig = os.path.expanduser("~/.kube/config")
+            # Running outside the cluster — load from upstream kubeconfig,
+            # skipping any proxy-generated sregym-agent-kubeconfig-* files.
+            default_kubeconfig = self._resolve_upstream_kubeconfig()
             config.load_kube_config(config_file=default_kubeconfig)
             self.api_host, self.api_port, self.ca_cert, self.client_cert, self.client_key = self._load_cluster_config(
                 kubeconfig_path=default_kubeconfig
             )
 
+    @staticmethod
+    def _resolve_upstream_kubeconfig() -> str:
+        """Return the upstream cluster kubeconfig path, ignoring agent proxy kubeconfigs."""
+        env_paths = os.environ.get("KUBECONFIG", "")
+        for raw_path in env_paths.split(os.path.pathsep):
+            candidate = raw_path.strip()
+            if not candidate:
+                continue
+            expanded = os.path.expanduser(candidate)
+            if os.path.basename(expanded).startswith("sregym-agent-kubeconfig-"):
+                continue
+            if os.path.isfile(expanded):
+                return expanded
+        return os.path.expanduser("~/.kube/config")
+
     def _load_cluster_config(self, kubeconfig_path: str | None = None):
         """Extract API server connection details from kubeconfig."""
         # Load full kubeconfig
         if kubeconfig_path is None:
-            kubeconfig_path = os.path.expanduser("~/.kube/config")
+            kubeconfig_path = self._resolve_upstream_kubeconfig()
 
         # Get the current context's cluster and user from the explicit config file
         _, active_context = config.list_kube_config_contexts(config_file=kubeconfig_path)
