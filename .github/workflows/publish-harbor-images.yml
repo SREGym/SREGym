@@ -56,14 +56,20 @@ jobs:
         run: |
           tags=(-t "$REGISTRY/sregym-dind:$TAG")
           if [[ $LATEST == true ]]; then tags+=(-t "$REGISTRY/sregym-dind:latest"); fi
-          # BuildKit picks up docker/dind/Dockerfile.dockerignore.
-          docker buildx build --push "${tags[@]}" -f docker/dind/Dockerfile .
+          # BuildKit picks up docker/dind/Dockerfile.dockerignore. The source
+          # label links the GHCR package to this repository.
+          docker buildx build --push "${tags[@]}" -f docker/dind/Dockerfile \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.description=SREGym sidecar for Harbor tasks: private Docker daemon and KIND cluster" .
 
       - name: Build and push the KIND node image
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           docker buildx build --push --build-arg "KIND_NODE_IMAGE=$KIND_BASE_IMAGE" \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
             -t "$REGISTRY/kind-node:${KIND_BASE_IMAGE##*:}-$TAG" kind
 
       - name: Summary

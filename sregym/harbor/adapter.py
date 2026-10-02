@@ -22,17 +22,20 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from sregym.harbor import protocol, selftest
 
 TEMPLATE_DIR = Path(__file__).parent / "task-template"
+DATASET_README = Path(__file__).parent / "dataset-readme.md"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BACKEND_IMAGE = "ghcr.io/sregym/sregym-dind:latest"
 DEFAULT_KUBECTL_VERSION = "v1.32.1"
@@ -79,6 +82,30 @@ SELFTEST = ProblemInfo(
 class Inspection:
     eligible: list[ProblemInfo] = field(default_factory=list)
     skipped: dict[str, str] = field(default_factory=dict)
+
+
+DEFAULT_DATASET_NAME = "sregym/sregym"
+SELFTEST_DATASET_NAME = "sregym/harbor-selftest"
+# Title and summary shown on Harbor Hub for the datasets SREGym publishes.
+_DATASET_TEXT = {
+    "sregym/sregym": (
+        "SREGym",
+        "This dataset holds every SREGym problem that runs on an emulated (KIND) "
+        "cluster: {count} tasks across microservice applications, fault types and "
+        "difficulty levels.",
+    ),
+    "sregym/sregym-lite": (
+        "SREGym-Lite",
+        "SREGym-Lite is a curated set of {count} problems with varied difficulty and "
+        "failure mechanisms, chosen to run reliably. It is the recommended starting point.",
+    ),
+    SELFTEST_DATASET_NAME: (
+        "SREGym Harbor self-test",
+        "A single small task that checks whether a Harbor environment can run SREGym: "
+        "the privileged sidecar, its KIND cluster, the API proxy, grading and the "
+        "reference solution. It takes a few minutes.",
+    ),
+}
 
 
 def task_name(problem_id: str) -> str:
@@ -201,8 +228,10 @@ def resolve_oracle_secret(output_dir: Path) -> tuple[str, Path | None]:
 def _render(text: str, values: dict[str, str]) -> str:
     for key, value in values.items():
         text = text.replace("{{" + key + "}}", value)
-    if "{{" in text:
-        raise ValueError(f"Unrendered template placeholder near: {text[text.index('{{') :][:40]!r}")
+    # BibTeX uses double braces too; a leftover placeholder is {{lowercase_name}}.
+    leftover = re.search(r"\{\{[a-z_]+\}\}", text)
+    if leftover:
+        raise ValueError(f"Unrendered template placeholder near: {text[leftover.start() :][:40]!r}")
     return text
 
 
@@ -224,6 +253,7 @@ class SREGymAdapter:
         storage_mb: int = 51200,
         registry_mirror: str = DEFAULT_REGISTRY_MIRROR,
         kind_node_image: str = "",
+        dataset_name: str = DEFAULT_DATASET_NAME,
     ):
         self.output_dir = output_dir
         self.limit = limit
@@ -237,6 +267,7 @@ class SREGymAdapter:
         self.storage_mb = storage_mb
         self.registry_mirror = registry_mirror
         self.kind_node_image = kind_node_image
+        self.dataset_name = dataset_name
         self._oracle_secret: str | None = None
         self.oracle_secret_file: Path | None = None
 
@@ -266,6 +297,7 @@ class SREGymAdapter:
             "cpus": str(self.cpus),
             "memory_mb": str(self.memory_mb),
             "storage_mb": str(self.storage_mb),
+            "dataset_name": self.dataset_name,
             "grade_timeout": str(info.grade_timeout_s),
             "grade_timeout_hook": f"{float(info.grade_timeout_s + 60)}",
             "ready_wait": str(READY_WAIT_S),
@@ -310,11 +342,38 @@ class SREGymAdapter:
                 target.chmod(0o755)
         return task_dir
 
+    def write_dataset_readme(self) -> Path:
+        """Write the dataset README that Harbor Hub shows, listing every task in the directory."""
+        rows = []
+        for config_path in sorted(self.output_dir.glob("*/task.toml")):
+            config = tomllib.loads(config_path.read_text())
+            name = config.get("task", {}).get("name", config_path.parent.name)
+            rows.append(f"| `{name}` | {config.get('metadata', {}).get('application', '')} |")
+        title, summary = _DATASET_TEXT.get(self.dataset_name, (self.dataset_name, "{count} SREGym tasks."))
+        readme = self.output_dir / "README.md"
+        readme.write_text(
+            _render(
+                DATASET_README.read_text(),
+                {
+                    "dataset_title": title,
+                    "dataset_summary": summary.format(count=len(rows)),
+                    "dataset_name": self.dataset_name,
+                    "cpus": str(self.cpus),
+                    "memory_mb": str(self.memory_mb),
+                    "storage_mb": str(self.storage_mb),
+                    "task_rows": "\n".join(rows),
+                },
+            )
+        )
+        return readme
+
     def run(self) -> tuple[list[Path], dict[str, str]]:
         inspection = Inspection(eligible=[SELFTEST]) if self.self_test else inspect_problems(self.task_ids)
         eligible = inspection.eligible[: self.limit] if self.limit is not None else inspection.eligible
         self.output_dir.mkdir(parents=True, exist_ok=True)
         written = [self.generate_task(info) for info in eligible]
+        if written:
+            self.write_dataset_readme()
         return written, inspection.skipped
 
 
@@ -348,6 +407,12 @@ def main(argv=None) -> int:
         default="",
         help="Prebuilt KIND node image (built from kind/Dockerfile); by default each trial builds it during setup",
     )
+    parser.add_argument(
+        "--dataset-name",
+        default=None,
+        help="Harbor Hub dataset name used in the README (default: sregym/<suite>, sregym/harbor-selftest "
+        f"or {DEFAULT_DATASET_NAME})",
+    )
     parser.add_argument("--agent-timeout", type=int, default=DEFAULT_AGENT_TIMEOUT_S, help="Agent time limit (s)")
     parser.add_argument("--cpus", type=int, default=8, help="CPUs requested for the task's whole Compose stack")
     parser.add_argument("--memory-mb", type=int, default=16384, help="Memory requested for the whole stack")
@@ -355,6 +420,14 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     task_ids = list(PROBLEM_SETS[args.suite]) if args.suite else args.task_ids
+    if args.dataset_name:
+        dataset_name = args.dataset_name
+    elif args.self_test:
+        dataset_name = SELFTEST_DATASET_NAME
+    elif args.suite:
+        dataset_name = f"sregym/{args.suite}"
+    else:
+        dataset_name = DEFAULT_DATASET_NAME
     adapter = SREGymAdapter(
         args.output_dir,
         limit=args.limit,
@@ -368,6 +441,7 @@ def main(argv=None) -> int:
         storage_mb=args.storage_mb,
         registry_mirror=args.registry_mirror,
         kind_node_image=args.kind_node_image,
+        dataset_name=dataset_name,
     )
     try:
         written, skipped = adapter.run()

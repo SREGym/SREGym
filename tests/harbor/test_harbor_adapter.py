@@ -41,6 +41,7 @@ def test_task_names_are_harbor_safe():
 def test_generated_task_is_complete_and_parses(task_dir):
     files = {path.relative_to(task_dir).as_posix() for path in task_dir.rglob("*") if path.is_file()}
     assert files == {
+        "README.md",
         "instruction.md",
         "task.toml",
         "environment/Dockerfile",
@@ -183,9 +184,24 @@ def test_existing_tasks_require_overwrite(tmp_path):
     SREGymAdapter(tmp_path, overwrite=True).generate_task(_info())
 
 
+def test_dataset_readme_lists_every_task_for_harbor_hub(tmp_path):
+    generator = SREGymAdapter(tmp_path, dataset_name="sregym/sregym-lite")
+    generator.generate_task(_info())
+    generator.generate_task(_info(problem_id="network_policy_block"))
+    readme = generator.write_dataset_readme().read_text()
+    assert readme.startswith("# SREGym-Lite\n")
+    assert "harbor run -d sregym/sregym-lite " in readme
+    assert "| `sregym/network-policy-block` | Hotel Reservation |" in readme
+    assert "| `sregym/wrong-service-selector-hotel-reservation` | Hotel Reservation |" in readme
+    assert "2 problems" in readme
+    assert "@article{sregym:26" in readme
+
+
 def test_unrendered_placeholders_are_rejected():
     with pytest.raises(ValueError, match="placeholder"):
         adapter._render("value: {{missing}}", {})
+    # BibTeX's double braces are not placeholders.
+    assert adapter._render("title = {{SREGym: A Benchmark}}", {}) == "title = {{SREGym: A Benchmark}}"
 
 
 def _load_score(task_dir, grade_path, reward_path):

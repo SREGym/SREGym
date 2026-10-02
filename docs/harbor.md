@@ -238,6 +238,60 @@ SREGym sidecar setup failed during: private Docker daemon (exit 1). Diagnostics:
 The sidecar then stays up for an hour so Harbor can still collect its
 diagnostics.
 
+## Publish to Harbor Hub
+
+[Harbor Hub](https://hub.harborframework.com) works like PyPI: datasets are
+published from the CLI, and anyone can then run them with
+`harbor run -d sregym/<dataset>`. Start with SREGym-Lite, whose 21 tasks
+passed the oracle sweep below. Publish the full set once its sweep passes.
+
+1. **Publish the images.** Run the **Publish Harbor Images** workflow, then make
+   the `sregym-dind` and `kind-node` GHCR packages public. Hub users pull them
+   without logging in.
+2. **Generate the dataset** with the published tags. Keep the oracle secret: you
+   need it to run the oracle agent against the published dataset, and it never
+   leaves your machine.
+
+   ```bash
+   git submodule update --init --recursive
+   export SREGYM_ORACLE_SECRET=...   # optional: omit to generate one in the dataset directory
+   uv run python -m sregym.harbor.adapter --suite sregym-lite --output-dir datasets/sregym-lite \
+       --backend-image ghcr.io/sregym/sregym-dind:<tag> \
+       --kind-node-image ghcr.io/sregym/kind-node:v1.32.11-<tag>
+   ```
+
+   The adapter writes the dataset `README.md` that the Hub shows, plus a
+   `README.md` for each task.
+3. **Create the manifest.** `dataset init` adds every task in the directory and
+   keeps the generated README:
+
+   ```bash
+   cd datasets/sregym-lite
+   harbor dataset init sregym/sregym-lite --author "SREGym Team" \
+       --description "21 curated live Kubernetes incidents for AI SRE agents, graded by mitigation oracles."
+   ```
+4. **Publish:**
+
+   ```bash
+   harbor auth login
+   harbor publish . -t v1.0 --public
+   ```
+
+   The first publish under `sregym` creates the organization, with you as its
+   owner; add co-maintainers on the Hub. If someone else already owns `sregym`,
+   publishing fails with a permission error. In that case, ask the Harbor team.
+5. **Check it:** see `https://hub.harborframework.com/datasets/sregym/sregym-lite`,
+   then run a published task:
+
+   ```bash
+   SREGYM_ORACLE_SECRET=... harbor run -d sregym/sregym-lite@v1.0 -a oracle -e daytona -l 1
+   ```
+
+To publish an update, regenerate with new image tags and the same secret, run
+`harbor sync`, then publish with a new tag. A leaderboard can then be added with
+`harbor hub leaderboard init --package sregym/sregym-lite`. See Harbor's
+[leaderboard guide](https://harborframework.com/docs/core-concepts/harbor-hub/leaderboards).
+
 ## Validation status
 
 Validated with Harbor 0.23.0 and Docker 29 on a 4-CPU, 16 GiB x86_64 VM.
