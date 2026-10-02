@@ -91,9 +91,45 @@ no family may define a `GUIDE` constant or write a
 README/notifications/provider-audit/failover file — rather than only rejecting
 known phrases, which lasts until someone invents a new phrase.
 
-**None of those families has yet been screened under a clean description**, so
-every number recorded for them measures guide-following. That screen is the first
-thing to finish.
+### Clean-description results for the formerly-leaking families
+
+Screened 2026-10-02, Codex `gpt-6-astra`, n=3, same harness and graders as the
+three above. Partial — the four notification variants and the stripe re-run were
+still running when this was written; `python scripts/screen_report.py
+results/clean-screen` has the current table.
+
+```
+gitea_database_deletion_single    ███   3 of 3   median 152s / 900s
+gitlab_database_deletion_single   ███   3 of 3   median 269s / 900s
+stripe_feature_config_single       --   no result: deploy gate failed, see below
+```
+
+Both deletion families are saturated *honestly*. I pulled the traces to check,
+because a 3-of-3 right after deleting the briefing is exactly what a remaining
+leak would look like. They are clean: the prompt is the generic instruction plus a
+factual topology sentence, and the agent's first command is `kubectl get
+pods,pvc,svc`. It derives the diagnosis itself — Gitea's 500s, then `\dn`/`\dt`
+showing no application tables — then reads the backup catalog, compares
+checksums, rejects the truncated `latest.dump`, restores the valid archive,
+replays the journal, and verifies identities and confidentiality flags before
+submitting. GitLab's attempt 1, in its own words:
+
+> The latest backup is truncated and fails its checksum, but the staging backup
+> matches its recorded checksum. I'm restoring that backup, then I'll replay the
+> six acknowledged issue changes recorded after it.
+
+**So the briefings were inflating these families, and removing them did not make
+them hard.** That is not a null result — it localises what was actually missing.
+Both families fail the one property that separated failover: **a plausible wrong
+action that succeeds silently.** Restoring the truncated dump does not quietly
+lose the tail, it errors out of `pg_restore`; the journal states the tail rather
+than leaving its absence to be noticed. Every wrong path self-corrects, so the
+broken-backup twist reduces to a signposted checksum comparison.
+
+This is direct evidence for the cheaper of the two next-family options: adapt
+`gitlab_database_deletion` so the truncated restore *succeeds* and silently drops
+the acknowledged tail. Same environment, same graders, and the failure becomes
+invisible at the moment of action instead of announcing itself.
 
 ## What exists
 
