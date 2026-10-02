@@ -132,15 +132,15 @@ its fault:
 * The first Frappe install runs `bench new-site` and can take 15–30 minutes. The app waits up to 45.
 * The charts use ReadWriteOnce volumes shared by several pods of one app. That works with
   SREGym's default `openebs-hostpath` (local PVs pin consumers to one node) and on kind.
-* Every problem is covered offline (unit tests and `helm template`, `tests/incident_arena`).
-  `tests/integration/validate_problem.py` has passed end to end on a 4-node kind cluster for
-  `incident_arena_frappe_desk_and_queue_oom` and `incident_arena_slack_sends_fail_strict_mode`,
-  and for `incident_arena_saleor_checkout_statement_timeout_canary` in SREGym's GitHub Actions
-  problem validation (kind on a 4 vCPU runner). Validate other problems on your cluster before
-  relying on their numbers.
-* SREGym sizes two components above the charts' defaults, because its load runs for the whole
+* Every problem passes `tests/integration/validate_problem.py` end to end (deploy, inject, oracle
+  fails, recover, oracle passes) on a 4-node kind cluster on a 16-thread 2.0 GHz Xeon D-1548, and is
+  covered offline by unit tests and `helm template` (`tests/incident_arena`). The Saleor problem also
+  passes SREGym's GitHub Actions problem validation (kind on a 4 vCPU runner).
+* SREGym sizes three components above the charts' defaults, because its load runs for the whole
   run and some hosts are slower than Incident Arena's: Saleor's API gets 4 uvicorn workers and 4 CPU
-  (checkouts queued past the load generator's timeout at 2 CPU on a 2.0 GHz host), and Slack's
-  in-memory search-engine gets 2 CPU (the async search lane fell behind as its corpus grew).
+  (checkouts queued past the load generator's timeout at 2 CPU on a 2.0 GHz host), Slack's
+  in-memory search-engine gets 2 CPU (the async search lane fell behind as its corpus grew), and
+  Frappe runs two long-queue workers (one drained Prepared Report jobs slower than they arrived).
+  Problems still forbid agents from changing these.
 * Incident Arena's binary graded report (the closed service/component vocabulary) is replaced by
   SREGym's free-text diagnosis stage. The incident report was advisory in most Incident Arena tasks anyway.

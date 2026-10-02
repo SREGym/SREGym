@@ -49,7 +49,12 @@ erpnext:
     short:
       replicaCount: 0
     long:
-      replicaCount: 1
+      # Two workers: a Prepared Report job takes ~2.4 s on a 2.0 GHz core, so
+      # one worker drains ~0.4 jobs/s against ~1.2 arrivals/s and rq_complete
+      # (15 s budget) sat at 0.37-0.48 against its 0.4 floor on such hosts.
+      # The scope guard pins the deployed replica count, so agents still may
+      # not scale it.
+      replicaCount: 2
       supervise: true
       resources:
         requests:
