@@ -10,7 +10,10 @@ V1_CTRLS="cpu cpuacct cpuset memory devices freezer blkio pids"
 
 if [ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ]; then
     cgroup_version=2
-    # Docker mounts cgroupfs read-only; a fresh mount in our cgroup namespace is writable.
+    # Docker mounts cgroupfs read-only; a fresh mount in our cgroup namespace is
+    # writable. The kernel refuses the same filesystem on the root of its own
+    # mount (EBUSY), so mount it over a tmpfs.
+    mount -t tmpfs -o mode=755 tmpfs /sys/fs/cgroup
     mount -t cgroup2 cgroup2 /sys/fs/cgroup
     # cgroup v2 forbids processes in a group that delegates controllers, so move
     # every process in the container (this namespace shares its PIDs) to a leaf.

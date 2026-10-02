@@ -11,6 +11,8 @@ hostname $name
 
 # Remount cgroupfs so this node sees its own subtree as the root.
 if [ "$cgroup_version" = 2 ]; then
+    # Over a tmpfs: the same filesystem cannot be mounted on its own mount root.
+    mount -t tmpfs -o mode=755 tmpfs /sys/fs/cgroup
     mount -t cgroup2 cgroup2 /sys/fs/cgroup
     mkdir -p /sys/fs/cgroup/init
     # The fabric moves this node's unshare parent into init; retry until the
