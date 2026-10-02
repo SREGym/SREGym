@@ -24,7 +24,13 @@ def store(tmp_path, monkeypatch):
 
 
 def fresh(store):
-    return dict(store.DEFAULT_STATE)
+    """A collapsed cluster -- what the agent is handed after injection."""
+    return store.collapsed(store.settled(1000.0), 1000.0)
+
+
+def healthy(store):
+    """A settled, serving cluster -- what the application deploys."""
+    return store.settled(1000.0)
 
 
 def test_the_incident_starts_with_the_leader_unable_to_hold(store):
@@ -430,3 +436,53 @@ def test_an_awkward_payload_value_cannot_break_the_script():
     script = CoordinationCluster.request_script("/v1/operator/force-reset", {"member": "a'b\"c\nd"})
 
     compile(script, "<awkward>", "exec")
+
+
+def test_the_application_deploys_healthy_and_serving(store):
+    """The harness requires the oracle to pass before injection.
+
+    An application that deploys already broken fails that gate, so the problem
+    could never be screened -- and a baseline that is already degraded cannot
+    show the incident caused anything. Found by checking the gate before
+    launching a screen, not by the earlier unit tests.
+    """
+    state = healthy(store)
+
+    assert store.leader_healthy(state)
+    assert store.write_latency_ms(state) <= store.LATENCY_BUDGET_MS
+    assert store.stable_seconds(state, 1000.0) >= store.STABILITY_SECONDS
+    assert store.cache_warm_fraction(state, 1000.0) == 1.0
+    assert store.serve_capacity(state, 1000.0) == 1.0
+    assert state["admitted_fraction"] == 1.0
+
+
+def test_a_healthy_cluster_drops_nothing(store):
+    state = healthy(store)
+    store.reconcile(state, 1000.0)
+    store.reconcile(state, 1005.0)
+
+    assert state["dropped_requests"] == 0
+    assert state["regressions"] == 0
+
+
+def test_inducing_the_collapse_breaks_it_and_pulls_traffic(store):
+    """Admission goes to zero, so loss accrues from choices rather than the clock."""
+    state = store.collapsed(healthy(store), 1000.0)
+
+    assert not store.leader_healthy(state)
+    assert state["watch_subscriptions"] == store.COLLAPSE["watch_subscriptions"]
+    assert not state["compacted"]
+    assert not state["scheduler_state_fresh"]
+    # Traffic pulled: an agent is charged for its own premature admissions only.
+    assert state["admitted_fraction"] == 0.0
+    store.reconcile(state, 1005.0)
+    assert state["dropped_requests"] == 0
+
+
+def test_a_slow_agent_is_not_charged_for_elapsed_time(store):
+    """With admission at zero the loss meter must not tick on its own."""
+    state = fresh(store)
+    for tick in range(60):
+        store.reconcile(state, 1000.0 + tick * 10)
+
+    assert state["dropped_requests"] == 0

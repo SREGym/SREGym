@@ -45,13 +45,16 @@ def validate(tier):
         result["recovery_floor_seconds"] = app.recovery_floor_seconds
 
         stage = "healthy_baseline"
-        # The application deploys already degraded, so the shared SaaS baseline
-        # is captured against a cluster whose business data is intact but whose
-        # coordination is collapsed. That is the incident, not a broken fixture.
         oracle.capture_baseline()
+        # The cluster must be serving before the incident, or the grader cannot
+        # show the collapse caused anything -- and the campaign gate, which
+        # requires a passing oracle before injection, would reject the problem.
+        result["healthy"] = grade("healthy")
+        assert result["healthy"]["success"], result["healthy"]
 
         stage = "inject"
         problem.inject_fault()
+        result["healthy_before"] = problem.observed["healthy_before"]
         result["collapse"] = problem.observed["collapse"]
         assert result["collapse"]["aggregated_metrics_blind"], result["collapse"]
         assert result["collapse"]["status_endpoint_stale"], result["collapse"]

@@ -246,6 +246,14 @@ class CoordinationCluster(Mattermost):
             )
         )
 
+    def induce_collapse(self):
+        """Develop the incident on a cluster that deployed healthy.
+
+        Goes through the coordinator so the change is serialised under its own
+        lock rather than racing the ticker that persists state every few seconds.
+        """
+        return self.coordinator_request("/v1/internal/induce", {})
+
     def truth(self):
         """The unvarnished coordination state, as the grader and a careful agent read it."""
         return self.coordinator_request("/v1/internal/truth")

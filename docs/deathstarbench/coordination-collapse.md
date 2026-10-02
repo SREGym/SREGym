@@ -77,7 +77,10 @@ serving nothing still answers `/health`, so a green probe is never evidence.
 ## 3. Cost that accumulates, damage that does not heal
 
 - **Dropped requests are permanent.** Admitting more than the cluster can serve
-  drops requests into a counter no action decreases. The grader has a budget
+  drops requests into a counter no action decreases. Admission is pulled to zero
+  when the collapse develops, as an edge does when its backends stop resolving,
+  so the meter ticks only on an agent's own premature admissions — the cost is
+  attributable to choices, not to how long the agent took. The grader has a budget
   (`20 × floor`, so 7,200 for `single`); the reference recovery loses **zero**,
   so the budget is headroom for one recoverable mistake, not a licence.
 - **A large admission while caches are cold re-collapses the cluster** and costs
@@ -104,6 +107,11 @@ Graded on the end state, what it cost to get there, and what survived:
   discarding business state.
 
 ## What this does and does not reproduce
+
+The cluster **deploys healthy and serving**, and injection drives it into the
+collapse. That is not cosmetic: the campaign gate requires the grader to pass
+before injection, so an application that deployed already broken could never be
+screened, and a degraded baseline cannot show the incident caused anything.
 
 **Real:** the degradation is computed from the service's own state — watch
 subscriptions, key count, compaction debt — not toggled by a flag. The phase

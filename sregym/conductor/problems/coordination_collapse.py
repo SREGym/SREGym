@@ -57,16 +57,22 @@ class CoordinationCollapse(Problem):
 
     @mark_fault_injected
     def inject_fault(self):
-        """Confirm the collapse the deployed state already represents.
+        """Develop the collapse, then prove it is real and observable.
 
-        The application deploys already degraded, because the incident is its
-        persisted data rather than an event. Injection's job is to prove the
-        collapse is real and observable before an agent is charged for it.
+        The application deploys healthy and serving, so the harness can confirm
+        the cluster worked before the incident. Injection drives it into the
+        degraded state and then verifies the symptom, the stale tool and the
+        circular telemetry failure before an agent is charged for any of it.
         """
         app = self.app
-        truth = app.wait_for_coordinator()
+        before = app.wait_for_coordinator()
+        if not before["leader_healthy"] or before["serve_capacity_fraction"] < 1.0:
+            raise RuntimeError(f"Cluster did not deploy healthy and serving: {before}")
+
+        app.induce_collapse()
+        truth = app.truth()
         if truth["leader_healthy"]:
-            raise RuntimeError("Coordination cluster is healthy; the incident state did not deploy")
+            raise RuntimeError("Coordination cluster is still healthy; the collapse did not take effect")
         if truth["write_latency_ms"] <= truth["latency_budget_ms"]:
             raise RuntimeError("Write latency is within budget; the amplification did not take effect")
         if truth["watch_subscriptions"] <= coordination_store.WATCH_BUDGET:
@@ -88,6 +94,11 @@ class CoordinationCollapse(Problem):
             pass
 
         self.collapsed = True
+        self.observed["healthy_before"] = {
+            "serve_capacity_fraction": before["serve_capacity_fraction"],
+            "write_latency_ms": before["write_latency_ms"],
+            "watch_subscriptions": before["watch_subscriptions"],
+        }
         self.observed["collapse"] = {
             "write_latency_ms": truth["write_latency_ms"],
             "latency_budget_ms": truth["latency_budget_ms"],
