@@ -50,7 +50,14 @@ def collect(roots):
             # Each attempt is written three times: a per-problem CSV, a copy
             # inside its run_N directory, and an `<agent>_ALL_results.csv`
             # roll-up beside it. Count the per-problem CSV only.
-            if any(part.startswith("run_") for part in parts) or name.endswith("_ALL_results.csv"):
+            # `_voided/` holds screens withdrawn for a known reason -- a broken
+            # fixture, or a task description that disclosed the answer. They are
+            # kept for audit but must never appear in a result table.
+            if (
+                any(part.startswith("run_") for part in parts)
+                or "_voided" in parts
+                or name.endswith("_ALL_results.csv")
+            ):
                 continue
             agent = next((part for part in parts if part in AGENTS), None)
             if agent is None:
@@ -60,13 +67,17 @@ def collect(roots):
                     rows = list(csv.DictReader(stream))
             except OSError:
                 continue
+            # The run directory is the campaign: `results/<timestamp>/<agent>/...`.
+            # Grouping without it merges separate screens of the same problem
+            # into one inflated cohort, which is wrong and silently so -- a
+            # voided screen's attempt would be averaged into its replacement's.
+            campaign = next(
+                (part for part in parts if len(part) == 9 and part[4] == "_" and part.replace("_", "").isdigit()),
+                "unknown",
+            )
             for row in rows:
                 problem = row.get("problem_id") or Path(path).parent.name
-                # Attempt numbers repeat across campaigns, so key on the file
-                # too: the same problem screened twice is two cohorts of three,
-                # not one cohort of six.
-                key = (path, row.get("attempt"))
-                cohorts[(agent, problem)][key] = row
+                cohorts[(campaign, agent, problem)][row.get("attempt")] = row
     return {k: list(v.values()) for k, v in cohorts.items()}
 
 
@@ -74,10 +85,10 @@ def report(cohorts):
     if not cohorts:
         print("No results found.")
         return
-    width = max(len(p) for _, p in cohorts) + 2
-    print(f"{'problem':<{width}} {'agent':<12} attempts  solved")
-    print("-" * (width + 34))
-    for (agent, problem), rows in sorted(cohorts.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+    width = max(len(p) for _, _, p in cohorts) + 2
+    print(f"{'problem':<{width}} {'agent':<11} {'screen':<10} attempts  solved")
+    print("-" * (width + 46))
+    for (campaign, agent, problem), rows in sorted(cohorts.items(), key=lambda kv: (kv[0][2], kv[0][0])):
         marks = [classify(r) for r in rows]
         valid = [m for m in marks if m != INVALID]
         solved = marks.count(SOLVED)
@@ -87,7 +98,7 @@ def report(cohorts):
             detail += f"  ({marks.count(INVALID)} invalid)"
         if times:
             detail += f"  median {statistics.median(times):.0f}s"
-        print(f"{problem:<{width}} {agent:<12} {''.join(marks):<9} {detail}")
+        print(f"{problem:<{width}} {agent:<11} {campaign:<10} {''.join(marks):<9} {detail}")
     print()
     print(LEGEND)
 
