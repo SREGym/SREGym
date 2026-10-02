@@ -113,6 +113,14 @@ def test_valkey_cart_survives_exec_of_valkey_cli_in_its_cgroup():
     assert limit.endswith("Mi") and int(limit[:-2]) >= 64
 
 
+def test_product_catalog_has_headroom_above_gomemlimit():
+    # The chart caps product-catalog at 20Mi with GOMEMLIMIT 16MiB; one run saw
+    # an OOMKill that failed /api/products/* with no injected fault behind it.
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    limit = values["components"]["product-catalog"]["resources"]["limits"]["memory"]
+    assert limit.endswith("Mi") and int(limit[:-2]) >= 64
+
+
 def test_locust_exporter_sidecar_is_not_chronically_throttled():
     # The sidecar is the only CPU-limited container in the load-generator pod, so
     # it alone decides the pod-scoped ContainerCPUThrottling alert.

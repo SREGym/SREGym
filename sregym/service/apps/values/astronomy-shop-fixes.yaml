@@ -127,6 +127,17 @@ components:
       # the OTel redis scraper connections.
       limits:
         memory: 64Mi
+  product-catalog:
+    resources:
+      # The chart caps this Go service at 20Mi with GOMEMLIMIT 16MiB. Under
+      # SREGym's locust load it idles at 11-15Mi working set, and in one
+      # SREGym-Lite run it was OOMKilled (exit 137) after 25 minutes. A kill
+      # fails every /api/products/* request and fires HighRequestErrorRate
+      # with no injected fault behind it. GOMEMLIMIT stays at 16MiB (Helm
+      # replaces env lists), so the GC behaviour is unchanged; only the kill
+      # threshold moves.
+      limits:
+        memory: 64Mi
   flagd:
     # KIND/containerd can give pods a NOFILE limit of 1,073,741,816. Erlang
     # allocates memory against that limit at startup and is OOMKilled even
