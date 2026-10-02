@@ -63,6 +63,38 @@ sanitising a leak only lasts until the next edit. The one exception that had to 
 *solved* rather than deleted: the coordinator's operator API is unguessable, so
 the service advertises its own routes at `GET /` — discovery, not disclosure.
 
+### The leak was wider than those three families
+
+The three above were cleaned first because they were the ones being screened. On
+2026-10-02 the same treatment was applied to every remaining family: six guide
+constants (`gitea_recovery`, `gitlab_recovery`, `stripe_config`, and three
+notification variants) with the archive writes and the ConfigMap entry that
+mounted them, plus five `operations.log` writes. Those logs were the worst of it
+— one quoted the destructive statement verbatim (`statement: DROP SCHEMA public
+CASCADE`), another named both the count of accepted deliveries and the queue the
+unsent mail was sitting in.
+
+I had judged four of those guides harmless on the grounds that everything in them
+was discoverable anyway: file inventories by `ls`, response shapes by one request,
+tool usage from `--help` or a module docstring. That reasoning is wrong in a way
+worth remembering. A guide that buys the agent nothing it could not find still
+costs the screen its meaning, because it changes the *task* from "investigate"
+to "read and comply" — and the trace shows the agent taking the cheaper path
+every time. Discoverable is not the test. Authored is the test.
+
+What stayed, because it is data rather than narration: the acknowledged-write
+journal, and the backup catalog whose mismatched checksum *is* the broken-backup
+puzzle.
+
+`tests/service/apps/test_coordination_store.py` now enforces this structurally —
+no family may define a `GUIDE` constant or write a
+README/notifications/provider-audit/failover file — rather than only rejecting
+known phrases, which lasts until someone invents a new phrase.
+
+**None of those families has yet been screened under a clean description**, so
+every number recorded for them measures guide-following. That screen is the first
+thing to finish.
+
 ## What exists
 
 ### Six application families, all opt-in
