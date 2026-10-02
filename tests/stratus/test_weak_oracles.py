@@ -87,11 +87,89 @@ def test_alert_query_distinguishes_firing_from_silence(monkeypatch):
     monkeypatch.setattr(alert_oracle.subprocess, "run", lambda *args, **kwargs: response)
     monkeypatch.setattr(alert_oracle, "_get_benchmark_status", lambda: "mitigation")
     monkeypatch.setattr(alert_oracle.time, "sleep", lambda _: None)
-    oracle = AlertOracle("social-network", buffer_seconds=0, sustained_silence_seconds=0)
+    oracle = AlertOracle("social-network", buffer_seconds=0, sustained_silence_seconds=0, resolve_grace_seconds=0)
     assert oracle.validate().success is False
 
     response.stdout = json.dumps({"status": "success", "data": {"alerts": []}})
     assert oracle.validate().success is True
+
+
+class _FakeClock:
+    """Deterministic clock: ``sleep`` advances ``monotonic`` without waiting."""
+
+    def __init__(self):
+        self.now = 1000.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+def _alert_oracle_with_script(monkeypatch, firing_per_poll: list[bool]):
+    """Build an AlertOracle whose polls follow ``firing_per_poll`` (last value repeats)."""
+    from clients.stratus.weak_oracles import alert_oracle
+
+    clock = _FakeClock()
+    polls: list[float] = []
+    alert = {"state": "firing", "labels": {"namespace": "astronomy-shop", "alertname": "HighRequestErrorRate"}}
+
+    def fake_query(self):
+        index = min(len(polls), len(firing_per_poll) - 1)
+        polls.append(clock.now)
+        return [alert] if firing_per_poll[index] else []
+
+    monkeypatch.setattr(alert_oracle.AlertOracle, "_query_firing_alerts", fake_query)
+    monkeypatch.setattr(alert_oracle, "_get_benchmark_status", lambda: "mitigation")
+    monkeypatch.setattr(alert_oracle.time, "sleep", clock.sleep)
+    monkeypatch.setattr(alert_oracle.time, "monotonic", clock.monotonic)
+    oracle = AlertOracle(
+        "astronomy-shop",
+        buffer_seconds=30,
+        poll_interval_seconds=10,
+        sustained_silence_seconds=120,
+        resolve_grace_seconds=180,
+    )
+    return oracle, clock, polls
+
+
+def test_alerts_that_clear_within_grace_pass(monkeypatch):
+    # Prometheus needs ~scrape + evaluation interval to resolve an alert after a
+    # fix; the first polls still see it firing.
+    oracle, clock, polls = _alert_oracle_with_script(monkeypatch, [True] * 9 + [False])
+
+    result = oracle.validate()
+
+    assert result.success is True
+    firing_polls = polls[:9]
+    assert firing_polls[-1] - firing_polls[0] == 80  # 9 polls, 10 s apart, all tolerated
+    # The silence window starts at the last firing poll and lasts the full 120 s.
+    assert clock.now - polls[8] >= 120
+
+
+def test_alerts_that_persist_fail_after_grace(monkeypatch):
+    oracle, clock, polls = _alert_oracle_with_script(monkeypatch, [True])
+
+    result = oracle.validate()
+
+    assert result.success is False
+    assert result.issues == ["Firing alerts: HighRequestErrorRate"]
+    assert polls[-1] - polls[0] >= 180
+    assert polls[-1] - polls[0] < 180 + 10
+
+
+def test_refiring_alert_restarts_silence_window(monkeypatch):
+    # Silent for 50 s, one more firing poll, then silent: the pass must wait for a
+    # full 120 s of silence after the re-fire, not 120 s since the first poll.
+    script = [False] * 5 + [True] + [False]
+    oracle, clock, polls = _alert_oracle_with_script(monkeypatch, script)
+
+    result = oracle.validate()
+
+    assert result.success is True
+    refire_time = polls[5]
+    assert clock.now - refire_time >= 120
 
 
 def test_unavailable_check_does_not_become_a_failed_verdict():

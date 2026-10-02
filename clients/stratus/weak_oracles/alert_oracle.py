@@ -13,6 +13,13 @@ logger = logging.getLogger("all.stratus.alert_oracle")
 _SUSTAINED_SILENCE_SECONDS = 120
 _POLL_INTERVAL_SECONDS = 10
 _BUFFER_SECONDS = 30
+# Prometheus evaluates rules once per minute (observer values.yaml) and the
+# locust error-rate rules compare a 2-minute window, so an alert can stay
+# "firing" for up to ~3.5 minutes after the fault is fixed (2 min window +
+# 1 min evaluation + scrape). Keep polling for that long before declaring the
+# alerts persistent; a measured fix cleared the alerts 138-183 s after it was
+# applied.
+_RESOLVE_GRACE_SECONDS = 300
 
 
 def _get_benchmark_status() -> str:
@@ -36,11 +43,13 @@ class AlertOracle(BaseOracle):
         sustained_silence_seconds: int = _SUSTAINED_SILENCE_SECONDS,
         poll_interval_seconds: int = _POLL_INTERVAL_SECONDS,
         buffer_seconds: int = _BUFFER_SECONDS,
+        resolve_grace_seconds: int = _RESOLVE_GRACE_SECONDS,
     ):
         self.namespace = namespace
         self.sustained_silence_seconds = sustained_silence_seconds
         self.poll_interval_seconds = poll_interval_seconds
         self.buffer_seconds = buffer_seconds
+        self.resolve_grace_seconds = resolve_grace_seconds
 
     def _query_firing_alerts(self) -> list[dict] | None:
         """Return firing alerts, or None when Prometheus cannot be checked."""
@@ -88,6 +97,8 @@ class AlertOracle(BaseOracle):
         time.sleep(self.buffer_seconds)
 
         start = time.monotonic()
+        silence_start = start
+        last_names = ""
         while True:
             status = _get_benchmark_status()
             if status in ("tearing_down", "done"):
@@ -97,16 +108,25 @@ class AlertOracle(BaseOracle):
             firing = self._query_firing_alerts()
             if firing is None:
                 return OracleResult(success=None, issues=["Could not query Prometheus alerts"])
+            now = time.monotonic()
             if firing:
-                names = ", ".join(a.get("labels", {}).get("alertname", "?") for a in firing)
-                logger.info(f"Firing alerts in {self.namespace}: {names}")
-                logger.info(f"[AlertOracle] FAIL — firing alerts detected in namespace '{self.namespace}': {names}")
-                return OracleResult(success=False, issues=[f"Firing alerts: {names}"])
+                last_names = ", ".join(a.get("labels", {}).get("alertname", "?") for a in firing)
+                # Alerts need up to a scrape + evaluation interval to resolve after
+                # a fix. Give them that time instead of failing on the first poll.
+                if now - start >= self.resolve_grace_seconds:
+                    logger.info(
+                        f"[AlertOracle] FAIL — alerts still firing in namespace '{self.namespace}' after "
+                        f"{self.resolve_grace_seconds}s: {last_names}"
+                    )
+                    return OracleResult(success=False, issues=[f"Firing alerts: {last_names}"])
+                logger.info(f"Firing alerts in {self.namespace}: {last_names} (waiting for them to resolve)")
+                silence_start = now
+            else:
+                remaining = self.sustained_silence_seconds - (now - silence_start)
+                if remaining <= 0:
+                    break
 
-            remaining = self.sustained_silence_seconds - (time.monotonic() - start)
-            if remaining <= 0:
-                break
-            time.sleep(min(self.poll_interval_seconds, remaining))
+            time.sleep(self.poll_interval_seconds)
 
         logger.info(
             f"[AlertOracle] PASS — no firing alerts detected in namespace '{self.namespace}' for {self.sustained_silence_seconds}s"
