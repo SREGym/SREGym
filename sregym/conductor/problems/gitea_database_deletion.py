@@ -103,8 +103,7 @@ class GiteaDatabaseDeletion(Problem):
             "/recovery/operations.log",
             "maintenance: requested disposable database reset\n"
             f"session: namespace={self.namespace} host=gitea-db-rw database=gitea server={primary}\n"
-            "statement: DROP SCHEMA public CASCADE; CREATE SCHEMA public AUTHORIZATION gitea;\n"
-            "support: projects and issue pages failing; Git objects still present on repository storage\n",
+            "statement: DROP SCHEMA public CASCADE; CREATE SCHEMA public AUTHORIZATION gitea;\n",
         )
         self.deletion_attempted = True
         self.app.sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public AUTHORIZATION gitea;")

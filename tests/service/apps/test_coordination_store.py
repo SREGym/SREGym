@@ -610,6 +610,67 @@ def test_no_injected_evidence_states_the_diagnosis():
             assert phrase not in blob, f"{name} evidence still states: {phrase}"
 
 
+#: Every incident family. The rule is global, not per-family -- I fixed three
+#: and left four leaking, which is why this list is explicit.
+ALL_PROBLEM_FILES = (
+    "gitea_database_deletion.py",
+    "gitlab_database_deletion.py",
+    "gitlab_notification_recovery.py",
+    "gitlab_notification_ambiguity.py",
+    "gitlab_notification_intermittent.py",
+    "gitlab_notification_delayed_audit.py",
+    "gitlab_notification_expanded.py",
+    "stripe_feature_config.py",
+    "gitlab_regional_failover.py",
+    "mattermost_capacity_cascade.py",
+    "coordination_collapse.py",
+)
+
+
+def test_no_family_anywhere_states_a_recovery_contract_or_a_cause():
+    """The rule applies to every family, not the three I noticed first.
+
+    I stripped the cascade, failover and coordination descriptions and left the
+    four older families stating their contracts outright -- "recover without
+    losing acknowledged issue content", "a completed upload is not evidence of a
+    restorable archive", "an absent receipt does not establish that a send was
+    rejected". Those are the tasks.
+    """
+    import pathlib
+
+    forbidden = [
+        # Recovery contracts.
+        "without losing acknowledged",
+        "Recover acknowledged",
+        "Recover every intended notification exactly once",
+        "Reconcile all acknowledged",
+        "Reconcile every entry",
+        "account for every acknowledged",
+        # Causal explanation or symptom interpretation.
+        "a completed upload is not evidence",
+        "does not establish that a send was rejected",
+        "Do not confuse a reachable HTTP health endpoint",
+        "does not establish recovery",
+        "incomplete recovery evidence",
+        "Check candidate archives before use",
+        "Validate archives before use",
+        "take thirty seconds to appear",
+        "durable evidence, regardless",
+        "remain queued",
+    ]
+    for directory, names in (
+        (pathlib.Path("sregym/service/apps"), [p.name for p in pathlib.Path("sregym/service/apps").glob("*.py")]),
+        (pathlib.Path("sregym/conductor/problems"), list(ALL_PROBLEM_FILES)),
+    ):
+        for name in names:
+            path = directory / name
+            if not path.exists():
+                continue
+            blob = " ".join(path.read_text().split())
+            for phrase in forbidden:
+                assert phrase not in blob, f"{name} states: {phrase}"
+
+
 def test_no_problem_writes_narrative_evidence_at_the_agent():
     """Colleague chatter is a briefing by another name.
 
@@ -622,7 +683,7 @@ def test_no_problem_writes_narrative_evidence_at_the_agent():
     import pathlib
 
     problems = pathlib.Path("sregym/conductor/problems")
-    for name in ("mattermost_capacity_cascade.py", "gitlab_regional_failover.py", "coordination_collapse.py"):
+    for name in ALL_PROBLEM_FILES:
         source = (problems / name).read_text()
         for authored in ("incident-notes.txt", "chat.txt", "ticket.txt"):
             assert authored not in source, f"{name} still writes {authored}"

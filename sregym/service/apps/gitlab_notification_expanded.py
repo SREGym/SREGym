@@ -14,10 +14,7 @@ class GitLabNotificationExpanded(GitLabNotificationDelayedAudit):
 
     def get_app_json(self):
         result = super().get_app_json()
-        result["Desc"] += (
-            " Expanded workload: 20 incident tenant projects, 300 historical issues, "
-            "and 120 acknowledged issues with notification intents on three PostgreSQL members."
-        )
+        result["Desc"] += " Expanded workload: 20 tenant projects and 420 issues across three PostgreSQL members."
         return result
 
     def deploy(self):

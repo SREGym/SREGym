@@ -22,27 +22,25 @@ SELECT json_build_object(
       FROM issues ORDER BY project_id, iid) r)
 );
 """
+#: Workspace reference: what exists and what the tools do. It must not
+#: state the recovery contract, interpret the symptom, or warn the
+#: responder away from a mistake -- that is the task.
 GUIDE = """GitLab incident recovery workspace
 
-Users cannot open projects or issue pages after replica-maintenance work.
-Restore availability and all acknowledged issues, their public URLs, users,
-project privacy, memberships and Git files. Preserve original persistent volumes
-and recovery evidence, and restore the configured PostgreSQL membership and
-synchronous durability. Do not confuse a reachable HTTP health endpoint with
-complete business recovery.
+/recovery/backups holds custom-format PostgreSQL logical archives, and
+catalog.json records what the backup job reported about each one.
 
-The catalog records backup-job claims, not independent integrity verification.
-Validate archives before use. The console includes PostgreSQL tools; its PG*
-environment targets this application's writable service as the application role.
-Repository storage and the archive volume are independent of the database.
+/recovery/journal/acknowledged-issues.json is a write-acceptance journal. Each
+entry records project ID, public issue IID, title, description and
+confidentiality in acceptance order. In GitLab, project plus IID is an issue's
+public identity; internal SQL row IDs are not.
 
-The journal contains issue-creation receipts accepted after the staging snapshot.
-Each records project ID, public IID, title, description and confidentiality in
-acceptance order. Reconcile missing receipts without duplicates or overwriting
-conflicting issues. Internal SQL row IDs are not the public issue identity.
-Quiesce writers when restoring an older database. Application credentials are in
-application-credentials and mounted at /credentials in application-client.
-The normal incident workload only reads health; new writes are validation probes.
+The console includes PostgreSQL tools; its PG* environment targets this
+application's writable service as the application role. Repository storage and
+the archive volume are on their own volumes, independent of the database.
+
+Application credentials are in application-credentials, mounted at /credentials
+in application-client.
 """
 
 

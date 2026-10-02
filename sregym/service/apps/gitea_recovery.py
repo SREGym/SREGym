@@ -23,29 +23,25 @@ SELECT json_build_object(
 );
 """
 
+#: Workspace reference: what exists and what the tools do. It must not
+#: state the recovery contract, interpret the symptom, or warn the
+#: responder away from a mistake -- that is the task.
 OPERATIONS_GUIDE = """Gitea service recovery workspace
 
-Users report failures opening projects and issues after a maintenance session.
-Recover the service without losing acknowledged issue content, issue URLs,
-accounts, repository contents, or access settings. Keep the original persistent
-volumes and restore the configured PostgreSQL membership and write durability.
-Preserve the recovery archives for subsequent investigation.
+/recovery/backups holds custom-format PostgreSQL logical archives, and
+catalog.json records what the backup uploader reported about each one.
 
-The backups directory contains custom-format PostgreSQL logical archives.
-catalog.json records what the backup uploader reported; a completed upload is
-not evidence of a restorable archive. Check candidate archives before use.
+/recovery/journal/acknowledged-issues.json is a write-acceptance journal. Each
+entry records repository, public issue number, title and body in acceptance
+order. In Gitea, repository plus issue number is an issue's public identity;
+database row IDs are internal.
+
 The tools container includes psql, pg_dump and pg_restore; its PG* environment
-points at the application's writable database service using the application role.
+points at the application's writable database service using the application
+role. Git repository storage is on its own volume, independent of the database.
 
-The journal contains acknowledged issue creations after the daily snapshot.
-Each entry records repository, public issue number, title and body in acceptance
-order. Reconcile every entry without duplicates or overwriting another issue.
-Issue IDs are internal; repository plus issue number is the public identity.
-Git repository storage is independent of this database archive.
-
-Application API credentials remain in the gitea-admin Secret and are mounted
-at /credentials in application-client. The normal workload is read-only during
-this incident. A successful HTTP response alone does not establish recovery.
+Application API credentials are in the gitea-admin Secret, mounted at
+/credentials in application-client.
 """
 
 
@@ -57,8 +53,8 @@ class GiteaRecovery(Gitea):
     def get_app_json(self):
         metadata = super().get_app_json()
         metadata["Desc"] += (
-            " Operations records and recovery archives are available in the recovery-console pod "
-            "at /recovery. Recover acknowledged business state as well as service availability."
+            " Database archives, a backup catalog and a write-acceptance journal are kept in"
+            " the recovery-console pod at /recovery."
         )
         return metadata
 

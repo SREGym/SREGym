@@ -8,31 +8,30 @@ from sregym.service.apps.stripe_marathon import StripeMarathon
 CATALOG_IMAGE = "clickhouse/clickhouse-server:25.8.12.129-alpine"
 RUNTIME_IMAGE = "python:3.12.13-alpine3.23"
 COUNTS = {"single": 6, "replicated": 24}
-GUIDE = """Payments incident operations workspace
+#: Workspace reference: what exists and what the tools do. It must not
+#: state the recovery contract, interpret the symptom, or warn the
+#: responder away from a mistake -- that is the task.
+GUIDE = """Payments operations workspace
 
-Restore API traffic and delivery of every acknowledged payment notification.
-Preserve captured amounts, refunds, idempotency, original event identities,
-customer records, persistent volumes and PostgreSQL durability.
+The edge and the configuration producer share /control:
 
-The edge and configuration producer share /control. settings.json controls
-publication (enabled), rollout query identities (sources), and the approved
-emergency bot-management kill switch (bot_management_enabled). Configuration is
-regenerated every 20 seconds. current.json is the distributed file; known-good.json
-is the last validated release. query.sql is the producer's ClickHouse query.
-Generation history and direct /metrics remain available when API traffic fails.
-Treat a single successful request as incomplete recovery evidence.
+  settings.json     publication (enabled), rollout query identities (sources),
+                    and the bot-management kill switch (bot_management_enabled)
+  current.json      the configuration file currently distributed to the edge
+  known-good.json   the last release that passed validation
+  query.sql         the producer's ClickHouse query
 
-The feature-catalog service is ClickHouse. The edge container has an operator
-credential in CATALOG_PASSWORD. /incident/feature_edge.py supports sql, safety,
-settings, generate and known-good commands. These operate real catalog grants,
-queries and persistent files, not a hidden outage flag.
+The feature-catalog service is ClickHouse; the edge container holds an operator
+credential in CATALOG_PASSWORD. /incident/feature_edge.py supports the sql,
+safety, settings, generate and known-good commands, which operate on real
+catalog grants, queries and persistent files. Generation history and each
+service's /metrics are reachable directly.
 
-The application has bounded delivery retries. Exhausted webhook events remain in
-PostgreSQL with their delivery history. In stripe-worker, the operator tool
-PYTHONPATH=/app python /incident/requeue_webhooks.py [optional JSON event-ID list]
+The application has bounded delivery retries, and exhausted webhook events stay
+in PostgreSQL with their delivery history. In stripe-worker,
+`PYTHONPATH=/app python /incident/requeue_webhooks.py [JSON event-ID list]`
 requeues original events transactionally, skipping successful and pending work.
-Check delivery history and receiver receipts; never recreate payments to resend
-notifications. Receipts are deduplicated by event ID on stripe-receiver's volume.
+Receipts are deduplicated by event ID on stripe-receiver's volume.
 """
 
 

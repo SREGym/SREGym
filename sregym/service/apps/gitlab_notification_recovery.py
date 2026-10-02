@@ -8,22 +8,21 @@ from sregym.service.apps.gitlab_recovery import ARCHIVE, GitLabRecovery
 
 NOTIFICATION_REASON = "sregym-ack"
 NOTIFICATION_JOURNAL = "/recovery/journal/acknowledged-notifications.json"
+#: API reference only. It must not say what is wrong, interpret a
+#: symptom, or state what a correct recovery preserves.
 MAIL_GUIDE = """
-Notification recovery contract
+Notification delivery
 
-The SMTP provider has already accepted some customer notifications; others were
-acknowledged by GitLab but remain queued. Recover every intended notification
-exactly once, to its intended recipient, with the correct issue content. An email
-cannot be unsent. Database availability alone does not complete this incident.
-Fresh issue notifications must also work after recovery.
+GitLab sends issue notifications through its ordinary Notify mailer and the
+Sidekiq mailers queue. Redis and the recipient mailbox are on their own volumes,
+independent of the database.
 
-The notification journal records the acknowledged intent, including project ID,
-public issue IID, recipient and queue job ID. Redis and the recipient mailbox
-survive database loss independently. The external provider's read-only audit is
-http://notification-mailbox:8080/messages. It accepts local synthetic mail only;
-its retained delivery history is external evidence and must not be modified.
-GitLab uses its ordinary Notify mailer and Sidekiq mailers queue. The journal's
-notification reason distinguishes incident work from unrelated mail.
+/recovery/journal/acknowledged-notifications.json records notification intent:
+project ID, public issue IID, recipient and queue job ID per entry.
+
+The provider's read-only audit is http://notification-mailbox:8080/messages. It
+accepts local synthetic mail only and exposes no mutation endpoints. The
+journal's notification reason distinguishes incident mail from unrelated mail.
 """
 
 
@@ -41,7 +40,10 @@ class GitLabNotificationRecovery(GitLabRecovery):
 
     def get_app_json(self):
         result = super().get_app_json()
-        result["Desc"] += " Recover acknowledged notifications exactly once; see /recovery/notifications.txt."
+        result["Desc"] += (
+            " Issue notifications are delivered over SMTP through a Sidekiq mailers queue"
+            " to a local provider with a read-only delivery audit."
+        )
         return result
 
     def application_documents(self):

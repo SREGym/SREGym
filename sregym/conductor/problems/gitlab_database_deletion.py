@@ -94,17 +94,7 @@ class GitLabDatabaseDeletion(Problem):
             "/recovery/operations.log",
             "maintenance requested: rebuild lagging secondary\n"
             f"shell prompt: db-secondary; connection PGHOST=gitlab-ce-db-rw; server={primary}\n"
-            "reset command completed; application reported missing relations immediately afterward\n",
-        )
-        app.archive_write(
-            "/recovery/chat.txt",
-            "on-call: users report project and issue failures\n"
-            "storage: repository files are still present\nbackup-job: latest upload marked completed; contents not independently verified\n",
-        )
-        app.archive_write(
-            "/recovery/ticket.txt",
-            "Restore GitLab and account for every acknowledged customer issue. "
-            "A recent HTTP 200 on /-/health has not restored project access.\n",
+            "reset command completed\n",
         )
         self.deletion_attempted = True
         app.sql("""DO $$ DECLARE n text; BEGIN

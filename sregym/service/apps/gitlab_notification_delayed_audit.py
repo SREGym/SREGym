@@ -6,25 +6,15 @@ from pathlib import Path
 from sregym.service.apps.gitlab_notification_ambiguity import AUDIT_GUIDE
 from sregym.service.apps.gitlab_notification_intermittent import GitLabNotificationIntermittent
 
+#: API reference only. It must not say what is wrong, interpret a
+#: symptom, or state what a correct recovery preserves.
 DELAY_GUIDE = """
-Audit publication advisory
+Provider audit fields
 
-During the current incident, accepted incident notifications take thirty seconds
-to appear in the provider audit. SMTP acceptance is durable immediately, including
-when the connection fails before a success reply. An absent receipt in a recent
-snapshot therefore does not establish that a send was rejected.
-
-Each audit response also includes observed_at, complete_through and
-publication_delay_seconds, expressed using the provider's clock. The snapshot
-contains every acceptance at or before complete_through. Follow next to read the
-entire snapshot; start again without a cursor to obtain a newer snapshot.
-
-After a send whose outcome is uncertain, a newly fetched response's observed_at
-can serve as a barrier. Once a later snapshot's complete_through reaches that
-barrier, the snapshot contains the evidence needed to decide whether to retry.
-This does not require synchronizing your clock with the provider. Normal mail
-and fresh-work notifications remain outside the impaired incident stream.
-Publication schedules and accepted mail survive provider restart.
+Each audit response includes observed_at, complete_through and
+publication_delay_seconds, expressed using the provider's clock. A snapshot
+contains every acceptance at or before its complete_through. Follow next to read
+an entire snapshot; start again without a cursor to obtain a newer one.
 """
 
 

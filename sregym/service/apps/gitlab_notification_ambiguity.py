@@ -5,17 +5,17 @@ from pathlib import Path
 
 from sregym.service.apps.gitlab_notification_recovery import GitLabNotificationRecovery
 
+#: API reference only. It must not say what is wrong, interpret a
+#: symptom, or state what a correct recovery preserves.
 AUDIT_GUIDE = """
 Provider audit API
 
 GET http://notification-mailbox:8080/messages returns an object containing
 items, next, snapshot and total. Each response contains at most 40 messages.
-Follow the relative next URL until it is null; subsequent pages retain the
-same snapshot. Begin a new request without a cursor to observe later deliveries.
-The audit includes unrelated local synthetic mail. Recipient-visible accepted
-messages are durable evidence, regardless of the sender's transport result.
-There are no audit mutation endpoints. Reconcile all acknowledged notification
-intent without duplicate or wrong-recipient delivery, and preserve original data.
+Follow the relative next URL until it is null; subsequent pages retain the same
+snapshot. Begin a new request without a cursor to observe later deliveries.
+The audit includes unrelated local synthetic mail. There are no audit mutation
+endpoints.
 """
 
 

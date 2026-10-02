@@ -51,13 +51,12 @@ class StripeFeatureConfig(Problem):
             app.control("sql", "GRANT SELECT ON r0.http_requests_features TO feature_new")
             app.control("generate", "feature_new")
             app.control_write("acknowledged-payments.json", json.dumps(self.payments, indent=2))
+            # A change-management record: what was applied, not what it did.
+            # Naming the effect ("expanded feature_new visibility") and the
+            # publication cadence handed over both the cause and the mechanic.
             app.control_write(
-                "change-ticket.txt",
-                "Catalog access-policy migration expanded feature_new visibility. Feature publishing is automatic every 20 seconds.\n",
-            )
-            app.control_write(
-                "chat.txt",
-                "on-call: intermittent payments and webhook errors; checking DDoS hypothesis\nnetwork: synthetic traffic rate unchanged; direct origin health responds\nsupport: captured payments are missing merchant notifications\n",
+                "change-log.txt",
+                "applied: catalog access-policy migration\n",
             )
         finally:
             app.set_worker(1)
