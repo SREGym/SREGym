@@ -5,10 +5,6 @@ name: Publish Harbor Images
 # saves every trial from building kind/Dockerfile during setup.
 
 on:
-  push:  # TEMP: publish images from this branch once; remove before merge
-    branches: [claude/intelligent-ramanujan-eeykkl]
-    paths:
-      - '.github/workflows/publish-harbor-images.yml'
   workflow_dispatch:
     inputs:
       tag:

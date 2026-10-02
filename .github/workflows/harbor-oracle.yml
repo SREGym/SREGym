@@ -21,10 +21,6 @@ on:
         description: Also require the no-op agent to score 0 (the fault is live)
         type: boolean
         default: false
-  push:  # TEMP: no-op sweep of SREGym-Lite from this branch; remove before merge
-    branches: [claude/intelligent-ramanujan-eeykkl]
-    paths:
-      - '.github/workflows/harbor-oracle.yml'
 
 permissions:
   contents: read
@@ -44,7 +40,7 @@ jobs:
       - name: Resolve problems
         id: plan
         env:
-          PROBLEMS: ${{ inputs.problems || 'sregym-lite' }}
+          PROBLEMS: ${{ inputs.problems }}
         run: |
           uv run --frozen python - >> "$GITHUB_OUTPUT" <<'EOF'
           import json
@@ -64,7 +60,7 @@ jobs:
     timeout-minutes: 120
     strategy:
       fail-fast: false
-      max-parallel: ${{ fromJSON(inputs.max_parallel || '6') }}
+      max-parallel: ${{ fromJSON(inputs.max_parallel) }}
       matrix:
         problem: ${{ fromJSON(needs.plan.outputs.problems) }}
     env:
@@ -103,7 +99,6 @@ jobs:
             --backend-image sregym-dind:ci --cpus 4 --memory-mb 12288 --storage-mb 40960
 
       - name: Oracle agent scores 1
-        if: github.event_name != 'push'  # TEMP
         run: |
           # The adapter saved this dataset's oracle secret beside its tasks.
           export SREGYM_ORACLE_SECRET="$(cat "$TASKS/.sregym-oracle-secret")"
@@ -111,7 +106,7 @@ jobs:
           python3 .github/scripts/harbor_rewards.py "$JOBS/oracle" 1
 
       - name: No-op agent scores 0
-        if: inputs.check_nop || github.event_name == 'push'  # TEMP
+        if: inputs.check_nop
         run: |
           harbor run -y -q -p "$TASKS" -a nop -e docker -o "$JOBS" --job-name nop
           python3 .github/scripts/harbor_rewards.py "$JOBS/nop" 0
