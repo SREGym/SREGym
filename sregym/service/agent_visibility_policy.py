@@ -52,6 +52,26 @@ def is_chaos_event(resource: dict, hidden_namespaces: set[str]) -> bool:
     )
 
 
+def is_hidden_workload_event(resource: dict, hidden_labels: dict[str, set[str]]) -> bool:
+    """Return whether a Kubernetes Event refers to a workload hidden by label policy."""
+    if resource.get("kind") != "Event" and "involvedObject" not in resource and "regarding" not in resource:
+        return False
+    hidden_names = set().union(
+        *(
+            hidden_labels.get(key, set())
+            for key in ("app", "opentelemetry.io/name", "app.kubernetes.io/name", "app.kubernetes.io/component")
+        )
+    )
+    if not hidden_names:
+        return False
+    references = (resource.get("involvedObject") or {}, resource.get("regarding") or {})
+    for ref in references:
+        ref_name = str(ref.get("name") or "")
+        if any(ref_name == name or ref_name.startswith(f"{name}-") for name in hidden_names):
+            return True
+    return False
+
+
 def is_hidden_resource(resource: dict, hidden_namespaces: set[str], hidden_labels: dict[str, set[str]]) -> bool:
     """Return whether a Kubernetes object must not be visible to an agent."""
     metadata = resource.get("metadata") or {}
@@ -62,6 +82,7 @@ def is_hidden_resource(resource: dict, hidden_namespaces: set[str], hidden_label
         or has_hidden_label
         or is_helm_release_secret(resource)
         or is_chaos_event(resource, hidden_namespaces)
+        or is_hidden_workload_event(resource, hidden_labels)
         or (not metadata.get("namespace") and mentions_chaos_mesh(str(metadata.get("name", ""))))
     )
 

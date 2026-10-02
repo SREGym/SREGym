@@ -1043,3 +1043,38 @@ def test_requests_are_served_while_another_client_has_not_finished_its_tls_hands
 
     assert served_in_time
     assert statuses == [200]
+
+
+def test_events_for_hidden_workloads_are_filtered_from_lists_and_direct_reads(proxy):
+    loadgen_event = {
+        "metadata": {"name": "load-generator-5d945c566-2lbl4.18a1", "namespace": "astronomy-shop"},
+        "involvedObject": {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "name": "load-generator-5d945c566-2lbl4",
+            "namespace": "astronomy-shop",
+        },
+        "reason": "Scheduled",
+        "message": "Successfully assigned astronomy-shop/load-generator-5d945c566-2lbl4 to worker",
+    }
+    frontend_event = {
+        "metadata": {"name": "frontend-abc.18a1", "namespace": "astronomy-shop"},
+        "involvedObject": {
+            "apiVersion": "v1",
+            "kind": "Pod",
+            "name": "frontend-abc",
+            "namespace": "astronomy-shop",
+        },
+        "reason": "Scheduled",
+        "message": "Successfully assigned astronomy-shop/frontend-abc to worker",
+    }
+    filtered = filter_resource_list(
+        {"items": [loadgen_event, frontend_event]},
+        hidden_namespaces={"chaos-mesh"},
+        hidden_labels={"app": {"load-generator"}},
+    )
+    assert filtered["items"] == [frontend_event]
+
+    FakeHTTPSConnection.response = FakeResponse(json.dumps(loadgen_event).encode())
+    status, _, _ = request(proxy, "/api/v1/namespaces/astronomy-shop/events/load-generator-5d945c566-2lbl4.18a1")
+    assert status == 404

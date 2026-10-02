@@ -52,6 +52,7 @@ from sregym.service.agent_visibility_policy import (
     is_hidden_api_group,
     is_hidden_cluster_resource,
     is_hidden_resource,
+    is_hidden_workload_event,
     mentions_chaos_mesh,
     sanitize_visible_resource,
 )
@@ -978,7 +979,9 @@ class KubernetesAPIProxy:
                                 response_body = json.dumps(data).encode()
                             elif filter_type is None and is_hidden_resource(data, hidden_namespaces, hidden_labels):
                                 # Block direct access to individual hidden resources
-                                if is_chaos_event(data, hidden_namespaces):
+                                if is_chaos_event(data, hidden_namespaces) or is_hidden_workload_event(
+                                    data, hidden_labels
+                                ):
                                     self.send_error(404, "Not Found")
                                 else:
                                     self.send_error(403, "Forbidden: Access to this resource is not allowed")
