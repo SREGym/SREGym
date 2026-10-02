@@ -103,3 +103,13 @@ def test_ui_fix_coexists_with_upstream_memory_fixes():
         assert components[name]["resources"]["limits"]["memory"] == "512Mi"
     assert components["kafka"]["resources"]["requests"]["memory"] == "600Mi"
     assert components["kafka"]["resources"]["limits"]["memory"] == "1Gi"
+
+
+def test_locust_exporter_sidecar_is_not_chronically_throttled():
+    # The sidecar is the only CPU-limited container in the load-generator pod, so
+    # it alone decides the pod-scoped ContainerCPUThrottling alert.
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    sidecar = values["components"]["load-generator"]["sidecarContainers"][0]
+    assert sidecar["name"] == "locust-exporter"
+    cpu = sidecar["resources"]["limits"]["cpu"]
+    assert cpu.endswith("m") and int(cpu[:-1]) >= 200

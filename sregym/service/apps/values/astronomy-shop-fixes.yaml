@@ -64,7 +64,13 @@ components:
             cpu: "10m"
           limits:
             memory: "64Mi"
-            cpu: "50m"
+            # The main locust container has no CPU limit, so this sidecar is the
+            # only container in the pod that CFS can throttle. At the upstream
+            # 50m it spent >25% of periods throttled while polling the locust
+            # stats endpoint, which kept `ContainerCPUThrottling` firing on
+            # `load-generator` for the whole run. The alert is pod-scoped, so
+            # the chronic warning masked real regressions from weak oracles.
+            cpu: "500m"
   accounting:
     # The first successful upstream nightly after opentelemetry-demo#2876.
     # Source ebb18186819c510b39d64184d774a527a79e1525 changes only Consumer.cs
