@@ -204,6 +204,15 @@ re-pulled in 3m18s). **Each screen leaves several GB behind**, so a multi-family
 campaign needs a prune *between families* or the later ones fail for reasons that
 look like environment instability. On CloudLab, size the disk so this is moot.
 
+A prune between families is **not sufficient on its own**. In one campaign the
+between-families prune ran and the GitLab deploy still climbed to 91% with 2.6 GB
+free while unpacking, against the 5.8 GB a successful run had had. Pruning the
+three nodes *not* running GitLab mid-pull recovered 4.9 GB and it completed; the
+unpack then returned the staging space on its own, settling at 66%. So: prune
+immediately **before** a GitLab-family deploy as well, and watch the figure
+during the unpack rather than only between families. Pruning a node that is not
+the one pulling is safe while a pull is in flight.
+
 ### The full test suite deploys to the live cluster
 
 `tests/problems/test_stale_hostaliases_dns_poisoning_astronomy_shop.py::test_lifecycle_against_a_live_cluster`
