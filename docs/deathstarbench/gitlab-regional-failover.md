@@ -117,7 +117,30 @@ python scripts/evaluate_deathstarbench.py \
 Admission is not a difficulty result. For the agent screen, see below and the
 [calibration report](difficulty-calibration.md) for the cohort rules that apply.
 
-## Claude Code screen: 3/3 passed, difficulty 0%
+## Codex screen under the corrected description: 1 of 3 solved
+
+`gpt-6-astra`, CLI 0.160.0, `svelte`, mitigation only, 900-second budget, after
+every authored briefing was removed from the family. Lifecycle gate 8/8.
+
+| Attempt | Verdict | Reason | Agent time |
+|---:|---|---|---:|
+| 1 | solved | — | 269.8 s |
+| 2 | **not solved** | `post_promotion_writes_lost` | 297.8 s |
+| 3 | **not solved** | `post_promotion_writes_lost` | 286.7 s |
+
+Three valid attempts, no ambiguous or environment failures. Both failures are
+the trap this family models: the agent restored the demoted primary's snapshot,
+which recovered all six orphaned writes and displaced all six post-promotion
+writes at exactly the colliding identities
+(`project 2,3,4 × iid 5,6`).
+
+The earlier screen below scored 3 of 3 because the evidence told the agent not to
+do that. One line — *"dba: do NOT restore the east snapshot over the live
+database, we have taken writes since"* — was the difference between a saturated
+problem and one that fails a frontier agent two times in three. It is gone, along
+with every other authored briefing.
+
+## Earlier Claude Code screen, with the answer disclosed: 3/3
 
 `claude-opus-5`, CLI `2.1.286`, `svelte`, mitigation only, 900-second budget.
 The lifecycle gate passed 8/8 (1,132 s) before any attempt was spent.

@@ -116,6 +116,42 @@ have produced invalid attempts rather than difficulty data: the campaign runner
 could not select either new incident, and the Claude Code client rejected
 subscription credentials outright. See the commit history.
 
+## Screens under the corrected task descriptions
+
+Re-screened with Codex `gpt-6-astra` (CLI 0.160.0, `svelte`, mitigation only)
+after every authored briefing was deleted. The agent now gets the harness's
+generic instruction plus an application description, like every other problem.
+
+| Problem | Attempts | Solved | Median agent time |
+|---|---|---:|---:|
+| `mattermost_capacity_cascade_single` | `███` | 3 of 3 | 243 s / 900 s |
+| `gitlab_regional_failover_single` | `█░░` | **1 of 3** | 287 s / 900 s |
+
+`█` solved · `░` not solved. All six attempts completed and graded, with no
+ambiguous or environment failures, so all six are valid.
+
+**The failover family discriminates, and the disclosure was what hid it.** Both
+failures are the same mistake and the one the family exists to test: the agent
+restored the demoted primary's snapshot, recovering all six orphaned writes and
+destroying all six post-promotion writes at exactly the colliding identities.
+Graded `post_promotion_writes_lost`, class `agent_error`, twice.
+
+Before the fix this family scored 3 of 3. The difference was one line in an
+evidence file I had written: *"dba: do NOT restore the east snapshot over the
+live database, we have taken writes since"* — the incident's central decision,
+handed over. Removing it took the family from saturated to 1 of 3.
+
+**The cascade family does not discriminate.** Removing its giveaway — a closing
+line telling the agent to consider what CPU means for blocked workers — changed
+nothing: still 3 of 3, 243 s against 238 s before. The agent discovers `/control`
+by listing it, reads the scaler policy and decision log, probes the gateway under
+concurrency, and finds the misleading signal in about four minutes. That
+environment is genuinely easy for a frontier agent, and no amount of description
+hygiene will change it.
+
+So the two families now say different things, which is the useful outcome: one
+was masked by its description, the other is simply not hard.
+
 ## The earlier 0% results were measured with the answer disclosed
 
 Every screen above was run against a task description that stated its own
