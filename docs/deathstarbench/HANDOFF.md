@@ -253,6 +253,35 @@ for an already-running container, `docker cp` it to
 `/root/.claude/.credentials.json`, mode 600. Check token expiry before a long
 campaign — a 4-hour run on an 8-hour token is fine, but plan it.
 
+### A file bind mount pins an inode, so re-logging in does not reach a container
+
+`docker/dind/run.py` bind-mounts `~/.codex/auth.json` (and
+`~/.claude/.credentials.json`) as *files*. A fresh `codex login` **replaces** the
+file rather than editing it, so the host path gets a new inode and the running
+container keeps serving the old credentials indefinitely. Symptom: the model
+reports unsupported even though login just succeeded on the host.
+
+Diagnose by comparing inodes, not mtimes:
+
+```sh
+stat -c %i ~/.codex/auth.json
+docker exec <dind> stat -c %i /root/.codex/auth.json
+```
+
+You cannot `docker cp` over the mount point (`device or resource busy`). Either
+restart the container — expensive, it takes the cluster with it — or stage the
+fresh file at another path and point `CODEX_HOME` at it, which
+`container_runner._mount_codex_credentials` honours when choosing what to copy
+into agent containers:
+
+```sh
+docker cp ~/.codex/auth.json <dind>:/root/.codex-fresh/auth.json
+# then run the campaign with CODEX_HOME=/root/.codex-fresh
+```
+
+On a fresh machine, prefer mounting the *directory* rather than the file so a
+re-login propagates.
+
 ### `--validate-only` is not a dry run
 
 It skips *agent attempts* but still deploys and validates. I used it to check
