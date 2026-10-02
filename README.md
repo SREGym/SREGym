@@ -368,7 +368,6 @@ This project is generously supported by a Slingshot grant from the [Laude Instit
 
 https://github.com/user-attachments/assets/e7b2ee27-e7a9-436a-858d-ee58e8bbd61d
 
-E2B for Research
 [![SPONSORED BY E2B FOR RESEARCH](https://img.shields.io/badge/SPONSORED%20BY-E2B%20FOR%20RESEARCH-ff3001?style=for-the-badge&labelColor=black)](https://e2b.dev/research)
 
 ## License
