@@ -105,6 +105,14 @@ def test_ui_fix_coexists_with_upstream_memory_fixes():
     assert components["kafka"]["resources"]["limits"]["memory"] == "1Gi"
 
 
+def test_valkey_cart_survives_exec_of_valkey_cli_in_its_cgroup():
+    # valkey_auth_disruption injects with `kubectl exec ... valkey-cli`; at the
+    # chart default of 20Mi the server was OOMKilled and lost the runtime password.
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    limit = values["components"]["valkey-cart"]["resources"]["limits"]["memory"]
+    assert limit.endswith("Mi") and int(limit[:-2]) >= 64
+
+
 def test_locust_exporter_sidecar_is_not_chronically_throttled():
     # The sidecar is the only CPU-limited container in the load-generator pod, so
     # it alone decides the pod-scoped ContainerCPUThrottling alert.

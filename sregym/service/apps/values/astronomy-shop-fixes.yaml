@@ -114,6 +114,19 @@ components:
         memory: 600Mi
       limits:
         memory: 1Gi
+  valkey-cart:
+    resources:
+      # The chart caps the server at 20Mi. valkey_auth_disruption injects its
+      # fault with `kubectl exec ... valkey-cli CONFIG SET requirepass`, which
+      # runs the CLI inside that same cgroup. In SREGym-Lite runs the server was
+      # OOMKilled about one second after injection (restart count 1, only in
+      # this problem), and the restart erased the runtime-only password, so the
+      # mitigation oracle passed before the agent changed anything. The
+      # mitigation oracle and the agent exec the same CLI, so they need the same
+      # headroom. valkey idles at ~8-10Mi RSS; 64Mi leaves room for the CLI and
+      # the OTel redis scraper connections.
+      limits:
+        memory: 64Mi
   flagd:
     # KIND/containerd can give pods a NOFILE limit of 1,073,741,816. Erlang
     # allocates memory against that limit at startup and is OOMKilled even
