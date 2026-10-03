@@ -9,7 +9,7 @@ Astronomy Shop's recommendation service fetches the product list from product-ca
 This problem overlays a version that calls product-catalog with a short timeout and caches the last
 successful response in memory, but never falls back to the cache if a later request times out.
 
-A Hidden Chaos Mesh delay on the product-catalog -> recommendation path (hidden from the agent) then turns
+A Chaos Mesh delay on the product-catalog -> recommendation path (hidden from the agent) then turns
 every recommendation into an error, while every pod stays Running and product-catalog itself looks healthy.
 
 The fix requires changing the application code. The agent must update the overlaid `recommendation_server.py`
@@ -50,10 +50,11 @@ ROOT_CAUSE = (
 # Runs inside the recommendation pod with its own generated stubs.
 # argv: count, interval_s, deadline_s, product ids to exclude as ONE comma-joined string.
 _PROBE_SCRIPT = r"""
-import json, sys, time
+import json, os, sys, time
 import grpc, demo_pb2, demo_pb2_grpc
 count, interval, deadline, exclude = int(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
-stub = demo_pb2_grpc.RecommendationServiceStub(grpc.insecure_channel("localhost:8080"))
+port = os.environ.get("RECOMMENDATION_PORT", "8080")
+stub = demo_pb2_grpc.RecommendationServiceStub(grpc.insecure_channel(f"localhost:{port}"))
 for i in range(count):
     start = time.monotonic()
     try:
@@ -66,28 +67,38 @@ for i in range(count):
 """
 
 # Times one direct ListProducts call from the recommendation pod.
+# argv: address (empty means the service's own PRODUCT_CATALOG_ADDR), timeout_s.
 _UPSTREAM_SCRIPT = r"""
-import os, time
+import json, os, sys, time
 import grpc, demo_pb2, demo_pb2_grpc
-stub = demo_pb2_grpc.ProductCatalogServiceStub(grpc.insecure_channel(os.environ["PRODUCT_CATALOG_ADDR"]))
-start = time.monotonic()
+address, timeout = sys.argv[1] or os.environ.get("PRODUCT_CATALOG_ADDR", ""), float(sys.argv[2])
+if not address:
+    print(json.dumps({"addr": "", "s": 0.0, "code": "NO_ADDRESS"}))
+    sys.exit(0)
+stub = demo_pb2_grpc.ProductCatalogServiceStub(grpc.insecure_channel(address))
+start, code = time.monotonic(), "OK"
 try:
-    stub.ListProducts(demo_pb2.Empty(), timeout=10)
-except grpc.RpcError:
-    pass
-print(f"{time.monotonic() - start:.3f}")
+    stub.ListProducts(demo_pb2.Empty(), timeout=timeout)
+except grpc.RpcError as e:
+    code = e.code().name
+print(json.dumps({"addr": address, "s": round(time.monotonic() - start, 3), "code": code}))
 """
 
 
 class MissingStaleCacheFallbackAstronomyShop(Problem):
     RECOMMENDATION = "recommendation"
     PRODUCT_CATALOG = "product-catalog"
+    # The chart's address for product-catalog. The oracle times it directly, whatever the agent configures.
+    UPSTREAM_ADDR = "product-catalog:8080"
     SOURCE_PATH = "/app/recommendation_server.py"
     # The agent sees this ConfigMap (editing it is the repair path), so it carries an ordinary name.
     CONFIGMAP = "recommendation-server"
-    # Hidden from the agent: k8s_proxy filters the chaos-mesh namespace and the chaos-mesh.org API group.
-    CHAOS_NAMESPACE = "chaos-mesh"
+    # Deployment selector label. Unlike app.kubernetes.io/name it cannot be removed from running pods.
+    SELECTOR_LABEL = "opentelemetry.io/name"
+    # Chaos objects live in the app namespace, so they are deleted with it.
+    # Hidden from the agent: k8s_proxy filters the chaos-mesh.org API group in every namespace.
     CHAOS_NAME = "catalog-latency"
+    CHAOS_RESOURCES = "schedules.chaos-mesh.org,networkchaos.chaos-mesh.org"
     # A Schedule re-creates the NetworkChaos so pods restarted during the incident get the delay back
     # (25 s later). Overlapping runs cause brief latency spikes, which change no outcome.
     SCHEDULE_EVERY = "@every 30s"
@@ -104,19 +115,19 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
     # A real catalog id which the service never recommends the product the caller is viewing.
     PROBE_PRODUCT = "OLJCESPC7Z"
     WARMUP_CALLS = 5
+    # Below this the oracle's latency limit (delay - 0.25 s) leaves little room for a 1 s timeout fallback.
+    MIN_DELAY_S = 2.0
 
     def __init__(self, delay: str = "3s"):
         super().__init__(app=AstronomyShop())
 
         self.kubectl = KubeCtl()
-        self.problem_id = "missing_stale_cache_fallback_astronomy_shop"
         self.faulty_service = [self.RECOMMENDATION]
 
-        if not re.fullmatch(r"\d+(\.\d+)?s", delay):
-            raise ValueError(f"delay must look like '3s', got {delay!r}")
         self.delay = delay
+        self.delay_seconds = self._parse_delay(delay)
         # A ListProducts call slower than this proves the delay is live.
-        self.delay_active_min_s = 0.8 * float(delay[:-1])
+        self.delay_active_min_s = 0.8 * self.delay_seconds
 
         self._buggy_source = (_ASSETS / "missing_stale_cache_fallback_recommendation.py").read_text()
         self._fixed_source = (_ASSETS / "missing_stale_cache_fallback_recommendation_fixed.py").read_text()
@@ -142,9 +153,7 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
             self.wait_until_answering()
 
             # Fill the in-memory product cache while product-catalog is still healthy
-            warmup = self.probe_recommendations(self.WARMUP_CALLS, 0.5, 5.0)
-            if not all(r["ok"] for r in warmup):
-                raise RuntimeError(f"recommendation failed while warming its cache: {warmup}")
+            self._warm_cache()
 
             self._ensure_chaos_mesh()
             self.apply_delay(keep_alive=True)
@@ -152,7 +161,7 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
                 raise RuntimeError(f"the {self.delay} product-catalog delay never became active")
 
             # The incident must be visible before the agent starts
-            confirm = self.probe_recommendations(3, 1.0, 5.0)
+            confirm = self.probe_recommendations(3, 1.0, self.delay_seconds + 2)
             if any(r["ok"] for r in confirm):
                 raise RuntimeError(f"recommendation still answers under the delay: {confirm}")
         except Exception:
@@ -194,19 +203,19 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
             "mode": "all",
             "selector": {
                 "namespaces": [self.namespace],
-                "labelSelectors": {"app.kubernetes.io/name": self.PRODUCT_CATALOG},
+                "labelSelectors": {self.SELECTOR_LABEL: self.PRODUCT_CATALOG},
             },
             "direction": "to",
             "target": {
                 "mode": "all",
                 "selector": {
                     "namespaces": [self.namespace],
-                    "labelSelectors": {"app.kubernetes.io/name": self.RECOMMENDATION},
+                    "labelSelectors": {self.SELECTOR_LABEL: self.RECOMMENDATION},
                 },
             },
             "delay": {"latency": self.delay},
         }
-        metadata = {"name": self.CHAOS_NAME, "namespace": self.CHAOS_NAMESPACE}
+        metadata = {"name": self.CHAOS_NAME, "namespace": self.namespace}
 
         if keep_alive:
             manifest = {
@@ -233,22 +242,43 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
     def remove_delay(self) -> None:
         self._delete_chaos()
         if not self.wait_for_delay(active=False):
-            raise RuntimeError("The product-catalog delay is still active after removing it")
+            raise RuntimeError("product-catalog did not answer quickly after removing the delay")
 
-    def delay_active(self) -> bool:
+    def incident_running(self) -> bool:
+        out = self.kubectl.exec_command(
+            f"kubectl get schedules.chaos-mesh.org {self.CHAOS_NAME} -n {self.namespace} -o name --ignore-not-found"
+        )
+        return self.CHAOS_NAME in out
+
+    def measure_upstream(self, address: str = "") -> dict | None:
         """
-        True when a direct ListProducts call from the recommendation pod is as slow as the injected delay
+        Time one ListProducts call from the recommendation pod: {"addr", "s", "code"}, or None if exec failed.
+
+        An empty address uses the service's own PRODUCT_CATALOG_ADDR.
         """
+        timeout_s = 3 * self.delay_seconds + 5
         try:
-            out = self._exec_python(_UPSTREAM_SCRIPT, [], timeout=30)
-            return float(out.strip().splitlines()[-1]) >= self.delay_active_min_s
+            out = self._exec_python(_UPSTREAM_SCRIPT, [address, str(timeout_s)], timeout=timeout_s + 30)
+            return json.loads(out.strip().splitlines()[-1])
         except (RuntimeError, ValueError, IndexError):
-            return False
+            return None
+
+    def delay_active(self) -> bool | None:
+        """
+        True when a direct call to product-catalog is as slow as the injected delay, False when it is fast
+        and answers OK. None when that cannot be told (exec failed, or a fast error).
+        """
+        upstream = self.measure_upstream(self.UPSTREAM_ADDR)
+        if upstream is None:
+            return None
+        if upstream["s"] >= self.delay_active_min_s:
+            return True
+        return False if upstream["code"] == "OK" else None
 
     def wait_for_delay(self, active: bool, timeout_s: float = 90) -> bool:
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
-            if self.delay_active() == active:
+            if self.delay_active() is active:
                 return True
             time.sleep(3)
         return False
@@ -284,9 +314,12 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
             if last["ok"]:
                 return
             # Any application-level answer counts (the buggy code answers with an error under the delay).
-            # Only "no pod to exec into" and "nothing listening on localhost:8080" mean keep waiting.
+            # Only "no pod to exec into" and "nothing listening on the local port" mean keep waiting.
             no_pod = last["code"] in ("EXEC_FAILED", "NO_OUTPUT")
-            not_listening = last["code"] == "UNAVAILABLE" and "127.0.0.1" in last.get("error", "")
+            error = last.get("error") or ""
+            not_listening = last["code"] == "UNAVAILABLE" and any(
+                s in error for s in ("127.0.0.1", "::1", "Connection refused")
+            )
             if not (no_pod or not_listening):
                 return
             time.sleep(2)
@@ -319,7 +352,27 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
             raise ValueError(f"unexpected product id {product_id!r}")
         self._psql(f"DELETE FROM catalog.products WHERE id = '{product_id}'")
 
-    """ Helpers """
+    # Helpers
+
+    @classmethod
+    def _parse_delay(cls, delay: str) -> float:
+        if not re.fullmatch(r"\d+(\.\d+)?s", delay) or float(delay[:-1]) < cls.MIN_DELAY_S:
+            raise ValueError(f"delay must look like '3s' and be at least {cls.MIN_DELAY_S:g}s, got {delay!r}")
+        return float(delay[:-1])
+
+    def _warm_cache(self, timeout_s: float = 120) -> None:
+        """
+        Require WARMUP_CALLS successful answers in a row. product-catalog can still be restarting right after deploy.
+        """
+        deadline = time.monotonic() + timeout_s
+        streak, last = 0, None
+        while time.monotonic() < deadline:
+            last = self.probe_recommendations(1, 0, 5.0)[0]
+            streak = streak + 1 if last["ok"] else 0
+            if streak >= self.WARMUP_CALLS:
+                return
+            time.sleep(0.5 if last["ok"] else 3)
+        raise RuntimeError(f"recommendation failed while warming its cache: {last}")
 
     def _overlay(self, source: str) -> None:
         ApplicationFaultInjector(namespace=self.namespace).inject_source_file_override(
@@ -356,7 +409,7 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
         `kubectl exec deploy/recommendation` can land on a pod that is still terminating after a rollout.
         """
         pods = self.kubectl.core_v1_api.list_namespaced_pod(
-            self.namespace, label_selector=f"app.kubernetes.io/name={self.RECOMMENDATION}"
+            self.namespace, label_selector=f"{self.SELECTOR_LABEL}={self.RECOMMENDATION}"
         ).items
         live = [p for p in pods if p.metadata.deletion_timestamp is None and p.status.phase == "Running"]
         if not live:
@@ -378,9 +431,12 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
         return self.kubectl.exec_command_checked(command, timeout=60)
 
     def _ensure_chaos_mesh(self) -> None:
-        # Same installer SREGym's noise injection uses
-        # The chaos-mesh namespace survives between problems.
-        get_noise_manager()._ensure_chaos_mesh_installed()
+        # Same installer SREGym's noise injection uses. It waits for the controller and daemon rollouts
+        # and sets _chaos_mesh_ready only when both finished.
+        manager = get_noise_manager()
+        manager._ensure_chaos_mesh_installed()
+        if not manager._chaos_mesh_ready:
+            raise RuntimeError("Chaos Mesh is not installed or not ready")
         self.kubectl.exec_command_checked(
             "kubectl get crd networkchaos.chaos-mesh.org schedules.chaos-mesh.org", timeout=30
         )
@@ -390,13 +446,13 @@ class MissingStaleCacheFallbackAstronomyShop(Problem):
         Delete our Schedule and NetworkChaos, then wait until no child NetworkChaos of ours is left
         """
         self.kubectl.exec_command(
-            f"kubectl delete schedule,networkchaos {self.CHAOS_NAME} -n {self.CHAOS_NAMESPACE} "
-            "--ignore-not-found --wait=true"
+            f"kubectl delete {self.CHAOS_RESOURCES} {self.CHAOS_NAME} -n {self.namespace} "
+            "--ignore-not-found --wait=true --timeout=60s"
         )
         deadline = time.monotonic() + 60
 
         while time.monotonic() < deadline:
-            names = self.kubectl.exec_command(f"kubectl get networkchaos -n {self.CHAOS_NAMESPACE} -o name")
+            names = self.kubectl.exec_command(f"kubectl get networkchaos.chaos-mesh.org -n {self.namespace} -o name")
             if not any(f"/{self.CHAOS_NAME}" in line for line in names.splitlines()):
                 return
             time.sleep(2)
