@@ -179,6 +179,7 @@ class ProblemRegistry:
             "missing_service_hotel_reservation": lambda: MissingService(app_name="hotel_reservation", faulty_service="mongodb-rate"),
             "missing_service_social_network": lambda: MissingService(app_name="social_network", faulty_service="user-service"),
             "missing_stale_cache_fallback_astronomy_shop": MissingStaleCacheFallbackAstronomyShop,
+            "missing_stale_cache_fallback_long_delay_astronomy_shop": lambda: MissingStaleCacheFallbackAstronomyShop(delay="5s"),
             "namespace_memory_limit": NamespaceMemoryLimit,
             "nightly_rebalance_oom_hotel_reservation": lambda: NightlyRebalanceOOM(faulty_service="recommendation"),
             "node_clock_drift_hotel_reservation": NodeClockDriftHotelReservation,
