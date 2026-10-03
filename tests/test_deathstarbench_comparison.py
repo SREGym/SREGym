@@ -198,6 +198,8 @@ def test_only_the_problems_a_screen_separated_on_are_registered():
     problem cannot pass silently either.
     """
     registered = registered_problem_ids()
+    # Candidates awaiting a first screen are allowed to be registered: a problem
+    # cannot be screened unless the campaign runner can resolve it.
     missing = SCREENED_DISCRIMINATING - registered
     assert not missing, f"screened discriminating problems went unregistered: {sorted(missing)}"
 

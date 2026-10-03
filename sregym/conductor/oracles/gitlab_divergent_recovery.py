@@ -24,32 +24,39 @@ def identity_key(record):
     return (project, record["iid"])
 
 
-def divergence_report(shared, orphaned, post_promotion, issues):
+def divergence_report(shared, orphaned, post_promotion, issues, keys=None):
     """Account for every acknowledged write in the recovered history.
 
     ``orphaned`` writes are graded on content, not identity: their original IIDs
     now belong to post-promotion issues, so a correct recovery necessarily gives
     them new ones. ``post_promotion`` and ``shared`` writes are graded on both,
     because nothing legitimately moves them.
+
+    ``keys`` supplies ``(content, identity, label)`` accessors so a second
+    application with the same divergence shape but different column names can
+    reuse this accounting. It defaults to GitLab's, so existing callers are
+    unaffected -- the logic here grades one discriminating problem and is not
+    worth re-deriving per application.
     """
-    counts = Counter(content_key(row) for row in issues)
-    identities = {identity_key(row): row for row in issues}
+    content, identity, label = keys or (content_key, identity_key, lambda r: r["title"])
+    counts = Counter(content(row) for row in issues)
+    identities = {identity(row): row for row in issues}
 
     def displaced(receipts):
         out = []
         for receipt in receipts:
-            row = identities.get(identity_key(receipt))
-            if row is None or content_key(row) != content_key(receipt):
-                out.append({"project": identity_key(receipt)[0], "iid": receipt["iid"]})
+            row = identities.get(identity(receipt))
+            if row is None or content(row) != content(receipt):
+                out.append({"project": identity(receipt)[0], "iid": identity(receipt)[1]})
         return out
 
     return {
         "shared_history_displaced": displaced(shared),
         "post_promotion_displaced": displaced(post_promotion),
-        "post_promotion_duplicated": sum(max(0, counts[content_key(r)] - 1) for r in post_promotion),
-        "orphaned_missing": [r["title"] for r in orphaned if not counts[content_key(r)]],
-        "orphaned_duplicated": [r["title"] for r in orphaned if counts[content_key(r)] > 1],
-        "orphaned_recovered": sum(counts[content_key(r)] == 1 for r in orphaned),
+        "post_promotion_duplicated": sum(max(0, counts[content(r)] - 1) for r in post_promotion),
+        "orphaned_missing": [label(r) for r in orphaned if not counts[content(r)]],
+        "orphaned_duplicated": [label(r) for r in orphaned if counts[content(r)] > 1],
+        "orphaned_recovered": sum(counts[content(r)] == 1 for r in orphaned),
     }
 
 

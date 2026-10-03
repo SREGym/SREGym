@@ -483,6 +483,33 @@ family pulls from a public registry and recovers on its own.
 
 ### The full test suite deploys to the live cluster
 
+The `--ignore=tests/problems` below is not optional, and I ignored my own note
+about it: I ran the suite with six other `--ignore` flags and not that one while
+a screen was mid-validation, and an `astronomy-shop` namespace duly appeared
+beside the GitLab deploy. The screen survived, but the attempt running at the
+time is suspect and has to be re-run, which costs more than the test run saved.
+
+The reliable way to check for regressions *while* a screen runs is not to
+remember a flag list. Use throwaway containers with no cluster access, and diff
+the failure set against `origin/main` in a worktree:
+
+```bash
+git worktree add -f --detach /tmp/mainref origin/main
+run() { docker run --rm -v "$1":/src -w /src \
+  --entrypoint /opt/sregym/.venv/bin/python sregym-dind:postmortems \
+  -m pytest tests/ -q -p no:cacheprovider | grep -E '^(FAILED|ERROR)' | sort -u; }
+diff <(run "$PWD") <(run /tmp/mainref)
+```
+
+Nothing deploys without a cluster, and the host's pre-existing failures cancel
+out instead of having to be held in your head.
+
+One more: `pkill -f pytest` inside `docker exec` kills the exec itself, because
+its own command line contains the pattern. Split it (`"m pyt""est"`) or match
+something the killing command does not contain.
+
+
+
 `tests/problems/test_stale_hostaliases_dns_poisoning_astronomy_shop.py::test_lifecycle_against_a_live_cluster`
 is one of the pre-existing failures and it **deploys 28 astronomy-shop pods and
 abandons them on failure**. They then compete with any running validation. Use

@@ -36,7 +36,17 @@ from sregym.conductor.problems.feature_flag_latent_bug_hotel_reservation import 
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.gitea_regional_failover import GiteaRegionalFailover
+from sregym.conductor.problems.unannounced_families import (
+    GiteaDatabaseDeletionUnannounced,
+    GitLabDatabaseDeletionUnannounced,
+    MattermostCapacityCascadeUnannounced,
+)
 from sregym.conductor.problems.gitlab_notification_delayed_audit import GitLabNotificationDelayedAudit
+from sregym.conductor.problems.gitlab_notification_unannounced import (
+    GitLabNotificationUnannounced,
+    GitLabNotificationUnannouncedAmbiguity,
+)
 from sregym.conductor.problems.gitlab_notification_intermittent import GitLabNotificationIntermittent
 from sregym.conductor.problems.gitlab_regional_failover import GitLabRegionalFailover
 from sregym.conductor.problems.stripe_feature_config import StripeFeatureConfig
@@ -230,6 +240,30 @@ class ProblemRegistry:
             # generic task description, so registering them would add campaign cost
             # without adding discrimination. Re-register one when a screen gives a
             # reason to -- a harder tier, a weaker agent, or a new lever.
+            # Candidates under screen: each differs from a 3-of-3 family by one
+            # sentence of the application description and nothing else.
+            "gitea_database_deletion_unannounced_single": lambda: GiteaDatabaseDeletionUnannounced(
+                scale_tier="single"
+            ),
+            "gitlab_database_deletion_unannounced_single": lambda: GitLabDatabaseDeletionUnannounced(
+                scale_tier="single"
+            ),
+            "mattermost_capacity_cascade_unannounced_single": lambda: MattermostCapacityCascadeUnannounced(
+                scale_tier="single"
+            ),
+            # Candidate under screen: the GitHub-2018 divergence on a second
+            # application. If it also separates the agent, the difficulty is a
+            # property of the incident rather than of GitLab.
+            "gitea_regional_failover_single": lambda: GiteaRegionalFailover(scale_tier="single"),
+            # Candidates under screen: the mail subsystem exists but is not
+            # named in the description, so delivering it must be noticed rather
+            # than followed. Unregister whichever comes back 3 of 3.
+            "gitlab_notification_unannounced_replicated": lambda: GitLabNotificationUnannounced(
+                scale_tier="replicated"
+            ),
+            "gitlab_notification_unannounced_ambiguity_replicated": lambda: GitLabNotificationUnannouncedAmbiguity(
+                scale_tier="replicated"
+            ),
             "gitlab_notification_intermittent_replicated": lambda: GitLabNotificationIntermittent(scale_tier="replicated"),
             "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAudit(scale_tier="replicated"),
             "gitlab_regional_failover_single": lambda: GitLabRegionalFailover(scale_tier="single"),

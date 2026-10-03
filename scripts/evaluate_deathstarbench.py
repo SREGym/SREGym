@@ -78,10 +78,21 @@ def problem_id(app, tier, incident="wrong_service_selector"):
         "notification_ambiguity",
         "notification_intermittent",
         "notification_delayed_audit",
+        "notification_unannounced",
+        "notification_unannounced_ambiguity",
     ):
         if app != "gitlab_ce" or tier != "replicated":
             raise ValueError("Notification recovery supports GitLab CE replicated only")
         return f"gitlab_{incident}_replicated"
+    if incident == "database_deletion_unannounced":
+        if app not in ("gitea", "gitlab_ce") or tier not in SUPPORTED_TIERS[app]:
+            raise ValueError("Unannounced database deletion supports Gitea and GitLab CE single and replicated")
+        prefix = "gitlab" if app == "gitlab_ce" else "gitea"
+        return f"{prefix}_database_deletion_unannounced_{tier}"
+    if incident == "capacity_cascade_unannounced":
+        if app != "mattermost" or tier not in SUPPORTED_TIERS[app]:
+            raise ValueError("Unannounced capacity cascade supports Mattermost single and replicated tiers")
+        return f"mattermost_capacity_cascade_unannounced_{tier}"
     if incident == "database_deletion":
         if app not in ("gitea", "gitlab_ce") or tier not in SUPPORTED_TIERS[app]:
             raise ValueError("Database deletion supports Gitea and GitLab CE single and replicated tiers")
@@ -96,9 +107,10 @@ def problem_id(app, tier, incident="wrong_service_selector"):
             raise ValueError("Capacity cascade supports Mattermost single and replicated tiers")
         return f"mattermost_capacity_cascade_{tier}"
     if incident == "regional_failover":
-        if app != "gitlab_ce" or tier not in SUPPORTED_TIERS[app]:
-            raise ValueError("Regional failover supports GitLab CE single and replicated tiers")
-        return f"gitlab_regional_failover_{tier}"
+        if app not in ("gitea", "gitlab_ce") or tier not in SUPPORTED_TIERS[app]:
+            raise ValueError("Regional failover supports Gitea and GitLab CE single and replicated tiers")
+        prefix = "gitlab" if app == "gitlab_ce" else "gitea"
+        return f"{prefix}_regional_failover_{tier}"
     if incident == "feature_config":
         if app != "stripe_marathon" or tier not in SUPPORTED_TIERS[app]:
             raise ValueError("Feature configuration supports Stripe single and replicated tiers")
@@ -149,11 +161,15 @@ def main():
         choices=(
             "wrong_service_selector",
             "database_deletion",
+            "database_deletion_unannounced",
+            "capacity_cascade_unannounced",
             "feature_config",
             "notification_recovery",
             "notification_ambiguity",
             "notification_intermittent",
             "notification_delayed_audit",
+            "notification_unannounced",
+            "notification_unannounced_ambiguity",
             "regional_failover",
             "capacity_cascade",
             "coordination_collapse",

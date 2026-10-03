@@ -13,8 +13,12 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class GiteaDatabaseDeletion(Problem):
+    #: Overridden by variants that change only the application, matching the
+    #: convention the other families in this group already use.
+    application_class = GiteaRecovery
+
     def __init__(self, scale_tier="replicated"):
-        super().__init__(GiteaRecovery(tier=scale_tier))
+        super().__init__(self.application_class(tier=scale_tier))
         self.kubectl = self.app.kubectl
         self.faulty_service = "gitea"
         self.expected_service_port = 3000

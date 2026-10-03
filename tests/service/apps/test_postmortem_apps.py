@@ -363,3 +363,50 @@ def test_calibrated_policy_still_reads_a_saturated_gateway_as_idle():
     assert decide(3, 44.0, rules, "cpu")[0] == 3
     assert decide(3, 2.0, rules, "cpu")[0] == 2
     assert "healthy gateway CPU: 44.0%" in written["capacity-policy.txt"]
+
+
+def test_unannounced_variants_remove_the_mail_clause_and_nothing_else():
+    """The only difference from the announced family is the missing sentence.
+
+    If the mixin silently stopped matching, the problem would look like a
+    disclosure experiment while being identical to its parent, and the screen
+    would measure nothing. The app raises in that case; this pins the behaviour
+    and the exact text.
+    """
+    from sregym.service.apps.gitlab_notification_ambiguity import GitLabNotificationAmbiguity
+    from sregym.service.apps.gitlab_notification_recovery import GitLabNotificationRecovery
+    from sregym.service.apps.gitlab_notification_unannounced import (
+        ANNOUNCEMENT,
+        GitLabNotificationUnannounced,
+        GitLabNotificationUnannouncedAmbiguity,
+    )
+
+    for announced, unannounced in (
+        (GitLabNotificationRecovery, GitLabNotificationUnannounced),
+        (GitLabNotificationAmbiguity, GitLabNotificationUnannouncedAmbiguity),
+    ):
+        loud = announced("replicated").get_app_json()["Desc"]
+        quiet = unannounced("replicated").get_app_json()["Desc"]
+        assert ANNOUNCEMENT in loud
+        assert ANNOUNCEMENT not in quiet
+        assert quiet == loud.replace(ANNOUNCEMENT, "")
+        # The subsystem itself must still be there: this withholds narration,
+        # not capability. An unsolvable task is not a harder task.
+        documents = unannounced("replicated").render()
+        names = [d["metadata"]["name"] for d in documents]
+        assert "notification-mailbox" in names
+        assert names.count("notification-mailbox") == 3  # PVC, Service, Deployment
+
+
+def test_unannounced_mixin_refuses_to_be_a_silent_no_op(monkeypatch):
+    """If the parent stops announcing, this must break loudly, not quietly pass."""
+    from sregym.service.apps.gitlab_notification_recovery import GitLabNotificationRecovery
+    from sregym.service.apps.gitlab_notification_unannounced import GitLabNotificationUnannounced
+
+    monkeypatch.setattr(
+        GitLabNotificationRecovery,
+        "get_app_json",
+        lambda self: {"Name": "GitLab CE prototype", "Desc": "a description with no mail clause"},
+    )
+    with pytest.raises(RuntimeError, match="no longer removes anything"):
+        GitLabNotificationUnannounced("replicated").get_app_json()
