@@ -22,9 +22,8 @@ class TrainTicketF17(Problem):
             component=f"deployment/{self.faulty_service}",
             namespace=self.namespace,
             description=(
-                "The enabled tt-feat-17 feature flag makes the voucher service execute SELECT SLEEP(10) "
-                "before handling voucher requests. This simulates an expensive database query, adds a ten-second "
-                "delay to each request, and causes request timeouts under workload."
+                "The voucher service executes malformed nested SQL SELECT logic, which causes query execution failures "
+                "in the database layer and breaks voucher-related request handling."
             ),
         )
 
