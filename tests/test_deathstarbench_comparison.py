@@ -150,3 +150,82 @@ def test_every_incident_the_cli_offers_can_be_routed():
                 except ValueError:
                     continue
         assert routed, f"{incident} is selectable but routes nowhere"
+
+
+#: Problems from this work that a screen showed to separate a frontier agent,
+#: and are therefore registered. Each entry is the exact id that was screened.
+SCREENED_DISCRIMINATING = {
+    "gitlab_notification_delayed_audit_replicated",
+    "gitlab_notification_intermittent_replicated",
+    "gitlab_regional_failover_single",
+    "stripe_feature_config_single",
+}
+
+#: Built, tested, and deliberately NOT registered: every one was solved 3 of 3
+#: under a generic task description, so registering them spends campaign time
+#: without discriminating. The modules must keep importing and constructing --
+#: four of these are superclasses of the registered notification problems.
+BUILT_BUT_GATED = {
+    "sregym.conductor.problems.gitea_database_deletion": "GiteaDatabaseDeletion",
+    "sregym.conductor.problems.gitlab_database_deletion": "GitLabDatabaseDeletion",
+    "sregym.conductor.problems.gitlab_notification_recovery": "GitLabNotificationRecovery",
+    "sregym.conductor.problems.gitlab_notification_ambiguity": "GitLabNotificationAmbiguity",
+    "sregym.conductor.problems.mattermost_capacity_cascade": "MattermostCapacityCascade",
+    "sregym.conductor.problems.coordination_collapse": "CoordinationCollapse",
+}
+
+
+def registered_problem_ids():
+    import ast
+
+    source = pathlib.Path("sregym/conductor/problems/registry.py").read_text()
+    # Read the ids statically: constructing the registry needs a live cluster.
+    return {
+        node.value
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+
+def test_only_the_problems_a_screen_separated_on_are_registered():
+    """The registry is gated on evidence, not on what happens to be built.
+
+    Every family in this branch is a working problem with a passing lifecycle,
+    but six of them were solved 3 of 3 by Codex `gpt-6-astra` under a generic
+    task description. Registering those spends campaign budget to re-learn that
+    they are saturated. The gate is recorded here so that re-registering one is
+    a deliberate edit with a reason attached, and so that deleting a registered
+    problem cannot pass silently either.
+    """
+    registered = registered_problem_ids()
+    missing = SCREENED_DISCRIMINATING - registered
+    assert not missing, f"screened discriminating problems went unregistered: {sorted(missing)}"
+
+    saturated = {
+        "gitea_database_deletion_single",
+        "gitlab_database_deletion_single",
+        "gitlab_notification_recovery_replicated",
+        "gitlab_notification_ambiguity_replicated",
+        "mattermost_capacity_cascade_single",
+        "coordination_collapse_single",
+    }
+    regressed = saturated & registered
+    assert not regressed, (
+        f"these were solved 3 of 3 and should stay gated until a screen says otherwise: {sorted(regressed)}"
+    )
+
+
+@pytest.mark.parametrize(("module_name", "class_name"), sorted(BUILT_BUT_GATED.items()))
+def test_gated_families_still_import_and_are_real_problems(module_name, class_name):
+    """Gating must not rot the code: these are superclasses of what is registered."""
+    import importlib
+
+    from sregym.conductor.problems.base import Problem
+
+    problem = getattr(importlib.import_module(module_name), class_name)
+    assert issubclass(problem, Problem)
+    # The lifecycle contract, rather than `application_class`: some families
+    # declare that attribute and some build their application in __init__.
+    for method in ("inject_fault", "recover_fault"):
+        assert callable(getattr(problem, method)), f"{class_name} has no {method}"
+    assert "scale_tier" in problem.__init__.__code__.co_varnames

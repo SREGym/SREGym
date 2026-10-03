@@ -36,16 +36,9 @@ from sregym.conductor.problems.feature_flag_latent_bug_hotel_reservation import 
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
-from sregym.conductor.problems.gitea_database_deletion import GiteaDatabaseDeletion
-from sregym.conductor.problems.gitlab_database_deletion import GitLabDatabaseDeletion
-from sregym.conductor.problems.gitlab_notification_ambiguity import GitLabNotificationAmbiguity
 from sregym.conductor.problems.gitlab_notification_delayed_audit import GitLabNotificationDelayedAudit
-from sregym.conductor.problems.gitlab_notification_expanded import GitLabNotificationExpanded
 from sregym.conductor.problems.gitlab_notification_intermittent import GitLabNotificationIntermittent
-from sregym.conductor.problems.gitlab_notification_recovery import GitLabNotificationRecovery
 from sregym.conductor.problems.gitlab_regional_failover import GitLabRegionalFailover
-from sregym.conductor.problems.coordination_collapse import CoordinationCollapse
-from sregym.conductor.problems.mattermost_capacity_cascade import MattermostCapacityCascade
 from sregym.conductor.problems.stripe_feature_config import StripeFeatureConfig
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
@@ -231,37 +224,16 @@ class ProblemRegistry:
             "wrong_service_selector_astronomy_shop": lambda: WrongServiceSelector(app_name="astronomy_shop", faulty_service="frontend"),
             "wrong_service_selector_hotel_reservation": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend"),
             "wrong_service_selector_social_network": lambda: WrongServiceSelector(app_name="social_network", faulty_service="user-service"),
-            "wrong_service_selector_hotel_reservation_single": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend", scale_tier="single"),
-            "wrong_service_selector_hotel_reservation_replicated": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend", scale_tier="replicated"),
-            "wrong_service_selector_hotel_reservation_expanded": lambda: WrongServiceSelector(app_name="hotel_reservation", faulty_service="frontend", scale_tier="expanded"),
-            "wrong_service_selector_social_network_single": lambda: WrongServiceSelector(app_name="social_network", faulty_service="user-service", scale_tier="single"),
-            "wrong_service_selector_social_network_replicated": lambda: WrongServiceSelector(app_name="social_network", faulty_service="user-service", scale_tier="replicated"),
-            "wrong_service_selector_social_network_expanded": lambda: WrongServiceSelector(app_name="social_network", faulty_service="user-service", scale_tier="expanded"),
-            "wrong_service_selector_gitea_single": lambda: WrongServiceSelector(app_name="gitea", faulty_service="gitea", scale_tier="single"),
-            "wrong_service_selector_gitea_replicated": lambda: WrongServiceSelector(app_name="gitea", faulty_service="gitea", scale_tier="replicated"),
-            "gitea_database_deletion_single": lambda: GiteaDatabaseDeletion(scale_tier="single"),
-            "gitea_database_deletion_replicated": lambda: GiteaDatabaseDeletion(scale_tier="replicated"),
-            "gitlab_database_deletion_single": lambda: GitLabDatabaseDeletion(scale_tier="single"),
-            "gitlab_database_deletion_replicated": lambda: GitLabDatabaseDeletion(scale_tier="replicated"),
-            "gitlab_notification_recovery_replicated": lambda: GitLabNotificationRecovery(scale_tier="replicated"),
-            "gitlab_notification_ambiguity_replicated": lambda: GitLabNotificationAmbiguity(scale_tier="replicated"),
+            # Only the problems a screen showed to separate a frontier agent are
+            # registered. The remaining families in this branch are built and
+            # tested but deliberately unregistered: each was solved 3 of 3 under a
+            # generic task description, so registering them would add campaign cost
+            # without adding discrimination. Re-register one when a screen gives a
+            # reason to -- a harder tier, a weaker agent, or a new lever.
             "gitlab_notification_intermittent_replicated": lambda: GitLabNotificationIntermittent(scale_tier="replicated"),
             "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAudit(scale_tier="replicated"),
-            "gitlab_notification_delayed_audit_expanded": GitLabNotificationExpanded,
             "gitlab_regional_failover_single": lambda: GitLabRegionalFailover(scale_tier="single"),
-            "gitlab_regional_failover_replicated": lambda: GitLabRegionalFailover(scale_tier="replicated"),
-            "mattermost_capacity_cascade_single": lambda: MattermostCapacityCascade(scale_tier="single"),
-            "mattermost_capacity_cascade_replicated": lambda: MattermostCapacityCascade(scale_tier="replicated"),
-            "coordination_collapse_single": lambda: CoordinationCollapse(scale_tier="single"),
-            "coordination_collapse_replicated": lambda: CoordinationCollapse(scale_tier="replicated"),
             "stripe_feature_config_single": lambda: StripeFeatureConfig(scale_tier="single"),
-            "stripe_feature_config_replicated": lambda: StripeFeatureConfig(scale_tier="replicated"),
-            "wrong_service_selector_gitlab_ce_single": lambda: WrongServiceSelector(app_name="gitlab_ce", faulty_service="gitlab-ce", scale_tier="single"),
-            "wrong_service_selector_gitlab_ce_replicated": lambda: WrongServiceSelector(app_name="gitlab_ce", faulty_service="gitlab-ce", scale_tier="replicated"),
-            "wrong_service_selector_mattermost_single": lambda: WrongServiceSelector(app_name="mattermost", faulty_service="mattermost", scale_tier="single"),
-            "wrong_service_selector_mattermost_replicated": lambda: WrongServiceSelector(app_name="mattermost", faulty_service="mattermost", scale_tier="replicated"),
-            "wrong_service_selector_stripe_marathon_single": lambda: WrongServiceSelector(app_name="stripe_marathon", faulty_service="stripe-marathon", scale_tier="single"),
-            "wrong_service_selector_stripe_marathon_replicated": lambda: WrongServiceSelector(app_name="stripe_marathon", faulty_service="stripe-marathon", scale_tier="replicated"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,
             "astronomy_shop_ad_service_high_cpu": AdServiceHighCpu,

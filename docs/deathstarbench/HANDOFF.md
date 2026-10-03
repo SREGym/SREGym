@@ -30,6 +30,15 @@ coordination_collapse_single                   ███   3 of 3   median 437s 
 `█` solved · `░` not solved · `×` invalid, excluded from the count. Reproduce
 with `python scripts/screen_report.py results/clean-screen`.
 
+**Only the four separating problems are registered.** The other six families are
+built, tested and deliberately absent from `registry.py`: each was solved 3 of 3,
+so registering them spends campaign budget to re-learn that they are saturated.
+Four of the six are superclasses of registered problems, so the code is live
+either way. `tests/test_deathstarbench_comparison.py` pins the gate in both
+directions -- a screened problem cannot silently fall out, and a saturated one
+cannot silently creep back in. Re-register one when there is a reason: a harder
+tier, a weaker agent, or a new lever.
+
 **Four problems separate a frontier agent, and they share one property.** Each
 has a plausible wrong action that succeeds silently; the six that do not are
 solved every time, only slower. The shapes are a conflict (failover), a race
