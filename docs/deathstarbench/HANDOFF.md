@@ -483,6 +483,25 @@ immediately **before** a GitLab-family deploy as well, and watch the figure
 during the unpack rather than only between families. Pruning a node that is not
 the one pulling is safe while a pull is in flight.
 
+### Never delete the `observe` namespace by hand
+
+The conductor creates and owns it. A deploy that starts while `observe` is still
+Terminating dies at the deploy stage about 37 seconds in:
+
+```
+RuntimeError: Helm install failed for release 'prometheus' in namespace 'observe'
+Error: INSTALLATION FAILED: metadata.managedFields...
+```
+
+That reads exactly like a newly written problem being broken, and it is not --
+it cost me a screen and a diagnosis. Between runs delete only the application
+namespaces (`gitea`, `gitlab-ce`, `mattermost`, `stripe-marathon`). If `observe`
+must be cleared, wait for it to actually disappear first:
+
+```bash
+until [ -z "$(kubectl get ns --no-headers | awk '$2=="Terminating"')" ]; do sleep 10; done
+```
+
 ### Pruning images breaks the one app that is built locally
 
 `crictl rmi --prune` on the KIND nodes is the only effective way to reclaim the
