@@ -33,7 +33,9 @@ class DNSResolutionMitigationOracle(Oracle):
     def _find_service_and_deployment(self, services):
         faulty_service = self.problem.faulty_service
         if faulty_service is not None:
-            service = next((svc for svc in services if svc.metadata.name == faulty_service), None)
+            # Ports to apps whose Service is not named after its Deployment set ``service_name``.
+            service_name = getattr(self.problem, "service_name", None) or faulty_service
+            service = next((svc for svc in services if svc.metadata.name == service_name), None)
             if service is None:
                 return None, None
             return service, self.problem.kubectl.get_deployment(faulty_service, self.problem.namespace)

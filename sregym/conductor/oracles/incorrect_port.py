@@ -58,6 +58,21 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
         )
         return any(subset.addresses for subset in endpoints.subsets or [])
 
+    def _probe_command(self, address: str) -> dict:
+        """Image and arguments that call the dependency at ``address``.
+
+        Ports whose dependency is not the original gRPC service set
+        ``tcp_dependency_probe`` on the problem and only require the configured
+        address to accept connections.
+        """
+        if getattr(self.problem, "tcp_dependency_probe", False):
+            host, _, port = address.rpartition(":")
+            return {"image": "busybox:1.36", "command": ["sh", "-c", f"nc -z -w 10 '{host}' {port}"]}
+        return {
+            "image": self.probe_image,
+            "args": ["-plaintext", "-max-time", "10", "-d", "{}", address, self.probe_rpc],
+        }
+
     def _run_dependency_probe(self, deployment, address: str) -> bool:
         namespace = self.problem.namespace
         core_v1 = self.problem.kubectl.core_v1_api
@@ -85,17 +100,8 @@ class IncorrectPortAssignmentMitigationOracle(Oracle):
                 containers=[
                     client.V1Container(
                         name="connectivity-check",
-                        image=self.probe_image,
+                        **self._probe_command(address),
                         image_pull_policy="IfNotPresent",
-                        args=[
-                            "-plaintext",
-                            "-max-time",
-                            "10",
-                            "-d",
-                            "{}",
-                            address,
-                            self.probe_rpc,
-                        ],
                         resources=client.V1ResourceRequirements(
                             requests={"cpu": "5m", "memory": "16Mi"},
                             limits={"cpu": "100m", "memory": "64Mi"},
