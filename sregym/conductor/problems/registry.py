@@ -36,6 +36,7 @@ from sregym.conductor.problems.feature_flag_latent_bug_hotel_reservation import 
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.gitea_compound_loss import GiteaCompoundLoss
 from sregym.conductor.problems.gitea_regional_failover import GiteaRegionalFailover
 from sregym.conductor.problems.unannounced_families import (
     GiteaDatabaseDeletionUnannounced,
@@ -240,6 +241,9 @@ class ProblemRegistry:
             # generic task description, so registering them would add campaign cost
             # without adding discrimination. Re-register one when a screen gives a
             # reason to -- a harder tier, a weaker agent, or a new lever.
+            # Candidate under screen: two faults in one incident, one loud and
+            # one silent, built by mechanism rather than by withholding text.
+            "gitea_compound_loss_single": lambda: GiteaCompoundLoss(scale_tier="single"),
             # Candidates under screen: each differs from a 3-of-3 family by one
             # sentence of the application description and nothing else.
             "gitea_database_deletion_unannounced_single": lambda: GiteaDatabaseDeletionUnannounced(

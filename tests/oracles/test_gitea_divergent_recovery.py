@@ -96,3 +96,47 @@ def test_every_named_reason_is_classified_as_an_agent_error():
         "acknowledged_git_data_changed",
     ):
         assert classes[reason] is FailureClass.AGENT_ERROR
+
+
+def test_compound_loss_declares_a_silent_second_fault():
+    """The quiet half must be graded, or the problem is just the loud half.
+
+    `acknowledged_git_data_changed` already exists on the deletion oracle, so a
+    recovery that stops at the database is a named failure. This pins that the
+    variant actually reaches it rather than inheriting a grader that ignores git.
+    """
+    from sregym.conductor.oracles.failure import FailureClass
+    from sregym.conductor.oracles.gitea_database_recovery import GiteaDatabaseRecoveryOracle
+    from sregym.conductor.problems.gitea_compound_loss import GiteaCompoundLoss
+
+    classes = GiteaDatabaseRecoveryOracle._failure_classes()
+    assert classes["acknowledged_git_data_changed"] is FailureClass.AGENT_ERROR
+    assert issubclass(GiteaCompoundLoss.application_class.__mro__[0], object)
+    # The recovery path has to exist, or a hard problem is an impossible one.
+    for method in ("backup_git_repositories", "restore_git_repositories", "discard_repository_storage"):
+        assert callable(getattr(GiteaCompoundLoss.application_class, method))
+
+
+def test_a_missing_repository_is_graded_rather_than_raising():
+    """Storage that is gone is a recovery failure, not an environment error.
+
+    `git_inventory` used to propagate the `ls-tree` failure, which would have
+    surfaced the exact outcome this problem grades as an invalid attempt --
+    discarding the evidence instead of recording it.
+    """
+    import subprocess
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sregym.service.apps.gitea_recovery import GiteaRecovery
+
+    # Called unbound against a stub: constructing the application needs a
+    # kubeconfig, and this behaviour is worth testing without a cluster.
+    stub = SimpleNamespace(command=Mock(side_effect=subprocess.CalledProcessError(128, ["git", "ls-tree"])))
+    inventory = GiteaRecovery.git_inventory(stub)
+    assert inventory, "every fixture repository should still be reported"
+    assert all(files == {} for files in inventory.values())
+
+    # And a healthy listing is still parsed into path -> mode/type/sha.
+    ok = SimpleNamespace(command=Mock(return_value="100644 blob abc123\tREADME.md"))
+    assert GiteaRecovery.git_inventory(ok)["alice/hello-zoo"] == {"README.md": "100644 blob abc123"}

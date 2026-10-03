@@ -84,6 +84,10 @@ def problem_id(app, tier, incident="wrong_service_selector"):
         if app != "gitlab_ce" or tier != "replicated":
             raise ValueError("Notification recovery supports GitLab CE replicated only")
         return f"gitlab_{incident}_replicated"
+    if incident == "compound_loss":
+        if app != "gitea" or tier not in SUPPORTED_TIERS[app]:
+            raise ValueError("Compound loss supports Gitea single and replicated tiers")
+        return f"gitea_compound_loss_{tier}"
     if incident == "database_deletion_unannounced":
         if app not in ("gitea", "gitlab_ce") or tier not in SUPPORTED_TIERS[app]:
             raise ValueError("Unannounced database deletion supports Gitea and GitLab CE single and replicated")
@@ -162,6 +166,7 @@ def main():
             "wrong_service_selector",
             "database_deletion",
             "database_deletion_unannounced",
+            "compound_loss",
             "capacity_cascade_unannounced",
             "feature_config",
             "notification_recovery",

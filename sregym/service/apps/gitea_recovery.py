@@ -1,6 +1,7 @@
 """Gitea's database-loss environment with durable, independently stored archives."""
 
 import json
+import subprocess
 from pathlib import Path
 
 from sregym.service.apps.gitea import FIXTURES, POSTGRES_IMAGE, Gitea
@@ -123,21 +124,65 @@ class GiteaRecovery(Gitea):
         result = {}
         for repository in json.loads((FIXTURES / "import-data.json").read_text())["repositories"]:
             name = repository["owner"] + "/" + repository["name"]
-            listing = self.command(
-                "exec",
-                "deployment/gitea",
-                "--",
-                "su-exec",
-                "git",
-                "git",
-                "--git-dir",
-                f"/data/git/repositories/{name}.git",
-                "ls-tree",
-                "-r",
-                "HEAD",
-            )
+            try:
+                listing = self.command(
+                    "exec",
+                    "deployment/gitea",
+                    "--",
+                    "su-exec",
+                    "git",
+                    "git",
+                    "--git-dir",
+                    f"/data/git/repositories/{name}.git",
+                    "ls-tree",
+                    "-r",
+                    "HEAD",
+                )
+            except subprocess.CalledProcessError:
+                # A repository whose storage is gone is missing git data, which is
+                # a graded outcome. Raising here instead would surface a real
+                # recovery failure as an environment error and void the attempt.
+                result[name] = {}
+                continue
             result[name] = {line.split("\t", 1)[1]: line.split("\t", 1)[0] for line in listing.splitlines()}
         return result
+
+    #: A local snapshot of the repository storage, on the same volume it protects.
+    GIT_BACKUP = "/data/backups/repositories.tar.gz"
+
+    def backup_git_repositories(self):
+        self.command(
+            "exec",
+            "deployment/gitea",
+            "--",
+            "sh",
+            "-c",
+            f"mkdir -p $(dirname {self.GIT_BACKUP}) && tar czf {self.GIT_BACKUP} -C /data/git repositories",
+            timeout=300,
+        )
+
+    def restore_git_repositories(self):
+        self.command(
+            "exec",
+            "deployment/gitea",
+            "--",
+            "sh",
+            "-c",
+            f"tar xzf {self.GIT_BACKUP} -C /data/git && chown -R git:git /data/git/repositories",
+            timeout=300,
+        )
+
+    def discard_repository_storage(self, repository):
+        """Remove one repository's git storage, leaving the database intact."""
+        self.command(
+            "exec",
+            "deployment/gitea",
+            "--",
+            "sh",
+            "-c",
+            f"rm -rf /data/git/repositories/{repository}.git",
+            timeout=120,
+        )
 
     def pause_application(self):
         self.command("scale", "deployment/gitea", "--replicas=0")
