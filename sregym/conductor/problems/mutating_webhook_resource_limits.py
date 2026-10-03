@@ -687,10 +687,10 @@ spec:
 
         time.sleep(8)
 
-        pods = self.core_api.list_namespaced_pod(
-            namespace=self.namespace,
-            label_selector=f"service={self.faulty_service}",
-        )
+        # The Deployment's own selector (service=<name> on Social Network) finds its pods on every app.
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        selector = ",".join(f"{key}={value}" for key, value in deployment.spec.selector.match_labels.items())
+        pods = self.core_api.list_namespaced_pod(namespace=self.namespace, label_selector=selector)
         if not pods.items:
             raise RuntimeError(f"No pods found for service '{self.faulty_service}' in namespace '{self.namespace}'")
 

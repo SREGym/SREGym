@@ -25,6 +25,9 @@ class SecretRotationStaleEnvMitigation(Oracle):
     frontend_service = "frontend-proxy"
     product_path = "/api/products"
     expected_product_id = "OLJCESPC7Z"
+    # Ports whose app-level health is judged elsewhere (e.g. by a load
+    # generator oracle) turn the Astronomy Shop product probe off.
+    run_product_probe = True
 
     def __init__(self, problem):
         """Capture problem constants needed to evaluate mitigation."""
@@ -33,6 +36,21 @@ class SecretRotationStaleEnvMitigation(Oracle):
         self.new_conn = problem.new_conn
         self.old_password = problem.old_password
         self.new_password = problem.new_password
+
+    # Ports to apps whose names differ set these attributes on the problem; the
+    # original problem uses ``faulty_service`` for the Deployment, its
+    # container and its Service, and runs psql in ``deploy/<backend_service>``.
+    @property
+    def _container_name(self) -> str:
+        return getattr(self.problem, "container_name", None) or self.problem.faulty_service
+
+    @property
+    def _service_name(self) -> str:
+        return getattr(self.problem, "service_name", None) or self.problem.faulty_service
+
+    @property
+    def _postgres_exec_target(self) -> str:
+        return getattr(self.problem, "postgres_exec_target", None) or f"deploy/{self.problem.backend_service}"
 
     def _run(self, command: str) -> str:
         """Helper to run a kubectl command for the mitigation oracle."""
@@ -66,7 +84,7 @@ class SecretRotationStaleEnvMitigation(Oracle):
         """Return whether product-catalog sources DB_CONNECTION_STRING from the expected Secret."""
         containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
         for container in containers:
-            if container.get("name") != self.problem.faulty_service:
+            if container.get("name") != self._container_name:
                 continue
             for env in container.get("env", []):
                 if env.get("name") != self.problem.secret_key:
@@ -82,7 +100,7 @@ class SecretRotationStaleEnvMitigation(Oracle):
         """Resolve the desired product-catalog connection string from its pod template."""
         containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
         for container in containers:
-            if container.get("name") != self.problem.faulty_service:
+            if container.get("name") != self._container_name:
                 continue
             for env in container.get("env", []):
                 if env.get("name") != self.problem.secret_key:
@@ -109,7 +127,7 @@ class SecretRotationStaleEnvMitigation(Oracle):
 
     def _ready_target_pod_uids(self, deployment) -> tuple[bool, set[str]]:
         namespace = self.problem.namespace
-        service_name = self.problem.faulty_service
+        service_name = self._service_name
         selector = deployment.spec.selector.match_labels or {}
         if not selector:
             print(f"[FAIL] Deployment '{service_name}' has no matchLabels selector")
@@ -157,8 +175,7 @@ class SecretRotationStaleEnvMitigation(Oracle):
             '*) printf "%s\\n" "$output" >&2; exit "$status";; esac; fi'
         )
         command = (
-            f"kubectl exec -n {self.problem.namespace} deploy/{self.problem.backend_service} -- "
-            f"sh -lc {shlex.quote(script)}"
+            f"kubectl exec -n {self.problem.namespace} {self._postgres_exec_target} -- sh -lc {shlex.quote(script)}"
         )
         for attempt in range(self.problem._POSTGRES_PASSWORD_CHECK_ATTEMPTS):
             output = self._run(command)
@@ -288,13 +305,15 @@ class SecretRotationStaleEnvMitigation(Oracle):
         desired = self._desired_replicas(deployment)
         if desired < 1:
             return self._reject(
-                results, "required_deployment_scaled_to_zero", f"product-catalog is scaled to {desired}"
+                results, "required_deployment_scaled_to_zero", f"{self.problem.faulty_service} is scaled to {desired}"
             )
 
         deployment = self._wait_for_current_rollout(deployment)
         if deployment is None:
             return self._reject(
-                results, "required_deployment_not_rolled_out", "product-catalog did not complete its current rollout"
+                results,
+                "required_deployment_not_rolled_out",
+                f"{self.problem.faulty_service} did not complete its current rollout",
             )
         results["rollout_complete"] = True
         results["pods_ready"] = True
@@ -304,7 +323,9 @@ class SecretRotationStaleEnvMitigation(Oracle):
         results["current_pod_uids"] = sorted(current_pod_uids)
         if not endpoint_ready:
             return self._reject(
-                results, "no_ready_endpoints", "product-catalog has no ready endpoint from its Deployment"
+                results,
+                "no_ready_endpoints",
+                f"{self.problem.faulty_service} has no ready endpoint from its Deployment",
             )
 
         stale_pod_uid = self._stale_pod_uid(deployment_json)
@@ -313,7 +334,7 @@ class SecretRotationStaleEnvMitigation(Oracle):
             return self._reject(
                 results,
                 "stale_pod_still_serving",
-                "the product-catalog pod from before credential rotation is still serving",
+                f"the {self.problem.faulty_service} pod from before credential rotation is still serving",
                 pod_uid=stale_pod_uid,
             )
 
@@ -330,7 +351,7 @@ class SecretRotationStaleEnvMitigation(Oracle):
             return self._reject(
                 results,
                 "deployment_not_using_rotated_secret",
-                "product-catalog is not configured with the required rotated connection string",
+                f"{self.problem.faulty_service} is not configured with the required rotated connection string",
             )
 
         results["postgres_accepts_old_password"] = self._postgres_accepts_password(self.old_password)
@@ -355,14 +376,17 @@ class SecretRotationStaleEnvMitigation(Oracle):
             return self._reject(
                 results,
                 "init_missing_rotated_password",
-                "postgresql-init does not declare the required rotated password",
+                f"{self.problem.postgresql_init_configmap} does not declare the required rotated password",
             )
 
-        results["product_probe_succeeded"] = self._run_product_probe()
-        if not results["product_probe_succeeded"]:
-            return self._reject(
-                results, "product_probe_failed", "a fresh /api/products request did not return catalog data"
-            )
+        if self.run_product_probe:
+            results["product_probe_succeeded"] = self._run_product_probe()
+            if not results["product_probe_succeeded"]:
+                return self._reject(
+                    results, "product_probe_failed", "a fresh /api/products request did not return catalog data"
+                )
+        else:
+            results["product_probe_succeeded"] = None
 
         results["success"] = True
         results["message"] = "required credential rotation is consistent and product queries succeed"

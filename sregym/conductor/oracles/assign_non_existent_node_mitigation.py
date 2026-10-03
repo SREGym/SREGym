@@ -23,12 +23,15 @@ class AssignNonExistentNodeMitigationOracle(Oracle):
             all_normal = False
         else:
             for pod in pod_list.items:
+                # One-shot Job pods (an app's migrate/seed Jobs) end Succeeded, not Running.
+                if any(ref.kind == "Job" for ref in pod.metadata.owner_references or []):
+                    continue
                 if pod.status.phase != "Running":
                     print(f"❌ Pod {pod.metadata.name} is in phase: {pod.status.phase}")
                     all_normal = False
                     break
 
-                for container_status in pod.status.container_statuses:
+                for container_status in pod.status.container_statuses or []:
                     if container_status.state.waiting and container_status.state.waiting.reason:
                         print(
                             f"❌ Container {container_status.name} is waiting: {container_status.state.waiting.reason}"

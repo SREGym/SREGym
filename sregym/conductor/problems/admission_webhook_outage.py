@@ -168,7 +168,7 @@ class AdmissionWebhookOutage(Problem):
         self.kubectl.get_deployment(self.faulty_service, self.namespace)
         self.kubectl.wait_for_ready(
             self.namespace,
-            service_names=self.faulty_service,
+            service_names=getattr(self, "service_name", None) or self.faulty_service,
             max_wait=180,
         )
 
@@ -235,10 +235,11 @@ class AdmissionWebhookOutage(Problem):
         # a pod CREATE that should hit it.
         time.sleep(2)
 
-        pods = self.core_api.list_namespaced_pod(
-            namespace=self.namespace,
-            label_selector=f"io.kompose.service={self.faulty_service}",
-        )
+        # The Deployment's own selector (io.kompose.service=<name> on the
+        # kompose-generated apps) finds its pods on every app.
+        deployment = self.kubectl.get_deployment(self.faulty_service, self.namespace)
+        selector = ",".join(f"{key}={value}" for key, value in deployment.spec.selector.match_labels.items())
+        pods = self.core_api.list_namespaced_pod(namespace=self.namespace, label_selector=selector)
         if not pods.items:
             raise RuntimeError(f"No pods found for service '{self.faulty_service}' in namespace '{self.namespace}'")
         target = pods.items[0].metadata.name

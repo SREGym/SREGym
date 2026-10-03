@@ -87,12 +87,12 @@ class DuplicatePVCMountsMitigationOracle(Oracle):
         core_v1 = self.problem.kubectl.core_v1_api
 
         pod_name = f"service-content-check-{time.time_ns()}"[:63]
-        url = f"http://{target_ip}:{self.query_port}/api/services"
-        script = (
-            f"response=$(wget -q -T 10 -O - '{url}') && "
-            "printf '%s' \"$response\" | grep -q '\"data\"' && "
-            "echo SERVICE_OK"
-        )
+        # Ports to other apps name the target's own health endpoint
+        # (``health_check = (port, path, expected text)``); Jaeger's query API by default.
+        port, path, expect = getattr(self.problem, "health_check", None) or (self.query_port, "/api/services", '"data"')
+        url = f"http://{target_ip}:{port}{path}"
+        content_check = f"printf '%s' \"$response\" | grep -qF '{expect}' && " if expect else ""
+        script = f"response=$(wget -q -T 10 -O - '{url}') && {content_check}echo SERVICE_OK"
         pod = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=pod_name,

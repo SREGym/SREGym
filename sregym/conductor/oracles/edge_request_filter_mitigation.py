@@ -31,6 +31,16 @@ class EdgeRequestFilterMitigationOracle(Oracle):
     poll_interval_seconds = 2
     request_timeout_seconds = 3
 
+    @property
+    def _service_name(self) -> str:
+        # Ports to apps whose Service is not named after its Deployment set
+        # ``service_name``; the original problem uses one name for both.
+        return getattr(self.problem, "service_name", None) or self.problem.faulty_service
+
+    @property
+    def _container_name(self) -> str:
+        return getattr(self.problem, "container_name", None) or self.problem.faulty_service
+
     @staticmethod
     def _desired_replicas(deployment) -> int:
         replicas = deployment.spec.replicas
@@ -83,7 +93,7 @@ class EdgeRequestFilterMitigationOracle(Oracle):
 
     def _service_target_endpoint_unready(self, deployment) -> dict | None:
         namespace = self.problem.namespace
-        service_name = self.problem.faulty_service
+        service_name = self._service_name
         selector = deployment.spec.selector.match_labels or {}
         if not selector:
             print(f"[FAIL] Deployment '{service_name}' has no matchLabels selector")
@@ -117,7 +127,7 @@ class EdgeRequestFilterMitigationOracle(Oracle):
 
     def _filter_probe_failed(self) -> dict | None:
         namespace = self.problem.namespace
-        service_name = self.problem.faulty_service
+        service_name = self._service_name
         core_v1 = self.problem.kubectl.core_v1_api
         service = core_v1.read_namespaced_service(name=service_name, namespace=namespace)
         service_ports = service.spec.ports or []
@@ -128,13 +138,18 @@ class EdgeRequestFilterMitigationOracle(Oracle):
         service_port = service_ports[0].port
         base_url = f"http://{service_name}.{namespace}.svc.cluster.local:{service_port}"
         crafted_url = f"{base_url}/?waf={self.problem.crafted_payload}"
+        normal_path = getattr(self.problem, "health_path", None) or "/"
         pod_name = f"frontend-filter-check-{time.time_ns()}"[:63]
         request_timeout = self.request_timeout_seconds
+        # Ports whose edge routes by virtual host (Frappe selects its site from
+        # the Host header) set ``probe_host_header``.
+        host_header = getattr(self.problem, "probe_host_header", None)
+        header = f"--header 'Host: {host_header}' " if host_header else ""
         script = (
             "set -eu; "
-            f"wget -q -T {request_timeout} -t 1 -O /tmp/crafted '{crafted_url}'; "
+            f"wget -q {header}-T {request_timeout} -t 1 -O /tmp/crafted '{crafted_url}'; "
             "echo CRAFTED_OK; "
-            f"wget -q -T {request_timeout} -t 1 -O /tmp/normal '{base_url}/'; "
+            f"wget -q {header}-T {request_timeout} -t 1 -O /tmp/normal '{base_url}{normal_path}'; "
             "test -s /tmp/normal; "
             "echo NORMAL_OK"
         )
@@ -212,10 +227,10 @@ class EdgeRequestFilterMitigationOracle(Oracle):
                     waited_seconds=self.rollout_timeout_seconds,
                 )
 
-            container = self._find_container(deployment, deployment_name)
+            container = self._find_container(deployment, self._container_name)
             if container is None:
-                print(f"[FAIL] Container '{deployment_name}' was not found")
-                return self.fail("target_container_missing", container=deployment_name)
+                print(f"[FAIL] Container '{self._container_name}' was not found")
+                return self.fail("target_container_missing", container=self._container_name)
 
             if self._known_bad_rule_active(container):
                 print("[FAIL] The injected vulnerable WAF rule is still active")
