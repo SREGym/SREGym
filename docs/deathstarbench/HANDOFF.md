@@ -99,9 +99,9 @@ still running when this was written; `python scripts/screen_report.py
 results/clean-screen` has the current table.
 
 ```
+stripe_feature_config_single      ░██   2 of 3   median 237s / 900s
 gitea_database_deletion_single    ███   3 of 3   median 152s / 900s
 gitlab_database_deletion_single   ███   3 of 3   median 269s / 900s
-stripe_feature_config_single       --   no result: deploy gate failed, see below
 ```
 
 Both deletion families are saturated *honestly*. I pulled the traces to check,
@@ -130,6 +130,34 @@ This is direct evidence for the cheaper of the two next-family options: adapt
 `gitlab_database_deletion` so the truncated restore *succeeds* and silently drops
 the acknowledged tail. Same environment, same graders, and the failure becomes
 invisible at the moment of action instead of announcing itself.
+
+### Even a pointer at a directory is load-bearing
+
+`stripe_feature_config` was screened twice by accident, and the pair is the most
+uncomfortable result here. Its guide was gone in both, but the first run still
+carried a nine-word description clause pointing at the workspace, *"Operational
+evidence is in stripe-marathon's edge container at /control"*; the second had
+only *"...to a persistent volume mounted at /control"*.
+
+```
+with the pointer:     ███   3 of 3   150 / 176 / 136s
+neutral wording:      ░██   2 of 3   219 / 237 / 241s
+```
+
+The failure is `agent_error` / `webhook_backlog_incomplete`: it fixed the
+configuration query and left the dead webhook events unreplayed -- the first half
+of the recovery, not the second.
+
+**Read the timing, not the pass rate.** One failure in three is inside the noise
+at n=3; every attempt being 55% slower is not. Deleting the pointer cost about 80
+seconds of searching, and in one attempt that was enough to run out the clock on
+the rest of the task.
+
+I had reasoned, twice, that a pointer at a path cannot matter because the agent
+would find `/control` from the pod spec anyway, and the second time I wrote that
+it was "almost certainly unaffected" -- which is the only reason the re-run
+happened. The re-run contradicted it. **Discoverability is not the test. Assume
+anything authored into the prompt is load-bearing until a screen says otherwise.**
 
 ### The controlled comparison that explains everything else
 
