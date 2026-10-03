@@ -134,14 +134,32 @@ invisible at the moment of action instead of announcing itself.
 ### The controlled comparison that explains everything else
 
 ```
-gitlab_notification_recovery_replicated      ███   3 of 3   median 614s / 900s
-gitlab_notification_ambiguity_replicated     ███   3 of 3   median 738s / 900s
-gitlab_notification_intermittent_replicated  █░░   1 of 3   median 797s / 900s
+gitlab_notification_recovery_replicated       ███   3 of 3   median 614s / 900s
+gitlab_notification_ambiguity_replicated      ███   3 of 3   median 738s / 900s
+gitlab_notification_intermittent_replicated   █░░   1 of 3   median 797s / 900s
+gitlab_notification_delayed_audit_replicated  ░×░   0 of 2   median 692s / 900s  (1 timeout)
 ```
 
+The four are a subclass chain, each adding exactly one impairment to the one
+above it, and they produce a monotone ladder with a dose response in the *size*
+of the error:
+
+| family | fault during recovery | audit | solved | duplicates |
+|---|---|---|---|---|
+| recovery | stopped | complete | 3 of 3 | 0 |
+| ambiguity | stopped | paginated, digest noise | 3 of 3 | 0 |
+| intermittent | **ongoing** | paginated | 1 of 3 | 5, 3 |
+| delayed_audit | **ongoing** | **receipts published late** | 0 of 2 | 7, 6 |
+
+Every single failure across both discriminating variants is the same mode:
+`expected 30, delivered 30, missing 0, duplicates N`. **The agent never loses
+data. It over-sends when it cannot tell what already landed.** That is one
+failure mode, graded unambiguously, reproducible, and it scales with how badly
+the delivery record lags reality.
+
 `GitLabNotificationIntermittent` subclasses `GitLabNotificationAmbiguity`, and
-the whole agent-visible difference between them is one line of
-`prepare_recovery_material`:
+the whole agent-visible difference between the 3-of-3 family and the 1-of-3
+family is one line of `prepare_recovery_material`:
 
 ```python
 self.app.ongoing_fault(True)
