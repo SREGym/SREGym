@@ -489,20 +489,29 @@ a screen was mid-validation, and an `astronomy-shop` namespace duly appeared
 beside the GitLab deploy. The screen survived, but the attempt running at the
 time is suspect and has to be re-run, which costs more than the test run saved.
 
-The reliable way to check for regressions *while* a screen runs is not to
-remember a flag list. Use throwaway containers with no cluster access, and diff
-the failure set against `origin/main` in a worktree:
+There is no good way to check for regressions *while* a screen runs. I tried the
+obvious one -- throwaway containers with no cluster, diffed against an
+`origin/main` worktree -- and it is worthless here: with no cluster every
+cluster-dependent test fails, and most of this work's tests are
+cluster-dependent, so the diff just lists the files the branch added (60 versus
+1). It looks like a clean method and produces a confident, meaningless answer.
+
+So: run the suite before or after a screen, not during, and pass
+`--ignore=tests/problems`. If you need a regression check mid-screen, restrict it
+to the directories that do not touch a cluster (`tests/oracles`,
+`tests/test_deathstarbench_comparison.py`) and accept that the rest waits.
+
+When accounting for failures, diff against the frozen snapshot instead, which has
+a real cluster:
 
 ```bash
-git worktree add -f --detach /tmp/mainref origin/main
-run() { docker run --rm -v "$1":/src -w /src \
-  --entrypoint /opt/sregym/.venv/bin/python sregym-dind:postmortems \
-  -m pytest tests/ -q -p no:cacheprovider | grep -E '^(FAILED|ERROR)' | sort -u; }
-diff <(run "$PWD") <(run /tmp/mainref)
+docker exec sregym-difficulty-baseline sh -lc \
+  'cd /opt/sregym && .venv/bin/python -m pytest <paths> -q -p no:cacheprovider'
 ```
 
-Nothing deploys without a cluster, and the host's pre-existing failures cancel
-out instead of having to be held in your head.
+On this host that reproduces 5 failures in `tests/test_kind_scripts.py` and 1 in
+`tests/service/test_mcp_port_reclaim.py`, with a 7th in `tests/problems`, so a
+live full-suite run showing 7 failures is clean.
 
 One more: `pkill -f pytest` inside `docker exec` kills the exec itself, because
 its own command line contains the pattern. Split it (`"m pyt""est"`) or match
