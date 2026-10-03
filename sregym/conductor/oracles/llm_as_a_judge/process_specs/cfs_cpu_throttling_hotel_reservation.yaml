@@ -1,0 +1,68 @@
+problem_id: cfs_cpu_throttling_hotel_reservation
+fault_summary: >-
+  The geo deployment in the hotel-reservation namespace has a CPU limit set
+  too low. The Linux CFS scheduler throttles the container within each 100ms
+  scheduling window. kubectl top masks the problem because it reports a
+  time-averaged CPU rate that looks normal; the per-window throttle fraction
+  visible only through cgroup cpu.stat or Prometheus CFS metrics reveals
+  the true saturation.
+
+root_cause:
+  resource: "Deployment/geo (spec.containers[].resources.limits.cpu)"
+  mechanism: >-
+    The CPU limit is set low enough that the container exhausts its CFS
+    quota before the 100ms scheduling window ends. The kernel throttles
+    it for the remainder of each window, accumulating nr_throttled counts
+    in the cgroup cpu.stat file. The time-averaged figure in kubectl top
+    never exceeds the limit and gives no indication of throttling.
+    Raising the CPU limit or removing it resolves the saturation.
+
+causal_chain:
+  - id: symptom
+    component: "Deployment/geo (elevated latency / normal-looking kubectl top)"
+    description: >-
+      The agent observes elevated latency or errors on the geo service. An
+      initial kubectl top check shows CPU usage below the limit, which can
+      mislead agents into dismissing CPU as the cause.
+    signals:
+      - field: result
+        pattern: "geo"
+
+  - id: intermediate_throttling_evidence
+    component: "geo pod — CFS throttle counters (cgroup or Prometheus)"
+    description: >-
+      The agent obtains per-window CPU throttle data from at least one of:
+      the container cgroup cpu.stat file (nr_throttled), the Prometheus metric
+      container_cpu_cfs_throttled_periods_total, or a ContainerCPUThrottling
+      alert firing in Alertmanager. This distinguishes real throttling from
+      mere high-but-within-limit CPU usage.
+    signals:
+      - field: result
+        pattern: 'nr_throttled|container_cpu_cfs_throttled|ContainerCPUThrottling'
+
+  - id: root_cause
+    component: "Deployment/geo resources.limits.cpu — value set too low"
+    description: >-
+      The agent inspects the geo deployment resource spec and identifies the
+      CPU limit as the constraint responsible for the throttling.
+    signals:
+      - field: command
+        pattern: "geo"
+      - field: result
+        pattern: "cpu.*limit|limit.*cpu|Limits.*cpu|resources.*cpu"
+
+anchoring_traps:
+  - id: kubectl_top_no_followup
+    description: >-
+      kubectl top time-averages CPU usage and never shows a value exceeding
+      the CPU limit. An agent that checks kubectl top, sees normal-looking
+      CPU, and concludes there is no CPU problem has been anchored on the
+      misleading aggregate metric without drilling into per-window throttle
+      counters.
+    misleading_signal:
+      field: command
+      pattern: "kubectl top"
+    escape_signals:
+      - field: any
+        pattern: 'cpu\.stat|container_cpu_cfs|ContainerCPUThrottling|nr_throttled'
+        across_calls: true
