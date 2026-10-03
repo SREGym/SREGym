@@ -12,6 +12,8 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class AssignNonExistentNode(Problem):
+    """Deprecated in SREGym 1.1 after reaching 100% overall pass@3."""
+
     def __init__(self):
         super().__init__(app=SocialNetwork())
         self.kubectl = KubeCtl()
