@@ -1,0 +1,34 @@
+#!/bin/bash
+# Wait up to $1 seconds (default 300) for the SREGym sidecar to finish setup.
+# Exit 0 once the fault is live and the cluster is reachable; exit 1 at once if
+# setup failed, or after the wait if setup is still in progress.
+set -u
+shared={{agent_shared_dir}}
+deadline=$((SECONDS + ${1:-300}))
+while :; do
+    state=$(cat "$shared/{{state_name}}" 2>/dev/null || echo starting)
+    case $state in
+        {{state_ready}})
+            if kubectl version --request-timeout=10s >/dev/null 2>&1; then
+                echo "SREGym environment is ready"
+                exit 0
+            fi
+            ;;
+        {{state_failed}})
+            echo "SREGym environment setup failed:" >&2
+            cat "$shared/{{status_name}}" >&2 2>/dev/null
+            exit 1
+            ;;
+    esac
+    # A sidecar that exits during setup (e.g. the cluster failed to start)
+    # cannot report its state, but it drops out of Compose DNS.
+    if ! getent hosts {{service_name}} >/dev/null; then
+        echo "SREGym sidecar '{{service_name}}' is not running" >&2
+        exit 1
+    fi
+    if ((SECONDS >= deadline)); then
+        echo "SREGym environment is still ${state}" >&2
+        exit 1
+    fi
+    sleep 5
+done
