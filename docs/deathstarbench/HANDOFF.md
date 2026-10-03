@@ -131,6 +131,77 @@ This is direct evidence for the cheaper of the two next-family options: adapt
 the acknowledged tail. Same environment, same graders, and the failure becomes
 invisible at the moment of action instead of announcing itself.
 
+### The controlled comparison that explains everything else
+
+```
+gitlab_notification_recovery_replicated      ███   3 of 3   median 614s / 900s
+gitlab_notification_ambiguity_replicated     ███   3 of 3   median 738s / 900s
+gitlab_notification_intermittent_replicated  █░░   1 of 3   median 797s / 900s
+```
+
+`GitLabNotificationIntermittent` subclasses `GitLabNotificationAmbiguity`, and
+the whole agent-visible difference between them is one line of
+`prepare_recovery_material`:
+
+```python
+self.app.ongoing_fault(True)
+```
+
+Same application, same grader, same budget, same agent. 3 of 3 becomes 1 of 3.
+Both failures are the predicted mode, and the grader is unambiguous about it:
+
+```
+attempt 2: expected 30, delivered 30, missing 0, duplicates 5
+attempt 3: expected 30, delivered 30, missing 0, duplicates 3
+```
+
+Nothing lost, everything delivered, some of it twice. The agent retried sends
+that had already been accepted, and nothing told it so.
+
+**Why `ambiguity` is solved and `intermittent` is not.** Ambiguity's fault is
+*stopped*: the delivery audit is static, merely paginated and padded with
+ordinary digest mail, so the agent pages through it, filters the noise and
+reconciles exactly once -- it costs 738 of 900 seconds, and it works.
+Intermittent's fault is still *running*: the audit trails sends that are failing
+while you read it, so no amount of investigation yields a trustworthy answer at
+the moment the agent has to act.
+
+### The rule, after five families
+
+> **A family separates agents when the information needed to act correctly does
+> not exist at decision time.**
+
+Two shapes produce that, and both are now evidenced:
+
+- a **conflict** -- failover's two acknowledged write sets with colliding IIDs,
+  where only one can survive and no query says which;
+- a **race** -- intermittent's delivery record trailing the deliveries.
+
+Everything else got solved: laborious, ambiguous-but-static, and loudly-wrong all
+fall to more investigation. `ongoing_fault` is therefore the most valuable lever
+found so far, and the cheapest -- a flag on a mailbox that already exists, not a
+new environment.
+
+### Difficulty is partly hiding in the budget
+
+```
+gitea_database_deletion         152s
+gitlab_database_deletion        269s
+gitlab_notification_recovery    614s
+gitlab_notification_ambiguity   738s   (attempts: 840 / 738 / 593)
+```
+
+The solved families are not quick, they are *long*, and one attempt used 93% of
+the budget. At a 600-second budget `ambiguity` would read about 1 of 3 -- not
+because the agent got worse, but because the budget stopped paying for the
+labour. **A pass rate at a fixed budget is a statement about the budget as much as
+the task.** Record the budget beside every result, and prefer families that fail
+on judgement rather than on the clock: the first kind is a property of the task,
+the second moves whenever someone changes a timeout.
+
+All of these are n=3 on one agent. One solve moves any of them, and the n=10
+confirmation below has not been run.
+
 ## What exists
 
 ### Six application families, all opt-in
