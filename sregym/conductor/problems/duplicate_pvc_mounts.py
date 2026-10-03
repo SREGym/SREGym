@@ -35,7 +35,17 @@ class DuplicatePVCMounts(Problem):
             ),
         )
         self.diagnosis_oracle = LLMAsAJudgeOracle(problem=self, expected=self.root_cause)
-        self.mitigation_oracle = DuplicatePVCMountsMitigationOracle(problem=self)
+        if self.faulty_service == "frontend":
+            self.mitigation_oracle = DuplicatePVCMountsMitigationOracle(
+                problem=self,
+                query_port=app.frontend_port,
+                query_path="/",
+                expected_content="Otel Demo - Home"
+                if self.app_name == "astronomy_shop"
+                else "Go Microservices Example",
+            )
+        else:
+            self.mitigation_oracle = DuplicatePVCMountsMitigationOracle(problem=self)
 
         self.app.create_workload()
 
