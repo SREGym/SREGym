@@ -120,13 +120,6 @@ def validate(
         conductor.problem = problem
         conductor.app = problem.app
 
-        if problem.requires_khaos() and conductor.kubectl.is_emulated_cluster():
-            raise ValidationError(
-                "this problem requires Khaos / a real (non-emulated) cluster for fault "
-                "injection and cannot be validated on the CI kind cluster. Validate it "
-                "manually on a supported cluster and have a maintainer confirm."
-            )
-
         oracle = getattr(problem, "mitigation_oracle", None)
         if oracle is None:
             raise ValidationError(

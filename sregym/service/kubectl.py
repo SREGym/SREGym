@@ -676,13 +676,20 @@ class KubeCtl:
 
         for node_name in node_names:
             try:
-                count = self._run_localpv_gc_pod_on_node(
+                logs = self.run_node_script_pod(
                     node_name=node_name,
                     namespace=pod_namespace,
                     script=script,
-                    keep_blob=keep_blob,
+                    name_prefix="sregym-localpv-gc",
+                    env={"KEEP": keep_blob},
                     timeout=timeout,
                 )
+                count = 0
+                for line in logs.splitlines():
+                    if line.strip().startswith("GC_REMOVED="):
+                        with contextlib.suppress(ValueError):
+                            count = int(line.strip().split("=", 1)[1])
+                        break
                 results[node_name] = count
                 if count:
                     logger.info(f"[gc_localpv] {node_name}: removed {count} orphan dir(s)")
@@ -694,32 +701,32 @@ class KubeCtl:
 
         return results
 
-    def _run_localpv_gc_pod_on_node(
+    def run_node_script_pod(
         self,
         node_name: str,
         namespace: str,
         script: str,
-        keep_blob: str,
-        timeout: int,
-    ) -> int:
-        """Run a one-shot privileged busybox pod on ``node_name`` to execute ``script``.
+        name_prefix: str,
+        env: dict[str, str] | None = None,
+        timeout: int = 180,
+    ) -> str:
+        """Run ``script`` in a one-shot privileged busybox pod on ``node_name`` and return its logs.
 
-        Mounts host ``/`` at ``/host`` so the script can rm dirs under
+        Mounts host ``/`` at ``/host`` so the script can reach node paths such as
         ``/host/var/openebs/local``. Tolerates all taints so it can land on
-        control-plane nodes. Returns the integer parsed from the
-        ``GC_REMOVED=<n>`` line in pod stdout.
+        control-plane nodes. Raises if the pod does not succeed within ``timeout``.
         """
         # Pod name must be DNS-1123: lowercase, <=63 chars. Use first label of
         # the node hostname plus a short suffix.
         short_node = node_name.split(".")[0].lower().replace("_", "-")[:40]
-        pod_name = f"sregym-localpv-gc-{short_node}-{int(time.time()) % 10000}"
+        pod_name = f"{name_prefix}-{short_node}-{int(time.time()) % 10000}"
         pod_name = pod_name[:63]
 
         pod_body = client.V1Pod(
             metadata=client.V1ObjectMeta(
                 name=pod_name,
                 namespace=namespace,
-                labels={"app": "sregym-localpv-gc"},
+                labels={"app": name_prefix},
             ),
             spec=client.V1PodSpec(
                 node_name=node_name,
@@ -733,7 +740,7 @@ class KubeCtl:
                         image="busybox:1.36",
                         image_pull_policy="IfNotPresent",
                         command=["sh", "-c", script],
-                        env=[client.V1EnvVar(name="KEEP", value=keep_blob)],
+                        env=[client.V1EnvVar(name=k, value=v) for k, v in (env or {}).items()],
                         security_context=client.V1SecurityContext(privileged=True),
                         volume_mounts=[
                             client.V1VolumeMount(name="host", mount_path="/host"),
@@ -767,34 +774,26 @@ class KubeCtl:
                 except ApiException as e:
                     if e.status == 404:
                         # Got deleted out from under us — treat as failure.
-                        raise RuntimeError(f"GC pod {pod_name} disappeared before completion") from e
+                        raise RuntimeError(f"Pod {pod_name} disappeared before completion") from e
                     raise
                 if phase in ("Succeeded", "Failed"):
                     break
                 time.sleep(sleep_s)
                 waited += sleep_s
             else:
-                raise TimeoutError(f"GC pod {pod_name} on {node_name} did not finish within {timeout}s (phase={phase})")
+                raise TimeoutError(f"Pod {pod_name} on {node_name} did not finish within {timeout}s (phase={phase})")
 
             logs = ""
             try:
                 logs = self.core_v1_api.read_namespaced_pod_log(name=pod_name, namespace=namespace)
             except ApiException as e:
-                logger.debug(f"[gc_localpv] Could not read logs for {pod_name}: {e}")
+                logger.debug(f"Could not read logs for {pod_name}: {e}")
 
             if phase != "Succeeded":
                 raise RuntimeError(
-                    f"GC pod {pod_name} on {node_name} ended with phase={phase}; logs: {logs.strip()[:500]}"
+                    f"Pod {pod_name} on {node_name} ended with phase={phase}; logs: {logs.strip()[:500]}"
                 )
-
-            removed = 0
-            for line in (logs or "").splitlines():
-                line = line.strip()
-                if line.startswith("GC_REMOVED="):
-                    with contextlib.suppress(ValueError):
-                        removed = int(line.split("=", 1)[1])
-                    break
-            return removed
+            return logs or ""
         finally:
             with contextlib.suppress(ApiException):
                 self.core_v1_api.delete_namespaced_pod(name=pod_name, namespace=namespace, grace_period_seconds=0)

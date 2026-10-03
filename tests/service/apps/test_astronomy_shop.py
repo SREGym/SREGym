@@ -98,5 +98,8 @@ def test_ui_fix_coexists_with_upstream_memory_fixes():
         overrides = {env["name"]: env["value"] for env in components[name]["envOverrides"]}
         assert "-javaagent:" in overrides["JAVA_TOOL_OPTIONS"]
         assert f"-Xmx{heap}" in overrides["JAVA_TOOL_OPTIONS"]
+        assert "-XX:ActiveProcessorCount=2" in overrides["JAVA_TOOL_OPTIONS"]
+        assert components[name]["resources"]["requests"]["memory"] == "300Mi"
+        assert components[name]["resources"]["limits"]["memory"] == "512Mi"
     assert components["kafka"]["resources"]["requests"]["memory"] == "600Mi"
     assert components["kafka"]["resources"]["limits"]["memory"] == "1Gi"

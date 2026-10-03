@@ -47,10 +47,6 @@ from sregym.conductor.problems.internal_traffic_policy_local import InternalTraf
 from sregym.conductor.problems.kafka_poison_pill_hol_block import KafkaPoisonPillHOLBlock
 from sregym.conductor.problems.kafka_producer_leak import KafkaProducerLeak
 from sregym.conductor.problems.kafka_queue_problems import KafkaQueueProblems
-from sregym.conductor.problems.khaos_faults import (
-    KhaosFaultName,
-    KhaosFaultProblem,
-)
 from sregym.conductor.problems.kubelet_crash import KubeletCrash
 from sregym.conductor.problems.kubelet_eviction_threshold_misconfig import KubeletEvictionThresholdMisconfig
 from sregym.conductor.problems.liveness_probe_misconfiguration import LivenessProbeMisconfiguration
@@ -61,6 +57,7 @@ from sregym.conductor.problems.misconfig_app import MisconfigAppHotelRes
 from sregym.conductor.problems.missing_configmap import MissingConfigMap
 from sregym.conductor.problems.missing_env_variable import MissingEnvVariable
 from sregym.conductor.problems.missing_service import MissingService
+from sregym.conductor.problems.mongo_storage_faults import LatentSectorError, SilentDataCorruption
 from sregym.conductor.problems.multiple_failures import MultipleIndependentFailures  # noqa: F401
 from sregym.conductor.problems.mutating_webhook_resource_limits import MutatingWebhookResourceLimits
 from sregym.conductor.problems.namespace_memory_limit import NamespaceMemoryLimit
@@ -102,9 +99,10 @@ from sregym.conductor.problems.service_wrong_pod_selection_hotel_reservation imp
     ServiceWrongPodSelectionHotelReservation,
 )
 from sregym.conductor.problems.sidecar_port_conflict import SidecarPortConflict
-from sregym.conductor.problems.silent_data_corruption import SilentDataCorruption
 from sregym.conductor.problems.stale_coredns_config import StaleCoreDNSConfig
-from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop import StaleHostAliasesDNSPoisoningAstronomyShop
+from sregym.conductor.problems.stale_hostaliases_dns_poisoning_astronomy_shop import (
+    StaleHostAliasesDNSPoisoningAstronomyShop,
+)
 from sregym.conductor.problems.storage_user_unregistered import MongoDBUserUnregistered
 from sregym.conductor.problems.taint_no_toleration import TaintNoToleration
 from sregym.conductor.problems.target_port import K8STargetPortMisconfig
@@ -236,66 +234,8 @@ class ProblemRegistry:
             "trainticket_f22_sql_column_name_mismatch_error": TrainTicketF22,
             # ==================== HARDWARE FAULT INJECTOR ====================
             "silent_data_corruption": SilentDataCorruption,
-            "latent_sector_error": lambda: KhaosFaultProblem(KhaosFaultName.latent_sector_error,inject_args=[30]),
+            "latent_sector_error": LatentSectorError,
             # ----- Hardware-failure compound problems (Tier A) -----
-            # "nic_packet_corruption": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.packet_loss_sendto, [30]),
-            #         (KhaosFaultName.packet_loss_recvfrom, [30]),
-            #     ],
-            #     root_cause=_HW_NIC_PACKET_CORRUPTION,
-            # ),
-            # "storage_controller_read_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.read_error, None),
-            #         (KhaosFaultName.pread_error, None),
-            #     ],
-            #     root_cause=_HW_STORAGE_READ_FAILURE,
-            # ),
-            # "storage_write_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.write_error, None),
-            #         (KhaosFaultName.pwrite_error, None),
-            #         (KhaosFaultName.fsync_error, None),
-            #     ],
-            #     root_cause=_HW_STORAGE_WRITE_FAILURE,
-            # ),
-            # "dram_module_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.mmap_fail, None),
-            #         (KhaosFaultName.mmap_oom, None),
-            #         (KhaosFaultName.oom_memchunk, None),
-            #     ],
-            #     root_cause=_HW_DRAM_MODULE_FAILURE,
-            # ),
-            # "cpu_clocksource_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.clock_drift, None),
-            #         (KhaosFaultName.gettimeofday_fail, None),
-            #     ],
-            #     root_cause=_HW_CPU_CLOCKSOURCE_FAILURE,
-            # ),
-            # # ----- Hardware-failure compound problems (Tier B) -----
-            # "mmu_page_protection_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.force_mprotect_eacces, None),
-            #         (KhaosFaultName.stack_rndsegfault, None),
-            #     ],
-            #     root_cause=_HW_MMU_PAGE_PROTECTION_FAILURE,
-            # ),
-            # "network_interface_link_down": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.bind_enetdown, None),
-            #         (KhaosFaultName.socket_block, None),
-            #     ],
-            #     root_cause=_HW_NETWORK_INTERFACE_LINK_DOWN,
-            # ),
-            # "dns_resolver_hardware_failure": lambda: KhaosCompoundFaultProblem(
-            #     fault_specs=[
-            #         (KhaosFaultName.getaddrinfo_fail, None),
-            #     ],
-            #     root_cause=_HW_DNS_RESOLVER_FAILURE,
-            # ),
             # ==================== DIRECT K8S API ====================
             "expired_tls_hotel_reservation": ExpiredTlsHotelReservation,
             "ingress_misroute": lambda: IngressMisroute(path="/api", correct_service="frontend-service", wrong_service="recommendation-service"),
