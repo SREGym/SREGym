@@ -9,21 +9,37 @@ record of every graded screen.
 
 ---
 
-## The one result that matters
+## The results
 
-Three families, re-screened with Codex `gpt-6-astra` under task descriptions that
-withhold the diagnosis. Nine valid attempts, no ambiguous or environment
-failures.
+Ten problems, every one screened with Codex `gpt-6-astra` under a generic task
+description with every authored briefing deleted. n=3 each.
 
 ```
-mattermost_capacity_cascade_single   ███   3 of 3   median 243s / 900s
-gitlab_regional_failover_single      █░░   1 of 3   median 287s / 900s
-coordination_collapse_single         ███   3 of 3   median 437s / 2700s
+stripe_feature_config_single                   ░██   2 of 3   median 237s / 900s   ← separates
+gitea_database_deletion_single                 ███   3 of 3   median 152s / 900s
+gitlab_database_deletion_single                ███   3 of 3   median 269s / 900s
+gitlab_notification_recovery_replicated        ███   3 of 3   median 614s / 900s
+gitlab_notification_ambiguity_replicated       ███   3 of 3   median 738s / 900s
+gitlab_notification_intermittent_replicated    █░░   1 of 3   median 797s / 900s   ← separates
+gitlab_notification_delayed_audit_replicated   ░×░   0 of 2   median 692s / 900s   ← separates
+mattermost_capacity_cascade_single             ███   3 of 3   median 243s / 900s
+gitlab_regional_failover_single                █░░   1 of 3   median 287s / 900s   ← separates
+coordination_collapse_single                   ███   3 of 3   median 437s / 2700s
 ```
 
-`█` solved · `░` not solved. Reproduce with `python scripts/screen_report.py`.
+`█` solved · `░` not solved · `×` invalid, excluded from the count. Reproduce
+with `python scripts/screen_report.py results/clean-screen`.
 
-**Only one family separates a frontier agent, and it is the one that requires a
+**Four problems separate a frontier agent, and they share one property.** Each
+has a plausible wrong action that succeeds silently; the six that do not are
+solved every time, only slower. The shapes are a conflict (failover), a race
+(the two notification variants) and silent incompleteness (stripe) -- set out
+under "The rule, after ten problems" below.
+
+Every failure is a valid `agent_error`, graded on data, with no ambiguous or
+environment failures in the set.
+
+**The sharpest single family is failover, and it is the one that requires a
 judgement with no safe default.** Failover asks which of two acknowledged write
 sets to preserve when neither restore is sufficient; the agent chose wrong twice
 in three, both times by failing back — recovering all six orphaned writes and
@@ -148,10 +164,20 @@ The failure is `agent_error` / `webhook_backlog_incomplete`: it fixed the
 configuration query and left the dead webhook events unreplayed -- the first half
 of the recovery, not the second.
 
-**Read the timing, not the pass rate.** One failure in three is inside the noise
-at n=3; every attempt being 55% slower is not. Deleting the pointer cost about 80
-seconds of searching, and in one attempt that was enough to run out the clock on
-the rest of the task.
+**This is a real discriminator, and I first wrote it off as noise.** The two
+attempts diverge on exactly one thing. The failing run fixed the query, confirmed
+HTTP 200 across two publication cycles, confirmed the business records, and then
+noted *"the webhook receipt checksum is unchanged"* -- it looked straight at the
+receipts, read "unchanged" as confirmation, and submitted. The passing run said
+*"Six webhooks..."* and replayed them. One mention of `requeue` versus seven.
+
+I dismissed it with "one failure in three is inside the noise at n=3", which
+conflated two different claims. A single *valid* `agent_error` proves the problem
+is not saturated: the agent demonstrably gets it wrong. What n=3 cannot tell you
+is whether the true rate is 90% or 50%. Only the second claim was about noise.
+The timing said the same thing and I under-weighted that too -- every attempt 55%
+slower, and the one that failed is the one that stopped before asking the second
+question.
 
 I had reasoned, twice, that a pointer at a path cannot matter because the agent
 would find `/control` from the pod spec anyway, and the second time I wrote that
@@ -212,16 +238,25 @@ Intermittent's fault is still *running*: the audit trails sends that are failing
 while you read it, so no amount of investigation yields a trustworthy answer at
 the moment the agent has to act.
 
-### The rule, after five families
+### The rule, after ten problems
 
 > **A family separates agents when the information needed to act correctly does
 > not exist at decision time.**
 
-Two shapes produce that, and both are now evidenced:
+Three shapes produce that, and all three are now evidenced:
 
 - a **conflict** -- failover's two acknowledged write sets with colliding IIDs,
   where only one can survive and no query says which;
-- a **race** -- intermittent's delivery record trailing the deliveries.
+- a **race** -- intermittent's delivery record trailing the deliveries;
+- **silent incompleteness** -- stripe's second obligation, where one symptom
+  hides two faults and repairing the visible one restores every signal the
+  responder thinks to check. Strictly this one stretches the rule: the dead
+  webhook events are sitting in a queryable table, so the information is not
+  absent. What is absent is any signal that the question needs asking. It is
+  probably the most useful of the three because it is the cheapest to build --
+  no flapping fault, no colliding identities, just a consequence that does not
+  appear in health -- and it is the classic real-incident failure: declaring
+  recovery while a backlog sits undrained.
 
 Everything else got solved: laborious, ambiguous-but-static, and loudly-wrong all
 fall to more investigation. `ongoing_fault` is therefore the most valuable lever
