@@ -130,6 +130,11 @@ class Oracle(ABC):
         """
         for pod in pods:
             pod_name = pod.metadata.name
+            # One-shot Job pods (an app's migrate/seed Jobs) end Succeeded by
+            # design; they are not workloads that should be Running.
+            owners = getattr(pod.metadata, "owner_references", None) or []
+            if any(getattr(owner, "kind", None) == "Job" for owner in owners):
+                continue
             if pod.status.phase != "Running":
                 print(f"❌ Pod {pod_name} is in phase: {pod.status.phase}")
                 return self.fail("pods_not_ready", pod=pod_name, phase=pod.status.phase, **detail)
