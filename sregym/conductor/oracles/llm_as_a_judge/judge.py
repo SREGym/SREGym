@@ -514,22 +514,45 @@ fences, no preamble, no commentary.
         # Strip markdown fences
         clean = re.sub(r"```(?:json)?\s*|\s*```", "", response_text).strip()
 
-        # Sometimes the model emits chain-of-thought text before the JSON array.
-        # Try to find the outermost JSON array.
-        bracket_start = clean.find("[")
-        bracket_end = clean.rfind("]")
-        if bracket_start != -1 and bracket_end != -1 and bracket_end > bracket_start:
-            clean = clean[bracket_start : bracket_end + 1]
-
-        try:
-            data = json.loads(clean)
-        except json.JSONDecodeError as exc:
-            raise ChecklistParseError(f"Invalid JSON: {exc}") from exc
-
-        if not isinstance(data, list):
-            raise ChecklistParseError("Response is not a JSON array")
-
         expected_ids = set(expected_question_ids)
+        decoder = json.JSONDecoder()
+
+        # Models may emit prose, bracketed reasoning, or another candidate
+        # before/after the requested checklist. Decode complete JSON arrays
+        # independently instead of pairing the first "[" with the last "]".
+        candidates: list[list] = []
+        last_error: json.JSONDecodeError | None = None
+        data = None
+
+        for match in re.finditer(r"\[", clean):
+            try:
+                candidate, _ = decoder.raw_decode(clean[match.start() :])
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                continue
+            if not isinstance(candidate, list):
+                continue
+
+            candidates.append(candidate)
+            received_ids = {item.get("id") for item in candidate if isinstance(item, dict)}
+            if expected_ids.issubset(received_ids):
+                data = candidate
+                break
+
+        if data is None and candidates:
+            # Preserve missing-question retry semantics without combining
+            # separate, malformed model responses.
+            def relevance(candidate: list) -> int:
+                received_ids = {item.get("id") for item in candidate if isinstance(item, dict)}
+                return len(expected_ids & received_ids)
+
+            data = max(candidates, key=relevance)
+
+        if data is None:
+            if last_error is not None:
+                raise ChecklistParseError(f"Invalid JSON: {last_error}") from last_error
+            raise ChecklistParseError("Invalid JSON: no JSON array found")
+
         num_expected = len(expected_ids)
         received_ids = {item.get("id") for item in data if isinstance(item, dict)}
 
