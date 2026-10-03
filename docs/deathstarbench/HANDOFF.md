@@ -194,6 +194,38 @@ it was "almost certainly unaffected" -- which is the only reason the re-run
 happened. The re-run contradicted it. **Discoverability is not the test. Assume
 anything authored into the prompt is load-bearing until a screen says otherwise.**
 
+### A withheld pointer only counts when it names what kubectl hides
+
+The stripe pair suggested that naming a subsystem in the application description
+is worth real difficulty. Tested directly, that generalisation is wrong, and
+wrong in the opposite direction.
+
+`gitlab_notification_unannounced` is `gitlab_notification_recovery` with one
+clause removed -- the sentence naming the SMTP path, the Sidekiq mailers queue
+and the delivery audit -- and nothing else changed.
+
+```
+announced     ███   3 of 3   median 614s   [620, 614, 595]
+unannounced   ███   3 of 3   median 563s   [563, 588, 543]
+```
+
+Not merely no harder: about 50 seconds *faster*, with non-overlapping ranges
+across three attempts each. The clause cost reading time and bought nothing.
+
+The difference from stripe is what the clause named. Stripe's named `/control`, a
+path inside a container: to find that unaided you have to suspect a workspace
+exists, exec in and look around. This one named `notification-mailbox`, a
+Deployment, which `kubectl get pods` returns in the agent's first command.
+
+> **A withheld pointer creates difficulty only when it names something `kubectl`
+> does not already show.** A path inside a container or an operator tool is
+> expensive to find. A deployment, service or volume is free.
+
+That retired three of the five candidates built on this lever before they ran.
+Recorded because the reasoning that produced them was sound and still wrong:
+"this sentence is doing work" is a hypothesis about where the agent spends time,
+and it has to be screened like any other.
+
 ### The controlled comparison that explains everything else
 
 ```
