@@ -145,6 +145,7 @@ def test_no_oracle_claims_a_harness_error_for_itself():
     allowed = {
         # capture_baseline not having run is a sequencing failure, not a check.
         "SearchRateRetryMitigationOracle",
+        "ThunderingHerdMitigationOracle",
         # Our probe patch not taking effect means the test never ran.
         "RollingUpdateMitigationOracle",
         # No probe pod means nothing was measured.
@@ -169,10 +170,11 @@ def test_a_reason_is_not_classified_two_ways_without_a_stated_reason():
     fails when the list grows.
     """
     expected_overrides = {
-        # Both record a *before* via capture_baseline, so a Deployment that was
+        # These record a *before* via capture_baseline, so a Deployment that was
         # there and now is not is attributable rather than ambiguous.
         ("MitigationOracle", "required_deployment_missing"),
         ("SearchRateRetryMitigationOracle", "required_deployment_missing"),
+        ("ThunderingHerdMitigationOracle", "required_deployment_missing"),
         # The agent rewrites these Deployments as its mitigation, so a stalled
         # rollout is not an environmental signal here.
         ("RollingUpdateMitigationOracle", "required_deployment_not_rolled_out"),

@@ -103,3 +103,18 @@ def test_ui_fix_coexists_with_upstream_memory_fixes():
         assert components[name]["resources"]["limits"]["memory"] == "512Mi"
     assert components["kafka"]["resources"]["requests"]["memory"] == "600Mi"
     assert components["kafka"]["resources"]["limits"]["memory"] == "1Gi"
+
+
+def test_deploy_can_disable_the_bundled_load_generator():
+    app = _app({"amd64"})
+    app.load_generator_enabled = False
+
+    with (
+        patch.object(astronomy_shop, "is_svelte", return_value=False),
+        patch.object(Helm, "add_repo"),
+        patch.object(Helm, "install") as install,
+        patch.object(Helm, "assert_if_deployed"),
+    ):
+        app.deploy()
+
+    assert "components.load-generator.enabled=false" in install.call_args.kwargs["extra_args"]

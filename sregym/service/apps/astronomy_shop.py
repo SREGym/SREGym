@@ -27,7 +27,8 @@ class AstronomyShop(Application):
     _VARIANT_ON = "on"
     _VARIANT_OFF = "off"
 
-    def __init__(self):
+    def __init__(self, *, load_generator_enabled: bool = True):
+        self.load_generator_enabled = load_generator_enabled
         super().__init__(ASTRONOMY_SHOP_METADATA)
         self.load_app_json()
         self.kubectl = KubeCtl()
@@ -69,6 +70,8 @@ class AstronomyShop(Application):
             "-f",
             str(self._VALUES_DIR / "astronomy-shop-fixes.yaml"),
         ]
+        if not self.load_generator_enabled:
+            extra_args += ["--set", "components.load-generator.enabled=false"]
         node_architectures = self.kubectl.get_node_architectures()
         if any(arch in {"arm64", "aarch64"} for arch in node_architectures):
             # The upstream limits are below the observed steady-state memory
