@@ -38,6 +38,7 @@ from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDea
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
+from sregym.conductor.problems.incident_arena import INCIDENT_ARENA_PROBLEMS
 from sregym.conductor.problems.incorrect_image import IncorrectImage
 from sregym.conductor.problems.incorrect_port_assignment import IncorrectPortAssignment
 from sregym.conductor.problems.ingress_misroute import IngressMisroute
@@ -297,6 +298,9 @@ class ProblemRegistry:
             "operator_security_context_fault": K8SOperatorSecurityContextFault,
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
             "operator_wrong_operator_image": K8SOperatorWrongOperatorImage,
+            # ==================== INCIDENT ARENA (abundant-ai/incident-arena) ====================
+            # Frappe, Saleor and a Slack clone, each with its own load generator; see docs/incident-arena.md.
+            **INCIDENT_ARENA_PROBLEMS,
         }
 # fmt: on
         self.kubectl = KubeCtl()

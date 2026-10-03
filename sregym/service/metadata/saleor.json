@@ -1,0 +1,14 @@
+{
+    "Name": "Saleor",
+    "Namespace": "saleor",
+    "Desc": "Saleor headless e-commerce (Django/GraphQL API under uvicorn plus a Celery worker) over PostgreSQL, Valkey and RabbitMQ, driven by cyclical storefront traffic (browsing and checkouts). Ported from Incident Arena. An `ops-toolbox` pod provides an operator shell: psql with the privileged PostgreSQL DSN in $DB_ADMIN_DSN, curl for the GraphQL API at $SALEOR_API_URL, and RabbitMQ management credentials in $RABBITMQ_ADMIN_URL. PostgreSQL, Valkey and RabbitMQ exporters are scraped by Prometheus.",
+    "Supported Operations": [
+        "Browse the product catalog",
+        "Create checkouts and place orders",
+        "Deliver order events asynchronously through Celery"
+    ],
+    "Helm Config": {
+        "release_name": "saleor",
+        "namespace": "saleor"
+    }
+}

@@ -114,6 +114,11 @@ Or start with SREGym-Lite:
 uv run main.py --suite sregym-lite --agent stratus --model gpt-5
 ```
 
+Or run the 20 incidents ported from [Incident Arena](https://github.com/abundant-ai/incident-arena) (Frappe, Saleor and a Slack clone; see [docs/incident-arena.md](./docs/incident-arena.md)):
+```bash
+uv run main.py --suite incident-arena --agent stratus --model gpt-5
+```
+
 Use `--judge-model` to override the judge model separately (defaults to `--model`):
 ```bash
 uv run main.py --agent stratus --model gpt-5 --judge-model anthropic/claude-sonnet-4-6-20250627

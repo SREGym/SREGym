@@ -1,0 +1,96 @@
+# --- fault and workload settings ---
+main:
+  enableServiceLinks: false
+loadgen:
+  profilesYaml: "profiles:\n  write_acl_push_loop_agent:\n    base: write\n    loop:\
+    \ true\n    events:\n    - kind: admin_event\n      fire_at_s: 40.0\n      duration_s:\
+    \ 0.0\n      event_name: read_consistency_strict\n      target_service: svc-channel\n\
+    \    declare_deadline_s: 3690.0\n    soak_cycles: 3\n"
+  profile: write_acl_push_loop_agent
+app:
+  roles:
+    channel:
+      db:
+        pool_size: 12
+        max_overflow: 2
+      env:
+        ACL_HOLD_MS: '350'
+# --- agent access settings ---
+agentSurface:
+  profile: confined
+# --- grading-harness settings ---
+gradingHarness:
+  podState:
+    enabled: true
+  answerKey:
+    enabled: true
+  dbState:
+    enabled: false
+  lockState:
+    enabled: false
+  verifierEvidence:
+    persistent: true
+    size: 256Mi
+# --- agent report vocabulary ---
+agentReport:
+  vocabulary:
+    services:
+    - db
+    - message
+    - auth
+    - channel
+    - workspace
+    - mesh
+    - load-generator
+    components:
+    - db.maintenance-controller
+    - db.postgres-server
+    - db.autovacuum-config
+    - db.routing
+    - message.send-pipeline
+    - message.db-pool
+    - message.sequencer
+    - auth.db-pool
+    - channel.db-pool
+    - channel.membership-acl
+    - channel.channel-crud
+    - channel.acl-scope-guard
+    - channel.shared-channel-router
+    - mesh.retry-policy
+    - workspace.settings-cache
+    descriptions:
+      db.maintenance-controller: schedules and runs the periodic database maintenance
+        window
+      db.postgres-server: the database server process and its server-level settings
+      db.autovacuum-config: the database's automatic table-cleanup settings
+      db.routing: directs database connections to the primary or a replica
+      message.send-pipeline: the send path that accepts, validates and persists a
+        message
+      message.db-pool: the message service's pool of database connections
+      message.sequencer: assigns each message its per-channel ordering number
+      auth.db-pool: the auth service's pool of database connections
+      channel.db-pool: the channel service's pool of database connections
+      channel.membership-acl: the stored per-channel membership and posting-permission
+        entries
+      channel.channel-crud: create, rename, archive and delete operations on channels
+      channel.acl-scope-guard: checks an access rule is applied at the scope it was
+        written for
+      channel.shared-channel-router: routes requests for channels shared across workspaces
+      mesh.retry-policy: retry and timeout behaviour on service-to-service calls
+      workspace.settings-cache: the cached copy of workspace-level settings
+# --- pinned-image settings ---
+global:
+  imagePullPolicy: IfNotPresent
+images:
+  app: ghcr.io/abundant-ai/sre-world/slack-app@sha256:e050b1d953721145ee580e1baf1e424c55aa31c37a15c909e296c9607c8f7f4a
+  appBuilder: ghcr.io/abundant-ai/sre-world/slack-app-builder@sha256:5201d7a4c6e4313c2b9d01209ff6aed413af6f4cc2e11d667631f0ce4920fa07
+  go: ghcr.io/abundant-ai/sre-world/slack-go@sha256:a9c60cefb4326ff918867ab522e05a9570b5b50fccc6208372228ed341d123dd
+  py: ghcr.io/abundant-ai/sre-world/slack-py@sha256:c3a51b1ab5082f337ae5e8c1f2d60467273b1e73440580fc7e1132564b943c12
+  main: ghcr.io/abundant-ai/sre-world/slack-main@sha256:e3dec9737ddfb496b7c380ff529248bf4216514f0d0127f91e41973c05d940f9
+  obsMcp: ghcr.io/abundant-ai/sre-world/slack-obs-mcp@sha256:891670f269e57db65d9a2a896472d91a876efb9896f139efd5e503a3b9818ae9
+  loadgen: ghcr.io/abundant-ai/sre-world/slack-loadgen@sha256:5a8bfa7e291a3e9ddc32eca99d291531964f08e3b1e269bd59fc9236a1eebbd2
+  pgbouncer: ghcr.io/abundant-ai/sre-world/slack-pgbouncer@sha256:70dc0e4aefb23ba0646a3410358732ba8358f3b8aa95b8595f2decbba56ceff0
+platformTools:
+  enabled: true
+  image: ghcr.io/abundant-ai/sre-world/codex-tools@sha256:c0ed85e5280e4d70c3ec341288fd240d2d64647d952db3712f94cd27c9c08d64
+  digest: sha256:c0ed85e5280e4d70c3ec341288fd240d2d64647d952db3712f94cd27c9c08d64

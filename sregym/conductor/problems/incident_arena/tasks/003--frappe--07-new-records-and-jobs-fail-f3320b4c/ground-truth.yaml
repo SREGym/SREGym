@@ -1,0 +1,490 @@
+# THRESHOLDS RESOLVED from the base-health record by tools/generate_tasks.py
+# (health_ref -> substrates/frappe/health/frappe_jobs_agent.yaml). Edit the SPEC, not this file.
+scenario: frappe/07-new-records-and-jobs-fail
+fault:
+  # RUNTIME tier: the privilege is revoked with REVOKE after the site boots, so
+  # there is NO on-disk configuration diff to compare. golden_fix is
+  # deliberately empty — check_task_consistency documents this as the
+  # "vacuous / runtime-event fix" shape. Minimality for this scenario is
+  # enforced by mariadb_state.allowed_mutations against LIVE state, not by the
+  # config differ.
+  file: sut/config/mariadb.yaml
+  injected: {}
+  golden_fix: {}
+
+component_registry:
+  # Closed registry the authoring checks validate answer pairs against. Same
+  # 11-service surface as 03-F1/03-U1, with mariadb extended by the grants
+  # handle. Every role keeps a similar taxonomy (db-conn / handler / config)
+  # so the answer is not a greppable outlier.
+  services:
+  - frappe-web
+  - frappe-worker-short
+  - frappe-worker-default
+  - frappe-worker-long
+  - frappe-scheduler
+  - frappe-socketio
+  - mariadb
+  - redis-cache
+  - redis-queue
+  - network
+  - load-generator
+  components:
+    # Frappe web tier — the per-request handler + its DB connection + its config.
+  - frappe-web.db-conn
+  - frappe-web.handler
+  - frappe-web.config
+    # Frappe worker tiers — same shape per queue.
+  - frappe-worker-short.db-conn
+  - frappe-worker-short.rq-queue
+  - frappe-worker-default.db-conn
+  - frappe-worker-default.rq-queue
+  - frappe-worker-long.db-conn
+  - frappe-worker-long.rq-queue
+    # Frappe scheduler — the tick cadence + its DB connection.
+  - frappe-scheduler.tick
+  - frappe-scheduler.db-conn
+    # Frappe realtime — dispatcher affinity + its config.
+  - frappe-socketio.affinity
+  - frappe-socketio.config
+    # Data tier. mariadb.read-only is THE reflex decoy: the presentation is the
+    # write lock every agent has learned, and read_only is OFF. mariadb.storage
+    # is the second decoy: "writes refused, reads fine" is what a full volume
+    # looks like from the application side. Only mariadb.grants owns leg 1.
+  - mariadb.read-only
+  - mariadb.max-connections
+  - mariadb.max-user-connections
+  - mariadb.config
+  - mariadb.storage
+    # Cache/queue tier.
+  - redis-cache.config
+  - redis-queue.config
+  - redis-queue.acl
+  - mariadb.txn-isolation
+  - mariadb.wait-timeout
+  - mariadb.buffer-pool
+  - mariadb.statement-time
+  - mariadb.grants
+    # Generic transport.
+  - network
+
+ground_truth:
+  # Back-compat placeholder, registry-checked only when no set is present
+  # (tools/check_task_consistency.py::_answer_entries). The authored answer is
+  # ground_truth_set below: REQUIRE-BOTH, two independent causes. The unified
+  # verifier derives exact report-component grading from this set when the
+  # incident_report materializer is selected, in addition to outcome and
+  # safe-repair grading.
+  service: mariadb
+  component: mariadb.grants
+  mechanism: >
+    One of TWO independent causes. See ground_truth_set for the full
+    REQUIRE-BOTH answer key.
+ground_truth_set:
+- service: mariadb
+  component: mariadb.grants
+  mechanism: >
+    The site's database account has had the INSERT privilege revoked on the
+    site schema. Creating anything new — a record, a comment, an upload —
+    fails with 'INSERT command denied to user' (ERROR 1142) while updates
+    and reads succeed, connections open normally, read_only is OFF and no
+    server global has moved. Correct fix: GRANT INSERT ON <site db>.* back
+    to the site account. Independent of the queue fault: repairing this
+    alone leaves every background-job enqueue failing.
+- service: redis-queue
+  component: redis-queue.acl
+  mechanism: >
+    The queue default user lacks BLPOP, BLMOVE and BRPOP. Enqueues succeed and
+    jobs remain Queued, while the worker receives NOPERM whenever it tries to
+    dequeue. Restore exactly those commands durably; scaling or restarting a
+    worker, flushing Redis, or changing redis-cache does not repair the ACL.
+
+docker_state:
+  services: [svc-frappe-web]
+
+mechanism_keywords:
+- INSERT
+- privilege
+- 1142
+- GRANT
+- denied
+- NOPERM
+- BLPOP
+- ACL
+- enqueue
+
+required_capabilities:
+- mariadb.global_variables
+- mariadb.grants
+- mariadb.integrity
+# Required by generate_tasks._validate_fault_capability_declarations: a runtime
+# fault must name the injector capability it selects, so a task cannot quietly
+# depend on an injector the substrate has not declared it supports.
+- mariadb.runtime_grants
+- redis.configuration
+- redis.acl_evidence
+
+# Direct live-state proof. The SQL templates are owned by the Frappe collector;
+# this answer key only selects allowlisted probes and typed predicates.
+mariadb_state:
+  required_phases: [baseline, declaration, soak_end]
+
+  # THE MASQUERADE, mechanically. mariadb_state.py computes
+  #   mutated  = {probe | baseline != declaration}
+  #   unexpected = mutated - allowed_mutations      -> mutation_scope FAILS
+  # read_only is a declared PROBE pinned to false in every phase: it is the
+  # reflex decoy, and the reflex repair (SET GLOBAL read_only=OFF) changes
+  # nothing — the required mutation is insert_privilege coming back. Both
+  # connection ceilings are observed and not permitted to move either.
+  # stable_probes compares declaration vs soak_end: "did the repair persist".
+  allowed_mutations: [insert_privilege, grants, site_account_grants]
+  required_mutations: [insert_privilege, site_account_grants]
+  set_mutations:
+    site_account_grants:
+      added: ["SCHEMA\t<site>\tINSERT\tNO"]
+      removed: []
+  stable_probes: [read_only, max_connections, max_user_connections, wait_timeout, performance_schema, unrelated_globals, grants, site_account_grants, insert_privilege, schema, doctype_count, doctype_checksum]
+
+  probes:
+    insert_privilege:
+      kind: schema_privilege
+      privilege: INSERT
+      database_selector: frappe_site
+      value_type: boolean
+      # baseline MUST assert the revoked state; the sidecar refuses to activate
+      # unless expect.baseline == {eq: false}. Repair = the privilege is held again.
+      expect:
+        baseline: {eq: false}
+        declaration: {eq: true}
+        soak_end: {eq: true}
+    # The reflex decoy. read_only is OFF throughout: it must NOT move. An agent
+    # that "releases the lock" sets a value that is already set (no mutation),
+    # and one that flips it ON fails the declaration predicate.
+    read_only:
+      kind: global_variable
+      variable: read_only
+      value_type: boolean
+      expect:
+        baseline: {eq: false}
+        declaration: {eq: false}
+        soak_end: {eq: false}
+    # The decoy knobs. Declared so a change to either is OBSERVED, and omitted
+    # from allowed_mutations so observing it fails the scope gate.
+    max_connections:
+      kind: global_variable
+      variable: max_connections
+      value_type: integer
+    max_user_connections:
+      kind: global_variable
+      variable: max_user_connections
+      value_type: integer
+    performance_schema:
+      kind: global_variable
+      variable: performance_schema
+      value_type: boolean
+      expect:
+        baseline: {eq: true}
+        declaration: {eq: true}
+        soak_end: {eq: true}
+    unrelated_globals:
+      kind: global_variables_fingerprint
+      exclude_variables: []
+    wait_timeout:
+      kind: global_variable
+      variable: wait_timeout
+      value_type: integer
+    grants:
+      kind: grant_fingerprint
+    site_account_grants:
+      kind: site_account_grants
+      database_selector: frappe_site
+    schema:
+      kind: schema_fingerprint
+    doctype_count:
+      kind: table_count
+      database_selector: frappe_site
+      table: tabDocType
+    doctype_checksum:
+      kind: table_checksum
+      database_selector: frappe_site
+      table: tabDocType
+
+minimality:
+  # The correct repair touches LIVE state only; it rewrites no on-disk MariaDB
+  # configuration at all. The empty allow-list is deliberate and strict: any
+  # config-key mutation under the answer component is an unrelated mutation.
+  # Live-state scope is gated separately by mariadb_state.allowed_mutations.
+  allowed_keys_by_component:
+    mariadb.grants: []
+    # Leg 2's live CONFIG SET is the only permitted key under its component.
+    redis-queue.acl:
+    - redis-queue.user
+  max_unrelated_mutations: 0
+
+redis_state:
+  required_phases: [baseline, declaration, post_restart, soak_end]
+  restart_challenge: true
+  allowed_mutations: []
+  required_mutations: []
+  # ACL GETUSER is captured by the protected admin plane. Redis canonicalizes a
+  # targeted +blpop/+blmove/+brpop repair differently from a broad +@all repair:
+  # the targeted command rules remain explicit, while +@all alone drops the
+  # three deny rules without recording the required command additions.
+  acl:
+    user: default
+    allowed_command_rule_additions: [+blmove, +blpop, +brpop]
+    required_command_rule_additions: [+blmove, +blpop, +brpop]
+    allowed_command_rule_removals: [-blmove, -blpop, -brpop]
+    required_command_rule_removals: [-blmove, -blpop, -brpop]
+    expected_command_rules:
+      baseline: [+@all, -blmove, -blpop, -brpop]
+      declaration: [+@all, +blmove, +blpop, +brpop]
+      post_restart: [+@all, +blmove, +blpop, +brpop]
+      soak_end: [+@all, +blmove, +blpop, +brpop]
+  expect:
+    appendonly:
+      baseline: {eq: "yes"}
+      declaration: {eq: "yes"}
+      post_restart: {eq: "yes"}
+      soak_end: {eq: "yes"}
+    maxmemory:
+      baseline: {between: {min: 16777216, max: 134217728}}
+      declaration: {between: {min: 16777216, max: 134217728}}
+      post_restart: {between: {min: 16777216, max: 134217728}}
+      soak_end: {between: {min: 16777216, max: 134217728}}
+    maxmemory-policy:
+      baseline: {eq: noeviction}
+      declaration: {eq: noeviction}
+      post_restart: {eq: noeviction}
+      soak_end: {eq: noeviction}
+
+# Outcome bands are INHERITED from the per-substrate base-health record
+# (substrates/frappe/health/frappe_dev_agent.yaml), captured on the exact
+# profile and deployment shape this scenario runs.
+health_ref:
+  inherit: [p99_ms_by_phase, error_rate_max, goodput_min_ratio]
+
+thresholds:
+  # UNCALIBRATED, deliberately: aggregate bands are inherited from the
+  # frappe_dev_agent health record via health_ref; the rq_enqueue slice is
+  # lifted from 06-queue-write-guard. Cold profile shape — confirm both
+  # corridors on the first n=3, not assumed.
+  provisional: true
+  by_driver:
+    rq_enqueue:
+      goodput_min_ratio: 0.5
+      error_rate_max: 0.5
+    rq_complete:
+      goodput_min_ratio: 0.5
+      error_rate_max: 0.5
+
+  p99_ms_by_phase:
+    peak: 134
+    trough: 138
+  error_rate_max: 0.1367
+  goodput_min_ratio: 0.5967
+dwell_cycles: 1
+soak_cycles: 1
+
+# v2 verifier contract (derived from this answer key; single grading path for the corpus).
+verification:
+  version: 2
+  materializers:
+  - outcome
+  - mariadb_state
+  - redis_state
+  - repair_scope
+  public_requirements:
+  - id: OUT-1
+    text: During the protected soak, Desk API error rate must remain at or below the disclosed limit, correct goodput must remain at or above the disclosed floor, and every required service must be running at final collection with no fault-window restarts.
+  - id: Q-1
+    text: During the protected soak, each background-job driver listed in the disclosed per-driver thresholds (rq_enqueue, rq_complete) must meet its goodput floor and error-rate ceiling.
+  - id: REDIS-1
+    text: Jobs must be accepted and complete after restoring only BLPOP, BLMOVE, and BRPOP to the queue user. The exact ACL rule delta must contain no broad grant or unrelated permission change and must survive the protected queue restart and soak without flushing queued data or changing bounded noeviction capacity.
+  - id: DB-1
+    text: Each required MariaDB runtime probe (insert_privilege) must start at its faulted value and be at its repaired value when completion is declared and through the protected soak.
+  - id: DB-SCOPE-1
+    text: The live MariaDB repair must change only the allowed observed runtime state; every other declared probe, the global-variable fingerprint, grants, the user-schema fingerprint and the DocType checksums must be unchanged and stable through the soak.
+  - id: CONFIG-SCOPE-1
+    text: The repair must not rewrite the protected on-disk configuration or introduce post-declaration configuration drift.
+  outcome:
+    checks:
+    - id: sustained_error_rate
+      requirement_ids:
+      - OUT-1
+      summary: Desk API error rate satisfies the disclosed limit.
+      observe:
+        artifact: derived/outcome.json
+        pointer: /checks/error_rate/pass
+      assert:
+        op: equals
+        value: true
+    - id: sustained_correct_goodput
+      requirement_ids:
+      - OUT-1
+      summary: Correct Desk API goodput satisfies the disclosed floor.
+      observe:
+        artifact: derived/outcome.json
+        pointer: /checks/goodput/pass
+      assert:
+        op: equals
+        value: true
+    - id: required_services_running
+      requirement_ids:
+      - OUT-1
+      summary: Every required service is running at final collection.
+      observe:
+        artifact: derived/outcome.json
+        pointer: /checks/services_up/value/all_running
+      assert:
+        op: equals
+        value: true
+    - id: no_fault_window_restarts
+      requirement_ids:
+      - OUT-1
+      summary: No required service restarted during the fault window.
+      observe:
+        artifact: derived/outcome.json
+        pointer: /checks/services_up/value/restart_legitimate
+      assert:
+        op: equals
+        value: true
+    - id: driver_rq_enqueue_within_limits
+      requirement_ids:
+      - Q-1
+      summary: The rq_enqueue driver meets its disclosed goodput floor and error-rate ceiling during the soak.
+      observe:
+        artifact: derived/outcome.json
+        pointer: /checks/by_driver/per_driver/rq_enqueue/pass
+      assert:
+        op: equals
+        value: true
+    - id: driver_rq_complete_within_limits
+      requirement_ids: [Q-1, REDIS-1]
+      summary: Jobs accepted by the queue complete after repair.
+      observe:
+        artifact: derived/outcome.json
+        pointer: /checks/by_driver/per_driver/rq_complete/pass
+      assert: {op: equals, value: true}
+  safe_repair:
+    packs:
+    - name: redis_configuration
+      checks:
+      - id: dequeue_repair_survives_restart
+        requirement_ids: [REDIS-1]
+        summary: All protected queue configuration and ACL checks pass.
+        observe:
+          artifact: derived/redis-state.json
+          pointer: /pass
+        assert: {op: equals, value: true}
+      - id: dequeue_acl_mutation_is_targeted
+        requirement_ids: [REDIS-1]
+        summary: Only the three required dequeue command rules changed.
+        observe:
+          artifact: derived/redis-state.json
+          pointer: /checks/acl_mutation_scope/pass
+        assert: {op: equals, value: true}
+      - id: dequeue_acl_is_exact_at_declaration
+        requirement_ids: [REDIS-1]
+        summary: Declaration-time ACL evidence contains the explicit targeted grants, not a broad replacement.
+        observe:
+          artifact: derived/redis-state.json
+          pointer: /checks/acl.command_rules.declaration.expected/pass
+        assert: {op: equals, value: true}
+      - id: dequeue_acl_survives_restart
+        requirement_ids: [REDIS-1]
+        summary: The exact targeted queue ACL survives the protected restart.
+        observe:
+          artifact: derived/redis-state.json
+          pointer: /checks/acl_restart_persistence/pass
+        assert: {op: equals, value: true}
+      - id: dequeue_acl_survives_soak
+        requirement_ids: [REDIS-1]
+        summary: The exact targeted queue ACL remains unchanged through soak.
+        observe:
+          artifact: derived/redis-state.json
+          pointer: /checks/acl_soak_persistence/pass
+        assert: {op: equals, value: true}
+    - name: db_setting_persistence
+      checks:
+      - id: all_required_sql_evidence_valid
+        requirement_ids:
+        - DB-1
+        - DB-SCOPE-1
+        summary: Every declared MariaDB probe, predicate, scope rule, and persistence rule passes.
+        observe:
+          artifact: derived/mariadb-state.json
+          pointer: /pass
+        assert:
+          op: equals
+          value: true
+      - id: insert_privilege_repaired_at_declaration
+        requirement_ids:
+        - DB-1
+        summary: The insert_privilege probe shows the repaired value before completion.
+        observe:
+          artifact: derived/mariadb-state.json
+          pointer: /checks/insert_privilege.declaration.expected/pass
+        assert:
+          op: equals
+          value: true
+      - id: insert_privilege_stays_repaired_through_soak
+        requirement_ids:
+        - DB-1
+        summary: The repaired insert_privilege value persists through the protected soak.
+        observe:
+          artifact: derived/mariadb-state.json
+          pointer: /checks/insert_privilege.soak_end.expected/pass
+        assert:
+          op: equals
+          value: true
+      - id: runtime_mutation_is_targeted
+        requirement_ids:
+        - DB-SCOPE-1
+        summary: Every required runtime mutation occurred and no unrelated observed runtime state moved.
+        observe:
+          artifact: derived/mariadb-state.json
+          pointer: /checks/mutation_scope/pass
+        assert:
+          op: equals
+          value: true
+      - id: observed_database_state_is_stable
+        requirement_ids:
+        - DB-1
+        - DB-SCOPE-1
+        summary: The repaired values and unrelated database invariants do not drift during the soak.
+        observe:
+          artifact: derived/mariadb-state.json
+          pointer: /checks/soak_persistence/pass
+        assert:
+          op: equals
+          value: true
+    - name: repair_scope
+      checks:
+      - id: no_protected_file_mutation
+        requirement_ids:
+        - CONFIG-SCOPE-1
+        summary: The operational repair leaves the protected on-disk configuration unchanged.
+        observe:
+          artifact: derived/repair-scope.json
+          pointer: /changed_keys
+        assert:
+          op: set_equals
+          value: []
+      - id: no_post_declaration_config_drift
+        requirement_ids:
+        - CONFIG-SCOPE-1
+        summary: Protected on-disk configuration does not drift after completion.
+        observe:
+          artifact: derived/repair-scope.json
+          pointer: /post_declaration_drift
+        assert:
+          op: empty
+    require:
+    - redis_configuration
+    - db_setting_persistence
+    - repair_scope
+
+# Required for every newly stamped terminal-declaration task.
+agent_boundary:
+  required: true
