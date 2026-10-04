@@ -254,12 +254,18 @@ class ThunderingHerdMitigationOracle(Oracle):
         )
 
     def _run_wave(
-        self, *, concurrency: int, product_ids: tuple[str, ...]
+        self, *, concurrency: int, product_ids: tuple[str, ...], allow_missing_baseline: bool = False
     ) -> tuple[HerdSnapshot, float | None, float | None] | None:
         before_products = self._catalog_list_products_total()
         before_recs = self._list_recommendations_total()
         if before_products is None or before_recs is None:
-            return None
+            if not allow_missing_baseline:
+                return None
+            # A fresh deployment has no span series until its first requests.
+            # Injection owns that first traffic; grading still requires an
+            # observed baseline so missing telemetry cannot pass a repair.
+            before_products = before_products if before_products is not None else 0.0
+            before_recs = before_recs if before_recs is not None else 0.0
         wave_started_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
         snapshot = self.problem.workload.run(
             concurrency=concurrency,
@@ -277,6 +283,8 @@ class ThunderingHerdMitigationOracle(Oracle):
             sample_products = self._catalog_list_products_total()
             sample_recs = self._list_recommendations_total()
             if sample_products is None or sample_recs is None:
+                if allow_missing_baseline and waited < self.scrape_wait_seconds:
+                    continue
                 return None
             after_products = sample_products
             after_recs = sample_recs
@@ -330,6 +338,7 @@ class ThunderingHerdMitigationOracle(Oracle):
             measured = self._run_wave(
                 concurrency=self.fault_concurrency,
                 product_ids=self.seed_product_ids,
+                allow_missing_baseline=True,
             )
             if measured is None:
                 raise RuntimeError("catalog RPC metrics were not available while verifying the fault")
@@ -379,11 +388,12 @@ class ThunderingHerdMitigationOracle(Oracle):
             )
             if first is None:
                 return self.fail("prometheus_unreachable")
-            snapshot, amplification, log_amplification = first
+            snapshot, amplification, _ = first
             if amplification is None:
                 return self.fail("prometheus_unreachable")
-            if log_amplification is not None:
-                amplification = max(amplification, log_amplification)
+            # Repairs can retain the overlay's debug messages while serving
+            # real cached catalog data. Grade actual RPCs; logs only provide
+            # diagnostic and injection evidence.
             wave_fail = self._wave_failure(
                 snapshot,
                 amplification,
@@ -409,11 +419,9 @@ class ThunderingHerdMitigationOracle(Oracle):
             )
             if second is None:
                 return self.fail("prometheus_unreachable")
-            hidden_snapshot, hidden_amplification, hidden_log_amplification = second
+            hidden_snapshot, hidden_amplification, _ = second
             if hidden_amplification is None:
                 return self.fail("prometheus_unreachable")
-            if hidden_log_amplification is not None:
-                hidden_amplification = max(hidden_amplification, hidden_log_amplification)
             wave_fail = self._wave_failure(
                 hidden_snapshot,
                 hidden_amplification,

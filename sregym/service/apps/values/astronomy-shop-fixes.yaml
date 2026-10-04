@@ -43,6 +43,19 @@ opentelemetry-collector:
 # ActiveProcessorCount=2 and raise limits.memory to 512Mi while keeping
 # requests.memory at 300Mi so scheduling requests are unchanged.
 components:
+  product-catalog:
+    # The 2.2.0 catalog exceeds its 20 MiB process limit on x86 KIND as well
+    # as ARM64, even before fault traffic. GOMEMLIMIT bounds the Go runtime,
+    # not the complete RSS including the database and telemetry libraries.
+    # Establish healthy capacity before the oracle captures its baseline.
+    envOverrides:
+      - name: GOMEMLIMIT
+        value: 48MiB
+    resources:
+      requests:
+        memory: 20Mi
+      limits:
+        memory: 64Mi
   load-generator:
     # Helm replaces lists. Preserve the sidecar and use the multiarch build
     # of the same upstream v0.5.0 source.

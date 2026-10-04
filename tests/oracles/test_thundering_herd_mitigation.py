@@ -275,10 +275,24 @@ def test_fault_verification_can_use_logs_when_rpc_ratio_is_incomplete(monkeypatc
     oracle.assert_fault_present()
 
 
-def test_fault_verification_rejects_when_metrics_and_logs_are_unavailable():
+def test_fault_verification_initializes_cold_rpc_series(monkeypatch):
+    oracle = _oracle()
+    oracle.scrape_wait_seconds = 10.0
+    oracle._catalog_list_products_total = Mock(side_effect=[None, None, 400.0])
+    oracle._list_recommendations_total = Mock(side_effect=[None, None, 40.0])
+    oracle.problem.kubectl.exec_command_checked = Mock(return_value="\n".join([oracle.overlay_log_marker] * 400))
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
+
+    oracle.assert_fault_present()
+
+    oracle.problem.workload.run.assert_called_once()
+
+
+def test_fault_verification_rejects_when_metrics_and_logs_are_unavailable(monkeypatch):
     oracle = _oracle()
     oracle._catalog_list_products_total = Mock(return_value=None)
     oracle._list_recommendations_total = Mock(return_value=None)
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
     with pytest.raises(RuntimeError, match="metrics were not available"):
         oracle.assert_fault_present()
@@ -379,6 +393,18 @@ def test_evaluate_passes_with_no_new_catalog_calls(monkeypatch):
     oracle._capacity_changed = Mock(return_value=None)
     oracle._catalog_list_products_total = Mock(return_value=100.0)
     oracle._list_recommendations_total = Mock(side_effect=[50.0, 90.0, 90.0, 130.0])
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
+
+    assert oracle.evaluate() == {"success": True}
+
+
+def test_evaluate_grades_real_cached_rpcs_despite_retained_debug_messages(monkeypatch):
+    oracle = _oracle()
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
+    oracle._catalog_list_products_total = Mock(return_value=100.0)
+    oracle._list_recommendations_total = Mock(side_effect=[50.0, 90.0, 90.0, 130.0])
+    oracle.problem.kubectl.exec_command_checked = Mock(return_value="\n".join([oracle.overlay_log_marker] * 400))
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
     assert oracle.evaluate() == {"success": True}

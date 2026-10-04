@@ -87,6 +87,14 @@ def test_arm_go_services_have_memory_headroom():
         assert service["envOverrides"] == [{"name": "GOMEMLIMIT", "value": "48MiB"}]
 
 
+def test_catalog_has_healthy_headroom_before_the_capacity_baseline_on_x86():
+    values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
+    catalog = values["components"]["product-catalog"]
+    assert catalog["resources"]["requests"]["memory"] == "20Mi"
+    assert catalog["resources"]["limits"]["memory"] == "64Mi"
+    assert catalog["envOverrides"] == [{"name": "GOMEMLIMIT", "value": "48MiB"}]
+
+
 def test_ui_fix_coexists_with_upstream_memory_fixes():
     source = (AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text()
     # Duplicate YAML mappings silently discard one side of a merge in safe_load.

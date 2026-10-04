@@ -54,7 +54,9 @@ def test_deployed_fault_rejects_noop_and_accepts_real_repairs(monkeypatch, repai
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(_ASSET), "exec"), namespace)
     get_product_list = namespace["get_product_list"]
     # Warm the actual catalog data before measuring cached recommendations.
-    cached_ids = {product.id for product in list_products(None).products}
+    cached_catalog = list_products(None)
+    if repair == "warm_cache":
+        namespace["product_catalog_stub"] = SimpleNamespace(ListProducts=lambda _: cached_catalog)
 
     def get(url, **kwargs):
         parsed = urlsplit(url)
@@ -66,7 +68,7 @@ def test_deployed_fault_rejects_noop_and_accepts_real_repairs(monkeypatch, repai
         exclusions = tuple(parse_qs(parsed.query)["productIds"][0].split(","))
         with lock:
             counts["recommendations"] += 1
-        ids = sorted(cached_ids.difference(exclusions))[:5] if repair == "warm_cache" else get_product_list(exclusions)
+        ids = get_product_list(exclusions)
         response.json.return_value = {"productIds": ids}
         return response
 
