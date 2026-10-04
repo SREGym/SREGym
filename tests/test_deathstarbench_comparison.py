@@ -166,6 +166,10 @@ SCREENED_DISCRIMINATING = {
 #: without discriminating. The modules must keep importing and constructing --
 #: four of these are superclasses of the registered notification problems.
 BUILT_BUT_GATED = {
+    "sregym.conductor.problems.gitea_compound_loss": "GiteaCompoundLoss",
+    "sregym.conductor.problems.gitea_regional_failover": "GiteaRegionalFailover",
+    "sregym.conductor.problems.gitlab_notification_unannounced": "GitLabNotificationUnannounced",
+    "sregym.conductor.problems.unannounced_families": "MattermostCapacityCascadeUnannounced",
     "sregym.conductor.problems.gitea_database_deletion": "GiteaDatabaseDeletion",
     "sregym.conductor.problems.gitlab_database_deletion": "GitLabDatabaseDeletion",
     "sregym.conductor.problems.gitlab_notification_recovery": "GitLabNotificationRecovery",
@@ -210,6 +214,16 @@ def test_only_the_problems_a_screen_separated_on_are_registered():
         "gitlab_notification_ambiguity_replicated",
         "mattermost_capacity_cascade_single",
         "coordination_collapse_single",
+        # Candidates screened and found not to discriminate. Their code stays in
+        # the tree -- the negative results are the useful part -- but a screen
+        # has to justify registering one.
+        "gitlab_notification_unannounced_replicated",
+        "gitlab_notification_unannounced_ambiguity_replicated",
+        "mattermost_capacity_cascade_unannounced_single",
+        "gitea_database_deletion_unannounced_single",
+        "gitlab_database_deletion_unannounced_single",
+        "gitea_compound_loss_single",
+        "gitea_regional_failover_single",
     }
     regressed = saturated & registered
     assert not regressed, (
