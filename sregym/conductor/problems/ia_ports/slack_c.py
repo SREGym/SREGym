@@ -14,7 +14,6 @@ import json
 import shlex
 import time
 
-import yaml
 from kubernetes import client
 from kubernetes.client.exceptions import ApiException
 
@@ -564,13 +563,11 @@ class StoreStrictEventOracle(Oracle):
                 print(f"[live] {pod} active events={active}")
                 if active is None or p.event in active:
                     return self.fail("fault_still_present", pod=pod, active=active)
-            probes = fetch_parallel(
-                p,
-                [
-                    (f"unread-{i}", f"http://{p.faulty_service}:8000/unread?user_id=probe-{i}&channel_id=probe", "GET", None)
-                    for i in range(self.PROBES)
-                ],
-            )
+            # One at a time: a concurrent burst would mostly measure the toolbox's own CPU throttling.
+            probes = {}
+            for i in range(self.PROBES):
+                url = f"http://{p.faulty_service}:8000/unread?user_id=probe-{i}&channel_id=probe"
+                probes.update(fetch_parallel(p, [(f"unread-{i}", url, "GET", None)]))
         except Exception as exc:
             print(f"❌ Probe failed: {exc}")
             return self.fail("probe_unavailable", error=str(exc))
@@ -889,21 +886,27 @@ class StaleHostAliasesSlack(Problem):
                 raise RuntimeError("svc-message rollout did not reach one stale and one corrected Ready pod")
             time.sleep(2)
         self._patch({"spec": {"paused": True, "minReadySeconds": 0}})
-        # Retire the legacy entrypoint, then replace the stale pod (its
-        # ReplicaSet recreates it from the old template) so it has to open
-        # new connections through the retired address.
+        # Retire the legacy entrypoint, then replace both pods one after the
+        # other (each ReplicaSet recreates its own from its template): the stale
+        # pod has to open new connections through the retired address, and
+        # clients' kept-alive connections re-spread over the two pods.
         retire = [{"op": "replace", "path": "/spec/selector", "value": {"retired-entrypoint": "true"}}]
         self.kubectl.exec_command_checked(
             f"kubectl patch service {self.LEGACY_SERVICE} -n {self.namespace} --type=json -p {shlex.quote(json.dumps(retire))}"
         )
-        stale = aliased[0].metadata.name
-        self.kubectl.core_v1_api.delete_namespaced_pod(stale, self.namespace)
-        deadline = time.monotonic() + 180
-        while time.monotonic() < deadline:
-            pods = [pod for pod in self._pods() if self._ready(pod)]
-            if len(pods) == self.EDGE_REPLICAS and sum(1 for pod in pods if pod.spec.host_aliases) == 1:
-                break
-            time.sleep(2)
+        for victim in sorted(pods, key=lambda pod: not pod.spec.host_aliases):  # the stale pod first
+            self.kubectl.core_v1_api.delete_namespaced_pod(victim.metadata.name, self.namespace)
+            deadline = time.monotonic() + 180
+            while time.monotonic() < deadline:
+                ready = [pod for pod in self._pods() if self._ready(pod)]
+                names = {pod.metadata.name for pod in ready}
+                if (
+                    len(ready) == self.EDGE_REPLICAS
+                    and victim.metadata.name not in names
+                    and sum(1 for pod in ready if pod.spec.host_aliases) == 1
+                ):
+                    break
+                time.sleep(2)
         print(f"Paused {self.faulty_service} with one pod pinning {self.TARGET_BACKEND} to retired {legacy_ip}")
 
     @mark_fault_injected
@@ -993,11 +996,15 @@ class IngressMisrouteSlack(IngressMisroute):
             },
         }
 
-    def _ensure_edge(self) -> None:
+    def _install_edge(self) -> None:
         IngressNginx().deploy()
+        self.kubectl.create_namespace_if_not_exist(self.namespace)
         self.kubectl.exec_command_checked(
             f"kubectl apply -n {self.namespace} -f -", input_data=json.dumps(self._ingress(self.correct_service))
         )
+
+    def _ensure_edge(self) -> None:
+        self._install_edge()
         # Wait until the controller serves the route.
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
@@ -1008,6 +1015,9 @@ class IngressMisrouteSlack(IngressMisroute):
         raise RuntimeError("ingress-nginx did not route /api/healthz to svc-message")
 
     def _deploy_with_edge(self):
+        # The load generator's init container waits for its target, so the
+        # controller and the Ingress exist before the chart is installed.
+        self._install_edge()
         self._app_deploy()
         self._ensure_edge()
 
