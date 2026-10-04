@@ -7,7 +7,7 @@ variants of one fault on different original apps share a port. ``NOT_PORTED``
 lists the problems with no faithful port and why.
 """
 
-from sregym.conductor.problems.ia_ports import frappe, saleor, saleor_b, slack_a, slack_b, slack_c
+from sregym.conductor.problems.ia_ports import frappe, lite_variants, saleor, saleor_b, slack_a, slack_b, slack_c
 
 IA_PORTS: dict[str, tuple[str, type]] = {
     **slack_a.PORTS,
@@ -16,9 +16,13 @@ IA_PORTS: dict[str, tuple[str, type]] = {
     **saleor.PORTS,
     **saleor_b.PORTS,
     **frappe.PORTS,
+    **lite_variants.PORTS,
 }
 
-IA_PORT_PROBLEMS = {problem_id: factory for problem_id, factory in IA_PORTS.values()}
+# Variant ids reuse Lite ports that are registered from lite_ia already.
+IA_PORT_PROBLEMS = {
+    problem_id: factory for original, (problem_id, factory) in IA_PORTS.items() if original not in lite_variants.PORTS
+}
 
 NOT_PORTED = {
     **frappe.NOT_PORTED,
