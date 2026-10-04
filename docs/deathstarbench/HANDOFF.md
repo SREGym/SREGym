@@ -194,6 +194,51 @@ it was "almost certainly unaffected" -- which is the only reason the re-run
 happened. The re-run contradicted it. **Discoverability is not the test. Assume
 anything authored into the prompt is load-bearing until a screen says otherwise.**
 
+### Silent incompleteness does not survive a thorough verifier
+
+`gitea_compound_loss` was built deliberately to be the shape that separated the
+agent on stripe: one incident with two faults, the loud one (deleted schema)
+self-announcing and the quiet one (one repository's git storage discarded)
+invisible once the loud one is repaired. It was solved 3 of 3.
+
+```
+gitea_database_deletion (baseline)   ███   3 of 3   median 152s   [153, 103, 152]
+gitea_compound_loss                  ███   3 of 3   median 187s   [196, 187, 182]
+```
+
+The trace says why, in the agent's own words on attempt 1:
+
+> The database and all six journaled issues are restored... Verification also
+> found that `alice/hello-zoo` is missing from the repository volume. A
+> repository archive is available; I'll restore that repository and check all
+> five repositories.
+
+Its post-recovery verification enumerated every repository rather than only
+re-checking what it had just fixed. The second fault cost it 35 seconds.
+
+**So "a plausible wrong action that succeeds silently" is the wrong rule, because
+a verification pass catches precisely that.** What survives is narrower:
+
+> **A problem discriminates only when verification cannot establish
+> correctness.**
+
+That sorts every result in this document:
+
+| shape | why it does or does not bite | evidence |
+|---|---|---|
+| silent incompleteness | a broad verifier finds the second fault | compound_loss 3/3, both deletions 3/3 |
+| **race** | the record you would verify against is itself wrong | intermittent 1/3, delayed_audit 0/2 |
+| **conflict** | no amount of checking resolves it; it is a judgement | failover 1/3 |
+
+It also reframes stripe's 2 of 3. That failure was the agent skipping its
+verification pass once, not a structural property of the task -- a lapse in an
+otherwise reliable habit, which is why it sits at 2 of 3 rather than 1 of 3. It
+is a real discriminator and the weakest of the four.
+
+**Consequence for what to build.** Build races and conflicts. Do not build more
+silent-incompleteness problems: the coordination leftover-debt idea was dropped
+unbuilt on this evidence rather than screened, because it is the same shape.
+
 ### A withheld pointer only counts when it names what kubectl hides
 
 The stripe pair suggested that naming a subsystem in the application description
