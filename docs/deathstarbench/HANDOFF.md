@@ -483,6 +483,31 @@ immediately **before** a GitLab-family deploy as well, and watch the figure
 during the unpack rather than only between families. Pruning a node that is not
 the one pulling is safe while a pull is in flight.
 
+### Killing a screen means killing the process tree
+
+`evaluate_deathstarbench.py` spawns `tests/integration/validate_problem.py` as a
+child. `kill -9` on the runner leaves that child deploying, and it does not stop:
+mine kept bringing up GitLab CE for four minutes, directly into the screen that
+had just started. That is the cross-contamination the one-screen-at-a-time rule
+exists to prevent, produced by the cleanup intended to respect it, and it voided
+a second screen.
+
+```bash
+# children first, then the runner, then verify
+for p in $(pgrep -f validate_problem); do kill -9 "$p"; done
+for p in $(pgrep -f evaluate_deathstarbench); do kill -9 "$p"; done
+ps -eo pid,cmd | grep -E 'validate_prob|evaluate_deat' | grep -v grep
+```
+
+A related trap: `pgrep`/`pkill` patterns inside `docker exec` match the exec's
+own command line, so the kill kills the killer and returns 137 or 143 before
+doing anything. List the PIDs in one call and `kill -9 <pids>` in the next.
+
+**The cheaper lesson is not to need any of this.** Both voided screens came from
+reordering a queue mid-flight. Decide the order before launching, and if a result
+makes the remaining order wrong, let the current run finish and change what comes
+after it.
+
 ### Never delete the `observe` namespace by hand
 
 The conductor creates and owns it. A deploy that starts while `observe` is still
