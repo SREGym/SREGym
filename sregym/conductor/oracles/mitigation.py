@@ -59,9 +59,28 @@ class MitigationOracle(Oracle):
                     all_settled = False
                     break
             if all_settled:
+                self._wait_for_terminating_pods(kubectl, namespace)
                 return
             time.sleep(_ROLLOUT_POLL_INTERVAL)
         print("⚠️ Timed out waiting for deployments to settle; evaluating current state")
+
+    def _wait_for_terminating_pods(self, kubectl, namespace, timeout: float = 120.0):
+        """Let pods replaced by a completed rollout finish terminating.
+
+        A rollout reports complete while the old ReplicaSet's pods are still
+        Terminating; graded at that instant they read as unready (or Pending, for
+        a pod stuck in Init). Pods still terminating after the timeout are graded.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                pods = list(kubectl.list_pods(namespace).items)
+                terminating = any(getattr(pod.metadata, "deletion_timestamp", None) for pod in pods)
+            except Exception:  # pod state unreadable here; grade as before
+                return
+            if not terminating:
+                return
+            time.sleep(_ROLLOUT_POLL_INTERVAL)
 
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation ==")
@@ -91,11 +110,13 @@ class MitigationOracle(Oracle):
         # into a pass. Include Deployments added after the baseline as well.
         for name, dep in current_deps.items():
             desired = dep.spec.replicas if dep.spec.replicas is not None else 1
-            if desired == 0 and name in self.replica_count:
+            # A component the app ships at 0 replicas (Frappe's optional workers) was 0 at baseline too.
+            baseline_zero = self.replica_count.get(name) == 0
+            if desired == 0 and name in self.replica_count and not baseline_zero:
                 print(f"❌ Deployment '{name}' was scaled to 0")
                 return self.fail("required_deployment_scaled_to_zero", deployment=name, namespace=namespace)
             ready = getattr(dep.status, "ready_replicas", None) or 0
-            if not deployment_rollout_complete(dep, allow_zero=name not in self.replica_count):
+            if not deployment_rollout_complete(dep, allow_zero=name not in self.replica_count or baseline_zero):
                 print(f"❌ Deployment '{name}' rollout is incomplete ({ready}/{desired} replicas ready)")
                 return self.fail(
                     "deployment_replicas_unready",

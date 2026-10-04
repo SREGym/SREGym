@@ -322,7 +322,9 @@ class CronJobSidecarBlocksCompletionMitigationOracle(Oracle):
         """Return the first Deployment with an incomplete rollout, or None."""
         deployments = self.apps_v1.list_namespaced_deployment(namespace=namespace)
         for dep in deployments.items:
-            if not deployment_rollout_complete(dep):
+            # Components an app ships scaled to zero (Frappe's optional
+            # workers) are not unhealthy; the original apps have none.
+            if not deployment_rollout_complete(dep, allow_zero=True):
                 return dep.metadata.name
         return None
 
