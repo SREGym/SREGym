@@ -19,6 +19,16 @@ grafana:
     GF_PLUGINS_PREINSTALL_DISABLED: "true"
 
 opentelemetry-collector:
+  resources:
+    # The 0.142 collector's mapped binary plus heap exceeds 200 MiB under
+    # paced recommendation traffic on x86 KIND. Cgroup reclaim/OOM then stops
+    # RPC exports even though the heap-based memory limiter accepts spans.
+    # Keep the original scheduling reservation and allow measured RSS headroom;
+    # the collector chart derives GOMEMLIMIT from this limit automatically.
+    requests:
+      memory: 200Mi
+    limits:
+      memory: 384Mi
   config:
     service:
       pipelines:
