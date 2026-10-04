@@ -1001,6 +1001,13 @@ class IngressMisrouteSlack(IngressMisroute):
         # attempt (metadata.managedFields must be nil): start every attempt clean.
         edge = IngressNginx()
         self.kubectl.exec_command(f"helm uninstall {edge.release_name} -n {edge.namespace} --wait --ignore-not-found")
+        # Cleanup between attempts deletes the ingress-nginx namespace (and with it the
+        # release record) but not the chart's cluster-scoped objects, which Helm then
+        # refuses to adopt; remove them so the install starts from nothing.
+        self.kubectl.exec_command(
+            "kubectl delete ingressclass,clusterrole,clusterrolebinding,validatingwebhookconfiguration "
+            f"-l app.kubernetes.io/instance={edge.release_name} --ignore-not-found"
+        )
         edge.deploy()
         self.kubectl.create_namespace_if_not_exist(self.namespace)
         self.kubectl.exec_command_checked(
