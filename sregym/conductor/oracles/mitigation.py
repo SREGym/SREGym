@@ -59,9 +59,28 @@ class MitigationOracle(Oracle):
                     all_settled = False
                     break
             if all_settled:
+                self._wait_for_terminating_pods(kubectl, namespace)
                 return
             time.sleep(_ROLLOUT_POLL_INTERVAL)
         print("⚠️ Timed out waiting for deployments to settle; evaluating current state")
+
+    def _wait_for_terminating_pods(self, kubectl, namespace, timeout: float = 120.0):
+        """Let pods replaced by a completed rollout finish terminating.
+
+        A rollout reports complete while the old ReplicaSet's pods are still
+        Terminating; graded at that instant they read as unready (or Pending, for
+        a pod stuck in Init). Pods still terminating after the timeout are graded.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                pods = list(kubectl.list_pods(namespace).items)
+                terminating = any(getattr(pod.metadata, "deletion_timestamp", None) for pod in pods)
+            except Exception:  # pod state unreadable here; grade as before
+                return
+            if not terminating:
+                return
+            time.sleep(_ROLLOUT_POLL_INTERVAL)
 
     def evaluate(self) -> dict:
         print("== Mitigation Evaluation ==")
