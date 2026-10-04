@@ -194,6 +194,46 @@ it was "almost certainly unaffected" -- which is the only reason the re-run
 happened. The re-run contradicted it. **Discoverability is not the test. Assume
 anything authored into the prompt is load-bearing until a screen says otherwise.**
 
+### The conflict shape did not travel to a second application
+
+`gitea_regional_failover` is the same incident as the GitLab family -- a promoted
+replica that has since issued per-repository issue numbers the demoted primary
+already gave to different issues -- with the same grading, budget and agent.
+
+```
+gitlab_regional_failover_single   █░░   1 of 3   median 287s   [270, 298, 287]   post_promotion_writes_lost
+gitea_regional_failover_single    ███   3 of 3   median  96s   [ 81, 132,  96]
+```
+
+Three times faster, and faster than Gitea's own deletion baseline (152s), for a
+task that strictly requires more work. The traces say why, and it is one command:
+
+```
+# Gitea, every attempt: read both snapshots, never apply them
+pg_restore --data-only -t issue -f - /recovery/east/pre-partition.dump
+pg_restore --data-only -t issue -f - /recovery/east/last-replicated.dump
+```
+
+`--clean` appears zero times in the Gitea traces. The agent extracted the issue
+table from each snapshot to stdout, diffed them, re-accepted the six orphans
+through the API with fresh numbers, and verified both sets. On GitLab it instead
+ran a destructive full restore in two of three attempts, which is exactly
+`post_promotion_writes_lost`.
+
+**So the conflict is not what makes the GitLab problem hard.** Selective
+extraction is available on GitLab too -- the `issues` table can be dumped the
+same way -- and the agent did not reach for it there. One trace per family cannot
+establish why. The plausible reading is that a small schema invites selective
+extraction while a large one invites the wholesale restore the family's other
+problems train, but that is a hypothesis, not a result.
+
+**What this means for the roadmap.** Conflicts are not a reliable generator of
+hard problems: the same conflict on a different application was solved three
+times as fast. GitLab's 1 of 3 is real but unexplained, and sits on n=3 with two
+failures. Before building more conflicts, run the n=10 confirmation and a second
+agent -- that question is now load-bearing rather than tidy-up, because the
+entire "build conflicts" recommendation rests on a single family.
+
 ### Silent incompleteness does not survive a thorough verifier
 
 `gitea_compound_loss` was built deliberately to be the shape that separated the
