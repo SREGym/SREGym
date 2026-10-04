@@ -663,6 +663,23 @@ class ValkeyMemoryDisruptionFrappe(Problem):
 
 
 # ---------------------------------------------------------------------- /dev/shm exhaustion
+class DevShmFrappeOracle(DevShmMitigationOracle):
+    """``DevShmMitigationOracle`` that also accepts removing the oversized staging step.
+
+    In the original the shared-memory need is a brand-new workload's, so only a
+    bigger /dev/shm fixes it. Here it arrives as a worker template change with
+    rollout history, so rolling that change back is an equally valid repair.
+    """
+
+    def _has_memory_backed_shm(self, pod_spec) -> bool:
+        if super()._has_memory_backed_shm(pod_spec):
+            return True
+        marker = f"{self.problem.shm_mount_path}/rq-spool"
+        return not any(
+            marker in " ".join([*(c.command or []), *(c.args or [])]) for c in pod_spec.containers or []
+        )
+
+
 class DevShmExhaustionFrappe(Problem):
     """The RQ long worker stages ~80 MiB in /dev/shm before starting; the runtime default is 64 MiB."""
 
@@ -684,9 +701,10 @@ class DevShmExhaustionFrappe(Problem):
                 '("No space left on device"), the container exits non-zero and the deployment is in '
                 "CrashLoopBackOff although the node has ample disk, so background jobs are no longer processed: the "
                 "RQ queues back up until Frappe refuses new jobs (`Too many queued background jobs`, HTTP 503). "
-                f"Fix: mount an emptyDir with medium: Memory at {self.shm_mount_path}."
+                f"Fix: mount an emptyDir with medium: Memory at {self.shm_mount_path} (or roll back the worker "
+                "template change that added the staging step)."
             ),
-            oracle_factory=lambda problem: DevShmMitigationOracle(problem),
+            oracle_factory=lambda problem: DevShmFrappeOracle(problem),
         )
         # Graded on the worker alone, as the original is: the RQ backlog the outage
         # leaves does not drain by itself, so app health could fail a correct fix.
@@ -939,7 +957,7 @@ class LoadGeneratorFloodHomepageFrappe(Problem):
         ported(
             self,
             app_name,
-            component=f"deployment/{GUNICORN}",
+            component=f"deployment/{self.DEPLOYMENT} (configmap/{self.CONFIGMAP} flag {self.FLAG})",
             description=(
                 f"The web tier (`{GUNICORN}`, Service `{WEB_SERVICE}`) is saturated by a sustained traffic surge on the "
                 "homepage route, so users' Desk/API requests queue behind it and time out or fail. Mechanism: the "
