@@ -102,6 +102,10 @@ def problem_id(app, tier, incident="wrong_service_selector"):
             raise ValueError("Database deletion supports Gitea and GitLab CE single and replicated tiers")
         prefix = "gitlab" if app == "gitlab_ce" else "gitea"
         return f"{prefix}_database_deletion_{tier}"
+    if incident in ("coordination_lagging_ack", "coordination_lagging_admission"):
+        if app != "mattermost" or tier not in SUPPORTED_TIERS[app]:
+            raise ValueError("Coordination lag variants support Mattermost single and replicated tiers")
+        return f"{incident}_{tier}"
     if incident == "coordination_collapse":
         if app != "mattermost" or tier not in SUPPORTED_TIERS[app]:
             raise ValueError("Coordination collapse supports Mattermost single and replicated tiers")
@@ -178,6 +182,8 @@ def main():
             "regional_failover",
             "capacity_cascade",
             "coordination_collapse",
+            "coordination_lagging_ack",
+            "coordination_lagging_admission",
         ),
         default="wrong_service_selector",
     )

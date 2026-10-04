@@ -734,3 +734,53 @@ def test_a_genuine_system_log_is_still_allowed():
     # But it must not editorialise about what the responder should conclude.
     for leak in ("were not discarded", "do NOT", "is not recovery"):
         assert leak not in failover, leak
+
+
+def test_a_lagging_compaction_ack_is_off_unless_configured():
+    """The base family must be byte-identical, or its 3-of-3 is not a baseline."""
+    import importlib
+
+    import sregym.service.apps.incident_runtime.coordination_store as store
+
+    importlib.reload(store)
+    assert store.COMPACTION_ACK_LAG_SECONDS == 0
+    assert store.ADMISSION_ACK_LAG_SECONDS == 0
+    state = dict(store.DEFAULT_STATE, compacted=True, compacted_at=None)
+    # With no lag the reported value is simply the real one, even with no
+    # timestamp recorded -- which is the state every existing attempt starts in.
+    assert store.compaction_visible(state, 1000.0) is True
+    assert store.visible_admitted_fraction(state, 1000.0) == state["admitted_fraction"]
+
+
+def test_a_configured_lag_reports_stale_state_then_catches_up(monkeypatch):
+    import sregym.service.apps.incident_runtime.coordination_store as store
+
+    monkeypatch.setattr(store, "COMPACTION_ACK_LAG_SECONDS", 40.0)
+    state = dict(store.DEFAULT_STATE, compacted=True, compacted_at=1000.0)
+    assert store.compaction_visible(state, 1000.0) is False
+    assert store.compaction_visible(state, 1039.0) is False
+    assert store.compaction_visible(state, 1040.0) is True
+    # Never compacted stays never compacted; the lag cannot invent progress.
+    assert store.compaction_visible(dict(state, compacted=False), 9999.0) is False
+
+
+def test_the_lag_is_always_shorter_than_the_window_the_agent_must_wait_anyway():
+    """Patience must be sufficient, or the problem is impossible rather than hard."""
+    from sregym.service.apps.coordination_cluster import TIER_SETTINGS
+    from sregym.service.apps.coordination_lagging_ack import ACK_LAG, ADMISSION_ACK_LAG
+
+    for tier, (stability, _warming, step) in TIER_SETTINGS.items():
+        assert ACK_LAG[tier] < stability, f"{tier}: compaction ack lag must clear within a stability window"
+        assert ADMISSION_ACK_LAG[tier] < step, f"{tier}: admission ack lag must clear within a step interval"
+
+
+def test_a_lag_variant_refuses_to_be_identical_to_its_parent():
+    from sregym.service.apps.coordination_lagging_ack import LaggingAck
+
+    class NoLag(LaggingAck):
+        LAGS = {}
+
+    app = NoLag.__new__(NoLag)
+    app.scale_tier = "single"
+    with pytest.raises(RuntimeError, match="declares no lag"):
+        app.application_documents()

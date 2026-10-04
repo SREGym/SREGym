@@ -48,6 +48,20 @@ WARMING_SECONDS = float(os.environ.get("WARMING_SECONDS", "120"))
 COLD_ADMISSION_LIMIT = 0.25
 #: How long each admission step must hold before the next is safe.
 ADMISSION_STEP_SECONDS = float(os.environ.get("ADMISSION_STEP_SECONDS", "45"))
+#: Seconds the reported compaction state trails the real one. Zero in the base
+#: family, which is therefore unchanged. When set, a compaction that has actually
+#: succeeded keeps reporting `compacted: false` for this long, and compacting
+#: again during the window is a second write storm: it adds debt and restarts the
+#: stability window. The event ledger records the truth immediately, so an agent
+#: that cross-checks its own actions wins and one that trusts the status loses.
+#: Shorter than STABILITY_SECONDS, so waiting is always sufficient.
+COMPACTION_ACK_LAG_SECONDS = float(os.environ.get("COMPACTION_ACK_LAG_SECONDS", "0"))
+#: Seconds the reported admitted fraction trails the real one. Zero in the base
+#: family. When set, an admission step that has taken effect keeps reporting the
+#: previous fraction for this long, so an agent that re-issues the step to "make
+#: it stick" hits the step-interval refusal and learns nothing, while one that
+#: reads the ledger sees the change recorded immediately.
+ADMISSION_ACK_LAG_SECONDS = float(os.environ.get("ADMISSION_ACK_LAG_SECONDS", "0"))
 
 #: Subscriptions, keys and debt once the incident has developed. Watches far
 #: over budget are what hold write latency above the health threshold.
@@ -61,11 +75,13 @@ DEFAULT_STATE = {
     "keys": 6000,
     "compaction_debt": 0,
     "compacted": True,
+    "compacted_at": None,
     "scheduler_state_fresh": True,
     "leader": MEMBER,
     "leader_since": None,
     "leader_elections": 0,
     "admitted_fraction": 1.0,
+    "previous_admitted_fraction": 1.0,
     "admitted_since": None,
     "cache_warm_since": None,
     "dropped_requests": 0,
@@ -157,6 +173,34 @@ def write_latency_ms(state):
     ratio = max(0.0, state["watch_subscriptions"]) / float(WATCH_BUDGET)
     debt = 0.0 if state["compacted"] else state["compaction_debt"] / 1000.0
     return BASE_LATENCY_MS * ratio**2 + debt * DEBT_LATENCY_MS_PER_K
+
+
+def visible_admitted_fraction(state, now):
+    """The *reported* admitted fraction, which trails the real one when lagging.
+
+    The cluster's physics always use the real value, so the loss the grader
+    counts is caused by what the agent actually did, never by what it was shown.
+    """
+    if ADMISSION_ACK_LAG_SECONDS <= 0:
+        return state["admitted_fraction"]
+    at = state.get("admitted_since")
+    if at is None or (now - at) >= ADMISSION_ACK_LAG_SECONDS:
+        return state["admitted_fraction"]
+    return state.get("previous_admitted_fraction", state["admitted_fraction"])
+
+
+def compaction_visible(state, now):
+    """Whether the *reported* state has caught up with the real one.
+
+    With no lag configured this is just `state["compacted"]`, so the base family
+    behaves exactly as before.
+    """
+    if not state["compacted"]:
+        return False
+    if COMPACTION_ACK_LAG_SECONDS <= 0:
+        return True
+    at = state.get("compacted_at")
+    return at is not None and (now - at) >= COMPACTION_ACK_LAG_SECONDS
 
 
 def quorum_members(state):
@@ -283,13 +327,16 @@ def truth(state, now):
         "watch_budget": WATCH_BUDGET,
         "keys": state["keys"],
         "compaction_debt": state["compaction_debt"],
-        "compacted": state["compacted"],
+        # The reported value, which trails reality when a lag is configured. The
+        # event ledger carries the truth immediately: a `compacted` entry is
+        # there the moment it happens, so the two can be cross-checked.
+        "compacted": compaction_visible(state, now),
         "scheduler_state_fresh": state["scheduler_state_fresh"],
         "leader_stable_seconds": round(stable_seconds(state, now), 1),
         "stability_required_seconds": STABILITY_SECONDS,
         "cache_warm_fraction": round(cache_warm_fraction(state, now), 3),
         "serve_capacity_fraction": round(serve_capacity(state, now), 3),
-        "admitted_fraction": state["admitted_fraction"],
+        "admitted_fraction": visible_admitted_fraction(state, now),
         "admission_step_seconds": ADMISSION_STEP_SECONDS,
         "cold_admission_limit": COLD_ADMISSION_LIMIT,
         "dropped_requests": state["dropped_requests"],
@@ -430,14 +477,32 @@ class Coordinator(BaseHTTPRequestHandler):
                     "error": f"leader stable for {held:.0f}s; {STABILITY_SECONDS:.0f}s required. "
                     "This attempt restarted the stability window.",
                 }
+            if state["compacted"] and not compaction_visible(state, now):
+                # A second compaction while the first is still flushing is
+                # another write storm, and costs the window it was waiting on.
+                state["compaction_debt"] += 3000
+                state["leader_since"] = now
+                state["leader_elections"] += 1
+                record("compaction_redundant", compaction_debt=state["compaction_debt"])
+                return {
+                    "_code": 409,
+                    "error": "a compaction is still flushing; this attempt added debt and "
+                    "restarted the stability window",
+                }
             state["compacted"] = True
+            state["compacted_at"] = now
             state["compaction_debt"] = 0
             record("compacted")
             return {"compacted": True}
 
         if action == "rebuild-scheduler":
-            if not state["compacted"]:
-                return {"_code": 409, "error": "compact the store before rebuilding scheduler state"}
+            if not compaction_visible(state, now):
+                reason = (
+                    "a compaction is still flushing"
+                    if state["compacted"]
+                    else "compact the store before rebuilding scheduler state"
+                )
+                return {"_code": 409, "error": reason}
             if stable_seconds(state, now) < STABILITY_SECONDS:
                 return {"_code": 409, "error": "leader is not stable long enough"}
             state["scheduler_state_fresh"] = True
@@ -455,6 +520,7 @@ class Coordinator(BaseHTTPRequestHandler):
                     "_code": 409,
                     "error": f"previous admission held {held:.0f}s; {ADMISSION_STEP_SECONDS:.0f}s required",
                 }
+            state["previous_admitted_fraction"] = previous
             state["admitted_fraction"] = float(fraction)
             state["admitted_since"] = now
             record("admission_changed", fraction=fraction, capacity=round(serve_capacity(state, now), 3))

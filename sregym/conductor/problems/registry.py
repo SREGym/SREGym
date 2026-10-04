@@ -36,6 +36,10 @@ from sregym.conductor.problems.feature_flag_latent_bug_hotel_reservation import 
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.coordination_lagging_ack import (
+    CoordinationLaggingAckCollapse,
+    CoordinationLaggingAdmissionCollapse,
+)
 from sregym.conductor.problems.gitlab_notification_delayed_audit import GitLabNotificationDelayedAudit
 from sregym.conductor.problems.gitlab_notification_intermittent import GitLabNotificationIntermittent
 from sregym.conductor.problems.gitlab_regional_failover import GitLabRegionalFailover
@@ -230,6 +234,12 @@ class ProblemRegistry:
             # generic task description, so registering them would add campaign cost
             # without adding discrimination. Re-register one when a screen gives a
             # reason to -- a harder tier, a weaker agent, or a new lever.
+            # Candidates under screen: a confirmation that trails the action,
+            # the only shape still standing after ten screens.
+            "coordination_lagging_ack_single": lambda: CoordinationLaggingAckCollapse(scale_tier="single"),
+            "coordination_lagging_admission_single": lambda: CoordinationLaggingAdmissionCollapse(
+                scale_tier="single"
+            ),
             # Seven candidates were screened against these families and none
             # discriminated, so none is registered. They remain in the tree
             # because the negative results are the useful part and the code is
