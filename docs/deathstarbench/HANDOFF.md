@@ -266,10 +266,22 @@ Deployment, which `kubectl get pods` returns in the agent's first command.
 > does not already show.** A path inside a container or an operator tool is
 > expensive to find. A deployment, service or volume is free.
 
+A second pair confirms it, and kills the one hypothesis left open -- that naming
+the *causal* component might matter even when the component is kubectl-visible.
+The cascade description names `capacity-scaler`, which is the incident itself:
+
+```
+cascade, announced     ███   3 of 3   median 243s   [282, 243, 178]
+cascade, unannounced   ███   3 of 3   median 206s   [217, 206, 167]
+```
+
+Faster again. Naming the cause is free when the cause is a Deployment.
+
 That retired three of the five candidates built on this lever before they ran.
 Recorded because the reasoning that produced them was sound and still wrong:
 "this sentence is doing work" is a hypothesis about where the agent spends time,
-and it has to be screened like any other.
+and it has to be screened like any other. Both times the sentence was costing
+the agent time rather than saving it.
 
 ### The controlled comparison that explains everything else
 
