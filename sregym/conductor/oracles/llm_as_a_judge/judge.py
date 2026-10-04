@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from collections.abc import Iterator
 from enum import StrEnum
 from pathlib import Path
 
@@ -510,34 +511,75 @@ fences, no preamble, no commentary.
 
     @staticmethod
     def _parse_response(response_text: str, expected_question_ids: list[str]) -> list[dict]:
-        """Parse the LLM JSON response into a list of question result dicts."""
-        # Strip markdown fences
-        clean = re.sub(r"```(?:json)?\s*|\s*```", "", response_text).strip()
+        """Return the first complete, valid checklist in the response."""
+        expected_ids = set(expected_question_ids)
+        last_error = ChecklistParseError("Invalid JSON: no checklist array found")
+        for candidate in DiagnosisJudge._json_candidates(response_text):
+            try:
+                return DiagnosisJudge._validate_checklist(candidate, expected_ids)
+            except ChecklistParseError as exc:
+                last_error = exc
+        raise last_error
 
-        # Sometimes the model emits chain-of-thought text before the JSON array.
-        # Try to find the outermost JSON array.
-        bracket_start = clean.find("[")
-        bracket_end = clean.rfind("]")
-        if bracket_start != -1 and bracket_end != -1 and bracket_end > bracket_start:
-            clean = clean[bracket_start : bracket_end + 1]
+    @staticmethod
+    def _json_candidates(response_text: str) -> Iterator[object]:
+        """Decode outer JSON containers without treating nested values as candidates."""
+        decoder = json.JSONDecoder()
+        stack: list[str] = []
+        start = 0
+        # Locate container boundaries only; the JSON decoder checks their syntax.
+        # Quoted strings are single tokens, including an unfinished final string.
+        for match in re.finditer(r'"(?:\\.|[^"\\])*"?|[\[\]{}]', response_text):
+            token = match.group()
+            if token.startswith('"'):
+                continue
+            if token in ("[", "{"):
+                if not stack:
+                    start = match.start()
+                stack.append("]" if token == "[" else "}")
+                continue
+            if not stack:
+                continue
+            if token != stack.pop():
+                # A broken outer container does not define safe candidate boundaries.
+                return
+            if not stack:
+                try:
+                    candidate, end = decoder.raw_decode(response_text, start)
+                except (ValueError, RecursionError):
+                    # ValueError also covers Python's integer conversion limit.
+                    continue
+                if end == match.end():
+                    yield candidate
 
-        try:
-            data = json.loads(clean)
-        except json.JSONDecodeError as exc:
-            raise ChecklistParseError(f"Invalid JSON: {exc}") from exc
-
-        if not isinstance(data, list):
+    @staticmethod
+    def _validate_checklist(candidate: object, expected_ids: set[str]) -> list[dict]:
+        """Validate the fields consumed by grading before accepting a candidate."""
+        if not isinstance(candidate, list):
             raise ChecklistParseError("Response is not a JSON array")
 
-        expected_ids = set(expected_question_ids)
-        num_expected = len(expected_ids)
-        received_ids = {item.get("id") for item in data if isinstance(item, dict)}
+        received_ids: set[str] = set()
+        for item in candidate:
+            if not isinstance(item, dict):
+                raise ChecklistParseError("Each checklist item must be an object")
+            qid = item.get("id")
+            if not isinstance(qid, str) or qid not in expected_ids:
+                raise ChecklistParseError(f"Invalid question ID: {qid!r}")
+            if qid in received_ids:
+                raise ChecklistParseError(f"Duplicate question ID: {qid}")
+            answer = item.get("answer")
+            if not isinstance(answer, str) or answer.strip().lower() not in ("yes", "no"):
+                raise ChecklistParseError(f"Question {qid} must have a Yes/No answer")
+            for field in ("evidence", "confidence"):
+                if field in item and not isinstance(item[field], str):
+                    raise ChecklistParseError(f"Question {qid} must have a string {field}")
+            received_ids.add(qid)
 
-        if len(data) < num_expected or not expected_ids.issubset(received_ids):
-            missing = expected_ids - received_ids
-            raise ChecklistParseError(f"Expected {num_expected} questions, got {len(data)}. Missing: {missing}")
-
-        return data
+        if missing := expected_ids - received_ids:
+            raise ChecklistParseError(
+                f"Expected {len(expected_ids)} questions, got {len(candidate)}. Missing: {sorted(missing)}"
+            )
+        return candidate
 
     def _empty_report(self):
         """Return a report where all questions score No (empty/unknown answer)."""
