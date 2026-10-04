@@ -32,13 +32,22 @@ def test_problem_file_is_x86_only_and_hides_eval_constants():
     assert "retry storm" in source
 
 
-@pytest.mark.parametrize("exclusions", [("a", "b"), ("a,b",), ("a,b", "c")])
+@pytest.mark.parametrize(
+    "exclusions",
+    [
+        ("product-a", "product-b"),
+        ("product-a,product-b",),
+        ("product-a,product-b", "product-c"),
+        tuple("product-a"),
+        tuple("product-a,product-b"),
+    ],
+)
 def test_overlay_honors_repeated_and_comma_separated_exclusions(exclusions):
     # Execute the deployed function without importing the service's generated
     # protobuf files or starting gRPC/OTel exporters in the unit-test process.
     tree = ast.parse(_ASSET.read_text(encoding="utf-8-sig"))
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "get_product_list")
-    catalog_ids = {"a", "b", "c", "d", "e", "f", "g"}
+    catalog_ids = {f"product-{item}" for item in "abcdefg"}
     catalog = Mock()
     catalog.ListProducts.return_value = SimpleNamespace(
         products=[SimpleNamespace(id=product_id) for product_id in sorted(catalog_ids)]
@@ -55,6 +64,11 @@ def test_overlay_honors_repeated_and_comma_separated_exclusions(exclusions):
 
     result = namespace["get_product_list"](exclusions)
 
-    excluded_ids = {product_id for value in exclusions for product_id in value.split(",")}
-    assert set(result) == catalog_ids - excluded_ids
+    excluded_ids = (
+        set("".join(exclusions).split(","))
+        if all(len(value) == 1 for value in exclusions)
+        else {product_id for value in exclusions for product_id in value.split(",")}
+    )
+    assert set(result) <= catalog_ids - excluded_ids
+    assert len(result) == min(5, len(catalog_ids - excluded_ids))
     assert catalog.ListProducts.call_count == 10

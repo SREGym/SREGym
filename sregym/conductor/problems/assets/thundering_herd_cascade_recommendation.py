@@ -56,9 +56,8 @@ def get_product_list(request_product_ids):
 
         # Accept both repeated IDs and comma-separated frontend input without
         # concatenating distinct exclusions into a nonexistent product ID.
-        request_product_ids = {
-            product_id for value in request_product_ids for product_id in value.split(",") if product_id
-        }
+        request_values = tuple(request_product_ids)
+        request_product_ids = {product_id for value in request_values for product_id in value.split(",") if product_id}
 
         span.set_attribute("app.recommendation.cache_enabled", False)
         # Defensive refetch: every request does 10 fresh product-catalog
@@ -72,6 +71,13 @@ def get_product_list(request_product_ids):
             responses.append(product_catalog_stub.ListProducts(demo_pb2.Empty()))
         cat_response = responses[-1]
         product_ids = [x.id for x in cat_response.products]
+        # The demo frontend serializes a single string query as repeated
+        # characters. Preserve that legacy path without joining full IDs from
+        # a correctly formed repeated protobuf request.
+        if request_values and all(len(value) == 1 for value in request_values):
+            request_product_ids.update(
+                product_id for product_id in "".join(request_values).split(",") if product_id in product_ids
+            )
 
         span.set_attribute("app.products.count", len(product_ids))
 

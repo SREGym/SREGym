@@ -1,5 +1,6 @@
 import threading
 from unittest.mock import Mock
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -31,6 +32,22 @@ def _workload(**kwargs):
     workload = RecommendationHerdWorkload("astronomy-shop", **kwargs)
     workload.frontend = Mock()
     return workload
+
+
+@pytest.mark.parametrize("product_ids", [("OLJCESPC7Z",), ("OLJCESPC7Z", "66VCHSJNUP"), ("a&b", "c/d")])
+def test_exclusions_reach_the_frontend_as_an_array_of_complete_ids(monkeypatch, product_ids):
+    workload = _workload()
+    workload.frontend.start.return_value = 8080
+    response = Mock(status_code=200)
+    response.json.return_value = {"productIds": ["recommended"]}
+    get = Mock(return_value=response)
+    monkeypatch.setattr("sregym.generators.workload.recommendation_herd.requests.get", get)
+
+    assert workload._one_request(product_ids)[0]
+
+    values = parse_qs(urlsplit(get.call_args.args[0]).query)["productIds"]
+    assert len(values) >= 2
+    assert set(values) == set(product_ids)
 
 
 def test_fast_responder_is_paced_instead_of_saturating_the_catalog():

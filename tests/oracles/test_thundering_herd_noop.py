@@ -65,7 +65,10 @@ def test_deployed_fault_rejects_noop_and_accepts_real_repairs(monkeypatch, repai
             response.json.return_value = {"products": [{"id": product.id} for product in list_products(None).products]}
             return response
         assert parsed.path == "/api/recommendations"
-        exclusions = tuple(parse_qs(parsed.query)["productIds"][0].split(","))
+        values = parse_qs(parsed.query).get("productIds", [])
+        # Match the real Next.js query and protobuf serializer, including its
+        # single-string character behavior rather than silently fixing input.
+        exclusions = tuple(values[0]) if len(values) == 1 else tuple(values)
         with lock:
             counts["recommendations"] += 1
         ids = get_product_list(exclusions)
