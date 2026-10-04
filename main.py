@@ -48,7 +48,9 @@ _driver_results: list[dict] = []
 _driver_base_dir: Path | None = None
 _driver_error: BaseException | None = None
 EVALUATION_DRAIN_TIMEOUT_SECONDS = 300
-CLEANUP_DRAIN_TIMEOUT_SECONDS = 300
+# Teardown under heavy host load (many parallel DinD campaigns) can exceed the
+# default; SREGYM_CLEANUP_DRAIN_TIMEOUT_S raises the deadline.
+CLEANUP_DRAIN_TIMEOUT_SECONDS = float(os.environ.get("SREGYM_CLEANUP_DRAIN_TIMEOUT_S", "300"))
 
 
 def _http_endpoint(value: str) -> str:
