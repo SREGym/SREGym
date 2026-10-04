@@ -8,6 +8,7 @@ import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
@@ -83,6 +84,18 @@ class RecommendationHerdWorkload:
         self._background_stop = threading.Event()
         self._background_threads: list[threading.Thread] = []
         self._background_lock = threading.Lock()
+        self._worker_client = threading.local()
+
+    @contextmanager
+    def _worker_session(self):
+        # Reuse each worker's HTTP connection across paced requests without
+        # sharing mutable Sessions between threads or retrying failed calls.
+        with requests.Session() as session:
+            self._worker_client.session = session
+            try:
+                yield
+            finally:
+                del self._worker_client.session
 
     def start(self) -> None:
         self.frontend.start()
@@ -109,15 +122,16 @@ class RecommendationHerdWorkload:
             interval = concurrency / self.requests_per_second
 
             def worker() -> None:
-                while not self._background_stop.is_set():
-                    started = time.monotonic()
-                    try:
-                        self._one_request(product_ids)
-                    except (RuntimeError, TimeoutError, OSError) as exc:
-                        # A frontend rollout may break the tunnel. The next
-                        # paced request reopens it instead of ending traffic.
-                        logger.warning("Recommendation background request failed: %s", exc)
-                    self._background_stop.wait(max(0.0, interval - (time.monotonic() - started)))
+                with self._worker_session():
+                    while not self._background_stop.is_set():
+                        started = time.monotonic()
+                        try:
+                            self._one_request(product_ids)
+                        except (RuntimeError, TimeoutError, OSError) as exc:
+                            # A frontend rollout may break the tunnel. The next
+                            # paced request reopens it instead of ending traffic.
+                            logger.warning("Recommendation background request failed: %s", exc)
+                        self._background_stop.wait(max(0.0, interval - (time.monotonic() - started)))
 
             self._background_threads = [
                 threading.Thread(target=worker, name=f"rec-herd-background-{index}", daemon=True)
@@ -157,7 +171,8 @@ class RecommendationHerdWorkload:
         query = urlencode([*(("productIds", item) for item in exclusions), ("_", time.time_ns())])
         started = time.monotonic()
         try:
-            response = requests.get(
+            client = getattr(self._worker_client, "session", requests)
+            response = client.get(
                 self._url(f"/api/recommendations?{query}"),
                 headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
                 timeout=self.request_timeout,
@@ -194,23 +209,24 @@ class RecommendationHerdWorkload:
 
         def worker() -> None:
             nonlocal submitted, completed, succeeded
-            while time.monotonic() < stop_at:
-                started = time.monotonic()
-                with lock:
-                    submitted += 1
-                ok, elapsed, ids = self._one_request(product_ids)
-                with lock:
-                    completed += 1
-                    latencies.append(elapsed)
-                    if ok:
-                        succeeded += 1
-                        returned_ids.extend(ids)
-                        recommendation_sets.add(tuple(sorted(set(ids))))
-                delay = min(
-                    max(0.0, interval - (time.monotonic() - started)),
-                    max(0.0, stop_at - time.monotonic()),
-                )
-                time.sleep(delay)
+            with self._worker_session():
+                while time.monotonic() < stop_at:
+                    started = time.monotonic()
+                    with lock:
+                        submitted += 1
+                    ok, elapsed, ids = self._one_request(product_ids)
+                    with lock:
+                        completed += 1
+                        latencies.append(elapsed)
+                        if ok:
+                            succeeded += 1
+                            returned_ids.extend(ids)
+                            recommendation_sets.add(tuple(sorted(set(ids))))
+                    delay = min(
+                        max(0.0, interval - (time.monotonic() - started)),
+                        max(0.0, stop_at - time.monotonic()),
+                    )
+                    time.sleep(delay)
 
         with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="rec-herd") as pool:
             futures = [pool.submit(worker) for _ in range(concurrency)]

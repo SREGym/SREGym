@@ -106,6 +106,10 @@ def test_deployed_fault_rejects_noop_and_accepts_real_repairs(monkeypatch, repai
     oracle._catalog_list_products_total = lambda: counter("products")
     oracle._list_recommendations_total = lambda: counter("recommendations")
     monkeypatch.setattr("sregym.generators.workload.recommendation_herd.requests.get", get)
+    monkeypatch.setattr(
+        "sregym.generators.workload.recommendation_herd.requests.Session.get",
+        lambda self, url, **kwargs: get(url, **kwargs),
+    )
 
     if repair in {"noop", "noop_stalled_catalog", "noop_stalled_during_wave"}:
         oracle.assert_fault_present()

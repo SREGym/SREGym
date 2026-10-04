@@ -53,6 +53,22 @@ opentelemetry-collector:
 # ActiveProcessorCount=2 and raise limits.memory to 512Mi while keeping
 # requests.memory at 300Mi so scheduling requests are unchanged.
 components:
+  frontend:
+    # Envoy's upstream idle timeout defaults to one hour. Next.js otherwise
+    # closes sockets after five seconds, racing with reuse and producing 503s
+    # during healthy paced traffic. Let the proxy retire idle sockets first.
+    envOverrides:
+      - name: KEEP_ALIVE_TIMEOUT
+        value: "3605000"
+  frontend-proxy:
+    # The 65 MiB cap forces Envoy to repeatedly reclaim executable pages under
+    # paced traffic, stalling workers and timing out healthy recommendations.
+    # Preserve its scheduling reservation while allowing the working set to fit.
+    resources:
+      requests:
+        memory: 65Mi
+      limits:
+        memory: 128Mi
   product-catalog:
     # The 2.2.0 catalog exceeds its 20 MiB process limit on x86 KIND as well
     # as ARM64, even before fault traffic. GOMEMLIMIT bounds the Go runtime,

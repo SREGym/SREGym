@@ -157,13 +157,88 @@ def test_background_traffic_survives_a_port_forward_rollout_error(monkeypatch):
         response.json.return_value = {"productIds": ["a"]}
         return response
 
-    monkeypatch.setattr("sregym.generators.workload.recommendation_herd.requests.get", responder)
+    monkeypatch.setattr("sregym.generators.workload.recommendation_herd.requests.Session.get", responder)
     try:
         workload.start_background(concurrency=1, product_ids=("excluded",))
         assert recovered.wait(timeout=2.0)
         assert workload.background_running
     finally:
         workload.stop()
+
+
+@pytest.mark.parametrize("background", [False, True])
+def test_workers_reuse_separate_http_sessions_and_close_them(monkeypatch, background):
+    workload = _workload(requests_per_second=40.0)
+    workload.frontend.start.return_value = 8080
+    sessions = []
+    observed_reuse = threading.Event()
+    lock = threading.Lock()
+
+    class RecordingSession:
+        def __init__(self):
+            self.owner = threading.get_ident()
+            self.calls = []
+            self.closed = False
+            with lock:
+                sessions.append(self)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.closed = True
+
+        def get(self, url, **kwargs):
+            assert threading.get_ident() == self.owner
+            assert not self.closed
+            with lock:
+                self.calls.append((url, kwargs))
+                if len(sessions) == 2 and all(len(session.calls) >= 2 for session in sessions):
+                    observed_reuse.set()
+            response = Mock(status_code=200)
+            response.json.return_value = {"productIds": ["recommended"]}
+            return response
+
+    monkeypatch.setattr("sregym.generators.workload.recommendation_herd.requests.Session", RecordingSession)
+    get = Mock(side_effect=AssertionError("workers must reuse their own session"))
+    monkeypatch.setattr("sregym.generators.workload.recommendation_herd.requests.get", get)
+
+    if background:
+        try:
+            workload.start_background(concurrency=2, product_ids=("excluded",))
+            assert observed_reuse.wait(timeout=2.0)
+        finally:
+            workload.stop_background()
+    else:
+        snapshot = workload.run(concurrency=2, duration_seconds=0.25, product_ids=("excluded",))
+        assert snapshot.succeeded == snapshot.completed
+        assert observed_reuse.is_set()
+
+    assert len(sessions) == 2
+    assert len({session.owner for session in sessions}) == 2
+    assert all(session.closed for session in sessions)
+    for session in sessions:
+        for url, kwargs in session.calls:
+            assert kwargs["timeout"] == workload.request_timeout
+            assert kwargs["headers"] == {"Cache-Control": "no-cache", "Pragma": "no-cache"}
+            assert parse_qs(urlsplit(url).query)["productIds"] == ["excluded", ","]
+    get.assert_not_called()
+
+
+def test_worker_session_closes_when_a_grading_worker_raises(monkeypatch):
+    workload = _workload()
+    workload._one_request = Mock(side_effect=RuntimeError("tunnel unavailable"))
+    # Use the real Session context manager to verify close runs on the error path.
+    from requests import Session
+
+    session = Session()
+    session.close = Mock(wraps=session.close)
+    monkeypatch.setattr("sregym.generators.workload.recommendation_herd.requests.Session", lambda: session)
+
+    with pytest.raises(RuntimeError, match="tunnel unavailable"):
+        workload.run(concurrency=1, duration_seconds=0.1, product_ids=("excluded",))
+
+    session.close.assert_called_once()
 
 
 @pytest.mark.parametrize("rate", [0, -1, float("nan"), float("inf")])
