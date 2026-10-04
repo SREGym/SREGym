@@ -194,6 +194,34 @@ it was "almost certainly unaffected" -- which is the only reason the re-run
 happened. The re-run contradicted it. **Discoverability is not the test. Assume
 anything authored into the prompt is load-bearing until a screen says otherwise.**
 
+### A race needs the service to be the only confirmation channel
+
+Two of the ten candidates were Stripe webhook races and one was a Mattermost
+cascade race. None was built, and the reason is structural rather than a matter
+of effort, so it is worth stating as a rule for choosing where to put a race.
+
+A race works by corrupting the record the responder would verify against. That
+only bites if there is no *other* record.
+
+| family | the responder's authoritative channel | can a lag corrupt it? |
+|---|---|---|
+| notifications | the provider's delivery audit | yes -- it *is* the service |
+| coordination | the store's own operator API and status | yes -- same |
+| cascade | `kubectl get deploy` | **no** |
+| stripe webhooks | `requeue_webhooks`, idempotent by event id | **no** |
+
+On the cascade, a lagging dashboard is just a lying tool: the agent asks
+Kubernetes instead and gets the truth for free. On Stripe, re-running the requeue
+is safe by construction, so there is no cost to acting on a stale read. In both
+cases the lag changes the cost of a mistake to zero, which is the opposite of
+what a discriminating problem needs.
+
+So: put a race where the agent's only way to confirm an action is to ask the
+service that performed it. That is why `coordination_lagging_ack` and
+`coordination_lagging_admission` are built on the coordination store -- its
+operator API is the sole confirmation path, and acting on a stale read there
+already carries a penalty (a premature compaction restarts the stability window).
+
 ### The conflict shape did not travel to a second application
 
 `gitea_regional_failover` is the same incident as the GitLab family -- a promoted
