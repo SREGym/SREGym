@@ -51,10 +51,12 @@ class DevShmMitigationOracle(Oracle):
             )
             return self.fail("fault_still_present", deployment=name, mount_path=self.problem.shm_mount_path)
 
-        pods = core_v1.list_namespaced_pod(namespace, label_selector=f"app={name}").items
+        # A problem may name its worker pods' selector (ports target real workloads); default ``app=<name>``.
+        selector = getattr(self.problem, "worker_pod_selector", None) or f"app={name}"
+        pods = core_v1.list_namespaced_pod(namespace, label_selector=selector).items
         if not pods:
             print(f"❌ No pods found for worker '{name}'.")
-            return self.fail("no_pods_found", namespace=namespace, selector=f"app={name}")
+            return self.fail("no_pods_found", namespace=namespace, selector=selector)
 
         unready = self.pods_unready(pods, deployment=name)
         if unready is not None:

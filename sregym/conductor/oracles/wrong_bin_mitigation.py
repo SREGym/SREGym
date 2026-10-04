@@ -12,9 +12,9 @@ class WrongBinMitigationOracle(Oracle):
         results = {}
 
         # Check if the deployment was updated to use the right binary
-        expected_command = (
-            "profile"  # Command dictates which binary will be ran, we want to run /go/bin/profile and not /go/bin/geo
-        )
+        # Command dictates which binary will be ran, we want to run /go/bin/profile and not /go/bin/geo.
+        # Ports to other apps name their own binary with ``problem.expected_command``.
+        expected_command = getattr(self.problem, "expected_command", "profile")
 
         try:
             deployment = kubectl.get_deployment(self.problem.faulty_service, namespace)
