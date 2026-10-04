@@ -58,7 +58,7 @@ class WrongPodSelectionMitigationOracle(Oracle):
         rolling out. The prints are kept: they are the human debugging path and
         carry the Deployment name, which the reason code deliberately does not.
         """
-        for name in (self.problem.frontend_service, self.problem.wrong_deployment):
+        for name in (self._target_deployment, self.problem.wrong_deployment):
             try:
                 deployment = self.problem.kubectl.get_deployment(name, self.problem.namespace)
             except ApiException as exc:
@@ -75,6 +75,18 @@ class WrongPodSelectionMitigationOracle(Oracle):
                 print(f"Required Deployment {name} is not fully rolled out and Ready.")
                 return self.fail("required_deployment_not_rolled_out", deployment=name)
         return None
+
+    @property
+    def _target_deployment(self) -> str:
+        # Ports to apps whose Service is not named after its Deployment set
+        # ``target_deployment``; Hotel Reservation's frontend uses one name.
+        return getattr(self.problem, "target_deployment", None) or self.problem.frontend_service
+
+    def _target_pod_labels(self) -> dict[str, str]:
+        deployment = self.problem.kubectl.get_deployment(self._target_deployment, self.problem.namespace)
+        selector = getattr(getattr(deployment.spec, "selector", None), "match_labels", None)
+        # The Deployment's own selector; Hotel Reservation's is the kompose label.
+        return dict(selector or {"io.kompose.service": self.problem.expected_endpoint_pod_label})
 
     def _active_replica_sets(self, deployment_name: str) -> set[str]:
         replica_sets = self.problem.kubectl.get_matching_replicasets(
@@ -147,7 +159,6 @@ class WrongPodSelectionMitigationOracle(Oracle):
         kubectl = self.problem.kubectl
         namespace = self.problem.namespace
         service_name = self.problem.frontend_service
-        expected_pod_label = self.problem.expected_endpoint_pod_label
 
         unhealthy = self._required_deployments_unhealthy()
         if unhealthy is not None:
@@ -158,10 +169,13 @@ class WrongPodSelectionMitigationOracle(Oracle):
             print(f"Service {service_name} has no Ready endpoint pods")
             return self.fail("no_ready_endpoints", service=service_name)
 
-        active_frontend_replica_sets = self._active_replica_sets(service_name)
+        active_frontend_replica_sets = self._active_replica_sets(self._target_deployment)
         if not active_frontend_replica_sets:
-            print(f"Deployment {service_name} has no active ReplicaSet.")
-            return self.fail("no_active_replicaset", deployment=service_name)
+            print(f"Deployment {self._target_deployment} has no active ReplicaSet.")
+            return self.fail("no_active_replicaset", deployment=self._target_deployment)
+        # Hotel Reservation's frontend selects io.kompose.service=frontend, the
+        # label this check originally compared against expected_endpoint_pod_label.
+        target_labels = self._target_pod_labels()
 
         wrong_pods = []
         for pod_name in selected_pods:
@@ -169,7 +183,7 @@ class WrongPodSelectionMitigationOracle(Oracle):
             labels = pod.metadata.labels or {}
             if (
                 pod.metadata.deletion_timestamp is not None
-                or labels.get("io.kompose.service") != expected_pod_label
+                or any(labels.get(key) != value for key, value in target_labels.items())
                 or not self._owned_by_replica_set(pod, active_frontend_replica_sets)
             ):
                 wrong_pods.append(pod_name)

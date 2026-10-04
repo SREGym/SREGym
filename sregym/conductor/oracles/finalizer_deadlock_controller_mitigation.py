@@ -226,7 +226,8 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
     def _check_app_healthy(self, kubectl, namespace) -> tuple[bool, str]:
         try:
             for deployment in kubectl.list_deployments(namespace).items:
-                if not deployment_rollout_complete(deployment):
+                # Components an app ships scaled to zero are not unhealthy.
+                if not deployment_rollout_complete(deployment, allow_zero=True):
                     return False, f"[FAIL] Deployment `{deployment.metadata.name}` rollout is incomplete."
             pods = kubectl.list_pods(namespace).items
         except Exception as exc:
@@ -237,6 +238,8 @@ class FinalizerDeadlockControllerMitigationOracle(Oracle):
             for pod in pods
             if pod.metadata.deletion_timestamp is None
             and not pod.metadata.name.startswith(f"{self.controller_deployment_name}-")
+            # One-shot Job pods (an app's migrate/seed Jobs) end Succeeded, not Running.
+            and not any(ref.kind == "Job" for ref in getattr(pod.metadata, "owner_references", None) or [])
         ]
         if not app_pods:
             return False, "[FAIL] No application pods found."

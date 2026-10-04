@@ -13,6 +13,7 @@ class AdmissionWebhookOutageMitigationOracle(Oracle):
     rollout_timeout_seconds = 120
     replacement_timeout_seconds = 120
     poll_interval_seconds = 2
+    ROLLOUT_PROBE_ANNOTATION = "sregym.io/recreation-probe"
 
     @staticmethod
     def _desired_replicas(deployment) -> int:
@@ -57,7 +58,8 @@ class AdmissionWebhookOutageMitigationOracle(Oracle):
 
     def _ready_endpoint_names(self) -> set[str]:
         endpoints = self.problem.kubectl.core_v1_api.read_namespaced_endpoints(
-            name=self.problem.faulty_service,
+            # Ports to apps whose Service is not named after the Deployment set ``service_name``.
+            name=getattr(self.problem, "service_name", None) or self.problem.faulty_service,
             namespace=self.problem.namespace,
         )
         return {
@@ -130,13 +132,31 @@ class AdmissionWebhookOutageMitigationOracle(Oracle):
                 return self.fail("no_ready_endpoints", deployment=deployment_name)
 
             previous_uids = {str(pod.metadata.uid) for pod in self._current_ready_pods()}
-            target = sorted(current_pods, key=lambda pod: pod.metadata.name)[0]
-            self.problem.kubectl.core_v1_api.delete_namespaced_pod(
-                name=target.metadata.name,
-                namespace=namespace,
-                body=client.V1DeleteOptions(grace_period_seconds=0),
-            )
-            print(f"Deleted current pod '{target.metadata.name}' to verify replacement admission")
+            if getattr(self.problem, "recreation_probe", "delete") == "rollout":
+                # Ports whose target has a single replica that the app's users
+                # depend on prove admission with a surge rollout instead: the
+                # replacement pod must be admitted and become Ready before the
+                # current one is removed, so the probe itself causes no outage.
+                self.problem.kubectl.apps_v1_api.patch_namespaced_deployment(
+                    name=deployment_name,
+                    namespace=namespace,
+                    body={
+                        "spec": {
+                            "template": {
+                                "metadata": {"annotations": {self.ROLLOUT_PROBE_ANNOTATION: str(time.time_ns())}}
+                            }
+                        }
+                    },
+                )
+                print(f"Rolled Deployment '{deployment_name}' to verify replacement admission")
+            else:
+                target = sorted(current_pods, key=lambda pod: pod.metadata.name)[0]
+                self.problem.kubectl.core_v1_api.delete_namespaced_pod(
+                    name=target.metadata.name,
+                    namespace=namespace,
+                    body=client.V1DeleteOptions(grace_period_seconds=0),
+                )
+                print(f"Deleted current pod '{target.metadata.name}' to verify replacement admission")
 
             if not self._wait_for_new_ready_endpoint(previous_uids):
                 print(f"[FAIL] Deployment '{deployment_name}' could not create a new serving pod")

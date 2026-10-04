@@ -91,11 +91,13 @@ class MitigationOracle(Oracle):
         # into a pass. Include Deployments added after the baseline as well.
         for name, dep in current_deps.items():
             desired = dep.spec.replicas if dep.spec.replicas is not None else 1
-            if desired == 0 and name in self.replica_count:
+            # A component the app ships at 0 replicas (Frappe's optional workers) was 0 at baseline too.
+            baseline_zero = self.replica_count.get(name) == 0
+            if desired == 0 and name in self.replica_count and not baseline_zero:
                 print(f"❌ Deployment '{name}' was scaled to 0")
                 return self.fail("required_deployment_scaled_to_zero", deployment=name, namespace=namespace)
             ready = getattr(dep.status, "ready_replicas", None) or 0
-            if not deployment_rollout_complete(dep, allow_zero=name not in self.replica_count):
+            if not deployment_rollout_complete(dep, allow_zero=name not in self.replica_count or baseline_zero):
                 print(f"❌ Deployment '{name}' rollout is incomplete ({ready}/{desired} replicas ready)")
                 return self.fail(
                     "deployment_replicas_unready",
