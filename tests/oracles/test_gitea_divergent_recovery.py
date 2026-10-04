@@ -140,3 +140,57 @@ def test_a_missing_repository_is_graded_rather_than_raising():
     # And a healthy listing is still parsed into path -> mode/type/sha.
     ok = SimpleNamespace(command=Mock(return_value="100644 blob abc123\tREADME.md"))
     assert GiteaRecovery.git_inventory(ok)["alice/hello-zoo"] == {"README.md": "100644 blob abc123"}
+
+
+def test_the_oracle_only_asks_its_application_for_methods_that_exist():
+    """Catch a wrong oracle base class statically, not at the deploy stage.
+
+    `SaaSOracle.capture_baseline` calls `app.record_query`, which GitLab,
+    Mattermost and Stripe define and Gitea does not. Basing this oracle on it --
+    the natural mistake, since it was written from the GitLab one -- fails during
+    *deploy* with a bare `AttributeError` and looks like a broken application
+    rather than a wrong import. Two screens were spent before that was obvious.
+
+    This walks every `app.<name>` the oracle and its bases reach for and asserts
+    the application actually provides it.
+    """
+    import ast
+    import inspect
+
+    from sregym.conductor.oracles.gitea_divergent_recovery import GiteaDivergentRecoveryOracle
+    from sregym.service.apps.gitea_failover import GiteaFailover
+
+    wanted = set()
+    for klass in GiteaDivergentRecoveryOracle.__mro__:
+        try:
+            source = inspect.getsource(klass)
+        except (OSError, TypeError):
+            continue
+        for node in ast.walk(ast.parse(source.lstrip())):
+            # `app.x`, `self.app.x` and `self.problem.app.x` all appear.
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "app":
+                wanted.add(node.attr)
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Attribute) and node.value.attr == "app":
+                wanted.add(node.attr)
+
+    # Attributes assigned in __init__ (`self.members`, `self.scale_tier`) are not
+    # visible on the class, so collect those from the application's sources too.
+    provided = set()
+    for klass in GiteaFailover.__mro__:
+        provided.update(vars(klass))
+        try:
+            source = inspect.getsource(klass)
+        except (OSError, TypeError):
+            continue
+        for node in ast.walk(ast.parse(source.lstrip())):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if (
+                        isinstance(target, ast.Attribute)
+                        and isinstance(target.value, ast.Name)
+                        and target.value.id == "self"
+                    ):
+                        provided.add(target.attr)
+
+    missing = sorted(wanted - provided)
+    assert not missing, f"GiteaFailover does not provide: {missing}"

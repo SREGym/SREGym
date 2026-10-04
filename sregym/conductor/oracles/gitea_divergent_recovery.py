@@ -3,13 +3,20 @@
 The accounting is the GitLab family's, reused with Gitea's column names: the
 divergence is a property of the incident, not of the application, so grading it
 twice from scratch would only create two things to keep in step.
+
+The base class is `GiteaOracle`, not `SaaSOracle`. `SaaSOracle.capture_baseline`
+calls `app.record_query(token)`, which GitLab, Mattermost and Stripe define and
+Gitea does not -- inheriting it fails at the *deploy* stage with a bare
+`AttributeError`, which reads as a broken application rather than a wrong base
+class. `GiteaOracle` supplies the Gitea equivalents (`check_workflow`,
+`volume_ids`, `verify_replication`), which is why the deletion family uses it.
 """
 
 import time
 
 from sregym.conductor.oracles.failure import FailureClass
+from sregym.conductor.oracles.gitea import GiteaOracle
 from sregym.conductor.oracles.gitlab_divergent_recovery import divergence_report
-from sregym.conductor.oracles.saas import SaaSOracle
 from sregym.service.apps.gitea_failover import EAST_SNAPSHOT, SHARED_SNAPSHOT
 
 
@@ -40,7 +47,7 @@ def gitea_keys(repositories):
     return content, identity, label
 
 
-class GiteaDivergentRecoveryOracle(SaaSOracle):
+class GiteaDivergentRecoveryOracle(GiteaOracle):
     FAILURE_CLASSES = {
         "database_schema_missing": FailureClass.AGENT_ERROR,
         "post_promotion_writes_lost": FailureClass.AGENT_ERROR,
