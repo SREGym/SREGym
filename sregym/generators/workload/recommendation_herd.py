@@ -139,7 +139,11 @@ class RecommendationHerdWorkload:
         return f"http://127.0.0.1:{port}{path}"
 
     def catalog_product_ids(self) -> set[str]:
-        response = requests.get(self._url("/api/products"), timeout=self.request_timeout)
+        response = requests.get(
+            self._url(f"/api/products?_={time.time_ns()}"),
+            headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+            timeout=self.request_timeout,
+        )
         response.raise_for_status()
         return set(extract_product_ids(response.json()))
 

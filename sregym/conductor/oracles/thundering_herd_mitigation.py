@@ -29,6 +29,7 @@ class ThunderingHerdMitigationOracle(Oracle):
         "slo_not_met": FailureClass.AGENT_ERROR,
         "insufficient_samples": FailureClass.AMBIGUOUS,
         "empty_catalog": FailureClass.ENVIRONMENT_ERROR,
+        "rpc_telemetry_stalled": FailureClass.ENVIRONMENT_ERROR,
         "baseline_not_captured": FailureClass.HARNESS_ERROR,
     }
 
@@ -137,6 +138,10 @@ class ThunderingHerdMitigationOracle(Oracle):
         except ApiException as exc:
             print(f"[FAIL] Could not read Deployments for resource comparison: {exc}")
             return self.fail_from_exception(exc)
+        added = sorted(current.keys() - self._baseline_replicas.keys())
+        if added:
+            print(f"[FAIL] Deployments were added after the capacity baseline: {', '.join(added)}")
+            return self.fail("capacity_changed", added_deployments=added)
         for name, expected_replicas in self._baseline_replicas.items():
             if name not in current:
                 print(f"[FAIL] Deployment {name!r} is missing")
@@ -178,6 +183,30 @@ class ThunderingHerdMitigationOracle(Oracle):
 
     def _list_recommendations_total(self) -> float | None:
         return list_recommendations_total(self.problem.namespace)
+
+    def _catalog_with_live_telemetry(self) -> tuple[set[str], dict | None]:
+        """Read catalog IDs and verify the known RPC reaches span metrics."""
+        before_probe = self._catalog_list_products_total()
+        if before_probe is None:
+            return set(), self.fail("prometheus_unreachable")
+        catalog_ids = self.problem.workload.catalog_product_ids()
+        if not catalog_ids:
+            print("[FAIL] The product catalog API returned no product IDs")
+            return catalog_ids, self.fail("empty_catalog")
+        time.sleep(self.scrape_wait_seconds)
+        after_probe = self._catalog_list_products_total()
+        if after_probe is None:
+            return catalog_ids, self.fail("prometheus_unreachable")
+        if not math.isfinite(before_probe) or not math.isfinite(after_probe) or after_probe <= before_probe:
+            print("[FAIL] Catalog ListProducts spans did not advance after a direct catalog lookup")
+            return catalog_ids, self.fail(
+                "rpc_telemetry_stalled",
+                service="product-catalog",
+                rpc="ListProducts",
+                before=before_probe,
+                after=after_probe,
+            )
+        return catalog_ids, None
 
     def _rpc_amplification(self, product_delta: float, recommendation_delta: float) -> float | None:
         if (
@@ -374,14 +403,18 @@ class ThunderingHerdMitigationOracle(Oracle):
             if capacity is not None:
                 return capacity
             self.problem.workload.start()
-            catalog_ids = self.problem.workload.catalog_product_ids()
-            if not catalog_ids:
-                print("[FAIL] The product catalog API returned no product IDs")
-                return self.fail("empty_catalog")
 
-            # Flush investigation traffic and the catalog lookup before taking
-            # the baseline for the current workload's RPC deltas.
+            # Drain investigation spans before using a known catalog RPC to
+            # prove that this service's telemetry is live. Recommendation
+            # spans alone cannot distinguish a warm cache from a stalled
+            # product-catalog exporter.
             time.sleep(self.scrape_wait_seconds)
+            catalog_ids, telemetry_failure = self._catalog_with_live_telemetry()
+            if telemetry_failure is not None:
+                return telemetry_failure
+
+            # The probe is fully exported before either recommendation wave's
+            # baseline; real warm caches may now legitimately add no RPCs.
             first = self._run_wave(
                 concurrency=self.visible_concurrency,
                 product_ids=self.seed_product_ids,
@@ -390,7 +423,7 @@ class ThunderingHerdMitigationOracle(Oracle):
                 return self.fail("prometheus_unreachable")
             snapshot, amplification, _ = first
             if amplification is None:
-                return self.fail("prometheus_unreachable")
+                return self.fail("rpc_telemetry_stalled", wave="visible")
             # Repairs can retain the overlay's debug messages while serving
             # real cached catalog data. Grade actual RPCs; logs only provide
             # diagnostic and injection evidence.
@@ -421,7 +454,7 @@ class ThunderingHerdMitigationOracle(Oracle):
                 return self.fail("prometheus_unreachable")
             hidden_snapshot, hidden_amplification, _ = second
             if hidden_amplification is None:
-                return self.fail("prometheus_unreachable")
+                return self.fail("rpc_telemetry_stalled", wave="hidden")
             wave_fail = self._wave_failure(
                 hidden_snapshot,
                 hidden_amplification,
@@ -431,6 +464,14 @@ class ThunderingHerdMitigationOracle(Oracle):
             )
             if wave_fail is not None:
                 return wave_fail
+
+            if amplification == 0 or hidden_amplification == 0:
+                # A catalog exporter can stop after the preflight. Verify it
+                # still observes real calls before accepting zero-call cache
+                # behavior; this probe is outside both grading windows.
+                _, telemetry_failure = self._catalog_with_live_telemetry()
+                if telemetry_failure is not None:
+                    return telemetry_failure
 
             unhealthy = self._cluster_shape_unhealthy()
             if unhealthy is not None:

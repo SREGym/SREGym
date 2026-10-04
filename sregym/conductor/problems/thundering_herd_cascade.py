@@ -114,7 +114,7 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
             raise
         print(f"Service: {self.recommendation_deployment} | Namespace: {self.namespace}")
 
-    @mark_fault_injected
+    @mark_fault_injected(strict=True)
     def recover_fault(self):
         print("== Fault Recovery ==")
         self.workload.stop()

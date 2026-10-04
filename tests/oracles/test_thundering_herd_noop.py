@@ -20,7 +20,9 @@ _ASSET = (
 )
 
 
-@pytest.mark.parametrize("repair", ["noop", "one_call", "warm_cache"])
+@pytest.mark.parametrize(
+    "repair", ["noop", "noop_stalled_catalog", "noop_stalled_during_wave", "one_call", "warm_cache"]
+)
 def test_deployed_fault_rejects_noop_and_accepts_real_repairs(monkeypatch, repair):
     source = _ASSET.read_text(encoding="utf-8-sig")
     if repair == "one_call":
@@ -105,11 +107,32 @@ def test_deployed_fault_rejects_noop_and_accepts_real_repairs(monkeypatch, repai
     oracle._list_recommendations_total = lambda: counter("recommendations")
     monkeypatch.setattr("sregym.generators.workload.recommendation_herd.requests.get", get)
 
-    if repair == "noop":
+    if repair in {"noop", "noop_stalled_catalog", "noop_stalled_during_wave"}:
         oracle.assert_fault_present()
+    reported_catalog = {"frozen": None}
+    if repair == "noop_stalled_catalog":
+        # The injected service still makes ten actual catalog calls, but its
+        # exporter stopped after injection. This must not pass as a warm cache.
+        reported_catalog["frozen"] = counter("products")
+    if repair == "noop_stalled_during_wave":
+        original_run = workload.run
+
+        def run_without_catalog_export(**kwargs):
+            if reported_catalog["frozen"] is None:
+                reported_catalog["frozen"] = counter("products")
+            return original_run(**kwargs)
+
+        workload.run = run_without_catalog_export
+    oracle._catalog_list_products_total = lambda: (
+        counter("products") if reported_catalog["frozen"] is None else reported_catalog["frozen"]
+    )
     result = oracle.evaluate()
 
-    if repair == "noop":
+    if repair in {"noop_stalled_catalog", "noop_stalled_during_wave"}:
+        assert result["success"] is False
+        assert result["reason"] == "rpc_telemetry_stalled"
+        assert counter("products") > reported_catalog["frozen"]
+    elif repair == "noop":
         assert result["success"] is False
         assert result["reason"] == "fault_still_present"
         assert result["detail"]["amplification"] == 10.0

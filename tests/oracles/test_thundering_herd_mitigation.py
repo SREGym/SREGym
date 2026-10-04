@@ -190,6 +190,21 @@ def test_resources_unchanged_rejects_replica_and_limit_cheats():
     assert oracle._resources_unchanged() is True
 
 
+def test_capacity_guard_rejects_an_added_replacement_deployment():
+    oracle = _oracle()
+    original = [_named_deployment(name) for name in oracle.guarded_deployments]
+    oracle.problem.kubectl.apps_v1_api.list_namespaced_deployment.return_value = SimpleNamespace(items=original)
+    oracle.capture_baseline()
+    oracle.problem.kubectl.apps_v1_api.list_namespaced_deployment.return_value = SimpleNamespace(
+        items=[*original, _named_deployment("recommendation-replacement")]
+    )
+
+    failure = oracle._capacity_changed()
+
+    assert failure["reason"] == "capacity_changed"
+    assert failure["detail"]["added_deployments"] == ["recommendation-replacement"]
+
+
 def test_run_wave_polls_until_both_rpc_counters_move(monkeypatch):
     oracle = _oracle()
     oracle.scrape_wait_seconds = 15.0
@@ -314,7 +329,7 @@ def test_evaluate_passes_both_waves_and_stops_workload(monkeypatch):
     oracle = _oracle()
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
-    oracle._catalog_list_products_total = Mock(side_effect=[100.0, 140.0, 140.0, 180.0])
+    oracle._catalog_list_products_total = Mock(side_effect=[99.0, 100.0, 100.0, 140.0, 140.0, 180.0])
     oracle._list_recommendations_total = Mock(side_effect=[50.0, 90.0, 90.0, 130.0])
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
@@ -345,18 +360,45 @@ def test_evaluate_fails_closed_when_prometheus_is_empty(monkeypatch):
     oracle.problem.workload.stop.assert_called()
 
 
-def test_evaluate_fails_closed_when_rpc_counters_do_not_move(monkeypatch):
+@pytest.mark.parametrize("failed_wave", ["visible", "hidden"])
+@pytest.mark.parametrize("product_delta,recommendation_delta", [(40.0, 0.0), (-1.0, 40.0), (40.0, -1.0)])
+def test_evaluate_reports_stalled_rpc_telemetry_for_invalid_deltas(
+    monkeypatch, failed_wave, product_delta, recommendation_delta
+):
     oracle = _oracle()
-    oracle.scrape_wait_seconds = 5.0
-    oracle.poll_interval_seconds = 5.0
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
-    oracle._catalog_list_products_total = Mock(return_value=0.0)
-    oracle._list_recommendations_total = Mock(return_value=0.0)
-    monkeypatch.setattr(
-        "sregym.conductor.oracles.thundering_herd_mitigation.time.sleep",
-        lambda _: None,
+    if failed_wave == "visible":
+        product_samples = [100.0, 101.0, 101.0, 101.0 + product_delta]
+        recommendation_samples = [100.0, 100.0 + recommendation_delta]
+    else:
+        product_samples = [100.0, 101.0, 101.0, 141.0, 141.0, 141.0 + product_delta]
+        recommendation_samples = [100.0, 140.0, 140.0, 140.0 + recommendation_delta]
+    oracle._catalog_list_products_total = Mock(side_effect=product_samples)
+    oracle._list_recommendations_total = Mock(side_effect=recommendation_samples)
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
+
+    result = oracle.evaluate()
+
+    assert result["reason"] == "rpc_telemetry_stalled"
+    assert result["failure_class"] == "environment_error"
+    assert result["detail"]["wave"] == failed_wave
+
+
+@pytest.mark.parametrize("failed_wave", ["visible", "hidden"])
+def test_evaluate_reports_missing_metric_samples_as_prometheus_unreachable(monkeypatch, failed_wave):
+    oracle = _oracle()
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
+    oracle._catalog_list_products_total = Mock(
+        side_effect=[100.0, 101.0, 101.0, None]
+        if failed_wave == "visible"
+        else [100.0, 101.0, 101.0, 141.0, 141.0, None]
     )
+    oracle._list_recommendations_total = Mock(
+        side_effect=[100.0, None] if failed_wave == "visible" else [100.0, 140.0, 140.0, None]
+    )
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
     result = oracle.evaluate()
 
@@ -364,11 +406,31 @@ def test_evaluate_fails_closed_when_rpc_counters_do_not_move(monkeypatch):
     assert result["reason"] == "prometheus_unreachable"
 
 
+@pytest.mark.parametrize("after_probe", [100.0, 0.0])
+def test_evaluate_rejects_stalled_or_reset_catalog_telemetry_before_waves(monkeypatch, after_probe):
+    oracle = _oracle()
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
+    oracle._catalog_list_products_total = Mock(side_effect=[100.0, after_probe])
+    # Advancing recommendation spans must not make missing catalog traffic
+    # look like a correctly cached repair.
+    oracle._list_recommendations_total = Mock(side_effect=[50.0, 90.0, 90.0, 130.0])
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
+
+    result = oracle.evaluate()
+
+    assert result["reason"] == "rpc_telemetry_stalled"
+    assert result["failure_class"] == "environment_error"
+    assert result["detail"]["service"] == "product-catalog"
+    oracle.problem.workload.catalog_product_ids.assert_called_once_with()
+    oracle.problem.workload.run.assert_not_called()
+
+
 def test_evaluate_rejects_high_amplification_even_when_latency_is_fine(monkeypatch):
     oracle = _oracle()
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
-    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 400.0])
+    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 1.0, 1.0, 401.0])
     oracle._list_recommendations_total = Mock(side_effect=[0.0, 40.0])
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
@@ -386,7 +448,7 @@ def test_evaluate_rejects_fixed_responder_with_dynamic_exclusions(monkeypatch):
     oracle.problem.workload.run.return_value = _snapshot(product_ids=fixed_ids, distinct_recommendation_sets=20)
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
-    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 40.0, 40.0, 80.0])
+    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 1.0, 1.0, 41.0, 41.0, 81.0])
     oracle._list_recommendations_total = Mock(side_effect=[0.0, 40.0, 40.0, 80.0])
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
@@ -403,18 +465,36 @@ def test_evaluate_passes_with_no_new_catalog_calls(monkeypatch):
     oracle = _oracle()
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
-    oracle._catalog_list_products_total = Mock(return_value=100.0)
+    oracle._catalog_list_products_total = Mock(side_effect=[99.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 101.0])
     oracle._list_recommendations_total = Mock(side_effect=[50.0, 90.0, 90.0, 130.0])
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
 
     assert oracle.evaluate() == {"success": True}
+    assert oracle.problem.workload.catalog_product_ids.call_count == 2
+
+
+def test_evaluate_rechecks_catalog_telemetry_after_zero_call_waves(monkeypatch):
+    oracle = _oracle()
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
+    # The preflight succeeds, then catalog spans stop while recommendation
+    # spans keep advancing. A final real lookup exposes the stalled exporter.
+    oracle._catalog_list_products_total = Mock(side_effect=[99.0, *([100.0] * 7)])
+    oracle._list_recommendations_total = Mock(side_effect=[50.0, 90.0, 90.0, 130.0])
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
+
+    result = oracle.evaluate()
+
+    assert result["reason"] == "rpc_telemetry_stalled"
+    assert oracle.problem.workload.run.call_count == 2
+    assert oracle.problem.workload.catalog_product_ids.call_count == 2
 
 
 def test_evaluate_grades_real_cached_rpcs_despite_retained_debug_messages(monkeypatch):
     oracle = _oracle()
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
-    oracle._catalog_list_products_total = Mock(return_value=100.0)
+    oracle._catalog_list_products_total = Mock(side_effect=[99.0, 100.0, 100.0, 100.0, 100.0, 100.0, 100.0, 101.0])
     oracle._list_recommendations_total = Mock(side_effect=[50.0, 90.0, 90.0, 130.0])
     oracle.problem.kubectl.exec_command_checked = Mock(return_value="\n".join([oracle.overlay_log_marker] * 400))
     monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
@@ -438,7 +518,7 @@ def test_evaluate_ignores_historical_refetch_logs(monkeypatch):
     oracle = _oracle()
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
-    oracle._catalog_list_products_total = Mock(side_effect=[1000.0, 1040.0, 1040.0, 1080.0])
+    oracle._catalog_list_products_total = Mock(side_effect=[999.0, 1000.0, 1000.0, 1040.0, 1040.0, 1080.0])
     oracle._list_recommendations_total = Mock(side_effect=[100.0, 140.0, 140.0, 180.0])
     # A five-minute query would include 360 historical calls; a wave query
     # includes only the current one-call repair's 40 calls.
@@ -461,7 +541,7 @@ def test_evaluate_pauses_and_resumes_investigation_traffic(monkeypatch, healthy)
     oracle.problem.start_workload.side_effect = lambda: events.append("resume")
     oracle._cluster_shape_unhealthy = Mock(return_value=None)
     oracle._capacity_changed = Mock(return_value=None)
-    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 40.0, 40.0, 80.0] if healthy else [None])
+    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 1.0, 1.0, 41.0, 41.0, 81.0] if healthy else [None])
     oracle._list_recommendations_total = Mock(side_effect=[0.0, 40.0, 40.0, 80.0] if healthy else [None])
     monkeypatch.setattr(
         "sregym.conductor.oracles.thundering_herd_mitigation.time.sleep",

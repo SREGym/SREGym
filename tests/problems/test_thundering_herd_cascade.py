@@ -224,3 +224,21 @@ def test_recovery_unmounts_the_overlay(monkeypatch):
     problem.kubectl.wait_for_ready.assert_called_once()
     problem.workload.stop.assert_called_once()
     assert problem.fault_injected is False
+
+
+@pytest.mark.parametrize("failure_step", ["remove_overlay", "wait_for_rollout"])
+def test_recovery_preserves_fault_state_and_reports_failed_cleanup(monkeypatch, failure_step):
+    injector = Mock()
+    monkeypatch.setattr(module, "ApplicationFaultInjector", Mock(return_value=injector))
+    problem = _problem()
+    problem.fault_injected = True
+    failed_operation = (
+        injector.recover_source_file_override if failure_step == "remove_overlay" else problem.kubectl.wait_for_ready
+    )
+    failed_operation.side_effect = RuntimeError("recovery did not complete")
+
+    with pytest.raises(RuntimeError, match="recovery did not complete"):
+        problem.recover_fault()
+
+    problem.workload.stop.assert_called_once()
+    assert problem.fault_injected is True
