@@ -47,7 +47,10 @@ def test_exclusions_reach_the_frontend_as_an_array_of_complete_ids(monkeypatch, 
 
     values = parse_qs(urlsplit(get.call_args.args[0]).query)["productIds"]
     assert len(values) >= 2
-    assert set(values) == set(product_ids)
+    assert set(values).difference({","}) == set(product_ids)
+    # Removing the fault overlay must remain a valid repair, including for the
+    # stock service's legacy join/split input parser.
+    assert set("".join(values).split(",")).difference({""}) == set(product_ids)
 
 
 def test_fast_responder_is_paced_instead_of_saturating_the_catalog():

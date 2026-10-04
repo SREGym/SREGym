@@ -145,9 +145,11 @@ class RecommendationHerdWorkload:
 
     def _one_request(self, product_ids: tuple[str, ...]) -> tuple[bool, float, tuple[str, ...]]:
         # Next.js passes one query value as a string, which the frontend's
-        # repeated protobuf field serializes character by character. Repeating
-        # a lone exclusion keeps the HTTP value an array of whole product IDs.
-        exclusions = product_ids * 2 if len(product_ids) == 1 else product_ids
+        # repeated protobuf field serializes character by character. Send an
+        # array of whole IDs, interleaved with harmless comma separators: the
+        # stock service joins its RPC inputs before splitting on commas, while
+        # repaired services can correctly filter the repeated IDs directly.
+        exclusions = [value for item in product_ids for value in (item, ",")]
         query = urlencode([*(("productIds", item) for item in exclusions), ("_", time.time_ns())])
         started = time.monotonic()
         try:
