@@ -9,6 +9,7 @@ from sregym.service.helm import Helm
 
 def _app(architectures: set[str]) -> AstronomyShop:
     app = AstronomyShop.__new__(AstronomyShop)
+    app.load_generator_enabled = True
     app.namespace = "astronomy-shop"
     app.logger = Mock()
     app.kubectl = Mock()

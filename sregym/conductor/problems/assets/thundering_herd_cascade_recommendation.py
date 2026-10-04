@@ -1,17 +1,23 @@
-﻿#!/usr/bin/python
+#!/usr/bin/python
 
 # Copyright The OpenTelemetry Authors
 # SPDX-License-Identifier: Apache-2.0
 
 
-# Python
+import logging
 import os
 import random
 from concurrent import futures
 
-# Pip
+import demo_pb2
+import demo_pb2_grpc
 import grpc
-from opentelemetry import trace, metrics
+from grpc_health.v1 import health_pb2, health_pb2_grpc
+from metrics import init_metrics
+from openfeature import api
+from openfeature.contrib.hook.opentelemetry import TracingHook
+from openfeature.contrib.provider.flagd import FlagdProvider
+from opentelemetry import metrics, trace
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
     OTLPLogExporter,
@@ -20,21 +26,6 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 
-from openfeature import api
-from openfeature.contrib.provider.flagd import FlagdProvider
-
-from openfeature.contrib.hook.opentelemetry import TracingHook
-
-# Local
-import logging
-import demo_pb2
-import demo_pb2_grpc
-from grpc_health.v1 import health_pb2
-from grpc_health.v1 import health_pb2_grpc
-
-from metrics import (
-    init_metrics
-)
 
 class RecommendationService(demo_pb2_grpc.RecommendationServiceServicer):
     def ListRecommendations(self, request, context):
@@ -48,26 +39,26 @@ class RecommendationService(demo_pb2_grpc.RecommendationServiceServicer):
         response.product_ids.extend(prod_list)
 
         # Collect metrics for this service
-        rec_svc_metrics["app_recommendations_counter"].add(len(prod_list), {'recommendation.type': 'catalog'})
+        rec_svc_metrics["app_recommendations_counter"].add(len(prod_list), {"recommendation.type": "catalog"})
 
         return response
 
     def Check(self, request, context):
-        return health_pb2.HealthCheckResponse(
-            status=health_pb2.HealthCheckResponse.SERVING)
+        return health_pb2.HealthCheckResponse(status=health_pb2.HealthCheckResponse.SERVING)
 
     def Watch(self, request, context):
-        return health_pb2.HealthCheckResponse(
-            status=health_pb2.HealthCheckResponse.UNIMPLEMENTED)
+        return health_pb2.HealthCheckResponse(status=health_pb2.HealthCheckResponse.UNIMPLEMENTED)
 
 
 def get_product_list(request_product_ids):
     with tracer.start_as_current_span("get_product_list") as span:
         max_responses = 5
 
-        # Formulate the list of characters to list of strings
-        request_product_ids_str = ''.join(request_product_ids)
-        request_product_ids = request_product_ids_str.split(',')
+        # Accept both repeated IDs and comma-separated frontend input without
+        # concatenating distinct exclusions into a nonexistent product ID.
+        request_product_ids = {
+            product_id for value in request_product_ids for product_id in value.split(",") if product_id
+        }
 
         span.set_attribute("app.recommendation.cache_enabled", False)
         # Defensive refetch: every request does 10 fresh product-catalog
@@ -78,9 +69,7 @@ def get_product_list(request_product_ids):
         responses = []
         for _ in range(10):
             print("recommendation catalog refetch", flush=True)
-            responses.append(
-                product_catalog_stub.ListProducts(demo_pb2.Empty())
-            )
+            responses.append(product_catalog_stub.ListProducts(demo_pb2.Empty()))
         cat_response = responses[-1]
         product_ids = [x.id for x in cat_response.products]
 
@@ -105,13 +94,13 @@ def get_product_list(request_product_ids):
 def must_map_env(key: str):
     value = os.environ.get(key)
     if value is None:
-        raise Exception(f'{key} environment variable must be set')
+        raise Exception(f"{key} environment variable must be set")
     return value
 
 
 if __name__ == "__main__":
-    service_name = must_map_env('OTEL_SERVICE_NAME')
-    api.set_provider(FlagdProvider(host=os.environ.get('FLAGD_HOST', 'flagd'), port=os.environ.get('FLAGD_PORT', 8013)))
+    service_name = must_map_env("OTEL_SERVICE_NAME")
+    api.set_provider(FlagdProvider(host=os.environ.get("FLAGD_HOST", "flagd"), port=os.environ.get("FLAGD_PORT", 8013)))
     api.add_hooks([TracingHook()])
 
     # Initialize Traces and Metrics
@@ -123,7 +112,7 @@ if __name__ == "__main__":
     logger_provider = LoggerProvider(
         resource=Resource.create(
             {
-                'service.name': service_name,
+                "service.name": service_name,
             }
         ),
     )
@@ -133,10 +122,10 @@ if __name__ == "__main__":
     handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
 
     # Attach OTLP handler to logger
-    logger = logging.getLogger('main')
+    logger = logging.getLogger("main")
     logger.addHandler(handler)
 
-    catalog_addr = must_map_env('PRODUCT_CATALOG_ADDR')
+    catalog_addr = must_map_env("PRODUCT_CATALOG_ADDR")
     pc_channel = grpc.insecure_channel(catalog_addr)
     product_catalog_stub = demo_pb2_grpc.ProductCatalogServiceStub(pc_channel)
 
@@ -149,8 +138,8 @@ if __name__ == "__main__":
     health_pb2_grpc.add_HealthServicer_to_server(service, server)
 
     # Start server
-    port = must_map_env('RECOMMENDATION_PORT')
-    server.add_insecure_port(f'[::]:{port}')
+    port = must_map_env("RECOMMENDATION_PORT")
+    server.add_insecure_port(f"[::]:{port}")
     server.start()
-    logger.info(f'Recommendation service started, listening on port {port}')
+    logger.info(f"Recommendation service started, listening on port {port}")
     server.wait_for_termination()

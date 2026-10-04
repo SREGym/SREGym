@@ -48,11 +48,16 @@ def _snapshot(**overrides) -> HerdSnapshot:
 
 
 def _oracle():
+    catalog = {"OLJCESPC7Z", "66VCHSJNUP", "1YMWWN1N4O", "HQTGWGPNH4"}
     workload = SimpleNamespace(
         start=Mock(),
         stop=Mock(),
-        catalog_product_ids=Mock(return_value={"OLJCESPC7Z", "66VCHSJNUP", "1YMWWN1N4O", "HQTGWGPNH4"}),
-        run=Mock(return_value=_snapshot()),
+        background_running=False,
+        stop_background=Mock(),
+        catalog_product_ids=Mock(return_value=catalog),
+        run=Mock(
+            side_effect=lambda **kwargs: _snapshot(product_ids=tuple(sorted(catalog.difference(kwargs["product_ids"]))))
+        ),
     )
     kubectl = SimpleNamespace(
         apps_v1_api=SimpleNamespace(list_namespaced_deployment=Mock()),
@@ -64,8 +69,11 @@ def _oracle():
         kubectl=kubectl,
         workload=workload,
         recommendation_deployment="recommendation",
+        start_workload=Mock(),
     )
-    return ThunderingHerdMitigationOracle(problem)
+    oracle = ThunderingHerdMitigationOracle(problem)
+    oracle.scrape_wait_seconds = 5.0
+    return oracle
 
 
 def test_rollout_requires_current_ready_nonzero_replicas():
@@ -73,6 +81,15 @@ def test_rollout_requires_current_ready_nonzero_replicas():
     assert ThunderingHerdMitigationOracle._rollout_complete(_deployment(replicas=0, ready=0)) is False
     assert ThunderingHerdMitigationOracle._rollout_complete(_deployment(observed=1)) is False
     assert ThunderingHerdMitigationOracle._rollout_complete(_deployment(ready=0)) is False
+
+
+def test_incomplete_guarded_baseline_cannot_pass():
+    oracle = _oracle()
+    oracle._baseline_deployments = {"recommendation", "product-catalog"}
+
+    failure = oracle._cluster_shape_unhealthy()
+
+    assert failure["reason"] == "baseline_not_captured"
 
 
 def test_wave_healthy_accepts_low_amplification_and_real_ids():
@@ -87,23 +104,20 @@ def test_wave_healthy_rejects_high_amplification():
     assert oracle._wave_healthy(_snapshot(), 9.5, catalog, concurrency=8) is False
 
 
-def test_wave_healthy_rejects_zero_catalog_increase():
+def test_wave_healthy_accepts_warm_catalog_cache():
     oracle = _oracle()
     catalog = {"OLJCESPC7Z", "66VCHSJNUP", "1YMWWN1N4O"}
-    assert oracle._wave_healthy(_snapshot(), 0.0, catalog, concurrency=8) is False
+    assert oracle._wave_healthy(_snapshot(), 0.0, catalog, concurrency=8) is True
 
 
 def test_wave_healthy_rejects_empty_and_unknown_ids():
     oracle = _oracle()
     catalog = {"OLJCESPC7Z"}
     assert oracle._wave_healthy(_snapshot(product_ids=()), 1.0, catalog, concurrency=8) is False
-    assert (
-        oracle._wave_healthy(_snapshot(product_ids=("not-a-product",)), 1.0, catalog, concurrency=8)
-        is False
-    )
+    assert oracle._wave_healthy(_snapshot(product_ids=("not-a-product",)), 1.0, catalog, concurrency=8) is False
 
 
-def test_wave_healthy_rejects_frozen_hard_coded_ids():
+def test_wave_healthy_accepts_deterministic_valid_recommendations():
     oracle = _oracle()
     catalog = {"OLJCESPC7Z", "66VCHSJNUP"}
     frozen = _snapshot(
@@ -112,7 +126,21 @@ def test_wave_healthy_rejects_frozen_hard_coded_ids():
         product_ids=("OLJCESPC7Z", "66VCHSJNUP"),
         distinct_recommendation_sets=1,
     )
-    assert oracle._wave_healthy(frozen, 0.1, catalog, concurrency=8) is False
+    assert oracle._wave_healthy(frozen, 0.1, catalog, concurrency=8) is True
+
+
+def test_wave_rejects_exclusions_even_when_responses_vary():
+    oracle = _oracle()
+    catalog = {"OLJCESPC7Z", "66VCHSJNUP", "1YMWWN1N4O"}
+    failure = oracle._wave_failure(
+        _snapshot(distinct_recommendation_sets=20),
+        1.0,
+        catalog,
+        concurrency=4,
+        product_ids=("OLJCESPC7Z", "66VCHSJNUP"),
+    )
+    assert failure["reason"] == "invalid_recommendation_ids"
+    assert failure["detail"]["excluded"] == ["66VCHSJNUP", "OLJCESPC7Z"]
 
 
 def test_wave_healthy_rejects_slow_or_errorful_traffic():
@@ -165,7 +193,7 @@ def test_run_wave_polls_until_both_rpc_counters_move(monkeypatch):
     measured = oracle._run_wave(concurrency=8, product_ids=("OLJCESPC7Z",))
 
     assert measured is not None
-    snapshot, amplification = measured
+    snapshot, amplification, _ = measured
     assert snapshot.succeeded == 40
     assert amplification == 6.0
     assert sleeps == [5.0, 5.0, 5.0]
@@ -173,11 +201,29 @@ def test_run_wave_polls_until_both_rpc_counters_move(monkeypatch):
 
 def test_overlay_log_amplification_uses_refetch_ratio():
     oracle = _oracle()
-    refetch = "\n".join(["recommendation catalog refetch"] * 20)
-    oracle.problem.kubectl.exec_command_checked = Mock(
-        return_value="\n".join(["recommendation catalog refetch"] * 20)
-    )
-    assert oracle._overlay_log_amplification(2) == 10.0
+    oracle.problem.kubectl.exec_command_checked = Mock(return_value="\n".join(["recommendation catalog refetch"] * 20))
+    since_time = "2026-10-04T10:00:00Z"
+    assert oracle._overlay_log_amplification(2, since_time=since_time) == 10.0
+    command = oracle.problem.kubectl.exec_command_checked.call_args.args[0]
+    assert f"--since-time={since_time}" in command
+    assert "--since=5m" not in command
+    assert "--tail=-1" in command
+
+
+def test_overlay_log_fallback_keeps_the_same_wave_window():
+    oracle = _oracle()
+    oracle.problem.kubectl.exec_command_checked = Mock(side_effect=[RuntimeError("selector failed"), ""])
+    since_time = "2026-10-04T10:00:00Z"
+    assert oracle._overlay_log_amplification(40, since_time=since_time) == 0.0
+    commands = [call.args[0] for call in oracle.problem.kubectl.exec_command_checked.call_args_list]
+    assert all(f"--since-time={since_time}" in command for command in commands)
+    assert "deploy/recommendation" in commands[1]
+
+
+def test_overlay_log_falls_back_when_the_selector_matches_no_pods():
+    oracle = _oracle()
+    oracle.problem.kubectl.exec_command_checked = Mock(side_effect=["", "\n".join([oracle.overlay_log_marker] * 400)])
+    assert oracle._overlay_log_amplification(40, since_time="2026-10-04T10:00:00Z") == 10.0
 
 
 def test_run_wave_uses_rpc_ratio_when_http_success_count_differs(monkeypatch):
@@ -189,7 +235,7 @@ def test_run_wave_uses_rpc_ratio_when_http_success_count_differs(monkeypatch):
     measured = oracle._run_wave(concurrency=8, product_ids=("OLJCESPC7Z",))
 
     assert measured is not None
-    _, amplification = measured
+    _, amplification, _ = measured
     assert amplification == 10.0
 
 
@@ -200,15 +246,27 @@ def test_rpc_amplification_fails_closed_without_recommendation_spans():
     assert oracle._rpc_amplification(0.0, 0.0) is None
 
 
+def test_rpc_amplification_fails_closed_on_counter_reset():
+    oracle = _oracle()
+
+    assert oracle._rpc_amplification(-100.0, 40.0) is None
+    assert oracle._rpc_amplification(100.0, -40.0) is None
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), float("-inf")])
+def test_rpc_amplification_fails_closed_for_nonfinite_counters(invalid):
+    oracle = _oracle()
+    assert oracle._rpc_amplification(invalid, 40.0) is None
+    assert oracle._rpc_amplification(0.0, invalid) is None
+
+
 def test_fault_verification_can_use_logs_when_rpc_ratio_is_incomplete(monkeypatch):
     oracle = _oracle()
     oracle.scrape_wait_seconds = 5.0
     oracle.poll_interval_seconds = 5.0
     oracle._catalog_list_products_total = Mock(side_effect=[0.0, 100.0])
     oracle._list_recommendations_total = Mock(side_effect=[0.0, 0.0])
-    oracle.problem.kubectl.exec_command_checked = Mock(
-        return_value="\n".join([oracle.overlay_log_marker] * 400)
-    )
+    oracle.problem.kubectl.exec_command_checked = Mock(return_value="\n".join([oracle.overlay_log_marker] * 400))
     monkeypatch.setattr(
         "sregym.conductor.oracles.thundering_herd_mitigation.time.sleep",
         lambda _: None,
@@ -242,7 +300,8 @@ def test_evaluate_passes_both_waves_and_stops_workload(monkeypatch):
     second_kwargs = oracle.problem.workload.run.call_args_list[1].kwargs
     assert first_kwargs["concurrency"] == ThunderingHerdMitigationOracle.visible_concurrency
     assert second_kwargs["concurrency"] == ThunderingHerdMitigationOracle.hidden_concurrency
-    assert second_kwargs["product_ids"] == ThunderingHerdMitigationOracle.hidden_product_ids
+    first_returned = oracle.problem.workload.catalog_product_ids() - set(first_kwargs["product_ids"])
+    assert set(second_kwargs["product_ids"]) == first_returned
     oracle.problem.workload.stop.assert_called()
 
 
@@ -290,3 +349,88 @@ def test_evaluate_rejects_high_amplification_even_when_latency_is_fine(monkeypat
     result = oracle.evaluate()
     assert result["success"] is False
     assert result["reason"] == "fault_still_present"
+
+
+def test_evaluate_rejects_fixed_responder_with_dynamic_exclusions(monkeypatch):
+    oracle = _oracle()
+    fixed_ids = tuple(f"fixed-{index}" for index in range(5))
+    catalog = {*fixed_ids, *oracle.seed_product_ids, *oracle.hidden_product_ids}
+    oracle.problem.workload.catalog_product_ids.return_value = catalog
+    oracle.problem.workload.run.side_effect = None
+    oracle.problem.workload.run.return_value = _snapshot(product_ids=fixed_ids, distinct_recommendation_sets=20)
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
+    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 40.0, 40.0, 80.0])
+    oracle._list_recommendations_total = Mock(side_effect=[0.0, 40.0, 40.0, 80.0])
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
+
+    result = oracle.evaluate()
+
+    assert result["reason"] == "invalid_recommendation_ids"
+    assert set(result["detail"]["excluded"]) == set(fixed_ids)
+    second_exclusions = oracle.problem.workload.run.call_args_list[1].kwargs["product_ids"]
+    assert set(fixed_ids).issubset(second_exclusions)
+    assert catalog.difference(second_exclusions)
+
+
+def test_evaluate_passes_with_no_new_catalog_calls(monkeypatch):
+    oracle = _oracle()
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
+    oracle._catalog_list_products_total = Mock(return_value=100.0)
+    oracle._list_recommendations_total = Mock(side_effect=[50.0, 90.0, 90.0, 130.0])
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
+
+    assert oracle.evaluate() == {"success": True}
+
+
+def test_run_wave_waits_for_delayed_catalog_export(monkeypatch):
+    oracle = _oracle()
+    oracle.scrape_wait_seconds = 15.0
+    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 40.0, 200.0, 400.0])
+    oracle._list_recommendations_total = Mock(side_effect=[0.0, 40.0, 40.0, 40.0])
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
+
+    _, amplification, _ = oracle._run_wave(concurrency=4, product_ids=oracle.seed_product_ids)
+
+    assert amplification == 10.0
+
+
+def test_evaluate_ignores_historical_refetch_logs(monkeypatch):
+    oracle = _oracle()
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
+    oracle._catalog_list_products_total = Mock(side_effect=[1000.0, 1040.0, 1040.0, 1080.0])
+    oracle._list_recommendations_total = Mock(side_effect=[100.0, 140.0, 140.0, 180.0])
+    # A five-minute query would include 360 historical calls; a wave query
+    # includes only the current one-call repair's 40 calls.
+    oracle.problem.kubectl.exec_command_checked = Mock(
+        side_effect=lambda command, **kwargs: "\n".join(
+            [oracle.overlay_log_marker] * (40 if "--since-time=" in command else 400)
+        )
+    )
+    monkeypatch.setattr("sregym.conductor.oracles.thundering_herd_mitigation.time.sleep", lambda _: None)
+
+    assert oracle.evaluate() == {"success": True}
+
+
+@pytest.mark.parametrize("healthy", [True, False])
+def test_evaluate_pauses_and_resumes_investigation_traffic(monkeypatch, healthy):
+    oracle = _oracle()
+    oracle.problem.workload.background_running = True
+    events = []
+    oracle.problem.workload.stop_background.side_effect = lambda: events.append("drain")
+    oracle.problem.start_workload.side_effect = lambda: events.append("resume")
+    oracle._cluster_shape_unhealthy = Mock(return_value=None)
+    oracle._capacity_changed = Mock(return_value=None)
+    oracle._catalog_list_products_total = Mock(side_effect=[0.0, 40.0, 40.0, 80.0] if healthy else [None])
+    oracle._list_recommendations_total = Mock(side_effect=[0.0, 40.0, 40.0, 80.0] if healthy else [None])
+    monkeypatch.setattr(
+        "sregym.conductor.oracles.thundering_herd_mitigation.time.sleep",
+        lambda _: events.append("settle"),
+    )
+
+    assert oracle.evaluate()["success"] is healthy
+    assert events[0:2] == ["drain", "settle"]
+    assert events[-1] == "resume"
+    oracle.problem.workload.stop.assert_not_called()

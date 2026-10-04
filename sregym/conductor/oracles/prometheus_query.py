@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 from urllib.parse import quote
 
 _PROMETHEUS_URL = "http://localhost:9090"
 _LIST_PRODUCTS_MATCHER = 'span_name=~".*ListProducts.*",service_name=~".*product-catalog.*"'
-_LIST_RECOMMENDATIONS_MATCHER = (
-    'span_name=~".*ListRecommendations.*",service_name=~".*recommendation.*"'
-)
+_LIST_RECOMMENDATIONS_MATCHER = 'span_name=~".*ListRecommendations.*",service_name=~".*recommendation.*"'
 
 
 def prometheus_query_url(query: str) -> str:
     return f"{_PROMETHEUS_URL}/api/v1/query?query={quote(query, safe='')}"
 
 
-def prometheus_scalar(query: str, *, announce: bool = True) -> float | None:
+def prometheus_scalar(query: str, *, announce: bool = True, empty_is_missing: bool = False) -> float | None:
     """Return the summed instant value for a PromQL query, or None on failure."""
     cmd = [
         "kubectl",
@@ -47,12 +46,15 @@ def prometheus_scalar(query: str, *, announce: bool = True) -> float | None:
         return None
     result = payload.get("data", {}).get("result") or []
     if not result:
-        return 0.0
+        return None if empty_is_missing else 0.0
     total = 0.0
     for series in result:
         value = series.get("value") or [None, None]
         try:
-            total += float(value[1])
+            sample = float(value[1])
+            if not math.isfinite(sample):
+                raise ValueError("non-finite Prometheus sample")
+            total += sample
         except (TypeError, ValueError, IndexError):
             if announce:
                 print("[FAIL] Prometheus sample was not a number")
@@ -64,12 +66,14 @@ def _namespaced_span_total(namespace: str, matcher: str) -> float | None:
     scoped = prometheus_scalar(
         f'sum(traces_span_metrics_calls_total{{{matcher},namespace="{namespace}"}})',
         announce=False,
+        empty_is_missing=True,
     )
     if scoped is not None:
         return scoped
     return prometheus_scalar(
         f"sum(traces_span_metrics_calls_total{{{matcher}}})",
         announce=True,
+        empty_is_missing=True,
     )
 
 

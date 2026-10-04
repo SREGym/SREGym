@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,6 +13,8 @@ from dataclasses import dataclass
 import requests
 
 from sregym.generators.workload.hotel_search import KubectlPortForward
+
+logger = logging.getLogger("all.infra.workload")
 
 
 @dataclass(frozen=True)
@@ -67,16 +71,67 @@ class RecommendationHerdWorkload:
         frontend_service: str = "frontend-proxy",
         frontend_port: int = 8080,
         request_timeout: float = 15.0,
+        requests_per_second: float = 2.0,
     ):
+        if not math.isfinite(requests_per_second) or requests_per_second <= 0:
+            raise ValueError("requests_per_second must be positive")
         self.namespace = namespace
         self.frontend = KubectlPortForward(namespace, frontend_service, frontend_port)
         self.request_timeout = request_timeout
+        self.requests_per_second = requests_per_second
+        self._background_stop = threading.Event()
+        self._background_threads: list[threading.Thread] = []
+        self._background_lock = threading.Lock()
 
     def start(self) -> None:
         self.frontend.start()
 
     def stop(self) -> None:
+        self.stop_background()
         self.frontend.stop()
+
+    @property
+    def background_running(self) -> bool:
+        with self._background_lock:
+            return any(thread.is_alive() for thread in self._background_threads)
+
+    def start_background(self, *, concurrency: int, product_ids: tuple[str, ...]) -> None:
+        """Keep bounded recommendation traffic active throughout investigation."""
+        if concurrency < 1:
+            raise ValueError("concurrency must be at least 1")
+        with self._background_lock:
+            if any(thread.is_alive() for thread in self._background_threads):
+                return
+            # Open/reopen the tunnel in the workers so a rollout cannot block
+            # resuming investigation traffic or overwrite an oracle verdict.
+            self._background_stop.clear()
+            interval = concurrency / self.requests_per_second
+
+            def worker() -> None:
+                while not self._background_stop.is_set():
+                    started = time.monotonic()
+                    try:
+                        self._one_request(product_ids)
+                    except (RuntimeError, TimeoutError, OSError) as exc:
+                        # A frontend rollout may break the tunnel. The next
+                        # paced request reopens it instead of ending traffic.
+                        logger.warning("Recommendation background request failed: %s", exc)
+                    self._background_stop.wait(max(0.0, interval - (time.monotonic() - started)))
+
+            self._background_threads = [
+                threading.Thread(target=worker, name=f"rec-herd-background-{index}", daemon=True)
+                for index in range(concurrency)
+            ]
+            for thread in self._background_threads:
+                thread.start()
+
+    def stop_background(self) -> None:
+        """Drain in-flight requests before measuring an isolated oracle wave."""
+        with self._background_lock:
+            self._background_stop.set()
+            for thread in self._background_threads:
+                thread.join()
+            self._background_threads.clear()
 
     def _url(self, path: str) -> str:
         port = self.frontend.start()
@@ -115,6 +170,9 @@ class RecommendationHerdWorkload:
             raise ValueError("concurrency must be at least 1")
         self.start()
         stop_at = time.monotonic() + duration_seconds
+        # Preserve concurrent bursts, but bound their average offered rate.
+        # An unpaced closed loop can OOM the catalog even without the fault.
+        interval = concurrency / self.requests_per_second
         submitted = 0
         completed = 0
         succeeded = 0
@@ -126,6 +184,7 @@ class RecommendationHerdWorkload:
         def worker() -> None:
             nonlocal submitted, completed, succeeded
             while time.monotonic() < stop_at:
+                started = time.monotonic()
                 with lock:
                     submitted += 1
                 ok, elapsed, ids = self._one_request(product_ids)
@@ -135,7 +194,12 @@ class RecommendationHerdWorkload:
                     if ok:
                         succeeded += 1
                         returned_ids.extend(ids)
-                        recommendation_sets.add(ids)
+                        recommendation_sets.add(tuple(sorted(set(ids))))
+                delay = min(
+                    max(0.0, interval - (time.monotonic() - started)),
+                    max(0.0, stop_at - time.monotonic()),
+                )
+                time.sleep(delay)
 
         with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="rec-herd") as pool:
             futures = [pool.submit(worker) for _ in range(concurrency)]

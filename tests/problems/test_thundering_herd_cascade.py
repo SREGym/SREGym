@@ -4,12 +4,12 @@ from unittest.mock import Mock
 
 import pytest
 
+from sregym.conductor.problems import thundering_herd_cascade as module
 from sregym.conductor.problems.thundering_herd_cascade import (
+    _ASSET,
     ROOT_CAUSE_DESCRIPTION,
     ThunderingHerdCascadeAstronomyShop,
-    _ASSET,
 )
-from sregym.conductor.problems import thundering_herd_cascade as module
 
 
 def test_problem_disables_the_unrelated_default_application_workload():
@@ -85,8 +85,10 @@ def _problem():
         wait_for_ready=Mock(),
         exec_command_checked=Mock(return_value="        for _ in range(10):"),
     )
-    problem.workload = SimpleNamespace(stop=Mock())
-    problem.mitigation_oracle = SimpleNamespace(assert_fault_present=Mock())
+    problem.workload = SimpleNamespace(stop=Mock(), start_background=Mock())
+    problem.mitigation_oracle = SimpleNamespace(
+        assert_fault_present=Mock(), visible_concurrency=4, seed_product_ids=("OLJCESPC7Z",)
+    )
     return problem
 
 
@@ -128,6 +130,7 @@ def test_inject_overlays_recommendation_and_keeps_cache_flag_off(monkeypatch):
     assert "extra_env" not in created[0].injected
     problem.kubectl.exec_command_checked.assert_called()
     problem.mitigation_oracle.assert_fault_present.assert_called_once_with()
+    problem.workload.start_background.assert_called_once_with(concurrency=4, product_ids=("OLJCESPC7Z",))
     problem.kubectl.wait_for_ready.assert_called_once()
     assert problem.fault_injected is True
 
@@ -154,6 +157,20 @@ def test_inject_removes_overlay_when_fault_verification_fails(monkeypatch):
 
     assert recovered and recovered[0]["deployment_name"] == "recommendation"
     problem.workload.stop.assert_called()
+    assert problem.fault_injected is False
+
+
+def test_inject_cleans_up_when_background_traffic_cannot_start(monkeypatch):
+    injector = Mock()
+    monkeypatch.setattr(module, "ApplicationFaultInjector", Mock(return_value=injector))
+    problem = _problem()
+    problem.workload.start_background.side_effect = RuntimeError("no tunnel")
+
+    with pytest.raises(RuntimeError, match="no tunnel"):
+        problem.inject_fault()
+
+    injector.recover_source_file_override.assert_called_once()
+    problem.workload.stop.assert_called_once()
     assert problem.fault_injected is False
 
 

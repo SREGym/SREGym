@@ -16,7 +16,6 @@ from sregym.service.apps.astronomy_shop import AstronomyShop
 from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
-
 _ASSET = Path(__file__).parent / "assets" / "thundering_herd_cascade_recommendation.py"
 
 ROOT_CAUSE_DESCRIPTION = (
@@ -82,13 +81,9 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
         try:
             output = self.kubectl.exec_command_checked(command)
         except RuntimeError as exc:
-            raise RuntimeError(
-                f"recommendation overlay is not live at {self.source_path}"
-            ) from exc
+            raise RuntimeError(f"recommendation overlay is not live at {self.source_path}") from exc
         if marker not in output:
-            raise RuntimeError(
-                f"recommendation overlay is not live at {self.source_path}: {output!r}"
-            )
+            raise RuntimeError(f"recommendation overlay is not live at {self.source_path}: {output!r}")
 
     def _wait_for_recommendation(self) -> None:
         self.kubectl.wait_for_ready(
@@ -109,24 +104,29 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
             self._wait_for_recommendation()
             self._assert_overlay_live()
             self.mitigation_oracle.assert_fault_present()
+            self.start_workload()
         except Exception:
+            self.workload.stop()
             try:
                 self._unoverlay(injector)
             except Exception as cleanup_error:
                 print(f"[Cleanup] Failed to remove the recommendation overlay: {cleanup_error}")
-            self.workload.stop()
             raise
         print(f"Service: {self.recommendation_deployment} | Namespace: {self.namespace}")
 
     @mark_fault_injected
     def recover_fault(self):
         print("== Fault Recovery ==")
-        try:
-            injector = ApplicationFaultInjector(namespace=self.namespace)
-            self._unoverlay(injector)
-            self._wait_for_recommendation()
-        finally:
-            self.workload.stop()
+        self.workload.stop()
+        injector = ApplicationFaultInjector(namespace=self.namespace)
+        self._unoverlay(injector)
+        self._wait_for_recommendation()
+
+    def start_workload(self):
+        self.workload.start_background(
+            concurrency=self.mitigation_oracle.visible_concurrency,
+            product_ids=self.mitigation_oracle.seed_product_ids,
+        )
 
     def stop_workload(self):
         self.workload.stop()
