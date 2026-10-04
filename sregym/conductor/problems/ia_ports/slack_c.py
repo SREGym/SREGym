@@ -997,7 +997,11 @@ class IngressMisrouteSlack(IngressMisroute):
         }
 
     def _install_edge(self) -> None:
-        IngressNginx().deploy()
+        # A previous attempt's release fails `helm upgrade --install` on the next
+        # attempt (metadata.managedFields must be nil): start every attempt clean.
+        edge = IngressNginx()
+        self.kubectl.exec_command(f"helm uninstall {edge.release_name} -n {edge.namespace} --wait --ignore-not-found")
+        edge.deploy()
         self.kubectl.create_namespace_if_not_exist(self.namespace)
         self.kubectl.exec_command_checked(
             f"kubectl apply -n {self.namespace} -f -", input_data=json.dumps(self._ingress(self.correct_service))
