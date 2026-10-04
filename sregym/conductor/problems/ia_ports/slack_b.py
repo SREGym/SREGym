@@ -125,7 +125,6 @@ class PodAntiAffinityDeadlockSlack(PodAntiAffinityDeadlock):
         self.kubectl.exec_command(f"kubectl delete deployment {self.faulty_service} -n {self.namespace} --wait=true")
         self.kubectl.exec_command_checked(f"kubectl apply -f {path} -n {self.namespace}")
 
-    
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
@@ -169,14 +168,17 @@ class TaintNoTolerationSlack(TaintNoToleration):
         ported(
             self,
             app_name,
-            component=faulty_service,
+            component=(
+                f"nodes (taint sre-fault=blocked:NoSchedule on all nodes) / deployment/{faulty_service} tolerations"
+            ),
             description=(
                 "Every cluster node is tainted `sre-fault=blocked:NoSchedule`, while Deployment "
                 f"`{faulty_service}` only carries a non-matching toleration (`dummy-key`). Its pods were "
                 "rescheduled after the taint, so the replacement pods stay Pending with "
                 "`untolerated taint {sre-fault: blocked}` FailedScheduling events; the Service has no endpoints and "
                 "thread requests (opening threads, posting replies) fail. Pods already running elsewhere are "
-                "unaffected because NoSchedule does not evict."
+                "unaffected because NoSchedule does not evict. Naming either the node-wide taint or the "
+                f"missing matching toleration on `{faulty_service}` is a correct localization."
             ),
             oracle_factory=MitigationOracle,
         )

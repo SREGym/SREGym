@@ -262,14 +262,19 @@ class FinalizerDeadlockControllerIA(FinalizerDeadlockController):
         ported(
             self,
             app_name,
-            component=f"ClusterRole/{self.clusterrole_name} and configmap/{self.configmap_name}",
+            component=(
+                f"ClusterRole/{self.clusterrole_name} (RBAC of ServiceAccount/{self.sa_name}) "
+                f"and configmap/{self.configmap_name}"
+            ),
             description=(
                 f"ConfigMap `{self.configmap_name}` is stuck in Terminating with finalizer `{self.finalizer}`. "
                 f"The finalizer is owned by Deployment `{self.controller_name}` using ServiceAccount "
                 f"`{self.sa_name}`, but ClusterRole `{self.clusterrole_name}` was changed to read-only and lacks "
                 "permission to patch ConfigMaps, so the controller logs HTTP 403 Forbidden while trying to remove "
                 "the finalizer. Restoring the controller's RBAC lets its reconcile loop remove finalizers so both "
-                "the current ConfigMap and future cleanup requests are deleted."
+                "the current ConfigMap and future cleanup requests are deleted. In other words, the ServiceAccount "
+                f"`{self.sa_name}` lacks RBAC permission to patch ConfigMaps; naming that missing ServiceAccount "
+                "permission is a correct localization even without naming the ClusterRole."
             ),
             oracle_factory=lambda problem: FinalizerDeadlockControllerMitigationOracle(
                 problem=problem,

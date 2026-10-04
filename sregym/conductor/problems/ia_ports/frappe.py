@@ -26,7 +26,6 @@ from sregym.conductor.oracles.expired_tls_mitigation_oracle import ExpiredTlsMit
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.mitigation import MitigationOracle
 from sregym.conductor.problems.base import Problem
-from sregym.conductor.problems.incident_arena.frappe import schema_privileges, site_account, site_database
 from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import (
     BAD_RANGE as EPHEMERAL_BAD_RANGE,
 )
@@ -34,6 +33,7 @@ from sregym.conductor.problems.ephemeral_port_range_hotel_reservation import (
     SYSCTL_NAME as EPHEMERAL_SYSCTL,
 )
 from sregym.conductor.problems.expired_tls_hotel_reservation import ExpiredTlsHotelReservation
+from sregym.conductor.problems.incident_arena.frappe import schema_privileges, site_account, site_database
 from sregym.conductor.problems.lite_ia.k8s import ported
 from sregym.conductor.problems.mongo_storage_faults import FAULT_POD_NAMESPACE
 from sregym.conductor.problems.node_conntrack_exhaustion import NodeConntrackExhaustionHotelReservation
@@ -126,9 +126,7 @@ class PSARestrictedBlocksRecreationFrappe(PSARestrictedBlocksRecreation):
     @mark_fault_injected
     def inject_fault(self):
         self._capture_prior_psa_labels()
-        self._patch_namespace_labels(
-            {PSA_ENFORCE_LABEL: RESTRICTED_PROFILE, PSA_ENFORCE_VERSION_LABEL: "latest"}
-        )
+        self._patch_namespace_labels({PSA_ENFORCE_LABEL: RESTRICTED_PROFILE, PSA_ENFORCE_VERSION_LABEL: "latest"})
         selector = selector_of(self, self.faulty_service)
         pods = self.core_api.list_namespaced_pod(self.namespace, label_selector=selector).items
         if not pods:
@@ -149,7 +147,6 @@ class FrappeFaultStateOracle(MitigationOracle):
     """
 
     FAILURE_CLASSES = {
-        "fault_still_present": FailureClass.AGENT_ERROR,
         "site_database_unusable": FailureClass.AGENT_ERROR,
     }
 
@@ -471,13 +468,14 @@ class ConfigMapDriftFrappe(Problem):
         self.expected_keys = sorted(config)
         state_file(self, "configmap-drift").write_text(json.dumps(self.expected_keys))
         drifted = {k: v for k, v in config.items() if k not in self.DROPPED_KEYS}
-        apply_manifest(self, 
+        apply_manifest(
+            self,
             {
                 "apiVersion": "v1",
                 "kind": "ConfigMap",
                 "metadata": {"name": self.CONFIGMAP, "namespace": self.namespace},
                 "data": {self.KEY: json.dumps(drifted, indent=1)},
-            }
+            },
         )
         patch = {
             "spec": {
@@ -675,9 +673,7 @@ class DevShmFrappeOracle(DevShmMitigationOracle):
         if super()._has_memory_backed_shm(pod_spec):
             return True
         marker = f"{self.problem.shm_mount_path}/rq-spool"
-        return not any(
-            marker in " ".join([*(c.command or []), *(c.args or [])]) for c in pod_spec.containers or []
-        )
+        return not any(marker in " ".join([*(c.command or []), *(c.args or [])]) for c in pod_spec.containers or [])
 
 
 class DevShmExhaustionFrappe(Problem):
@@ -811,6 +807,7 @@ class NodeConntrackExhaustionFrappe(NodeConntrackExhaustionHotelReservation):
             if pod.status.phase == "Running" and pod.spec.node_name:
                 return pod.spec.node_name
 
+
 # ---------------------------------------------------------------------- silent data corruption
 class SilentDataCorruptionFrappe(Problem):
     """Overwrite InnoDB pages of Frappe's MariaDB volume with random bytes.
@@ -861,16 +858,19 @@ class SilentDataCorruptionFrappe(Problem):
         return node, path
 
     def _scale(self, replicas: int) -> None:
-        self.kubectl.exec_command_checked(f"kubectl scale statefulset/{self.STS} -n {self.namespace} --replicas={replicas}")
+        self.kubectl.exec_command_checked(
+            f"kubectl scale statefulset/{self.STS} -n {self.namespace} --replicas={replicas}"
+        )
         if replicas == 0:
-            self.kubectl.exec_command(
-                f"kubectl wait pod/{self.STS}-0 -n {self.namespace} --for=delete --timeout=180s"
-            )
+            self.kubectl.exec_command(f"kubectl wait pod/{self.STS}-0 -n {self.namespace} --for=delete --timeout=180s")
 
     def _node_script(self, node: str, script: str) -> str:
         self.kubectl.create_namespace_if_not_exist(FAULT_POD_NAMESPACE)
         return self.kubectl.run_node_script_pod(
-            node_name=node, namespace=FAULT_POD_NAMESPACE, script=script, name_prefix="sregym-storage-fault",
+            node_name=node,
+            namespace=FAULT_POD_NAMESPACE,
+            script=script,
+            name_prefix="sregym-storage-fault",
             timeout=600,
         )
 
@@ -879,7 +879,8 @@ class SilentDataCorruptionFrappe(Problem):
         database = site_database(self.app)
         try:
             out = self.app.exec_in(
-                f"deploy/{GUNICORN}", f"cd /home/frappe/frappe-bench && bench --site {self.app.SITE_NAME} backup",
+                f"deploy/{GUNICORN}",
+                f"cd /home/frappe/frappe-bench && bench --site {self.app.SITE_NAME} backup",
                 timeout=600,
             )
             print(out.strip().splitlines()[-1] if out.strip() else "bench backup done")
@@ -961,7 +962,7 @@ class LoadGeneratorFloodHomepageFrappe(Problem):
             description=(
                 f"The web tier (`{GUNICORN}`, Service `{WEB_SERVICE}`) is saturated by a sustained traffic surge on the "
                 "homepage route, so users' Desk/API requests queue behind it and time out or fail. Mechanism: the "
-                f"`{self.CONFIGMAP}` ConfigMap has the `{self.FLAG}` feature flag's `defaultVariant` set to `\"on\"`, "
+                f'`{self.CONFIGMAP}` ConfigMap has the `{self.FLAG}` feature flag\'s `defaultVariant` set to `"on"`, '
                 f"which makes the in-namespace `{self.DEPLOYMENT}` client switch from one homepage fetch every 30 s to "
                 f"{self.CONCURRENCY} concurrent request loops against `http://{WEB_SERVICE}:8000/`. Fix: turn the flag "
                 "off (or stop the client)."
@@ -1021,7 +1022,10 @@ class LoadGeneratorFloodHomepageFrappe(Problem):
                                 "command": ["sh", "-c", script],
                                 "env": [{"name": "TARGET", "value": f"http://{WEB_SERVICE}:8000/"}],
                                 "volumeMounts": [{"name": "flags", "mountPath": "/flags"}],
-                                "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}, "limits": {"memory": "768Mi"}},
+                                "resources": {
+                                    "requests": {"cpu": "100m", "memory": "256Mi"},
+                                    "limits": {"memory": "768Mi"},
+                                },
                             }
                         ],
                         "volumes": [{"name": "flags", "configMap": {"name": self.CONFIGMAP}}],
@@ -1031,13 +1035,14 @@ class LoadGeneratorFloodHomepageFrappe(Problem):
         }
 
     def _set_flag(self, variant: str) -> None:
-        apply_manifest(self, 
+        apply_manifest(
+            self,
             {
                 "apiVersion": "v1",
                 "kind": "ConfigMap",
                 "metadata": {"name": self.CONFIGMAP, "namespace": self.namespace},
                 "data": {"flags.json": self._flags(variant)},
-            }
+            },
         )
 
     @mark_fault_injected
@@ -1049,7 +1054,9 @@ class LoadGeneratorFloodHomepageFrappe(Problem):
 
     @mark_fault_injected
     def recover_fault(self):
-        self.kubectl.exec_command(f"kubectl delete deployment {self.DEPLOYMENT} -n {self.namespace} --ignore-not-found --wait=true")
+        self.kubectl.exec_command(
+            f"kubectl delete deployment {self.DEPLOYMENT} -n {self.namespace} --ignore-not-found --wait=true"
+        )
         self.kubectl.exec_command(f"kubectl delete configmap {self.CONFIGMAP} -n {self.namespace} --ignore-not-found")
 
     def fault_check(self, oracle) -> dict | None:

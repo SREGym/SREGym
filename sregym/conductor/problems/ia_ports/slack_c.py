@@ -35,8 +35,8 @@ from sregym.conductor.problems.calico_route_reflector_label_drift import (
 from sregym.conductor.problems.cumulative_admission_webhook_timeout_hotel_reservation import (
     CumulativeAdmissionWebhookTimeoutHotelReservation,
 )
-from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.incident_arena.slack_spine import patch_role_db_config
+from sregym.conductor.problems.ingress_misroute import IngressMisroute
 from sregym.conductor.problems.lite_ia.k8s import ported
 from sregym.conductor.problems.lite_ia.retry_storm import (
     DEFAULT_MESH,
@@ -157,7 +157,7 @@ class StaleCoreDNSConfigSlack(StaleCoreDNSConfig):
             component="configmap/coredns",
             description=(
                 "The CoreDNS Corefile (ConfigMap `coredns` in `kube-system`) carries a stale `template ANY ANY "
-                'svc.cluster.local` block that answers NXDOMAIN for every name matching `.*\\.svc\\.cluster\\.local`, '
+                "svc.cluster.local` block that answers NXDOMAIN for every name matching `.*\\.svc\\.cluster\\.local`, "
                 "inserted before the `kubernetes` plugin. Every in-cluster Service name therefore resolves as "
                 "non-existent, cluster-wide, although CoreDNS, the Services and the application pods are healthy. "
                 "In Slack Spine, new connections between roles (svc-message -> svc-auth/svc-channel, roles -> `db`, "
@@ -426,7 +426,6 @@ spec:
         print("Recovery complete")
 
 
-
 # ---------------------------------------------------------------------- feature_flag_latent_bug
 class SequencerModeOracle(Oracle):
     """The latent allocator is off (persisted and live) and concurrent sends get distinct sequence numbers.
@@ -439,9 +438,7 @@ class SequencerModeOracle(Oracle):
     importance = 1.0
     PROBE_SENDS = 24
     FAILURE_CLASSES = {
-        "fault_still_present": FailureClass.AGENT_ERROR,
         "sends_failing": FailureClass.AGENT_ERROR,
-        "required_deployment_not_rolled_out": FailureClass.AGENT_ERROR,
         "probe_unavailable": FailureClass.AMBIGUOUS,
     }
 
@@ -466,8 +463,12 @@ class SequencerModeOracle(Oracle):
                     return self.fail("fault_still_present", pod=pod, live_mode=mode)
             channel = f"seq-probe-{time.time_ns()}"
             sends = [
-                (f"send-{i}", "http://svc-message:8000/messages", "POST",
-                 {"channel_id": channel, "client_msg_id": f"{channel}-{i}", "text": f"probe {i}"})
+                (
+                    f"send-{i}",
+                    "http://svc-message:8000/messages",
+                    "POST",
+                    {"channel_id": channel, "client_msg_id": f"{channel}-{i}", "text": f"probe {i}"},
+                )
                 for i in range(self.PROBE_SENDS)
             ]
             replies = fetch_parallel(p, sends)
@@ -538,15 +539,21 @@ class FeatureFlagLatentBugSlack(Problem):
 
 # ---------------------------------------------------------------------- astronomy_shop_ad_service_image_slow_load
 class StoreStrictEventOracle(Oracle):
-    """The runtime toggle is off on every pod of the role and its user endpoint answers promptly."""
+    """The injected delay is gone from the role and its user endpoint answers promptly.
+
+    Clearing the runtime toggle is the direct fix; leaving it active is also
+    accepted when the role's effective ``STORE_HOLD_MS`` was cut to a sane
+    dose (at most ``MAX_HOLD_MS`` and below the injected one), in which case
+    the latency probe decides.
+    """
 
     importance = 1.0
     PROBES = 5
     MAX_LATENCY_S = 2.0
+    MAX_HOLD_MS = 1000.0
+    DEFAULT_HOLD_MS = 250.0  # servicekit's default when the env is unset
     FAILURE_CLASSES = {
-        "fault_still_present": FailureClass.AGENT_ERROR,
         "endpoint_slow_or_failing": FailureClass.AGENT_ERROR,
-        "required_deployment_not_rolled_out": FailureClass.AGENT_ERROR,
         "probe_unavailable": FailureClass.AMBIGUOUS,
     }
 
@@ -556,13 +563,17 @@ class StoreStrictEventOracle(Oracle):
         try:
             if not wait_rollout(p, p.faulty_service, timeout_s=180):
                 return self.fail("required_deployment_not_rolled_out", deployment=p.faulty_service)
+            hold_ms = self._effective_hold_ms()
+            hold_ok = hold_ms <= self.MAX_HOLD_MS and hold_ms < float(p.HOLD_MS)
             pods = role_pod_ips(p, p.role)
             events = fetch_parallel(p, [(n, f"http://{ip}:8000/admin/event", "GET", None) for n, ip in pods.items()])
             for pod, (status, body, _) in events.items():
                 active = json.loads(body).get("active", []) if int(status) == 200 else None
                 print(f"[live] {pod} active events={active}")
-                if active is None or p.event in active:
-                    return self.fail("fault_still_present", pod=pod, active=active)
+                if active is None or (p.event in active and not hold_ok):
+                    return self.fail("fault_still_present", pod=pod, active=active, store_hold_ms=hold_ms)
+                if p.event in active:
+                    print(f"[live] {pod}: {p.event} still active, but STORE_HOLD_MS={hold_ms:g}; probing latency")
             # One at a time: a concurrent burst would mostly measure the toolbox's own CPU throttling.
             probes = {}
             for i in range(self.PROBES):
@@ -575,8 +586,20 @@ class StoreStrictEventOracle(Oracle):
         print(f"[probe] GET /unread: {len(probes) - len(slow)}/{len(probes)} fast and OK")
         if slow:
             return self.fail("endpoint_slow_or_failing", slow=slow)
-        print("✅ Toggle cleared and /unread is fast")
+        print("✅ Injected delay removed and /unread is fast")
         return {"success": True}
+
+    def _effective_hold_ms(self) -> float:
+        """``STORE_HOLD_MS`` of the role's (rolled-out) app container."""
+        p = self.problem
+        dep = p.kubectl.get_deployment(p.faulty_service, p.namespace)
+        container = next((c for c in dep.spec.template.spec.containers if c.name == "app"), None)
+        container = container or dep.spec.template.spec.containers[0]
+        env = {item.name: item.value for item in container.env or [] if item.value is not None}
+        try:
+            return float(env.get("STORE_HOLD_MS", self.DEFAULT_HOLD_MS))
+        except ValueError:
+            return float("inf")
 
 
 class ImageSlowLoadSlack(Problem):
@@ -621,7 +644,10 @@ class ImageSlowLoadSlack(Problem):
         pods = role_pod_ips(self, self.role)
         replies = fetch_parallel(
             self,
-            [(n, f"http://{ip}:8000/admin/event", "PUT", {"name": self.event, "active": active}) for n, ip in pods.items()],
+            [
+                (n, f"http://{ip}:8000/admin/event", "PUT", {"name": self.event, "active": active})
+                for n, ip in pods.items()
+            ],
         )
         for pod, (status, body, _) in replies.items():
             if int(status) != 200:
@@ -724,8 +750,12 @@ class StaleHostAliasesOracle(Oracle):
     """
 
     importance = 1.0
+    # Let kept-alive connections and caches settle after the rollout, then
+    # probe in rounds; the first fully successful round passes.
+    SETTLE_S = 15.0
+    PROBE_ROUNDS = 4
+    ROUND_INTERVAL_S = 10.0
     FAILURE_CLASSES = {
-        "fault_still_present": FailureClass.AGENT_ERROR,
         "rollout_paused_or_incomplete": FailureClass.AGENT_ERROR,
         "serving_capacity_reduced": FailureClass.AGENT_ERROR,
         "sends_failing": FailureClass.AGENT_ERROR,
@@ -760,19 +790,38 @@ class StaleHostAliasesOracle(Oracle):
             ready = {pod.metadata.name: pod.status.pod_ip for pod in pods if pod.status.pod_ip}
             if len(ready) < p.EDGE_REPLICAS:
                 return self.fail("serving_capacity_reduced", pods=sorted(ready))
-            stamp = time.time_ns()
-            sends = [
-                (f"{name}#{i}", f"http://{ip}:8000/messages", "POST",
-                 {"channel_id": f"alias-probe-{i}", "client_msg_id": f"alias-probe-{stamp}-{name}-{i}", "text": "probe"})
-                for name, ip in sorted(ready.items())
-                for i in range(3)
-            ]
-            replies = fetch_parallel(p, sends)
+            time.sleep(self.SETTLE_S)
+            failed: dict = {}
+            for round_no in range(1, self.PROBE_ROUNDS + 1):
+                if round_no > 1:
+                    time.sleep(self.ROUND_INTERVAL_S)
+                stamp = time.time_ns()  # fresh client_msg_ids every round
+                sends = [
+                    (
+                        f"{name}#{i}",
+                        f"http://{ip}:8000/messages",
+                        "POST",
+                        {
+                            "channel_id": f"alias-probe-{i}",
+                            "client_msg_id": f"alias-probe-{stamp}-{name}-{i}",
+                            "text": "probe",
+                        },
+                    )
+                    for name, ip in sorted(ready.items())
+                    for i in range(3)
+                ]
+                replies = fetch_parallel(p, sends)
+                failed = {
+                    key: (status, body[:120])
+                    for key, (status, body, _) in replies.items()
+                    if not 200 <= int(status) < 300
+                }
+                print(f"[probe] round {round_no}: per-pod sends {len(replies) - len(failed)}/{len(replies)} ok")
+                if not failed:
+                    break
         except Exception as exc:
             print(f"❌ Probe failed: {exc}")
             return self.fail("probe_unavailable", error=str(exc))
-        failed = {key: (status, body[:120]) for key, (status, body, _) in replies.items() if not 200 <= int(status) < 300}
-        print(f"[probe] per-pod sends: {len(replies) - len(failed)}/{len(replies)} ok")
         if failed:
             return self.fail("sends_failing", failed=failed)
         print("✅ Every serving svc-message pod resolves svc-auth through the current Service")
@@ -796,7 +845,10 @@ class StaleHostAliasesSlack(Problem):
     EDGE_REPLICAS = 2
     TARGET_BACKEND = "svc-auth"
     LEGACY_SERVICE = "svc-auth-legacy"
-    load_profile = ("lite_slack_sendheavy", {"base": "slack_session", "soak_cycles": 2, "action_weights": SEND_HEAVY_ACTION_WEIGHTS})
+    load_profile = (
+        "lite_slack_sendheavy",
+        {"base": "slack_session", "soak_cycles": 2, "action_weights": SEND_HEAVY_ACTION_WEIGHTS},
+    )
 
     def __init__(self, faulty_service: str = "svc-message"):
         self.faulty_service = faulty_service
@@ -856,10 +908,10 @@ class StaleHostAliasesSlack(Problem):
                 "ports": [{"name": "http", "port": 8000, "targetPort": 8000}],
             },
         }
-        self.kubectl.exec_command_checked(
-            f"kubectl apply -n {self.namespace} -f -", input_data=json.dumps(legacy)
-        )
-        legacy_ip = self.kubectl.core_v1_api.read_namespaced_service(self.LEGACY_SERVICE, self.namespace).spec.cluster_ip
+        self.kubectl.exec_command_checked(f"kubectl apply -n {self.namespace} -f -", input_data=json.dumps(legacy))
+        legacy_ip = self.kubectl.core_v1_api.read_namespaced_service(
+            self.LEGACY_SERVICE, self.namespace
+        ).spec.cluster_ip
         # The previous release: two replicas resolving svc-auth through the legacy entrypoint.
         self._patch(
             {
@@ -914,7 +966,9 @@ class StaleHostAliasesSlack(Problem):
         print("== Fault Recovery ==")
         self._patch({"spec": {"paused": False, "minReadySeconds": 0, "template": {"spec": {"hostAliases": None}}}})
         wait_rollout(self, self.faulty_service, timeout_s=300)
-        self.kubectl.exec_command(f"kubectl delete service {self.LEGACY_SERVICE} -n {self.namespace} --ignore-not-found")
+        self.kubectl.exec_command(
+            f"kubectl delete service {self.LEGACY_SERVICE} -n {self.namespace} --ignore-not-found"
+        )
 
 
 # ---------------------------------------------------------------------- ingress_misroute
@@ -952,8 +1006,10 @@ class IngressMisrouteSlack(IngressMisroute):
             oracle_factory=IngressMisrouteMitigationOracle,
         )
         self.networking_v1 = client.NetworkingV1Api()
-        base = {f"LOADGEN_{key}_BASE_URL": f"http://svc-{role}:8000" for key, role in
-                (("THREAD", "thread"), ("NOTIF", "notification"), ("SEARCH", "search"))}
+        base = {
+            f"LOADGEN_{key}_BASE_URL": f"http://svc-{role}:8000"
+            for key, role in (("THREAD", "thread"), ("NOTIF", "notification"), ("SEARCH", "search"))
+        }
         self.app.configure(
             {
                 "loadgen": {"target": self.CONTROLLER_URL + self.path},
@@ -1113,8 +1169,25 @@ class ChannelRetryStormBase(RetryStormCollapseIA):
     # Every arrival is a real send (POST /messages, then index + search readback).
     load_profile = ("lite_slack_send", {"base": "write", "cycles": [[30.0, 30.0, 30.0, 30.0]], "soak_cycles": 2})
 
-    def __init__(self, description: str, component: str):
-        ported(self, APP, component=component, description=description, oracle_factory=ChannelRetryStormOracle)
+    # Both co-causes: the amplifying retry policy and the bounded channel pool.
+    COMPONENT = (
+        "svc-message -> svc-channel mesh retry policy (roles.message.mesh) and svc-channel DB pool "
+        "(roles.channel.db, below the peers' 20+10)"
+    )
+    CO_CAUSES = (
+        "The retry/timeout feedback loop and the bounded channel pool are co-causes; either may be called primary; "
+        "a diagnosis is incomplete only if it omits the retry/timeout amplification, or blames the strict reads or "
+        "the trigger (capacity cut / load spike) alone."
+    )
+
+    def __init__(self, description: str, component: str | None = None):
+        ported(
+            self,
+            APP,
+            component=component or self.COMPONENT,
+            description=f"{description} {self.CO_CAUSES}",
+            oracle_factory=ChannelRetryStormOracle,
+        )
         self.app.set_load_profile(*self.load_profile)
         self.app.configure(
             {
@@ -1132,15 +1205,29 @@ class ChannelRetryStormBase(RetryStormCollapseIA):
     def metrics(self) -> dict[str, float]:
         requests = self.role_requests(self.CALLER_ROLE, "/metrics") + self.role_requests(self.BACKEND_ROLE, "/metrics")
         replies = self.fetch_many(requests)
-        snap = {k: 0.0 for k in ("authz_calls", "backend_attempts", "backend_timeouts", "backend_ok", "pool_checked_out", "pool_capacity")}
+        snap = {
+            k: 0.0
+            for k in (
+                "authz_calls",
+                "backend_attempts",
+                "backend_timeouts",
+                "backend_ok",
+                "pool_checked_out",
+                "pool_capacity",
+            )
+        }
         for key, (status, text) in replies.items():
             if int(status) != 200:
                 raise RuntimeError(f"GET {key} returned {status}: {text[:200]}")
             if key.split("/", 1)[0] == self.CALLER_ROLE:
                 target = self.BACKEND_ROLE
-                snap["authz_calls"] += _prom_sum(text, "http_request_duration_seconds_count", method="POST", route="/messages")
+                snap["authz_calls"] += _prom_sum(
+                    text, "http_request_duration_seconds_count", method="POST", route="/messages"
+                )
                 snap["backend_attempts"] += _prom_sum(text, "http_client_attempts_total", target=target)
-                snap["backend_timeouts"] += _prom_sum(text, "http_client_attempts_total", target=target, result="timeout")
+                snap["backend_timeouts"] += _prom_sum(
+                    text, "http_client_attempts_total", target=target, result="timeout"
+                )
                 snap["backend_ok"] += _prom_sum(text, "http_client_attempts_total", target=target, result="ok")
             else:
                 snap["pool_checked_out"] += _prom_sum(text, "db_pool_checked_out")
@@ -1166,7 +1253,9 @@ class ChannelRetryStormBase(RetryStormCollapseIA):
         self.kubectl.core_v1_api.patch_namespaced_config_map(
             self.app.APP_CONFIG_MAP, self.namespace, {"data": {"app.yaml": text}}
         )
-        self.admin_all(self.BACKEND_ROLE, "/admin/config", "PUT", {"db": {"pool_size": pool_size, "max_overflow": max_overflow}})
+        self.admin_all(
+            self.BACKEND_ROLE, "/admin/config", "PUT", {"db": {"pool_size": pool_size, "max_overflow": max_overflow}}
+        )
         self.admin_all(self.BACKEND_ROLE, "/admin/reload", "POST")
 
     def set_trigger(self, active: bool) -> None:  # no runtime event of our own to clear
@@ -1242,14 +1331,13 @@ class ChannelRetryStormOracle(RetryStormMitigationOracle):
                 pool_timeout = float(db.get("pool_timeout_s", 0))
                 connections += pool_size + overflow
                 print(f"[Policy] {pod} db={json.dumps(db, sort_keys=True)}")
-                if (
-                    not 0 < pool_size <= p.max_pool_size
-                    or not 0 <= overflow <= p.max_overflow
-                    or not p.min_pool_timeout_s <= pool_timeout <= p.max_pool_timeout_s
-                ):
+                # No per-pod pool_size / max_overflow cap here: a larger pool on fewer replicas is a valid
+                # fix; only the aggregate backend-connection budget below bounds it.
+                if pool_size <= 0 or overflow < 0 or not p.min_pool_timeout_s <= pool_timeout <= p.max_pool_timeout_s:
                     print(f"[FAIL] {pod}: pool outside the safe envelope")
                     return self.fail("backend_pool_outside_safe_envelope", pod=pod, db=db)
             if connections > p.max_backend_connections:
+                print(f"[FAIL] svc-{p.BACKEND_ROLE} holds {connections} connections (max {p.max_backend_connections})")
                 return self.fail("backend_pool_outside_safe_envelope", connections=connections)
             message_env, _ = self._container_env(p.UPSTREAM_ROLE)
             if message_env.get("AUTHZ_CHECK") != "1":
@@ -1298,7 +1386,6 @@ class CapacityDecreaseRPCRetryStormSlack(ChannelRetryStormBase):
     def __init__(self):
         mesh = self.caller_mesh
         super().__init__(
-            component="svc-message -> svc-channel mesh retry policy (roles.message.mesh)",
             description=(
                 "A metastable retry storm on the send path after a capacity decrease. Every message send "
                 "(svc-message POST /messages) resolves channel authz on svc-channel (GET /authz/resolve) through "
@@ -1317,7 +1404,8 @@ class CapacityDecreaseRPCRetryStormSlack(ChannelRetryStormBase):
                 "fail with 503 `authz_unavailable`. The sustaining cause is the timeout/retry/queue feedback loop "
                 "(made self-sustaining by the capacity cut), not the expired event. Valid mitigations bring the retry "
                 "policy (fewer attempts, a per-try timeout above the queueing delay, no retry on timeout, or a sane "
-                "breaker) and/or svc-channel's pool (within the peer-uniform 20+10) into a safe envelope so the "
+                "breaker) and/or svc-channel's pool (at most 60 backend connections across replicas) into a safe "
+                "envelope so the "
                 "backlog drains and a repeated slowdown is survived; disabling strict ACL reads or the authz check is "
                 "not a fix."
             ),
@@ -1358,7 +1446,6 @@ class LoadSpikeRPCRetryStormSlack(ChannelRetryStormBase):
     def __init__(self):
         mesh = self.caller_mesh
         super().__init__(
-            component="svc-message -> svc-channel mesh retry policy (roles.message.mesh)",
             description=(
                 "A metastable retry storm on the send path triggered by a load spike. Every message send "
                 "(svc-message POST /messages) resolves channel authz on svc-channel (GET /authz/resolve) through "
@@ -1374,8 +1461,8 @@ class LoadSpikeRPCRetryStormSlack(ChannelRetryStormBase):
                 "load: the pool stays saturated, every attempt times out and sends fail with 503 "
                 "`authz_unavailable`. The sustaining cause is the timeout/retry/queue feedback loop, not the spike. "
                 "Valid mitigations bring the retry policy (fewer attempts, a per-try timeout above the queueing delay, "
-                "no retry on timeout, or a sane breaker) and/or svc-channel's pool (within the peer-uniform 20+10) "
-                "into a safe envelope so the backlog drains and a repeated spike is survived; disabling strict ACL "
+                "no retry on timeout, or a sane breaker) and/or svc-channel's pool (at most 60 backend connections "
+                "across replicas) into a safe envelope so the backlog drains and a repeated spike is survived; disabling strict ACL "
                 "reads or the authz check is not a fix."
             ),
         )

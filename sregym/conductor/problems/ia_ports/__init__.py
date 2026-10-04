@@ -19,6 +19,10 @@ IA_PORTS: dict[str, tuple[str, type]] = {
     **lite_variants.PORTS,
 }
 
+# Ported but withdrawn: the fault cannot be graded fairly on these clusters (see NOT_PORTED).
+WITHDRAWN = {"kubelet_crash"}
+IA_PORTS = {original: port for original, port in IA_PORTS.items() if original not in WITHDRAWN}
+
 # Variant ids reuse Lite ports that are registered from lite_ia already.
 IA_PORT_PROBLEMS = {
     problem_id: factory for original, (problem_id, factory) in IA_PORTS.items() if original not in lite_variants.PORTS
@@ -40,6 +44,7 @@ NOT_PORTED = {
     "astronomy_shop_payment_service_unreachable": "Saleor's checkout pays through the in-process dummy gateway: there is no network hop between checkout and payment to make unreachable (a payment App webhook to a blackhole added no errors on the user path).",
     "kafka_producer_leak": "Not completed. No broker in these apps fails like the original (Kafka heap OOM from a producer leak): RabbitMQ sizes its memory watermark from host RAM, so it is OOMKilled before its alarm, and Redpanda throttles instead of failing; work on a broker-flooding analogue was also halted by a safety check.",
     "gc_capacity_degradation": "No GC-bound service on a user path: GOGC=1 on Slack Spine's Go services (search-engine, kafkagate, dispatcher, geodns) changed CPU from ~2m to ~5m with no effect on users; the Python/TypeScript/Django services have no GOGC analogue.",
+    "kubelet_crash": "Withdrawn after evaluation: killing kubelet on every worker cannot be repaired from inside the cluster (the agent has no node access), and the load generator lands on a dead worker, so the port's mitigation cannot be graded fairly; the original's AlertOracle has no rules for the new namespaces either. (Port kept in ia_ports/saleor.py for reference.)",
     "trainticket_f17_nested_sql_select_clause_error": "a malformed nested SELECT compiled into ts-voucher-service; a source-code bug with no analogue in the apps' images.",
 }
 

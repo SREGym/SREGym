@@ -146,6 +146,7 @@ def test_no_oracle_claims_a_harness_error_for_itself():
         # capture_baseline not having run is a sequencing failure, not a check.
         "SearchRateRetryMitigationOracle",
         "RetryStormMitigationOracle",
+        "ChannelRetryStormOracle",
         # Our probe patch not taking effect means the test never ran.
         "RollingUpdateMitigationOracle",
         # No probe pod means nothing was measured.

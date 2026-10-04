@@ -74,6 +74,10 @@ class WrongBinUsageSaleor(WrongBinUsage):
         self.wrong_binary_source = wrong_binary_source
         # WrongBinMitigationOracle: the API container's command must run this binary again.
         self.expected_command = "uvicorn"
+        # The injected command is the worker's Celery entrypoint; removing the
+        # override (the image's default CMD runs uvicorn) is also a fix once the
+        # Deployment rolls out Ready.
+        self.wrong_command = "celery"
         ported(
             self,
             APP,
@@ -331,9 +335,7 @@ class NightlyRebalanceOOMSaleor(NightlyRebalanceOOM):
                     limits = c.resources.limits
             if limits.get("memory") != self.squeeze_memory:
                 print(f"Deleting pre-squeeze ReplicaSet {rs.metadata.name}")
-                apps.delete_namespaced_replica_set(
-                    rs.metadata.name, self.namespace, propagation_policy="Background"
-                )
+                apps.delete_namespaced_replica_set(rs.metadata.name, self.namespace, propagation_policy="Background")
 
     def _squeeze_patch(self) -> dict:
         memory = {"memory": self.squeeze_memory}

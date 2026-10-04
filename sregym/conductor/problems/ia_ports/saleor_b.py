@@ -179,7 +179,6 @@ class SaleorFaultStateOracle(MitigationOracle):
     """
 
     FAILURE_CLASSES = {
-        "fault_still_present": FailureClass.AGENT_ERROR,
         "checkout_probe_failed": FailureClass.AGENT_ERROR,
     }
 
@@ -328,7 +327,9 @@ class ChannelDeactivatedSaleor(Problem):
     def inject_fault(self):
         channel = self._channel()
         data = admin_gql(
-            self, "mutation($id:ID!){channelDeactivate(id:$id){channel{isActive} errors{message}}}", {"id": channel["id"]}
+            self,
+            "mutation($id:ID!){channelDeactivate(id:$id){channel{isActive} errors{message}}}",
+            {"id": channel["id"]},
         )
         mutation_ok(data, "channelDeactivate")
         print(f"Deactivated channel {CHANNEL}")
@@ -880,7 +881,9 @@ class PostgresLockContentionSaleor(PostgresLockContentionProductCatalog):
             return False, str(exc).rsplit("': ", 1)[-1]
 
     def _catalog_read_status(self) -> str:
-        ok, out = self._admin_psql(f"SET lock_timeout = 3000; SELECT count(*) FROM (SELECT 1 FROM {self.TABLE} LIMIT 1) t")
+        ok, out = self._admin_psql(
+            f"SET lock_timeout = 3000; SELECT count(*) FROM (SELECT 1 FROM {self.TABLE} LIMIT 1) t"
+        )
         if ok:
             return "ok"
         if "lock timeout" in out.lower() or "canceling statement due to lock" in out.lower():
@@ -1040,7 +1043,9 @@ while True:
 
     def _deployment_json(self) -> dict:
         return json.loads(
-            self.kubectl.exec_command_checked(f"kubectl get deployment {self.faulty_service} -n {self.namespace} -o json")
+            self.kubectl.exec_command_checked(
+                f"kubectl get deployment {self.faulty_service} -n {self.namespace} -o json"
+            )
         )
 
     def _patch_container(self, command, args) -> None:
@@ -1078,7 +1083,10 @@ while True:
                                 "image": "python:3.12-alpine",
                                 "command": ["python3", "-u", "-c", self.FLOOD_SCRIPT],
                                 "env": [
-                                    {"name": "TARGET_HOST", "value": f"{API_SERVICE}.{self.namespace}.svc.cluster.local"},
+                                    {
+                                        "name": "TARGET_HOST",
+                                        "value": f"{API_SERVICE}.{self.namespace}.svc.cluster.local",
+                                    },
                                     {"name": "TARGET_PORT", "value": "8000"},
                                     {"name": "CONNECTIONS", "value": str(self.CONNECTIONS)},
                                 ],
@@ -1123,9 +1131,9 @@ class LatentSectorErrorSaleor(Problem):
     missing blocks fail. Here the PostgreSQL StatefulSet is scaled to 0, every
     relation file of the ``saleor`` database (``base/<oid>/``, catalogs
     included) is truncated to its first 8 KiB page on the node, and the
-    database is started again. The server comes up, but any session on the
-    database fails reading the missing blocks (``could not read block N in
-    file "base/...": read only 0 of 8192 bytes``), so every API request fails.
+    database is started again. Connections then fail with FATAL/PANIC
+    ``could not open critical system index 2662`` and the server crash-loops,
+    so every API request fails.
 
     A ``pg_dump`` taken just before (on the database's own volume, under
     ``backups/``) is the realistic way back; the harness also snapshots the
@@ -1144,13 +1152,16 @@ class LatentSectorErrorSaleor(Problem):
             component=f"statefulset/{self.STS}",
             description=(
                 f"The storage backing Saleor's PostgreSQL (`{self.STS}` StatefulSet, PVC `data-{self.STS}-0`) "
-                "developed latent sector errors: everything past the first 8 KiB page of each relation file of "
-                "the `saleor` database (`pgdata/base/<database oid>/`, system catalogs included) can no longer be "
-                "read. PostgreSQL starts, but every session on the database fails when it reads those blocks "
-                "(`could not read block N in file \"base/...\": read only 0 of 8192 bytes`), so the Saleor API and "
-                "worker cannot load anything and every storefront and checkout request fails. The data must be "
-                f"restored, e.g. by recreating the database from the `pg_dump` archive in `{self.BACKUP_DIR}` on "
-                "the database volume."
+                "developed latent sector errors: the relation files of the `saleor` database on the Postgres "
+                "volume (`pgdata/base/<database oid>/`, system catalogs and their indexes included) were truncated "
+                "to their first 8 KiB page and its relcache file `pg_internal.init` is gone. Connections to the "
+                "database fail with FATAL/PANIC errors such as `could not open critical system index 2662` "
+                "(pg_class_oid_index), and the PostgreSQL pod crash-loops, so the Saleor API and worker cannot "
+                "load anything and every storefront and checkout request fails. Naming truncation/corruption of the "
+                "`saleor` database files on the Postgres volume (including naming the damaged system index) is a "
+                "correct localization. The repair is restoring the data, e.g. by recreating the database from the "
+                f"`pg_dump` archive in `{self.BACKUP_DIR}` on the database volume or restoring the volume; "
+                "reseeding the database with fresh fixture data is not a repair."
             ),
             oracle_factory=SaleorFaultStateOracle,
         )
@@ -1317,15 +1328,19 @@ class _WorkerRoleFault(Problem):
 
     def __init__(self, app_name: str = APP):
         self.faulty_service = WORKER
-        ported(self, app_name, component=self.COMPONENT, description=self.DESCRIPTION, oracle_factory=SaleorFaultStateOracle)
+        ported(
+            self,
+            app_name,
+            component=self.COMPONENT,
+            description=self.DESCRIPTION,
+            oracle_factory=SaleorFaultStateOracle,
+        )
         self.app.configure(ASYNC_LANE_VALUES)
         self.app.set_load_profile(*ASYNC_LANE_PROFILE)
 
     def _restart_worker(self) -> None:
         # Faithful to the originals, which restarted the client into the fault.
-        self.app.psql(
-            f"SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename = '{WORKER_ROLE}'"
-        )
+        self.app.psql(f"SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity WHERE usename = '{WORKER_ROLE}'")
         self.kubectl.exec_command(f"kubectl rollout restart deployment/{WORKER} -n {self.namespace}")
 
     def _missing_privileges(self) -> list[str]:
@@ -1367,9 +1382,7 @@ class _WorkerRoleFault(Problem):
                 return None
             if time.monotonic() > deadline:
                 print(f"❌ Async round trip incomplete after 90s: {left} deliveries undelivered, {sent} payloads sent")
-                return oracle.fail(
-                    "fault_still_present", detail="async round trip failed", undelivered=left, sent=sent
-                )
+                return oracle.fail("fault_still_present", detail="async round trip failed", undelivered=left, sent=sent)
             time.sleep(5)
 
     def fault_check(self, oracle) -> dict | None:
@@ -1424,7 +1437,7 @@ class StorageUserUnregisteredWorkerRoleSaleor(_WorkerRoleFault):
         f"The PostgreSQL role Saleor's Celery worker (`{WORKER}`) connects as, `{WORKER_ROLE}` (password from "
         "the worker's DATABASE_URL), is missing: it was dropped from the database server (`postgres` "
         "StatefulSet) together with its grants. The worker cannot authenticate (`password authentication failed "
-        f"for user \"{WORKER_ROLE}\"` / role does not exist), so every task that needs the database fails and "
+        f'for user "{WORKER_ROLE}"` / role does not exist), so every task that needs the database fails and '
         "asynchronous work such as webhook deliveries (ORDER_CREATED for every new order) stops, while the API "
         "(role `saleor_app`) keeps serving. Fix: recreate the role with the worker's password and grant it "
         "CONNECT, schema USAGE and SELECT/INSERT/UPDATE/DELETE on the tables (plus sequence usage)."
@@ -1469,7 +1482,10 @@ PORTS: dict[str, tuple[str, type]] = {
         "trainticket_f22_sql_column_name_mismatch_error_saleor",
         SchemaColumnDriftSaleor,
     ),
-    "integer_overflow_primary_key_astronomy_shop": ("integer_overflow_primary_key_saleor", IntegerOverflowPrimaryKeySaleor),
+    "integer_overflow_primary_key_astronomy_shop": (
+        "integer_overflow_primary_key_saleor",
+        IntegerOverflowPrimaryKeySaleor,
+    ),
     "postgres_lock_contention_product_catalog": ("postgres_lock_contention_saleor", PostgresLockContentionSaleor),
     "file_descriptor_exhaustion": ("file_descriptor_exhaustion_saleor", FileDescriptorExhaustionSaleor),
     "latent_sector_error": ("latent_sector_error_saleor", LatentSectorErrorSaleor),

@@ -182,7 +182,9 @@ class FaultyImageCorrelatedSlack(FaultyImageCorrelated):
     @mark_fault_injected
     def inject_fault(self):
         print("== Fault Injection ==")
-        self.bad_image = self.kubectl.get_deployment("dispatcher", self.namespace).spec.template.spec.containers[0].image
+        self.bad_image = (
+            self.kubectl.get_deployment("dispatcher", self.namespace).spec.template.spec.containers[0].image
+        )
         for service in self.faulty_service:
             deployment = self.kubectl.get_deployment(service, self.namespace)
             container = deployment.spec.template.spec.containers[0]
@@ -268,8 +270,8 @@ class UpdateIncompatibleCorrelatedSlack(UpdateIncompatibleCorrelated):
             description=(
                 f"The PostgreSQL StatefulSets ({', '.join(self.faulty_service)}) were upgraded in place from "
                 f"`postgres:16` to an incompatible major version (`{self.BAD_IMAGE}`). Their persistent volumes hold "
-                "PostgreSQL 16 data directories, which a 17 server refuses to open (\"database files are "
-                "incompatible with server\"), so the database pods crash-loop and every service that persists to "
+                'PostgreSQL 16 data directories, which a 17 server refuses to open ("database files are '
+                'incompatible with server"), so the database pods crash-loop and every service that persists to '
                 "Postgres (messages, channels, threads, files, workspace) fails. The fix is to roll the StatefulSets "
                 "back to `postgres:16` and replace the stuck pods."
             ),
@@ -467,7 +469,9 @@ class LivenessProbeMisconfigurationSlack(LivenessProbeMisconfiguration):
             # Between kills the pod is briefly Ready, so a single snapshot can
             # miss the restart loop: readiness must also hold for a minute.
             oracle_factory=lambda problem: CompoundedOracle(
-                problem, MitigationOracle(problem), SustainedReadinessOracle(problem, buffer_period=30, sustained_period=60)
+                problem,
+                MitigationOracle(problem),
+                SustainedReadinessOracle(problem, buffer_period=30, sustained_period=60),
             ),
         )
         self.injector = VirtualizationFaultInjector(namespace=self.namespace)
@@ -506,9 +510,9 @@ class _TargetPortOracle(TargetPortMisconfigMitigationOracle):
 
     def evaluate(self) -> dict:
         kubectl = self.problem.kubectl
-        target_port = kubectl.get_service_json(self.problem.faulty_service, self.problem.namespace)["spec"]["ports"][
-            0
-        ]["targetPort"]
+        target_port = kubectl.get_service_json(self.problem.faulty_service, self.problem.namespace)["spec"]["ports"][0][
+            "targetPort"
+        ]
         if target_port not in self.problem.valid_target_ports:
             print("== Mitigation Evaluation ==")
             print(f"❌ Service {self.problem.faulty_service} targetPort is {target_port}")
