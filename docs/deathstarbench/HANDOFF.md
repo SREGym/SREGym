@@ -556,9 +556,20 @@ for p in $(pgrep -f evaluate_deathstarbench); do kill -9 "$p"; done
 ps -eo pid,cmd | grep -E 'validate_prob|evaluate_deat' | grep -v grep
 ```
 
-A related trap: `pgrep`/`pkill` patterns inside `docker exec` match the exec's
-own command line, so the kill kills the killer and returns 137 or 143 before
-doing anything. List the PIDs in one call and `kill -9 <pids>` in the next.
+A related trap, which cost more than the kill did: a pattern matches the
+*matching process* too. `pgrep`/`pkill` inside `docker exec` match the exec's own
+command line, so the kill kills the killer and returns 137 or 143 before doing
+anything. Worse, a wait loop built the same way never exits --
+
+```sh
+while ps -eo cmd | grep -q "sh /tmp/screen-final.sh"; do sleep 60; done
+```
+
+`ps` lists the `grep` as well, so this is always true. Mine sat in that loop for
+an hour and three quarters with the cluster free. Use a bracket class so the
+pattern cannot match itself (`grep -q "[s]h /tmp/screen-final.sh"`), list PIDs in
+one call and kill them in the next, and prefer chaining runs inside a single
+driver script over having a second script wait on the first.
 
 **The cheaper lesson is not to need any of this.** Both voided screens came from
 reordering a queue mid-flight. Decide the order before launching, and if a result
