@@ -1,8 +1,8 @@
-# SREGym-Lite on the Incident Arena apps (`sregym-lite-ia`)
+# SREGym-Lite on Frappe, Saleor and Slack Spine (`sregym-lite-ia`)
 
 Environment scaling for SREGym 2.0: the 21 SREGym-Lite faults re-targeted from Hotel Reservation,
-Social Network and Astronomy Shop to the much larger Incident Arena applications — Frappe/ERPNext,
-Saleor and Slack Spine (see [incident-arena.md](incident-arena.md)).
+Social Network and Astronomy Shop to three much larger applications: Frappe/ERPNext, Saleor and
+Slack Spine.
 
 Each port keeps the original fault's causal mechanism and state-based mitigation oracle, aimed at a
 real component of the new app, and adds one requirement: after the agent finishes, the chart's own
