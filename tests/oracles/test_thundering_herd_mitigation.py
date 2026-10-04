@@ -1,10 +1,22 @@
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+import yaml
 
 from sregym.conductor.oracles.thundering_herd_mitigation import ThunderingHerdMitigationOracle
 from sregym.generators.workload.recommendation_herd import HerdSnapshot
+
+
+def test_otlp_span_flush_fits_the_isolated_wave_export_window():
+    manifest = Path(__file__).resolve().parents[2] / "sregym/observer/otel_collector/otel-collector.yaml"
+    config_map = next(yaml.safe_load_all(manifest.read_text()))
+    collector = yaml.safe_load(config_map["data"]["config.yaml"])
+    connector = collector["connectors"]["spanmetrics/otlp"]
+    # Reserve the rest of the 45s window for SDK/collector batches and the
+    # central Prometheus's 15s scrape, rather than a 60s connector default.
+    assert float(connector["metrics_flush_interval"].removesuffix("s")) <= 5
 
 
 def _deployment(*, replicas=1, generation=2, observed=2, ready=1, cpu_limit="200m"):
