@@ -22,6 +22,7 @@ class NightlyRebalanceOOM(Problem):
     policy_configmap = "vpa-updater-policy"
     schedule = "* * * * *"
     squeeze_memory = "4Mi"
+    actor_image = "bitnami/kubectl:latest"
 
     def __init__(self, app_name: str = "hotel_reservation", faulty_service: str = "recommendation"):
         if app_name != "hotel_reservation":
@@ -147,7 +148,7 @@ class NightlyRebalanceOOM(Problem):
         cmd = 'kubectl -n "$NAMESPACE" patch deployment "$TARGET" --type=strategic -p "$PATCH"'
         container = {
             "name": "patch",
-            "image": "bitnami/kubectl:latest",
+            "image": self.actor_image,
             "command": ["sh", "-c", cmd],
             "envFrom": [{"configMapRef": {"name": self.policy_configmap}}],
         }

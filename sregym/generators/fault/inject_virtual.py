@@ -357,6 +357,7 @@ class VirtualizationFaultInjector(FaultInjector):
         all_services: bool = False,
         additional_services: list[str] | None = None,
         loose_headroom_factor: float = 2.0,
+        calibration_kwargs: dict | None = None,
     ) -> dict[str, str]:
         if all_services and additional_services:
             raise ValueError("Use either all_services or additional_services, not both")
@@ -367,6 +368,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 services=all_deps,
                 faulty_services=microservices,
                 loose_headroom=loose_headroom_factor,
+                **(calibration_kwargs or {}),
             )
             services_to_patch = all_deps
         elif additional_services:
@@ -375,6 +377,7 @@ class VirtualizationFaultInjector(FaultInjector):
                 services=services_to_patch,
                 faulty_services=microservices,
                 loose_headroom=loose_headroom_factor,
+                **(calibration_kwargs or {}),
             )
         else:
             services_to_patch = microservices
@@ -578,9 +581,12 @@ class VirtualizationFaultInjector(FaultInjector):
     def _get_ready_pods(self, services: list[str]) -> dict[str, str]:
         wanted = set(services)
         ready = {}
+        # Pod label naming the service; apps not built with kompose set
+        # ``service_label_key`` on the injector (e.g. ``app.kubernetes.io/component``).
+        label_key = getattr(self, "service_label_key", None) or "io.kompose.service"
         for pod in self.kubectl.list_pods(self.namespace, timeout=60).items:
             labels = pod.metadata.labels or {}
-            service = labels.get("io.kompose.service")
+            service = labels.get(label_key)
             statuses = pod.status.container_statuses or []
             if (
                 service in wanted
