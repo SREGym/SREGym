@@ -11,6 +11,13 @@ from sregym.utils.decorators import mark_fault_injected
 
 
 class IncorrectPortAssignment(Problem):
+    """Model incorrect port assignment variants.
+
+    The ``incorrect_port_assignment`` configuration is deprecated in SREGym
+    1.1 after reaching 100% overall pass@3. The unschedulable variant remains
+    active.
+    """
+
     def __init__(self, **kwargs):
         super().__init__(app=AstronomyShop())
         self.kubectl = KubeCtl()
