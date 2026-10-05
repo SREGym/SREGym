@@ -241,6 +241,48 @@ it was "almost certainly unaffected" -- which is the only reason the re-run
 happened. The re-run contradicted it. **Discoverability is not the test. Assume
 anything authored into the prompt is load-bearing until a screen says otherwise.**
 
+### A race needs the uncertainty to be irreducible, not merely late
+
+Both coordination races were built on the rule in the next section -- put the race
+where the service is the only confirmation channel -- and both were solved.
+
+```
+coordination_collapse (baseline)  ███   3 of 3   median 437s   [437, 374, 669]
+coordination_lagging_admission    ███   3 of 3   median 390s   [390, 387, 450]
+```
+
+Faster than the baseline. The agent said so itself on attempt 1:
+
+> The operator ledger confirms the change; reported admission has a configured
+> 30-second delay. I'll check both customer-facing services after that delay.
+
+**The escape hatch was mine, and deliberate.** The event ledger records every
+action accurately and immediately, and the docstring says so -- "an agent that
+cross-checks its own actions wins" -- because a lag with no way through would be
+unsolvable. The agent cross-checked on its first pass.
+
+That is four levers defeated by one habit: this agent verifies against
+independent sources, so corrupting a single channel is detectable by
+construction. Which explains why the notification races *do* work, and the
+explanation is not the one in the next section:
+
+> **A race discriminates only when the uncertainty is irreducible** -- when no
+> source can answer the question, not merely when the obvious source answers it
+> late.
+
+When an SMTP send fails mid-DATA, *nothing anywhere* records whether it was
+accepted; the fact does not exist in any ledger. The only way through is to
+accept that it cannot be known and pick the action that is safe either way, which
+is a judgement. A delayed acknowledgement is only inconvenient: the answer exists,
+somewhere, now.
+
+This is the tension that defeated every lever tried here. Solvable requires a
+path; a path this agent reliably finds makes the problem easy. The notification
+family threads it by accident of modelling real SMTP honestly, not by design.
+**Irreducibility has to be a property of the incident being modelled, and it
+cannot be retrofitted onto a family as a flag.** That is why none of the ten
+candidates worked, and it is the single most useful thing in this document.
+
 ### A race needs the service to be the only confirmation channel
 
 Two of the ten candidates were Stripe webhook races and one was a Mattermost
