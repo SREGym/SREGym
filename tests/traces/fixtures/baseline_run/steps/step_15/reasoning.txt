@@ -1,0 +1,9 @@
+No wget/curl/nc in proxy. Let me check the envoy bootstrap config file in the proxy pod to see how FRONTEND_HOST is used.
+
+Actually I already have enough evidence for the diagnosis. But let me be efficient — the key question is whether FRONTEND_HOST=localhost actually breaks routing. Envoy config typically uses `{{ .Env.FRONTEND_HOST }}` in a template for the frontend cluster address. With `localhost`, envoy would try to reach 127.0.0.1:8080 inside the proxy pod, which nothing listens on → 503.
+
+Let me verify quickly by checking if there's a config file and grep for the host.
+
+Actually the frontend uses nginx? No, frontend is node. Let me check the proxy config file.
+
+Let me just check the impact via metrics - the envoy admin. Actually, let me try to look at the proxy config template file.

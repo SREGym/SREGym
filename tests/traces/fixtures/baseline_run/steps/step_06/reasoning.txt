@@ -1,0 +1,12 @@
+Key findings:
+- otel-collector at 10.96.133.106:4317 is refusing connections. That's the collector service ClusterIP. Many services fail to export traces. But is the collector actually broken, or was it just restarting?
+- frontend and recommendation fail to connect to 10.96.7.238:8080 - that's likely product-catalog service (which restarted / is in backoff).
+- One frontend-proxy ReplicaSet was scaled down — the new one 7cbc46b687 replaced 84f445bb4b. Let me check whether the new frontend-proxy config is broken.
+
+Let me check otel-collector endpoints/readiness, and the frontend-proxy service endpoints. The otel-collector-agent pods seemed to be getting recreated (they were deleted/killed). Let me check the otel-collector deployment and its service.
+
+Actually, key: `kubectl get svc otel-collector` gives ClusterIP. The errors reference 10.96.133.106:4317. Let me check endpoints of otel-collector service and whether the collector is ready.
+
+Let me also note: frontend-proxy was rolled out (two RS). This is often the injected fault — a bad configmap for frontend-proxy. Let me examine the frontend-proxy deployment and configmap.
+
+Let me look broadly: check all deployments' replicas/ready, and check the otel-collector service endpoints.

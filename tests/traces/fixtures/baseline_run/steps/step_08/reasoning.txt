@@ -1,0 +1,7 @@
+This all looks like the normal demo startup noise. The accounting kafka "orders topic not available" is transient at startup. Let me look at the actual application behavior — the frontend proxy and load generator. Note there's no load-generator pod! The task said "locust-fetcher" events appeared. Let me check for the load-generator deployment — it's not in the list of deployments. That could be intentional.
+
+The key question: is there an injected fault? The frontend-proxy had a rollout (new RS 7cbc46b687 replacing 84f445bb4b) at 04:26:19 — that's ~20 seconds after everything started. This strongly suggests someone patched the frontend-proxy deployment. Let me compare the two ReplicaSet specs to find what changed.
+
+Actually, let me check the frontend-proxy deployment spec, and compare RS templates.
+
+Let me focus. The environment seems healthy overall. I need to find the injected fault. Let me query metrics/traces via the observability tools. But first, let me diff frontend-proxy RS specs.

@@ -1,0 +1,27 @@
+The frontend pod has wget? First command returned empty. Let me check the frontend-proxy behavior more directly. FRONTEND_HOST=localhost means envoy routes to 127.0.0.1:8080 inside the proxy pod — which is the proxy itself, causing a loop or 503. Let me test via a pod that has curl — maybe the otel-collector-agent has some tools, or use the frontend-proxy itself. Actually envoy admin is at 10000. Let me check the config_dump via wget from within proxy? No curl/wget.
+
+Let me check if there's a load-generator or locust pod. Earlier grep showed locust-fetcher events but no pods. Actually events showed "locust-fetcher". Let me check.
+
+Actually, let me focus. The key finding: duplicate FRONTEND_HOST env var set to localhost. This is clearly the injected misconfiguration. The frontend-proxy is the entry point (service frontend-proxy). All traffic through it to frontend service would be broken.
+
+Let me verify by checking the frontend-proxy access logs for 503 or by testing externally. Let me look for any pod with curl. The otel-collector likely has some. Let me try the flagd or use python.
+
+Actually let me just confirm the envoy cluster config points to localhost. Use the admin API via the proxy pod. Envoy has wget? Let me try.
+
+Actually simpler: check the frontend service and whether traffic reaches it. Let me look at frontend-proxy logs for requests and errors.
+
+Let me just directly patch the deployment to remove the duplicate env var. But first, confirm this is THE fault vs a symptom. The duplicate env var with localhost is clearly an injected misconfig (it's the 2nd entry, overriding). Yes.
+
+Let me verify the frontend-proxy returns errors. Let me test using a pod that has tools. Let me check what images we can exec into. The kafka pod has bash. Let me try kafka (it's a Java/confluent image). Or postgresql pod has psql. Let me try from postgresql with curl? Not likely.
+
+Let me try the otel-collector-agent which is a collector distro — it may have some tools.
+
+Actually, let me just check if there's a locust/load-generator that reveals failures, and check the jaeger service. Let me survey a few things at once.
+
+Let me test connectivity using the frontend pod's node (it's a node app - node may be at a path). Actually it failed. Let me try `wget` from frontend returned empty (no wget).
+
+Let me check kubectl get events for frontend-proxy related failures or check via port-forward? Port-forward could work locally.
+
+Let me try port-forward to frontend-proxy.
+
+Actually I can't easily. Let me use the envoy admin config dump. The admin port 10000 - I need an HTTP client inside the pod. Envoy image is distroless? It had `sh` failed? Actually that was frontend pod. frontend-proxy `sh` worked (we ran env). So proxy has sh but not curl. Maybe has wget? Let's try. Or use /dev/tcp with bash. Actually sh is dash likely. Let me try wget.

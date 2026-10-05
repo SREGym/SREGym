@@ -1,0 +1,24 @@
+All deployments 1/1 ready. The otel-collector endpoints show the agent pods as endpoints. Interesting: the service is called otel-collector and points to otel-collector-agent pods (daemonset). The connection refused to 10.96.133.106:4317 was transient during startup.
+
+The frontend got ECONNREFUSED to product-catalog (10.96.7.238:8080) at 04:26:03 - during product-catalog crash restarts.
+
+Now things seem to be stabilizing. The frontend-proxy has two ReplicaSets but deployment is 1/1. That could be a config change - perhaps the actual fault. Let me look at what's different: the new frontend-proxy-7cbc46b687 was scaled up at 04:26:19 and old one scaled down. This looks like a normal rollout. But maybe the fault was injected by changing the frontend-proxy config.
+
+Let me now actually test the application end-to-end. The load generator (locust) is running. Let's check load-generator and see if it's producing errors, and check the frontend behavior. But load-generator pod isn't in the list! Events mention load-generator-5d945c566 scaled up. Let me check.
+
+Actually the pod list didn't show load-generator. Let me check. Also check jaeger for traces, and check the actual runtime health by curling the frontend.
+
+Let me survey: check all namespaces, check for a load generator, and test the app. Let me also look at frontend-proxy config change (the two ReplicaSets difference).
+
+Let me check the frontend-proxy deployment configmap and its recent change, plus try curl through the proxy.
+
+Actually, let me focus. The task: find faulty component and root cause. Signals:
+1. currency, product-reviews, product-catalog: otel-collector connection refused (transient, since collector restarted).
+2. frontend/recommendation: ECONNREFUSED to product-catalog 10.96.7.238:8080 (transient, product-catalog restarting).
+3. accounting: "Error: libgssapi_krb5.so.2: cannot open shared object file" and Kafka Consumer errors — this could be a real fault.
+
+Let me look at accounting logs more fully.
+
+Also there's a frontend-proxy rollout. Let me diff the two replicasets to find what changed — that may be the injected fault.
+
+Let me run a broader survey.

@@ -1,0 +1,3 @@
+The most suspicious is product-catalog, which had a BackOff restarting failed container. Let me look at the product-catalog pod logs and the deployment. Also the frontend-proxy rollout looks like a config change. Let me focus on product-catalog crash.
+
+Let me get logs from product-catalog.

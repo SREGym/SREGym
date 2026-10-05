@@ -1,0 +1,62 @@
+The frontend-proxy deployment has a duplicate FRONTEND_HOST. I need to fix it. The issue is duplicate env entries: FRONTEND_HOST: frontend (with FRONTEND_PORT: 8080), then FRONTEND_HOST: localhost.
+
+Actually, note the env list is: FRONTEND_HOST=frontend, then FRONTEND_PORT=8080, then later FRONTEND_HOST=localhost and FRONTEND_PORT=8080 (at end). Wait let me re-look:
+
+```
+- name: FRONTEND_HOST
+  value: frontend
+- name: FRONTEND_PORT
+  value: "8080"
+...
+- name: OTEL_COLLECTOR_PORT_HTTP
+  value: "4318"
+- name: FRONTEND_HOST
+  value: localhost
+- name: FRONTEND_PORT  (maybe, truncated)
+```
+
+Actually the yaml showed after FRONTEND_HOST localhost, then image. Hmm, but the env list shows the first block had FRONTEND_HOST=frontend and FRONTEND_PORT=8080. Then appended at end FRONTEND_HOST=localhost and FRONTEND_PORT=8080? Let me look at the actual deployment yaml env.
+
+From command 10 output, the containers env list:
+- OTEL_SERVICE_NAME
+- OTEL_COLLECTOR_NAME
+- OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+- ENVOY_PORT
+- ENVOY_ADDR
+- ENVOY_ADMIN_PORT
+- FLAGD_HOST
+- FLAGD_PORT
+- FLAGD_UI_HOST
+- FLAGD_UI_PORT
+- FRONTEND_HOST: frontend
+- FRONTEND_PORT: "8080"
+- GRAFANA_HOST
+- GRAFANA_PORT
+- IMAGE_PROVIDER_HOST
+- IMAGE_PROVIDER_PORT
+- JAEGER_HOST
+- JAEGER_UI_PORT
+- LOCUST_WEB_HOST
+- LOCUST_WEB_PORT
+- OTEL_COLLECTOR_HOST
+- OTEL_COLLECTOR_PORT_GRPC
+- OTEL_COLLECTOR_PORT_HTTP
+- FRONTEND_HOST: localhost
+
+Wait, but the env in the pod also had FRONTEND_PORT. Actually FRONTEND_PORT appears once in the list. The process env just shows it. So the appended fault is just FRONTEND_HOST: localhost.
+
+Hmm, actually diff showed only FRONTEND_HOST value localhost added. Right: the diff showed only the extra FRONTEND_HOST=localhost env added. So the fix is to remove the duplicate `FRONTEND_HOST: localhost` env entry from the deployment.
+
+First, let me confirm the mitigation stage has begun. I should now fix it. Let me patch the deployment to remove the duplicate env entry.
+
+The best fix: use kubectl to edit the deployment, removing the second FRONTEND_HOST. I can use a JSON patch. But the env list ordering matters. Let me get the deployment as JSON to find the index.
+
+Actually, a robust way: use kubectl patch with strategic merge? Strategic merge for env list uses `name` as merge key, so duplicate names get merged into one — which would keep localhost (last). That's not what I want.
+
+Better: use JSON patch to remove the last env element, or set the value. Actually simplest: JSON patch to replace the env entry value at the specific index, or remove the duplicate.
+
+Let me get the deployment env array as JSON and find indices.
+
+Let me think - the duplicate is the last env entry (index -1). Let me confirm by listing env names/values.
+
+I'll run a command to output the env array with indices.

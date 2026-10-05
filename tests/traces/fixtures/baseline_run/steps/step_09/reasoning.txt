@@ -1,0 +1,18 @@
+The new frontend-proxy RS adds FRONTEND_HOST=localhost. That's a change someone made. But is that the actual fault? The exit code 1 means diff found differences. Let me see the full spec diff of both containers and also look at what modifications exist. Actually let me reconsider — the task is to find a fault injected in the application. Let me systematically check.
+
+Signals so far:
+- accounting: "Subscribed topic not available: orders" - but then it does consume orders successfully. Actually the "Cannot load library libgssapi_krb5.so.2" is probably benign warning.
+- otel-collector connection refused transient during startup.
+- frontend uses a product-catalog connection; there were errors pointing to product-catalog 10.96.7.238:8080 refused — that's because product-catalog was restarting.
+
+Let me check the flagd config and the frontend-proxy change. Actually FRONTEND_HOST=localhost on frontend-proxy is a likely injected fault. Let me examine the frontend-proxy config and env more.
+
+Let me look at the ConfigMaps and check for the injected fault. Let me look at overall deployments' env for suspicious values. Also check flagd flags.
+
+Let me check what the original frontend-proxy should have. In opentelemetry demo, frontend-proxy (envoy) has FRONTEND_HOST env? Actually the frontend-proxy config has CLUSTER endpoints. Let me look at its configmap.
+
+Let me examine the diff more thoroughly — the python printed new spec then old spec diff. Only one difference: FRONTEND_HOST=localhost added. So someone added FRONTEND_HOST=localhost env var to frontend-proxy deployment, causing a rollout (RS 7cbc46b687).
+
+Hmm, but is FRONTEND_HOST=localhost harmful? Given frontend-proxy routes to frontend service, setting FRONTEND_HOST=localhost could make it route to localhost instead of the frontend service. That could break the website! Let me check the frontend-proxy config to see whether it uses FRONTEND_HOST.
+
+Let me check the configmap for frontend-proxy.

@@ -1,0 +1,7 @@
+Both submissions are done. Let me provide a summary.
+
+Wait, the budget shows command 5 of 80 again - it seems the mitigation stage reset. But both submissions have been received with status 200. The task says to submit with empty string for mitigation, which I did.
+
+Let me verify the fix is complete and no further action needed. Actually, both submissions returned 200 success. I'm done.
+
+Let me provide a concise summary.

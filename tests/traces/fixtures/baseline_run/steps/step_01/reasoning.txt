@@ -1,0 +1,3 @@
+Let me start by investigating the application. I'll survey the whole system first.
+
+Let me check the pods, deployments, and services in the astronomy-shop namespace.
