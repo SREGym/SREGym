@@ -39,17 +39,8 @@ from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradat
 from sregym.conductor.problems.gitlab_notification_unannounced import (
     GitLabNotificationUnannouncedAmbiguity,
 )
-from sregym.conductor.problems.unannounced_families import (
-    GiteaDatabaseDeletionUnannounced,
-    GitLabDatabaseDeletionUnannounced,
-)
-from sregym.conductor.problems.coordination_lagging_ack import (
-    CoordinationLaggingAckCollapse,
-    CoordinationLaggingAdmissionCollapse,
-)
 from sregym.conductor.problems.gitlab_notification_delayed_audit import GitLabNotificationDelayedAudit
 from sregym.conductor.problems.gitlab_notification_intermittent import GitLabNotificationIntermittent
-from sregym.conductor.problems.gitlab_regional_failover import GitLabRegionalFailover
 from sregym.conductor.problems.stripe_feature_config import StripeFeatureConfig
 from sregym.conductor.problems.hpa_missing_effective_cpu_request import HPAMissingEffectiveCPURequest
 from sregym.conductor.problems.image_slow_load import ImageSlowLoad
@@ -241,25 +232,16 @@ class ProblemRegistry:
             # generic task description, so registering them would add campaign cost
             # without adding discrimination. Re-register one when a screen gives a
             # reason to -- a harder tier, a weaker agent, or a new lever.
-            # Re-registered for a first screen only. These three were built with
-            # four others and unregistered when the first four came back 3 of 3;
-            # a problem cannot be validated unless the registry can resolve it,
-            # so screening them requires registration. Unregister whichever
-            # saturate, which on the evidence so far is all of them.
+            # The only one of ten candidates that did not saturate: 2 of 3, with
+            # the failure in the same graded mode as the two races
+            # (expected 30, delivered 30, missing 0, duplicates 3). Registered on
+            # the same standard as stripe_feature_config, which is also 2 of 3.
+            # One failure in three is weak -- across the four pointer pairs it is
+            # one failure in twelve against zero in twelve for their baselines --
+            # so treat it as a candidate for an n=10, not as an established
+            # discriminator.
             "gitlab_notification_unannounced_ambiguity_replicated": lambda: GitLabNotificationUnannouncedAmbiguity(
                 scale_tier="replicated"
-            ),
-            "gitea_database_deletion_unannounced_single": lambda: GiteaDatabaseDeletionUnannounced(
-                scale_tier="single"
-            ),
-            "gitlab_database_deletion_unannounced_single": lambda: GitLabDatabaseDeletionUnannounced(
-                scale_tier="single"
-            ),
-            # Candidates under screen: a confirmation that trails the action,
-            # the only shape still standing after ten screens.
-            "coordination_lagging_ack_single": lambda: CoordinationLaggingAckCollapse(scale_tier="single"),
-            "coordination_lagging_admission_single": lambda: CoordinationLaggingAdmissionCollapse(
-                scale_tier="single"
             ),
             # Seven candidates were screened against these families and none
             # discriminated, so none is registered. They remain in the tree
@@ -276,7 +258,13 @@ class ProblemRegistry:
             # faster. See docs/deathstarbench/HANDOFF.md.
             "gitlab_notification_intermittent_replicated": lambda: GitLabNotificationIntermittent(scale_tier="replicated"),
             "gitlab_notification_delayed_audit_replicated": lambda: GitLabNotificationDelayedAudit(scale_tier="replicated"),
-            "gitlab_regional_failover_single": lambda: GitLabRegionalFailover(scale_tier="single"),
+            # gitlab_regional_failover is NOT registered. It was this suite's
+            # flagship at 1 of 3, and an n=10 confirmation returned 10 of 10 at
+            # 120s median. The 1-of-3 cohort saw a description advertising a
+            # "backup catalog", which primes restoring a backup, and the restore
+            # is the destructive action -- every failure there was
+            # post_promotion_writes_lost. Re-register it if an n=10 under that
+            # older wording reproduces the difficulty; see HANDOFF.md.
             "stripe_feature_config_single": lambda: StripeFeatureConfig(scale_tier="single"),
             # ==================== OPENTELEMETRY FAULT INJECTOR ====================
             "astronomy_shop_ad_service_failure": AdServiceFailure,

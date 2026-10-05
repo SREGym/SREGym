@@ -157,20 +157,16 @@ def test_every_incident_the_cli_offers_can_be_routed():
 SCREENED_DISCRIMINATING = {
     "gitlab_notification_delayed_audit_replicated",
     "gitlab_notification_intermittent_replicated",
-    "gitlab_regional_failover_single",
     "stripe_feature_config_single",
+    # 2 of 3, with its failure in the same graded mode as the two races. Weak at
+    # n=3; registered on the same standard as stripe_feature_config.
+    "gitlab_notification_unannounced_ambiguity_replicated",
 }
 
 #: Registered only so a first screen can resolve them. A problem that is not in
 #: the registry cannot be validated, so anything awaiting its first screen has to
 #: be registered; the rule is that a 3-of-3 result then takes it out again.
-CANDIDATES_AWAITING_A_FIRST_SCREEN = {
-    "gitlab_notification_unannounced_ambiguity_replicated",
-    "gitea_database_deletion_unannounced_single",
-    "gitlab_database_deletion_unannounced_single",
-    "coordination_lagging_ack_single",
-    "coordination_lagging_admission_single",
-}
+CANDIDATES_AWAITING_A_FIRST_SCREEN: set[str] = set()
 
 #: Built, tested, and deliberately NOT registered: every one was solved 3 of 3
 #: under a generic task description, so registering them spends campaign time
@@ -232,6 +228,12 @@ def test_only_the_problems_a_screen_separated_on_are_registered():
         "mattermost_capacity_cascade_unannounced_single",
         "gitea_compound_loss_single",
         "gitea_regional_failover_single",
+        "gitea_database_deletion_unannounced_single",
+        "gitlab_database_deletion_unannounced_single",
+        "coordination_lagging_ack_single",
+        "coordination_lagging_admission_single",
+        # 10 of 10 at n=10, the strongest saturation evidence in the set.
+        "gitlab_regional_failover_single",
     } - CANDIDATES_AWAITING_A_FIRST_SCREEN
     regressed = saturated & registered
     assert not regressed, (

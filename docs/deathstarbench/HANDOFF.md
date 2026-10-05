@@ -1,7 +1,7 @@
 # Handoff: environment scaling, and the task on CloudLab
 
-Branch `feat/environment-scaling-postmortems`, 26 commits, 209 files, clean
-tree, **nothing pushed**. Everything below is reproducible from that branch.
+Branch `feat/environment-scaling-postmortems`, 70 commits, pushed, open as
+a draft PR. Everything below is reproducible from that branch.
 
 This document is for the agent picking the work up on CloudLab. Read
 [the calibration report](difficulty-calibration.md) next; it is the running
@@ -11,129 +11,77 @@ record of every graded screen.
 
 ## The results
 
-Ten problems, every one screened with Codex `gpt-6-astra` under a generic task
-description with every authored briefing deleted. n=3 each.
+Every problem screened with Codex `gpt-6-astra` under a generic task description
+with no authored evidence. Reproduce with
+`python scripts/screen_report.py results/clean-screen`.
+
+### Registered: the problems a screen showed to separate the agent
 
 ```
-stripe_feature_config_single                   ░██   2 of 3   median 237s / 900s   ← separates
-gitea_database_deletion_single                 ███   3 of 3   median 152s / 900s
-gitlab_database_deletion_single                ███   3 of 3   median 269s / 900s
-gitlab_notification_recovery_replicated        ███   3 of 3   median 614s / 900s
-gitlab_notification_ambiguity_replicated       ███   3 of 3   median 738s / 900s
-gitlab_notification_intermittent_replicated    █░░   1 of 3   median 797s / 900s   ← separates
-gitlab_notification_delayed_audit_replicated   ░×░   0 of 2   median 692s / 900s   ← separates
-mattermost_capacity_cascade_single             ███   3 of 3   median 243s / 900s
-gitlab_regional_failover_single                ███  10 of 10  median 120s / 900s   ← NOT a discriminator, see below
-coordination_collapse_single                   ███   3 of 3   median 437s / 2700s
+gitlab_notification_delayed_audit_replicated    ░×░   0 of 2   median 692s / 900s
+gitlab_notification_intermittent_replicated     █░░   1 of 3   median 797s / 900s
+gitlab_notification_unannounced_ambiguity_repl  ░██   2 of 3   median 495s / 900s
+stripe_feature_config_single                    ░██   2 of 3   median 237s / 900s
 ```
 
-`█` solved · `░` not solved · `×` invalid, excluded from the count. Reproduce
-with `python scripts/screen_report.py results/clean-screen`.
+Only the first two are solid. The other two are single failures at n=3; see the
+caveats at the end.
 
-**Only the four separating problems are registered.** The other six families are
-built, tested and deliberately absent from `registry.py`: each was solved 3 of 3,
-so registering them spends campaign budget to re-learn that they are saturated.
-Four of the six are superclasses of registered problems, so the code is live
-either way. `tests/test_deathstarbench_comparison.py` pins the gate in both
-directions -- a screened problem cannot silently fall out, and a saturated one
-cannot silently creep back in. Re-register one when there is a reason: a harder
-tier, a weaker agent, or a new lever.
-
-**Three problems separate a frontier agent.** `gitlab_regional_failover` was the
-fourth and the flagship; an n=10 confirmation returned **10 of 10 at 120s
-median**, against the 1 of 3 at 287s recorded here earlier. The difference is one
-sentence of its description, and the whole story is under "The flagship result
-was its own prompt" below. Read that before building anything on the conflict
-shape.
-
-The three that remain are two races (`notification_intermittent` 1 of 3,
-`notification_delayed_audit` 0 of 2) and one skipped verification
-(`stripe_feature_config` 2 of 3). All three were screened after the description
-correction and are unaffected by it.
-
-Every failure is a valid `agent_error`, graded on data, with no ambiguous or
-environment failures in the set.
-
-### The flagship result was its own prompt
-
-Failover asks which of two acknowledged write sets to preserve when neither
-restore is sufficient, and the agent chose wrong twice in three, both times by
-failing back. That looked like a judgement with no safe default. It was not.
+### Not registered: screened and saturated
 
 ```
-1002_0441  codex  █░░   1 of 3   270 / 298 / 287s
-1004_2059  codex  ███  10 of 10  median 120s, range 90-156s
+gitlab_regional_failover_single                 ██████████ 10 of 10  120s
+gitea_regional_failover_single                  ███   3 of 3    96s
+gitea_database_deletion_unannounced_single      ███   3 of 3   139s
+gitea_database_deletion_single                  ███   3 of 3   152s
+gitea_compound_loss_single                      ███   3 of 3   187s
+mattermost_capacity_cascade_unannounced_single  ███   3 of 3   206s
+mattermost_capacity_cascade_single              ███   3 of 3   243s
+gitlab_database_deletion_single                 ███   3 of 3   269s
+gitlab_database_deletion_unannounced_single     ███   3 of 3   276s
+coordination_lagging_admission_single           ███   3 of 3   390s
+coordination_lagging_ack_single                 ███   3 of 3   416s
+coordination_collapse_single                    ███   3 of 3   437s
+gitlab_notification_unannounced_replicated      ███   3 of 3   563s
+gitlab_notification_recovery_replicated         ███   3 of 3   614s
+gitlab_notification_ambiguity_replicated        ███   3 of 3   738s
 ```
 
-Same problem, same pinned agent and CLI version, same budget, same grader. The
-only difference anyone has found is one sentence of the application description,
-retoned on 2 Oct at 19:40 while removing authored evidence -- after the first
-cohort ran that morning and before the second:
+`█` solved · `░` not solved · `×` invalid, excluded. Every counted failure is a
+valid `agent_error` graded on data; no ambiguous or environment failures.
 
-```
-1 of 3 cohort:   Recovery evidence, backup catalog and issue receipts are in
-                 recovery-console:/recovery.
-10 of 10 cohort: The recovery-console pod mounts the database archive volume at
-                 /recovery.
-```
+## Ten candidates were built to add difficulty. None did.
 
-Every failure in the first cohort was `post_promotion_writes_lost`, which *is*
-the fail-back. **A description that advertises a "backup catalog" primes a
-responder to restore a backup, and restoring the backup is the destructive
-action.** Remove the noun and the agent reads the partition journal and
-reconciles through the API instead: `--clean` appears zero times in all ten of
-the new traces.
+Four levers, each a controlled comparison against a family above, differing in
+one property:
 
-This also retracts the conclusion two sections below, that the conflict shape
-"did not travel" to Gitea. Gitea's description already carried the neutral
-wording, so its agent never reached for a restore either. The two families agree;
-they only disagreed because they were screened either side of a one-sentence
-edit.
+| lever | candidates | result |
+|---|---|---|
+| withhold a description clause naming a subsystem | 4 | no effect either way; see the retraction below |
+| the same conflict on a second application | 1 | 3 of 3 at 96s, agreeing with GitLab's own 10 of 10 |
+| a second, silent fault in one incident | 1 | 3 of 3; the agent's verification pass found it |
+| an acknowledgement that trails the action | 2 | 3 of 3; the agent read the event ledger |
+| re-screens of the above at other rungs | 2 | 3 of 3, and one 2 of 3 |
 
-**The lever, if it survives testing, is the most useful one found here.** It is
-not disclosure: `/recovery` really does hold a backup catalog and issue receipts,
-so the first wording is the more accurate of the two and names neither a cause
-nor a contract. It is a factual description that invites the wrong tool, which is
-the GitLab-2017 error itself. The retone removed the difficulty by accident.
+**The single conclusion: difficulty cannot be retrofitted onto a working family.**
+Every lever lost to the same habit -- the agent verifies against an independent
+source, so corrupting or withholding one channel is detectable by construction.
+Each time a "fair" path was left in so the problem would stay solvable, that path
+was found on the first pass. In the lagging-acknowledgement variants the escape
+hatch was written into the docstring as the intended solution, and the agent
+cross-checked the ledger within one attempt.
 
-**It is not established.** One cohort of 3 against one of 10 is not a controlled
-comparison, and n=3 with two failures is weak. The experiment is to re-run the
-old wording at n=10 (~3.5h); if it reproduces near 1 of 3, prompt wording that
-primes a destructive tool is a difficulty lever worth building deliberately.
+**What the two solid discriminators have that none of the candidates do** is
+irreducible uncertainty. When an SMTP send fails mid-DATA, nothing anywhere
+records whether it was accepted; the fact does not exist in any ledger. The only
+way through is to accept that it cannot be known and choose the action that is
+safe either way, which is a judgement rather than a lookup. Everything built here
+made an answer *late* or *inconvenient*, never absent.
 
-**The two families that ask for a procedure were solved every time, quickly.**
-Cascade asks the agent to distrust a correct-but-misleading metric: found in four
-minutes. Coordination asks for a long gated sequence and is the surprise — it was
-built specifically to be hard, with a 360-second recovery floor, five phases each
-gated on the previous settling, premature action *regressing* progress, tooling
-that lies, and permanently accumulating loss. The agent solved it 3 of 3 with
-**zero regressions, zero dropped requests, one leader election and all three
-members intact every time**, two attempts landing within 80 seconds of the
-theoretical minimum. Every protective mechanic went untouched: it read the
-refusal messages and waited.
-
-### Two things this overturns
-
-1. **"Scale the horizon" is not the lever.** I previously recommended building
-   more long-horizon families (Rogers, Kinesis, CrowdStrike). On this evidence
-   duration, damaged tooling and accumulating cost all failed to bite. Build
-   incidents around *a decision the responder can get wrong*, which is cheaper
-   than a 73-hour recovery and demonstrably works.
-2. **Earlier saturation was partly my own doing.** Every pre-correction screen
-   ran against descriptions that stated their own diagnosis. The failover family
-   scored 3 of 3 because one line I wrote into its evidence said *"dba: do NOT
-   restore the east snapshot over the live database, we have taken writes
-   since"* — the incident's central decision, handed over. Removing it took the
-   family from saturated to 1 of 3. Treat every result dated before 2026-10-02
-   as void; they are quarantined under `results/_voided/`.
-
-**Never disclose the diagnosis.** The harness gives a generic "diagnose and fix"
-instruction and the application description says what the application *is*, in
-the register the stock applications use. No guide files, no README written into a
-volume, no colleague chatter authored at the responder. Tests enforce this, since
-sanitising a leak only lasts until the next edit. The one exception that had to be
-*solved* rather than deleted: the coordinator's operator API is unguessable, so
-the service advertises its own routes at `GET /` — discovery, not disclosure.
+That property came from modelling real SMTP honestly, not from a design decision.
+**Select postmortems for it; do not try to add it.** Candidates: a split-brain
+where both sides accepted writes, an at-least-once delivery with no idempotency
+key, a partially applied migration with no transaction log.
 
 ### The leak was wider than those three families
 

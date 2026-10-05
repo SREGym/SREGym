@@ -253,3 +253,51 @@ metadata against saved traces. Detailed source hashes, grades, runtime versions,
 linked from the individual reports. Raw local artifacts are under
 `results/dind/sregym-difficulty-baseline/`. Code and artifacts remain local and
 uncommitted; nothing has been pushed.
+
+## Final screen: ten candidates built to add difficulty
+
+Codex `gpt-6-astra` 0.160.0, generic task description, no authored evidence.
+Each candidate is a controlled comparison against a registered family, differing
+in one property. Reproduce with `python scripts/screen_report.py results/clean-screen`.
+
+| candidate | baseline | candidate result | lever |
+|---|---|---|---|
+| `gitlab_notification_unannounced` | 3/3 614s | 3/3 563s | clause withheld |
+| `gitlab_notification_unannounced_ambiguity` | 3/3 738s | **2/3** 495s | clause withheld |
+| `gitea_database_deletion_unannounced` | 3/3 152s | 3/3 139s | clause withheld |
+| `gitlab_database_deletion_unannounced` | 3/3 269s | 3/3 276s | clause withheld |
+| `mattermost_capacity_cascade_unannounced` | 3/3 243s | 3/3 206s | clause withheld |
+| `gitea_regional_failover` | GitLab 10/10 120s | 3/3 96s | conflict, 2nd application |
+| `gitea_compound_loss` | 3/3 152s | 3/3 187s | second silent fault |
+| `coordination_lagging_ack` | 3/3 437s | 3/3 416s | compaction ack trails |
+| `coordination_lagging_admission` | 3/3 437s | 3/3 390s | admission ack trails |
+| `gitlab_regional_failover` n=10 | 1/3 287s (n=3) | **10/10** 120s | confirmation run |
+
+One candidate in ten did not saturate, and its single failure is weak evidence:
+across the four clause-withheld pairs it is one failure in twelve attempts
+against zero in twelve for their baselines.
+
+Two results retracted earlier claims in this file and in HANDOFF.md:
+
+- `gitlab_regional_failover` was recorded at 1 of 3 and treated as the suite's
+  sharpest problem. At n=10 it is 10 of 10. The 1-of-3 cohort ran before a
+  one-sentence description edit that removed the phrase "backup catalog";
+  advertising a backup catalog primes restoring a backup, and the restore is the
+  destructive action. Every failure in that cohort was
+  `post_promotion_writes_lost`.
+- The clause-withheld lever was recorded as a finding after two pairs. Four pairs
+  show no effect on solve rate and a time difference that changes sign, so the
+  stripe observation it rested on is indistinguishable from n=3 variance.
+
+### Open experiments, in order of value
+
+1. `gitlab_notification_unannounced_ambiguity` at n=10 (~6h). The only candidate
+   that failed, in the same graded mode as the two confirmed races
+   (`duplicates: 3`). Settles whether removing awareness of the verification
+   channel is a real lever.
+2. `gitlab_regional_failover` at n=10 under the older "backup catalog" wording
+   (~3.5h). Settles whether a factually accurate description that primes a
+   destructive tool is a difficulty lever. It is not disclosure: `/recovery` does
+   hold a backup catalog.
+3. A second agent on the two confirmed races. `claudecode` has never been
+   screened on them.
