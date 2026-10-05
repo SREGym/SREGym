@@ -206,7 +206,7 @@ class SaleorCheckoutStatementTimeoutCanary(IncidentArenaProblem):
     """Incident Arena 006: intermittent checkout timeouts aligned with traffic peaks."""
 
     TASK = "006--saleor-spine--10-T1-statement-timeout-canary-c7dcd6d4"
-    PROBLEM_ID = "incident_arena_saleor_checkout_statement_timeout_canary"
+    PROBLEM_ID = "saleor_checkout_statement_timeout_canary"
     GROUND_RULES = (
         "Ground rules from the incident runbook: repair the live system in place through its operational "
         "surfaces (database administration, the application's own APIs). Restarting or redeploying workloads, "

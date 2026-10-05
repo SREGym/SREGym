@@ -1,9 +1,13 @@
 # Incident Arena task contracts (vendored)
 
-One directory per task of [abundant-ai/incident-arena](https://github.com/abundant-ai/incident-arena)
+One directory per ported task of [abundant-ai/incident-arena](https://github.com/abundant-ai/incident-arena)
 (commit `fba011e451653c4058c2dc80a97c5d260c036872`, Apache-2.0; see `LICENSE-incident-arena`).
 Incident Arena calls task 005 `07-writes-and-queue-oom-f1db8f42`. It is stored here as
 `005--frappe--07-writes-and-queue-oom-f1db8f42` so that the directories sort in task order.
+
+The numbering gaps are deliberate. Tasks 000, 001, 003, 004, 011, 012, 015, 016 and 017
+combine faults that the tasks kept here already cover, so they are not ported
+(see `docs/incident-arena.md`).
 
 Each directory keeps these files from the Harbor task, unmodified:
 

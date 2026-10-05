@@ -1,4 +1,4 @@
-# SMTP sink for incident_arena_frappe_writes_and_queue_oom. Incident Arena
+# SMTP sink for frappe_writes_and_queue_oom. Incident Arena
 # delivered the seeded Frappe mail to an in-cluster mailbox inside its private
 # grading plane; SREGym runs Mailpit instead and counts deliveries through its
 # API. Labelled like SREGym's load generators so it stays out of the agent's view.

@@ -800,7 +800,7 @@ class SlackSplitSequencer(SlackSpineProblem):
     """Incident Arena 007: non-atomic sequencer silently duplicates per-channel sequence numbers."""
 
     TASK = "007--slack-spine--06-F3-split-sequencer-eef5b438"
-    PROBLEM_ID = "incident_arena_slack_split_sequencer"
+    PROBLEM_ID = "slack_split_sequencer"
 
     def build_legs(self):
         return [SequencerMode()]
@@ -810,7 +810,7 @@ class SlackMaintenanceCollision(SlackSpineProblem):
     """Incident Arena 008: maintenance checkpoints scheduled inside the write peaks."""
 
     TASK = "008--slack-spine--06-F4-maintenance-collision-cc222870"
-    PROBLEM_ID = "incident_arena_slack_maintenance_collision"
+    PROBLEM_ID = "slack_maintenance_collision"
 
     def build_legs(self):
         return [MaintenanceSchedule()]
@@ -836,7 +836,7 @@ class SlackLoginsUnreadSendsAllSlow(SlackSpineProblem):
     """Incident Arena 009: shared Redis store put into strict mode (250ms hold) on three services."""
 
     TASK = "009--slack-spine--06-logins-unread-and-sends-all-slow-since-noon-16e3fd23"
-    PROBLEM_ID = "incident_arena_slack_logins_unread_sends_all_slow"
+    PROBLEM_ID = "slack_logins_unread_sends_all_slow"
 
     def build_legs(self):
         return [_store_event(["auth", "workspace", "notification"], "250")]
@@ -846,37 +846,17 @@ class SlackLoginsUnreadSendsSlower(SlackSpineProblem):
     """Incident Arena 010: the same shared-store strict mode at a milder 100ms hold."""
 
     TASK = "010--slack-spine--06-logins-unread-sends-slower-cccddfb2"
-    PROBLEM_ID = "incident_arena_slack_logins_unread_sends_slower"
+    PROBLEM_ID = "slack_logins_unread_sends_slower"
 
     def build_legs(self):
         return [_store_event(["auth", "workspace", "notification"], "100")]
-
-
-class SlackSendsCrawlThenStoreSlows(SlackSpineProblem):
-    """Incident Arena 011: channel strict-ACL toggle + undersized channel pool + auth store strict mode."""
-
-    TASK = "011--slack-spine--06-sends-crawl-then-store-slows-3e65c480"
-    PROBLEM_ID = "incident_arena_slack_sends_crawl_then_store_slows"
-
-    def build_legs(self):
-        return [_acl_event(), _store_event(["auth"], "250"), RolePoolSize("channel", 3, 2)]
-
-
-class SlackSendsFailStrictModePlausiblePool(SlackSpineProblem):
-    """Incident Arena 012: channel strict-ACL toggle + a plausible-looking 12/2 channel pool."""
-
-    TASK = "012--slack-spine--06-sends-fail-after-strict-mode-plausible-pool-d18e8739"
-    PROBLEM_ID = "incident_arena_slack_sends_fail_strict_mode_plausible_pool"
-
-    def build_legs(self):
-        return [_acl_event(), RolePoolSize("channel", 12, 2)]
 
 
 class SlackSendsFailStrictMode(SlackSpineProblem):
     """Incident Arena 013: channel strict-ACL toggle + a 3/2 channel pool."""
 
     TASK = "013--slack-spine--06-sends-fail-after-strict-mode-turns-on-728f0739"
-    PROBLEM_ID = "incident_arena_slack_sends_fail_strict_mode"
+    PROBLEM_ID = "slack_sends_fail_strict_mode"
 
     def build_legs(self):
         return [_acl_event(), RolePoolSize("channel", 3, 2)]
@@ -886,48 +866,18 @@ class SlackSendsFailComplianceWindow(SlackSpineProblem):
     """Incident Arena 014: the strict-ACL window is mandated; only the 3/2 channel pool may change."""
 
     TASK = "014--slack-spine--06-sends-fail-during-compliance-window-1f4b1235"
-    PROBLEM_ID = "incident_arena_slack_sends_fail_compliance_window"
+    PROBLEM_ID = "slack_sends_fail_compliance_window"
 
     def build_legs(self):
         # The mandated window is context, not a cause: only the pool is graded.
         return [_acl_event(keep_active=True), RolePoolSize("channel", 3, 2)]
 
 
-class SlackSendsFailStrictPool16(SlackSpineProblem):
-    """Incident Arena 015: channel strict-ACL toggle + a nominally sufficient 16/4 channel pool."""
-
-    TASK = "015--slack-spine--06-sends-fail-strict-pool-16-66fa1a7c"
-    PROBLEM_ID = "incident_arena_slack_sends_fail_strict_pool_16"
-
-    def build_legs(self):
-        return [_acl_event(), RolePoolSize("channel", 16, 4)]
-
-
-class SlackSendsSlowAndStallEveryMinute(SlackSpineProblem):
-    """Incident Arena 016: maintenance collision + undersized message pool."""
-
-    TASK = "016--slack-spine--06-sends-slow-and-stall-every-minute-83867383"
-    PROBLEM_ID = "incident_arena_slack_sends_slow_and_stall_every_minute"
-
-    def build_legs(self):
-        return [MaintenanceSchedule(), RolePoolSize("message", 3, 2, floors=None)]
-
-
-class SlackStallEveryMinuteThenCrawl(SlackSpineProblem):
-    """Incident Arena 017: maintenance collision + channel strict-ACL toggle (healthy pool)."""
-
-    TASK = "017--slack-spine--06-stall-every-minute-and-later-every-send-crawls-bd50bae9"
-    PROBLEM_ID = "incident_arena_slack_stall_every_minute_then_crawl"
-
-    def build_legs(self):
-        return [MaintenanceSchedule(), _acl_event()]
-
-
 class SlackSeqLockLeak(SlackSpineProblem):
     """Incident Arena 018: the release leaks a chan-0 channel_seq row lock (idle in transaction)."""
 
     TASK = "018--slack-spine--09-I1-seq-lock-leak-0b7c2973"
-    PROBLEM_ID = "incident_arena_slack_seq_lock_leak"
+    PROBLEM_ID = "slack_seq_lock_leak"
     # The faulty release is deployed from the start.
     HEALTHY_BASELINE = False
     # The reference repair bounds idle transactions server-wide.
@@ -941,7 +891,7 @@ class SlackDistractorVolumeSeqLock(SlackSpineProblem):
     """Incident Arena 019: session-scoped sequencer handoff leaks a cohort lock under heavy log noise."""
 
     TASK = "019--slack-spine--13-P1-distractor-volume-shell-f73987d7"
-    PROBLEM_ID = "incident_arena_slack_distractor_volume_seq_lock"
+    PROBLEM_ID = "slack_distractor_volume_seq_lock"
     # The faulty release is deployed from the start.
     HEALTHY_BASELINE = False
 
@@ -954,13 +904,8 @@ __all__ = [
     "SlackMaintenanceCollision",
     "SlackLoginsUnreadSendsAllSlow",
     "SlackLoginsUnreadSendsSlower",
-    "SlackSendsCrawlThenStoreSlows",
-    "SlackSendsFailStrictModePlausiblePool",
     "SlackSendsFailStrictMode",
     "SlackSendsFailComplianceWindow",
-    "SlackSendsFailStrictPool16",
-    "SlackSendsSlowAndStallEveryMinute",
-    "SlackStallEveryMinuteThenCrawl",
     "SlackSeqLockLeak",
     "SlackDistractorVolumeSeqLock",
 ]

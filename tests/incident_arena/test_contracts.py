@@ -11,12 +11,21 @@ from sregym.service.apps.incident_arena.base import LOAD_WINDOW_S, continuous_lo
 ALL_TASKS = sorted(p.name for p in TASKS_DIR.iterdir() if p.is_dir())
 
 
-def test_all_twenty_tasks_are_vendored_and_ported():
-    assert len(ALL_TASKS) == 20
-    assert [t[:3] for t in ALL_TASKS] == [f"{i:03d}" for i in range(20)]
+# Incident Arena tasks whose faults no other ported task covers (see docs/incident-arena.md).
+PORTED_TASKS = ["002", "005", "006", "007", "008", "009", "010", "013", "014", "018", "019"]
+
+
+def test_each_ported_task_is_vendored_once():
+    assert [t[:3] for t in ALL_TASKS] == PORTED_TASKS
     assert sorted(cls.TASK for cls in INCIDENT_ARENA_PROBLEM_CLASSES) == ALL_TASKS
-    assert len(INCIDENT_ARENA_PROBLEMS) == 20
-    assert list(PROBLEM_SETS["incident-arena"]) == [cls.PROBLEM_ID for cls in INCIDENT_ARENA_PROBLEM_CLASSES]
+    assert len(INCIDENT_ARENA_PROBLEMS) == len(PORTED_TASKS)
+
+
+def test_ported_problems_are_ordinary_problems():
+    # No separate suite and no source prefix: they are selected like any other problem.
+    assert all(not pid.startswith("incident_arena") for pid in INCIDENT_ARENA_PROBLEMS)
+    for problem_set in PROBLEM_SETS.values():
+        assert not set(problem_set) & set(INCIDENT_ARENA_PROBLEMS)
 
 
 def test_problem_ids_are_registered(monkeypatch):
@@ -26,7 +35,6 @@ def test_problem_ids_are_registered(monkeypatch):
     registry = registry_module.ProblemRegistry()
     for problem_id, cls in INCIDENT_ARENA_PROBLEMS.items():
         assert registry.get_problem(problem_id) is cls
-    assert len(registry.get_problem_ids(task_type="incident_arena")) == 20
 
 
 @pytest.mark.parametrize("slug", ALL_TASKS)
@@ -76,7 +84,7 @@ def test_problem_constructs_offline(offline_cluster, problem_cls):
     assert problem.problem_id == problem_cls.PROBLEM_ID
     assert problem.legs, "every incident injects at least one fault leg"
     # Frappe and Slack carry an app-wide scope guard; Saleor's single leg grades its own scope.
-    assert problem.guards or problem_cls.PROBLEM_ID.startswith("incident_arena_saleor")
+    assert problem.guards or problem_cls.PROBLEM_ID.startswith("saleor_")
     # The agent sees the original ticket plus the app's ground rules.
     assert problem.task.ticket.splitlines()[0][:40] in problem.app.description
     assert "Ground rules" in problem.app.description
@@ -121,4 +129,4 @@ def test_event_legs_carry_their_latent_hold_dose(offline_cluster):
 
 def test_only_the_image_fault_problems_skip_the_healthy_latency_baseline():
     unhealthy = {pid for pid, cls in INCIDENT_ARENA_PROBLEMS.items() if not cls.HEALTHY_BASELINE}
-    assert unhealthy == {"incident_arena_slack_seq_lock_leak", "incident_arena_slack_distractor_volume_seq_lock"}
+    assert unhealthy == {"slack_seq_lock_leak", "slack_distractor_volume_seq_lock"}

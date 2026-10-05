@@ -85,8 +85,8 @@ def test_chart_renders_without_harness(offline_cluster, tmp_path, problem_cls):
 
 def test_slack_problem_specific_knobs_render(offline_cluster, tmp_path):
     from sregym.conductor.problems.incident_arena.slack_spine import (
+        SlackMaintenanceCollision,
         SlackSendsFailStrictMode,
-        SlackSendsSlowAndStallEveryMinute,
     )
 
     docs = _render(SlackSendsFailStrictMode(), tmp_path)
@@ -97,7 +97,7 @@ def test_slack_problem_specific_knobs_render(offline_cluster, tmp_path):
     app_yaml = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "app-config")
     assert yaml.safe_load(app_yaml["data"]["app.yaml"])["roles"]["channel"]["db"]["pool_size"] == 20
 
-    docs = _render(SlackSendsSlowAndStallEveryMinute(), tmp_path)
+    docs = _render(SlackMaintenanceCollision(), tmp_path)
     db = next(d for d in docs if d["kind"] == "StatefulSet" and d["metadata"]["name"] == "db")
     containers = {c["name"]: c for c in db["spec"]["template"]["spec"]["containers"]}
     maintenance = next(c for name, c in containers.items() if name != "postgres")

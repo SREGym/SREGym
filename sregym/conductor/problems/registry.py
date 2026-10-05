@@ -298,8 +298,8 @@ class ProblemRegistry:
             "operator_security_context_fault": K8SOperatorSecurityContextFault,
             "operator_wrong_update_strategy_fault": K8SOperatorWrongUpdateStrategyFault,
             "operator_wrong_operator_image": K8SOperatorWrongOperatorImage,
-            # ==================== INCIDENT ARENA (abundant-ai/incident-arena) ====================
-            # Frappe, Saleor and a Slack clone, each with its own load generator; see docs/incident-arena.md.
+            # ==================== FRAPPE, SALEOR AND SLACK SPINE ====================
+            # Ported from Incident Arena (abundant-ai/incident-arena); see docs/incident-arena.md.
             **INCIDENT_ARENA_PROBLEMS,
         }
 # fmt: on
