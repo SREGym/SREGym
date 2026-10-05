@@ -36,6 +36,13 @@ from sregym.conductor.problems.feature_flag_latent_bug_hotel_reservation import 
 from sregym.conductor.problems.file_descriptor_exhaustion import FileDescriptorExhaustion
 from sregym.conductor.problems.finalizer_deadlock_controller import FinalizerDeadlockController
 from sregym.conductor.problems.gc_capacity_degradation import GCCapacityDegradation
+from sregym.conductor.problems.gitlab_notification_unannounced import (
+    GitLabNotificationUnannouncedAmbiguity,
+)
+from sregym.conductor.problems.unannounced_families import (
+    GiteaDatabaseDeletionUnannounced,
+    GitLabDatabaseDeletionUnannounced,
+)
 from sregym.conductor.problems.coordination_lagging_ack import (
     CoordinationLaggingAckCollapse,
     CoordinationLaggingAdmissionCollapse,
@@ -234,6 +241,20 @@ class ProblemRegistry:
             # generic task description, so registering them would add campaign cost
             # without adding discrimination. Re-register one when a screen gives a
             # reason to -- a harder tier, a weaker agent, or a new lever.
+            # Re-registered for a first screen only. These three were built with
+            # four others and unregistered when the first four came back 3 of 3;
+            # a problem cannot be validated unless the registry can resolve it,
+            # so screening them requires registration. Unregister whichever
+            # saturate, which on the evidence so far is all of them.
+            "gitlab_notification_unannounced_ambiguity_replicated": lambda: GitLabNotificationUnannouncedAmbiguity(
+                scale_tier="replicated"
+            ),
+            "gitea_database_deletion_unannounced_single": lambda: GiteaDatabaseDeletionUnannounced(
+                scale_tier="single"
+            ),
+            "gitlab_database_deletion_unannounced_single": lambda: GitLabDatabaseDeletionUnannounced(
+                scale_tier="single"
+            ),
             # Candidates under screen: a confirmation that trails the action,
             # the only shape still standing after ten screens.
             "coordination_lagging_ack_single": lambda: CoordinationLaggingAckCollapse(scale_tier="single"),
