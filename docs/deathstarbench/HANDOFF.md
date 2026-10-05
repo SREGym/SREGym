@@ -422,12 +422,34 @@ path inside a container: to find that unaided you have to suspect a workspace
 exists, exec in and look around. This one named `notification-mailbox`, a
 Deployment, which `kubectl get pods` returns in the agent's first command.
 
-> **A withheld pointer creates difficulty only when it names something `kubectl`
-> does not already show.** A path inside a container or an operator tool is
-> expensive to find. A deployment, service or volume is free.
+> ~~**A withheld pointer creates difficulty only when it names something
+> `kubectl` does not already show.**~~ **Retracted.** Four screens later the
+> effect is not there in either form; see the table below.
 
-A second pair confirms it, and kills the one hypothesis left open -- that naming
-the *causal* component might matter even when the component is kubectl-visible.
+Four pairs were eventually screened, and they retract the rule rather than
+confirming it:
+
+| pair | announced | unannounced | difference |
+|---|---|---|---|
+| notification recovery | 3/3 614s | 3/3 563s | 51s faster |
+| cascade | 3/3 243s | 3/3 206s | 37s faster |
+| gitea deletion | 3/3 152s | 3/3 139s | 13s faster |
+| gitlab deletion | 3/3 269s | 3/3 276s | 7s slower |
+
+No effect on the solve rate anywhere, and a time difference that changes sign.
+Against a spread like that, stripe's apparent 80s cost and single lost solve --
+the observation this whole lever was built on -- is indistinguishable from
+run-to-run variance at n=3. **The honest reading is that a description clause
+naming infrastructure has no detectable effect in either direction, and the
+stripe pair was noise I over-read into a finding.**
+
+The clause distinction (a path inside a container versus a Deployment) does not
+survive either: `gitea_deletion_unannounced` removes a clause naming `/recovery`,
+a path, and changed nothing.
+
+That matters beyond this lever, because five of the ten candidates were built on
+it. The original reasoning is below as written, for the record.
+
 The cascade description names `capacity-scaler`, which is the incident itself:
 
 ```
