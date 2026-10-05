@@ -23,7 +23,7 @@ gitlab_notification_ambiguity_replicated       ███   3 of 3   median 738s 
 gitlab_notification_intermittent_replicated    █░░   1 of 3   median 797s / 900s   ← separates
 gitlab_notification_delayed_audit_replicated   ░×░   0 of 2   median 692s / 900s   ← separates
 mattermost_capacity_cascade_single             ███   3 of 3   median 243s / 900s
-gitlab_regional_failover_single                █░░   1 of 3   median 287s / 900s   ← separates
+gitlab_regional_failover_single                ███  10 of 10  median 120s / 900s   ← NOT a discriminator, see below
 coordination_collapse_single                   ███   3 of 3   median 437s / 2700s
 ```
 
@@ -39,20 +39,67 @@ directions -- a screened problem cannot silently fall out, and a saturated one
 cannot silently creep back in. Re-register one when there is a reason: a harder
 tier, a weaker agent, or a new lever.
 
-**Four problems separate a frontier agent, and they share one property.** Each
-has a plausible wrong action that succeeds silently; the six that do not are
-solved every time, only slower. The shapes are a conflict (failover), a race
-(the two notification variants) and silent incompleteness (stripe) -- set out
-under "The rule, after ten problems" below.
+**Three problems separate a frontier agent.** `gitlab_regional_failover` was the
+fourth and the flagship; an n=10 confirmation returned **10 of 10 at 120s
+median**, against the 1 of 3 at 287s recorded here earlier. The difference is one
+sentence of its description, and the whole story is under "The flagship result
+was its own prompt" below. Read that before building anything on the conflict
+shape.
+
+The three that remain are two races (`notification_intermittent` 1 of 3,
+`notification_delayed_audit` 0 of 2) and one skipped verification
+(`stripe_feature_config` 2 of 3). All three were screened after the description
+correction and are unaffected by it.
 
 Every failure is a valid `agent_error`, graded on data, with no ambiguous or
 environment failures in the set.
 
-**The sharpest single family is failover, and it is the one that requires a
-judgement with no safe default.** Failover asks which of two acknowledged write
-sets to preserve when neither restore is sufficient; the agent chose wrong twice
-in three, both times by failing back — recovering all six orphaned writes and
-destroying all six post-promotion writes at the colliding identities.
+### The flagship result was its own prompt
+
+Failover asks which of two acknowledged write sets to preserve when neither
+restore is sufficient, and the agent chose wrong twice in three, both times by
+failing back. That looked like a judgement with no safe default. It was not.
+
+```
+1002_0441  codex  █░░   1 of 3   270 / 298 / 287s
+1004_2059  codex  ███  10 of 10  median 120s, range 90-156s
+```
+
+Same problem, same pinned agent and CLI version, same budget, same grader. The
+only difference anyone has found is one sentence of the application description,
+retoned on 2 Oct at 19:40 while removing authored evidence -- after the first
+cohort ran that morning and before the second:
+
+```
+1 of 3 cohort:   Recovery evidence, backup catalog and issue receipts are in
+                 recovery-console:/recovery.
+10 of 10 cohort: The recovery-console pod mounts the database archive volume at
+                 /recovery.
+```
+
+Every failure in the first cohort was `post_promotion_writes_lost`, which *is*
+the fail-back. **A description that advertises a "backup catalog" primes a
+responder to restore a backup, and restoring the backup is the destructive
+action.** Remove the noun and the agent reads the partition journal and
+reconciles through the API instead: `--clean` appears zero times in all ten of
+the new traces.
+
+This also retracts the conclusion two sections below, that the conflict shape
+"did not travel" to Gitea. Gitea's description already carried the neutral
+wording, so its agent never reached for a restore either. The two families agree;
+they only disagreed because they were screened either side of a one-sentence
+edit.
+
+**The lever, if it survives testing, is the most useful one found here.** It is
+not disclosure: `/recovery` really does hold a backup catalog and issue receipts,
+so the first wording is the more accurate of the two and names neither a cause
+nor a contract. It is a factual description that invites the wrong tool, which is
+the GitLab-2017 error itself. The retone removed the difficulty by accident.
+
+**It is not established.** One cohort of 3 against one of 10 is not a controlled
+comparison, and n=3 with two failures is weak. The experiment is to re-run the
+old wording at n=10 (~3.5h); if it reproduces near 1 of 3, prompt wording that
+primes a destructive tool is a difficulty lever worth building deliberately.
 
 **The two families that ask for a procedure were solved every time, quickly.**
 Cascade asks the agent to distrust a correct-but-misleading metric: found in four
@@ -248,19 +295,22 @@ through the API with fresh numbers, and verified both sets. On GitLab it instead
 ran a destructive full restore in two of three attempts, which is exactly
 `post_promotion_writes_lost`.
 
-**So the conflict is not what makes the GitLab problem hard.** Selective
-extraction is available on GitLab too -- the `issues` table can be dumped the
-same way -- and the agent did not reach for it there. One trace per family cannot
-establish why. The plausible reading is that a small schema invites selective
-extraction while a large one invites the wholesale restore the family's other
-problems train, but that is a hypothesis, not a result.
+**Superseded.** The n=10 on GitLab came back 10 of 10 at 120s, so the two
+families agree and there was never a gap to explain. The hypothesis recorded here
+-- that a small schema invites extraction where a large one invites a wholesale
+restore -- was wrong. The real difference was that these two cohorts ran either
+side of a one-sentence description edit; see "The flagship result was its own
+prompt" above. Kept rather than deleted because the reasoning was plausible and
+confidently wrong, which is the failure mode to watch for in this work: both
+families were screened once each, and I explained a difference between two n=3
+samples instead of questioning whether the samples were comparable.
 
-**What this means for the roadmap.** Conflicts are not a reliable generator of
-hard problems: the same conflict on a different application was solved three
-times as fast. GitLab's 1 of 3 is real but unexplained, and sits on n=3 with two
-failures. Before building more conflicts, run the n=10 confirmation and a second
-agent -- that question is now load-bearing rather than tidy-up, because the
-entire "build conflicts" recommendation rests on a single family.
+**What this means for the roadmap.** The n=10 has now run: 10 of 10. There is no
+evidence that conflicts generate difficulty, and the family that appeared to
+demonstrate it was measuring its own prompt. A second agent had also already gone
+3 of 3 on failover back on 1 Oct (`_voided/1001_0325`, under the disclosed
+description) -- a cohort that sat unquarantined in the results tree while this
+document listed "run it on a second agent" as an open task.
 
 ### Silent incompleteness does not survive a thorough verifier
 
