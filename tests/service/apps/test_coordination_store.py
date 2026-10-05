@@ -784,3 +784,45 @@ def test_a_lag_variant_refuses_to_be_identical_to_its_parent():
     app.scale_tier = "single"
     with pytest.raises(RuntimeError, match="declares no lag"):
         app.application_documents()
+
+
+def test_the_reference_recovery_waits_for_the_compaction_acknowledgement():
+    """A problem whose own reference recovery cannot pass is unsolvable.
+
+    The first screen of `coordination_lagging_ack` failed the lifecycle at the
+    `recover` stage, not at an agent attempt: `reference_recovery` called
+    `compact` and then `rebuild-scheduler` immediately, and the lagging
+    acknowledgement refused the second call. The gate caught it before a single
+    attempt ran, which is what the gate is for.
+    """
+    import inspect
+
+    from sregym.service.apps.coordination_cluster import CoordinationCluster
+
+    source = inspect.getsource(CoordinationCluster.reference_recovery)
+    compact = source.index('operate("compact")')
+    rebuild = source.index('operate("rebuild-scheduler")')
+    await_call = source.index("await_compaction()")
+    assert compact < await_call < rebuild, "the wait must sit between the two gated calls"
+
+
+def test_awaiting_compaction_returns_at_once_without_a_lag():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sregym.service.apps.coordination_cluster import CoordinationCluster
+
+    app = SimpleNamespace(truth=Mock(return_value={"compacted": True}))
+    assert CoordinationCluster.await_compaction(app) is True
+    assert app.truth.call_count == 1
+
+
+def test_awaiting_compaction_gives_up_rather_than_hanging_forever():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from sregym.service.apps.coordination_cluster import CoordinationCluster
+
+    app = SimpleNamespace(truth=Mock(return_value={"compacted": False}))
+    with pytest.raises(RuntimeError, match="never reported the compaction"):
+        CoordinationCluster.await_compaction(app, timeout=0)

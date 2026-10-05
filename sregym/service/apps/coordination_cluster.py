@@ -260,12 +260,31 @@ class CoordinationCluster(Mattermost):
         # early compaction attempt would restart the very window it waits on.
         time.sleep(stability + 5)
         self.operate("compact")
+        # Wait for the store to report the compaction before using it as a
+        # precondition. With no acknowledgement lag configured this returns at
+        # once, so the base family is unchanged; where a variant makes the
+        # confirmation trail the action, a patient operator waits rather than
+        # re-issuing, and re-issuing is what costs the window.
+        self.await_compaction()
         self.operate("rebuild-scheduler")
         time.sleep(warming + 5)
         for fraction in (0.25, 0.5, 0.75, 1.0):
             self.operate("admit", fraction=fraction)
             time.sleep(step + 5)
         return self.truth()
+
+    def await_compaction(self, timeout=180):
+        """Block until the store reports itself compacted.
+
+        Polls the read-only truth endpoint, which is free: the gated operator
+        verbs are what punish impatience, not reading.
+        """
+        deadline = time.monotonic() + timeout
+        while not self.truth()["compacted"]:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("The store never reported the compaction it accepted")
+            time.sleep(5)
+        return True
 
     def start_workload(self):
         """A no-op: admitted customer traffic is the operator's dial, not ours.
