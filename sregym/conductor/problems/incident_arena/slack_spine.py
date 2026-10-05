@@ -842,16 +842,6 @@ class SlackLoginsUnreadSendsAllSlow(SlackSpineProblem):
         return [_store_event(["auth", "workspace", "notification"], "250")]
 
 
-class SlackLoginsUnreadSendsSlower(SlackSpineProblem):
-    """Incident Arena 010: the same shared-store strict mode at a milder 100ms hold."""
-
-    TASK = "010--slack-spine--06-logins-unread-sends-slower-cccddfb2"
-    PROBLEM_ID = "slack_logins_unread_sends_slower"
-
-    def build_legs(self):
-        return [_store_event(["auth", "workspace", "notification"], "100")]
-
-
 class SlackSendsFailStrictMode(SlackSpineProblem):
     """Incident Arena 013: channel strict-ACL toggle + a 3/2 channel pool."""
 
@@ -903,7 +893,6 @@ __all__ = [
     "SlackSplitSequencer",
     "SlackMaintenanceCollision",
     "SlackLoginsUnreadSendsAllSlow",
-    "SlackLoginsUnreadSendsSlower",
     "SlackSendsFailStrictMode",
     "SlackSendsFailComplianceWindow",
     "SlackSeqLockLeak",

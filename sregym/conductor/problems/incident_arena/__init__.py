@@ -1,8 +1,8 @@
 """Problems ported from Incident Arena (https://github.com/abundant-ai/incident-arena).
 
-Incident Arena builds many of its tasks by combining independent faults. A
-combination is ported only when it covers a fault no other ported problem
-has; see docs/incident-arena.md for the mapping.
+Incident Arena builds many of its tasks by combining independent faults or by
+re-running one fault at another setting. A task is ported only when it covers a
+fault no other ported problem has; see docs/incident-arena.md for the mapping.
 """
 
 from sregym.conductor.problems.incident_arena.frappe import FrappeDeskAndQueueOutage, FrappeWritesAndQueueOOM
@@ -10,7 +10,6 @@ from sregym.conductor.problems.incident_arena.saleor import SaleorCheckoutStatem
 from sregym.conductor.problems.incident_arena.slack_spine import (
     SlackDistractorVolumeSeqLock,
     SlackLoginsUnreadSendsAllSlow,
-    SlackLoginsUnreadSendsSlower,
     SlackMaintenanceCollision,
     SlackSendsFailComplianceWindow,
     SlackSendsFailStrictMode,
@@ -26,7 +25,6 @@ INCIDENT_ARENA_PROBLEM_CLASSES = (
     SlackSplitSequencer,
     SlackMaintenanceCollision,
     SlackLoginsUnreadSendsAllSlow,
-    SlackLoginsUnreadSendsSlower,
     SlackSendsFailStrictMode,
     SlackSendsFailComplianceWindow,
     SlackSeqLockLeak,

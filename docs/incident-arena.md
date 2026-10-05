@@ -46,7 +46,6 @@ switched off:
 | 007 | `slack_split_sequencer` | `SEQUENCER_MODE=rmw` on svc-message, silently duplicating per-channel sequence numbers |
 | 008 | `slack_maintenance_collision` | durable PostgreSQL checkpoint schedule moved to offset 35, inside the write peaks |
 | 009 | `slack_logins_unread_sends_all_slow` | shared Redis store put in `store_consistency_strict` (250ms hold) on auth/workspace/notification |
-| 010 | `slack_logins_unread_sends_slower` | the same, at a 100ms hold |
 | 013 | `slack_sends_fail_strict_mode` | channel `read_consistency_strict` + channel pool 3/2 |
 | 014 | `slack_sends_fail_compliance_window` | channel pool 3/2 (the strict window is mandated and must stay on) |
 | 018 | `slack_seq_lock_leak` | the release leaks chan-0's `channel_seq` row lock from an idle transaction (image fault) |
@@ -54,11 +53,12 @@ switched off:
 
 ### Tasks not ported
 
-Many Incident Arena tasks are compounds: they combine independent faults from other tasks into a
-new incident. A compound is ported only when one of its faults appears in no other ported problem.
-That keeps 002 (the only `max_user_connections` and `min-replicas-to-write` faults), 005 (the only
-`read_only` fault, the UPDATE revoke and the backlog reconciliation) and 013 (channel
-`read_consistency_strict`, which appears only in compounds). The other nine are covered:
+Many Incident Arena tasks are compounds that combine independent faults from other tasks, and one
+re-runs a fault at another setting. A task is ported only when one of its faults appears in no other
+ported problem. That keeps the compounds 002 (the only `max_user_connections` and
+`min-replicas-to-write` faults), 005 (the only `read_only` fault, the UPDATE revoke and the backlog
+reconciliation) and 013 (channel `read_consistency_strict`, which appears only in compounds). The
+other ten are covered:
 
 | # | Incident Arena task | Faults | Covered by |
 |---|---|---|---|
@@ -66,6 +66,7 @@ That keeps 002 (the only `max_user_connections` and `min-replicas-to-write` faul
 | 001 | `07-desk-and-queue-oom` | `max_user_connections=8` + 2mb noeviction queue | 002, 005 |
 | 003 | `07-new-records-and-jobs-fail` | INSERT revoked + dequeue ACL denial | 005 |
 | 004 | `07-new-records-and-queue-oom` | INSERT revoked + 3mb noeviction queue | 005 |
+| 010 | `06-logins-unread-sends-slower` | 009's store strict mode at a 100ms hold instead of 250ms | 009 |
 | 011 | `06-sends-crawl-then-store-slows` | channel strict + channel pool 3/2 + auth store strict | 013, 009 |
 | 012 | `06-sends-fail-after-strict-mode-plausible-pool` | channel strict + channel pool 12/2 | 013 |
 | 015 | `06-sends-fail-strict-pool-16` | channel strict + channel pool 16/4 | 013 |

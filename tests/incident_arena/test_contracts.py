@@ -12,7 +12,7 @@ ALL_TASKS = sorted(p.name for p in TASKS_DIR.iterdir() if p.is_dir())
 
 
 # Incident Arena tasks whose faults no other ported task covers (see docs/incident-arena.md).
-PORTED_TASKS = ["002", "005", "006", "007", "008", "009", "010", "013", "014", "018", "019"]
+PORTED_TASKS = ["002", "005", "006", "007", "008", "009", "013", "014", "018", "019"]
 
 
 def test_each_ported_task_is_vendored_once():
@@ -117,13 +117,13 @@ def test_compliance_window_is_context_not_a_cause(offline_cluster):
 
 
 def test_event_legs_carry_their_latent_hold_dose(offline_cluster):
-    from sregym.conductor.problems.incident_arena.slack_spine import SlackLoginsUnreadSendsSlower
+    from sregym.conductor.problems.incident_arena.slack_spine import SlackLoginsUnreadSendsAllSlow
 
-    roles = SlackLoginsUnreadSendsSlower().app.deploy_overrides["app"]["roles"]
+    roles = SlackLoginsUnreadSendsAllSlow().app.deploy_overrides["app"]["roles"]
     assert {r: roles[r]["env"]["STORE_HOLD_MS"] for r in roles} == {
-        "auth": "100",
-        "workspace": "100",
-        "notification": "100",
+        "auth": "250",
+        "workspace": "250",
+        "notification": "250",
     }
 
 
