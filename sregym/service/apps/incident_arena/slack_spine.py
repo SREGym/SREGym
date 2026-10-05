@@ -19,6 +19,8 @@ class SlackSpine(IncidentArenaApplication):
     ADMIN_DSN = "postgresql://svc_admin:svc_admin@127.0.0.1:5432/app"
     APP_CONFIG_MAP = "app-config"
     MAINTENANCE_URL = "http://db-maintenance:8081/v1/maintenance"
+    # svc-message holds a DB connection for 150 ms by default; its peers hold 5-12 ms.
+    NOISE_ABLATION_VALUES = {"app": {"roles": {"message": {"db": {"hold_ms": 10}}}}}
 
     def __init__(self):
         super().__init__(SLACK_SPINE_METADATA)

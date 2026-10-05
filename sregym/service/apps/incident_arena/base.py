@@ -15,6 +15,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 import shlex
 import tempfile
 import time
@@ -77,6 +78,9 @@ class IncidentArenaApplication(Application):
     READY_TIMEOUT_S: int = 1200
     #: Pods matching this selector run the operator toolbox (repair CLIs).
     TOOLBOX_SELECTOR = "app.kubernetes.io/component=ops-toolbox"
+    #: Noise-ablation experiment only (SREGYM_ABLATE_NATURAL_NOISE=1): chart
+    #: values that remove harmless-but-suspicious defaults agents mistake for faults.
+    NOISE_ABLATION_VALUES: dict[str, Any] = {}
 
     def __init__(self, config_file):
         super().__init__(config_file)
@@ -119,12 +123,24 @@ class IncidentArenaApplication(Application):
         return Path(handle.name)
 
     # ------------------------------------------------------------------ lifecycle
+    @staticmethod
+    def ablate_natural_noise() -> bool:
+        return os.environ.get("SREGYM_ABLATE_NATURAL_NOISE") == "1"
+
     def deploy(self):
         self.kubectl.create_namespace_if_not_exist(self.namespace)
+        if self.ablate_natural_noise():
+            logger.info("Noise ablation: removing natural decoys from %s", self.CHART_NAME)
+            self.configure(self.NOISE_ABLATION_VALUES)
         overrides = self._write_overrides()
         self.helm_configs["extra_args"] = ["-f", str(self.values_file), "-f", str(overrides)]
         Helm.install(**self.helm_configs)
         self.wait_until_ready()
+        if self.ablate_natural_noise():
+            self.remove_runtime_noise()
+
+    def remove_runtime_noise(self) -> None:
+        """Noise ablation: clear decoys that only exist at runtime (e.g. stale boot logs)."""
 
     def wait_until_ready(self) -> None:
         deadline = time.monotonic() + self.READY_TIMEOUT_S

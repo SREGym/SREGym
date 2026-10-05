@@ -24,6 +24,8 @@ class Frappe(IncidentArenaApplication):
     SITE_NAME = "svc-frappe-web"
     GUNICORN_DEPLOYMENT = "erp-gunicorn"
     WORKER_DEPLOYMENT = "erp-worker-l"
+    # The overlay ships the scheduler at 0 replicas, which agents read as an outage.
+    NOISE_ABLATION_VALUES = {"erpnext": {"worker": {"scheduler": {"replicaCount": 1}}}}
 
     def __init__(self):
         super().__init__(FRAPPE_METADATA)

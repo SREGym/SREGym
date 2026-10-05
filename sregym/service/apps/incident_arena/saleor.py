@@ -26,6 +26,11 @@ class Saleor(IncidentArenaApplication):
         self.frontend_service = "svc-saleor-api"
         self.frontend_port = 8000
 
+    def remove_runtime_noise(self) -> None:
+        """Restart the API after migrations so their boot-time errors leave its logs."""
+        self.kubectl.exec_command_checked(f"kubectl rollout restart deploy/{self.API_DEPLOYMENT} -n {self.namespace}")
+        self.wait_rollout("deploy", self.API_DEPLOYMENT)
+
     def psql(self, sql: str, user: str | None = None, password: str | None = None, timeout: float = 60) -> str:
         """Run SQL over TCP inside the PostgreSQL pod; unaligned, tuples only."""
         user = user or self.ADMIN_ROLE
