@@ -26,10 +26,22 @@ class Saleor(IncidentArenaApplication):
         self.frontend_service = "svc-saleor-api"
         self.frontend_port = 8000
 
+    # The API and worker start while the init Job is still migrating, and the
+    # early "does not exist" errors stay in Loki. Hold both at zero until then.
+    NOISE_ABLATION_VALUES = {"saleor": {"api": {"replicaCount": 0}, "worker": {"replicaCount": 0}}}
+
     def remove_runtime_noise(self) -> None:
-        """Restart the API after migrations so their boot-time errors leave its logs."""
-        self.kubectl.exec_command_checked(f"kubectl rollout restart deploy/{self.API_DEPLOYMENT} -n {self.namespace}")
-        self.wait_rollout("deploy", self.API_DEPLOYMENT)
+        """Start the API and worker only after migrations, through Helm so its values stay consistent."""
+        self.configure({"saleor": {"api": {"replicaCount": 1}, "worker": {"replicaCount": 1}}})
+        overrides = self._write_overrides()
+        cfg = self.helm_configs
+        self.kubectl.exec_command_checked(
+            f"helm upgrade {cfg['release_name']} {cfg['chart_path']} -n {self.namespace} "
+            f"-f {self.values_file} -f {overrides}",
+            timeout=600,
+        )
+        for name in (self.API_DEPLOYMENT, "saleor-worker"):
+            self.wait_rollout("deploy", name)
 
     def psql(self, sql: str, user: str | None = None, password: str | None = None, timeout: float = 60) -> str:
         """Run SQL over TCP inside the PostgreSQL pod; unaligned, tuples only."""
