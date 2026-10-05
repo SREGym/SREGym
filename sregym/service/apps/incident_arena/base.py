@@ -135,9 +135,11 @@ class IncidentArenaApplication(Application):
         overrides = self._write_overrides()
         self.helm_configs["extra_args"] = ["-f", str(self.values_file), "-f", str(overrides)]
         Helm.install(**self.helm_configs)
-        self.wait_until_ready()
         if self.ablate_natural_noise():
+            # Workloads held back until the Jobs finish keep dependent pods unready.
+            self.wait_for_jobs(self.READY_TIMEOUT_S)
             self.remove_runtime_noise()
+        self.wait_until_ready()
 
     def remove_runtime_noise(self) -> None:
         """Noise ablation: clear decoys that only exist at runtime (e.g. stale boot logs)."""

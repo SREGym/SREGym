@@ -40,8 +40,6 @@ class Saleor(IncidentArenaApplication):
             f"-f {self.values_file} -f {overrides}",
             timeout=600,
         )
-        for name in (self.API_DEPLOYMENT, "saleor-worker"):
-            self.wait_rollout("deploy", name)
 
     def psql(self, sql: str, user: str | None = None, password: str | None = None, timeout: float = 60) -> str:
         """Run SQL over TCP inside the PostgreSQL pod; unaligned, tuples only."""
