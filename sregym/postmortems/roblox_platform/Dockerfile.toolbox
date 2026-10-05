@@ -1,0 +1,9 @@
+FROM golang:1.23.12-bookworm AS go
+FROM python:3.12.11-slim-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client curl jq procps iproute2 less && rm -rf /var/lib/apt/lists/*
+COPY bin/consul bin/nomad bin/vault /usr/local/bin/
+COPY --from=go /usr/local/go/pkg/tool/linux_amd64/pprof /usr/local/bin/pprof
+RUN useradd -m -u 1000 agent && mkdir /workspace && chown agent:agent /workspace
+USER agent
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

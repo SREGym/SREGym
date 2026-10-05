@@ -1,0 +1,17 @@
+{
+  "consul": {
+    "version": "1.10.4",
+    "archive_sha256": "2be6414cdce1540c022acda76da55ef6bbd51c537dc2e3d4020652e72daec62d",
+    "binary_sha256": "9b2eee42d63ec0aa5c0f3c2a8a83a4c04cc160c103c97b1c66f0a59f897472df"
+  },
+  "nomad": {
+    "version": "1.9.7",
+    "archive_sha256": "e9c7337893eceb549557ef9ad341b3ae64f5f43e29ff1fb167b70cfd16748d2d",
+    "binary_sha256": "e0e919a594f78163387ed08d90bfea08aa9a21b91b5911d659b89e96f6fe7b08"
+  },
+  "vault": {
+    "version": "1.18.5",
+    "archive_sha256": "dfd8619affbc6449a2f8b23a04f1e8632a00e9b8010b49f7f5daf253d181129d",
+    "binary_sha256": "b93b898fb5e400e93d204ab4d68708ffa95afd3db7459130c2313200ce221265"
+  }
+}
