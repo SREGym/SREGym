@@ -5,6 +5,8 @@ Calibrated and supported on x86-64 only.
 
 from __future__ import annotations
 
+import hashlib
+import time
 from pathlib import Path
 
 from sregym.conductor.oracles.llm_as_a_judge.llm_as_a_judge_oracle import LLMAsAJudgeOracle
@@ -17,10 +19,15 @@ from sregym.service.kubectl import KubeCtl
 from sregym.utils.decorators import mark_fault_injected
 
 _ASSET = Path(__file__).parent / "assets" / "thundering_herd_cascade_recommendation.py"
+_VALUES = Path(__file__).parent / "assets" / "thundering_herd_values.yaml"
+_SOURCE_CONFIGMAP = "recommendation-code"
+_SOURCE_PATH = "/app/recommendation_server.py"
 
 ROOT_CAUSE_DESCRIPTION = (
     "The recommendation service issues about ten equivalent ListProducts RPCs "
-    "for each ListRecommendations with no single-flight or coalescing. Concurrent "
+    "for each ListRecommendations: initial catalog discovery is followed by a "
+    "full catalog reload for each eligible candidate lookup, with no reuse or "
+    "coalescing. Concurrent "
     "clients therefore multiply catalog load; this is duplicated in-flight work, "
     "not a retry storm. Pods stay Running. A diagnosis that blames product-catalog "
     "alone is incomplete: the catalog is healthy and the caller is multiplying work. "
@@ -28,17 +35,68 @@ ROOT_CAUSE_DESCRIPTION = (
 )
 
 
+class _RecommendationSourceApp(AstronomyShop):
+    """Use the editable source package in the healthy deployment as well."""
+
+    extra_values_files = (_VALUES,)
+
+    def deploy(self):
+        super().deploy()
+        self.prepare_source_package()
+
+    def prepare_source_package(self):
+        source = self.kubectl.exec_command_checked(
+            f"kubectl exec -n {self.namespace} deploy/recommendation -c recommendation -- cat {_SOURCE_PATH}"
+        )
+        if not source.strip():
+            raise RuntimeError("recommendation source package is empty")
+        ApplicationFaultInjector(namespace=self.namespace).inject_source_file_override(
+            deployment_name="recommendation",
+            source_path=_SOURCE_PATH,
+            replacement_content=source,
+            configmap_name=_SOURCE_CONFIGMAP,
+            container_name="recommendation",
+        )
+        _wait_for_services(self.kubectl, self.namespace, ["recommendation", "product-catalog"])
+
+
+def _wait_for_services(kubectl, namespace: str, services: list[str]) -> None:
+    """Wait for active endpoints and for previous source revisions to drain."""
+    kubectl.wait_for_ready(namespace, service_names=services)
+    selectors = []
+    for name in services:
+        service = kubectl.get_service(namespace=namespace, name=name)
+        if not service.spec.selector:
+            raise RuntimeError(f"recommendation-path service has no pod selector: {name}")
+        selectors.append(",".join(f"{key}={value}" for key, value in service.spec.selector.items()))
+    deadline = time.monotonic() + 180.0
+    while time.monotonic() < deadline:
+        draining = []
+        for selector in selectors:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("previous recommendation-path pods did not drain before the deadline")
+            pods = kubectl.core_v1_api.list_namespaced_pod(
+                namespace=namespace, label_selector=selector, _request_timeout=min(10.0, remaining)
+            )
+            draining.extend(pod.metadata.name for pod in pods.items if pod.metadata.deletion_timestamp is not None)
+        if not draining:
+            return
+        time.sleep(2.0)
+    raise RuntimeError(f"previous recommendation-path pods did not drain: {', '.join(draining)}")
+
+
 class ThunderingHerdCascadeAstronomyShop(Problem):
     """Overlay recommendation so each ListRecommendations fans out ListProducts."""
 
     run_default_workload = False
     recommendation_deployment = "recommendation"
-    source_path = "/app/recommendation_server.py"
-    configmap_name = "recommendation-src-override"
+    source_path = _SOURCE_PATH
+    configmap_name = _SOURCE_CONFIGMAP
     cache_flag = "recommendationCacheFailure"
 
     def __init__(self):
-        super().__init__(app=AstronomyShop(load_generator_enabled=False))
+        super().__init__(app=_RecommendationSourceApp(load_generator_enabled=False))
         self.kubectl = KubeCtl()
         self.workload = RecommendationHerdWorkload(
             self.namespace,
@@ -73,23 +131,20 @@ class ThunderingHerdCascadeAstronomyShop(Problem):
         )
 
     def _assert_overlay_live(self) -> None:
-        marker = "for _ in range(10)"
         command = (
             f"kubectl exec -n {self.namespace} deploy/{self.recommendation_deployment} "
-            f"-c {self.recommendation_deployment} -- grep -F '{marker}' {self.source_path}"
+            f"-c {self.recommendation_deployment} -- sha256sum {self.source_path}"
         )
         try:
             output = self.kubectl.exec_command_checked(command)
         except RuntimeError as exc:
             raise RuntimeError(f"recommendation overlay is not live at {self.source_path}") from exc
-        if marker not in output:
+        expected_digest = hashlib.sha256(self._replacement_content.encode("utf-8")).hexdigest()
+        if not output.split() or output.split()[0] != expected_digest:
             raise RuntimeError(f"recommendation overlay is not live at {self.source_path}: {output!r}")
 
     def _wait_for_recommendation(self) -> None:
-        self.kubectl.wait_for_ready(
-            self.namespace,
-            service_names=[self.recommendation_deployment, "product-catalog"],
-        )
+        _wait_for_services(self.kubectl, self.namespace, [self.recommendation_deployment, "product-catalog"])
 
     @mark_fault_injected
     def inject_fault(self):

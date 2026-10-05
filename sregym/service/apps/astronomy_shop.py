@@ -21,6 +21,7 @@ class AstronomyShop(Application):
         "opensearch": "https://opensearch-project.github.io/helm-charts/",
     }
     _VALUES_DIR = Path(__file__).resolve().parent / "values"
+    extra_values_files: tuple[Path, ...] = ()
     _FLAGD_CONFIGMAP = "flagd-config"
     _FLAGD_CONFIG_KEY = "demo.flagd.json"
     _FLAGD_DEPLOYMENT = "flagd"
@@ -80,6 +81,9 @@ class AstronomyShop(Application):
         if is_svelte():
             extra_args += ["-f", str(self._VALUES_DIR / "astronomy-shop-svelte.yaml")]
             self.logger.info("[svelte] Dropping bundled OpenSearch, Grafana and Jaeger from astronomy-shop")
+
+        for values_file in self.extra_values_files:
+            extra_args += ["-f", str(self._validated_path(values_file, "Helm values file"))]
 
         self.helm_configs["extra_args"] = extra_args
 

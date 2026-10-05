@@ -31,9 +31,6 @@ data:
         dimensions: []
       spanmetrics/otlp:
         namespace: traces_span_metrics
-        # The default 60s flush can straddle the oracle's 45s export window,
-        # mixing investigation traffic with the next wave's RPC deltas.
-        metrics_flush_interval: 5s
         histogram:
           explicit:
             buckets: [5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 1500, 2000, 5000]

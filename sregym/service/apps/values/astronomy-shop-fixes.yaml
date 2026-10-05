@@ -19,16 +19,6 @@ grafana:
     GF_PLUGINS_PREINSTALL_DISABLED: "true"
 
 opentelemetry-collector:
-  resources:
-    # The 0.142 collector's mapped binary plus heap exceeds 200 MiB under
-    # paced recommendation traffic on x86 KIND. Cgroup reclaim/OOM then stops
-    # RPC exports even though the heap-based memory limiter accepts spans.
-    # Keep the original scheduling reservation and allow measured RSS headroom;
-    # the collector chart derives GOMEMLIMIT from this limit automatically.
-    requests:
-      memory: 200Mi
-    limits:
-      memory: 384Mi
   config:
     service:
       pipelines:
@@ -53,35 +43,6 @@ opentelemetry-collector:
 # ActiveProcessorCount=2 and raise limits.memory to 512Mi while keeping
 # requests.memory at 300Mi so scheduling requests are unchanged.
 components:
-  frontend:
-    # Envoy's upstream idle timeout defaults to one hour. Next.js otherwise
-    # closes sockets after five seconds, racing with reuse and producing 503s
-    # during healthy paced traffic. Let the proxy retire idle sockets first.
-    envOverrides:
-      - name: KEEP_ALIVE_TIMEOUT
-        value: "3605000"
-  frontend-proxy:
-    # The 65 MiB cap forces Envoy to repeatedly reclaim executable pages under
-    # paced traffic, stalling workers and timing out healthy recommendations.
-    # Preserve its scheduling reservation while allowing the working set to fit.
-    resources:
-      requests:
-        memory: 65Mi
-      limits:
-        memory: 128Mi
-  product-catalog:
-    # The 2.2.0 catalog exceeds its 20 MiB process limit on x86 KIND as well
-    # as ARM64, even before fault traffic. GOMEMLIMIT bounds the Go runtime,
-    # not the complete RSS including the database and telemetry libraries.
-    # Establish healthy capacity before the oracle captures its baseline.
-    envOverrides:
-      - name: GOMEMLIMIT
-        value: 48MiB
-    resources:
-      requests:
-        memory: 20Mi
-      limits:
-        memory: 64Mi
   load-generator:
     # Helm replaces lists. Preserve the sidecar and use the multiarch build
     # of the same upstream v0.5.0 source.

@@ -87,12 +87,33 @@ def test_arm_go_services_have_memory_headroom():
         assert service["envOverrides"] == [{"name": "GOMEMLIMIT", "value": "48MiB"}]
 
 
-def test_catalog_has_healthy_headroom_before_the_capacity_baseline_on_x86():
+def test_default_values_do_not_include_problem_specific_capacity():
     values = yaml.safe_load((AstronomyShop._VALUES_DIR / "astronomy-shop-fixes.yaml").read_text())
-    catalog = values["components"]["product-catalog"]
-    assert catalog["resources"]["requests"]["memory"] == "20Mi"
-    assert catalog["resources"]["limits"]["memory"] == "64Mi"
-    assert catalog["envOverrides"] == [{"name": "GOMEMLIMIT", "value": "48MiB"}]
+    assert "product-catalog" not in values["components"]
+    assert "frontend-proxy" not in values["components"]
+    assert "frontend" not in values["components"]
+    assert "resources" not in values["opentelemetry-collector"]
+    assert AstronomyShop.extra_values_files == ()
+
+
+def test_extra_values_files_override_profile_values(tmp_path):
+    values_file = tmp_path / "problem-values.yaml"
+    values_file.write_text("components: {}")
+    app = _app({"amd64"})
+    app.extra_values_files = (values_file,)
+    with (
+        patch.object(astronomy_shop, "is_svelte", return_value=True),
+        patch.object(Helm, "add_repo"),
+        patch.object(Helm, "install") as install,
+        patch.object(Helm, "assert_if_deployed"),
+    ):
+        app.deploy()
+
+    extra_args = install.call_args.kwargs["extra_args"]
+    assert extra_args[-2:] == ["-f", str(values_file.resolve())]
+    assert extra_args.index(str(AstronomyShop._VALUES_DIR / "astronomy-shop-svelte.yaml")) < extra_args.index(
+        str(values_file.resolve())
+    )
 
 
 def test_ui_fix_coexists_with_upstream_memory_fixes():

@@ -20,6 +20,12 @@ logger = logging.getLogger("all.infra.workload")
 
 
 @dataclass(frozen=True)
+class RecommendationResponse:
+    excluded_product_ids: tuple[str, ...]
+    product_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class HerdSnapshot:
     submitted: int
     completed: int
@@ -29,6 +35,7 @@ class HerdSnapshot:
     p99_latency_seconds: float | None
     product_ids: tuple[str, ...]
     distinct_recommendation_sets: int
+    responses: tuple[RecommendationResponse, ...] = ()
 
 
 def _percentile(values: list[float], fraction: float) -> float | None:
@@ -191,6 +198,7 @@ class RecommendationHerdWorkload:
         concurrency: int,
         duration_seconds: float,
         product_ids: tuple[str, ...],
+        product_id_sets: tuple[tuple[str, ...], ...] | None = None,
     ) -> HerdSnapshot:
         if concurrency < 1:
             raise ValueError("concurrency must be at least 1")
@@ -205,6 +213,7 @@ class RecommendationHerdWorkload:
         latencies: list[float] = []
         returned_ids: list[str] = []
         recommendation_sets: set[tuple[str, ...]] = set()
+        responses: list[RecommendationResponse] = []
         lock = threading.Lock()
 
         def worker() -> None:
@@ -213,8 +222,11 @@ class RecommendationHerdWorkload:
                 while time.monotonic() < stop_at:
                     started = time.monotonic()
                     with lock:
+                        request_ids = (
+                            product_id_sets[submitted % len(product_id_sets)] if product_id_sets else product_ids
+                        )
                         submitted += 1
-                    ok, elapsed, ids = self._one_request(product_ids)
+                    ok, elapsed, ids = self._one_request(request_ids)
                     with lock:
                         completed += 1
                         latencies.append(elapsed)
@@ -222,6 +234,7 @@ class RecommendationHerdWorkload:
                             succeeded += 1
                             returned_ids.extend(ids)
                             recommendation_sets.add(tuple(sorted(set(ids))))
+                            responses.append(RecommendationResponse(request_ids, ids))
                     delay = min(
                         max(0.0, interval - (time.monotonic() - started)),
                         max(0.0, stop_at - time.monotonic()),
@@ -244,4 +257,5 @@ class RecommendationHerdWorkload:
             p99_latency_seconds=_percentile(latencies, 0.99),
             product_ids=unique_ids,
             distinct_recommendation_sets=len(recommendation_sets),
+            responses=tuple(responses),
         )

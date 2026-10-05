@@ -50,6 +50,11 @@ class RecommendationService(demo_pb2_grpc.RecommendationServiceServicer):
         return health_pb2.HealthCheckResponse(status=health_pb2.HealthCheckResponse.UNIMPLEMENTED)
 
 
+def _catalog_product(product_id):
+    response = product_catalog_stub.ListProducts(demo_pb2.Empty())
+    return next((product for product in response.products if product.id == product_id), None)
+
+
 def get_product_list(request_product_ids):
     with tracer.start_as_current_span("get_product_list") as span:
         max_responses = 5
@@ -60,16 +65,7 @@ def get_product_list(request_product_ids):
         request_product_ids = {product_id for value in request_values for product_id in value.split(",") if product_id}
 
         span.set_attribute("app.recommendation.cache_enabled", False)
-        # Defensive refetch: every request does 10 fresh product-catalog
-        # calls "to guard against stale data". No single-flight / coalescing
-        # -- concurrent clients multiply the upstream load by 10x each.
-        # Do not gate this on flagd: recommendationCacheFailure is a different
-        # fault and must not hide the duplicated in-flight ListProducts fan-out.
-        responses = []
-        for _ in range(10):
-            print("recommendation catalog refetch", flush=True)
-            responses.append(product_catalog_stub.ListProducts(demo_pb2.Empty()))
-        cat_response = responses[-1]
+        cat_response = product_catalog_stub.ListProducts(demo_pb2.Empty())
         product_ids = [x.id for x in cat_response.products]
         # The demo frontend serializes a single string query as repeated
         # characters. Preserve that legacy path without joining full IDs from
@@ -82,7 +78,9 @@ def get_product_list(request_product_ids):
         span.set_attribute("app.products.count", len(product_ids))
 
         # Create a filtered list of products excluding the products received as input
-        filtered_products = list(set(product_ids) - set(request_product_ids))
+        candidate_ids = list(set(product_ids) - set(request_product_ids))
+        candidates = [_catalog_product(product_id) for product_id in candidate_ids]
+        filtered_products = [product.id for product in candidates if product is not None]
         num_products = len(filtered_products)
         span.set_attribute("app.filtered_products.count", num_products)
         num_return = min(max_responses, num_products)

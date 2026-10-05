@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import math
 import time
-from datetime import UTC, datetime
 
 from kubernetes.client.rest import ApiException
 
 from sregym.conductor.oracles.base import Oracle
 from sregym.conductor.oracles.failure import FailureClass
 from sregym.conductor.oracles.prometheus_query import catalog_list_products_total, list_recommendations_total
+from sregym.conductor.oracles.thundering_herd_rpc import catalog_product_ids, recommendation_product_ids
 from sregym.generators.workload.recommendation_herd import HerdSnapshot
 from sregym.service.rollout import deployment_rollout_complete
 
@@ -25,6 +25,7 @@ class ThunderingHerdMitigationOracle(Oracle):
     FAILURE_CLASSES = {
         "required_deployment_missing": FailureClass.AGENT_ERROR,
         "capacity_changed": FailureClass.AGENT_ERROR,
+        "catalog_data_changed": FailureClass.AGENT_ERROR,
         "invalid_recommendation_ids": FailureClass.AGENT_ERROR,
         "slo_not_met": FailureClass.AGENT_ERROR,
         "insufficient_samples": FailureClass.AMBIGUOUS,
@@ -41,26 +42,31 @@ class ThunderingHerdMitigationOracle(Oracle):
     visible_concurrency = 4
     hidden_concurrency = 6
     wave_seconds = 25.0
-    scrape_wait_seconds = 45.0
+    # The standard collector flushes OTLP span metrics every 60 seconds;
+    # allow its export and the Prometheus scrape to finish before measuring.
+    scrape_wait_seconds = 90.0
     poll_interval_seconds = 5.0
     wave_gap_seconds = 5.0
     seed_product_ids = ("OLJCESPC7Z",)
     hidden_product_ids = ("66VCHSJNUP",)
 
-    max_amplification = 2.0
+    # Four clients sharing one eleven-read catalog fill produce 2.75 calls per
+    # recommendation. Allow this valid single-flight repair with headroom,
+    # while retaining a clear gap from the unchanged ten-call fault.
+    max_amplification = 3.0
     min_fault_amplification = 6.0
-    overlay_log_marker = "recommendation catalog refetch"
     min_success_rate = 0.90
     max_p95_seconds = 8.0
     max_p99_seconds = 12.0
     min_completed_per_worker = 1
-    evaluation_timeout_seconds = 360.0
+    evaluation_timeout_seconds = 660.0
 
     def __init__(self, problem):
         super().__init__(problem)
         self._baseline_deployments: set[str] = set()
         self._baseline_replicas: dict[str, int] = {}
         self._baseline_shape: dict[str, dict] = {}
+        self._baseline_catalog_ids: set[str] = set()
 
     def capture_baseline(self) -> None:
         deployments = self.problem.kubectl.apps_v1_api.list_namespaced_deployment(namespace=self.problem.namespace)
@@ -76,6 +82,9 @@ class ThunderingHerdMitigationOracle(Oracle):
         self._baseline_shape = {
             name: self._fingerprint_deployment(current[name]) for name in self.guarded_deployments if name in current
         }
+        self._baseline_catalog_ids = self._catalog_product_ids()
+        if not self._baseline_catalog_ids:
+            raise RuntimeError("cannot capture a healthy baseline with an empty catalog")
         print(
             f"[Baseline] {len(self._baseline_deployments)} deployments; guarded={', '.join(self.guarded_deployments)}"
         )
@@ -101,7 +110,11 @@ class ThunderingHerdMitigationOracle(Oracle):
         return {"replicas": replicas, "containers": containers}
 
     def _cluster_shape_unhealthy(self) -> dict | None:
-        if not self._baseline_deployments or not set(self.guarded_deployments).issubset(self._baseline_deployments):
+        if (
+            not self._baseline_deployments
+            or not self._baseline_catalog_ids
+            or not set(self.guarded_deployments).issubset(self._baseline_deployments)
+        ):
             print("[FAIL] No healthy baseline was captured")
             return self.fail("baseline_not_captured")
         try:
@@ -123,6 +136,9 @@ class ThunderingHerdMitigationOracle(Oracle):
                 if not any(subset.addresses for subset in endpoints.subsets or []):
                     print(f"[FAIL] Service {service_name!r} has no Ready endpoints")
                     return self.fail("no_ready_endpoints", service=service_name)
+                backing_capacity = self._service_capacity_changed(service_name, endpoints, current[service_name])
+                if backing_capacity is not None:
+                    return backing_capacity
         except ApiException as exc:
             print(f"[FAIL] Could not verify the application topology: {exc}")
             return self.fail_from_exception(exc)
@@ -130,6 +146,44 @@ class ThunderingHerdMitigationOracle(Oracle):
 
     def _cluster_shape_healthy(self) -> bool:
         return self._cluster_shape_unhealthy() is None
+
+    def _service_capacity_changed(self, service_name: str, endpoints, deployment) -> dict | None:
+        """Verify traffic still uses the Deployment whose capacity is guarded."""
+        for subset in endpoints.subsets or []:
+            for address in subset.addresses or []:
+                target = address.target_ref
+                if target is None or target.kind != "Pod" or target.namespace not in (None, self.problem.namespace):
+                    return self.fail("capacity_changed", service=service_name, endpoint=address.ip)
+                pod = self.problem.kubectl.core_v1_api.read_namespaced_pod(
+                    name=target.name, namespace=self.problem.namespace, _request_timeout=10
+                )
+                pod_ips = {item.ip for item in pod.status.pod_i_ps or []}
+                if pod.status.pod_ip:
+                    pod_ips.add(pod.status.pod_ip)
+                owner = next((item for item in pod.metadata.owner_references or [] if item.controller), None)
+                valid = (
+                    address.ip in pod_ips
+                    and (target.uid is None or target.uid == pod.metadata.uid)
+                    and owner is not None
+                    and owner.kind == "ReplicaSet"
+                )
+                if valid:
+                    replica_set = self.problem.kubectl.apps_v1_api.read_namespaced_replica_set(
+                        name=owner.name, namespace=self.problem.namespace, _request_timeout=10
+                    )
+                    parent = next(
+                        (item for item in replica_set.metadata.owner_references or [] if item.controller), None
+                    )
+                    valid = (
+                        replica_set.metadata.uid == owner.uid
+                        and parent is not None
+                        and parent.kind == "Deployment"
+                        and parent.name == deployment.metadata.name
+                        and parent.uid == deployment.metadata.uid
+                    )
+                if not valid:
+                    return self.fail("capacity_changed", service=service_name, backing_pod=target.name)
+        return None
 
     def _capacity_changed(self) -> dict | None:
         try:
@@ -189,10 +243,22 @@ class ThunderingHerdMitigationOracle(Oracle):
         before_probe = self._catalog_list_products_total()
         if before_probe is None:
             return set(), self.fail("prometheus_unreachable")
-        catalog_ids = self.problem.workload.catalog_product_ids()
+        catalog_ids = self._catalog_product_ids()
+        if not self._baseline_catalog_ids.issubset(catalog_ids):
+            return catalog_ids, self.fail(
+                "catalog_data_changed", missing_products=sorted(self._baseline_catalog_ids.difference(catalog_ids))
+            )
         if not catalog_ids:
             print("[FAIL] The product catalog API returned no product IDs")
             return catalog_ids, self.fail("empty_catalog")
+        recommended = self._recommendation_product_ids(self.seed_product_ids)
+        eligible = catalog_ids.difference(self.seed_product_ids)
+        if (
+            (eligible and not recommended)
+            or len(set(recommended)) != len(recommended)
+            or not set(recommended).issubset(eligible)
+        ):
+            return catalog_ids, self.fail("invalid_recommendation_ids", probe="recommendation_rpc")
         time.sleep(self.scrape_wait_seconds)
         after_probe = self._catalog_list_products_total()
         if after_probe is None:
@@ -207,6 +273,12 @@ class ThunderingHerdMitigationOracle(Oracle):
                 after=after_probe,
             )
         return catalog_ids, None
+
+    def _catalog_product_ids(self) -> set[str]:
+        return catalog_product_ids(self.problem)
+
+    def _recommendation_product_ids(self, exclusions: tuple[str, ...]) -> tuple[str, ...]:
+        return recommendation_product_ids(self.problem, exclusions)
 
     def _rpc_amplification(self, product_delta: float, recommendation_delta: float) -> float | None:
         if (
@@ -255,6 +327,20 @@ class ThunderingHerdMitigationOracle(Oracle):
                 f"(maximum {self.max_amplification:.2f} ListProducts per useful recommendation)"
             )
             return self.fail("fault_still_present", amplification=round(amplification, 2))
+        if len(snapshot.responses) != snapshot.succeeded:
+            return self.fail("invalid_recommendation_ids", missing_responses=True)
+        for response in snapshot.responses:
+            unknown = sorted(set(response.product_ids).difference(catalog_ids))
+            excluded = sorted(set(response.product_ids).intersection(response.excluded_product_ids))
+            if unknown or excluded:
+                return self.fail("invalid_recommendation_ids", unknown=unknown, excluded=excluded)
+            # The public frontend materializes at most four of the service's
+            # five recommendations via GetProduct before returning JSON.
+            expected_count = min(4, len(catalog_ids.difference(response.excluded_product_ids)))
+            if len(response.product_ids) != expected_count or len(set(response.product_ids)) != expected_count:
+                return self.fail(
+                    "invalid_recommendation_ids", expected_count=expected_count, returned=response.product_ids
+                )
         if not snapshot.product_ids:
             print("[FAIL] Recommendations returned no product IDs")
             return self.fail("invalid_recommendation_ids")
@@ -283,8 +369,13 @@ class ThunderingHerdMitigationOracle(Oracle):
         )
 
     def _run_wave(
-        self, *, concurrency: int, product_ids: tuple[str, ...], allow_missing_baseline: bool = False
-    ) -> tuple[HerdSnapshot, float | None, float | None] | None:
+        self,
+        *,
+        concurrency: int,
+        product_ids: tuple[str, ...],
+        product_id_sets: tuple[tuple[str, ...], ...] | None = None,
+        allow_missing_baseline: bool = False,
+    ) -> tuple[HerdSnapshot, float | None] | None:
         before_products = self._catalog_list_products_total()
         before_recs = self._list_recommendations_total()
         if before_products is None or before_recs is None:
@@ -295,11 +386,12 @@ class ThunderingHerdMitigationOracle(Oracle):
             # observed baseline so missing telemetry cannot pass a repair.
             before_products = before_products if before_products is not None else 0.0
             before_recs = before_recs if before_recs is not None else 0.0
-        wave_started_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+        variant_args = {"product_id_sets": product_id_sets} if product_id_sets else {}
         snapshot = self.problem.workload.run(
             concurrency=concurrency,
             duration_seconds=self.wave_seconds,
             product_ids=product_ids,
+            **variant_args,
         )
         after_products = before_products
         after_recs = before_recs
@@ -326,39 +418,7 @@ class ThunderingHerdMitigationOracle(Oracle):
             f"ListProducts delta={product_delta:.0f} ListRecommendations delta={rec_delta:.0f} "
             f"amplification={amplification_text} waited={waited:.0f}s"
         )
-        log_amplification = self._overlay_log_amplification(snapshot.succeeded, since_time=wave_started_at)
-        return snapshot, amplification, log_amplification
-
-    def _overlay_log_amplification(self, succeeded: int, *, since_time: str) -> float | None:
-        if succeeded <= 0:
-            return None
-        deployment = getattr(self.problem, "recommendation_deployment", "recommendation")
-        commands = (
-            (
-                f"kubectl logs -n {self.problem.namespace} "
-                f"-l app.kubernetes.io/component={deployment} -c {deployment} "
-                f"--since-time={since_time} --tail=-1 --max-log-requests=20"
-            ),
-            (
-                f"kubectl logs -n {self.problem.namespace} deploy/{deployment} "
-                f"-c {deployment} --since-time={since_time} --tail=-1"
-            ),
-        )
-        logs = ""
-        last_error = None
-        for command in commands:
-            try:
-                logs = self.problem.kubectl.exec_command_checked(command, timeout=20)
-                if logs.strip() or command == commands[-1]:
-                    break
-            except (AttributeError, RuntimeError) as exc:
-                last_error = exc
-        else:
-            print(f"[Fault] recommendation logs unavailable: {last_error}")
-            return None
-        refetches = logs.count(self.overlay_log_marker)
-        print(f"[Fault] log refetch={refetches} succeeded={succeeded}")
-        return refetches / succeeded
+        return snapshot, amplification
 
     def assert_fault_present(self) -> None:
         """Fail injection if the overlay is not multiplying catalog RPCs."""
@@ -371,16 +431,15 @@ class ThunderingHerdMitigationOracle(Oracle):
             )
             if measured is None:
                 raise RuntimeError("catalog RPC metrics were not available while verifying the fault")
-            snapshot, amplification, log_amplification = measured
-            observed_values = [value for value in (amplification, log_amplification) if value is not None]
-            if not observed_values:
-                raise RuntimeError("catalog RPC metrics and recommendation logs were not available")
-            observed = max(observed_values)
+            snapshot, amplification = measured
+            if amplification is None:
+                raise RuntimeError("catalog RPC metrics did not establish a valid amplification ratio")
+            observed = amplification
             amplification_text = f"{amplification:.2f}" if amplification is not None else "unavailable"
             print(
                 "[Fault] "
                 f"completed={snapshot.completed} success={snapshot.success_rate:.1%} "
-                f"amplification={amplification_text} log_amplification={log_amplification}"
+                f"amplification={amplification_text}"
             )
             if snapshot.succeeded < 5:
                 raise RuntimeError("fault verification did not complete enough recommendations")
@@ -421,12 +480,10 @@ class ThunderingHerdMitigationOracle(Oracle):
             )
             if first is None:
                 return self.fail("prometheus_unreachable")
-            snapshot, amplification, _ = first
+            snapshot, amplification = first
             if amplification is None:
                 return self.fail("rpc_telemetry_stalled", wave="visible")
-            # Repairs can retain the overlay's debug messages while serving
-            # real cached catalog data. Grade actual RPCs; logs only provide
-            # diagnostic and injection evidence.
+            # Grade actual RPCs and outputs independently of application logs.
             wave_fail = self._wave_failure(
                 snapshot,
                 amplification,
@@ -446,13 +503,22 @@ class ThunderingHerdMitigationOracle(Oracle):
                 if len(catalog_ids.difference(candidate)) > 0 and product_id not in hidden_exclusions:
                     hidden_exclusions.append(product_id)
             hidden_product_ids = tuple(hidden_exclusions)
+            # Exercise different exclusions with the same cardinality so a
+            # recommendation cache keyed only by request size cannot pass.
+            catalog_order = sorted(catalog_ids)
+            width = min(2, len(catalog_order) - 1)
+            variants = tuple(
+                tuple(catalog_order[(offset + index) % len(catalog_order)] for index in range(width))
+                for offset in range(len(catalog_order))
+            )
             second = self._run_wave(
                 concurrency=self.hidden_concurrency,
                 product_ids=hidden_product_ids,
+                product_id_sets=(hidden_product_ids, *variants),
             )
             if second is None:
                 return self.fail("prometheus_unreachable")
-            hidden_snapshot, hidden_amplification, _ = second
+            hidden_snapshot, hidden_amplification = second
             if hidden_amplification is None:
                 return self.fail("rpc_telemetry_stalled", wave="hidden")
             wave_fail = self._wave_failure(
@@ -460,7 +526,7 @@ class ThunderingHerdMitigationOracle(Oracle):
                 hidden_amplification,
                 catalog_ids,
                 concurrency=self.hidden_concurrency,
-                product_ids=hidden_product_ids,
+                product_ids=(),
             )
             if wave_fail is not None:
                 return wave_fail

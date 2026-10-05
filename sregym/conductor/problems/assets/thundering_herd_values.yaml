@@ -1,0 +1,28 @@
+# Healthy capacity for the recommendation path, established before injection.
+opentelemetry-collector:
+  resources:
+    requests:
+      memory: 200Mi
+    limits:
+      memory: 384Mi
+
+components:
+  frontend:
+    envOverrides:
+      - name: KEEP_ALIVE_TIMEOUT
+        value: "3605000"
+  frontend-proxy:
+    resources:
+      requests:
+        memory: 65Mi
+      limits:
+        memory: 128Mi
+  product-catalog:
+    envOverrides:
+      - name: GOMEMLIMIT
+        value: 48MiB
+    resources:
+      requests:
+        memory: 20Mi
+      limits:
+        memory: 64Mi

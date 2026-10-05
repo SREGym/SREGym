@@ -65,6 +65,20 @@ def test_fast_responder_is_paced_instead_of_saturating_the_catalog():
     assert snapshot.succeeded == snapshot.submitted
 
 
+def test_mixed_exclusions_are_retained_for_each_response():
+    workload = _workload(requests_per_second=50.0)
+    workload._one_request = lambda ids: (True, 0.001, (f"result-for-{ids[0]}",))
+    variants = (("a", "b"), ("b", "c"), ("c", "a"))
+
+    snapshot = workload.run(concurrency=1, duration_seconds=0.15, product_ids=("unused",), product_id_sets=variants)
+
+    assert len(snapshot.responses) == snapshot.succeeded
+    assert {response.excluded_product_ids for response in snapshot.responses} == set(variants)
+    assert all(
+        response.product_ids == (f"result-for-{response.excluded_product_ids[0]}",) for response in snapshot.responses
+    )
+
+
 def test_shuffling_fixed_ids_does_not_create_distinct_recommendation_sets():
     workload = _workload(requests_per_second=20.0)
     counter = 0

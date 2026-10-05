@@ -12,11 +12,13 @@ _ASSET = _REPO / "sregym" / "conductor" / "problems" / "assets" / "thundering_he
 _PROBLEM = _REPO / "sregym" / "conductor" / "problems" / "thundering_herd_cascade.py"
 
 
-def test_asset_fans_out_ten_list_products_calls():
+def test_asset_has_no_answer_billboards():
     source = _ASSET.read_text(encoding="utf-8")
-    assert "for _ in range(10):" in source
+    assert "for _ in range(10):" not in source
     assert "product_catalog_stub.ListProducts" in source
-    assert "recommendation catalog refetch" in source
+    assert "recommendation catalog refetch" not in source
+    assert "single-flight" not in source
+    assert "coalescing" not in source
     assert "ListRecommendations" in source
     assert "GetProduct" not in source
     assert "check_feature_flag" not in source
@@ -46,7 +48,11 @@ def test_overlay_honors_repeated_and_comma_separated_exclusions(exclusions):
     # Execute the deployed function without importing the service's generated
     # protobuf files or starting gRPC/OTel exporters in the unit-test process.
     tree = ast.parse(_ASSET.read_text(encoding="utf-8-sig"))
-    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "get_product_list")
+    functions = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in {"_catalog_product", "get_product_list"}
+    ]
     catalog_ids = {f"product-{item}" for item in "abcdefg"}
     catalog = Mock()
     catalog.ListProducts.return_value = SimpleNamespace(
@@ -60,7 +66,7 @@ def test_overlay_honors_repeated_and_comma_separated_exclusions(exclusions):
         "product_catalog_stub": catalog,
         "demo_pb2": SimpleNamespace(Empty=Mock()),
     }
-    exec(compile(ast.Module(body=[function], type_ignores=[]), str(_ASSET), "exec"), namespace)
+    exec(compile(ast.Module(body=functions, type_ignores=[]), str(_ASSET), "exec"), namespace)
 
     result = namespace["get_product_list"](exclusions)
 
@@ -71,4 +77,36 @@ def test_overlay_honors_repeated_and_comma_separated_exclusions(exclusions):
     )
     assert set(result) <= catalog_ids - excluded_ids
     assert len(result) == min(5, len(catalog_ids - excluded_ids))
-    assert catalog.ListProducts.call_count == 10
+    assert catalog.ListProducts.call_count == 1 + len(catalog_ids - excluded_ids)
+
+
+@pytest.mark.parametrize("excluded_count", [0, 1, 2, 9, 10])
+def test_candidate_lookups_amplify_catalog_reads_without_changing_results(excluded_count):
+    tree = ast.parse(_ASSET.read_text(encoding="utf-8"))
+    functions = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name in {"_catalog_product", "get_product_list"}
+    ]
+    catalog_ids = tuple(f"product-{index}" for index in range(10))
+    exclusions = catalog_ids[:excluded_count]
+    catalog = Mock()
+    catalog.ListProducts.return_value = SimpleNamespace(
+        products=[SimpleNamespace(id=product_id) for product_id in catalog_ids]
+    )
+    tracer = Mock()
+    tracer.start_as_current_span.side_effect = lambda _: nullcontext(Mock())
+    namespace = {
+        "tracer": tracer,
+        "random": random.Random(0),
+        "product_catalog_stub": catalog,
+        "demo_pb2": SimpleNamespace(Empty=Mock()),
+    }
+    exec(compile(ast.Module(body=functions, type_ignores=[]), str(_ASSET), "exec"), namespace)
+
+    result = namespace["get_product_list"](exclusions)
+
+    assert set(result) <= set(catalog_ids) - set(exclusions)
+    assert len(result) == min(5, 10 - excluded_count)
+    assert len(set(result)) == len(result)
+    assert catalog.ListProducts.call_count == 11 - excluded_count
