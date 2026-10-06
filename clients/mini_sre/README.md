@@ -1,13 +1,13 @@
-# Baseline agent
+# mini-sre agent
 
-In each reply the model writes one bash command. The baseline agent runs it in a new shell and sends back the exit code and the output. Any model that LiteLLM can call with an API key works.
+In each reply the model writes one bash command. The mini-sre agent runs it in a new shell and sends back the exit code and the output. Any model that LiteLLM can call with an API key works.
 
 ## Running
 
 ```
 export AGENT_API_BASE=https://api.example.com/v1   # your provider's endpoint
 export AGENT_API_KEY=...                           # your provider's key
-uv run main.py --suite sregym-lite --agent baseline --model openai/<model> --force-build
+uv run main.py --suite sregym-lite --agent mini-sre --model openai/<model> --force-build
 ```
 
 - `--force-build` builds the agent image from your local code. The released image does not have this agent.
@@ -33,13 +33,13 @@ The agent runs in the agent container, so set these in `agents.yaml` under `kick
 
 | Variable                   | Default | Meaning                           |
 | -------------------------- | ------- | --------------------------------- |
-| `BASELINE_HARD_CAP`        | 80      | Commands per stage                |
-| `BASELINE_DEADLINE_S`      | 1500    | Seconds per stage                 |
-| `BASELINE_COMMAND_TIMEOUT` | 60      | Seconds per command               |
-| `BASELINE_WRAP_UP_CALLS`   | 3       | Replies allowed after a limit     |
-| `BASELINE_MAX_TOKENS`      | 65536   | `max_tokens` for each model call  |
-| `BASELINE_TEMPERATURE`     | not set | Sampling temperature              |
-| `BASELINE_EXTRA_BODY`      | not set | Extra JSON added to every request |
+| `MINI_SRE_HARD_CAP`        | 80      | Commands per stage                |
+| `MINI_SRE_DEADLINE_S`      | 1500    | Seconds per stage                 |
+| `MINI_SRE_COMMAND_TIMEOUT` | 60      | Seconds per command               |
+| `MINI_SRE_WRAP_UP_CALLS`   | 3       | Replies allowed after a limit     |
+| `MINI_SRE_MAX_TOKENS`      | 65536   | `max_tokens` for each model call  |
+| `MINI_SRE_TEMPERATURE`     | not set | Sampling temperature              |
+| `MINI_SRE_EXTRA_BODY`      | not set | Extra JSON added to every request |
 
 
 ## Files
@@ -49,8 +49,8 @@ The agent writes these files in the run's log folder:
 
 | File                        | Contents                                                                            |
 | --------------------------- | ----------------------------------------------------------------------------------- |
-| `baseline_transcript.jsonl` | The prompt, every model call, and every command with its exit code, time and output |
-| `baseline_results_*.json`   | Token use, command counts, and how each stage ended                                 |
+| `mini_sre_transcript.jsonl` | The prompt, every model call, and every command with its exit code, time and output |
+| `mini_sre_results_*.json`   | Token use, command counts, and how each stage ended                                 |
 | `steps/step_NN/`            | The messages sent at each step, the reply, and its reasoning                        |
 
 

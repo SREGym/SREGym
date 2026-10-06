@@ -1,4 +1,4 @@
-"""Run bash commands for the baseline agent.
+"""Run bash commands for the mini-sre agent.
 
 Each command runs in a new shell inside the agent container. A command that runs past its
 timeout is killed along with every process it started.

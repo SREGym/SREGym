@@ -136,8 +136,8 @@ def test_stratus_provider_allowlist_is_derived_from_selected_model(model, enviro
         ("openai/deepseek-flash", {"AGENT_API_BASE": "https://api.deepseek.com/v1"}, {"api.deepseek.com"}),
     ],
 )
-def test_baseline_allowlist_is_its_model_endpoint(model, environment, expected_hosts):
-    policy = InternetPolicy.from_mode("filtered", agent_name="baseline", model_id=model)
+def test_mini_sre_allowlist_is_its_model_endpoint(model, environment, expected_hosts):
+    policy = InternetPolicy.from_mode("filtered", agent_name="mini-sre", model_id=model)
 
     rules = provider_endpoint_rules(policy, environment)
 

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from clients.baseline import driver, mini, tools
-from clients.baseline.backends import Reply
 from clients.harness.token_usage import usage_metrics
+from clients.mini_sre import driver, mini, tools
+from clients.mini_sre.backends import Reply
 from sregym.run_artifacts import _find_token_hit
 
 APP = {"app_name": "Hotel Reservation", "namespace": "hotel-reservation", "descriptions": "A hotel app."}
@@ -91,13 +91,13 @@ def run_main(monkeypatch, backend, *, hard_cap=80):
 
 
 def read_results(logs: Path) -> dict:
-    files = list(logs.glob("baseline_results_*.json"))
+    files = list(logs.glob("mini_sre_results_*.json"))
     assert len(files) == 1
     return json.loads(files[0].read_text())
 
 
 def read_transcript(logs: Path) -> list[dict]:
-    return [json.loads(line) for line in (logs / "baseline_transcript.jsonl").read_text().splitlines()]
+    return [json.loads(line) for line in (logs / "mini_sre_transcript.jsonl").read_text().splitlines()]
 
 
 def test_instance_text():
@@ -169,12 +169,12 @@ def test_model_submits_both_stages(monkeypatch, harness):
     assert third[: len(second)] == second
     assert "Submission received" in third[-1]["content"] and "Current stage: mitigation" not in third[-1]["content"]
     results = read_results(harness["logs"])
-    assert results["success"] is True and results["baseline"]["protocol"] == "mini"
-    assert results["baseline"]["submit_mode"] == "curl"
-    assert results["baseline"]["submitted_stages"] == ["diagnosis", "mitigation"]
-    assert results["baseline"]["stages"]["diagnosis"]["termination_reason"] == "submitted_by_command"
-    assert results["baseline"]["stages"]["mitigation"]["termination_reason"] == "submitted_by_command"
-    assert results["baseline"]["stages"]["diagnosis"]["commands_used"] == 2  # the curl command counts
+    assert results["success"] is True and results["mini_sre"]["protocol"] == "mini"
+    assert results["mini_sre"]["submit_mode"] == "curl"
+    assert results["mini_sre"]["submitted_stages"] == ["diagnosis", "mitigation"]
+    assert results["mini_sre"]["stages"]["diagnosis"]["termination_reason"] == "submitted_by_command"
+    assert results["mini_sre"]["stages"]["mitigation"]["termination_reason"] == "submitted_by_command"
+    assert results["mini_sre"]["stages"]["diagnosis"]["commands_used"] == 2  # the curl command counts
     assert results["usage_metrics"]["input_tokens"] == 400
     records = read_transcript(harness["logs"])
     assert [r["type"] for r in records[:2]] == ["meta", "prompt"]
@@ -192,21 +192,21 @@ def test_stage_ends_on_submission_receipt(monkeypatch, harness):
     backend = FakeBackend([block("kubectl get pods"), block(CURL_DIAG), block("kubectl get svc"), block(CURL_FIX)])
     assert run_main(monkeypatch, backend) == 0
     assert len(harness["commands"]) == 4  # one look and one submission per stage
-    assert read_results(harness["logs"])["baseline"]["submitted_stages"] == ["diagnosis", "mitigation"]
+    assert read_results(harness["logs"])["mini_sre"]["submitted_stages"] == ["diagnosis", "mitigation"]
 
 
 def test_stage_change_counts_as_submission(monkeypatch, harness):
     backend = FakeBackend([block("python3 -c 'import requests'")])
     monkeypatch.setattr(driver, "current_stage", lambda: "tearing_down")
     assert run_main(monkeypatch, backend) == 0
-    assert read_results(harness["logs"])["baseline"]["termination_reason"] == "submitted_by_command"
+    assert read_results(harness["logs"])["mini_sre"]["termination_reason"] == "submitted_by_command"
 
 
 def test_marker_line_is_an_ordinary_command(monkeypatch, harness):
     backend = FakeBackend([block(f"echo {MARKER}"), block(CURL_DIAG)])
     assert run_main(monkeypatch, backend) == 0
     assert harness["commands"][0] == f"echo {MARKER}"
-    assert read_results(harness["logs"])["baseline"]["commands_used"] == 2
+    assert read_results(harness["logs"])["mini_sre"]["commands_used"] == 2
 
 
 def test_three_format_errors_end_the_stage(monkeypatch, harness):
@@ -218,7 +218,7 @@ def test_three_format_errors_end_the_stage(monkeypatch, harness):
     )
     assert "found 2 actions" in backend.calls[2][-1]["content"]
     results = read_results(harness["logs"])
-    assert results["baseline"]["termination_reason"] == "repeated_format_error" and results["success"] is False
+    assert results["mini_sre"]["termination_reason"] == "repeated_format_error" and results["success"] is False
 
 
 def test_format_error_counter_resets_after_a_good_action(monkeypatch, harness):
@@ -242,7 +242,7 @@ def test_hard_cap_asks_for_submission(monkeypatch, harness):
     assert "exactly as the task instruction describes" in notice and MARKER not in notice
     wrap_up = [r for r in read_transcript(harness["logs"]) if r["type"] == "wrap_up"]
     assert [(r["reason"], r["commands"]) for r in wrap_up] == [("hard_cap", 2)]
-    assert read_results(harness["logs"])["baseline"]["termination_reason"] == "submitted_by_command"
+    assert read_results(harness["logs"])["mini_sre"]["termination_reason"] == "submitted_by_command"
 
 
 def test_stage_ends_if_wrap_up_is_ignored(monkeypatch, harness):
@@ -251,7 +251,7 @@ def test_stage_ends_if_wrap_up_is_ignored(monkeypatch, harness):
     assert run_main(monkeypatch, backend, hard_cap=2) == driver.EXIT_NO_SUBMISSION
     assert harness["commands"] == ["a", "b", "c", "d"]
     assert len(backend.calls) == 4  # two before the cap, two after the notice
-    assert read_results(harness["logs"])["baseline"]["termination_reason"] == "hard_cap_no_submission"
+    assert read_results(harness["logs"])["mini_sre"]["termination_reason"] == "hard_cap_no_submission"
 
 
 def test_timeout_uses_the_timeout_template(monkeypatch, harness):
@@ -260,13 +260,13 @@ def test_timeout_uses_the_timeout_template(monkeypatch, harness):
     assert backend.calls[1][-1]["content"].startswith(
         "The last command <command>sleep 99</command> timed out and has been killed."
     )
-    assert read_results(harness["logs"])["baseline"]["commands_used"] == 2
+    assert read_results(harness["logs"])["mini_sre"]["commands_used"] == 2
 
 
 def test_two_failed_model_calls_end_the_stage(monkeypatch, harness):
     backend = FakeBackend([Reply(error="model call failed: boom"), Reply(error="model call failed: boom")])
     assert run_main(monkeypatch, backend) == driver.EXIT_MODEL_FAILURE
-    assert read_results(harness["logs"])["baseline"]["termination_reason"] == "model_failure"
+    assert read_results(harness["logs"])["mini_sre"]["termination_reason"] == "model_failure"
 
 
 def test_failed_mitigation_keeps_diagnosis(monkeypatch, harness):
@@ -274,8 +274,8 @@ def test_failed_mitigation_keeps_diagnosis(monkeypatch, harness):
     backend = FakeBackend([block(CURL_DIAG), "none", "none", "none"])
     assert run_main(monkeypatch, backend) == driver.EXIT_NO_SUBMISSION
     results = read_results(harness["logs"])
-    assert results["baseline"]["submitted_stages"] == ["diagnosis"]
-    assert results["baseline"]["stages"]["mitigation"]["termination_reason"] == "repeated_format_error"
+    assert results["mini_sre"]["submitted_stages"] == ["diagnosis"]
+    assert results["mini_sre"]["stages"]["mitigation"]["termination_reason"] == "repeated_format_error"
 
 
 def test_attempt_starting_at_mitigation(monkeypatch, harness):
@@ -284,7 +284,7 @@ def test_attempt_starting_at_mitigation(monkeypatch, harness):
     backend = FakeBackend([block(CURL_FIX)])
     assert run_main(monkeypatch, backend) == 0
     assert backend.calls[0][-1]["content"] == mini.instance_text(APP)
-    assert "diagnosis" not in read_results(harness["logs"])["baseline"]["stages"]
+    assert "diagnosis" not in read_results(harness["logs"])["mini_sre"]["stages"]
 
 
 def test_missing_model_is_infra_error(monkeypatch, harness):

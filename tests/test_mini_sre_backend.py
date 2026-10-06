@@ -5,13 +5,13 @@ from types import SimpleNamespace
 import litellm
 import pytest
 
-from clients.baseline import backends
-from clients.baseline.backends import ApiBackend, Reply
+from clients.mini_sre import backends
+from clients.mini_sre.backends import ApiBackend, Reply
 
 ENV = {
     "AGENT_API_BASE": "https://api.z.ai/api/paas/v4",
     "AGENT_API_KEY": "secret-key-123",
-    "BASELINE_EXTRA_BODY": '{"thinking": {"type": "enabled"}}',
+    "MINI_SRE_EXTRA_BODY": '{"thinking": {"type": "enabled"}}',
 }
 
 
@@ -30,19 +30,19 @@ def response(content="", reasoning=None, finish="stop", use=None):
 
 
 def test_build_request():
-    backend = ApiBackend("openai/glm-5.3", "high", env={**ENV, "BASELINE_MAX_TOKENS": "4096"})
+    backend = ApiBackend("openai/glm-5.3", "high", env={**ENV, "MINI_SRE_MAX_TOKENS": "4096"})
     request = backend.build_request([{"role": "user", "content": "hi"}])
     assert request["model"] == "openai/glm-5.3" and request["api_base"] == ENV["AGENT_API_BASE"]
     assert request["max_tokens"] == 4096 and "tools" not in request
     assert "temperature" not in request  # the provider's default is used
-    pinned = ApiBackend("openai/glm-5.3", None, env={**ENV, "BASELINE_TEMPERATURE": "0"})
+    pinned = ApiBackend("openai/glm-5.3", None, env={**ENV, "MINI_SRE_TEMPERATURE": "0"})
     assert pinned.build_request([{"role": "user", "content": "hi"}])["temperature"] == 0.0
     assert request["extra_body"] == {"thinking": {"type": "enabled"}, "reasoning_effort": "high"}
     assert "secret-key-123" not in json.dumps(request["messages"])
 
 
 def test_non_streaming_reply(tmp_path, monkeypatch):
-    backend = ApiBackend("openai/glm-5.3", None, env={**ENV, "BASELINE_API_STREAM": "0"})
+    backend = ApiBackend("openai/glm-5.3", None, env={**ENV, "MINI_SRE_API_STREAM": "0"})
     seen = {}
 
     def fake(**kwargs):
@@ -95,7 +95,7 @@ def test_streaming_reply(tmp_path, monkeypatch):
 
 
 def test_empty_reply_is_an_error(tmp_path, monkeypatch):
-    backend = ApiBackend("openai/glm-5.3", None, env={**ENV, "BASELINE_API_STREAM": "0", "BASELINE_MAX_TOKENS": "64"})
+    backend = ApiBackend("openai/glm-5.3", None, env={**ENV, "MINI_SRE_API_STREAM": "0", "MINI_SRE_MAX_TOKENS": "64"})
     monkeypatch.setattr(litellm, "completion", lambda **kwargs: response("", finish="length"))
     reply = backend.complete([{"role": "user", "content": "go"}], step_dir=tmp_path / "s1")
     assert reply.error == "empty model reply (output truncated at max_tokens=64)"
@@ -103,7 +103,7 @@ def test_empty_reply_is_an_error(tmp_path, monkeypatch):
 
 def test_hard_deadline_non_streaming(tmp_path, monkeypatch):
     backend = ApiBackend(
-        "openai/glm-5.3", None, env={**ENV, "BASELINE_API_STREAM": "0", "BASELINE_API_HARD_DEADLINE_S": "0.2"}
+        "openai/glm-5.3", None, env={**ENV, "MINI_SRE_API_STREAM": "0", "MINI_SRE_API_HARD_DEADLINE_S": "0.2"}
     )
     monkeypatch.setattr(backends, "API_RETRY_WAIT_S", 0)
 
@@ -119,7 +119,7 @@ def test_hard_deadline_non_streaming(tmp_path, monkeypatch):
 
 
 def test_hard_deadline_streaming_closes_the_stream(tmp_path, monkeypatch):
-    backend = ApiBackend("openai/glm-5.3", None, env={**ENV, "BASELINE_API_HARD_DEADLINE_S": "0.1"})
+    backend = ApiBackend("openai/glm-5.3", None, env={**ENV, "MINI_SRE_API_HARD_DEADLINE_S": "0.1"})
     monkeypatch.setattr(backends, "API_RETRY_WAIT_S", 0)
     closed = []
 
@@ -143,7 +143,7 @@ def test_hard_deadline_streaming_closes_the_stream(tmp_path, monkeypatch):
 
 
 def test_rate_limit_retries(tmp_path, monkeypatch):
-    backend = ApiBackend("openai/glm-5.3", None, env={**ENV, "BASELINE_API_STREAM": "0"})
+    backend = ApiBackend("openai/glm-5.3", None, env={**ENV, "MINI_SRE_API_STREAM": "0"})
     monkeypatch.setattr(backends, "API_RATE_LIMIT_WAIT_S", 0)
     monkeypatch.setattr(backends, "API_RETRY_WAIT_S", 0)
     monkeypatch.setattr(backends, "API_RATE_LIMIT_RETRIES", 3)
@@ -187,7 +187,7 @@ def test_is_rate_limit(text, expected):
 
 
 def test_reasoning_only_reply_is_used_as_content(tmp_path, monkeypatch):
-    backend = ApiBackend("openai/deepseek-flash", "high", env={**ENV, "BASELINE_API_STREAM": "0"})
+    backend = ApiBackend("openai/deepseek-flash", "high", env={**ENV, "MINI_SRE_API_STREAM": "0"})
     only_reasoning = response("", reasoning="THOUGHT\n\n```bash\nkubectl get pods\n```")
     monkeypatch.setattr(litellm, "completion", lambda **kwargs: only_reasoning)
     reply = backend.complete([{"role": "user", "content": "go"}], step_dir=tmp_path / "r1")
@@ -197,7 +197,7 @@ def test_reasoning_only_reply_is_used_as_content(tmp_path, monkeypatch):
 
 
 def test_truncated_empty_reply_is_an_error(tmp_path, monkeypatch):
-    backend = ApiBackend("openai/deepseek-flash", "high", env={**ENV, "BASELINE_API_STREAM": "0"})
+    backend = ApiBackend("openai/deepseek-flash", "high", env={**ENV, "MINI_SRE_API_STREAM": "0"})
     monkeypatch.setattr(
         litellm, "completion", lambda **kwargs: response("", reasoning="still thinking", finish="length")
     )
@@ -206,7 +206,7 @@ def test_truncated_empty_reply_is_an_error(tmp_path, monkeypatch):
 
 
 def test_gateway_error_is_retried(tmp_path, monkeypatch):
-    backend = ApiBackend("openai/deepseek-flash", "high", env={**ENV, "BASELINE_API_STREAM": "0"})
+    backend = ApiBackend("openai/deepseek-flash", "high", env={**ENV, "MINI_SRE_API_STREAM": "0"})
     assert backends.is_transient(
         Exception("BadGatewayError: 502 Bad Gateway [Errno -5] No address associated with hostname")
     )
@@ -227,7 +227,7 @@ def test_gateway_error_is_retried(tmp_path, monkeypatch):
 
 
 def test_gateway_error_fails_after_retries(tmp_path, monkeypatch):
-    backend = ApiBackend("openai/deepseek-flash", "high", env={**ENV, "BASELINE_API_STREAM": "0"})
+    backend = ApiBackend("openai/deepseek-flash", "high", env={**ENV, "MINI_SRE_API_STREAM": "0"})
     monkeypatch.setattr(backends.time, "sleep", lambda _: None)
 
     def always(**kwargs):

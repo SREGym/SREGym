@@ -1,4 +1,4 @@
-"""Model calls for the baseline agent, through LiteLLM.
+"""Model calls for the mini-sre agent, through LiteLLM.
 
 Replies are streamed, so a long reply keeps the connection busy. SREGym's egress proxy closes a
 connection that sends nothing for ten minutes. Each call has a time limit, and rate limit errors
@@ -127,15 +127,15 @@ class ApiBackend:
         self.reasoning_effort = reasoning_effort
         self.api_base = source.get("AGENT_API_BASE") or None
         self.api_key = source.get("AGENT_API_KEY") or None
-        self.max_tokens = int(source.get("BASELINE_MAX_TOKENS", DEFAULT_API_MAX_TOKENS))
-        self.extra_body = json.loads(source.get("BASELINE_EXTRA_BODY") or "{}")
-        self.timeout_s = int(source.get("BASELINE_API_TIMEOUT", "600"))
+        self.max_tokens = int(source.get("MINI_SRE_MAX_TOKENS", DEFAULT_API_MAX_TOKENS))
+        self.extra_body = json.loads(source.get("MINI_SRE_EXTRA_BODY") or "{}")
+        self.timeout_s = int(source.get("MINI_SRE_API_TIMEOUT", "600"))
         # Time limit for a whole call. A provider can keep the connection open without sending
         # anything, and then the HTTP read timeout never fires.
-        self.hard_deadline_s = float(source.get("BASELINE_API_HARD_DEADLINE_S", str(self.timeout_s + 60)))
-        self.stream = source.get("BASELINE_API_STREAM", "1") != "0"
-        # No temperature is sent unless BASELINE_TEMPERATURE is set, so the provider's default is used.
-        raw_temperature = source.get("BASELINE_TEMPERATURE")
+        self.hard_deadline_s = float(source.get("MINI_SRE_API_HARD_DEADLINE_S", str(self.timeout_s + 60)))
+        self.stream = source.get("MINI_SRE_API_STREAM", "1") != "0"
+        # No temperature is sent unless MINI_SRE_TEMPERATURE is set, so the provider's default is used.
+        raw_temperature = source.get("MINI_SRE_TEMPERATURE")
         self.temperature = float(raw_temperature) if raw_temperature not in (None, "") else None
 
     def version(self) -> str:

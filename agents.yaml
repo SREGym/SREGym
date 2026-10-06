@@ -113,11 +113,11 @@ agents:
     install_script: null
     agent_version: null
     container_isolation: false
-  - name: baseline
-    kickoff_command: python -m clients.baseline.driver
+  - name: mini-sre
+    kickoff_command: python -m clients.mini_sre.driver
     kickoff_workdir: .
     kickoff_env:
-      BASELINE_HARD_CAP: "80"  # commands per stage
-      BASELINE_DEADLINE_S: "1500"  # seconds per stage
+      MINI_SRE_HARD_CAP: "80"  # commands per stage
+      MINI_SRE_DEADLINE_S: "1500"  # seconds per stage
     install_script: null
     agent_version: null

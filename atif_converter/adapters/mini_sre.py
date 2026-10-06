@@ -1,10 +1,10 @@
-"""Baseline agent -> ATIF v1.7 adapter.
+"""mini-sre agent -> ATIF v1.7 adapter.
 
-The baseline agent is SREGym's own reference client, so — like Stratus, and unlike
+The mini-sre agent is SREGym's own reference client, so — like Stratus, and unlike
 claudecode/codex/opencode/copilot — there is no Harbor converter to port. This adapter is
 bespoke, built from the transcript the driver writes.
 
-Input: ``baseline_transcript.jsonl``, written by ``clients/baseline/driver.py``. NDJSON:
+Input: ``mini_sre_transcript.jsonl``, written by ``clients/mini_sre/driver.py``. NDJSON:
 
     {"type":"meta", "backend":..., "model":..., "protocol":"mini", "submit_mode":..., ...}
     {"type":"prompt", "messages":[{"role":"system", "content":...}, {"role":"user", "content":...}]}
@@ -28,7 +28,7 @@ Key facts (confirmed against real runs):
 - **Reasoning** is written per step to ``steps/step_NN/reasoning.txt`` rather than into the
   transcript, so it is picked up from the run directory when one is given.
 - **Stages** are sequential phases (``diagnosis``, ``mitigation``). They are concatenated into one
-  trajectory, with the boundaries and how each ended recorded under ``extra.baseline.stages``.
+  trajectory, with the boundaries and how each ended recorded under ``extra.mini_sre.stages``.
 - **Token usage** is already SREGym's token-metrics v2, so it maps to ATIF ``Metrics`` directly.
 - **Streams** are stored with a length and a sha256, and the text is cut at the driver's storage
   limit; a cut stream keeps its ``chars``/``sha256`` under the observation result's ``extra``.
@@ -54,8 +54,8 @@ from ._common import TOKEN_METRICS_VERSION, _aggregate_final_metrics, _load_json
 
 logger = logging.getLogger(__name__)
 
-AGENT_NAME = "baseline"
-TRANSCRIPT_NAME = "baseline_transcript.jsonl"
+AGENT_NAME = "mini-sre"
+TRANSCRIPT_NAME = "mini_sre_transcript.jsonl"
 
 
 def _metrics(usage: dict[str, Any] | None) -> Metrics | None:
@@ -196,7 +196,7 @@ def convert_records(
     flush(None)
 
     if not any(step.source == "agent" for step in steps):
-        raise ConversionFailedError("baseline transcript holds no model calls")
+        raise ConversionFailedError("mini-sre transcript holds no model calls")
 
     submissions = [{"stage": r.get("stage"), "by": r.get("by")} for r in records if r.get("type") == "submit"]
     run_end = next((r for r in records if r.get("type") == "end" and r.get("stage") == "run"), {})
@@ -227,7 +227,7 @@ def convert_records(
         steps=steps,
         final_metrics=_aggregate_final_metrics(steps),
         extra={
-            "baseline": {
+            "mini_sre": {
                 "stages": stages,
                 "submissions": submissions,
                 "return_code": run_end.get("return_code"),
@@ -237,6 +237,6 @@ def convert_records(
 
 
 def convert_file(session_file: Path | str, *, agent_version: str | None = None) -> Trajectory:
-    """Convert one ``baseline_transcript.jsonl``; reasoning is read from its run directory."""
+    """Convert one ``mini_sre_transcript.jsonl``; reasoning is read from its run directory."""
     path = Path(session_file)
     return convert_records(_load_jsonl(path), run_dir=path.parent, agent_version=agent_version)

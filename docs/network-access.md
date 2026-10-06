@@ -4,7 +4,7 @@ Filtered access is the default. It allows the selected model provider and intern
 
 ## Endpoint configuration
 
-For a custom Stratus, Codex, baseline, or local OpenCode endpoint, set `AGENT_API_BASE`.
+For a custom Stratus, Codex, mini-sre, or local OpenCode endpoint, set `AGENT_API_BASE`.
 See [local models](../README.md#local-llms) for examples and the host-interface requirement.
 
 Use `--allow-agent-endpoint` for an extra destination:

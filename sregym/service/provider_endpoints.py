@@ -84,7 +84,7 @@ def provider_endpoint_rules(
         if provider == "local":
             return _required_custom_base(environment, agent, model)
         return _provider_rules(provider, environment)
-    if agent in {"stratus", "baseline"}:
+    if agent in {"stratus", "mini-sre"}:
         if _configured_url(environment, "AGENT_API_BASE"):
             return _required_custom_base(environment, agent, model)
         return _provider_rules(_provider_from_model(model), environment)

@@ -1,7 +1,7 @@
 import pytest
 
-from clients.baseline import driver, tools
-from clients.baseline.backends import Reply
+from clients.mini_sre import driver, tools
+from clients.mini_sre.backends import Reply
 
 
 def test_is_external_submit():

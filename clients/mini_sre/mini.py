@@ -1,4 +1,4 @@
-"""Prompt text and message formats for the baseline agent.
+"""Prompt text and message formats for the mini-sre agent.
 
 The texts follow mini-swe-agent v1.17.5 (agents/default.py and config/mini.yaml). The system
 prompt and the observation, long-output, format error and timeout messages are copied or adapted

@@ -1,6 +1,6 @@
 """
-Baseline agent driver for SREGym.
-Entry point for running the baseline agent on SREGym tasks.
+mini-sre agent driver for SREGym.
+Entry point for running the mini-sre agent on SREGym tasks.
 """
 
 import argparse
@@ -28,13 +28,13 @@ from logger import init_logger  # noqa: E402
 
 init_logger()
 
-from clients.baseline import mini  # noqa: E402
-from clients.baseline.backends import ApiBackend, Reply  # noqa: E402
-from clients.baseline.tools import CommandResult, run_command  # noqa: E402,F401  (re-exported for tests)
 from clients.harness.problem_id import resolve_problem_id  # noqa: E402
 from clients.harness.token_usage import aggregate_usage  # noqa: E402
+from clients.mini_sre import mini  # noqa: E402
+from clients.mini_sre.backends import ApiBackend, Reply  # noqa: E402
+from clients.mini_sre.tools import CommandResult, run_command  # noqa: E402,F401  (re-exported for tests)
 
-logger = logging.getLogger("all.baseline.driver")
+logger = logging.getLogger("all.mini_sre.driver")
 
 # Settings (module level so tests can patch them)
 
@@ -42,17 +42,17 @@ API_HOSTNAME = os.getenv("API_HOSTNAME", "localhost")
 API_PORT = os.getenv("API_PORT", "8000")
 CONDUCTOR_URL = f"http://{API_HOSTNAME}:{API_PORT}"
 
-AGENT_LOGS_DIR = os.environ.get("AGENT_LOGS_DIR", "./logs/baseline")
+AGENT_LOGS_DIR = os.environ.get("AGENT_LOGS_DIR", "./logs/mini-sre")
 MODEL = os.environ.get("AGENT_MODEL_ID", "")
 REASONING_EFFORT = os.environ.get("AGENT_REASONING_EFFORT")
 
-HARD_CAP = int(os.environ.get("BASELINE_HARD_CAP", "80"))
+HARD_CAP = int(os.environ.get("MINI_SRE_HARD_CAP", "80"))
 # Replies allowed after the limit message.
-WRAP_UP_CALLS = int(os.environ.get("BASELINE_WRAP_UP_CALLS", "3"))
-COMMAND_TIMEOUT = int(os.environ.get("BASELINE_COMMAND_TIMEOUT", "60"))
-DEADLINE_S = float(os.environ.get("BASELINE_DEADLINE_S", "1500"))
-RETRY_WAIT_S = float(os.environ.get("BASELINE_RETRY_WAIT_S", "30"))
-SESSION_REASONING = os.environ.get("BASELINE_SESSION_REASONING", "1") != "0"
+WRAP_UP_CALLS = int(os.environ.get("MINI_SRE_WRAP_UP_CALLS", "3"))
+COMMAND_TIMEOUT = int(os.environ.get("MINI_SRE_COMMAND_TIMEOUT", "60"))
+DEADLINE_S = float(os.environ.get("MINI_SRE_DEADLINE_S", "1500"))
+RETRY_WAIT_S = float(os.environ.get("MINI_SRE_RETRY_WAIT_S", "30"))
+SESSION_REASONING = os.environ.get("MINI_SRE_SESSION_REASONING", "1") != "0"
 
 STORED_STREAM_CHARS = 256 * 1024
 SUBMIT_ENDPOINT = re.compile(r"/submit(?:_mcp)?\b")
@@ -323,7 +323,7 @@ def run_stage(
             return outcome("submitted_by_command")
 
 
-def save_results(path: Path, problem_id: str, return_code: int, usage: dict, baseline: dict) -> None:
+def save_results(path: Path, problem_id: str, return_code: int, usage: dict, meta: dict) -> None:
     """Write the results file for the run."""
     payload = {
         "problem_id": problem_id,
@@ -331,7 +331,7 @@ def save_results(path: Path, problem_id: str, return_code: int, usage: dict, bas
         "return_code": return_code,
         "success": return_code == EXIT_OK,
         "usage_metrics": usage,
-        "baseline": baseline,
+        "mini_sre": meta,
     }
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     logger.info(f"Saved results to {path}")
@@ -343,7 +343,7 @@ def run_preflight() -> None:
         print("AGENT_MODEL_ID is not set")
         sys.exit(1)
     backend = make_backend(MODEL, REASONING_EFFORT)
-    with tempfile.TemporaryDirectory(prefix="baseline-preflight-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="mini-sre-preflight-") as tmp:
         reply = backend.complete(
             [backend.system_message("Reply with the single word ok."), {"role": "user", "content": "ok?"}],
             step_dir=Path(tmp) / "preflight",
@@ -355,8 +355,8 @@ def run_preflight() -> None:
 
 
 def main():
-    """Run the baseline agent on the current problem."""
-    parser = argparse.ArgumentParser(description="Run the SREGym baseline agent")
+    """Run the mini-sre agent on the current problem."""
+    parser = argparse.ArgumentParser(description="Run the SREGym mini-sre agent")
     parser.add_argument("--logs-dir", default=AGENT_LOGS_DIR)
     parser.add_argument("--problem-id", default=None, help="artifact id (default: SREGYM_ARTIFACT_ID)")
     args = parser.parse_args()
@@ -368,19 +368,19 @@ def main():
     logs_dir.mkdir(parents=True, exist_ok=True)
     problem_id = resolve_problem_id(cli_problem_id=args.problem_id)
 
-    transcript = Transcript(logs_dir / "baseline_transcript.jsonl")
-    results_path = logs_dir / f"baseline_results_{problem_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    transcript = Transcript(logs_dir / "mini_sre_transcript.jsonl")
+    results_path = logs_dir / f"mini_sre_results_{problem_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     backend = make_backend(MODEL, REASONING_EFFORT)
     try:
         backend_version = backend.version()
     except Exception as e:
         backend_version = f"unavailable: {e}"
-    baseline_meta: dict = {
+    mini_sre_meta: dict = {
         "backend": backend.name,
         "backend_version": backend_version,
         "model": MODEL,
         "reasoning_effort": REASONING_EFFORT,
-        # The ATIF adapter uses these fields to recognize a baseline transcript.
+        # The ATIF adapter uses these fields to recognize a mini-sre transcript.
         "protocol": "mini",
         "submit_mode": "curl",
         "submission_mode": "full",
@@ -392,9 +392,9 @@ def main():
         "artifact_id": problem_id,
         "stages": {},
     }
-    transcript.write({"type": "meta", **baseline_meta, "conductor_url": CONDUCTOR_URL})
+    transcript.write({"type": "meta", **mini_sre_meta, "conductor_url": CONDUCTOR_URL})
     logger.info("=" * 60)
-    logger.info(f"Baseline driver starting: {baseline_meta}")
+    logger.info(f"mini-sre driver starting: {mini_sre_meta}")
     logger.info("=" * 60)
 
     try:
@@ -431,14 +431,14 @@ def main():
 
     def finish_snapshot() -> None:
         """Write the results file with the stages submitted so far."""
-        baseline_meta["submitted_stages"] = list(submitted_stages)
-        save_results(results_path, problem_id, return_code, aggregate_usage(usage_records), baseline_meta)
+        mini_sre_meta["submitted_stages"] = list(submitted_stages)
+        save_results(results_path, problem_id, return_code, aggregate_usage(usage_records), mini_sre_meta)
 
     def record(outcome: StageOutcome) -> None:
         """Save a finished stage. A stage without a submission ends the run."""
         nonlocal return_code
         usage_records.extend(outcome.usage_records)
-        baseline_meta["stages"][outcome.stage] = outcome.summary()
+        mini_sre_meta["stages"][outcome.stage] = outcome.summary()
         if outcome.termination_reason == "submitted_by_command":
             submitted_stages.append(outcome.stage)
             transcript.write({"type": "submit", "stage": outcome.stage, "by": "command"})
@@ -457,7 +457,7 @@ def main():
         outcome = run("diagnosis")
         calls, records = outcome.model_calls, outcome.records
         # The diagnosis numbers also go at the top level of the results file.
-        baseline_meta.update(
+        mini_sre_meta.update(
             commands_used=outcome.commands_used,
             model_calls=outcome.model_calls,
             termination_reason=outcome.termination_reason,
@@ -483,7 +483,7 @@ def main():
     finish_snapshot()
     transcript.write({"type": "end", "stage": "run", "return_code": return_code})
     transcript.close()
-    logger.info(f"Baseline driver finished with return code {return_code}")
+    logger.info(f"mini-sre driver finished with return code {return_code}")
     sys.exit(return_code)
 
 
