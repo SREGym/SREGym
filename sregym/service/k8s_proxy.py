@@ -394,6 +394,42 @@ def _relay_upgraded_connection(
     client_to_upstream.join()
 
 
+_TLS_HANDSHAKE_TIMEOUT_SECONDS = 30
+
+
+class _TLSThreadingHTTPServer(ThreadingHTTPServer):
+    """Threaded HTTPS server that does each TLS handshake in the worker thread of its connection.
+
+    With a TLS-wrapped listening socket, accept() does the handshake in the serve_forever() thread.
+    A client that connects and then sends no TLS data blocks that thread. The server then accepts
+    no other connection, and shutdown() does not return.
+    """
+
+    def __init__(self, server_address, handler_class, tls_context: ssl.SSLContext):
+        super().__init__(server_address, handler_class)
+        self._tls_context = tls_context
+
+    def get_request(self):
+        connection, client_address = self.socket.accept()
+        try:
+            tls_connection = self._tls_context.wrap_socket(connection, server_side=True, do_handshake_on_connect=False)
+        except BaseException:
+            connection.close()
+            raise
+        return tls_connection, client_address
+
+    def finish_request(self, request, client_address):
+        # ThreadingMixIn calls this method in the worker thread and closes the connection after it returns.
+        request.settimeout(_TLS_HANDSHAKE_TIMEOUT_SECONDS)
+        try:
+            request.do_handshake()
+        except OSError as exc:
+            logger.debug(f"Proxy: TLS handshake with {client_address} did not complete: {exc}")
+            return
+        request.settimeout(None)
+        super().finish_request(request, client_address)
+
+
 class KubernetesAPIProxy:
     """Manages the Kubernetes API filtering proxy."""
 
@@ -1010,11 +1046,10 @@ class KubernetesAPIProxy:
                 self._proxy_request("HEAD")
 
         # Create and start server
-        self.server = ThreadingHTTPServer((self.listen_host, self.listen_port), FilteringProxyHandler)
         tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
         tls_context.load_cert_chain(cert_files["server_cert"], cert_files["server_key"])
-        self.server.socket = tls_context.wrap_socket(self.server.socket, server_side=True)
+        self.server = _TLSThreadingHTTPServer((self.listen_host, self.listen_port), FilteringProxyHandler, tls_context)
         self.server_thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.server_thread.start()
         logger.info(f"Kubernetes API filtering proxy started on {self.listen_host}:{self.listen_port}")

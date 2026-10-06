@@ -1297,7 +1297,7 @@ extraScrapeConfigs: |
         target_label: namespace
         replacement: social-network
 
-  # ---- OTel Collector spanmetrics (OTLP traces — astronomy-shop) ----
+  # ---- OTel Collector spanmetrics (OTLP traces — astronomy-shop, train-ticket) ----
   - job_name: 'otel-spanmetrics-otlp'
     scrape_interval: 15s
     static_configs:
@@ -1305,6 +1305,11 @@ extraScrapeConfigs: |
           - otel-collector.observe:8890
         labels:
           namespace: astronomy-shop
+    metric_relabel_configs:
+      - source_labels: [service_name]
+        regex: 'ts-.+'
+        target_label: namespace
+        replacement: train-ticket
   # ---- Scraping from TiDB Cluster ----
   - job_name: tidb-cluster
     scrape_interval: 15s

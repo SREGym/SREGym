@@ -1,6 +1,6 @@
 # SREGym-Lite
 
-SREGym-Lite is a curated set of 21 well-tested problems with varied difficulty and failure mechanisms. The problems were selected to be easy and reliable to run, making Lite a practical starting point before running the full benchmark.
+SREGym-Lite is a curated set of 17 well-tested problems with varied difficulty and failure mechanisms. The problems were selected to be easy and reliable to run, making Lite a practical starting point before running the full benchmark.
 
 SREGym-Lite can run using SREGym's existing [KIND](https://kind.sigs.k8s.io/) setup on a machine with 8 vCPU and 16 GB of memory.
 
@@ -70,10 +70,6 @@ The normal runner options, including `--judge-model`, `--reasoning-effort`, `--n
 - `valkey_auth_disruption`
 - `secret_rotation_stale_env_credentials_astronomy_shop`
 - `unschedulable_incorrect_port_assignment`
-- `readiness_probe_misconfiguration_social_network`
 - `duplicate_pvc_mounts_social_network`
-- `admission_webhook_outage_hotel_reservation`
-- `wrong_dns_policy_astronomy_shop`
-- `wrong_service_selector_social_network`
 - `rolling_update_misconfigured_social_network`
 - `search_rate_retry_collapse_hotel_reservation`

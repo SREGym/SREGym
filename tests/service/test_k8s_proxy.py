@@ -4,6 +4,7 @@ import json
 import socket
 import ssl
 import threading
+import time
 from datetime import timedelta
 
 import pytest
@@ -999,3 +1000,46 @@ def test_rejected_protocol_upgrade_uses_the_normal_response_path(proxy):
     assert status == 404
     assert headers["Content-Length"] == str(len(response_body))
     assert body == response_body
+
+
+def _connect_without_tls_handshake(proxy: KubernetesAPIProxy) -> socket.socket:
+    """Open a TCP connection to the proxy and send no TLS data."""
+    idle_client = socket.create_connection(("127.0.0.1", proxy.server.server_address[1]))
+    # Give the accept loop time to take the connection.
+    time.sleep(0.3)
+    return idle_client
+
+
+def test_stop_returns_while_a_client_has_not_finished_its_tls_handshake(proxy):
+    idle_client = _connect_without_tls_handshake(proxy)
+    stopper = threading.Thread(target=proxy.stop, daemon=True)
+    try:
+        stopper.start()
+        stopper.join(timeout=5)
+        stopped_in_time = not stopper.is_alive()
+    finally:
+        # Closing the idle connection unblocks an accept loop that waits for its handshake.
+        idle_client.close()
+        stopper.join(timeout=5)
+
+    assert stopped_in_time
+
+
+def test_requests_are_served_while_another_client_has_not_finished_its_tls_handshake(proxy):
+    FakeHTTPSConnection.response = FakeResponse(b'{"kind":"PodList","items":[]}')
+    statuses = []
+    idle_client = _connect_without_tls_handshake(proxy)
+    client = threading.Thread(
+        target=lambda: statuses.append(request(proxy, "/api/v1/namespaces/default/pods")[0]),
+        daemon=True,
+    )
+    try:
+        client.start()
+        client.join(timeout=5)
+        served_in_time = not client.is_alive()
+    finally:
+        idle_client.close()
+        client.join(timeout=5)
+
+    assert served_in_time
+    assert statuses == [200]

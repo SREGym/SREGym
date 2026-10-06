@@ -31,7 +31,7 @@ SREGym has been used to simulate real-world cloud failures, such as:
 
 <h2 id="🚀SREGym-Lite">🚀🚀🚀 Start with SREGym-Lite</h2>
 
-[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 21 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
+[SREGym-Lite](./docs/SREGym-Lite.md) is a curated set of 17 representative problems with varied difficulty levels that are friendly to run. It is the recommended starting point for new users and can run easily on a [Kind](https://kind.sigs.k8s.io/) setup with 8 vCPU and 16 GB of memory.
 
 
 <h2 id="📦installation">📦 Installation</h2>
@@ -350,25 +350,27 @@ See the full list of supported providers and model strings in the [LiteLLM docs]
 
 </details>
 
-## Cite This
+## Cite Our Work
 If our work is useful for you, please cite it:
 
 ```bibtex
-@article{sregym:26,
-  author  = {Jackson Clark and Yiming Su and Saad Mohammad Rafid Pial and Yifang Tian and Lily Gniedziejko and Hans-Arno Jacobsen and Yinfang Chen and Tianyin Xu},
-  title   = {{SREGym: A Live Benchmark for AI SRE Agents with High-Fidelity Failure Scenarios}},
+@article{clark:arxiv:2026,
+  author = {Jackson Clark and Yiming Su and Saad Mohammad Rafid Pial and Yifang Tian and Lily Gniedziejko and Hans-Arno Jacobsen and Yinfang Chen and Tianyin Xu},
+  title = "{SREGym: A Live Benchmark for AI SRE Agents with High-Fidelity Failure Scenarios}",
   journal = {arXiv:2605.07161},
-  year    = {2026},
-  month   = may,
-  eprint  = {2605.07161},
-  archivePrefix = {arXiv}
+  year = 2026,
+  month = MAY,
 }
 ```
 
 ## Acknowledgements
-This project is generously supported by a Slingshot grant from the [Laude Institute](https://www.laude.org).
 
-https://github.com/user-attachments/assets/e7b2ee27-e7a9-436a-858d-ee58e8bbd61d
+We are grateful to the generous support from
+* [Laude Institute](https://www.laude.org) ([Slingshots // TWO](https://www.laude.org/updates/slingshots-two))
+* OpenAI
+* [E2B for Research](https://e2b.dev/research)
+* Anthropic ([AI for Science Program](https://www.anthropic.com/news/ai-for-science-program))
+* [Cohere Labs Catalyst Grant](https://cohere.com/research/grants)
 
 ## License
 Licensed under the [MIT](LICENSE.txt) license.
