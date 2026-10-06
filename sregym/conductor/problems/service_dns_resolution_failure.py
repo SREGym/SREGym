@@ -27,7 +27,7 @@ class ServiceDNSResolutionFailure(Problem):
 
         self.kubectl = KubeCtl()
         self.root_cause = self.build_structured_root_cause(
-            component=self.faulty_service,
+            component=f"configmap/coredns in kube-system (NXDOMAIN template for `{self.faulty_service}`)",
             namespace=self.namespace,
             description=(
                 f"CoreDNS is configured with an NXDOMAIN template for `{self.faulty_service}.{self.namespace}.svc.cluster.local`, "

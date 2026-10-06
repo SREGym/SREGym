@@ -107,7 +107,7 @@ class ServiceDNSResolutionFailureIA(ServiceDNSResolutionFailure):
         ported(
             self,
             app_name,
-            component=faulty_service,
+            component=f"configmap/coredns in kube-system (NXDOMAIN template for `{faulty_service}`)",
             description=(
                 f"CoreDNS (kube-system/coredns Corefile) is configured with an NXDOMAIN template for "
                 f"`{faulty_service}.<namespace>.svc.cluster.local`, so in-cluster lookups for this service name "
