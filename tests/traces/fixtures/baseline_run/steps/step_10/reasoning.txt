@@ -1,3 +1,0 @@
-Let me look at the frontend-proxy env and how FRONTEND_HOST is used. Let me examine the deployment env vars and the frontend-proxy config.
-
-Let me check the full frontend-proxy deployment spec.

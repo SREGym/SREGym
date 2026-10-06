@@ -1,3 +1,0 @@
-All pods are running (no obvious crash). Let me check the pod status more carefully - restart counts, readiness. The get pods output didn't show STATUS/READY because of -o wide? Actually the output seems truncated to NAME/AGE columns. Let me check readiness and restart counts.
-
-I notice frontend-proxy has two replicas: frontend-proxy-7cbc46b687-r5hmc (24s) and frontend-proxy-84f445bb4b-v47fv (59s). That's two different ReplicaSets - a new one rolling out. Could be a deployment issue. Let me look deeper.

@@ -1,1 +1,0 @@
-Both stages are complete. I need to issue the submission command to end the stage. The mitigation was already submitted, but the conductor wants the final submission command format. Let me re-submit the mitigation with empty string to trigger the COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT response.

@@ -1,9 +1,0 @@
-Confirmed: `FRONTEND_HOST=localhost` in the running proxy pod. This is the injected fault — the frontend-proxy will route `/` and frontend routes to localhost:8080 (itself) instead of frontend:8080, causing a routing loop / failure.
-
-Let me confirm envoy config via the admin port without curl. Maybe wget exists. Or use /dev/tcp. Let me check the config dump using python or nc. Actually envoy image is minimal (debian based). Let me try wget or python3.
-
-Actually let me just verify the failure by testing through the frontend-proxy service from a pod that already exists — e.g., exec into frontend and curl the frontend-proxy. The frontend pod likely has curl/node. Let me try using node or wget.
-
-Actually let me think about the intended fault more. The frontend-proxy routes external traffic to the frontend. With FRONTEND_HOST=localhost, the proxy would try to reach itself → error 503/loop. Let me confirm by curling frontend-proxy from the frontend pod (has node, maybe wget).
-
-Let me test.

@@ -1,3 +1,0 @@
-Now verify the rollout and that the new pod has correct FRONTEND_HOST and envoy config.
-
-Let me wait for rollout and verify.

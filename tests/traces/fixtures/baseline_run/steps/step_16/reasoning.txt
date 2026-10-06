@@ -1,3 +1,0 @@
-The static envoy.yaml is minimal. The clusters are loaded dynamically via a template (envoy.tmpl.yaml) whose env vars are substituted. Let me look at envoy.tmpl.yaml to confirm FRONTEND_HOST is used to build the frontend cluster.
-
-Actually, the proxy is running TWO frontend-proxy pods? No, deployment has 1 replica. But there were 2 RS. Let me focus: confirm envsubst usage. Let me check envoy.tmpl.yaml.

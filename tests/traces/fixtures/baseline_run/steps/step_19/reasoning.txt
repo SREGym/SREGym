@@ -1,5 +1,0 @@
-Now patch the deployment to remove index 23 (the duplicate FRONTEND_HOST=localhost). I'll use a JSON patch or strategic merge. Simplest: use `kubectl patch` with JSON patch removing the env element at index 23.
-
-Let me do a JSON patch: remove /spec/template/spec/containers/0/env/23.
-
-But safer to fetch, modify in python, and apply. Let me use JSON patch remove.

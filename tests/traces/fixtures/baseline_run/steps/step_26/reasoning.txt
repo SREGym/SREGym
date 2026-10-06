@@ -1,3 +1,0 @@
-All pods are READY and 0 restarts except product-catalog (2 restarts, transient from startup). The fix is verified: FRONTEND_HOST=frontend and the frontend cluster resolves to `frontend:8080`. All envoy clusters initialized successfully.
-
-Now I must submit with an empty string to trigger validation.

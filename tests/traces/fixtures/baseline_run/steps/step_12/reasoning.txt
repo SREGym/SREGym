@@ -1,9 +1,0 @@
-Pod creation is disabled. I need to test differently. Let me look at the frontend-proxy envoy config to see how FRONTEND_HOST is used. The frontend-proxy container builds envoy config from a template using environment variables. FRONTEND_HOST=localhost would make the proxy route to localhost:8080 (itself) instead of frontend:8080. That would break all UI/API routing.
-
-Actually wait — let me check. The frontend-proxy config template. Let me look at the pod's envoy config or the container filesystem. Actually let me check if there's an entrypoint that generates config. Let me look at how the proxy is used.
-
-Let me check the frontend-proxy config. Actually, the concern: the last FRONTEND_HOST wins → localhost. The envoy cluster for frontend would point to 127.0.0.1:8080 — the proxy itself, creating a loop / connection refused/404.
-
-But wait, frontend-proxy root returned something? I couldn't test. Let me check the admin config_dump or the envoy config in the pod.
-
-Let me exec into the pod.

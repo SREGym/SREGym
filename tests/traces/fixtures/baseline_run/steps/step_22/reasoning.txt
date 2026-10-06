@@ -1,9 +1,0 @@
-Now only one FRONTEND_HOST=frontend. The new pod is frontend-proxy-84f445bb4b-vlmwv (wait, that's the old RS hash 84f445bb4b — interesting, that's the original correct template! So the deployment went back to the base template which already had FRONTEND_HOST=frontend).
-
-Wait, actually the pod is named 84f445bb4b which was the "old" RS. Interesting — so the base manifest template had the correct env, and the fault was injected by adding the duplicate. Removing it reverted to the base RS template hash. Good.
-
-Now let me verify the envoy config resolved to frontend. The exec timed out but let me try a simpler exec with a timeout.
-
-Actually let me verify routing works now. I couldn't create pods (workload creation disabled). Let me try hitting the proxy from within an existing pod that has curl or wget. Frontend pod had wget (the first wget returned empty). Let me try to test via the proxy's own admin or via exec.
-
-Let me try exec with grep on the envoy.yaml.
