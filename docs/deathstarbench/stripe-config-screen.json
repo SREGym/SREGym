@@ -1,6 +1,6 @@
 {
   "problem": "stripe_feature_config_replicated",
-  "status": "three valid passes; difficulty target unmet",
+  "status": "SUPERSEDED for the single tier. This screened stripe_feature_config_replicated before the description correction. The post-correction screen of stripe_feature_config_single is 2 of 3; the replicated tier has not been re-screened. See difficult-problems.md.",
   "difficulty_target_met": false,
   "model": "gpt-6-astra",
   "cli_version": "0.157.1",
@@ -134,5 +134,8 @@
   "raw_artifact_root": "results/dind/sregym-difficulty-baseline/stripe-three",
   "source_manifest_sha256": "5a72f101fb9c8f9dbabdfae92bdc4fb1fea5ffdb8f8e0d63d378b8e0e0622396",
   "stripe_image": "sregym-stripe-marathon:b584170d733ece2d",
-  "stripe_image_id": "sha256:4d228d74ac0eda8b689c27082c65d3c6376a816879f35d082a3653daf7a320e1"
+  "stripe_image_id": "sha256:4d228d74ac0eda8b689c27082c65d3c6376a816879f35d082a3653daf7a320e1",
+  "superseded_by": "docs/deathstarbench/difficult-problems.md",
+  "superseded_note": "SUPERSEDED for the single tier. This screened stripe_feature_config_replicated before the description correction. The post-correction screen of stripe_feature_config_single is 2 of 3; the replicated tier has not been re-screened. See difficult-problems.md.",
+  "original_status": "three valid passes; difficulty target unmet"
 }

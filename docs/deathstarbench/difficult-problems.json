@@ -1,0 +1,208 @@
+{
+  "generated": "2026-10-06",
+  "agent": "codex",
+  "model": "gpt-6-astra",
+  "agent_version": "0.160.0",
+  "task_description": "generic SRE instruction plus the application description; no authored evidence",
+  "difficulty_definition": "1 - (passes / valid attempts); invalid attempts excluded",
+  "caveats": [
+    "Every attempt is Codex gpt-6-astra. No problem here has been screened on a second agent.",
+    "Three of the four are rungs of one subclass chain in one environment (delayed_audit <- intermittent <- ambiguity), so this is two distinct incidents, not four.",
+    "A pass rate at a fixed budget is partly a statement about the budget: the solved families in this suite reach 93% of theirs.",
+    "Pre-correction campaigns (task descriptions that disclosed the diagnosis) are excluded; they are quarantined under results/_voided/."
+  ],
+  "problems": [
+    {
+      "problem": "gitlab_notification_delayed_audit_replicated",
+      "incident": "GitLab notification delivery, receipts published late",
+      "shape": "race",
+      "budget_seconds": 900,
+      "confidence": "solid",
+      "note": "Two valid attempts, both failed. A third hit the agent timeout and is excluded.",
+      "campaigns": [
+        "1003_0458"
+      ],
+      "valid_attempts": 2,
+      "solved": 0,
+      "failures": 2,
+      "difficulty": 1.0,
+      "median_seconds": 692,
+      "attempts": [
+        {
+          "attempt": 1,
+          "valid": true,
+          "solved": false,
+          "seconds": 586,
+          "failure_class": "agent_error",
+          "reason": "notification_delivery_violation",
+          "detail": "{'notifications': {'expected': 30, 'delivered': 30, 'missing': 0, 'duplicates': 7, 'wrong_deliveries': []}}",
+          "excluded_because": null
+        },
+        {
+          "attempt": 2,
+          "valid": false,
+          "solved": null,
+          "seconds": null,
+          "failure_class": null,
+          "reason": null,
+          "detail": null,
+          "excluded_because": "agent_timeout"
+        },
+        {
+          "attempt": 3,
+          "valid": true,
+          "solved": false,
+          "seconds": 798,
+          "failure_class": "agent_error",
+          "reason": "notification_delivery_violation",
+          "detail": "{'notifications': {'expected': 30, 'delivered': 30, 'missing': 0, 'duplicates': 6, 'wrong_deliveries': []}}",
+          "excluded_because": null
+        }
+      ]
+    },
+    {
+      "problem": "gitlab_notification_intermittent_replicated",
+      "incident": "GitLab notification delivery, SMTP still failing during recovery",
+      "shape": "race",
+      "budget_seconds": 900,
+      "confidence": "solid",
+      "note": "Two failures in three. The strongest evidence in the suite.",
+      "campaigns": [
+        "1003_0242"
+      ],
+      "valid_attempts": 3,
+      "solved": 1,
+      "failures": 2,
+      "difficulty": 0.667,
+      "median_seconds": 797,
+      "attempts": [
+        {
+          "attempt": 1,
+          "valid": true,
+          "solved": true,
+          "seconds": 797,
+          "failure_class": null,
+          "reason": null,
+          "detail": null,
+          "excluded_because": null
+        },
+        {
+          "attempt": 2,
+          "valid": true,
+          "solved": false,
+          "seconds": 844,
+          "failure_class": "agent_error",
+          "reason": "notification_delivery_violation",
+          "detail": "{'notifications': {'expected': 30, 'delivered': 30, 'missing': 0, 'duplicates': 5, 'wrong_deliveries': []}}",
+          "excluded_because": null
+        },
+        {
+          "attempt": 3,
+          "valid": true,
+          "solved": false,
+          "seconds": 636,
+          "failure_class": "agent_error",
+          "reason": "notification_delivery_violation",
+          "detail": "{'notifications': {'expected': 30, 'delivered': 30, 'missing': 0, 'duplicates': 3, 'wrong_deliveries': []}}",
+          "excluded_because": null
+        }
+      ]
+    },
+    {
+      "problem": "gitlab_notification_unannounced_ambiguity_replicated",
+      "incident": "GitLab notification delivery, audit not named in the description",
+      "shape": "unverified action",
+      "budget_seconds": 900,
+      "confidence": "weak",
+      "note": "One failure in three. Registered as a candidate for an n=10, not as an established result.",
+      "campaigns": [
+        "1005_0352"
+      ],
+      "valid_attempts": 3,
+      "solved": 2,
+      "failures": 1,
+      "difficulty": 0.333,
+      "median_seconds": 495,
+      "attempts": [
+        {
+          "attempt": 1,
+          "valid": true,
+          "solved": false,
+          "seconds": 451,
+          "failure_class": "agent_error",
+          "reason": "notification_delivery_violation",
+          "detail": "{'notifications': {'expected': 30, 'delivered': 30, 'missing': 0, 'duplicates': 3, 'wrong_deliveries': []}}",
+          "excluded_because": null
+        },
+        {
+          "attempt": 2,
+          "valid": true,
+          "solved": true,
+          "seconds": 573,
+          "failure_class": null,
+          "reason": null,
+          "detail": null,
+          "excluded_because": null
+        },
+        {
+          "attempt": 3,
+          "valid": true,
+          "solved": true,
+          "seconds": 495,
+          "failure_class": null,
+          "reason": null,
+          "detail": null,
+          "excluded_because": null
+        }
+      ]
+    },
+    {
+      "problem": "stripe_feature_config_single",
+      "incident": "Stripe payments edge configuration, with a dead webhook backlog",
+      "shape": "skipped verification",
+      "budget_seconds": 900,
+      "confidence": "weak",
+      "note": "One failure in three. Same evidence strength as the above; treat as a candidate.",
+      "campaigns": [
+        "1003_0723"
+      ],
+      "valid_attempts": 3,
+      "solved": 2,
+      "failures": 1,
+      "difficulty": 0.333,
+      "median_seconds": 237,
+      "attempts": [
+        {
+          "attempt": 1,
+          "valid": true,
+          "solved": false,
+          "seconds": 219,
+          "failure_class": "agent_error",
+          "reason": "webhook_backlog_incomplete",
+          "detail": "{'member': 'stripe-marathon-db-1', 'changed_records': {}, 'duplicate_financial_effects': 0, 'missing_events': [], 'undelivered_events': ['evt_K1XMwVBSnay631T5lHR9PC7T', 'evt_LwzAHK6SANOqrONXQvOZewqA', 'evt_ThCgLi9Lo7fY2bKe1LfhHc7V', 'evt_UW2dDkq2VZqE2Ezf1Z48Iq8m', 'evt_cV7LdGv7o3vikzRMkcg0MR9p', 'evt_l6Ed6RHZosvJgqVQmERyzp7n']}",
+          "excluded_because": null
+        },
+        {
+          "attempt": 2,
+          "valid": true,
+          "solved": true,
+          "seconds": 237,
+          "failure_class": null,
+          "reason": null,
+          "detail": null,
+          "excluded_because": null
+        },
+        {
+          "attempt": 3,
+          "valid": true,
+          "solved": true,
+          "seconds": 241,
+          "failure_class": null,
+          "reason": null,
+          "detail": null,
+          "excluded_because": null
+        }
+      ]
+    }
+  ]
+}

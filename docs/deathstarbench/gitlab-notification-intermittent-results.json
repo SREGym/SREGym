@@ -1,7 +1,7 @@
 {
   "problem": "gitlab_notification_intermittent_replicated",
   "candidate_revision": 2,
-  "status": "complete: 3 of 3 valid model attempts passed; difficulty target not met",
+  "status": "SUPERSEDED. This 3-of-3 ran under a task description that disclosed the diagnosis; that campaign is quarantined under results/_voided/. The post-correction screen is 1 of 3. See difficult-problems.md.",
   "focused_tests_passed": 29,
   "source_manifest_sha256": "bcf4b8fda0c25d857e94269f461dd94708f80ecdc9b27f6126e94b1ff9a21e95",
   "image": {
@@ -539,5 +539,8 @@
     "container_matches": true,
     "host_mismatches": [],
     "container_mismatches": []
-  }
+  },
+  "superseded_by": "docs/deathstarbench/difficult-problems.md",
+  "superseded_note": "SUPERSEDED. This 3-of-3 ran under a task description that disclosed the diagnosis; that campaign is quarantined under results/_voided/. The post-correction screen is 1 of 3. See difficult-problems.md.",
+  "original_status": "complete: 3 of 3 valid model attempts passed; difficulty target not met"
 }

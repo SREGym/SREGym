@@ -1,7 +1,7 @@
 {
   "problem": "gitlab_notification_delayed_audit_replicated",
   "candidate_revision": 1,
-  "status": "complete: three valid passes; difficulty target unmet",
+  "status": "SUPERSEDED. This result ran under a task description that disclosed the diagnosis; that campaign is quarantined under results/_voided/. The post-correction screen is 0 of 2. See difficult-problems.md.",
   "focused_tests_passed": 37,
   "subtests_passed": 5,
   "source_manifest_sha256": "13a6235adffc071ef03289a591563aad1e1f7a64fdcc864b5833d21a1e67ed6e",
@@ -661,5 +661,8 @@
       "artifact": "delayed-audit-three/mailbox-attempt3-1790447380175629434.json",
       "messages": 356
     }
-  ]
+  ],
+  "superseded_by": "docs/deathstarbench/difficult-problems.md",
+  "superseded_note": "SUPERSEDED. This result ran under a task description that disclosed the diagnosis; that campaign is quarantined under results/_voided/. The post-correction screen is 0 of 2. See difficult-problems.md.",
+  "original_status": "complete: three valid passes; difficulty target unmet"
 }

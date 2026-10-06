@@ -255,3 +255,48 @@ def test_gated_families_still_import_and_are_real_problems(module_name, class_na
     for method in ("inject_fault", "recover_fault"):
         assert callable(getattr(problem, method)), f"{class_name} has no {method}"
     assert "scale_tier" in problem.__init__.__code__.co_varnames
+
+
+def test_the_committed_results_artifact_matches_the_registry():
+    """The PR must not claim a problem is hard and leave it unregistered.
+
+    `difficult-problems.json` is the evidence shipped with this branch, since the
+    `results/` tree is gitignored and therefore not reviewable. Three committed
+    results files already asserted stale pre-correction outcomes that a later
+    screen contradicted, so the two have to be checked against each other.
+    """
+    import json
+
+    artifact = json.loads(pathlib.Path("docs/deathstarbench/difficult-problems.json").read_text())
+    claimed = {p["problem"] for p in artifact["problems"]}
+    assert claimed == SCREENED_DISCRIMINATING, (
+        f"artifact and registry disagree: only in artifact {sorted(claimed - SCREENED_DISCRIMINATING)}, "
+        f"only in registry {sorted(SCREENED_DISCRIMINATING - claimed)}"
+    )
+    registered = registered_problem_ids()
+    assert claimed <= registered, f"claimed hard but unregistered: {sorted(claimed - registered)}"
+
+    for problem in artifact["problems"]:
+        # A problem is only in here because an agent failed it at least once.
+        assert problem["failures"] >= 1, f"{problem['problem']} has no recorded failure"
+        assert problem["valid_attempts"] >= 2, f"{problem['problem']} rests on fewer than two valid attempts"
+        assert problem["difficulty"] > 0
+        # Confidence has to be stated, and a single failure is never "solid".
+        assert problem["confidence"] in ("solid", "weak")
+        if problem["failures"] < 2:
+            assert problem["confidence"] == "weak", f"{problem['problem']} has one failure and must not be called solid"
+
+
+def test_superseded_results_files_say_so():
+    """A stale status in a committed file is a claim the PR is making."""
+    import json
+
+    for name in (
+        "gitlab-notification-intermittent-results.json",
+        "gitlab-notification-delayed-audit-results.json",
+        "stripe-config-screen.json",
+    ):
+        d = json.loads((pathlib.Path("docs/deathstarbench") / name).read_text())
+        assert d.get("superseded_by"), f"{name} carries a pre-correction status without saying so"
+        assert "SUPERSEDED" in d["status"]
+        assert d.get("original_status"), f"{name} should keep what it originally claimed"
