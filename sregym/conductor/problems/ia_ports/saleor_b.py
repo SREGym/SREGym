@@ -234,7 +234,7 @@ class PaymentGatewayDisabledSaleor(Problem):
         ported(
             self,
             app_name,
-            component=f"deployment/{API} (payment plugin `{DUMMY_GATEWAY}` configuration, channel `{CHANNEL}`)",
+            component=f"payment plugin `{DUMMY_GATEWAY}` configuration for channel `{CHANNEL}` (`plugins_pluginconfiguration`, statefulset/{POSTGRES})",
             description=(
                 "Configuration analogue of a payment service that fails every charge: in Saleor the payment step "
                 f"of checkout is handled in-process by the payment gateway plugin `{DUMMY_GATEWAY}` (the dummy "
@@ -307,7 +307,7 @@ class ChannelDeactivatedSaleor(Problem):
         ported(
             self,
             app_name,
-            component=f"deployment/{API} (channel `{CHANNEL}`)",
+            component=f"sales channel `{CHANNEL}` (`channel_channel`, statefulset/{POSTGRES})",
             description=(
                 "Configuration analogue of a cart service that errors on every cart operation: Saleor's carts "
                 f"(checkouts) are scoped to a sales channel, and the storefront channel `{CHANNEL}` was deactivated "
@@ -372,7 +372,10 @@ class CatalogUnpublishedSaleor(Problem):
         ported(
             self,
             app_name,
-            component=f"deployment/{API} (product channel listings, categories `{'`, `'.join(self.CATEGORIES)}`, channel `{CHANNEL}`)",
+            component=(
+                f"product channel listings of categories `{'`, `'.join(self.CATEGORIES)}` in channel `{CHANNEL}` "
+                f"(`product_productchannellisting`, statefulset/{POSTGRES})"
+            ),
             description=(
                 "Catalog-data analogue of a product catalog service that fails for specific products: the "
                 "channel listings (`product_productchannellisting.is_published`) of every product in the "
