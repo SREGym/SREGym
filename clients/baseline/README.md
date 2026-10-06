@@ -7,12 +7,11 @@ In each reply the model writes one bash command. The baseline agent runs it in a
 ```
 export AGENT_API_BASE=https://api.example.com/v1   # your provider's endpoint
 export AGENT_API_KEY=...                           # your provider's key
-uv run main.py --suite sregym-lite --agent baseline --model openai/<model> \
-  --force-build --internet-access open
+uv run main.py --suite sregym-lite --agent baseline --model openai/<model> --force-build
 ```
 
 - `--force-build` builds the agent image from your local code. The released image does not have this agent.
-- `--internet-access open` is needed for now. In filtered mode the run stops before it starts.
+- The default filtered internet mode works as for the other agents: the agent can reach its model endpoint and SREGym's own services, and nothing else.
 - `--reasoning-effort` is passed to the model as `reasoning_effort`. Without it, the provider's default is used.
 
 ## Prompt
