@@ -110,7 +110,7 @@ def run_problem(problem: str, args) -> dict:
             # thread passes the check before any of the containers it starts appear.
             with slot_lock(args):
                 wait_for_slot(args)
-                subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+                subprocess.run(["docker", "rm", "-f", "-v", name], capture_output=True)
                 log(f"START {problem} (try {attempt}) -> {run_dir}")
                 started = time.monotonic()
                 proc = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT)
