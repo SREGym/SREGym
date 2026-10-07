@@ -72,13 +72,14 @@ class _CoreV1:
         endpoint_pods=None,
         probe_phase="Succeeded",
         probe_logs="CRAFTED_OK\nNORMAL_OK\n",
+        probe_runs=None,
     ):
         endpoint_pods = ["frontend-proxy-abc"] if endpoint_pods is None else endpoint_pods
         self.endpoints = SimpleNamespace(
             subsets=[SimpleNamespace(addresses=[_endpoint(name) for name in endpoint_pods])]
         )
-        self.probe_phase = probe_phase
-        self.probe_logs = probe_logs
+        # One (phase, logs) per probe pod; the last one repeats.
+        self.probe_runs = probe_runs or [(probe_phase, probe_logs)]
         self.created_pods = []
         self.deleted_pods = []
 
@@ -92,10 +93,13 @@ class _CoreV1:
         self.created_pods.append((namespace, body))
 
     def read_namespaced_pod(self, name, namespace):
-        return SimpleNamespace(status=SimpleNamespace(phase=self.probe_phase))
+        return SimpleNamespace(status=SimpleNamespace(phase=self._current_run()[0]))
 
     def read_namespaced_pod_log(self, name, namespace):
-        return self.probe_logs
+        return self._current_run()[1]
+
+    def _current_run(self):
+        return self.probe_runs[min(len(self.created_pods), len(self.probe_runs)) - 1]
 
     def delete_namespaced_pod(self, name, namespace, grace_period_seconds):
         self.deleted_pods.append((name, namespace, grace_period_seconds))
@@ -183,14 +187,36 @@ def test_runtime_probe_rejects_an_alternate_vulnerable_regex():
     core_v1 = _CoreV1(probe_phase="Failed", probe_logs="")
     deployment = _deployment(container=_container(regex="^([a-z]+)+$", enabled="true"))
 
-    assert _oracle(_KubeCtl(deployment=deployment, core_v1=core_v1)).evaluate()["success"] is False
-    assert len(core_v1.deleted_pods) == 1
+    oracle = _oracle(_KubeCtl(deployment=deployment, core_v1=core_v1))
+
+    assert oracle.evaluate()["success"] is False
+    assert len(core_v1.deleted_pods) == oracle.probe_attempts
 
 
 def test_rejects_probe_that_does_not_complete_normal_request():
     core_v1 = _CoreV1(probe_logs="CRAFTED_OK\n")
 
     assert _oracle(_KubeCtl(core_v1=core_v1)).evaluate()["success"] is False
+
+
+def test_retries_transient_probe_failure_after_edge_restart():
+    core_v1 = _CoreV1(probe_runs=[("Failed", ""), ("Succeeded", "CRAFTED_OK\nNORMAL_OK\n")])
+
+    assert _oracle(_KubeCtl(core_v1=core_v1)).evaluate()["success"] is True
+    assert len(core_v1.created_pods) == 2
+    assert len(core_v1.deleted_pods) == 2
+
+
+def test_persistent_probe_failure_fails_after_retries():
+    core_v1 = _CoreV1(probe_phase="Failed", probe_logs="CRAFTED_OK\n")
+    oracle = _oracle(_KubeCtl(core_v1=core_v1))
+
+    result = oracle.evaluate()
+
+    assert result["success"] is False
+    assert result["reason"] == "edge_filter_probe_failed"
+    assert len(core_v1.created_pods) == oracle.probe_attempts
+    assert len(core_v1.deleted_pods) == oracle.probe_attempts
 
 
 def test_rejects_scaled_to_zero_without_waiting_or_probing():
