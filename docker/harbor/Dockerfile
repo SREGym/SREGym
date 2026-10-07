@@ -8,7 +8,7 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git iproute2 iptables procps util-linux socat \
+    ca-certificates curl git iproute2 iptables procps util-linux uidmap socat \
     python3 python3-dev python3-venv build-essential libffi-dev libssl-dev \
     jq tini \
     && rm -rf /var/lib/apt/lists/*
@@ -44,11 +44,15 @@ COPY docker/harbor/sregym-ready /usr/local/bin/sregym-ready
 # cluster only through SREGym's filtered API proxy, via $KUBECONFIG.
 RUN chmod 755 /usr/local/lib/sregym-harbor/start.sh /usr/local/bin/sregym-ready \
     && chmod 700 /opt/sregym /root \
-    && useradd -m -s /bin/bash agent
+    && useradd -m -s /bin/bash agent \
+    && echo root:0:65536 > /etc/subuid && echo root:0:65536 > /etc/subgid
 
 ENV PATH="/opt/sregym/.venv/bin:${PATH}" \
     K3S_BIN=/opt/k3s/bin \
     WAIT_FOR_POD_READY_TIMEOUT=1800 \
     KUBECONFIG=/run/sregym/kubeconfig
+# containerd's overlayfs snapshotter cannot sit on the container's own overlay
+# root. A volume gives it a real filesystem (Sysbox mounts one here itself).
+VOLUME /var/lib/rancher/k3s
 WORKDIR /home/agent
 CMD ["sleep", "infinity"]

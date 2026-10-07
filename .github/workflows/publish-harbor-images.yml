@@ -1,8 +1,8 @@
-name: Publish Harbor Images
+name: Publish Harbor Image
 
-# Publishes the images that generated Harbor tasks pull on cloud providers:
-# the SREGym sidecar (docker/dind) and a prebuilt KIND node image, which
-# saves every trial from building kind/Dockerfile during setup.
+# Publishes the image that every generated Harbor task builds on
+# (docker/harbor): an unprivileged k3s cluster, the SREGym backend and the
+# agent's tools, in one container.
 
 on:
   workflow_dispatch:
@@ -25,7 +25,6 @@ jobs:
     timeout-minutes: 90
     env:
       REGISTRY: ghcr.io/sregym
-      KIND_BASE_IMAGE: kindest/node:v1.32.11
 
     steps:
       - name: Checkout repository
@@ -49,39 +48,29 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push the sidecar image
+      - name: Build and push the task image
         env:
           TAG: ${{ steps.tag.outputs.tag }}
           LATEST: ${{ inputs.latest }}
         run: |
-          tags=(-t "$REGISTRY/sregym-dind:$TAG")
-          if [[ $LATEST == true ]]; then tags+=(-t "$REGISTRY/sregym-dind:latest"); fi
-          # BuildKit picks up docker/dind/Dockerfile.dockerignore. The source
+          tags=(-t "$REGISTRY/sregym-harbor:$TAG")
+          if [[ $LATEST == true ]]; then tags+=(-t "$REGISTRY/sregym-harbor:latest"); fi
+          # BuildKit picks up docker/harbor/Dockerfile.dockerignore. The source
           # label links the GHCR package to this repository.
-          docker buildx build --push "${tags[@]}" -f docker/dind/Dockerfile \
+          docker buildx build --push "${tags[@]}" -f docker/harbor/Dockerfile \
             --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            --label "org.opencontainers.image.description=SREGym sidecar for Harbor tasks: private Docker daemon and KIND cluster" .
-
-      - name: Build and push the KIND node image
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          docker buildx build --push --build-arg "KIND_NODE_IMAGE=$KIND_BASE_IMAGE" \
-            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
-            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
-            -t "$REGISTRY/kind-node:${KIND_BASE_IMAGE##*:}-$TAG" kind
+            --label "org.opencontainers.image.description=SREGym Harbor task image: unprivileged k3s cluster, backend and agent tools" .
 
       - name: Summary
         env:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           {
-            echo "Generate tasks that use these images:"
+            echo "Generate tasks that use this image:"
             echo '```'
             echo "uv run python -m sregym.harbor.adapter --output-dir datasets/sregym \\"
-            echo "  --backend-image $REGISTRY/sregym-dind:$TAG \\"
-            echo "  --kind-node-image $REGISTRY/kind-node:${KIND_BASE_IMAGE##*:}-$TAG"
+            echo "  --backend-image $REGISTRY/sregym-harbor:$TAG"
             echo '```'
-            echo "Cloud providers pull these anonymously: make both GHCR packages public once."
+            echo "Cloud providers pull it anonymously: make the GHCR package public once."
           } >> "$GITHUB_STEP_SUMMARY"

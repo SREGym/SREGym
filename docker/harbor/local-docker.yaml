@@ -1,0 +1,13 @@
+# Overlay for running SREGym Harbor tasks on Harbor's local Docker environment:
+#   harbor run ... -e docker --extra-docker-compose docker/harbor/local-docker.yaml
+# Plain Docker's default seccomp profile and masked /proc paths stop the task
+# container from creating the namespaces its cluster runs in. This lifts those
+# two filters only: the container stays unprivileged, with Docker's default
+# capabilities and no devices. Cloud sandboxes (VMs, Sysbox) need no overlay.
+services:
+  main:
+    security_opt:
+      - seccomp=unconfined
+      - systempaths=unconfined
+      - apparmor=unconfined
+    cgroup: private
