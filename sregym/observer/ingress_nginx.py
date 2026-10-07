@@ -25,6 +25,7 @@ class IngressNginx:
         self.run_cmd("helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx 2>/dev/null || true")
         self.run_cmd("helm repo update ingress-nginx")
 
+        self._remove_orphaned_cluster_objects()
         # Install or upgrade the chart
         self.run_cmd(
             f"helm upgrade --install {self.release_name} ingress-nginx/ingress-nginx "
@@ -35,6 +36,22 @@ class IngressNginx:
         )
         self._wait_for_ready(timeout=120)
         logger.info("Nginx ingress controller deployed successfully.")
+
+    def _remove_orphaned_cluster_objects(self) -> None:
+        """Delete the chart's cluster-scoped objects left behind by a release that no longer exists.
+
+        Deleting the ingress-nginx namespace (as cleanup between attempts does) removes the
+        release record but not its IngressClass, ClusterRoles or webhook configuration, and
+        Helm then refuses to adopt them (``metadata.managedFields must be nil``).
+        """
+        if subprocess.run(
+            f"helm status {self.release_name} -n {self.namespace}", shell=True, capture_output=True
+        ).returncode == 0:
+            return
+        self.run_cmd(
+            "kubectl delete ingressclass,clusterrole,clusterrolebinding,validatingwebhookconfiguration "
+            f"-l app.kubernetes.io/instance={self.release_name} --ignore-not-found"
+        )
 
     def _wait_for_ready(self, timeout: int = 120):
         """Wait until the ingress controller deployment is ready."""

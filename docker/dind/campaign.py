@@ -14,6 +14,8 @@ containers. --max-containers-file caps the DinD containers running host-wide acr
 """
 
 import argparse
+import contextlib
+import fcntl
 import concurrent.futures
 import datetime
 import json
@@ -34,6 +36,11 @@ def log(msg: str) -> None:
         print(f"[{datetime.datetime.now():%H:%M:%S}] {msg}", flush=True)
 
 
+def running_containers() -> list[str] | None:
+    proc = subprocess.run(["docker", "ps", "--format", "{{.Image}} {{.Names}}"], capture_output=True, text=True)
+    return proc.stdout.split("\n") if proc.returncode == 0 else None
+
+
 def wait_for_slot(args) -> None:
     """Block until fewer DinD containers run host-wide than the limit in --max-containers-file."""
     repo = args.image.split(":")[0] + ":"
@@ -42,10 +49,35 @@ def wait_for_slot(args) -> None:
             limit = int(args.max_containers_file.read_text().strip())
         except (OSError, ValueError):
             return
-        images = subprocess.run(["docker", "ps", "--format", "{{.Image}}"], capture_output=True, text=True).stdout
-        if sum(image.startswith(repo) for image in images.split()) < limit:
+        rows = running_containers()
+        # An unreadable `docker ps` counts as full, never as empty.
+        if rows is not None and sum(row.startswith(repo) for row in rows) < limit:
             return
         time.sleep(30)
+
+
+@contextlib.contextmanager
+def slot_lock(args):
+    """Serialize slot checks and container starts across threads and, via a file lock, campaigns."""
+    with SLOT_LOCK:
+        if not args.max_containers_file:
+            yield
+            return
+        with open(args.max_containers_file.with_suffix(".lock"), "w") as handle:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def wait_until_listed(name: str, proc: subprocess.Popen, timeout_s: float = 300) -> None:
+    """Return once container ``name`` shows in `docker ps` (or its run already ended)."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline and proc.poll() is None:
+        if any(row.split(" ")[-1] == name for row in running_containers() or [] if row):
+            return
+        time.sleep(2)
 
 
 def result_csvs(out: Path) -> list[Path]:
@@ -60,10 +92,7 @@ def run_problem(problem: str, args) -> dict:
         auth_copy = run_dir / "codex-auth.json"
         shutil.copyfile(AUTH, auth_copy)
         auth_copy.chmod(0o600)
-        with SLOT_LOCK:
-            wait_for_slot(args)
         name = f"{args.name_prefix}-{problem}"[:63].replace("_", "-")
-        subprocess.run(["docker", "rm", "-f", name], capture_output=True)
         command = [
             "docker", "run", "--rm", "--privileged", "--cgroupns=private", "--name", name,
             "--stop-timeout", "45", "--cpus", str(args.cpus), "--memory", args.memory,
@@ -76,10 +105,17 @@ def run_problem(problem: str, args) -> dict:
             "--model", args.model, "--judge-backend", "codex", "--n-attempts", str(args.attempts),
             *args.extra,
         ]
-        log(f"START {problem} (try {attempt}) -> {run_dir}")
-        started = time.monotonic()
         with open(run_dir / "campaign.log", "w") as handle:
-            code = subprocess.run(command, stdout=handle, stderr=subprocess.STDOUT).returncode
+            # Hold the slot lock until the new container is listed: otherwise every waiting
+            # thread passes the check before any of the containers it starts appear.
+            with slot_lock(args):
+                wait_for_slot(args)
+                subprocess.run(["docker", "rm", "-f", name], capture_output=True)
+                log(f"START {problem} (try {attempt}) -> {run_dir}")
+                started = time.monotonic()
+                proc = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT)
+                wait_until_listed(name, proc)
+            code = proc.wait()
         minutes = (time.monotonic() - started) / 60
         auth_copy.unlink(missing_ok=True)
         csvs = result_csvs(run_dir)
