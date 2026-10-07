@@ -84,6 +84,8 @@ if [ "$role" = server ]; then
     # "true". SREGym's charts select the KIND form. Kubelets cannot set
     # node-role labels themselves, and k3s sets both labels in one update after
     # registration, so relabel once its master label appears.
+    # k3s's own admin kubeconfig: the image may set KUBECONFIG for someone else.
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
     (until [ "$(kubectl get node "$name" -o 'jsonpath={.metadata.labels.node-role\.kubernetes\.io/master}' 2>/dev/null)" = true ] &&
         kubectl label node "$name" node-role.kubernetes.io/control-plane= --overwrite >/dev/null 2>&1; do
         sleep 2
