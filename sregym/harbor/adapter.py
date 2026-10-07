@@ -57,6 +57,18 @@ users: [{name: offline, user: {token: offline}}]
 """
 
 
+# Problems the unprivileged k3s cluster cannot run, with the reason. Validate a
+# problem with docker/userns-k3s/validate-sregym.sh before removing it here.
+K3S_UNSUPPORTED = {
+    "kubelet_crash": "injects its fault with docker exec into KIND node containers",
+    "kubelet_eviction_threshold_misconfig": "injects its fault with docker exec into KIND node containers",
+    "calico_route_reflector_label_drift_hotel_reservation": "needs Calico; the cluster runs flannel",
+    "pod_cidr_exhaustion_hotel_reservation": "needs Calico; the cluster runs flannel",
+    "node_conntrack_exhaustion_hotel_reservation": "writes a host-global sysctl",
+    "workload_imbalance": "replaces the kube-proxy DaemonSet; k3s has kube-proxy built in",
+}
+
+
 @dataclass
 class ProblemInfo:
     problem_id: str
@@ -123,6 +135,9 @@ def _inspect_in_this_process(problem_ids: list[str] | None) -> Inspection:
     for problem_id in problem_ids or all_ids:
         if problem_id in registry.non_emulated_cluster_problems:
             inspection.skipped[problem_id] = "requires a non-emulated cluster"
+            continue
+        if problem_id in K3S_UNSUPPORTED:
+            inspection.skipped[problem_id] = K3S_UNSUPPORTED[problem_id]
             continue
         try:
             problem = registry.get_problem(problem_id)()

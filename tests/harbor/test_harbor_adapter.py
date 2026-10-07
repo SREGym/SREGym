@@ -219,6 +219,15 @@ def test_inspection_skips_problems_that_cannot_run_on_kind():
     assert "non-emulated" in inspection.skipped["node_clock_drift_hotel_reservation"]
 
 
+def test_inspection_skips_problems_the_unprivileged_cluster_cannot_run():
+    from sregym.conductor.problems.registry import ProblemRegistry
+
+    assert set(adapter.K3S_UNSUPPORTED) <= set(ProblemRegistry().get_problem_ids(all=True))
+    inspection = adapter.inspect_problems(["network_policy_block", "kubelet_crash"])
+    assert [info.problem_id for info in inspection.eligible] == ["network_policy_block"]
+    assert "docker exec" in inspection.skipped["kubelet_crash"]
+
+
 def test_inspection_rejects_unknown_problems():
     with pytest.raises(ValueError, match="not_a_problem"):
         adapter.inspect_problems(["not_a_problem"])
