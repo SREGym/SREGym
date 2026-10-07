@@ -49,3 +49,24 @@ Notes:
 `docker/dind/campaign.py` runs one problem (N attempts) per DinD container. Every container has a
 private Docker daemon and kind cluster, so pass `--registry-mirrors` (sets `SREGYM_REGISTRY_MIRRORS`,
 see the DinD README) to avoid Docker Hub's unauthenticated pull limit.
+
+Campaigns that run at the same time need distinct `--name-prefix` values: containers are named after
+the problem, and a second campaign would otherwise remove the first one's running container. Use
+`--max-containers-file` to cap DinD containers host-wide across campaigns (the limit is re-read, so it
+can be changed while campaigns run), `--suffix .topup1` to add attempts in a separate results
+directory, and `--env KEY=VALUE` to pass settings such as `SREGYM_CLEANUP_DRAIN_TIMEOUT_S` into
+each run.
+
+## Natural-noise ablation (experiment only)
+
+`SREGYM_ABLATE_NATURAL_NOISE=1` removes three harmless properties of the larger apps that agents
+often mistake for the fault:
+
+| App | Decoy | Change |
+|---|---|---|
+| Slack Spine | svc-message holds DB connections for 150 ms (peers use 5–12 ms) | `db.hold_ms` set to 10 |
+| Frappe | the scheduler ships at 0 replicas | scheduler scaled to 1 |
+| Saleor | API and worker log schema errors while the init Job migrates | both held at 0 replicas until the Jobs finish, then released with `helm upgrade` |
+
+Default deployments are unchanged. Restarting Saleor's API after migrations is not enough: Loki
+keeps the old errors and agents query it.
