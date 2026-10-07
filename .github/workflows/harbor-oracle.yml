@@ -80,11 +80,15 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           df -h /
 
-      - name: Raise inotify limits for KIND
-        run: sudo sysctl -w fs.inotify.max_user_watches=524288 fs.inotify.max_user_instances=512
+      - name: Prepare the runner for the task's cluster
+        # k3s needs inotify watches. Ubuntu 24.04's AppArmor stops a container
+        # without CAP_SYS_ADMIN from creating the user namespace it runs in.
+        run: |
+          sudo sysctl -w fs.inotify.max_user_watches=524288 fs.inotify.max_user_instances=512
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
-      - name: Build the sidecar image
-        run: python3 docker/dind/run.py build --image sregym-dind:ci
+      - name: Build the task image
+        run: docker build -f docker/harbor/Dockerfile -t sregym-harbor:ci .
 
       - name: Install uv
         uses: astral-sh/setup-uv@v4
@@ -96,26 +100,22 @@ jobs:
         # Sized for the 4-CPU, 16 GiB runner.
         run: |
           uv run --frozen python -m sregym.harbor.adapter --task-ids "$PROBLEM" --output-dir "$TASKS" \
-            --backend-image sregym-dind:ci --cpus 4 --memory-mb 12288 --storage-mb 40960
+            --backend-image sregym-harbor:ci --cpus 4 --memory-mb 12288 --storage-mb 40960
 
       - name: Oracle agent scores 1
         run: |
           # The adapter saved this dataset's oracle secret beside its tasks.
           export SREGYM_ORACLE_SECRET="$(cat "$TASKS/.sregym-oracle-secret")"
-          harbor run -y -q -p "$TASKS" -a oracle -e docker -o "$JOBS" --job-name oracle
+          harbor run -y -q -p "$TASKS" -a oracle -e docker --extra-docker-compose "$GITHUB_WORKSPACE/docker/harbor/local-docker.yaml" -o "$JOBS" --job-name oracle
           python3 .github/scripts/harbor_rewards.py "$JOBS/oracle" 1
 
       - name: No-op agent scores 0
         if: inputs.check_nop
         run: |
-          harbor run -y -q -p "$TASKS" -a nop -e docker -o "$JOBS" --job-name nop
+          harbor run -y -q -p "$TASKS" -a nop -e docker --extra-docker-compose "$GITHUB_WORKSPACE/docker/harbor/local-docker.yaml" -o "$JOBS" --job-name nop
           python3 .github/scripts/harbor_rewards.py "$JOBS/nop" 0
 
-      - name: Show sidecar host summary
-        if: always()
-        run: bash .github/scripts/harbor_diagnostics.sh "$JOBS"
-
-      - name: Show sidecar logs
+      - name: Show setup and backend logs
         if: failure()
         run: bash .github/scripts/harbor_diagnostics.sh "$JOBS" --logs
 
