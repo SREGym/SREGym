@@ -37,6 +37,9 @@ kubectl get nodes
 stage="SREGym backend"
 trap - ERR
 cd /opt/sregym
+# Social Network's ID services read eth0's MAC from sysfs, which pods cannot
+# read under Sysbox; its chart then mounts this one instead. Same on every host.
+export SREGYM_FIXED_MAC_ADDRESS=02:42:ac:11:00:02
 SREGYM_PROBLEM_ID=$(cat /etc/sregym/problem) \
 SREGYM_ORACLE_TOKEN_SHA256=$(cat /etc/sregym/oracle-token-sha256) \
     exec python -m sregym.harbor.backend --advertise-host 127.0.0.1 --shared-dir "$shared" --output-dir "$out"

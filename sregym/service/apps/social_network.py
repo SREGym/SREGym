@@ -1,6 +1,8 @@
 """Interface to the social network application from DeathStarBench"""
 
 import logging
+import os
+import shlex
 
 from sregym.generators.workload.wrk2 import Wrk2, Wrk2WorkloadManager
 from sregym.paths import SOCIAL_NETWORK_METADATA, TARGET_MICROSERVICES
@@ -10,6 +12,19 @@ from sregym.service.helm import Helm
 from sregym.service.kubectl import KubeCtl
 
 logger = logging.getLogger("all.sregym.social_network")
+
+
+def chart_set_values() -> dict[str, str]:
+    """Helm --set values every install or upgrade of the chart must carry.
+
+    SREGYM_FIXED_MAC_ADDRESS gives the services that derive their machine ID
+    from eth0's MAC a fixed one, for hosts whose pods cannot read
+    /sys/class/net/eth0/address (Sysbox sandboxes such as Daytona).
+    """
+    mac = os.environ.get("SREGYM_FIXED_MAC_ADDRESS", "").strip()
+    return {"global.fixedMacAddress": mac} if mac else {}
+
+
 logger.propagate = True
 logger.setLevel(logging.DEBUG)
 
@@ -60,7 +75,8 @@ class SocialNetwork(Application):
         """Deploy the same multiarch images on AMD64 and ARM64 nodes."""
         self.create_namespace()
         self.create_tls_secret()
-        Helm.install(**self.helm_configs)
+        extra_args = [f"--set {key}={shlex.quote(value)}" for key, value in chart_set_values().items()]
+        Helm.install(**{**self.helm_configs, "extra_args": [*self.helm_configs.get("extra_args", []), *extra_args]})
         Helm.assert_if_deployed(self.helm_configs["namespace"])
 
     def delete(self):
