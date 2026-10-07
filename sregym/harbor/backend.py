@@ -26,6 +26,7 @@ import hmac
 import json
 import logging
 import os
+import secrets
 import shutil
 import signal
 import tempfile
@@ -153,12 +154,14 @@ class Backend:
         shared_dir: Path,
         output_dir: Path,
         oracle_token_sha256: str | None,
+        grade_token: str | None = None,
     ):
         self.session = session
         self.problem_id = problem_id
         self.shared_dir = shared_dir
         self.output_dir = output_dir
         self.oracle_token_sha256 = (oracle_token_sha256 or "").strip().lower() or None
+        self.grade_token = grade_token
         self.state = protocol.STATE_STARTING
         self.error: str | None = None
         # Grading, recovery and setup all act on the live cluster; never overlap them.
@@ -293,7 +296,11 @@ class Backend:
         except RuntimeError as exc:
             return HTTPStatus.CONFLICT, {"error": str(exc)}
 
-    def _grade_route(self, _request) -> tuple[int, dict]:
+    def _grade_route(self, request) -> tuple[int, dict]:
+        if self.grade_token:
+            scheme, _, token = (request.headers.get("Authorization") or "").partition(" ")
+            if scheme.lower() != "bearer" or not hmac.compare_digest(token.strip(), self.grade_token):
+                return HTTPStatus.FORBIDDEN, {"error": "grading requires the trial's grade token"}
         return HTTPStatus.OK, self.grade()
 
     def start_servers(self, *, api_host: str, api_port: int, grade_port: int) -> None:
@@ -331,7 +338,10 @@ def parse_args(argv=None):
 def main(argv=None) -> int:
     args = parse_args(argv)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    args.output_dir.chmod(0o700)
     args.shared_dir.mkdir(parents=True, exist_ok=True)
+    grade_token = secrets.token_urlsafe(32)
+    _write_atomic(args.output_dir / Path(protocol.GRADE_TOKEN_PATH).name, grade_token + "\n", mode=0o600)
     # init_logger() writes its file under AGENT_LOGS_DIR.
     os.environ.setdefault("AGENT_LOGS_DIR", protocol.LOG_DIR)
     os.environ.setdefault("MCP_SERVER_PORT", "9954")
@@ -359,6 +369,7 @@ def main(argv=None) -> int:
         shared_dir=args.shared_dir,
         output_dir=args.output_dir,
         oracle_token_sha256=os.environ.get(protocol.ORACLE_TOKEN_SHA256_ENV),
+        grade_token=grade_token,
     )
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, request_stop)

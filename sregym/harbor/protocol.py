@@ -25,6 +25,9 @@ STATUS_NAME = "status.json"
 # the same path inside the separate verifier container.
 BACKEND_OUTPUT_DIR = "/sregym-harbor"
 GRADE_PATH = f"{BACKEND_OUTPUT_DIR}/grade.json"
+# Root-only bearer token for POST /grade, generated per trial. The agent may share
+# the backend's loopback, so grading must not be open to it.
+GRADE_TOKEN_PATH = f"{BACKEND_OUTPUT_DIR}/grade-token"
 LOG_DIR = f"{BACKEND_OUTPUT_DIR}/logs"
 
 # Backend configuration read from the sidecar environment.

@@ -5,10 +5,11 @@ Usage:
     uv run python -m sregym.harbor.adapter --suite sregym-lite --output-dir datasets/sregym-lite
     uv run python -m sregym.harbor.adapter --task-ids network_policy_block incorrect_image
 
-Each generated task pairs an agent container with a privileged ``sregym``
-sidecar that runs the prebuilt DinD image (``docker/dind``). The sidecar
-deploys the problem and grades it with the problem's mitigation oracle; see
-``sregym/harbor/backend.py`` and ``docs/harbor.md``.
+Each generated task is one unprivileged container built on the SREGym Harbor
+image (``docker/harbor``): a four-node k3s cluster, the backend that deploys the
+problem and grades it with the problem's mitigation oracle, and the agent, which
+runs as an unprivileged user. See ``sregym/harbor/backend.py`` and
+``docs/harbor.md``.
 
 Problem metadata is read by constructing each problem against a placeholder
 kubeconfig, so no cluster is needed. Problems that cannot run in the per-task
@@ -37,11 +38,7 @@ from sregym.harbor import protocol, selftest
 TEMPLATE_DIR = Path(__file__).parent / "task-template"
 DATASET_README = Path(__file__).parent / "dataset-readme.md"
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BACKEND_IMAGE = "ghcr.io/sregym/sregym-dind:latest"
-DEFAULT_KUBECTL_VERSION = "v1.32.1"
-# Google's public Docker Hub cache. Parallel trials otherwise exhaust Docker
-# Hub's anonymous pull limit; images it lacks are pulled from Docker Hub.
-DEFAULT_REGISTRY_MIRROR = "https://mirror.gcr.io"
+DEFAULT_BACKEND_IMAGE = "ghcr.io/sregym/sregym-harbor:latest"
 # SREGym's own runner gives agents 1800s per attempt.
 DEFAULT_AGENT_TIMEOUT_S = 1800
 # Default oracle budget: the base mitigation oracle waits up to 60s for
@@ -102,7 +99,7 @@ _DATASET_TEXT = {
     SELFTEST_DATASET_NAME: (
         "SREGym Harbor self-test",
         "A single small task that checks whether a Harbor environment can run SREGym: "
-        "the privileged sidecar, its KIND cluster, the API proxy, grading and the "
+        "its unprivileged cluster, the API proxy, grading and the "
         "reference solution. It takes a few minutes.",
     ),
 }
@@ -251,8 +248,6 @@ class SREGymAdapter:
         cpus: int = 8,
         memory_mb: int = 16384,
         storage_mb: int = 51200,
-        registry_mirror: str = DEFAULT_REGISTRY_MIRROR,
-        kind_node_image: str = "",
         dataset_name: str = DEFAULT_DATASET_NAME,
     ):
         self.output_dir = output_dir
@@ -265,8 +260,6 @@ class SREGymAdapter:
         self.cpus = cpus
         self.memory_mb = memory_mb
         self.storage_mb = storage_mb
-        self.registry_mirror = registry_mirror
-        self.kind_node_image = kind_node_image
         self.dataset_name = dataset_name
         self._oracle_secret: str | None = None
         self.oracle_secret_file: Path | None = None
@@ -304,9 +297,6 @@ class SREGymAdapter:
             "ready_timeout": f"{float(READY_WAIT_S + 60)}",
             "ready_retries": str(READY_BUDGET_S // READY_WAIT_S),
             "backend_image": self.backend_image,
-            "registry_mirror": self.registry_mirror,
-            "kind_node_image": self.kind_node_image,
-            "kubectl_version": DEFAULT_KUBECTL_VERSION,
             "oracle_secret_env": protocol.ORACLE_SECRET_ENV,
             "oracle_token_sha256": hashlib.sha256(
                 oracle_token(self.oracle_secret, task_name(info.problem_id)).encode()
@@ -315,6 +305,7 @@ class SREGymAdapter:
             "api_port": str(protocol.API_PORT),
             "grade_port": str(protocol.GRADE_PORT),
             "grade_path": protocol.GRADE_PATH,
+            "grade_token_path": protocol.GRADE_TOKEN_PATH,
             "log_dir": protocol.LOG_DIR,
             "agent_shared_dir": protocol.AGENT_SHARED_DIR,
             "backend_shared_dir": protocol.BACKEND_SHARED_DIR,
@@ -395,17 +386,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--backend-image",
         default=DEFAULT_BACKEND_IMAGE,
-        help="SREGym DinD image for the sidecar; SREGYM_HARBOR_IMAGE overrides it when a task runs",
-    )
-    parser.add_argument(
-        "--registry-mirror",
-        default=DEFAULT_REGISTRY_MIRROR,
-        help="Docker Hub pull-through mirror for the sidecar and KIND nodes; pass '' to pull from Docker Hub directly",
-    )
-    parser.add_argument(
-        "--kind-node-image",
-        default="",
-        help="Prebuilt KIND node image (built from kind/Dockerfile); by default each trial builds it during setup",
+        help="SREGym Harbor image (docker/harbor) the task image is built on",
     )
     parser.add_argument(
         "--dataset-name",
@@ -414,9 +395,9 @@ def main(argv=None) -> int:
         f"or {DEFAULT_DATASET_NAME})",
     )
     parser.add_argument("--agent-timeout", type=int, default=DEFAULT_AGENT_TIMEOUT_S, help="Agent time limit (s)")
-    parser.add_argument("--cpus", type=int, default=8, help="CPUs requested for the task's whole Compose stack")
-    parser.add_argument("--memory-mb", type=int, default=16384, help="Memory requested for the whole stack")
-    parser.add_argument("--storage-mb", type=int, default=51200, help="Disk requested for the whole stack")
+    parser.add_argument("--cpus", type=int, default=8, help="CPUs requested for the task container")
+    parser.add_argument("--memory-mb", type=int, default=16384, help="Memory requested for the task container")
+    parser.add_argument("--storage-mb", type=int, default=51200, help="Disk requested for the task container")
     args = parser.parse_args(argv)
 
     task_ids = list(PROBLEM_SETS[args.suite]) if args.suite else args.task_ids
@@ -439,8 +420,6 @@ def main(argv=None) -> int:
         cpus=args.cpus,
         memory_mb=args.memory_mb,
         storage_mb=args.storage_mb,
-        registry_mirror=args.registry_mirror,
-        kind_node_image=args.kind_node_image,
         dataset_name=dataset_name,
     )
     try:

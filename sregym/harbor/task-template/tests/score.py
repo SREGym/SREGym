@@ -1,9 +1,9 @@
 """Turn the SREGym mitigation verdict into a Harbor reward.
 
-The grade is produced inside the sregym sidecar by the problem's mitigation
-oracle and collected as an artifact. A missing or unusable grade is an
-infrastructure failure, so no reward is written and Harbor records an error
-instead of scoring the agent zero.
+The grade is produced by the SREGym backend in this container, with the
+problem's mitigation oracle. A missing or unusable grade is an infrastructure
+failure, so no reward is written and Harbor records an error instead of scoring
+the agent zero.
 """
 
 import json
@@ -18,7 +18,7 @@ def main() -> int:
     try:
         grade = json.loads(GRADE.read_text())
     except FileNotFoundError:
-        print(f"No grade was collected from the SREGym sidecar ({GRADE}).", file=sys.stderr)
+        print(f"The SREGym backend wrote no grade ({GRADE}).", file=sys.stderr)
         return 1
     except json.JSONDecodeError as exc:
         print(f"Unreadable SREGym grade: {exc}", file=sys.stderr)

@@ -10,7 +10,6 @@ import tomllib
 from pathlib import Path
 
 import pytest
-import yaml
 
 from sregym.harbor import adapter, protocol
 from sregym.harbor.adapter import ProblemInfo, SREGymAdapter
@@ -45,81 +44,64 @@ def test_generated_task_is_complete_and_parses(task_dir):
         "instruction.md",
         "task.toml",
         "environment/Dockerfile",
-        "environment/docker-compose.yaml",
-        "environment/sregym-ready",
         "solution/solve.sh",
-        "tests/Dockerfile",
         "tests/test.sh",
         "tests/score.py",
     }
-    for executable in ("solution/solve.sh", "tests/test.sh", "environment/sregym-ready"):
+    for executable in ("solution/solve.sh", "tests/test.sh"):
         assert (task_dir / executable).stat().st_mode & 0o111
 
     config = tomllib.loads((task_dir / "task.toml").read_text())
     assert config["task"]["name"] == "sregym/wrong-service-selector-hotel-reservation"
     assert config["metadata"]["sregym_problem_id"] == "wrong_service_selector_hotel_reservation"
-    assert config["verifier"]["environment_mode"] == "separate"
-    [hook] = config["verifier"]["collect"]
-    assert hook["service"] == protocol.SERVICE_NAME
-    assert f"127.0.0.1:{protocol.GRADE_PORT}/grade" in hook["command"]
-    assert {"source": protocol.GRADE_PATH, "service": protocol.SERVICE_NAME} in config["artifacts"]
     assert config["environment"]["healthcheck"]["command"].startswith("sregym-ready ")
+    assert {"source": protocol.GRADE_PATH} in config["artifacts"]
+    # One container: the verifier grades in it as root, the agent runs unprivileged.
+    assert config["verifier"]["environment_mode"] == "shared"
+    assert "user" not in config["verifier"]
+    assert config["agent"]["user"] == "agent"
 
-    compose = yaml.safe_load((task_dir / "environment/docker-compose.yaml").read_text())
-    backend = compose["services"][protocol.SERVICE_NAME]
-    assert backend["privileged"] is True
-    assert backend["image"] == "${SREGYM_HARBOR_IMAGE:-example.test/sregym:1}"
-    assert backend["environment"][protocol.PROBLEM_ID_ENV] == "wrong_service_selector_hotel_reservation"
-    # The agent never gets the backend's privileges or writable shared state.
-    main = compose["services"]["main"]
-    assert "privileged" not in main
-    assert main["volumes"] == [f"sregym-shared:{protocol.AGENT_SHARED_DIR}:ro"]
-
-
-def test_sidecar_defaults_suit_cloud_providers(task_dir):
-    compose = yaml.safe_load((task_dir / "environment/docker-compose.yaml").read_text())
-    environment = compose["services"][protocol.SERVICE_NAME]["environment"]
-    # Overridable when the task runs; an empty value disables the mirror.
-    assert environment["SREGYM_REGISTRY_MIRROR"] == f"${{SREGYM_REGISTRY_MIRROR-{adapter.DEFAULT_REGISTRY_MIRROR}}}"
-    assert environment["SREGYM_KIND_NODE_IMAGE"] == "${SREGYM_KIND_NODE_IMAGE-}"
-    # Setup diagnostics land in the collected log directory, and a failed
-    # setup is reported through the shared state the healthcheck reads.
-    assert environment["SREGYM_DIND_RESULTS"].startswith(protocol.LOG_DIR + "/")
-    assert environment["SREGYM_FAILURE_STATE_DIR"] == protocol.BACKEND_SHARED_DIR
-    assert int(environment["SREGYM_HOLD_ON_FAILURE_S"]) > 0
+    test_sh = (task_dir / "tests/test.sh").read_text()
+    assert "pkill -KILL -u agent" in test_sh
+    assert f"127.0.0.1:{protocol.GRADE_PORT}/grade" in test_sh
+    assert protocol.GRADE_TOKEN_PATH in test_sh
 
 
-def test_mirror_and_node_image_can_be_set(tmp_path):
-    task = SREGymAdapter(tmp_path, registry_mirror="", kind_node_image="example.test/node:1").generate_task(_info())
-    environment = yaml.safe_load((task / "environment/docker-compose.yaml").read_text())["services"][
-        protocol.SERVICE_NAME
-    ]["environment"]
-    assert environment["SREGYM_REGISTRY_MIRROR"] == "${SREGYM_REGISTRY_MIRROR-}"
-    assert environment["SREGYM_KIND_NODE_IMAGE"] == "${SREGYM_KIND_NODE_IMAGE-example.test/node:1}"
+def test_task_image_keeps_the_problem_root_only(task_dir):
+    dockerfile = (task_dir / "environment/Dockerfile").read_text()
+    assert dockerfile.splitlines()[3] == "FROM example.test/sregym:1"
+    assert "echo 'wrong_service_selector_hotel_reservation' > /etc/sregym/problem" in dockerfile
+    assert "install -d -m 700 /etc/sregym" in dockerfile
+    assert "chmod 600 /etc/sregym/problem" in dockerfile
+    # Nothing in the files that configure the container asks for privileges.
+    for name in ("task.toml", "environment/Dockerfile"):
+        assert "privileged" not in (task_dir / name).read_text().replace("unprivileged", ""), name
 
 
-def test_dind_setup_failures_use_the_backend_state_files(tmp_path):
-    # The DinD entrypoint fails before the backend exists, so it writes the
-    # backend's state files itself; sregym-ready must read them the same way.
-    script = (ROOT / "docker/dind/entrypoint.sh").read_text()
-    function = re.search(r"^report_setup_failure\(\) \{\n.*?^\}\n", script, re.S | re.M).group(0)
+def test_setup_failures_use_the_backend_state_files(tmp_path):
+    # start.sh fails before the backend exists, so it writes the backend's
+    # state files itself; sregym-ready must read them the same way.
+    script = (ROOT / "docker/harbor/start.sh").read_text()
+    function = re.search(r"^fail\(\) \{\n.*?^\}\n", script, re.S | re.M).group(0)
     shared = tmp_path / "shared"
+    shared.mkdir()
     subprocess.run(
-        ["bash", "-c", function + 'stage="KIND cluster"; results=/logs; report_setup_failure 3'],
-        env={**os.environ, "SREGYM_FAILURE_STATE_DIR": str(shared), "SREGYM_HOLD_ON_FAILURE_S": "0"},
+        ["bash", "-c", f"shared={shared}; out=/out; " + function + 'stage="cluster"; fail'],
         check=True,
         capture_output=True,
     )
     assert (shared / protocol.STATE_NAME).read_text().strip() == protocol.STATE_FAILED
     status = json.loads((shared / protocol.STATUS_NAME).read_text())
     assert status["state"] == protocol.STATE_FAILED
-    assert "KIND cluster" in status["error"]
+    assert "cluster" in status["error"]
+    ready = (ROOT / "docker/harbor/sregym-ready").read_text()
+    assert f"$shared/{protocol.STATE_NAME}" in ready and f"$shared/{protocol.STATUS_NAME}" in ready
 
 
 def test_only_the_oracle_secret_unlocks_recovery(task_dir, tmp_path):
     secret = (tmp_path / protocol.ORACLE_SECRET_FILE).read_text().strip()
-    compose = yaml.safe_load((task_dir / "environment/docker-compose.yaml").read_text())
-    expected = compose["services"][protocol.SERVICE_NAME]["environment"][protocol.ORACLE_TOKEN_SHA256_ENV]
+    dockerfile = (task_dir / "environment/Dockerfile").read_text()
+    expected = re.search(r"echo '([0-9a-f]{64})' > /etc/sregym/oracle-token-sha256", dockerfile).group(1)
     token = adapter.oracle_token(secret, task_dir.name)
     assert hashlib.sha256(token.encode()).hexdigest() == expected
 
@@ -162,9 +144,9 @@ def test_oracle_secret_comes_from_the_environment_or_the_dataset_root(tmp_path, 
 
 
 def test_agent_visible_files_do_not_reveal_the_problem(task_dir):
-    # instruction.md and the agent image are what the agent sees; the Compose
-    # file and task.toml stay on the Harbor host.
-    for name in ("instruction.md", "environment/Dockerfile", "environment/sregym-ready"):
+    # instruction.md is what the agent sees; the task directory stays on the
+    # Harbor host, and the image keeps the problem in a root-only file.
+    for name in ("instruction.md",):
         text = (task_dir / name).read_text().lower()
         assert "wrong_service_selector" not in text
         assert "selector" not in text

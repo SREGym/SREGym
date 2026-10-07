@@ -11,6 +11,7 @@ from sregym.harbor import protocol
 from sregym.harbor.backend import Backend
 
 TOKEN = "reference-solution-token"
+GRADE_TOKEN = "grade-token"
 
 
 class FakeSession:
@@ -48,6 +49,7 @@ def make_backend(tmp_path):
             shared_dir=tmp_path / "shared",
             output_dir=tmp_path / "output",
             oracle_token_sha256=hashlib.sha256(TOKEN.encode()).hexdigest(),
+            grade_token=GRADE_TOKEN,
         )
         return backend, session
 
@@ -151,7 +153,10 @@ def test_http_routes(make_backend):
         assert _request(public, "POST", "/oracle/recover")[0] == 403
         assert _request(public, "POST", "/oracle/recover", token="wrong")[0] == 403
         assert _request(public, "POST", "/oracle/recover", token=TOKEN)[0] == 200
-        status, grade = _request(local, "POST", "/grade")
+        # The agent may share the loopback; grading needs the root-only grade token.
+        assert _request(local, "POST", "/grade")[0] == 403
+        assert _request(local, "POST", "/grade", token=TOKEN)[0] == 403
+        status, grade = _request(local, "POST", "/grade", token=GRADE_TOKEN)
         assert status == 200 and grade["success"] is True
         assert _request(public, "POST", "/oracle/recover", token=TOKEN)[0] == 409
     finally:

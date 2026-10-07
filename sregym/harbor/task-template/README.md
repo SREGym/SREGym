@@ -10,13 +10,13 @@ healthy again after the agent stops, and 0.0 otherwise.
 
 ## Runtime
 
-A privileged `sregym` sidecar runs its own Docker daemon and a four-node KIND
-cluster, deploys the application and injects the fault. The agent reaches the
-cluster only through a filtered Kubernetes API proxy.
+One unprivileged container runs everything: a four-node k3s cluster, the
+application and SREGym's grader. It needs no `--privileged`, added capabilities
+or devices. The agent runs as an unprivileged user and reaches the cluster only
+through a filtered Kubernetes API proxy.
 
-The task needs a Harbor environment that runs Docker Compose with privileged
-services, such as `docker`, `ec2`, `gke` (Standard) or `daytona`. Request about
-{{cpus}} CPUs, {{memory_mb}} MiB of memory and {{storage_mb}} MiB of disk.
-Setup pulls images and Helm charts and takes 5 to 30 minutes before the agent
-starts. See the
+The container's root must be able to create namespaces and mount cgroups, as in
+the VM and Sysbox sandboxes of Harbor's cloud environments (`daytona` included).
+Request about {{cpus}} CPUs, {{memory_mb}} MiB of memory and {{storage_mb}} MiB
+of disk. Setup pulls images and Helm charts before the agent starts. See the
 [Harbor guide](https://github.com/SREGym/SREGym/blob/main/docs/harbor.md).

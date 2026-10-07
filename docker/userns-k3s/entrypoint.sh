@@ -3,6 +3,11 @@
 # and no devices. Everything Kubernetes needs happens inside a user namespace.
 set -e
 lib=/usr/local/lib/userns-k3s
+# Images that keep k3s's binaries outside /bin (the Harbor task image) name the
+# directory here. They go last, so the image's own tools win over busybox's.
+if [ -n "${K3S_BIN:-}" ]; then
+    export PATH="/var/lib/rancher/k3s/data/cni:$PATH:$K3S_BIN:$K3S_BIN/aux"
+fi
 mkdir -p /run/outer
 # The only way into the cluster: container :6443 -> unix socket -> API server.
 # Unix sockets cross network namespaces. Start this before unshare, which moves
