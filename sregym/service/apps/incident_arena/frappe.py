@@ -24,13 +24,19 @@ class Frappe(IncidentArenaApplication):
     SITE_NAME = "svc-frappe-web"
     GUNICORN_DEPLOYMENT = "erp-gunicorn"
     WORKER_DEPLOYMENT = "erp-worker-l"
-    # The overlay ships the scheduler at 0 replicas, which agents read as an outage.
-    NOISE_ABLATION_VALUES = {"erpnext": {"worker": {"scheduler": {"replicaCount": 1}}}}
 
     def __init__(self):
         super().__init__(FRAPPE_METADATA)
         self.frontend_service = "svc-frappe-web"
         self.frontend_port = 8000
+
+    def after_jobs(self) -> None:
+        """Enable the site scheduler: new sites start with it off, which reads as a broken system."""
+        self.wait_rollout("deploy", self.GUNICORN_DEPLOYMENT)
+        self.site_python(
+            "from frappe.utils.scheduler import enable_scheduler\nenable_scheduler()\nfrappe.db.commit()\n"
+            "print(frappe.utils.scheduler.is_scheduler_disabled())"
+        )
 
     # ------------------------------------------------------------------ data-plane helpers
     def mysql(self, sql: str, timeout: float = 60) -> str:

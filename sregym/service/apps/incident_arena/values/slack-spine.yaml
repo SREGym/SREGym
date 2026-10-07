@@ -47,6 +47,15 @@ gradingHarness:
   answerKey:
     enabled: true
 
+# The chart holds svc-message's DB connection for 150 ms per request while
+# every other role holds it for 5-12 ms; the outlier reads as a fault, so
+# bring it in line with its peers.
+app:
+  roles:
+    message:
+      db:
+        hold_ms: 10
+
 sregym:
   enabled: true
   loadgenLabels:

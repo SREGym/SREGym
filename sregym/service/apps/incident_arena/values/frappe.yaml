@@ -2,7 +2,7 @@
 #
 # Deploys the healthy Frappe site with the images pinned by the Incident Arena
 # tasks and the workload shape every Frappe task shares (one supervised long
-# worker, no scheduler/socketio), drops the Harbor harness (agent foothold,
+# worker and the scheduler, no socketio), drops the Harbor harness (agent foothold,
 # egress proxy, DNS filter, in-chart Prometheus/Loki/obs-mcp) in favour of
 # SREGym's own observability stack, and replaces the foothold with an operator
 # toolbox. Problems layer their load profile and fault values on top.
@@ -61,8 +61,10 @@ erpnext:
           cpu: 250m
         limits:
           cpu: 1000m
+    # A scheduler at zero replicas (and the site's scheduler off) reads as an
+    # outage to an investigator; run it as a real deployment would.
     scheduler:
-      replicaCount: 0
+      replicaCount: 1
   socketio:
     replicaCount: 0
 

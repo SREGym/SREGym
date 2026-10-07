@@ -57,16 +57,13 @@ can be changed while campaigns run), `--suffix .topup1` to add attempts in a sep
 directory, and `--env KEY=VALUE` to pass settings such as `SREGYM_CLEANUP_DRAIN_TIMEOUT_S` into
 each run.
 
-## Natural-noise ablation (experiment only)
+## Fixed environment decoys
 
-`SREGYM_ABLATE_NATURAL_NOISE=1` removes three harmless properties of the larger apps that agents
-often mistake for the fault:
+Three harmless-looking properties of the larger apps made agents blame them instead of the
+injected fault. They are fixed in the default deployment:
 
-| App | Decoy | Change |
+| App | Was | Now |
 |---|---|---|
-| Slack Spine | svc-message holds DB connections for 150 ms (peers use 5–12 ms) | `db.hold_ms` set to 10 |
-| Frappe | the scheduler ships at 0 replicas | scheduler scaled to 1 |
-| Saleor | API and worker log schema errors while the init Job migrates | both held at 0 replicas until the Jobs finish, then released with `helm upgrade` |
-
-Default deployments are unchanged. Restarting Saleor's API after migrations is not enough: Loki
-keeps the old errors and agents query it.
+| Slack Spine | svc-message held its DB connection for 150 ms per request (peers 5–12 ms) | `db.hold_ms` 10 (`values/slack-spine.yaml`) |
+| Frappe | scheduler Deployment at 0 replicas and the site's scheduler disabled | scheduler runs and is enabled on the site |
+| Saleor | API and worker started during the init Job's migrations and logged schema errors that stay in Loki | both start once the Jobs finish |

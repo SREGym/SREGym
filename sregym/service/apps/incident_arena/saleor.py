@@ -26,20 +26,17 @@ class Saleor(IncidentArenaApplication):
         self.frontend_service = "svc-saleor-api"
         self.frontend_port = 8000
 
-    # The API and worker start while the init Job is still migrating, and the
-    # early "does not exist" errors stay in Loki. Hold both at zero until then.
-    NOISE_ABLATION_VALUES = {"saleor": {"api": {"replicaCount": 0}, "worker": {"replicaCount": 0}}}
+    # The API and worker would start while the init Job is still migrating and
+    # log schema errors ("does not exist") that stay in Loki and read as a
+    # fault. Install them at zero replicas and start them once the Job is done.
+    HELD_UNTIL_MIGRATED = ("api", "worker")
 
-    def remove_runtime_noise(self) -> None:
-        """Start the API and worker only after migrations, through Helm so its values stay consistent."""
-        self.configure({"saleor": {"api": {"replicaCount": 1}, "worker": {"replicaCount": 1}}})
-        overrides = self._write_overrides()
-        cfg = self.helm_configs
-        self.kubectl.exec_command_checked(
-            f"helm upgrade {cfg['release_name']} {cfg['chart_path']} -n {self.namespace} "
-            f"-f {self.values_file} -f {overrides}",
-            timeout=600,
-        )
+    def deploy(self):
+        self.configure({"saleor": {name: {"replicaCount": 0} for name in self.HELD_UNTIL_MIGRATED}})
+        super().deploy()
+
+    def after_jobs(self) -> None:
+        self.helm_upgrade({"saleor": {name: {"replicaCount": 1} for name in self.HELD_UNTIL_MIGRATED}})
 
     def psql(self, sql: str, user: str | None = None, password: str | None = None, timeout: float = 60) -> str:
         """Run SQL over TCP inside the PostgreSQL pod; unaligned, tuples only."""
