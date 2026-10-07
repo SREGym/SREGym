@@ -55,7 +55,7 @@ def test_generated_task_is_complete_and_parses(task_dir):
     assert config["task"]["name"] == "sregym/wrong-service-selector-hotel-reservation"
     assert config["metadata"]["sregym_problem_id"] == "wrong_service_selector_hotel_reservation"
     assert config["environment"]["healthcheck"]["command"].startswith("sregym-ready ")
-    assert {"source": protocol.GRADE_PATH} in config["artifacts"]
+    assert config["artifacts"] == [{"source": protocol.LOG_DIR}]
     # One container: the verifier grades in it as root, the agent runs unprivileged.
     assert config["verifier"]["environment_mode"] == "shared"
     assert "user" not in config["verifier"]

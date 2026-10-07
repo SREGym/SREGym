@@ -1,9 +1,9 @@
 schema_version = "1.4"
 
-# Backend logs and the grade, copied out of the container for inspection.
+# Setup and backend logs, copied out of the container for inspection. The
+# verifier prints the grade itself: it is written after artifacts are collected.
 artifacts = [
     { source = "{{log_dir}}" },
-    { source = "{{grade_path}}" },
 ]
 
 [task]
