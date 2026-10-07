@@ -18,6 +18,14 @@ fi
 # it holds CAP_SETUID). Root inside it has full capabilities, but only over the
 # namespaces it owns. The fabric keeps the container's PID namespace so it can
 # move every process when it delegates cgroup v2 controllers.
-exec unshare --user --map-users=0:0:65536 --map-groups=0:0:65536 --setgroups=allow \
+#
+# A container that already runs in a user namespace (Sysbox, as on Daytona)
+# skips this: its root already owns its namespaces, and a nested user namespace
+# cannot mount the fresh procfs every node needs.
+userns="--user --map-users=0:0:65536 --map-groups=0:0:65536 --setgroups=allow"
+if ! grep -qE '^ +0 +0 +4294967295$' /proc/self/uid_map; then
+    userns=""
+fi
+exec unshare $userns \
     --mount --net --cgroup --uts --ipc --propagation=private \
     /bin/sh $lib/fabric.sh
