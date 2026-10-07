@@ -1,41 +1,11 @@
 #!/bin/sh
-# Give every container a working, read-only /sys, then run the real runc.
-#
-# A container's /sys must be a sysfs of its pod's network namespace, or
-# /sys/class/net shows the wrong interfaces. Mounted by runc inside the
-# container, it is broken here: the kernel lets a nested user namespace mount
-# sysfs read-only only ("mount too revealing"), and under Sysbox (Daytona)
-# /sys/class/net/eth0/address then cannot be read, which Social Network's
-# services need. So mount a fresh read-only sysfs in the pod's network namespace
-# from the node, and bind it into the container in place of its sysfs mount.
-real="$(dirname "$0")/runc.real"
-base=/run/userns-k3s-sysfs
+# Docker mounts the outer /sys read-only, and the kernel then lets a nested user
+# namespace mount sysfs only read-only ("mount too revealing"). Privileged pods
+# (CNI, chaos daemons, node exporters) request a read-write /sys, so rewrite that
+# one mount to read-only and pass everything else straight through to runc.
 bundle=""; prev=""
 for a in "$@"; do [ "$prev" = "--bundle" ] && bundle="$a"; prev="$a"; done
-config="$bundle/config.json"
-if [ -n "$bundle" ] && [ -f "$config" ]; then
-    netns=$(sed -n 's/.*"type":"network","path":"\([^"]*\)".*/\1/p' "$config")
-    if [ -n "$netns" ] && [ -e "$netns" ]; then
-        # Keyed by the namespace's inode: a pod's containers name it by
-        # /var/run/netns/<name> or by /proc/<pid>/ns/net.
-        dir="$base/$(stat -L -c %i "$netns")"
-        if ! mountpoint -q "$dir" 2>/dev/null; then
-            mkdir -p "$dir"
-            nsenter --net="$netns" mount -t sysfs -o ro,nosuid,nodev,noexec sysfs "$dir"
-        fi
-        sed -i "s#\"destination\":\"/sys\",\"type\":\"sysfs\",\"source\":\"sysfs\",\"options\":\[[^]]*\]#\"destination\":\"/sys\",\"type\":\"bind\",\"source\":\"$dir\",\"options\":[\"rbind\",\"ro\",\"nosuid\",\"nodev\",\"noexec\"]#" "$config"
-    else
-        # No pod network namespace to mount from: keep runc's own sysfs mount,
-        # read-only as a nested user namespace requires.
-        sed -i 's#\("destination":"/sys","type":"sysfs","source":"sysfs","options":\[[^]]*\)"rw"\]#\1"ro"]#' "$config"
-    fi
+if [ -n "$bundle" ] && [ -f "$bundle/config.json" ]; then
+    sed -i 's#\("destination":"/sys","type":"sysfs","source":"sysfs","options":\[[^]]*\)"rw"\]#\1"ro"]#' "$bundle/config.json"
 fi
-# Release the sysfs mounts of pods that are gone: each pins its network
-# namespace, which is gone once no process or /var/run/netns entry holds it.
-if [ -d "$base" ]; then
-    live=" $(stat -L -c %i /proc/[0-9]*/ns/net /var/run/netns/* 2>/dev/null | sort -u | tr '\n' ' ')"
-    for dir in "$base"/*; do
-        case "$live" in *" $(basename "$dir") "*) ;; *) umount "$dir" 2>/dev/null && rmdir "$dir" ;; esac
-    done
-fi
-exec "$real" "$@"
+exec "$(dirname "$0")/runc.real" "$@"
