@@ -32,7 +32,9 @@ class Frappe(IncidentArenaApplication):
 
     def after_jobs(self) -> None:
         """Enable the site scheduler: new sites start with it off, which reads as a broken system."""
-        self.wait_rollout("deploy", self.GUNICORN_DEPLOYMENT)
+        # The site must be up first. `rollout status` gives up at the Deployment's
+        # 10-minute progress deadline, and new-site can take longer on a busy host.
+        self.wait_until_ready()
         self.site_python(
             "from frappe.utils.scheduler import enable_scheduler\nenable_scheduler()\nfrappe.db.commit()\n"
             "print(frappe.utils.scheduler.is_scheduler_disabled())"
