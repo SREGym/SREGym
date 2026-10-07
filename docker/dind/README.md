@@ -130,11 +130,9 @@ Harnesses can adjust where diagnostics go and how setup failures are reported:
 
 ## Harbor
 
-`python -m sregym.harbor.adapter` generates Harbor tasks that run this image as
-a privileged Compose sidecar next to an unprivileged agent container. The
-sidecar keeps this entrypoint, runs the SREGym backend (`sregym/harbor/backend.py`)
-and grades with the problem's mitigation oracle. The agent reaches the cluster
-only through SREGym's filtered API proxy. See [Running SREGym on Harbor](../../docs/harbor.md).
+Harbor tasks do not use this image: each runs in one unprivileged container
+built from `docker/harbor`, with the k3s cluster from `docker/userns-k3s`. See
+[Running SREGym on Harbor](../../docs/harbor.md).
 
 Prior work inspected while implementing this runtime:
 

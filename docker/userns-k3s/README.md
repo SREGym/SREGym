@@ -1,6 +1,8 @@
-# Unprivileged multi-node k3s (experimental prototype)
+# Unprivileged multi-node k3s
 
-This directory is a feasibility prototype. It is not wired into SREGym.
+This cluster runs inside every SREGym Harbor task (`docker/harbor`, see
+[Running SREGym on Harbor](../../docs/harbor.md)). This directory also builds it
+as a standalone image for experiments.
 
 It runs a four-node Kubernetes cluster (k3s: one server and three agents) inside
 one Docker container. The nodes use KIND's names (`kind-control-plane`,

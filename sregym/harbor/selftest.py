@@ -2,9 +2,9 @@
 
 Real SREGym problems deploy observability stacks and large applications, so a
 misconfigured provider can take a long time to fail. This session exercises
-the same Harbor path in a few minutes: the privileged sidecar, the per-run KIND
-cluster, SREGym's filtered Kubernetes API proxy, the healthcheck, the oracle
-token, collect-hook grading and the separate verifier.
+the same Harbor path in a few minutes: the unprivileged task container and its
+k3s cluster, SREGym's filtered Kubernetes API proxy, the healthcheck, the
+unprivileged agent user, the oracle token and grading.
 
 The fault points a Service's selector at no pods; the oracle requires the
 Deployment to be available and the Service to have ready endpoints.

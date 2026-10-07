@@ -316,14 +316,11 @@ class SREGymAdapter:
             "oracle_token_sha256": hashlib.sha256(
                 oracle_token(self.oracle_secret, task_name(info.problem_id)).encode()
             ).hexdigest(),
-            "service_name": protocol.SERVICE_NAME,
             "api_port": str(protocol.API_PORT),
             "grade_port": str(protocol.GRADE_PORT),
             "grade_path": protocol.GRADE_PATH,
             "grade_token_path": protocol.GRADE_TOKEN_PATH,
             "log_dir": protocol.LOG_DIR,
-            "agent_shared_dir": protocol.AGENT_SHARED_DIR,
-            "backend_shared_dir": protocol.BACKEND_SHARED_DIR,
             "kubeconfig_name": protocol.KUBECONFIG_NAME,
             "state_name": protocol.STATE_NAME,
             "status_name": protocol.STATUS_NAME,

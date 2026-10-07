@@ -1,28 +1,24 @@
-"""Names shared by the Harbor task generator and the SREGym sidecar backend.
+"""Names shared by the Harbor task generator, the task image and the backend.
 
-Generated tasks embed these values in Compose files, task.toml and scripts, so
-changing one requires regenerating the dataset.
+Generated tasks embed these values in task.toml and scripts, and
+docker/harbor/start.sh and sregym-ready use the same paths, so changing one
+requires rebuilding the image and regenerating the dataset.
 """
 
-# Compose service that runs the backend. Agents reach it by this DNS name.
-SERVICE_NAME = "sregym"
-
-# Public listeners on the sidecar, reachable from the agent container.
+# Backend listeners in the task container. The agent can reach these.
 K8S_PROXY_PORT = 16443
 API_PORT = 8765
-# Loopback-only listener used by Harbor's collect hook after the agent stops.
+# Grading listener; it requires the root-only grade token.
 GRADE_PORT = 8766
 
-# Named volume shared by both services: written by the backend, mounted
-# read-only in the agent container.
-BACKEND_SHARED_DIR = "/run/sregym-harbor/shared"
-AGENT_SHARED_DIR = "/run/sregym"
+# Written by the backend (root), readable by the agent: its kubeconfig and
+# the setup state that sregym-ready waits on.
+SHARED_DIR = "/run/sregym"
 KUBECONFIG_NAME = "kubeconfig"
 STATE_NAME = "state"
 STATUS_NAME = "status.json"
 
-# Sidecar paths collected as Harbor artifacts. The grade is re-materialized at
-# the same path inside the separate verifier container.
+# Root-only backend output. The logs are collected as Harbor artifacts.
 BACKEND_OUTPUT_DIR = "/sregym-harbor"
 GRADE_PATH = f"{BACKEND_OUTPUT_DIR}/grade.json"
 # Root-only bearer token for POST /grade, generated per trial. The agent may share
@@ -30,7 +26,8 @@ GRADE_PATH = f"{BACKEND_OUTPUT_DIR}/grade.json"
 GRADE_TOKEN_PATH = f"{BACKEND_OUTPUT_DIR}/grade-token"
 LOG_DIR = f"{BACKEND_OUTPUT_DIR}/logs"
 
-# Backend configuration read from the sidecar environment.
+# Backend configuration, read from its environment (start.sh sets these from
+# root-only files in the task image).
 PROBLEM_ID_ENV = "SREGYM_PROBLEM_ID"
 ORACLE_TOKEN_SHA256_ENV = "SREGYM_ORACLE_TOKEN_SHA256"
 

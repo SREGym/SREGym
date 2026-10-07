@@ -1,22 +1,23 @@
-"""SREGym backend process for the ``sregym`` sidecar of a Harbor task.
+"""SREGym backend process of a Harbor task.
 
-The DinD entrypoint (``docker/dind/entrypoint.sh``) starts the private Docker
-daemon and KIND cluster, then runs this module. It deploys the configured
-problem, injects its fault and exposes SREGym's filtered Kubernetes API proxy
-to the agent container. It then stays alive: several mitigation oracles compare
+``docker/harbor/start.sh`` starts the task container's k3s cluster, then runs
+this module as root. It deploys the configured problem, injects its fault and
+exposes SREGym's filtered Kubernetes API proxy to the agent, which runs as an
+unprivileged user in the same container. It then stays alive: several mitigation oracles compare
 against a baseline captured in memory immediately before injection, so grading
 must use this same problem object rather than a fresh process.
 
 Interfaces (see ``sregym.harbor.protocol``):
 
-- Shared volume: ``state``, ``status.json`` and the agent ``kubeconfig``.
+- ``SHARED_DIR``: ``state``, ``status.json`` and the agent ``kubeconfig``.
 - ``0.0.0.0:API_PORT``: ``GET /status``; ``POST /oracle/recover`` runs the
   problem's ``recover_fault()`` for Harbor's oracle agent. It requires a bearer
-  token whose SHA-256 is configured on the sidecar; only the task's reference
-  solution contains the token.
+  token whose SHA-256 is configured in the task image; only the task's reference
+  solution can derive the token.
 - ``127.0.0.1:GRADE_PORT``: ``POST /grade`` evaluates the mitigation oracle once
-  and caches the verdict. Harbor calls it through a collect hook that runs
-  inside this container after the agent container has been stopped.
+  and caches the verdict. It requires the per-trial token in
+  ``GRADE_TOKEN_PATH``, readable by root only; the task's verifier sends it
+  after killing the agent's processes.
 """
 
 import argparse
@@ -323,11 +324,11 @@ class Backend:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     parser.add_argument("--problem", default=os.environ.get(protocol.PROBLEM_ID_ENV))
-    parser.add_argument("--advertise-host", default=protocol.SERVICE_NAME)
+    parser.add_argument("--advertise-host", default="127.0.0.1")
     parser.add_argument("--api-port", type=int, default=protocol.API_PORT)
     parser.add_argument("--grade-port", type=int, default=protocol.GRADE_PORT)
     parser.add_argument("--proxy-port", type=int, default=protocol.K8S_PROXY_PORT)
-    parser.add_argument("--shared-dir", type=Path, default=Path(protocol.BACKEND_SHARED_DIR))
+    parser.add_argument("--shared-dir", type=Path, default=Path(protocol.SHARED_DIR))
     parser.add_argument("--output-dir", type=Path, default=Path(protocol.BACKEND_OUTPUT_DIR))
     args = parser.parse_args(argv)
     if not args.problem:
@@ -355,7 +356,7 @@ def main(argv=None) -> int:
 
     def request_stop(signum, _frame):
         stop.set()
-        # Deployment can take many minutes; do not make Compose wait it out.
+        # Deployment can take many minutes; do not make the container wait it out.
         if backend.state != protocol.STATE_READY:
             raise SystemExit(128 + signum)
 
