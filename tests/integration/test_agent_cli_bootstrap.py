@@ -28,9 +28,10 @@ def test_agent_cli_installs_and_reports_version(agent, monkeypatch, tmp_path):
     monkeypatch.setattr(runner, "API_KEY_VARS", [])
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     try:
+        runner.ensure_image_exists()
         result = runner.run_sync(
             ExecInput(
-                command=f"bash /opt/sregym/install-scripts/install-{agent}.sh",
+                command=f"bash /opt/runtime/install-scripts/install-{agent}.sh",
                 env={"DISABLE_TELEMETRY": "1", "DO_NOT_TRACK": "1"},
                 timeout=600,
                 label=f"bootstrap-{agent}",

@@ -95,7 +95,7 @@ def run_preflight_check(
         return
     check_cmd = f"python3 -c 'from {module_path} import run_preflight; run_preflight()'"
     if install_script and not container_runner.has_prepared_agent_tools:
-        check_cmd = f"/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
+        check_cmd = f"{container_runner.runtime_root}/install-scripts/{install_script} > /dev/null 2>&1 && {check_cmd}"
     try:
         result = container_runner.run_sync(ExecInput(command=check_cmd, label="preflight", timeout=180))
     except BaseException:

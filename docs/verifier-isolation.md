@@ -140,6 +140,38 @@ read, so replacing a pathname after its metadata check cannot substitute input.
 
 ## Scope
 
+### Agent identity cleanup
+
+The default agent image is prepared with an allowlisted public runtime at
+`/opt/runtime`. Imports, source text, paths, logs, kubeconfig names, session
+headers, and forwarded artifact environment variables use neutral identifiers.
+The existing MCP control namespace and its RBAC references are excluded from
+agent Kubernetes responses and observability, with no namespace or service
+renaming. Private control-service startup text and visible cleanup pod names
+also use neutral text. Upstream proxy exception details stay in private logs.
+Binary workload creates and replacements use the API server's non-persisting
+`dryRun=All` decoder, then pass the returned JSON through the same protected
+Secret and network-isolation checks before any real submission. Invalid or
+uninspectable results fail closed; the proxy never forwards an unchecked binary
+body for a persisted mutation.
+The public runtime excludes private judge bridges, fault definitions, oracle
+answers, hidden client data, and symlinked source paths. Its cache identity covers
+the public source bytes and pinned dependency image. Building from source uses
+the same projection. Custom images retain their existing layout contract and
+need an independent visibility audit before use in a qualified environment.
+
+This is not yet a complete environment identity migration for issue #1067.
+Published workload image references and OCI source labels still identify the
+project. The retained qualification cluster also has branded node names and
+rootless Docker storage paths visible in `/proc/self/mountinfo`, and
+existing MCP image releases and external native integrations need a
+completed rollout audit. A derivative image removing a directory does
+not erase its base image's lower layers or registry metadata from a daemon
+administrator. The container filesystem test covers the default agent runtime,
+not those additional surfaces. Do not claim the issue is resolved or rename
+published references to unavailable images. Replacement releases must preserve
+supported architectures, deployment, recreation, and fault recovery.
+
 This change protects grading execution and state. It does not change existing
 oracle acceptance criteria or guarantee the absence of reward hacking. A weak
 oracle can still reward a fabricated application response or missing telemetry;
@@ -285,6 +317,13 @@ the API loopback address with a reachable physical-host address that is also
 reachable from the trusted verifier's bridge. Omit the `/run/udev` host mount.
 Load required host networking modules before creating the cluster; do not
 disable AppArmor or user-namespace restrictions globally.
+Use neutral account, storage-directory and cluster/node names. Container mount
+metadata can reveal a Docker storage path even when input files are transferred
+through volumes. Existing node identities require cluster recreation or a
+coordinated node replacement, not a cosmetic API response rewrite. Existing
+control-service images and observability configurations need an explicit rollout
+of the current visibility policy; collector changes do not erase old stored
+telemetry by themselves.
 
 For example, the existing CloudLab validation environment uses:
 

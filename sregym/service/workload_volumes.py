@@ -87,7 +87,7 @@ class WorkloadVolumes:
     def _carrier(self, volume):
         # An unstarted container provides Docker's copy interface. It never
         # executes the image or receives a runtime socket or host directory.
-        name = f"sregym-volume-copy-{uuid.uuid4().hex}"
+        name = f"agent-volume-copy-{uuid.uuid4().hex}"
         try:
             self._run(
                 "create",
@@ -137,7 +137,7 @@ class WorkloadVolumes:
                 group["inputs"].append((path, "" if path.is_dir() else container_path.name))
         try:
             for mount, group in groups.items():
-                volume = f"sregym-agent-files-{uuid.uuid4().hex}"
+                volume = f"agent-files-{uuid.uuid4().hex}"
                 self._run("volume", "create", volume)
                 self.volumes.append((volume, group["output"]))
                 if group["inputs"]:

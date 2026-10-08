@@ -19,6 +19,7 @@
 !docker/
 !docker/agents/
 !docker/agents/requirements-container.txt
+!docker/agents/runtime_context.py
 !docker/agents/install-scripts/
 !docker/agents/install-scripts/**
 **/__pycache__

@@ -156,8 +156,11 @@ def test_main_image_selection_reuses_one_build(monkeypatch, backend, external, f
         assert not [call for call in run.call_args_list if call.args[0][0] == "bash"]
         return
 
-    expected_image = LOCAL_AGENT_IMAGE if force_build else DEFAULT_AGENT_IMAGE
-    assert prepared_runners[0].config.image == expected_image
+    expected_image = prepared_runners[0].config.image
+    if force_build:
+        assert expected_image == LOCAL_AGENT_IMAGE
+    else:
+        assert expected_image.startswith("incident-agent:runtime-")
     assert launcher._container_runner is None
     if backend != "api" and not external:
         assert popen.call_args.args[0][-2] == expected_image

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import platform
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -285,6 +286,10 @@ class ContainerRunner:
 
     def __init__(self, config: ContainerConfig | None = None):
         self.config = config or ContainerConfig()
+        self._public_runtime = self.config.image in {
+            DEFAULT_AGENT_IMAGE,
+            LOCAL_AGENT_IMAGE,
+        } or self.config.image.startswith("incident-agent:runtime-")
         if self.config.isolate_mounts and self.config.docker_host is None:
             self.config.docker_host = os.environ.get("DOCKER_HOST") or None
         self._credential_tmps: list[str] = []
@@ -300,6 +305,19 @@ class ContainerRunner:
 
     def _docker_command(self):
         return docker_command(host=self.config.docker_host)
+
+    @property
+    def runtime_root(self) -> str:
+        return "/opt/runtime" if self._public_runtime else "/opt/sregym"
+
+    def _read_runtime_layout(self, inspection: subprocess.CompletedProcess) -> None:
+        try:
+            metadata = json.loads(inspection.stdout)
+            labels = metadata[0]["Config"].get("Labels") or {}
+        except (TypeError, ValueError, KeyError, IndexError):
+            return
+        if labels.get("io.incident.runtime.root") == "/opt/runtime":
+            self._public_runtime = True
 
     @property
     def internet_access_mode(self) -> str:
@@ -369,7 +387,9 @@ class ContainerRunner:
         self._run_docker_checked([*self._docker_command(), "volume", "create", volume], "create the agent tools volume")
         self._agent_tools_volume = volume
         version = agent_version or "latest"
-        command = f"AGENT_VERSION={shlex.quote(version)} /opt/sregym/install-scripts/{shlex.quote(install_script)}"
+        command = (
+            f"AGENT_VERSION={shlex.quote(version)} {self.runtime_root}/install-scripts/{shlex.quote(install_script)}"
+        )
         try:
             result = subprocess.run(
                 [
@@ -426,7 +446,7 @@ class ContainerRunner:
             args.extend(["-v", f"{auth_src.resolve()}:/root/.codex/auth.json:rw"])
             return
 
-        tmp = tempfile.mkdtemp(prefix="sregym-codex-")
+        tmp = tempfile.mkdtemp(prefix="agent-codex-")
         auth_dst = Path(tmp) / "auth.json"
         shutil.copy2(auth_src, auth_dst)
 
@@ -474,6 +494,12 @@ class ContainerRunner:
 
         if extra_env:
             env_vars.update(extra_env)
+
+        # Keep the host's legacy settings out of the public runtime.
+        if self._public_runtime:
+            for old, new in (("SREGYM_ARTIFACT_ID", "RUN_ARTIFACT_ID"), ("SREGYM_PROBLEM_ID", "PROBLEM_ID")):
+                if old in env_vars:
+                    env_vars[new] = env_vars.pop(old)
 
         if self.config.internet_policy.agent_name == "codex" and env_vars.get("AGENT_API_BASE"):
             env_vars.setdefault("CODEX_HOME", "/logs")
@@ -593,7 +619,8 @@ class ContainerRunner:
             for subdir in self.config.sregym_app_subdirs:
                 host_path = self.config.sregym_apps_path / subdir
                 if host_path.exists():
-                    args.extend(["-v", f"{host_path.resolve()}:/opt/sregym/SREGym-applications/{subdir}:ro"])
+                    utilities = "applications" if self._public_runtime else "SREGym-applications"
+                    args.extend(["-v", f"{host_path.resolve()}:{self.runtime_root}/{utilities}/{subdir}:ro"])
 
         if self.config.isolate_mounts:
             address = runner_address()
@@ -628,7 +655,7 @@ class ContainerRunner:
         if not changed:
             return source
 
-        temp_dir = Path(tempfile.mkdtemp(prefix="sregym-kubeconfig-"))
+        temp_dir = Path(tempfile.mkdtemp(prefix="operator-kubeconfig-"))
         output = temp_dir / source.name
         with output.open("w", encoding="utf-8") as handle:
             yaml.safe_dump(config, handle, sort_keys=False)
@@ -643,7 +670,7 @@ class ContainerRunner:
         suffix = uuid.uuid4().hex[:8]
         if exec_input.label or self.config.isolate_mounts:
             label = exec_input.label or "agent"
-            container_name = f"sregym-{label}-{suffix}"
+            container_name = f"agent-{label}-{suffix}"
             cmd.extend(["--name", container_name])
             exec_input.container_name = container_name
         cmd.extend(self._build_env_flags(exec_input.env))
@@ -664,9 +691,9 @@ class ContainerRunner:
         if install_script and not self.has_prepared_agent_tools:
             version_env = f'AGENT_VERSION="{agent_version}" ' if agent_version else ""
             if not capture_logs:
-                return f"{version_env}/opt/sregym/install-scripts/{install_script} > /dev/null 2>&1 && {driver_command}"
+                return f"{version_env}{self.runtime_root}/install-scripts/{install_script} > /dev/null 2>&1 && {driver_command}"
             parts.append(
-                f"{version_env}/opt/sregym/install-scripts/{install_script} 2>&1 "
+                f"{version_env}{self.runtime_root}/install-scripts/{install_script} 2>&1 "
                 f"| tee /logs/install.log; INSTALL_RC=${{PIPESTATUS[0]}}; "
                 f'echo "$INSTALL_RC" > /logs/install.rc; '
                 f'[ "$INSTALL_RC" -eq 0 ] || exit "$INSTALL_RC"'
@@ -735,6 +762,9 @@ class ContainerRunner:
             capture_output=True,
         )
         if result.returncode == 0:
+            self._read_runtime_layout(result)
+            if image == DEFAULT_AGENT_IMAGE:
+                self._prepare_public_runtime()
             return
 
         if image == LOCAL_AGENT_IMAGE:
@@ -742,6 +772,41 @@ class ContainerRunner:
             return
         logger.info("Pulling agent image '%s'...", image)
         self._run_docker_checked([*self._docker_command(), "pull", image], f"pull agent image '{image}'")
+        if image == DEFAULT_AGENT_IMAGE:
+            self._prepare_public_runtime()
+
+        else:
+            self._read_runtime_layout(
+                subprocess.run(
+                    [*self._docker_command(), "image", "inspect", image],
+                    capture_output=True,
+                )
+            )
+
+    def _prepare_public_runtime(self) -> None:
+        """Use current public sources on top of the immutable dependency release."""
+        repo = Path(__file__).resolve().parents[2]
+        prepare = runpy.run_path(str(repo / "docker/agents/runtime_context.py"))["write_context"]
+        with tempfile.TemporaryDirectory(prefix="agent-runtime-") as folder:
+            context = Path(folder)
+            identity = prepare(repo, context, base_image=DEFAULT_AGENT_IMAGE)
+            image = f"incident-agent:runtime-{identity}"
+            cached = subprocess.run([*self._docker_command(), "image", "inspect", image], capture_output=True)
+            if cached.returncode != 0:
+                self._run_docker_checked(
+                    [
+                        *self._docker_command(),
+                        "build",
+                        "--build-arg",
+                        f"BASE_IMAGE={DEFAULT_AGENT_IMAGE}",
+                        "--tag",
+                        image,
+                        str(context),
+                    ],
+                    "prepare public agent runtime",
+                )
+            self.config.image = image
+            self._public_runtime = True
 
     def build_image(self) -> None:
         """Build (or rebuild) the container image using docker/agents/build.sh."""
@@ -772,6 +837,7 @@ class ContainerRunner:
         if result.returncode != 0:
             raise RuntimeError(f"Failed to build container image '{image}'. Check the build output above for errors.")
         self.config.image = image
+        self._public_runtime = True
         logger.info(f"✅ Container image '{image}' built successfully.")
 
     @staticmethod

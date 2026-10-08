@@ -2,13 +2,16 @@
 
 import json
 
+MCP_CONTROL_NAMESPACE = "sregym"
 VERIFIER_PROBE_NAMESPACE = "sregym-verifier"
-HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos", VERIFIER_PROBE_NAMESPACE}
+# Keep existing control-service identities while excluding them from agent IO.
+HIDDEN_NAMESPACES: set[str] = {"chaos-mesh", "khaos", MCP_CONTROL_NAMESPACE, VERIFIER_PROBE_NAMESPACE}
 HIDDEN_LABELS: dict[str, set[str]] = {
     "app": {"load-generator", "locust-fetcher"},
     "job": {"workload"},
     "network-access": {"restricted"},
     "opentelemetry.io/name": {"load-generator"},
+    "app.kubernetes.io/component": {"mcp-server"},
 }
 HELM_RELEASE_SECRET_TYPE = "helm.sh/release.v1"
 HELM_RELEASE_SECRET_NAME_PREFIX = "sh.helm.release.v1."
@@ -58,9 +61,14 @@ def is_hidden_resource(resource: dict, hidden_namespaces: set[str], hidden_label
     metadata = resource.get("metadata") or {}
     labels = metadata.get("labels") or {}
     has_hidden_label = any(labels.get(key) in values for key, values in hidden_labels.items())
+    has_hidden_subject = bool(resource.get("roleRef")) and any(
+        isinstance(subject, dict) and subject.get("namespace") in hidden_namespaces
+        for subject in resource.get("subjects") or []
+    )
     return (
         metadata.get("namespace") in hidden_namespaces
         or has_hidden_label
+        or has_hidden_subject
         or is_helm_release_secret(resource)
         or is_chaos_event(resource, hidden_namespaces)
         or (not metadata.get("namespace") and mentions_chaos_mesh(str(metadata.get("name", ""))))

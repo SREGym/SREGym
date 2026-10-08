@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 
 from mcp_server import prometheus_server
-from sregym.service.agent_visibility_policy import HIDDEN_NAMESPACES
+from sregym.service.agent_visibility_policy import HIDDEN_NAMESPACES, MCP_CONTROL_NAMESPACE, VERIFIER_PROBE_NAMESPACE
 
 
 class FakeResponse:
@@ -31,6 +31,15 @@ def test_prometheus_tools_hide_chaos_metrics_and_alerts(monkeypatch):
                                 {"metric": {"namespace": "chaos-mesh", "pod": "chaos-daemon-123"}, "value": [1, "1"]},
                                 {"metric": {"namespace": "khaos", "pod": "helper"}, "value": [1, "1"]},
                                 {"metric": {"namespace": "sregym-verifier", "pod": "private-probe"}, "value": [1, "1"]},
+                                {
+                                    "metric": {"namespace": VERIFIER_PROBE_NAMESPACE, "pod": "node-probe"},
+                                    "value": [1, "1"],
+                                },
+                                {
+                                    "metric": {"namespace": MCP_CONTROL_NAMESPACE, "pod": "mcp-server"},
+                                    "value": [1, "1"],
+                                },
+                                {"metric": {"namespace": "sregym", "pod": "legacy-mcp"}, "value": [1, "1"]},
                                 {"metric": {"namespace": "astronomy-shop", "pod": "checkout"}, "value": [1, "1"]},
                             ],
                         }
@@ -42,6 +51,10 @@ def test_prometheus_tools_hide_chaos_metrics_and_alerts(monkeypatch):
                         "alerts": [
                             {"state": "firing", "labels": {"namespace": "chaos-mesh", "alertname": "PodDown"}},
                             {"state": "firing", "labels": {"namespace": "sregym-verifier", "alertname": "ProbeDown"}},
+                            {
+                                "state": "firing",
+                                "labels": {"namespace": MCP_CONTROL_NAMESPACE, "alertname": "ControlDown"},
+                            },
                             {"state": "firing", "labels": {"namespace": "astronomy-shop", "alertname": "CheckoutDown"}},
                         ]
                     }
@@ -58,9 +71,13 @@ def test_prometheus_tools_hide_chaos_metrics_and_alerts(monkeypatch):
     assert "khaos" not in metrics
     assert "private-probe" not in metrics
     assert "sregym-verifier" not in metrics
+    assert "mcp-server" not in metrics
+    assert "legacy-mcp" not in metrics
+    assert "node-probe" not in metrics
     assert "CheckoutDown" in alerts
     assert "chaos-mesh" not in alerts
     assert "ProbeDown" not in alerts
+    assert "ControlDown" not in alerts
 
 
 def test_observability_collectors_use_the_shared_hidden_namespaces():

@@ -10,6 +10,7 @@ import requests
 import yaml
 
 from sregym.paths import MCP_SERVER_K8S
+from sregym.service.agent_visibility_policy import MCP_CONTROL_NAMESPACE
 from sregym.service.kubectl import KubeCtl
 from sregym.service.kubernetes_access_policy import restricted_cluster_role
 from sregym.service.rollout import deployment_rollout_complete
@@ -19,7 +20,7 @@ logger = logging.getLogger("all.sregym.mcp_server")
 
 class MCPServer:
     def __init__(self, *, restrict_network_access: bool = False):
-        self.namespace = "sregym"
+        self.namespace = MCP_CONTROL_NAMESPACE
         self.service_name = "mcp-server"
         # Local end of the port-forward only. The in-cluster Service port stays
         # 9954 (see start_port_forward), so this can move without touching the
